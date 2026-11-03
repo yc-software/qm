@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { assertNoEscalation } from "../src/triggers/trigger-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";

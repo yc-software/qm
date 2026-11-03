@@ -1,9 +1,10 @@
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { createAdmittedWork } from "../src/util/admitted-work.ts";
 import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
 import type { TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
@@ -65,11 +66,12 @@ function service(
     resolveRecipient?: TriggerDeps["resolveRecipient"];
   },
 ) {
-  const loops = createLoopStore(testLoopRows());
-  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) });
-  const items = createLoopItemLedger(testItemRows());
-  const outputs = createLoopOutputStore(testOutputRows());
-  const grants = overrides?.grants ?? createShipGrantStore(testShipGrantRows());
+  const url = testDatabaseUrl();
+  const loops = createLoopStore(testLoopRows(url));
+  const crons = createCronStore(testCronRows(url), { fires: createPostgresCronFireStore(url) });
+  const items = createLoopItemLedger(testItemRows(url));
+  const outputs = createLoopOutputStore(testOutputRows(url));
+  const grants = overrides?.grants ?? createShipGrantStore(testShipGrantRows(url));
   const deliveries = fakeDeliveries();
   const turns: TurnRequest[] = [];
   const idempotency = createIdempotencyStore(testMap());

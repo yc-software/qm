@@ -1,5 +1,6 @@
+import { testDatabaseUrl } from "./support/test-database.ts";
 import assert from "node:assert/strict";
-import test from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import { createSuggestedActivityService } from "../src/suggestions/activities.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
@@ -11,7 +12,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { testCronRows, testSharedDatabaseUrl } from "./support/typed-stores.ts";
+import { testCronRows } from "./support/typed-stores.ts";
 import { testActivityProfiles } from "./support/typed-stores.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -23,11 +24,12 @@ const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
 }));
 
 function fixture() {
+  const url = testDatabaseUrl();
   let time = Date.now();
   let output = JSON.stringify(activities);
-  const store = testActivityProfiles();
-  const sessions = createPostgresSessionStore(testSharedDatabaseUrl());
-  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) });
+  const store = testActivityProfiles(url);
+  const sessions = createPostgresSessionStore(url);
+  const crons = createCronStore(testCronRows(url), { fires: createPostgresCronFireStore(url) });
   const deliveries = createDeliveryStore();
   const calls: TurnRequest[] = [];
   const settled: Promise<void>[] = [];

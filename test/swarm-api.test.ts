@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";

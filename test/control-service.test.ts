@@ -1,6 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

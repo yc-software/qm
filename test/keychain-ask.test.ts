@@ -1,7 +1,8 @@
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import "./support/auto-fake-sprites.ts";
 
-import { test, describe, it, before, after } from "node:test";
+import { describe, it, before, after } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

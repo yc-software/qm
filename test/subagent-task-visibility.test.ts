@@ -1,5 +1,5 @@
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -12,7 +12,8 @@ import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 test("a subagent shows its delegated tasks while the parent's completion wake stays hidden", async (t) => {
-  const built = buildApp(testConfig({ memoryCapture: "off" }));
+  const config = testConfig({ memoryCapture: "off" });
+  const built = buildApp(config);
   t.after(async () => {
     built.scheduler.stop();
     built.deploymentLayerRefresh.stop();
@@ -38,7 +39,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
     sessions: built.sessions,
     runs: built.runs,
     signals: built.signals,
-    mailbox: testSessionMailbox(),
+    mailbox: testSessionMailbox(config.databaseUrl),
     maxAttempts: 1,
   }).forTurn({
     session: parentSession,
@@ -79,7 +80,8 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
 
 test("human-origin delegated input is screened before model execution", async (t) => {
   const screened: string[] = [];
-  const built = buildApp(testConfig({ memoryCapture: "off", securityPosture: "strict" }), {
+  const config = testConfig({ memoryCapture: "off", securityPosture: "strict" });
+  const built = buildApp(config, {
     securityScreener: {
       provider: "test-screen",
       async classify(input) {
@@ -116,7 +118,7 @@ test("human-origin delegated input is screened before model execution", async (t
     sessions: built.sessions,
     runs: built.runs,
     signals: built.signals,
-    mailbox: testSessionMailbox(),
+    mailbox: testSessionMailbox(config.databaseUrl),
     maxAttempts: 1,
   }).forTurn({ session, scopeId: session.scopeId, request: { ...parent.request, runId: parent.id } });
   const opened = await inTestTenant(() => syscalls.open({ task: "UNTRUSTED_TASK" }));
@@ -133,7 +135,8 @@ test("human-origin delegated input is screened before model execution", async (t
 for (const fork of [false, true]) {
   test(`a human-initiated ${fork ? "fork" : "new session"} shows its seed without claiming human authorship`, async (t) => {
     const { startSession } = await import("../src/api/start-session.ts");
-    const built = buildApp(testConfig({ memoryCapture: "off" }));
+    const config = testConfig({ memoryCapture: "off" });
+    const built = buildApp(config);
     t.after(async () => {
       built.scheduler.stop();
       built.deploymentLayerRefresh.stop();

@@ -1,5 +1,5 @@
 import { testCronRows } from "./support/typed-stores.ts";
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
@@ -127,7 +127,7 @@ test("pg cron_fires: fire rows accept text a legacy jsonb blob would reject (NUL
 test("pg cron_fires: the cron store writes the table only and reads back through it", { skip }, () =>
   inTestTenant(async () => {
     const fires = createPostgresCronFireStore(URL!);
-    const store = createCronStore(testCronRows(), { fires });
+    const store = createCronStore(testCronRows(URL!), { fires });
     const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
     await store.beginFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" });
     await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok" });

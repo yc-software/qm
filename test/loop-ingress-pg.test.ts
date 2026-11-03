@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import { createHmac } from "node:crypto";
 import { configurePgPooling, createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";

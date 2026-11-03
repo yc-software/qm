@@ -17,7 +17,6 @@ import { inTestTenant } from "./support/test-tenants.ts";
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
 
-const SCHEMA = "pgboss_cron_queue_test";
 const CRON_DB = testDatabaseUrl();
 const IDEM_TABLE = "cron_queue_test_idempotency";
 
@@ -26,7 +25,6 @@ before(async () => {
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
   await p.query(`DROP TABLE IF EXISTS ${IDEM_TABLE}`);
   await p.end();
 });
@@ -55,7 +53,7 @@ function instance(
     idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run,
-    jobQueue: createPgBossCronQueue(URL ?? "", SCHEMA),
+    jobQueue: createPgBossCronQueue(URL ?? ""),
   });
   return { scheduler, crons };
 }

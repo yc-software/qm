@@ -1,4 +1,4 @@
-import { inTenantOf } from "../tenants/claim.ts";
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { renderSourceInboxTask, isReplyLoop, applyReplyResolution, REPLY_DECISION } from "./inbox-loop.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
@@ -948,10 +948,10 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     }
   }
 
-  async function sweepStale(now: number): Promise<void> {
+  const sweepStale = crossTenantLoop(async (now: number): Promise<void> => {
     for (const loop of await deps.loops.staleGoverned(now))
       await inTenantOf(loop.tenantId, () => applyGovernor(loop.id, undefined, now));
-  }
+  });
 
   async function itemTurn(
     loop: Loop,

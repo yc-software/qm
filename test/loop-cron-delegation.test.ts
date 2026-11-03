@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";

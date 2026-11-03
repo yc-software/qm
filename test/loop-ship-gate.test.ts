@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { buildShipGrant, decideShip, graduationAllowed, undeclaredShipActions } from "../src/loops/ship-gate.ts";

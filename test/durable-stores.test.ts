@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";

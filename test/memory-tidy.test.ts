@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import { createMemoryTidyService, withMemoryTidy } from "../src/memory/tidy.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";

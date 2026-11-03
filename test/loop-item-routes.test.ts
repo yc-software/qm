@@ -1,5 +1,6 @@
+import { testDatabaseUrl } from "./support/test-database.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import { loopItemRoutes } from "../src/api/routes/loop-items.ts";
 import type { LoopServiceDeps } from "../src/api/routes/loops.ts";
 import { findRoute, run, type ApiCtx } from "../src/api/routes/route.ts";
@@ -16,14 +17,7 @@ import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
 import { sleep } from "../src/util/async.ts";
 import { testConfigStore } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import {
-  testCronRows,
-  testItemRows,
-  testLoopRows,
-  testOutputRows,
-  testShipGrantRows,
-  testSharedDatabaseUrl,
-} from "./support/typed-stores.ts";
+import { testCronRows, testItemRows, testLoopRows, testOutputRows, testShipGrantRows } from "./support/typed-stores.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -56,13 +50,14 @@ interface World {
 let cronSeq = 0;
 
 function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
+  const url = testDatabaseUrl();
   const w: World = {
     loops: {
-      store: createLoopStore(testLoopRows()),
-      items: createLoopItemLedger(testItemRows()),
-      outputs: createLoopOutputStore(testOutputRows()),
-      grants: createShipGrantStore(testShipGrantRows()),
-      crons: createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) }),
+      store: createLoopStore(testLoopRows(url)),
+      items: createLoopItemLedger(testItemRows(url)),
+      outputs: createLoopOutputStore(testOutputRows(url)),
+      grants: createShipGrantStore(testShipGrantRows(url)),
+      crons: createCronStore(testCronRows(url), { fires: createPostgresCronFireStore(url) }),
       config: testConfigStore("org"),
     },
     crons: new Map(),

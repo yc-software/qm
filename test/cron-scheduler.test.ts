@@ -1,5 +1,5 @@
 import { testCronRows, testSharedDatabaseUrl } from "./support/typed-stores.ts";
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
