@@ -381,3 +381,34 @@ test("replacing a path preserves its artifact when staged again by ID", async ()
   assert.equal(staging.staged().length, 2);
   assert.ok(await store.open(id), "the staged file ID remains readable");
 });
+
+test("surface edit rewrites a Slack message in place and refuses outside Slack instead of posting", async () => {
+  const edit = async (destination: Record<string, unknown>) => {
+    const queued: Array<{ destination: Record<string, unknown>; text: string }> = [];
+    const tools = createSurfaceToolDeps({
+      deps: {
+        surfaces: testSurfaces(),
+        deliveries: {
+          enqueue: async (d: { destination: Record<string, unknown>; text: string }) => {
+            queued.push(d);
+            return { id: `D${queued.length}` };
+          },
+        },
+      },
+      input: { surfaceTools: true },
+      defaultDestination: destination,
+      strictReadOnly: false,
+      postProvenance: () => ({}),
+      postKeys: turnPostKeys("run-test"),
+      spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+    } as unknown as SurfaceToolsContext)!;
+    return { result: await tools.edit({ ref: "1723497600.123456", text: "fixed" }), queued };
+  };
+  const slack = await edit({ type: "slack", target: "C1:1723497600.000001" });
+  assert.equal(slack.result.ok, true);
+  assert.deepEqual(slack.queued[0]?.destination.edit, { messageTs: "1723497600.123456" });
+  assert.equal(slack.queued[0]?.text, "fixed");
+  const web = await edit({ type: "web", target: "web:U1:S1" });
+  assert.equal(web.result.ok, false);
+  assert.deepEqual(web.queued, []);
+});

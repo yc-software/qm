@@ -1,12 +1,8 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createManagedAgentsSandbox } from "../src/sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "../src/sandbox/managed-agents-client.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
@@ -35,20 +31,16 @@ async function main(): Promise<void> {
   });
 
   const prefix = `qms${randomBytes(3).toString("hex")}`;
-  const sandbox = createManagedAgentsSandbox(
-    createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "managed-agents-smoke-ws-"))),
-    {
-      client,
-      namePrefix: prefix,
-      store: smokeMap("managed_agents"),
-      snapshots: createMemorySnapshotStore(),
-    },
-  );
+  const sandbox = createManagedAgentsSandbox({
+    client,
+    namePrefix: prefix,
+    store: smokeMap("managed_agents"),
+    snapshots: createMemorySnapshotStore(),
+  });
   const scope = scopeId("personal", "smoke");
-  const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 
   log(`provisioning a qm agent computer (prefix ${prefix})...`);
-  const handle = await sandbox.provision(layers, { env: { QM_SMOKE: "1" } });
+  const handle = await sandbox.provision(scope, { env: { QM_SMOKE: "1" } });
   log("provisioned", handle.id, "coldStart", handle.coldStart);
 
   try {
@@ -101,7 +93,7 @@ async function main(): Promise<void> {
     log("checking the workspace survives a pause and resume...");
     await sandbox.run(handle, "echo persisted > survives-pause.txt");
     await sandbox.teardown(handle, {});
-    const resumed = await sandbox.provision(layers, { env: { QM_SMOKE: "1" } });
+    const resumed = await sandbox.provision(scope, { env: { QM_SMOKE: "1" } });
     const after = await sandbox.run(resumed, "cat survives-pause.txt");
     assert.match(after.stdout, /persisted/, "the workspace did not survive a pause and resume");
     log("workspace intact after pause and resume");

@@ -78,6 +78,7 @@ import { replaceChildrenPreservingFocus } from "./pane-focus";
 import {
   openSession,
   closeOpenSessionMenu,
+  refreshOpenTrees,
   refreshSessions,
   renderChatsPage,
   renderList,
@@ -1032,7 +1033,10 @@ window.addEventListener("popstate", () => {
 window.addEventListener("focus", () => {
   if (!appState.me) return;
   if (appState.currentView === "contexts") void renderContexts();
-  else if (appState.currentView === "chats") void refreshSessions({ silent: true, refreshContexts: true });
+  else if (appState.currentView === "chats") {
+    void refreshSessions({ silent: true, refreshContexts: true });
+    refreshOpenTrees();
+  }
 });
 
 function warmDeferredChunks(): void {
@@ -1132,7 +1136,7 @@ export async function boot(): Promise<void> {
       transcriptUnavailable = !(error instanceof ApiError && (error.status === 404 || error.status === 403));
       return null;
     });
-  const entriesPrefetch = linkedId ? loadLinkedTranscript(linkedId) : null;
+  const transcriptPrefetch = linkedId ? loadLinkedTranscript(linkedId) : null;
   const approvalsPrefetch = linkedId ? fetchSessionApprovals(linkedId) : null;
   const runtimeConfigFetch = fetchRuntimeConfig();
   const remoteSplitFetch = fetchRemoteSplit();
@@ -1202,7 +1206,7 @@ export async function boot(): Promise<void> {
   if (restoreLast && bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
 
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
-    const transcript = entriesPrefetch ?? loadLinkedTranscript(wantedSession);
+    const transcript = transcriptPrefetch ?? loadLinkedTranscript(wantedSession);
     const linked = (await transcript)?.session;
     if (linked) {
       exitSplitIfActive();

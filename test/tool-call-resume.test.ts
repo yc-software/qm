@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -9,7 +8,6 @@ import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
 import { bridgedTools, resumeInterruptedToolCall } from "../src/agent/turn-support.ts";
@@ -19,14 +17,14 @@ import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
-import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -41,15 +39,15 @@ function historyToolContext(calls: string[]): ToolContext {
   return {
     async history(q: string) {
       calls.push(q);
-      return [`user#3: the budget doc is in shared/q2.md (${q})`];
+      return [`UserMessage#3: the budget doc is in shared/q2.md (${q})`];
     },
   } as unknown as ToolContext;
 }
 
 function turnFor(
-  history: SessionEntry[],
+  history: Item[],
   call: ResumableToolCall | undefined,
-  sink: Array<{ type: string; payload: unknown }>,
+  sink: Item[],
   tools: ToolContext,
 ): AgentTurnInput {
   let seq = history.length + 10;
@@ -61,34 +59,29 @@ function turnFor(
     tools,
     scopeLabel: personal,
     orgScopeId: scopeId("org", ORG),
-    emit: async (entry) => {
-      sink.push({ type: entry.type, payload: entry.payload });
-      return { ...entry, sessionId: "s1", seq: seq++, parentSeq: null, createdAt: 1000 + seq } as SessionEntry;
+    emit: async (item) => {
+      const stored = storedItem(item, { sessionId: "s1", seq: seq++, createdAt: 1000 + seq });
+      sink.push(stored);
+      return stored;
     },
     recordModelCall: () => {},
     ...(call ? { resumeToolCall: call } : {}),
   };
 }
 
-const danglingCall: SessionEntry = {
-  sessionId: "s1",
-  seq: 2,
-  parentSeq: null,
-  type: "tool_call",
-  payload: {
+const danglingCall = storedItem(
+  {
+    kind: "ToolCall",
     tool: "history",
-    query: "budget",
     callId: "c-budget",
-    retrySafe: true,
-    rerun: { tool: "history", input: { query: "budget" } },
+    body: { query: "budget", retrySafe: true, rerun: { tool: "history", input: { query: "budget" } } },
   },
-  scopeLabel: personal,
-  createdAt: 2,
-};
+  { sessionId: "s1", seq: 2, createdAt: 2 },
+);
 
 test("resumeInterruptedToolCall re-runs the recorded input exactly once and records only the result", async () => {
   const queries: string[] = [];
-  const sink: Array<{ type: string; payload: unknown }> = [];
+  const sink: Item[] = [];
   const tools = historyToolContext(queries);
   const turn = turnFor(
     [danglingCall],
@@ -96,43 +89,44 @@ test("resumeInterruptedToolCall re-runs the recorded input exactly once and reco
     sink,
     tools,
   );
-  const ref: ToolContextRef = { current: tools, emit: turn.emit, scopeLabel: personal, orgScopeId: turn.orgScopeId };
+  const emit: ToolContextRef["emit"] = (item) => turn.emit(item);
+  const ref: ToolContextRef = { current: tools, emit, scopeLabel: personal, orgScopeId: turn.orgScopeId };
 
   const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
 
   assert.deepEqual(queries, ["budget"], "the tool body ran exactly once with the stripped input");
   assert.deepEqual(
-    sink.map((e) => e.type),
-    ["tool_result"],
+    sink.map((e) => e.kind),
+    ["ToolResult"],
     "the dangling tool_call entry is not re-recorded; only its result lands",
   );
-  const result = sink[0]!.payload as { callId: string; result: string; isError: boolean };
+  const result = sink[0]!;
   assert.equal(result.callId, "c-budget");
   assert.equal(result.isError, false);
-  assert.match(result.result, /shared\/q2\.md/);
+  assert.match(result.text ?? "", /shared\/q2\.md/);
   assert.ok(resumed);
   assert.equal(resumed.history.length, 2, "the agent continues from history that now carries the result");
-  assert.equal(resumed.history[1]!.type, "tool_result");
+  assert.equal(resumed.history[1]!.kind, "ToolResult");
   assert.deepEqual(
     { ...resumed.message, timestamp: 0 },
     {
       role: "toolResult",
       toolCallId: "c-budget",
       toolName: "history",
-      content: [{ type: "text", text: "- user#3: the budget doc is in shared/q2.md (budget)" }],
+      content: [{ type: "text", text: "- UserMessage#3: the budget doc is in shared/q2.md (budget)" }],
       isError: false,
       timestamp: 0,
     },
   );
-  assert.equal(ref.emit, turn.emit, "the emit hook is restored after the re-run");
+  assert.equal(ref.emit, emit, "the emit hook is restored after the re-run");
 });
 
 test("resumeInterruptedToolCall does nothing without a call to resume", async () => {
   const queries: string[] = [];
-  const sink: Array<{ type: string; payload: unknown }> = [];
+  const sink: Item[] = [];
   const tools = historyToolContext(queries);
   const idle = turnFor([danglingCall], undefined, sink, tools);
-  const ref: ToolContextRef = { current: tools, emit: idle.emit, scopeLabel: personal };
+  const ref: ToolContextRef = { current: tools, emit: (item) => idle.emit(item), scopeLabel: personal };
   assert.equal(await resumeInterruptedToolCall(idle, ref, bridgedTools(ref, {})), null);
   assert.deepEqual(queries, []);
   assert.deepEqual(sink, []);
@@ -140,25 +134,25 @@ test("resumeInterruptedToolCall does nothing without a call to resume", async ()
 
 test("when the tool is unavailable on the retried turn the call is closed as interrupted instead of left dangling", async () => {
   const queries: string[] = [];
-  const sink: Array<{ type: string; payload: unknown }> = [];
+  const sink: Item[] = [];
   const tools = historyToolContext(queries);
   const missing = turnFor([danglingCall], { callId: "c-x", tool: "no_such_tool", input: {} }, sink, tools);
-  const ref: ToolContextRef = { current: tools, emit: missing.emit, scopeLabel: personal };
+  const ref: ToolContextRef = { current: tools, emit: (item) => missing.emit(item), scopeLabel: personal };
   const resumed = await resumeInterruptedToolCall(missing, ref, bridgedTools(ref, {}));
   assert.ok(resumed);
   assert.equal(resumed.message.isError, true);
   assert.equal(resumed.message.content[0]!.text, INTERRUPTED_TOOL_RESULT);
   assert.deepEqual(
-    sink.map((e) => [e.type, (e.payload as { callId: string; result: string }).result]),
-    [["tool_result", INTERRUPTED_TOOL_RESULT]],
+    sink.map((e) => [e.kind, e.text]),
+    [["ToolResult", INTERRUPTED_TOOL_RESULT]],
   );
-  assert.equal((sink[0]!.payload as { interrupted?: boolean }).interrupted, true, "the ledger carries the meaning");
+  assert.equal(sink[0]!.body.interrupted, true, "the ledger carries the meaning");
   assert.deepEqual(queries, []);
 });
 
 test("a cancelled turn does not re-run anything and closes the call as interrupted", async () => {
   const queries: string[] = [];
-  const sink: Array<{ type: string; payload: unknown }> = [];
+  const sink: Item[] = [];
   const tools = historyToolContext(queries);
   const turn = turnFor(
     [danglingCall],
@@ -167,7 +161,7 @@ test("a cancelled turn does not re-run anything and closes the call as interrupt
     tools,
   );
   turn.cancel = AbortSignal.abort();
-  const ref: ToolContextRef = { current: tools, emit: turn.emit, scopeLabel: personal };
+  const ref: ToolContextRef = { current: tools, emit: (item) => turn.emit(item), scopeLabel: personal };
   const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
   assert.equal(resumed?.message.isError, true);
   assert.deepEqual(queries, []);
@@ -176,7 +170,7 @@ test("a cancelled turn does not re-run anything and closes the call as interrupt
 });
 
 test("a tool that throws during the re-run still records an error result so the model sees a closed call", async () => {
-  const sink: Array<{ type: string; payload: unknown }> = [];
+  const sink: Item[] = [];
   const tools = {
     async history() {
       throw new Error("transcript index offline");
@@ -188,14 +182,14 @@ test("a tool that throws during the re-run still records an error result so the 
     sink,
     tools,
   );
-  const ref: ToolContextRef = { current: tools, emit: turn.emit, scopeLabel: personal };
+  const ref: ToolContextRef = { current: tools, emit: (item) => turn.emit(item), scopeLabel: personal };
   const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
   assert.ok(resumed);
   assert.equal(resumed.message.isError, true);
   assert.match(resumed.message.content[0]!.text ?? "", /transcript index offline/);
   assert.deepEqual(
-    sink.map((e) => [e.type, (e.payload as { callId: string; isError: boolean }).isError]),
-    [["tool_result", true]],
+    sink.map((e) => [e.kind, e.isError]),
+    [["ToolResult", true]],
   );
 });
 
@@ -222,7 +216,7 @@ function buildScenario() {
     input: string;
     continueTurn?: boolean;
     resumeToolCall?: ResumableToolCall;
-    historyTypes: string[];
+    historyKinds: string[];
   }> = [];
   const agent: Agent = {
     async runTurn(turn) {
@@ -230,18 +224,20 @@ function buildScenario() {
         input: turn.input,
         ...(turn.continueTurn ? { continueTurn: true } : {}),
         ...(turn.resumeToolCall ? { resumeToolCall: turn.resumeToolCall } : {}),
-        historyTypes: turn.history.map((e) => e.type),
+        historyKinds: turn.history.map((e) => e.kind),
       });
       if (turn.resumeToolCall) {
         await turn.emit({
-          type: "tool_result",
-          payload: { tool: "history", callId: turn.resumeToolCall.callId, isError: false, result: "- found it" },
-          scopeLabel: turn.scopeLabel,
+          kind: "ToolResult",
+          tool: "history",
+          callId: turn.resumeToolCall.callId,
+          isError: false,
+          text: "- found it",
         });
       }
-      await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+      await turn.emit({ kind: "UserMessage", text: turn.input });
       const reply = "we kept the Q2 budget flat";
-      await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+      await turn.emit({ kind: "AgentMessage", text: reply });
       return { reply, modelCalls: 1 };
     },
     async screenSecurity() {
@@ -252,18 +248,15 @@ function buildScenario() {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "tool-call-resume-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
     runs,
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy: createDeployService({
@@ -290,28 +283,23 @@ function buildScenario() {
 
 async function seedDeadAttempt(
   sessions: ReturnType<typeof buildScenario>["sessions"],
-  callPayload: Record<string, unknown>,
+  call: NewItem<"ToolCall">,
 ): Promise<{ sessionId: string; userSeq: number }> {
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", personal);
-  const { lease } = await sessions.acquireLease(session.id);
-  try {
-    const user = await sessions.append(lease!, { type: "user", payload: { text: ASK }, scopeLabel: personal });
-    await sessions.append(lease!, { type: "tool_call", payload: callPayload, scopeLabel: personal });
-    return { sessionId: session.id, userSeq: user.seq };
-  } finally {
-    await sessions.releaseLease(lease!);
-  }
+  const writer = { sessionId: session.id };
+  const user = await sessions.append(writer, { kind: "UserMessage", text: ASK });
+  await sessions.append(writer, call);
+  return { sessionId: session.id, userSeq: user.seq };
 }
 
 test("a retry whose dangling call was marked retry-safe re-runs it silently instead of warning about an unknown outcome", async () => {
   const { orchestrator, sessions, runs, received, input } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const { sessionId, userSeq } = await seedDeadAttempt(sessions, {
+    kind: "ToolCall",
     tool: "history",
-    query: "budget",
     callId: "c-budget",
-    retrySafe: true,
-    rerun: { tool: "history", input: { query: "budget" } },
+    body: { query: "budget", retrySafe: true, rerun: { tool: "history", input: { query: "budget" } } },
   });
   await runs.noteTurnUserSeq(run.id, userSeq);
 
@@ -322,15 +310,17 @@ test("a retry whose dangling call was marked retry-safe re-runs it silently inst
   assert.deepEqual(turn.resumeToolCall, { callId: "c-budget", tool: "history", input: { query: "budget" } });
   assert.equal(turn.continueTurn, true, "the agent continues the recorded turn instead of re-sending the request");
 
-  const entries = await sessions.getEntries(sessionId);
-  const types = entries.map((e) => e.type);
-  assert.deepEqual(types, ["user", "tool_call", "tool_result", "user", "assistant"]);
+  const items = await sessions.getItems(sessionId);
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ["UserMessage", "ToolCall", "ToolResult", "UserMessage", "AgentMessage"],
+  );
 });
 
 for (const [label, payload] of [
-  ["unsafe", { tool: "history", query: "budget", callId: "c-budget", retrySafe: false }],
-  ["unmarked", { tool: "history", query: "budget", callId: "c-budget" }],
-] as const) {
+  ["unsafe", { kind: "ToolCall", tool: "history", callId: "c-budget", body: { query: "budget", retrySafe: false } }],
+  ["unmarked", { kind: "ToolCall", tool: "history", callId: "c-budget", body: { query: "budget" } }],
+] satisfies Array<[string, NewItem<"ToolCall">]>) {
   test(`a retry whose dangling call is ${label} records what happened as its result and does not re-run it`, async () => {
     const { orchestrator, sessions, runs, received, input } = buildScenario();
     const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
@@ -343,16 +333,16 @@ for (const [label, payload] of [
     const turn = received[0]!;
     assert.equal(turn.resumeToolCall, undefined);
     assert.equal(turn.continueTurn, true, "the agent continues the recorded turn instead of re-sending the request");
-    const entries = await sessions.getEntries(sessionId);
+    const items = await sessions.getItems(sessionId);
     assert.deepEqual(
-      entries.map((e) => e.type),
-      ["user", "tool_call", "tool_result", "user", "assistant"],
+      items.map((item) => item.kind),
+      ["UserMessage", "ToolCall", "ToolResult", "UserMessage", "AgentMessage"],
       "nothing is re-run; the call gets a recorded result",
     );
-    const result = entries[2]!.payload as { callId?: string; isError?: boolean; result?: string };
+    const result = items[2]!;
     assert.equal(result.callId, "c-budget");
     assert.equal(result.isError, true);
-    assert.match(result.result ?? "", /^\[system\] This call was interrupted; its outcome wasn't recorded\./);
-    assert.ok(turn.historyTypes.includes("tool_result"), "the model sees the recorded result");
+    assert.match(result.text ?? "", /^\[system\] This call was interrupted; its outcome wasn't recorded\./);
+    assert.ok(turn.historyKinds.includes("ToolResult"), "the model sees the recorded result");
   });
 }

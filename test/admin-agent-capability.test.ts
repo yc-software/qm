@@ -261,7 +261,7 @@ test("an autonomous turn's token cannot act as an admin, even when its actor hol
   }
 });
 
-test("an unattended admin-read grant opens only the five read-only routes and keeps the DM gate", async () => {
+test("an unattended admin-read grant opens only its read-only routes and keeps the DM gate", async () => {
   const s = await start();
   try {
     const granted = await capFor("admin-alice", { live: false, grants: ["admin.sessions.read"] });
@@ -271,7 +271,6 @@ test("an unattended admin-read grant opens only the five read-only routes and ke
       [`/v1/admin/sessions/missing-session?${scopeQ}`, 404],
       ["/v1/admin/scopes", 200],
       [`/v1/admin/errors?${scopeQ}`, 200],
-      [`/v1/admin/runs?${scopeQ}`, 200],
     ];
     for (const [path, expected] of allowed) {
       const response = await fetch(`${s.base}${path}`, { headers: { "x-agent-capability": granted } });
@@ -698,11 +697,11 @@ for (const liveAuthor of [false, true]) {
 }
 
 for (const [name, input, expected] of [
-  ["human thread reply", { unprompted: true, liveActor: true }, 200],
-  ["synthetic ambient wake", { unprompted: true }, 403],
-  ["bot thread reply", { unprompted: true, botActor: true }, 403],
-  ["cron", { triggered: true, surface: "cron", liveActor: true }, 403],
-  ["webhook", { triggered: true, surface: "webhook", liveActor: true }, 403],
+  ["human thread reply", { origin: { kind: "ambient", live: true } }, 200],
+  ["synthetic ambient wake", { origin: { kind: "ambient" } }, 403],
+  ["bot thread reply", { origin: { kind: "ambient" }, botActor: true }, 403],
+  ["cron", { origin: { kind: "automation" }, surface: "cron" }, 403],
+  ["webhook", { origin: { kind: "automation" }, surface: "webhook" }, 403],
 ] satisfies Array<[string, Partial<TurnRequest>, number]>) {
   test(`orchestrator-issued ${name} token reaches the HTTP admin gate with the right authority`, async () => {
     const s = await start();
@@ -710,9 +709,9 @@ for (const [name, input, expected] of [
       await selectDefaultSandbox(s.built, "admin-alice", "channel:C1");
       let cap: string | undefined;
       const provision = s.built.sandbox.provision.bind(s.built.sandbox);
-      s.built.sandbox.provision = (layers, opts) => {
+      s.built.sandbox.provision = (owner, opts) => {
         cap = opts?.env?.AGENT_API_TOKEN;
-        return provision(layers, opts);
+        return provision(owner, opts);
       };
       const admin = { externalId: "admin-alice" };
       const result = await s.built.app.turn({

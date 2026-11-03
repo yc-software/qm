@@ -61,8 +61,6 @@ test("external Slack strips private and org preloads before the prompt, but keep
   await b.config.setSoul("org:default-org", "ORG_SOUL_SENTINEL");
   await b.memory.capture("personal:U1", ["PERSONAL_MEMORY_SENTINEL"], Date.now(), "U1");
   await b.memory.capture("org:default-org", ["ORG_MEMORY_SENTINEL"], Date.now(), "U1");
-  await b.workspace.write("org:default-org", "secret.txt", "ORG_FILE_SENTINEL");
-  await b.workspace.write("personal:U1", "secret.txt", "PERSONAL_FILE_SENTINEL");
   for (const slug of ["safe", "confidential"]) {
     await b.serviceCreds.setServiceCredential("org:default-org", {
       slug,
@@ -89,17 +87,14 @@ test("external Slack strips private and org preloads before the prompt, but keep
   b.keychain!.listConnectorsByOwners = mustNotRead;
   const prompt = await b.app.turn(request("!sysprompt"));
   assert.equal(prompt.status, "ok", JSON.stringify(prompt));
-  assert.doesNotMatch(
-    prompt.reply!,
-    /PERSONAL_MEMORY_SENTINEL|ORG_MEMORY_SENTINEL|ORG_SOUL_SENTINEL|PERSONAL_FILE_SENTINEL|ORG_FILE_SENTINEL|confidential/,
-  );
+  assert.doesNotMatch(prompt.reply!, /PERSONAL_MEMORY_SENTINEL|ORG_MEMORY_SENTINEL|ORG_SOUL_SENTINEL|confidential/);
   assert.match(prompt.reply!, /safe/);
   await selectDefaultSandbox(b, "U1", scopeId("channel", `${namespace}:C1`));
-  const provisions: string[][] = [];
+  const provisions: string[] = [];
   const provision = b.sandbox.provision.bind(b.sandbox);
-  b.sandbox.provision = (layers, opts) => {
-    provisions.push(layers.map((l) => l.scopeId));
-    return provision(layers, opts);
+  b.sandbox.provision = (owner, opts) => {
+    provisions.push(owner);
+    return provision(owner, opts);
   };
   const run = b.sandbox.run.bind(b.sandbox);
   const seenClaims: CapabilityClaims[] = [];
@@ -118,7 +113,7 @@ test("external Slack strips private and org preloads before the prompt, but keep
   assert.match(code.reply!, /external-code-ok/);
   assert.equal(safeEnv, "SYNTHETIC_safe");
   assert.ok(provisions.length);
-  assert.ok(provisions.every((scopes) => scopes.every((scope) => scope.startsWith("channel:external-slack:"))));
+  assert.ok(provisions.every((scope) => scope.startsWith("channel:external-slack:")));
   assert.equal(seenClaims.at(-1)?.externalSlack, true);
   assert.equal(seenClaims.at(-1)?.ownerConnections, undefined);
   assert.equal(seenClaims.at(-1)?.memory, undefined);
@@ -146,11 +141,11 @@ test("external native tool ceiling cannot delegate, switch sandboxes, read confi
   );
   await tools.execute("printf safe");
   assert.equal(runs, 1);
-  for (const opts of [{ scratch: true }, { reachTarget: "private" }, { sandboxId: "private" }])
+  for (const opts of [{ scratch: true }, { sandboxId: "private" }])
     await assert.rejects(tools.execute("unsafe", opts), /private access/);
   for (const call of [
     () => tools.memoryRead(),
-    () => tools.read("global/secret"),
+    () => tools.read("secret.txt"),
     () => tools.callMcpTool("private", {}),
     () => tools.cronList(),
   ])

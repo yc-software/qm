@@ -53,26 +53,18 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "a
   turnWallClockMs?: number;
   errorNotice?: (noteOrStatus: string) => string;
   onClaimed?: () => Promise<void>;
-  deferWhenBusy?: boolean;
 }
 
 export interface TriggerOutcome {
   authzFailed: boolean;
   ownerLeft?: boolean;
   ran: boolean;
-  deferred?: boolean;
   status?: TurnResult["status"];
   errorCode?: string;
   note?: string;
   userNote?: string;
   reply?: string;
   sessionId?: string;
-}
-
-class FireDeferred extends Error {
-  constructor() {
-    super("fire deferred: session busy");
-  }
 }
 
 function isTriggerFailure(outcome: TriggerOutcome): boolean {
@@ -252,104 +244,97 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let userNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
-  let deferred = false;
-  const ran = await deps.idempotency
-    .once(spec.fireKey, async () => {
-      await spec.onClaimed?.();
-      if (spec.message !== undefined) {
-        status = "ok";
-        if (!spec.destination) return;
-        if (!deliverable) {
-          status = "refused";
-          note = notVisibleNote;
-          return;
-        }
-        const attributeAs = await relayAttribution(deps, spec);
-        await reachEnqueue({
-          deliveries: deps.deliveries,
-          destination: spec.destination,
-          text: spec.message,
-          idempotencyKey: spec.fireKey,
-          provenance: deliveryProvenance(spec, threadRef),
-          ...(attributeAs ? { attributeAs } : {}),
-          ...(spec.shadow ? { shadow: true } : {}),
-        });
+  const ran = await deps.idempotency.once(spec.fireKey, async () => {
+    await spec.onClaimed?.();
+    if (spec.message !== undefined) {
+      status = "ok";
+      if (!spec.destination) return;
+      if (!deliverable) {
+        status = "refused";
+        note = notVisibleNote;
         return;
       }
-      if (!homeAccess.ok) {
-        note = homeAccess.note ?? MEMBERSHIP_SKIP_NOTE;
-        return;
-      }
-      const res = await deps.run({
-        surface: spec.surface,
-        actor: { externalId: actorId },
-        conversation,
-        text: typeof spec.input === "string" ? spec.input : spec.input(roster),
-        ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
-        triggered: true,
-        ...(spec.unattendedGrants && grantsHomedWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
-        ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
-        ...turnModelOptions({
-          triggered: true,
-          surface: spec.surface,
-          thinkingLevel: spec.runtime?.effortLevel ?? spec.thinkingLevel,
-          fastMode: spec.fastMode ?? spec.runtime?.fastMode,
-        }),
-        ...(spec.model ? { model: spec.model } : {}),
-        ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
-        ...(spec.readOnly ? { readOnly: true } : {}),
-        ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
-        ...(spec.destination ? { triggerDestination: spec.destination } : {}),
-        ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
-        ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { ownerKeychainUnion: true } : {}),
+      const attributeAs = await relayAttribution(deps, spec);
+      await reachEnqueue({
+        deliveries: deps.deliveries,
+        destination: spec.destination,
+        text: spec.message,
         idempotencyKey: spec.fireKey,
+        provenance: deliveryProvenance(spec, threadRef),
+        ...(attributeAs ? { attributeAs } : {}),
+        ...(spec.shadow ? { shadow: true } : {}),
       });
-      if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
-      status = res.status;
-      errorCode = res.errorCode;
-      reply = res.reply;
-      sessionId = res.sessionId;
-      if (res.status === "silent") return;
-      if (res.status === "pending_approval") {
-        note = "hit a require_approval command — failed closed (no human at fire/event time)";
-        console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
-        return;
-      }
-      if (res.status === "ok" && (res.reply || res.attachments?.length)) {
-        if (!spec.destination) return;
-        if (liveDelivery) return;
-        if (!deliverable) {
-          status = "refused";
-          note = notVisibleNote;
-          return;
-        }
-        await reachEnqueue({
-          deliveries: deps.deliveries,
-          destination: spec.destination,
-          text: res.reply ?? "",
-          ...(res.attachments?.length ? { attachments: res.attachments } : {}),
-          idempotencyKey: spec.fireKey,
-          provenance: deliveryProvenance(spec, threadRef, res),
-          ...(spec.shadow ? { shadow: true } : {}),
-        });
-        return;
-      }
-      if (res.status === "ok") note = "produced no reply";
-      else {
-        note = res.reason ? `${res.status}: ${res.reason}` : res.status;
-        userNote = userFacingFailureClause(res);
-      }
-    })
-    .catch((e: unknown) => {
-      if (!(e instanceof FireDeferred)) throw e;
-      deferred = true;
-      return false;
+      return;
+    }
+    if (!homeAccess.ok) {
+      note = homeAccess.note ?? MEMBERSHIP_SKIP_NOTE;
+      return;
+    }
+    const res = await deps.run({
+      surface: spec.surface,
+      actor: { externalId: actorId },
+      conversation,
+      text: typeof spec.input === "string" ? spec.input : spec.input(roster),
+      origin: {
+        kind: "automation",
+        ...(spec.securityScreenData !== undefined ? { screenData: spec.securityScreenData } : {}),
+        ...(spec.destination ? { destination: spec.destination } : {}),
+        ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { useOwnerKeychain: true } : {}),
+      },
+      ...(spec.unattendedGrants && grantsHomedWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
+      ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
+      ...turnModelOptions({
+        triggered: true,
+        surface: spec.surface,
+        thinkingLevel: spec.runtime?.effortLevel ?? spec.thinkingLevel,
+        fastMode: spec.fastMode ?? spec.runtime?.fastMode,
+      }),
+      ...(spec.model ? { model: spec.model } : {}),
+      ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
+      ...(spec.readOnly ? { readOnly: true } : {}),
+      ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
+      ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
+      idempotencyKey: spec.fireKey,
     });
+    status = res.status;
+    errorCode = res.errorCode;
+    reply = res.reply;
+    sessionId = res.sessionId;
+    if (res.status === "silent") return;
+    if (res.status === "pending_approval") {
+      note = "hit a require_approval command — failed closed (no human at fire/event time)";
+      console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
+      return;
+    }
+    if (res.status === "ok" && (res.reply || res.attachments?.length)) {
+      if (!spec.destination) return;
+      if (liveDelivery) return;
+      if (!deliverable) {
+        status = "refused";
+        note = notVisibleNote;
+        return;
+      }
+      await reachEnqueue({
+        deliveries: deps.deliveries,
+        destination: spec.destination,
+        text: res.reply ?? "",
+        ...(res.attachments?.length ? { attachments: res.attachments } : {}),
+        idempotencyKey: spec.fireKey,
+        provenance: deliveryProvenance(spec, threadRef, res),
+        ...(spec.shadow ? { shadow: true } : {}),
+      });
+      return;
+    }
+    if (res.status === "ok") note = "produced no reply";
+    else {
+      note = res.reason ? `${res.status}: ${res.reason}` : res.status;
+      userNote = userFacingFailureClause(res);
+    }
+  });
 
   const outcome: TriggerOutcome = {
     authzFailed: false,
     ran,
-    ...(deferred ? { deferred } : {}),
     ...(status ? { status } : {}),
     ...(errorCode ? { errorCode } : {}),
     ...(note ? { note } : {}),

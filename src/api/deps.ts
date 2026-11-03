@@ -39,7 +39,6 @@ import type { AuditLog } from "../audit/audit-log.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import type { EgressEnforcement, Sandbox } from "../sandbox/sandbox.ts";
@@ -73,7 +72,6 @@ import type { ChannelPolicyStore } from "../surface-cache/channel-policy-store.t
 import type { UiStateStore } from "../surfaces/ui-state.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { ConnectorTokenSource, SlackUserClient } from "../loops/sources/adapter.ts";
-import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
 import type { BudgetTracker } from "../ratelimit/budget.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
@@ -150,7 +148,6 @@ export interface ServerDeps {
   emailAuthPrincipals?: readonly string[];
   emailAuthDomain?: string;
   slackAllowFrom?: readonly string[];
-  rateLimiter?: RateLimiter;
   budget?: BudgetTracker;
   sessions?: SessionStore;
   auditLog?: AuditLog;
@@ -160,7 +157,6 @@ export interface ServerDeps {
   runs?: RunStore;
   signals?: RunSignalStore;
   sessionStateBus?: SessionStateBus;
-  workspace?: WorkspaceStore;
   files?: FileArtifactStore;
   fileUploads?: DirectFileUploads;
   memory?: MemoryService;

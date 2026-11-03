@@ -29,9 +29,9 @@ test("background output selects the recorded private resource and fails closed w
     await built.processes!.register({ ...registryRow("private-output", "resource-output"), sandboxId: resource.id });
     let selected: string | undefined;
     const provision = built.sandbox.provision.bind(built.sandbox);
-    built.sandbox.provision = (layers, options) => {
+    built.sandbox.provision = (owner, options) => {
       selected = options?.sandboxId;
-      return provision(layers, options);
+      return provision(owner, options);
     };
     let reads = 0;
     built.sandbox.readProcess = async () => {

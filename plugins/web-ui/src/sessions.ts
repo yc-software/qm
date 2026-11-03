@@ -42,7 +42,7 @@ import {
   currentEarlierCount,
   detachSession,
   inheritedTranscript,
-  entriesToMessages,
+  itemsToMessages,
   regenerateTitle,
   sharedContextLabel,
   slackThreadUrl,
@@ -218,6 +218,9 @@ export function resetSessionsState(): void {
   sessionPatchEpoch++;
   sessionPatchTails.clear();
   sessionPatchVersions.clear();
+  for (const t of treeRefreshes.values()) if (t.timer) clearTimeout(t.timer);
+  treeRefreshes.clear();
+  unseenThreadParents.clear();
   sessionsState.list = [];
   sessionsState.loaded = false;
   listCurrent = false;
@@ -1861,15 +1864,11 @@ async function runSessionsRefresh(
   listRequestedAt = Date.now();
   try {
     const surface = sessionsState.webOnly ? "web" : undefined;
-    const roots = [...new Set(openConversationIds())];
-    const nested = roots.filter((id) => sessionsState.list.some((row) => row.id === id && row.parentSessionId));
-    const [page, children, nestedRows] = await Promise.all([
+    const nested = [...new Set(openConversationIds())].filter((id) =>
+      sessionsState.list.some((row) => row.id === id && row.parentSessionId),
+    );
+    const [page, nestedRows] = await Promise.all([
       fetchSessionPage({ limit: SESSION_BATCH_SIZE, ...(surface ? { surface } : {}) }),
-      Promise.all(
-        roots.map(
-          async (id) => [id, await fetchSessionChildren(id).catch(swallowAs("web-ui: load subagents", null))] as const,
-        ),
-      ),
       Promise.all(nested.map((id) => fetchSessionRow({ id }).catch(swallowAs("web-ui: refresh subagent", null)))),
     ]);
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
@@ -1878,7 +1877,7 @@ async function runSessionsRefresh(
       return false;
     }
     const last = page.sessions[page.sessions.length - 1];
-    let list = mergeFirstPage(
+    const list = mergeFirstPage(
       sessionsState.list,
       page,
       {
@@ -1888,12 +1887,10 @@ async function runSessionsRefresh(
       },
       openConversationIds(),
     );
-    for (const [id, rows] of children) if (rows) list = mergeChildren(list, id, rows);
-    list = upsertSessions(
+    sessionsState.list = upsertSessions(
       list,
       nestedRows.filter((row) => row !== null),
     );
-    sessionsState.list = list;
     sessionsState.hasArchived = Boolean(page.hasArchived);
     if (!activePaged) activeCursor = page.nextCursor;
     sessionsState.loaded = true;
@@ -1916,6 +1913,103 @@ async function runSessionsRefresh(
   }
 }
 
+const TREE_REFRESH_MS = 2_000;
+const UNSEEN_THREAD_RETRY_MS = 30_000;
+type TreeRefresh = {
+  at: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  running: boolean;
+  again: boolean;
+  fetches: number;
+  applied: number;
+};
+const treeRefreshes = new Map<string, TreeRefresh>();
+const unseenThreadParents = new Map<string, Promise<string | null>>();
+
+export function refreshTreesFor(threadRef: string): void {
+  const row = sessionsState.list.find((s) => s.threadRef === threadRef);
+  if (row) return refreshTreesFrom(row.id);
+  if (!openConversationIds().length) return;
+  let parent = unseenThreadParents.get(threadRef);
+  if (!parent) {
+    const lookup = fetchSessionRow({ threadRef }).then(
+      (found) => {
+        if (!found) forgetUnseenThread(threadRef, lookup);
+        return found?.parentSessionId ?? null;
+      },
+      (e: unknown) => {
+        forgetUnseenThread(threadRef, lookup);
+        swallow("web-ui: look up subagent parent", e);
+        return null;
+      },
+    );
+    parent = lookup;
+    unseenThreadParents.set(threadRef, parent);
+  }
+  void parent.then((id) => id && refreshTreesFrom(id));
+}
+
+function forgetUnseenThread(threadRef: string, lookup: Promise<string | null>): void {
+  setTimeout(() => {
+    if (unseenThreadParents.get(threadRef) === lookup) unseenThreadParents.delete(threadRef);
+  }, UNSEEN_THREAD_RETRY_MS);
+}
+
+export function refreshOpenTrees(): void {
+  for (const id of new Set(openConversationIds())) refreshTree(id);
+}
+
+function refreshTreesFrom(id: string): void {
+  const open = new Set(openConversationIds());
+  const seen = new Set<string>();
+  for (
+    let at: string | undefined = id;
+    at && !seen.has(at);
+    at = sessionsState.list.find((s) => s.id === at)?.parentSessionId
+  ) {
+    seen.add(at);
+    if (open.has(at)) refreshTree(at);
+  }
+}
+
+function treeRefresh(rootId: string): TreeRefresh {
+  let t = treeRefreshes.get(rootId);
+  if (!t) treeRefreshes.set(rootId, (t = { at: 0, timer: null, running: false, again: false, fetches: 0, applied: 0 }));
+  return t;
+}
+
+export function refreshTree(rootId: string): void {
+  const t = treeRefresh(rootId);
+  if (t.running) t.again = true;
+  else if (!t.timer)
+    t.timer = setTimeout(() => void runTreeRefresh(rootId, t), Math.max(0, t.at + TREE_REFRESH_MS - Date.now()));
+}
+
+async function runTreeRefresh(rootId: string, t: TreeRefresh): Promise<void> {
+  t.timer = null;
+  if (!openConversationIds().includes(rootId)) return;
+  t.running = true;
+  t.at = Date.now();
+  const epoch = sessionPatchEpoch;
+  const request = ++t.fetches;
+  try {
+    const children = await fetchSessionChildren(rootId).catch(swallowAs("web-ui: load subagents", null));
+    if (epoch !== sessionPatchEpoch) t.again = true;
+    if (!children || request < t.applied || epoch !== sessionPatchEpoch || !openConversationIds().includes(rootId))
+      return;
+    t.applied = request;
+    sessionsState.list = mergeChildren(sessionsState.list, rootId, children);
+    renderList();
+    for (const conversation of allConversations()) conversation.redraw();
+  } finally {
+    t.running = false;
+    if (t.again) {
+      t.again = false;
+      refreshTree(rootId);
+    }
+  }
+}
+
 export async function loadScopeSessions(scopeId: string): Promise<void> {
   const page = await fetchSessionPage({ limit: SESSION_BATCH_SIZE, scope: scopeId });
   sessionsState.list = upsertSessions(sessionsState.list, page.sessions);
@@ -1924,6 +2018,8 @@ export async function loadScopeSessions(scopeId: string): Promise<void> {
 async function loadSessionNeighbors(s: CoreSession): Promise<void> {
   const parentId = s.parentSessionId;
   const needsParent = Boolean(parentId) && !sessionsState.list.some((row) => row.id === parentId);
+  const tree = treeRefresh(s.id);
+  const request = ++tree.fetches;
   const [children, parent] = await Promise.all([
     fetchSessionChildren(s.id).catch(swallowAs("web-ui: load subagents", null)),
     needsParent && parentId
@@ -1933,7 +2029,10 @@ async function loadSessionNeighbors(s: CoreSession): Promise<void> {
   let list = sessionsState.list.some((row) => row.id === s.id)
     ? sessionsState.list
     : upsertSessions(sessionsState.list, [s]);
-  if (children) list = mergeChildren(list, s.id, children);
+  if (children && request > tree.applied) {
+    tree.applied = request;
+    list = mergeChildren(list, s.id, children);
+  }
   if (parent) list = upsertSessions(list, [parent]);
   if (list === sessionsState.list) return;
   sessionsState.list = list;
@@ -1943,7 +2042,7 @@ async function loadSessionNeighbors(s: CoreSession): Promise<void> {
 
 export async function openSession(
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
   historyMode: "push" | "replace" = "push",
 ): Promise<void> {
@@ -1951,7 +2050,7 @@ export async function openSession(
   if (keptUnreadId !== s.id) keptUnreadId = null;
   const navigation = historyMode === "push" ? beginNavigation() : null;
   try {
-    await showSession(s, entriesPrefetch, approvalsPrefetch);
+    await showSession(s, transcriptPrefetch, approvalsPrefetch);
   } finally {
     if (navigation && endNavigation(navigation)) syncUrlFromState(undefined, "push");
   }
@@ -1959,7 +2058,7 @@ export async function openSession(
 
 async function showSession(
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
 ): Promise<void> {
   if (appState.currentView !== "chats") {
@@ -1974,13 +2073,13 @@ async function showSession(
   const pane = splitInterceptsOpen(s);
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();
-  await openSessionInto(pane ?? mainConversation(), s, entriesPrefetch, approvalsPrefetch, true);
+  await openSessionInto(pane ?? mainConversation(), s, transcriptPrefetch, approvalsPrefetch, true);
 }
 
 export async function openSessionInto(
   conv: Conversation,
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
   tracked = conv === mainConversation(),
 ): Promise<boolean> {
@@ -1993,13 +2092,13 @@ export async function openSessionInto(
     }
     return true;
   }
-  if (s.id === conv.state.sessionId && !entriesPrefetch) return true;
+  if (s.id === conv.state.sessionId && !transcriptPrefetch) return true;
   const started = Date.now();
 
   refreshSessionsOnOpen();
   void loadSessionNeighbors(s);
 
-  const cached = entriesPrefetch ? undefined : cachedTranscript(s.id);
+  const cached = transcriptPrefetch ? undefined : cachedTranscript(s.id);
   if (cached) {
     if (!isLiveConversation(conv)) return false;
     if (tracked) sessionsState.openingKey = null;
@@ -2013,7 +2112,7 @@ export async function openSessionInto(
       prefetched: false,
       cached: true,
       tracked,
-      entries: cached.entries?.length ?? 0,
+      items: cached.items?.length ?? 0,
     });
     void reconcileCachedTranscript(conv, s, cached, approvals, conv.transcriptAnchor()).catch((error: unknown) =>
       reportHandledError("web:transcript_reconcile", error),
@@ -2029,39 +2128,39 @@ export async function openSessionInto(
   if (!isLiveConversation(conv)) return false;
   const isCurrent = conv.mountLoadingPane();
 
-  const fetchEntries = (): Promise<TranscriptPage | null> =>
+  const fetchPage = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(swallowAs("web-ui: load session transcript", null));
   const continuable = s.canContinue === true;
   const approvals = continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : null;
   let prefetched = false;
-  const entriesRes = await (entriesPrefetch
-    ? entriesPrefetch.then((r) => {
+  const transcriptRes = await (transcriptPrefetch
+    ? transcriptPrefetch.then((r) => {
         prefetched = r !== null;
-        return r ?? fetchEntries();
+        return r ?? fetchPage();
       })
-    : fetchEntries());
+    : fetchPage());
   if (!isLiveConversation(conv) || !isCurrent()) return false;
   const fetched = Date.now();
   const reportPainted = () =>
     reportSwitchPainted(started, {
       fetchedMs: fetched,
-      loaded: entriesRes !== null,
+      loaded: transcriptRes !== null,
       prefetched,
       cached: false,
       tracked,
-      entries: entriesRes?.entries?.length ?? 0,
+      items: transcriptRes?.items.length ?? 0,
     });
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return false;
     sessionsState.openingKey = null;
   }
-  if (!entriesPrefetch && conv.state.sessionId === s.id) {
+  if (!transcriptPrefetch && conv.state.sessionId === s.id) {
     renderList();
     return true;
   }
 
-  if (!entriesRes) {
+  if (!transcriptRes) {
     dropTranscript(s.id);
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
@@ -2069,8 +2168,8 @@ export async function openSessionInto(
     return false;
   }
 
-  storeTranscript(s.id, entriesRes);
-  mountTranscript(conv, s, entriesRes, approvals);
+  storeTranscript(s.id, transcriptRes);
+  mountTranscript(conv, s, transcriptRes, approvals);
   renderList();
   reportPainted();
   return true;
@@ -2084,7 +2183,7 @@ function reportSwitchPainted(
     prefetched: boolean;
     cached: boolean;
     tracked: boolean;
-    entries: number;
+    items: number;
   },
 ): void {
   if (document.visibilityState !== "visible") return;
@@ -2098,17 +2197,17 @@ function mountTranscript(
   approvals: Promise<{ approvals: PendingApproval[] } | null> | null,
 ): void {
   if (s.canContinue === true) {
-    const split = inheritedTranscript(s, page.entries ?? []);
+    const split = inheritedTranscript(s, page.items);
     conv.mountContinuable(
       s.threadRef,
       s.id,
       s.scopeId,
-      entriesToMessages(split.current, transcriptModel()),
+      itemsToMessages(split.current, transcriptModel()),
       s.channelName ?? null,
       s,
-      entriesToMessages(split.inherited, transcriptModel()),
+      itemsToMessages(split.inherited, transcriptModel()),
     );
-    const rawEarlier = page.earlierEntries ?? 0;
+    const rawEarlier = page.earlierItems ?? 0;
     conv.setTranscriptWindow(pageAnchor(page), currentEarlierCount(s, rawEarlier), rawEarlier > 0);
     if (approvals) conv.attachApprovalsWhenLoaded(s.id, approvals);
     conv.setPins(page.pins ?? []);

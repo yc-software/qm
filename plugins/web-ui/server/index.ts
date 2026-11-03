@@ -427,7 +427,7 @@ async function webTurnBase(
     surface: "web",
     actor: { externalId: user, ...(displayName ? { displayName } : {}) },
     conversation,
-    liveActor: true,
+    origin: { kind: "human" },
     deliveryTarget: threadRef,
     ...(inboxContext ? { conversationHeader: inboxContext } : {}),
     ...(appSlug
@@ -2173,7 +2173,7 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
-    path: "/api/sessions/:id/entries/:seq",
+    path: "/api/sessions/:id/items/:seq",
     handle: async (c) => {
       const { res, user } = c;
       const { id, seq } = c.params as { id: string; seq: string };
@@ -2181,7 +2181,7 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(
         res,
         "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/entries/${seq}?viewer=${encodeURIComponent(user)}`,
+        `/v1/sessions/${encodeURIComponent(id)}/items/${seq}?viewer=${encodeURIComponent(user)}`,
       );
     },
   },
@@ -2251,6 +2251,19 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res, user } = c;
       return relayCore(res, "GET", `/v1/memory?principalId=${encodeURIComponent(user)}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/spend",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      for (const key of ["from", "to", "bucket"]) {
+        const value = url.searchParams.get(key);
+        if (value) qs.set(key, value);
+      }
+      return relayCore(res, "GET", `/v1/spend?${qs.toString()}`);
     },
   },
   {

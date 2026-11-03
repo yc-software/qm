@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
-import { sleep } from "../util/async.ts";
+import type { ScopeId, Session, SessionType, SpawnMeta } from "../types.ts";
 import type { GoalRecord } from "../agent/goal.ts";
+import { isUserItem, type Item, type NewItem } from "./items.ts";
 
 export const LLM_CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
@@ -17,99 +17,25 @@ export function promptEnvelopeBody(envelope: unknown): { hash: string; body: str
   return { hash: createHash("sha256").update(body).digest("hex"), body };
 }
 
-const CONTEXT_SUMMARY_KIND = "context_summary";
-
-export interface ContextSummaryPayload {
-  kind: typeof CONTEXT_SUMMARY_KIND;
-  throughSeq: number;
-  text: string;
-}
-
-export function contextSummaryPayload(entry: SessionEntry): ContextSummaryPayload | null {
-  const payload = entry.payload as Partial<ContextSummaryPayload> | null;
-  if (
-    entry.type === "system" &&
-    payload?.kind === CONTEXT_SUMMARY_KIND &&
-    typeof payload.throughSeq === "number" &&
-    typeof payload.text === "string"
-  ) {
-    return { kind: CONTEXT_SUMMARY_KIND, throughSeq: payload.throughSeq, text: payload.text };
-  }
-  return null;
-}
-
-export function createContextSummaryPayload(throughSeq: number, text: string): ContextSummaryPayload {
-  return { kind: CONTEXT_SUMMARY_KIND, throughSeq, text };
+export function contextSummary(item: Item): { throughSeq: number; text: string } | null {
+  return item.kind === "ContextCompaction" && item.throughSeq !== null
+    ? { throughSeq: item.throughSeq, text: item.text ?? "" }
+    : null;
 }
 
 interface ContextWindow {
-  entries: SessionEntry[];
-  totalEntries: number;
+  items: Item[];
+  totalItems: number;
 }
 
-export interface Lease {
+export interface SessionWriter {
   sessionId: string;
-  token: string;
   turnId?: string;
-}
-
-export type LeaseHolder = "turn" | "compaction" | "fork" | "backfill";
-
-export interface LeaseAttempt {
-  lease: Lease | null;
-  heldBy?: LeaseHolder;
-  heldSince?: number;
-  heldUntil?: number;
-}
-
-export interface LeasePeek {
-  holder?: LeaseHolder;
-  heldUntil: number;
-}
-
-export interface AcquireLeaseWaitOptions {
-  waitFor?: (heldBy: LeaseHolder | undefined) => boolean;
-}
-
-const LEASE_WAIT_MIN_DELAY_MS = 25;
-const LEASE_WAIT_MAX_DELAY_MS = 1_000;
-
-export async function acquireLeaseWithin(
-  sessions: Pick<SessionStore, "acquireLease" | "peekLease">,
-  sessionId: string,
-  holder: LeaseHolder,
-  budgetMs: number,
-  opts?: AcquireLeaseWaitOptions,
-): Promise<LeaseAttempt & { waitedMs?: number }> {
-  const started = Date.now();
-  const deadline = started + budgetMs;
-  let delay = LEASE_WAIT_MIN_DELAY_MS;
-  for (;;) {
-    const waitedMs = Date.now() - started;
-    const attempt = await sessions.acquireLease(sessionId, holder);
-    if (attempt.lease) return { ...attempt, waitedMs };
-    if (attempt.heldUntil === undefined) return { ...attempt, waitedMs };
-    if (opts?.waitFor && !opts.waitFor(attempt.heldBy)) return { ...attempt, waitedMs };
-    for (;;) {
-      if (Date.now() + LEASE_WAIT_MIN_DELAY_MS > deadline) return { ...attempt, waitedMs: Date.now() - started };
-      await sleep(Math.min(delay, deadline - Date.now()));
-      delay = Math.min(delay * 2, LEASE_WAIT_MAX_DELAY_MS);
-      const seen = await sessions.peekLease(sessionId);
-      if (!seen || seen.heldUntil <= Date.now()) break;
-    }
-  }
+  runLeaseToken?: string;
 }
 
 export interface StoreOptions {
   now?: () => number;
-  leaseTtlMs?: number;
-}
-
-export interface NewEntry {
-  type: EntryType;
-  payload: unknown;
-  scopeLabel: ScopeId;
-  author?: string;
 }
 
 interface ParticipantViewPatch {
@@ -134,7 +60,7 @@ export interface SessionPin extends NewSessionPin {
 
 export const isWebThread = (threadRef: string): boolean => threadRef.startsWith("web:");
 
-export interface GetEntriesOptions {
+export interface GetItemsOptions {
   messagesOnly?: boolean;
   transcript?: boolean;
   turnId?: string;
@@ -232,15 +158,15 @@ export interface ParticipantWindow {
   validToSeq: number | null;
 }
 
-export function entryWithinTenure(
-  entry: Pick<SessionEntry, "seq" | "createdAt">,
+export function itemWithinTenure(
+  item: Pick<Item, "seq" | "createdAt">,
   window: Pick<ParticipantWindow, "validFrom" | "validTo" | "validFromSeq" | "validToSeq">,
 ): boolean {
-  const fromOk = window.validFromSeq !== null ? entry.seq >= window.validFromSeq : entry.createdAt >= window.validFrom;
+  const fromOk = window.validFromSeq !== null ? item.seq >= window.validFromSeq : item.createdAt >= window.validFrom;
   const toOk =
     window.validToSeq !== null
-      ? entry.seq < window.validToSeq
-      : window.validTo === null || entry.createdAt < window.validTo;
+      ? item.seq < window.validToSeq
+      : window.validTo === null || item.createdAt < window.validTo;
   return fromOk && toOk;
 }
 
@@ -323,7 +249,7 @@ export interface ParticipantScope {
 export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
   sessionId: string;
   seq: number;
-  type: EntryType;
+  type: "user" | "text" | "assistant";
   author?: string;
   text: string;
   createdAt: number;
@@ -343,12 +269,7 @@ export interface SessionSummary {
   lastMessage: string;
 }
 
-export function userMessagePreview(payload: unknown, maxLen = 160): string {
-  let text = "";
-  if (typeof payload === "string") text = payload;
-  else if (payload && typeof payload === "object" && typeof (payload as { text?: unknown }).text === "string") {
-    text = (payload as { text: string }).text;
-  }
+export function userMessagePreview(text: string, maxLen = 160): string {
   const kept =
     text
       .split("\n\n")
@@ -361,12 +282,19 @@ export function userMessagePreview(payload: unknown, maxLen = 160): string {
 
 export const ENTRY_STRING_BUDGET = 2_000;
 
-export type TranscriptEntry = SessionEntry & { truncated?: true };
+export type TranscriptItem = Item & { truncated?: true };
 
-const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
-const MODEL_ONLY_FIELDS: Partial<Record<EntryType, ReadonlySet<string>>> = {
-  user: new Set(["environment", "environmentSnapshot", "rosterSnapshot", "memoryRecall", "memoryRecallOutcomes"]),
-  thinking: new Set(["thinkingSignature"]),
+const MESSAGE_MODEL_CONTEXT: ReadonlySet<string> = new Set([
+  "environment",
+  "environmentSnapshot",
+  "rosterSnapshot",
+  "memoryRecall",
+  "memoryRecallOutcomes",
+]);
+const MODEL_ONLY_FIELDS: Partial<Record<Item["kind"], ReadonlySet<string>>> = {
+  UserMessage: MESSAGE_MODEL_CONTEXT,
+  SteeringMessage: MESSAGE_MODEL_CONTEXT,
+  Reasoning: new Set(["thinkingSignature"]),
 };
 const WALK_DEPTH = 8;
 
@@ -400,24 +328,27 @@ function shortenStrings(value: unknown, depth: number): { value: unknown; trunca
   return truncated ? { value: next, truncated } : { value, truncated };
 }
 
-function postsToTheConversation(entry: SessionEntry): boolean {
-  const p = entry.payload as { action?: unknown } | null;
-  return entry.type === "tool_call" && p?.action === "post";
+function withoutModelContext(item: Item, fields: ReadonlySet<string>): TranscriptItem {
+  if (!Object.keys(item.body).some((k) => fields.has(k))) return item;
+  return {
+    ...item,
+    body: Object.fromEntries(Object.entries(item.body).filter(([k]) => !fields.has(k))),
+    truncated: true,
+  };
 }
 
-function withoutModelContext(entry: SessionEntry, fields: ReadonlySet<string>): TranscriptEntry {
-  const payload = entry.payload;
-  if (!payload || typeof payload !== "object" || !Object.keys(payload).some((k) => fields.has(k))) return entry;
-  const visible = Object.fromEntries(Object.entries(payload).filter(([k]) => !fields.has(k)));
-  return { ...entry, payload: visible, truncated: true };
-}
-
-function projectEntry(entry: SessionEntry): TranscriptEntry {
-  const modelOnly = MODEL_ONLY_FIELDS[entry.type];
-  if (modelOnly) return withoutModelContext(entry, modelOnly);
-  if (!PROJECTED_TYPES.has(entry.type) || postsToTheConversation(entry)) return entry;
-  const walked = shortenStrings(entry.payload, 0);
-  return walked.truncated ? { ...entry, payload: walked.value, truncated: true } : entry;
+function projectItem(item: Item): TranscriptItem {
+  const modelOnly = MODEL_ONLY_FIELDS[item.kind];
+  if (modelOnly) return withoutModelContext(item, modelOnly);
+  if (
+    (item.kind !== "ToolCall" && item.kind !== "ToolResult") ||
+    (item.kind === "ToolCall" && item.body.action === "post")
+  )
+    return item;
+  const body = shortenStrings(item.body, 0);
+  const text = shortenStrings(item.text, 0);
+  if (!body.truncated && !text.truncated) return item;
+  return { ...item, body: body.value as Record<string, unknown>, text: text.value as string | null, truncated: true };
 }
 
 function payloadBytes(value: unknown, depth: number): number {
@@ -440,32 +371,28 @@ function payloadBytes(value: unknown, depth: number): number {
 }
 
 export function windowedTranscript(
-  entries: SessionEntry[],
+  items: Item[],
   window?: { tailTurns?: number; sinceSeq?: number; beforeSeq?: number },
-): { entries: TranscriptEntry[]; earlier: number } {
+): { items: TranscriptItem[]; earlier: number } {
   if (window?.beforeSeq !== undefined) {
-    const at = entries.findIndex((e) => e.seq >= window.beforeSeq!);
-    entries = entries.slice(0, at < 0 ? entries.length : at);
+    const at = items.findIndex((e) => e.seq >= window.beforeSeq!);
+    items = items.slice(0, at < 0 ? items.length : at);
   }
   let cut = 0;
   if (window?.sinceSeq !== undefined) {
-    const at = entries.findIndex((e) => e.seq >= window.sinceSeq!);
-    cut = at < 0 ? entries.length : at;
+    const at = items.findIndex((e) => e.seq >= window.sinceSeq!);
+    cut = at < 0 ? items.length : at;
   } else if (window?.tailTurns !== undefined && window.tailTurns > 0) {
     let turns = 0;
-    for (let i = entries.length - 1; i >= 0; i--) {
-      if (entries[i]!.type !== "user") continue;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (!isUserItem(items[i]!)) continue;
       if (++turns === window.tailTurns) {
         cut = i;
         break;
       }
     }
   }
-  return { entries: (cut > 0 ? entries.slice(cut) : entries).map(projectEntry), earlier: cut };
-}
-
-export function isOverheardEntry(e: Pick<SessionEntry, "type" | "payload">): boolean {
-  return e.type === "user" && (e.payload as { overheard?: unknown } | null)?.overheard === true;
+  return { items: (cut > 0 ? items.slice(cut) : items).map(projectItem), earlier: cut };
 }
 
 export class DuplicateCallError extends Error {
@@ -506,25 +433,19 @@ export interface SessionStore {
     },
   ): Promise<void>;
 
-  readonly leaseTtlMs: number;
-  acquireLease(sessionId: string, holder?: LeaseHolder): Promise<LeaseAttempt>;
-  peekLease(sessionId: string): Promise<LeasePeek | null>;
-  renewLease(lease: Lease): Promise<boolean>;
-  releaseLease(lease: Lease): Promise<void>;
-  forceReleaseLease(sessionId: string): Promise<void>;
-
-  append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
-  appendMany(lease: Lease, entries: readonly NewEntry[]): Promise<SessionEntry[]>;
-  getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  append(writer: SessionWriter, item: NewItem): Promise<Item>;
+  appendMany(writer: SessionWriter, items: readonly NewItem[]): Promise<Item[]>;
+  getItems(sessionId: string, opts?: GetItemsOptions): Promise<Item[]>;
   hasDeliveryEntry(sessionId: string, deliveryKey: string, slackTs?: string): Promise<boolean>;
-  countEntriesBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
+  countItemsBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
-  getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
-  latestEntrySeq(sessionId: string): Promise<number>;
+  getItem(sessionId: string, seq: number): Promise<Item | undefined>;
+  latestItemSeq(sessionId: string): Promise<number>;
+  latestToolPurposes(turnIds: readonly string[]): Promise<Map<string, string>>;
   goals(sessionIds: readonly string[]): Promise<Map<string, GoalRecord>>;
-  setGoal(lease: Lease, goal: GoalRecord, notices?: readonly NewEntry[]): Promise<void>;
+  setGoal(writer: SessionWriter, goal: GoalRecord, notices?: readonly NewItem[]): Promise<void>;
 
-  recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
+  recordLlmRequest(sessionId: string, rec: NewLlmRequest): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
   purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
@@ -534,8 +455,10 @@ export interface SessionStore {
   participantScopes(principalId: string): Promise<ParticipantScope[]>;
   listParticipantPage(principalId: string, query: ParticipantPageQuery): Promise<ParticipantPage>;
   descendantsOf(rootIds: readonly string[]): Promise<SessionDescendant[]>;
+  inheritedOrigin(session: Pick<Session, "id" | "parentSessionId">): Promise<SessionOrigin>;
   listDescendantsForParticipant(rootId: string, principalId: string, limit: number): Promise<Session[]>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
+  sameScopeAncestors(threadRefs: readonly string[]): Promise<Session[]>;
 
   deleteSession(sessionId: string): Promise<void>;
   deleteSessionIfEmpty(sessionId: string): Promise<boolean>;
@@ -546,7 +469,7 @@ export interface SessionStore {
   listPins(sessionId: string): Promise<SessionPin[]>;
   removePin(sessionId: string, pinId: string): Promise<boolean>;
 
-  visibleEntries(sessionId: string, principalId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  visibleItems(sessionId: string, principalId: string, opts?: GetItemsOptions): Promise<Item[]>;
 
   searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
 

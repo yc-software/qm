@@ -91,7 +91,7 @@ test("an unmentioned thread followup QM answers gets the ack reaction added then
     return { status: "ok", reply: "Staging is green." };
   });
   await h.handler.handleIncoming(h.followup, h.client);
-  assert.equal(h.turns[0].unprompted, true);
+  assert.equal(h.turns[0].origin?.kind, "ambient");
   assert.deepEqual(h.reactions, ["+eyes@2.000", "-eyes@2.000"]);
   assert.deepEqual(h.posts, ["Staging is green."]);
 });
@@ -156,7 +156,7 @@ test("waitRun signals replying only once the run has passed detection and begun 
   const client = createSlackCoreClient({
     turnStream,
     runs: {
-      onTerminal() {},
+      watchSession: () => ({ changed: async () => {}, close() {} }),
       get: async () => {
         polls++;
         if (polls === 2) turnStream.begin("r1");

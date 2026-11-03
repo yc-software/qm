@@ -23,7 +23,7 @@ Commands use `execute(command, sandbox_id?, credentials?, background?)`. Set
 with the job and displayed instead of the command; the raw command remains available
 in expanded output. `timeout_seconds` is the foreground wall-clock timeout or the
 background job lifetime. Background jobs require scoped, durable execution; disposable
-scratch and reached-room routing remain foreground-only.
+scratch routing remains foreground-only.
 
 In a shared conversation (anything other than the acting person's personal scope, or a
 personal scope whose environment another conversation is attached to), a
@@ -31,7 +31,7 @@ command that names a personal, granted, connector, role-broker or org environmen
 credential runs on the turn's scratch computer instead of the conversation's computer,
 including when it asked for the scoped computer or a `sandbox_id`. The scratch computer
 is the ordinary per-turn one: same image, the turn's environment and capability tokens,
-Files, skills and global mounts, but none of the shared workspace's files. Only that
+Files and skills, but none of the shared workspace's files. Only that
 turn's commands run there. The result tells the model the command moved. Brokered org
 service handles (`AGENT_CREDENTIAL_TOKEN`) carry no raw secret and stay on the requested
 computer. Personal conversations stage credentials on their own computer.

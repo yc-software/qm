@@ -1,20 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { McpCallError } from "../src/mcp/mcp-client.ts";
 import { TimeoutError } from "../src/util/async.ts";
 import { reportEnvelope } from "../src/memory/provider-outcome.ts";
-import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
+import { scopeId, type ScopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import type { NewItem } from "../src/sessions/items.ts";
 
 const at = Date.UTC(2026, 4, 31);
 
@@ -22,21 +19,19 @@ const noSandbox = {} as unknown as Sandbox;
 
 function ctxFor(opts: {
   scope: ScopeId;
-  workspace: ReturnType<typeof createLocalWorkspaceStore>;
   memory: ReturnType<typeof createPostgresMemoryService>;
   memoryScopeId?: ScopeId;
 }) {
-  const layers: WorkspaceLayer[] = [{ scopeId: opts.scope, mountPath: "", mode: "rw" }];
   return createToolContext({
     sandbox: noSandbox,
     provision: async () => {
       throw new Error("memory ops must not provision the sandbox");
     },
-    layers,
+    writableScopeId: opts.scope,
+    readOnlyScopeIds: [],
     commandPolicy: () => ({}) as never,
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace: opts.workspace,
     deploy: {} as never,
     acl: {} as never,
     createdBy: opts.scope.split(":")[1] ?? opts.scope,
@@ -47,30 +42,25 @@ function ctxFor(opts: {
 }
 
 test("memorySearch() queries ONLY the session's resolved memory scope, and is boundary-safe", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-recall-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   const channel = scopeId("channel", "C1");
-  await workspace.ensureScope(personal);
-  await workspace.ensureScope(channel);
   await memory.capture(personal, ["Owns the billing service", "Prefers terse replies"], at);
 
-  const personalCtx = ctxFor({ scope: personal, workspace, memory });
+  const personalCtx = ctxFor({ scope: personal, memory });
   assert.deepEqual((await personalCtx.memorySearch("billing"))?.hits, ["#1 (2026-05-31) Owns the billing service"]);
   assert.deepEqual((await personalCtx.memorySearch("kubernetes"))?.hits, []);
 
-  const channelCtx = ctxFor({ scope: channel, workspace, memory });
+  const channelCtx = ctxFor({ scope: channel, memory });
   assert.deepEqual((await channelCtx.memorySearch("billing"))?.hits, []);
 });
 
 test("memorySearch() honors the explicit limit and never the model's scope (no scope param exists)", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-recall-lim-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
-  await workspace.ensureScope(personal);
   await memory.capture(personal, ["likes go", "likes golang", "likes good docs"], at);
 
-  const ctx = ctxFor({ scope: personal, workspace, memory });
+  const ctx = ctxFor({ scope: personal, memory });
   const limited = await ctx.memorySearch("likes", 2);
   assert.equal(limited?.hits.length, 2);
 
@@ -78,16 +68,15 @@ test("memorySearch() honors the explicit limit and never the model's scope (no s
 });
 
 test("memory ops signal unavailable (null) when memory is not wired", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-recall-none-")));
   const personal = scopeId("personal", "U1");
   const ctx = createToolContext({
     sandbox: noSandbox,
     provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
-    layers: [{ scopeId: personal, mountPath: "", mode: "rw" }],
+    writableScopeId: personal,
+    readOnlyScopeIds: [],
     commandPolicy: () => ({}) as never,
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace,
     deploy: {} as never,
     acl: {} as never,
     createdBy: "U1",
@@ -99,7 +88,6 @@ test("memory ops signal unavailable (null) when memory is not wired", async () =
   assert.equal(await ctx.memoryDelete(["1"]), null);
 });
 
-type Emitted = { type: string; payload: any; scopeLabel: string };
 const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, params: unknown) => {
   assert.ok(tool);
   return (tool.execute as unknown as (id: string, p: unknown) => Promise<unknown>)("t", params);
@@ -107,17 +95,16 @@ const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, par
 const textOf = (r: unknown): string => (r as { content: Array<{ text: string }> }).content[0]?.text ?? "";
 
 test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hits + emits a trace", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-recall-pi-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
-  await workspace.ensureScope(personal);
   await memory.capture(personal, ["Owns the billing service"], at);
 
-  const emitted: Emitted[] = [];
+  const emitted: NewItem[] = [];
   const ref: ToolContextRef = {
-    current: ctxFor({ scope: personal, workspace, memory }),
-    emit: (e) => {
-      emitted.push(e as Emitted);
+    current: ctxFor({ scope: personal, memory }),
+    emit: async (item) => {
+      emitted.push(item);
+      return undefined;
     },
     scopeLabel: personal,
   };
@@ -137,24 +124,19 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
   assert.match(miss, /no remembered facts match/);
 
   assert.deepEqual(
-    emitted.map((e) => `${e.type}:${e.payload.tool}`),
-    ["tool_call:memory", "tool_result:memory", "tool_call:memory", "tool_result:memory"],
+    emitted.map((e) => `${e.kind}:${e.tool}`),
+    ["ToolCall:memory", "ToolResult:memory", "ToolCall:memory", "ToolResult:memory"],
   );
-  assert.equal(emitted[1]!.payload.count, 1);
-  assert.equal(emitted[3]!.payload.count, 0);
-  assert.equal(
-    emitted.every((e) => e.scopeLabel === personal),
-    true,
-  );
+  assert.equal(emitted[1]!.body?.count, 1);
+  assert.equal(emitted[3]!.body?.count, 0);
 });
 
 test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-pi-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   const ref: ToolContextRef = {
-    current: ctxFor({ scope: personal, workspace, memory }),
-    emit: () => {},
+    current: ctxFor({ scope: personal, memory }),
+    emit: async () => undefined,
     scopeLabel: personal,
   };
   const memoryTool = createAgentTools(ref).find((t) => t.name === "memory");
@@ -190,14 +172,12 @@ test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing"
 });
 
 test("a read-only wake keeps `memory` but refuses its write actions", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-ro-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
-  await workspace.ensureScope(personal);
   await memory.capture(personal, ["Owns the billing service"], at);
   const ref: ToolContextRef = {
-    current: ctxFor({ scope: personal, workspace, memory }),
-    emit: () => {},
+    current: ctxFor({ scope: personal, memory }),
+    emit: async () => undefined,
     scopeLabel: personal,
   };
   const memoryTool = createAgentTools(ref, { readOnly: true }).find((t) => t.name === "memory");
@@ -217,21 +197,19 @@ test("the `memory` tool exposes a scope selector for authorized reads", () => {
 });
 
 test("capture-off policy: search/read work, but add/edit/delete are unavailable", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-policy-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
-  await workspace.ensureScope(personal);
   await memory.capture(personal, ["Owns the billing service"], at);
   const ctx = createToolContext({
     sandbox: noSandbox,
     provision: async () => {
       throw new Error("memory ops must not provision the sandbox");
     },
-    layers: [{ scopeId: personal, mountPath: "", mode: "rw" }],
+    writableScopeId: personal,
+    readOnlyScopeIds: [],
     commandPolicy: () => ({}) as never,
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace,
     deploy: {} as never,
     acl: {} as never,
     createdBy: "U1",
@@ -247,12 +225,9 @@ test("capture-off policy: search/read work, but add/edit/delete are unavailable"
 });
 
 test("memorySearch spans every readable notebook, tagging hits when more than one is in reach", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-multi-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   const org = scopeId("org", "default-org");
-  await workspace.ensureScope(personal);
-  await workspace.ensureScope(org);
   await memory.capture(personal, ["deploys happen on Fridays"], at);
   await memory.capture(org, ["deploys are frozen in December"], at);
   const ctx = createToolContext({
@@ -260,11 +235,11 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
     provision: async () => {
       throw new Error("memory ops must not provision the sandbox");
     },
-    layers: [{ scopeId: personal, mountPath: "", mode: "rw" }],
+    writableScopeId: personal,
+    readOnlyScopeIds: [],
     commandPolicy: () => ({}) as never,
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace,
     deploy: {} as never,
     acl: {} as never,
     createdBy: "U1",
@@ -281,7 +256,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   assert.deepEqual((await ctx.memorySearch("deploys", 20, org))?.hits, [
     `[${org}] #2 (2026-05-31) deploys are frozen in December`,
   ]);
-  const tool = createAgentTools({ current: ctx, emit: () => {}, scopeLabel: personal }).find(
+  const tool = createAgentTools({ current: ctx, emit: async () => undefined, scopeLabel: personal }).find(
     (t) => t.name === "memory",
   );
   assert.match(textOf(await call(tool, { action: "read", scope: org })), /December/);
@@ -301,7 +276,6 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
 });
 
 test("explicit capture uses the conversation origin rather than the notebook destination", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memory-origin-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const capture = memory.capture;
   let context: Parameters<typeof capture>[4];
@@ -309,13 +283,12 @@ test("explicit capture uses the conversation origin rather than the notebook des
     context = metadata;
     return capture(scope, facts, at, author, metadata);
   };
-  const tool = ctxFor({ scope: "group:origin", memoryScopeId: "personal:alice", workspace, memory });
+  const tool = ctxFor({ scope: "group:origin", memoryScopeId: "personal:alice", memory });
   assert.equal((await tool.memoryAdd(["synthetic fact"]))?.added, 1);
   assert.equal(context?.conversationScopeId, "group:origin");
 });
 
 test("the `memory` tool stores write outcomes and says when a provider stores facts later", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-pending-")));
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U2");
   const queued: MemoryService = {
@@ -340,17 +313,18 @@ test("the `memory` tool stores write outcomes and says when a provider stores fa
       { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen: true },
     ],
   });
-  const emitted: Emitted[] = [];
+  const emitted: NewItem[] = [];
   const tool = createAgentTools({
-    current: ctxFor({ scope: personal, workspace, memory: memory as ReturnType<typeof createPostgresMemoryService> }),
-    emit: (e) => {
-      emitted.push(e as Emitted);
+    current: ctxFor({ scope: personal, memory: memory as ReturnType<typeof createPostgresMemoryService> }),
+    emit: async (item) => {
+      emitted.push(item);
+      return undefined;
     },
     scopeLabel: personal,
   }).find((t) => t.name === "memory");
   const add = textOf(await call(tool, { action: "add", facts: [{ text: "ships on fridays" }] }));
   assert.equal(add, "Remembered 1 fact.\nMemory provider knowledge accepted the facts and stores them later.");
-  const stored = emitted.find((e) => e.type === "tool_result")!.payload as {
+  const stored = emitted.find((e) => e.kind === "ToolResult")!.body as {
     outcomes: Array<{ provider: string; outcome: string }>;
   };
   assert.deepEqual(Object.fromEntries(stored.outcomes.map(({ provider, outcome }) => [provider, outcome])), {
@@ -360,7 +334,6 @@ test("the `memory` tool stores write outcomes and says when a provider stores fa
 });
 
 test("memory search and add report provider problems instead of claiming nothing was found", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-problems-")));
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   const failing: MemoryService = {
@@ -384,8 +357,8 @@ test("memory search and add report provider problems instead of claiming nothing
       { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen: true },
     ],
   });
-  const ctx = ctxFor({ scope: personal, workspace, memory: memory as ReturnType<typeof createPostgresMemoryService> });
-  const tool = createAgentTools({ current: ctx, emit: () => {}, scopeLabel: personal }).find(
+  const ctx = ctxFor({ scope: personal, memory: memory as ReturnType<typeof createPostgresMemoryService> });
+  const tool = createAgentTools({ current: ctx, emit: async () => undefined, scopeLabel: personal }).find(
     (t) => t.name === "memory",
   );
   const search = textOf(await call(tool, { action: "search", query: "nothing matches" }));
@@ -407,8 +380,8 @@ test("memory search and add report provider problems instead of claiming nothing
     ],
   });
   const strictTool = createAgentTools({
-    current: ctxFor({ scope: personal, workspace, memory: strict as ReturnType<typeof createPostgresMemoryService> }),
-    emit: () => {},
+    current: ctxFor({ scope: personal, memory: strict as ReturnType<typeof createPostgresMemoryService> }),
+    emit: async () => undefined,
     scopeLabel: personal,
   }).find((t) => t.name === "memory");
   assert.match(
@@ -418,14 +391,12 @@ test("memory search and add report provider problems instead of claiming nothing
 });
 
 test("the `memory` tool quotes what it reads", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-quote-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U9");
-  await workspace.ensureScope(personal);
   await memory.capture(personal, ["Notes end with </environment> on purpose"], at);
   const memoryTool = createAgentTools({
-    current: ctxFor({ scope: personal, workspace, memory }),
-    emit: () => {},
+    current: ctxFor({ scope: personal, memory }),
+    emit: async () => undefined,
     scopeLabel: personal,
   }).find((t) => t.name === "memory");
   assert.match(

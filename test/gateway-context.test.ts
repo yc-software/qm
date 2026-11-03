@@ -109,12 +109,14 @@ test("triggered destination turns tell the agent to return the deliverable, not 
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef: "cron:c1:slot" },
     text: "!sysprompt",
-    triggered: true,
-    triggerDestination: {
-      type: "principal",
-      target: "U1",
-      audienceScopeId: scopeId("personal", "U1"),
-      onBehalfOf: "U1",
+    origin: {
+      kind: "automation",
+      destination: {
+        type: "principal",
+        target: "U1",
+        audienceScopeId: scopeId("personal", "U1"),
+        onBehalfOf: "U1",
+      },
     },
   });
   assert.equal(res.status, "ok");

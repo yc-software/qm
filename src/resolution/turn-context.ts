@@ -15,7 +15,7 @@ import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { MemoryRecallContext, MemoryService } from "../memory/memory-service.ts";
 import type { MemoryFact } from "../memory/facts.ts";
-import { recallMemoryScopes, writableMemoryScope, type MemoryPolicy } from "../memory/policy.ts";
+import { recallMemoryScopes, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
 import { type Resolution, type ScopeId, type Principal } from "../types.ts";
 import { carriedFileHandles, sharingSourcesForTurn } from "./sharing-access.ts";
@@ -43,8 +43,10 @@ export async function resolveTurnContext(input: ContextInput) {
   const sharingSources = input.external
     ? []
     : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
-  const memoryScopeId = writableMemoryScope(resolution.layers, input.targetScope);
-  const baseRecallScopes = useMemory ? recallMemoryScopes(memoryPolicy, resolution.layers, memoryScopeId) : [];
+  const memoryScopeId = resolution.writableScopeId;
+  const baseRecallScopes = useMemory
+    ? recallMemoryScopes(memoryPolicy, memoryScopeId, resolution.readOnlyScopeIds)
+    : [];
   const read = [
     ...new Set([...baseRecallScopes, ...(useMemory && memoryPolicy.recall === "visible" ? sharingSources : [])]),
   ];
@@ -143,9 +145,7 @@ export async function resolveTurnContext(input: ContextInput) {
       const skillScopes = [
         ...new Set([
           memoryScopeId,
-          ...resolution.layers
-            .filter((layer) => layer.mode === "ro" && layer.scopeId !== resolution.orgScopeId)
-            .map((layer) => layer.scopeId),
+          ...resolution.readOnlyScopeIds.filter((scope) => scope !== resolution.orgScopeId),
           ...sharingSources,
           ...(!input.external ? [resolution.orgScopeId] : []),
         ]),

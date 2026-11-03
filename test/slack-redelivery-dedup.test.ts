@@ -59,7 +59,7 @@ test("a redelivered message that folded into a live run as a steer is injected o
   try {
     const first = await built.app.turn(slackTurn("first", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
+    const claimed = (await built.runs.claim("w1", 30_000))[0] ?? null;
     assert.equal(claimed?.id, runId);
     const steer = await built.app.turn(slackTurn("also this", "t2"));
     const replay = await built.app.turn(slackTurn("also this", "t2"));
@@ -77,7 +77,7 @@ test("a redelivery that arrives while the first delivery's run is live joins tha
   try {
     const first = await built.app.turn(slackTurn("hello", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
+    const claimed = (await built.runs.claim("w1", 30_000))[0] ?? null;
     assert.equal(claimed?.id, runId);
     const again = await built.app.turn(slackTurn("hello", "t1"));
     assert.equal(again.status, "silent");
@@ -92,7 +92,7 @@ test("a message folded as a steer is not re-run as a fresh turn after that run e
   try {
     const first = await built.app.turn(slackTurn("first", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
+    const claimed = (await built.runs.claim("w1", 30_000))[0] ?? null;
     await built.app.turn(slackTurn("fold me", "t2"));
     assert.equal((await built.signals.takePending(runId)).length, 1);
     await built.runs.complete(runId, claimed!.leaseToken!, { status: "silent" });
@@ -145,7 +145,7 @@ test("a redelivery of a finished run posts nothing rather than the answer a seco
   try {
     const first = await built.app.turn(slackTurn("hello", "t1"));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
+    const claimed = (await built.runs.claim("w1", 30_000))[0] ?? null;
     await built.runs.complete(runId, claimed!.leaseToken!, { status: "ok", reply: "the answer" });
     const again = await built.app.turn({ ...slackTurn("hello", "t1"), async: false });
     assert.equal(again.status, "silent");

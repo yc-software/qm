@@ -1,13 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -21,7 +19,6 @@ import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
@@ -45,20 +42,17 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const errors = createPostgresErrorLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "rdf-")));
   const orch = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService("default-org", config, acl),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: {
       profile: { backend: "fake", writablePersistence: "snapshot_to_workspace", processSessions: false },
     } as Sandbox,
     auditLog,
     errors,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy: createDeployService({

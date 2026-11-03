@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -21,11 +22,13 @@ const key = "company-gateway-secret";
 
 test("browser inference uses the company gateway with scoped model authorization", async (t) => {
   const calls: Array<{ url: string; auth: string | undefined; body: Record<string, unknown> }> = [];
+  const contexts: Array<Record<string, unknown>> = [];
   let status = 200;
   const upstream = httpServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     calls.push({ url: req.url!, auth: req.headers.authorization, body: JSON.parse(raw) });
+    contexts.push(Object.fromEntries(Object.entries(req.headers).filter(([name]) => name.startsWith("x-qm-"))));
     res.writeHead(status, { "content-type": "application/json" });
     res.end(
       JSON.stringify(
@@ -45,6 +48,7 @@ test("browser inference uses the company gateway with scoped model authorization
       apiKey: `Bearer ${key}`,
       apiKeyHeader: "Authorization",
       models: routes,
+      actorKey: "test-actor-key",
     },
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -56,6 +60,8 @@ test("browser inference uses the company gateway with scoped model authorization
     browserModel: model,
     aud: BROWSER_MODEL_AUD,
     browserAccount: "company" as const,
+    sessionId: "session-browser",
+    origin: "conversation" as const,
     exp: Date.now() + 60_000,
   };
   const token = await mintCapabilityToken(claims, TEST_CAPABILITY_SECRET);
@@ -73,6 +79,13 @@ test("browser inference uses the company gateway with scoped model authorization
     url: "/v1/chat/completions",
     auth: `Bearer ${key}`,
     body: { ...body, model: "anthropic/claude-opus-5", stream: false },
+  });
+  assert.deepEqual(contexts[0], {
+    "x-qm-session-id": "session-browser",
+    "x-qm-actor": gatewayActorId("U1", "test-actor-key"),
+    "x-qm-scope": `personal:${gatewayActorId("U1", "test-actor-key")}`,
+    "x-qm-purpose": "browser",
+    "x-qm-origin": "conversation",
   });
   for (const invalid of [
     { ...body, model: "other" },
@@ -143,9 +156,9 @@ test("gateway deployment provisions a browser token without exposing the company
   await selectDefaultSandbox(built, "U1", "personal:U1");
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = (layers, opts) => {
+  built.sandbox.provision = (owner, opts) => {
     captured = opts;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   const result = await built.app.turn({
     surface: "test",
@@ -162,6 +175,9 @@ test("gateway deployment provisions a browser token without exposing the company
   assert.equal(claims?.aud, BROWSER_MODEL_AUD);
   assert.equal(claims?.browserModel, model);
   assert.equal(claims?.scopeId, "personal:U1");
+  assert.equal(claims?.sessionId, result.sessionId);
+  assert.equal(claims?.origin, "conversation");
+  assert.equal((await verifyCapabilityToken(env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET))?.origin, "conversation");
 });
 
 test("gateway browsing never selects a direct provider when callback signing or URL is missing", async () => {
@@ -181,9 +197,9 @@ test("gateway browsing never selects a direct provider when callback signing or 
     await selectDefaultSandbox(built, "U1", "personal:U1");
     let captured: ProvisionOptions | undefined;
     const provision = built.sandbox.provision.bind(built.sandbox);
-    built.sandbox.provision = (layers, opts) => {
+    built.sandbox.provision = (owner, opts) => {
       captured = opts;
-      return provision(layers, opts);
+      return provision(owner, opts);
     };
     await built.app.turn({
       surface: "test",
@@ -241,9 +257,9 @@ test("company browsing without a gateway uses current deployment credentials and
   await selectDefaultSandbox(built, "U1", "personal:U1");
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = (layers, opts) => {
+  built.sandbox.provision = (owner, opts) => {
     captured = opts;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   await built.app.turn({
     surface: "test",

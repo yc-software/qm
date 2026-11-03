@@ -92,3 +92,46 @@ test("keychain: lists people with links to their user page", async () => {
   assert.equal(link.getAttribute("href"), "/settings/user?principal=alex%40example.com");
   page.close();
 });
+
+test("user detail: offboarding previews, applies after confirming, then offers reactivation", async () => {
+  let accept = false;
+  const calls: unknown[] = [];
+  const changes = [
+    { kind: "principal", id: "alex@example.com", label: "sign-in", action: "deactivate" },
+    { kind: "cron", id: "cr1", label: "digest", action: "disable_and_archive" },
+  ];
+  const page = await mountPage(
+    "/settings/user?principal=alex%40example.com",
+    {
+      "GET /users/alex@example.com": { principalId: "alex@example.com", deactivated: false },
+      "GET /keychain": { credentials: [], grants: [] },
+      "POST /users/alex@example.com/offboard": ({ body }) => (
+        calls.push(["offboard", body]),
+        body.apply
+          ? { applied: true, changes: changes.map((c, i) => ({ ...c, result: i ? "failed" : "done", error: "boom" })) }
+          : { applied: false, changes }
+      ),
+      "POST /users/alex@example.com/reactivate": () => (calls.push(["reactivate"]), { active: true }),
+    },
+    { confirm: () => accept },
+  );
+  await page.settle();
+  button(page.host, "Preview offboarding").click();
+  await page.settle();
+  assert.match(page.host.textContent!, /disable and archive/);
+  button(page.host, "Offboard").click();
+  await page.settle();
+  accept = true;
+  button(page.host, "Offboard").click();
+  await page.settle();
+  assert.match(page.host.textContent!, /1 failed\. Preview again to retry\./);
+  button(page.host, "Reactivate").click();
+  await page.settle();
+  assert.match(page.host.textContent!, /Sign-in is back on\./);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ["offboard", {}],
+    ["offboard", { apply: true }],
+    ["reactivate"],
+  ]);
+  page.close();
+});

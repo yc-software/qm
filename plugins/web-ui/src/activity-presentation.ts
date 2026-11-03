@@ -1,4 +1,12 @@
-import { toolCategory, toolRowKind, type TimelineItem, type ToolPayload, type ToolRowModel } from "./timeline.ts";
+import {
+  rowArgs,
+  rowTool,
+  toolBody,
+  toolCategory,
+  toolRowKind,
+  type TimelineItem,
+  type ToolRowModel,
+} from "./timeline.ts";
 import type { WorkBlock } from "./core-bridge.ts";
 
 export type ActivityCategory = "read" | "search" | "execute" | "other";
@@ -22,14 +30,13 @@ function shellWords(command: string): string[] | null {
   return words;
 }
 
-export function activityDescription(
-  call: ToolPayload,
-  result: ToolPayload = {},
-): {
+export function activityDescription(row: Pick<ToolRowModel, "call" | "result">): {
   category: ActivityCategory;
   target: string;
 } {
-  const tool = toolCategory({ ...result, ...call });
+  const call = toolBody(row.call);
+  const result = toolBody(row.result);
+  const tool = toolCategory(rowTool(row), rowArgs(row));
   if (tool === "read") return { category: "read", target: compactPath(call.path ?? result.path ?? "") };
   if (tool === "skill") {
     const name = call.name ?? result.name ?? "";
@@ -78,14 +85,14 @@ export function activityDescription(
 }
 
 export function activityLabel(row: ToolRowModel, status: WorkBlock["status"]): string | null {
-  const call = (row.call?.payload ?? {}) as ToolPayload;
-  const result = (row.result?.payload ?? {}) as ToolPayload;
-  const { category, target } = activityDescription(call, result);
+  const call = toolBody(row.call);
+  const result = toolBody(row.result);
+  const { category, target } = activityDescription(row);
   const state = toolRowKind(row, status);
   if (state === "approval") return null;
   const exit =
     state === "ok" &&
-    toolCategory({ ...result, ...call }) === "execute" &&
+    toolCategory(rowTool(row), rowArgs(row)) === "execute" &&
     typeof result.code === "number" &&
     result.code !== 0
       ? ` · exit ${result.code}`
@@ -97,18 +104,12 @@ export function activityLabel(row: ToolRowModel, status: WorkBlock["status"]): s
     return purpose + exit;
   }
   if (category === "other") return null;
-  const verbs = {
-    read: { ok: "Read", running: "Reading", failed: "Failed to read", attempted: "Tried reading" },
-    search: {
-      ok: "Searched for",
-      running: "Searching for",
-      failed: "Failed searching for",
-      attempted: "Tried searching for",
-    },
-    execute: { ok: "Ran", running: "Running", failed: "Failed running", attempted: "Tried running" },
-  };
+  const verbs = { read: "Reading", search: "Searching for", execute: "Running" };
   if (state === "ok" && (category === "read" || category === "execute") && target) return target + exit;
-  return `${verbs[category][state]} ${target || (category === "execute" ? "command" : "file")}${exit}`;
+  const label = `${verbs[category]} ${target || (category === "execute" ? "command" : "file")}`;
+  if (state === "failed") return `${label} · Failed`;
+  if (state === "attempted") return `${label} · Unconfirmed`;
+  return label + exit;
 }
 
 export function activityGroupSummary(
@@ -121,7 +122,6 @@ export function activityGroupSummary(
 } {
   const categories = new Set<ActivityCategory>();
   let failed = 0;
-  let running = 0;
   let approvals = 0;
   let attempted = 0;
   for (const item of items) {
@@ -129,23 +129,16 @@ export function activityGroupSummary(
     if (item.kind !== "tool") continue;
     const state = toolRowKind(item.row, status);
     if (state === "failed") failed++;
-    if (state === "running") running++;
     if (item.row.pending) approvals++;
     if (state === "attempted") attempted++;
-    categories.add(
-      activityDescription(
-        (item.row.call?.payload ?? {}) as ToolPayload,
-        (item.row.result?.payload ?? {}) as ToolPayload,
-      ).category,
-    );
+    categories.add(activityDescription(item.row).category);
   }
-  const active = running > 0;
   const phrases = [];
-  if (categories.has("read")) phrases.push(active ? "Reading files" : "Read files");
-  if (categories.has("search")) phrases.push(active ? "Searching files" : "Searched files");
-  if (categories.has("execute")) phrases.push(active ? "Running commands" : "Ran commands");
-  if (categories.has("other")) phrases.push(active ? "Using tools" : "Used tools");
-  const base = phrases.map((phrase, i) => (i ? phrase.toLowerCase() : phrase)).join(", ") || "Thought";
+  if (categories.has("read")) phrases.push("Reading files");
+  if (categories.has("search")) phrases.push("Searching files");
+  if (categories.has("execute")) phrases.push("Running commands");
+  if (categories.has("other")) phrases.push("Using tools");
+  const base = phrases.map((phrase, i) => (i ? phrase.toLowerCase() : phrase)).join(", ") || "Thinking";
   const notes = [
     failed ? `${failed} failed` : "",
     approvals ? "Approval needed" : "",
@@ -171,36 +164,30 @@ export function sessionPresentation(
   row: ToolRowModel,
   status: WorkBlock["status"],
 ): { label: string; target: string; preview: string } | null {
-  const call = (row.call?.payload ?? {}) as ToolPayload & {
-    target?: string;
-    text?: string;
-    task?: string;
-    interrupt?: boolean;
-  };
-  const result = (row.result?.payload ?? {}) as ToolPayload & { title?: string; sessionId?: string };
-  if (toolCategory({ ...result, ...call }) !== "session") return null;
+  const call = toolBody(row.call) as ReturnType<typeof toolBody> & { text?: string };
+  const result = toolBody(row.result);
+  if (toolCategory(rowTool(row), rowArgs(row)) !== "session") return null;
   const action = call.interrupt === true ? "interrupt" : (call.action ?? result.action ?? "");
-  const actions: Record<string, [string, string, string]> = {
-    open: ["Created", "Creating", "create"],
-    write: ["Sent message to", "Sending message to", "send message to"],
-    send_message: ["Sent message to", "Sending message to", "send message to"],
-    followup_task: ["Continued", "Continuing", "continue"],
-    read: ["Read updates from", "Reading updates from", "read updates from"],
-    wait: ["Waited", "Waiting", "wait"],
-    interrupt: ["Interrupted", "Interrupting", "interrupt"],
-    close: ["Closed", "Closing", "close"],
-    list: ["Listed", "Listing", "list"],
-    new: ["Started", "Starting", "start"],
-    fork: ["Forked into", "Forking into", "fork into"],
+  const actions: Record<string, [string, string]> = {
+    open: ["Creating", "create"],
+    write: ["Sending message to", "send message to"],
+    send_message: ["Sending message to", "send message to"],
+    followup_task: ["Continuing", "continue"],
+    read: ["Reading updates from", "read updates from"],
+    wait: ["Waiting on", "wait"],
+    interrupt: ["Interrupting", "interrupt"],
+    close: ["Closing", "close"],
+    list: ["Listing", "list"],
+    new: ["Starting", "start"],
+    fork: ["Forking into", "fork into"],
   };
   const verbs = actions[action];
   if (!verbs) return null;
   const state = toolRowKind(row, status);
   let label = verbs[0];
-  if (state === "running") label = verbs[1];
-  else if (state === "failed") label = `Failed to ${verbs[2]}`;
-  else if (state === "attempted") label = `Tried to ${verbs[2]}`;
-  else if (state === "approval") label = `${row.pending ? "Approval needed" : "Approval requested"} to ${verbs[2]}`;
+  if (state === "failed") label = `Failed to ${verbs[1]}`;
+  else if (state === "attempted") label = `Tried to ${verbs[1]}`;
+  else if (state === "approval") label = `${row.pending ? "Approval needed" : "Approval requested"} to ${verbs[1]}`;
   const target =
     result.title ||
     call.name ||
