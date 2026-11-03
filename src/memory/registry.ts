@@ -303,12 +303,8 @@ export function setBrainSecret(
   return putBrain(record, target.id, { clientSecret }, change);
 }
 
-export function redactBrain(brain: RegistryBrain) {
-  const {
-    auth: { clientSecretEnc, ...auth },
-    ...rest
-  } = brain;
-  return { ...rest, auth: { ...auth, hasClientSecret: !!clientSecretEnc } };
+export function redactBrain({ auth, ...rest }: RegistryBrain) {
+  return { ...rest, auth: { clientId: auth.clientId, hasClientSecret: !!auth.clientSecretEnc } };
 }
 
 export interface MemoryRegistryStore extends RegistryContext {
