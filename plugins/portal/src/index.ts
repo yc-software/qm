@@ -14,6 +14,7 @@ import { createServer, METHODS, type IncomingMessage, type ServerResponse } from
 import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
+import { createCanonicalResolver } from "./canonical.ts";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import { answerPreflight, parseAllowedOrigins, prepareCors } from "./cors.ts";
 import {
@@ -307,13 +308,9 @@ async function isAdmin(sub: string): Promise<boolean> {
   return false;
 }
 
-const CANONICAL_TTL_MS = 60_000;
 const CANONICAL_TIMEOUT_MS = 4_000;
-const canonicalCache = new LRUCache<string, string>({ max: 10_000, ttl: CANONICAL_TTL_MS });
 
-async function canonicalPrincipal(sub: string): Promise<string | null> {
-  const hit = canonicalCache.get(sub);
-  if (hit !== undefined) return hit;
+const canonicalPrincipal = createCanonicalResolver(async (sub) => {
   const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
   try {
     const r = await fetch(`${CORE}${path}`, {
@@ -325,14 +322,12 @@ async function canonicalPrincipal(sub: string): Promise<string | null> {
       return null;
     }
     const body = (await r.json()) as { canonicalId?: unknown };
-    const canonical = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
-    canonicalCache.set(sub, canonical);
-    return canonical;
+    return typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
   } catch (error) {
     console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
     return null;
   }
-}
+});
 
 function identityUnavailable(req: IncomingMessage, res: ServerResponse): void {
   if (wantsHtml(req))

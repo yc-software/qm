@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { mock } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -9,6 +9,7 @@ let lastWhoamiSigned = false;
 let lastConsentClicker: string | null = null;
 let lastImpersonateIdentity: string | null = null;
 let agentApiRequests = 0;
+let flakyLookups = 0;
 const VALID_AGENT_CAPABILITY = "valid.agent.capability";
 let deploymentLayerRequests = 0;
 const VALID_SOURCE_SIGNATURE = "v0=valid-source-signature";
@@ -58,6 +59,11 @@ const upstream = createServer((req: IncomingMessage, res) => {
   if (req.url?.startsWith("/v1/principals/U-alias/canonical")) {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ principalId: "U-alias", canonicalId: "U1" }));
+  }
+  if (req.url?.startsWith("/v1/principals/U-flaky/canonical")) {
+    flakyLookups++;
+    res.writeHead(flakyLookups === 1 ? 200 : 500, { "content-type": "application/json" });
+    return void res.end(JSON.stringify(flakyLookups === 1 ? { canonicalId: "U1" } : { error: "timeout" }));
   }
   if (req.url?.startsWith("/v1/principals/U-unresolved/canonical")) {
     res.writeHead(500, { "content-type": "application/json" });
@@ -218,6 +224,23 @@ test("when core cannot resolve the session subject the portal refuses to proxy i
     redirect: "manual",
   });
   assert.notEqual(logout.status, 503, "auth routes still work without core");
+});
+
+test("a signed-in user keeps their last known identity while core cannot answer the lookup", async () => {
+  mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  try {
+    const first = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-flaky") } });
+    assert.equal(((await first.json()) as { cookie: string }).cookie, "webuiuser=U1");
+    mock.timers.tick(61_000);
+    for (let i = 0; i < 2; i++) {
+      const r = await fetch(`${base}/api/x`, { headers: { cookie: sessionCookie("U-flaky") } });
+      assert.equal(r.status, 200);
+      assert.equal(((await r.json()) as { cookie: string }).cookie, "webuiuser=U1");
+    }
+    assert.ok(flakyLookups >= 2, "the portal keeps asking core in the background");
+  } finally {
+    mock.timers.reset();
+  }
 });
 
 test("web-ui /app-edit drops x-frame-options so its own frame-ancestors CSP can allow the app origin", async () => {
