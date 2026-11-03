@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
-import { scopeId, type WorkspaceLayer } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { SandboxAccessPlan } from "../src/sandbox/sandbox-resources.ts";
 
@@ -28,10 +28,8 @@ function agent(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContextDe
       ]),
     ],
   ]);
-  const stored: Array<{ scope: string; path: string }> = [];
   const deployed: Array<Record<string, unknown>> = [];
   let defaultProvisions = 0;
-  const layers: WorkspaceLayer[] = [{ scopeId: conversation, mountPath: "", mode: "rw" }];
   const sandbox = {
     profile: { backend: "modal" },
     readFile: async (h: SandboxHandle, path: string) => disks.get(h.id)?.get(path) ?? null,
@@ -59,15 +57,11 @@ function agent(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContextDe
       authorize?.(input as SandboxAccessPlan);
       return selectedBox;
     },
-    layers,
+    writableScopeId: conversation,
+    readOnlyScopeIds: [],
     commandPolicy: () => ({ mode: "denylist", rules: [] }),
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace: {
-      write: async (scope: string, path: string) => {
-        stored.push({ scope, path });
-      },
-    } as never,
     files: {} as never,
     acl: {} as never,
     deploy: {
@@ -81,7 +75,7 @@ function agent(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContextDe
     createdBy: "U1",
     ...opts.extra,
   });
-  return { ctx, disks, stored, deployed, provisions: () => defaultProvisions };
+  return { ctx, disks, deployed, provisions: () => defaultProvisions };
 }
 
 test("a selected sandbox read never falls back to the default computer", async () => {
@@ -95,12 +89,11 @@ test("a selected sandbox read never falls back to the default computer", async (
   assert.equal(h.provisions(), 0);
 });
 
-test("a selected write persists to that computer's backing store, not the conversation default", async () => {
+test("a selected write lands on that computer, not the conversation default", async () => {
   const h = agent({ access: plan("sb1", conversation) });
   await h.ctx.write("notes.md", "edited", "sb1");
   assert.equal(h.disks.get("selected")!.get("notes.md"), "edited");
   assert.equal(h.disks.get("default")!.get("notes.md"), "default copy");
-  assert.deepEqual(h.stored, [{ scope: conversation, path: "sandbox-files/sb1/notes.md" }]);
   assert.equal(h.provisions(), 0);
 });
 
@@ -109,7 +102,6 @@ test("another conversation's computer can be read but not written", async () => 
   assert.equal((await h.ctx.read("notes.md", undefined, "sb2")).sourceScopeId, other);
   await assert.rejects(h.ctx.write("notes.md", "x", "sb2"), /owned by this conversation/);
   assert.equal(h.disks.get("selected")!.get("notes.md"), "selected copy");
-  assert.deepEqual(h.stored, []);
 });
 
 test("publish reads files from the selected sandbox while the app stays owned by its creator", async () => {
@@ -133,27 +125,12 @@ test("metadata-only publish needs no computer but still rejects an unknown sandb
   assert.equal(h.deployed.length, 1);
 });
 
-test("naming the default sandbox explicitly persists exactly like omitting it", async () => {
-  const access = plan("sb1", conversation);
-  const h = agent({
-    access,
-    extra: {
-      provision: async () => ({ ...selectedBox, resourceId: "sb1" }),
-      sandboxResources: { get: async () => access.resource, resolve: async () => access.resource } as never,
-    },
-  });
-  await h.ctx.write("notes.md", "implicit");
-  await h.ctx.write("notes.md", "explicit", "sb1");
-  assert.deepEqual(new Set(h.stored.map((e) => `${e.scope} ${e.path}`)), new Set([`${conversation} notes.md`]));
-});
-
 test("an absolute path inside a computer's workspace reads and writes like its workspace path", async () => {
   const h = agent({ access: plan("sb1", conversation) });
   assert.equal((await h.ctx.read("/workspace/notes.md", undefined, "sb1")).content, "selected copy");
   assert.equal((await h.ctx.read("/workspace/./notes.md")).content, "default copy");
   await h.ctx.write("/workspace/notes.md", "edited", "sb1");
   assert.equal(h.disks.get("selected")!.get("notes.md"), "edited");
-  assert.deepEqual(h.stored, [{ scope: conversation, path: "sandbox-files/sb1/notes.md" }]);
 });
 
 test("an absolute path outside the workspace reads nothing and says so", async () => {

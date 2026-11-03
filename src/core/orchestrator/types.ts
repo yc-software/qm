@@ -28,7 +28,6 @@ import type { SessionStore } from "../../sessions/session-store.ts";
 import type { SessionStateBus } from "../../runs/session-state-bus.ts";
 import type { SessionSyscallsFactory } from "../../sessions/session-syscalls.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
-import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
 import type { Sandbox } from "../../sandbox/sandbox.ts";
 import type { ProcessRegistry } from "../../processes/process-registry.ts";
 import type { MonitorStore } from "../../monitors/monitor-store.ts";
@@ -123,7 +122,6 @@ export interface OrchestratorDeps {
   sessions: SessionStore;
   sessionStateBus?: SessionStateBus;
   sessionSyscalls?: SessionSyscallsFactory;
-  workspace: WorkspaceStore;
   files: FileArtifactStore;
   toolOutput?: ToolOutputStore;
   sandbox: Sandbox;

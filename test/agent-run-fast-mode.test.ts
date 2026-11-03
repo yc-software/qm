@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { applyTurnEffort, createAgent } from "../src/agent/agent-run.ts";
 import type { AgentOptions } from "../src/agent/agent-run.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem } from "../src/sessions/items.ts";
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import { defaultInteractiveThinkingLevel, getRequiredModel, modelSupportsFastMode } from "../src/model/pi-models.ts";
 import {
@@ -376,7 +375,7 @@ async function runTurn(
       orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
       runtime: { modelId, fastMode },
       ...(!gateway && modelId === ASTRA.id ? { providerKeys: { openai: "sk-openai-direct" } } : {}),
-      emit: async (entry: NewEntry) => ({ ...entry, seq: seq++, createdAt: Date.now() }) as unknown as SessionEntry,
+      emit: async (item) => storedItem(item, { sessionId, seq: seq++, createdAt: Date.now() }),
       recordModelCall: () => {},
       recordLlmRequest: (rec: TurnLlmRequestRecord) => {
         rows.push(rec);
@@ -565,9 +564,9 @@ test("compaction retries a refused summary on the configured fallback model", as
     const text = await agent.compactHistory!({
       session: { id: "compact-fallback" } as AgentTurnInput["session"],
       history: [
-        { seq: 1, kind: "user", payload: { text: "hello" }, createdAt: 1 },
-        { seq: 2, kind: "assistant", payload: { text: "hi" }, createdAt: 2 },
-      ] as unknown as SessionEntry[],
+        storedItem({ kind: "UserMessage", text: "hello" }, { sessionId: "compact-fallback", seq: 1, createdAt: 1 }),
+        storedItem({ kind: "AgentMessage", text: "hi" }, { sessionId: "compact-fallback", seq: 2, createdAt: 2 }),
+      ],
       recordModelCall: () => {},
     });
     assert.match(text, /summary of the work/);

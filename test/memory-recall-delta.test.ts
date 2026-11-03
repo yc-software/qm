@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { memoryRecallDelta, shownFacts } from "../src/memory/recall-delta.ts";
 import { renderFacts, type MemoryFact } from "../src/memory/facts.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { type Item, storedItem } from "../src/sessions/items.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-service.ts";
@@ -27,15 +27,11 @@ const memoryFact = (id: string, text: string): MemoryFact => ({
 const fact = (id: string, text: string) => ({ scope: alice, id, text: renderFacts([memoryFact(id, text)]) });
 const held = (...facts: Array<[string, string]>) =>
   new Map([[alice, shownFacts(facts.map(([id, text]) => memoryFact(id, text)))]]);
-const entry = (record: unknown, seq = 1): SessionEntry => ({
-  sessionId: "s",
-  seq,
-  type: "user",
-  parentSeq: null,
-  createdAt: 1,
-  scopeLabel: alice,
-  payload: { text: "hello", memoryRecall: JSON.parse(JSON.stringify(record)) },
-});
+const entry = (record: unknown, seq = 1): Item =>
+  storedItem(
+    { kind: "UserMessage", text: "hello", body: { memoryRecall: JSON.parse(JSON.stringify(record)) } },
+    { sessionId: "s", seq, createdAt: 1 },
+  );
 const all = held(["1", "ALPHA"], ["2", "BETA"], ["3", "GAMMA"]);
 
 test("the first recall is complete and an unchanged recall adds nothing", () => {
@@ -101,8 +97,9 @@ test("compacting away the recall anchor restores a current baseline", () => {
 
 test("recall checkpoint metadata never leaks into attachment-only compaction input", () => {
   const recorded = entry(memoryRecallDelta([fact("1", "CHECKPOINT_ONLY_FACT")], [], all).record);
-  recorded.payload = { ...(recorded.payload as Record<string, unknown>), text: "", environment: "file: report.csv" };
-  const text = compactTranscript([recorded]);
+  const text = compactTranscript([
+    { ...recorded, text: "", body: { ...recorded.body, environment: "file: report.csv" } },
+  ]);
   assert.match(text, /report.csv/);
   assert.doesNotMatch(text, /CHECKPOINT_ONLY_FACT|memoryRecall/);
 });
@@ -143,7 +140,7 @@ test("id-less provider lines inject only new lines over 20 turns, and timeouts o
     ],
   });
   const labels = new Map([[alice, "Alice"]]);
-  const history: SessionEntry[] = [];
+  const history: Item[] = [];
   const turn = async () => {
     const outcomes: MemoryProviderOutcome[] = [];
     const report = (outcome: MemoryProviderOutcome) => void outcomes.push(outcome);
@@ -239,7 +236,7 @@ test("a multi-line provider block that shares a line with an earlier one is inje
       { provider: "procedures", scopes: ["personal"], manage: false, label: "Procedures" },
     ],
   });
-  const history: SessionEntry[] = [];
+  const history: Item[] = [];
   const turn = async () => {
     const outcomes: MemoryProviderOutcome[] = [];
     const recalled = await recallAcrossScopes(memory, [alice], {
@@ -280,7 +277,7 @@ test("identical text from another provider never hides a refusal or keeps the ol
 });
 
 test("the checkpoint keeps no more earlier provider lines than the latest answer showed", () => {
-  const history: SessionEntry[] = [];
+  const history: Item[] = [];
   let record: { shown: unknown[] } = { shown: [] };
   for (let turn = 0; turn < 60; turn++) {
     const recalled = Array.from({ length: 40 }, (_, k) => provided("knowledge", `turn ${turn} line ${k}`));

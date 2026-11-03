@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { createToolContext, type ToolContextDeps, CONTROL_UNAVAILABLE } from "../src/tools/primitives.ts";
-import { scopeId, type WorkspaceLayer } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -41,15 +41,14 @@ const claims = (actorId: string): CapabilityClaims => ({
 
 function ctxFor(extra: Partial<ToolContextDeps>) {
   const scope = scopeId("personal", "U1");
-  const layers: WorkspaceLayer[] = [{ scopeId: scope, mountPath: "", mode: "rw" }];
   return createToolContext({
     sandbox: {} as unknown as Sandbox,
     provision: async () => handle,
-    layers,
+    writableScopeId: scope,
+    readOnlyScopeIds: [],
     commandPolicy: () => ({ mode: "denylist", rules: [] }),
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace: {} as never,
     deploy: {} as never,
     acl: {} as never,
     createdBy: "U1",
@@ -201,8 +200,9 @@ for (const scope of ["conversation", "channel"] as const) {
       {
         current: ctx,
         scopeLabel: scopeId("personal", "U1"),
-        emit: (entry) => {
-          entries.push(entry.type);
+        emit: async (item) => {
+          entries.push(item.kind);
+          return undefined;
         },
       },
       { controlTools: true },
@@ -213,7 +213,7 @@ for (const scope of ["conversation", "channel"] as const) {
         .then((result) => JSON.stringify(result));
     const results = await Promise.all([edit("First rule.", "First updated."), edit("Second rule.", "Second updated.")]);
     assert.equal(results.filter((result) => !result.includes("[error]")).length, 1);
-    assert.equal(entries.filter((type) => type === "tool_result").length, 2);
+    assert.equal(entries.filter((kind) => kind === "ToolResult").length, 2);
     assert.match(
       results.find((result) => result.includes("[error]"))!,
       /changed/,

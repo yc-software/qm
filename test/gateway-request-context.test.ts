@@ -8,12 +8,13 @@ import { probeModel } from "../src/model/model-runtime.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { withResolvedRuntime } from "../src/agent/runtime-choice.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { storedItem } from "../src/sessions/items.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { withModelRequestContext } from "../src/model/request-context.ts";
 import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { Config } from "../src/config.ts";
-import type { Session, SessionEntry } from "../src/types.ts";
+import type { Session } from "../src/types.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
@@ -53,7 +54,7 @@ function turn(extra: Partial<AgentTurnInput> = {}): AgentTurnInput {
     tools: {} as AgentTurnInput["tools"],
     scopeLabel: "channel:C123",
     orgScopeId: "org:test",
-    emit: async (entry) => ({ ...entry, sessionId: "session-cron", seq: seq++, parentSeq: null, createdAt: 0 }),
+    emit: async (item) => storedItem(item, { sessionId: "session-cron", seq: seq++, createdAt: 0 }),
     recordModelCall: () => {},
     cancel: AbortSignal.timeout(10_000),
     ...extra,
@@ -146,7 +147,10 @@ test("every helper call keeps its work's context and names its own purpose", asy
     modelGateway: gateway,
   });
   const session = { id: "session-cron" } as Session;
-  const entry = { sessionId: "session-cron", seq: 1, parentSeq: null, type: "user", payload: { text: "report" } };
+  const reportItem = storedItem(
+    { kind: "UserMessage", text: "report" },
+    { sessionId: "session-cron", seq: 1, createdAt: 0 },
+  );
   const helpers: Record<string, () => Promise<unknown>> = {
     detect: () =>
       harness.shouldRespond!({
@@ -160,7 +164,7 @@ test("every helper call keeps its work's context and names its own purpose", asy
     compaction: () =>
       harness.compactHistory!({
         session,
-        history: [{ ...entry, scopeLabel: "channel:C123", createdAt: 0 } as SessionEntry],
+        history: [reportItem],
         recordModelCall: () => {},
       }),
     title: () => harness.generateTitle!("User:\nSummarize the nightly report"),

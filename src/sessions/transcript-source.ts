@@ -1,19 +1,19 @@
-import type { SessionEntry } from "../types.ts";
-import type { GetEntriesOptions, SessionStore } from "./session-store.ts";
+import type { Item } from "./items.ts";
+import type { GetItemsOptions, SessionStore } from "./session-store.ts";
 
-type TranscriptStore = Pick<SessionStore, "getEntries" | "visibleEntries" | "countEntriesBefore">;
+type TranscriptStore = Pick<SessionStore, "getItems" | "visibleItems" | "countItemsBefore">;
 
 interface TranscriptRead {
-  entries: SessionEntry[];
+  items: Item[];
   earlier: number;
 }
 
 export interface TranscriptSource {
-  forRender(sessionId: string, opts?: GetEntriesOptions): Promise<TranscriptRead>;
-  forViewer(sessionId: string, principalId: string, opts?: GetEntriesOptions): Promise<TranscriptRead>;
+  forRender(sessionId: string, opts?: GetItemsOptions): Promise<TranscriptRead>;
+  forViewer(sessionId: string, principalId: string, opts?: GetItemsOptions): Promise<TranscriptRead>;
 }
 
-export function commonEntrySeqs(views: readonly (readonly SessionEntry[])[]): Set<number> {
+export function commonEntrySeqs(views: readonly (readonly Pick<Item, "seq">[])[]): Set<number> {
   const common = new Set((views[0] ?? []).map((entry) => entry.seq));
   for (const view of views.slice(1)) {
     const visible = new Set(view.map((entry) => entry.seq));
@@ -22,24 +22,24 @@ export function commonEntrySeqs(views: readonly (readonly SessionEntry[])[]): Se
   return common;
 }
 
-const emptyWindowStart = (opts?: GetEntriesOptions): number =>
+const emptyWindowStart = (opts?: GetItemsOptions): number =>
   Math.min(opts?.sinceSeq ?? Infinity, opts?.beforeSeq ?? Infinity, Number.MAX_SAFE_INTEGER);
 
 export function createTranscriptSource(sessions: TranscriptStore): TranscriptSource {
   const read = async (
     sessionId: string,
-    opts: GetEntriesOptions | undefined,
+    opts: GetItemsOptions | undefined,
     principalId?: string,
   ): Promise<TranscriptRead> => {
-    const entries =
+    const items =
       principalId === undefined
-        ? await sessions.getEntries(sessionId, { ...opts, transcript: true })
-        : await sessions.visibleEntries(sessionId, principalId, { ...opts, transcript: true });
-    const windowed = opts?.sinceSeq !== undefined || (opts?.limit !== undefined && entries.length >= opts.limit);
+        ? await sessions.getItems(sessionId, { ...opts, transcript: true })
+        : await sessions.visibleItems(sessionId, principalId, { ...opts, transcript: true });
+    const windowed = opts?.sinceSeq !== undefined || (opts?.limit !== undefined && items.length >= opts.limit);
     const earlier = windowed
-      ? await sessions.countEntriesBefore(sessionId, entries[0]?.seq ?? emptyWindowStart(opts), principalId)
+      ? await sessions.countItemsBefore(sessionId, items[0]?.seq ?? emptyWindowStart(opts), principalId)
       : 0;
-    return { entries, earlier };
+    return { items, earlier };
   };
   return {
     forRender: (sessionId, opts) => read(sessionId, opts),

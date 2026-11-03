@@ -2,6 +2,7 @@ import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { requestedRuntimeError, userRuntimeConfigBody, validateWebTurnModelOptions } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
+import { isUserItem } from "../sessions/items.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
@@ -25,6 +26,7 @@ import {
 import { selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
 import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
+import { steerWithheldItem } from "../core/turn-error.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
@@ -61,7 +63,7 @@ export function createTurnMethods(
   | "listSessionApprovals"
   | "pendingApprovalForThread"
   | "getRun"
-  | "getRunToolEntries"
+  | "getRunToolItems"
   | "subscribeRun"
   | "syncRunStream"
   | "activeRunForThread"
@@ -433,8 +435,13 @@ export function createTurnMethods(
               conversation,
               ...(session ? { sessionId: session.id } : {}),
             });
-            if (decision === "block")
+            if (decision === "block") {
+              if (session)
+                await deps.sessions
+                  .append({ sessionId: session.id }, steerWithheldItem(actor.displayName?.trim() || actor.id))
+                  .catch((error) => swallow("turn: withheld steer note", error));
               return req.async ? { status: "queued", runId: targetRun.id, steered: true } : drive(targetRun.id);
+            }
             if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
           }
           const fileNames = (req.attachments ?? []).map((a) =>
@@ -687,22 +694,19 @@ export function createTurnMethods(
       };
     },
 
-    async getRunToolEntries(runId, viewer, afterSeq) {
+    async getRunToolItems(runId, viewer, afterSeq) {
       const run = await deps.runs.get(runId);
       if (!run || run.turnUserSeq === null) return [];
       if (viewer && !(await viewerMayUseRun(run, viewer))) return [];
       const session = await deps.sessions.getByThread(run.sessionId);
       if (!session) return [];
-      const entries = await deps.sessions.getEntries(session.id, {
+      const items = await deps.sessions.getItems(session.id, {
         sinceSeq: Math.max(run.turnUserSeq, (afterSeq ?? -1) + 1),
       });
-      const nextRun = entries.findIndex((e) => {
-        const owner = (e.payload as { runId?: unknown } | null)?.runId;
-        return e.type === "user" && typeof owner === "string" && owner !== runId;
-      });
-      return entries
+      const nextRun = items.findIndex((item) => isUserItem(item) && item.turnId !== null && item.turnId !== runId);
+      return items
         .slice(0, nextRun < 0 ? undefined : nextRun)
-        .filter((e) => e.type === "tool_call" || e.type === "tool_result");
+        .filter((item) => item.kind === "ToolCall" || item.kind === "ToolResult");
     },
 
     async stopConversation(threadRef, viewer) {

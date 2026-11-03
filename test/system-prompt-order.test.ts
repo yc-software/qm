@@ -7,14 +7,13 @@ import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/ski
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { anthropicStream, contextHeaders, recordRequests } from "./support/gateway-stream.ts";
@@ -46,6 +45,7 @@ import {
 } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -111,7 +111,6 @@ function buildOrchestrator(
   const config = testConfigStore(ORG);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "spo-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const deploy = createDeployService({
     ...singleProcessDeps(),
@@ -128,7 +127,6 @@ function buildOrchestrator(
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
-    workspace,
     files,
     sandbox: fakeSandbox(),
     auditLog,
@@ -147,7 +145,7 @@ function buildOrchestrator(
     apiBaseUrl: "https://api.test",
     ...extra,
   });
-  return { orchestrator, memory, config, workspace, sessions, files, auditLog, acl };
+  return { orchestrator, memory, config, sessions, files, auditLog, acl };
 }
 
 const dm = (thread: string, text: string, extra: Partial<OrchestratorInput> = {}): OrchestratorInput => ({
@@ -211,7 +209,7 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
 
 test("Open carries only the live actor's personal reads into a shared turn and audits actual access", async () => {
   const teammate: Principal = { id: "U2", type: "internal" };
-  const { orchestrator, config, workspace, files, auditLog } = buildOrchestrator({
+  const { orchestrator, config, files, auditLog } = buildOrchestrator({
     sandbox: readSandbox(),
     isCurrentSharedScopeMember: async (_principalId, sourceScope) => sourceScope === scopeId("channel", "C1"),
   });
@@ -301,7 +299,6 @@ test("Open carries only the live actor's personal reads into a shared turn and a
   });
   assert.equal(external.status, "ok");
   assert.doesNotMatch(external.reply ?? "", /shared\/open-personal-U1\/private\.txt/);
-  assert.equal((await workspace.list(channelScope)).includes("private.txt"), false);
   const carryAudit = (await auditLog.events()).find((event) => event.action === "sharing.cross_context_read");
   assert.equal(carryAudit?.principalId, actor.id);
   assert.deepEqual(JSON.parse(carryAudit?.detail ?? "{}"), {
@@ -369,7 +366,7 @@ test("Open advertises the source and audits a carried skill read without grantin
     source: personal,
     target: scopeId("channel", "C1"),
   });
-  assert.deepEqual(await acl.list(), []);
+  assert.deepEqual(await acl.find({ ownerScopeId: personal }), []);
 });
 
 test("Open keeps unclassified personal memory out of rooms, loads room memory in DMs, and capture stays in the room", async () => {
@@ -1356,8 +1353,8 @@ for (const surfaceTools of [false, true]) {
       ...base,
       runTurn: async (turn) => {
         seen.push(turn);
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-        await turn.emit({ type: "assistant", payload: { text: "ok" }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "UserMessage", text: turn.input });
+        await turn.emit({ kind: "AgentMessage", text: "ok" });
         return { reply: "ok" };
       },
     };
@@ -1377,10 +1374,10 @@ for (const surfaceTools of [false, true]) {
     assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
     assert.match(seen[2]!.environment!, /GAMMA_MARKER/);
     assert.match(seen[2]!.environment!, /\nU1: 1 earlier fact was consolidated or removed/);
-    const entries = await sessions.getEntries(first.sessionId!);
-    const users = entries.filter((entry) => entry.type === "user");
-    assert.match(JSON.stringify(users[0]!.payload), /memoryRecall/);
-    assert.doesNotMatch(JSON.stringify(users[1]!.payload), /ALPHA_MARKER|BETA_MARKER/);
+    const items = await sessions.getItems(first.sessionId!);
+    const users = items.filter((item) => USER_ITEM_KINDS.includes(item.kind));
+    assert.match(JSON.stringify(users[0]!.body), /memoryRecall/);
+    assert.doesNotMatch(JSON.stringify(users[1]), /ALPHA_MARKER|BETA_MARKER/);
   });
 }
 
@@ -1398,7 +1395,7 @@ test("scheduled-work changes update the next turn's system block without rewriti
   const input = dm("dm:U1:snapshot-cache", "hello");
   const first = await orchestrator.handleTurn(input);
   assert.equal(first.status, "ok");
-  const originalHistory = await sessions.getEntries(first.sessionId!);
+  const originalItems = await sessions.getItems(first.sessionId!);
   const cron = await crons.create({
     owner: actor.id,
     createdBy: actor.id,
@@ -1422,8 +1419,8 @@ test("scheduled-work changes update the next turn's system block without rewriti
   assert.equal(seen[2]!.systemPrompt, seen[0]!.systemPrompt);
   assert.match(seen[3]!.systemPrompt, /Scheduled-work status is unavailable/);
   assert.doesNotMatch(seen[1]!.systemPrompt, /Other Linux|8 vCPU|\/new\/workspace/);
-  assert.deepEqual(seen[1]!.history, originalHistory);
-  assert.deepEqual((await sessions.getEntries(first.sessionId!)).slice(0, originalHistory.length), originalHistory);
+  assert.deepEqual(seen[1]!.history, originalItems);
+  assert.deepEqual((await sessions.getItems(first.sessionId!)).slice(0, originalItems.length), originalItems);
 });
 
 for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as const) {

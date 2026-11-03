@@ -3,14 +3,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
-import { promptEnvelopeBody, type NewEntry } from "../src/sessions/session-store.ts";
-import type { ScopeId, SessionEntry } from "../src/types.ts";
+import { promptEnvelopeBody } from "../src/sessions/session-store.ts";
+import { isUserItem, messageTs, storedItem, type Item } from "../src/sessions/items.ts";
+import type { ScopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 type Sink = {
-  entries: Array<{ seq: number; type: string; payload: unknown }>;
+  entries: Item[];
 };
 
 function turnInput(sessionId: string, sink: Sink, overrides: Partial<AgentTurnInput> = {}): AgentTurnInput {
@@ -23,10 +24,10 @@ function turnInput(sessionId: string, sink: Sink, overrides: Partial<AgentTurnIn
     tools: {} as AgentTurnInput["tools"],
     scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
-    emit: async (entry: NewEntry) => {
-      const appended = { ...entry, seq: seq++, createdAt: Date.now() };
-      sink.entries.push({ seq: appended.seq, type: entry.type, payload: entry.payload });
-      return appended as unknown as SessionEntry;
+    emit: async (item) => {
+      const stored = storedItem(item, { sessionId, seq: seq++, createdAt: Date.now() });
+      sink.entries.push(stored);
+      return stored;
     },
     recordModelCall: () => {},
     ...overrides,
@@ -118,9 +119,9 @@ for (const variant of ["text", "images", "documents", "finished during preparati
     try {
       const turn = turnInput("steer-order", sink, { runId: "run-order" });
       const emit = turn.emit;
-      turn.emit = async (entry) => {
-        if (entry.type === "thinking") await new Promise((resolve) => setTimeout(resolve, 100));
-        return emit(entry);
+      turn.emit = async (item) => {
+        if (item.kind === "Reasoning") await new Promise((resolve) => setTimeout(resolve, 100));
+        return emit(item);
       };
       turn.prepareSteer = async (text) => {
         if (finishDuringPreparation) {
@@ -129,11 +130,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
         } else {
           setTimeout(() => {
             releaseFirstStep();
-            assert.equal(
-              sink.entries.filter((entry) => entry.type === "user").length,
-              1,
-              "enqueue is not model intake",
-            );
+            assert.equal(sink.entries.filter(isUserItem).length, 1, "enqueue is not model intake");
           });
         }
         if (!withImages) return { text };
@@ -161,21 +158,15 @@ for (const variant of ["text", "images", "documents", "finished during preparati
         assert.ok(JSON.stringify(requestMessages[1]).includes(documentBase64));
         assert.ok(!JSON.stringify(sink.entries).includes(documentBase64));
       }
-      const steeredEntry = sink.entries.find(
-        (entry) => entry.type === "user" && (entry.payload as { steered?: boolean }).steered,
-      );
+      const steeredEntry = sink.entries.find((entry) => entry.kind === "SteeringMessage");
       assert.ok(steeredEntry);
       if (variant === "text")
         assert.ok(
-          steeredEntry.seq > sink.entries.find((entry) => entry.type === "thinking")!.seq,
+          steeredEntry.seq > sink.entries.find((entry) => entry.kind === "Reasoning")!.seq,
           "slow persistence of prior thinking must not cross the intake event",
         );
-      assert.equal(
-        (steeredEntry.payload as { ts?: string }).ts,
-        "1712.001",
-        "the steer entry is stamped with its arrival ts",
-      );
-      assert.match((steeredEntry.payload as { text: string }).text, /actually, do it differently/);
+      assert.equal(messageTs(steeredEntry), "1712.001", "the steer entry is stamped with its arrival ts");
+      assert.match(steeredEntry.text ?? "", /actually, do it differently/);
       assert.deepEqual(await signals.takePending("run-order"), [], "consumed steer is acknowledged");
       assert.equal(calls, 2);
       assert.deepEqual(
@@ -257,14 +248,14 @@ test("completed Pi attach results retain openable files in viewer history", asyn
     );
     assert.equal(result.reply, "Here are the previews.");
     assert.equal(calls, 2);
-    const original = (await store.getEntries(session.id)).find((e) => e.type === "tool_result");
+    const original = (await store.getItems(session.id)).find((item) => item.kind === "ToolResult");
     assert.ok(original);
-    assert.deepEqual((original.payload as { files?: unknown[] }).files, files);
+    assert.deepEqual(original.body.files, files);
     const source = createTranscriptSource(store);
     for (const read of [await source.forRender(session.id), await source.forViewer(session.id, "tester")]) {
-      const restored = read.entries.find((e) => e.type === "tool_result");
+      const restored = read.items.find((item) => item.kind === "ToolResult");
       assert.ok(restored);
-      assert.deepEqual((restored.payload as { files?: unknown[] }).files, files);
+      assert.deepEqual(restored.body.files, files);
       assert.deepEqual(restored, original);
     }
   } finally {
@@ -442,7 +433,7 @@ for (const stopBeforeIntake of [false, true]) {
       events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
       return sse(events);
     }) as typeof fetch;
-    const entries: SessionEntry[] = [];
+    const entries: Item[] = [];
     let steerTaken = () => {};
     const taken = new Promise<void>((resolve) => (steerTaken = resolve));
     try {
@@ -457,7 +448,7 @@ for (const stopBeforeIntake of [false, true]) {
               memoryRead: async () => {
                 await signals.send("tool-steer", { kind: "steer", text: "use the other file", ts: "tool.1" });
                 await taken;
-                assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
+                assert.equal(entries.filter(isUserItem).length, 1);
                 assert.equal((await signals.pending("tool-steer")).length, 1);
                 if (stopBeforeIntake) {
                   await signals.send("tool-steer", { kind: "abort" });
@@ -478,7 +469,7 @@ for (const stopBeforeIntake of [false, true]) {
           },
         ),
       );
-      const users = entries.filter((entry) => entry.type === "user");
+      const users = entries.filter(isUserItem);
       if (stopBeforeIntake) {
         assert.equal(users.length, 1);
         assert.equal((await signals.pending("tool-steer")).filter((row) => row.signal.kind === "steer").length, 1);
@@ -487,13 +478,13 @@ for (const stopBeforeIntake of [false, true]) {
         assert.equal(calls, before + 1, "cached Pi session must not redeliver the queued steer on its own");
       } else {
         assert.deepEqual(
-          entries.map((entry) => entry.type),
-          ["user", "tool_call", "tool_result", "user", "assistant"],
+          entries.map((entry) => entry.kind),
+          ["UserMessage", "ToolCall", "ToolResult", "SteeringMessage", "AgentMessage"],
         );
-        assert.equal((users[1]!.payload as { ts?: string }).ts, "tool.1");
+        assert.equal(messageTs(users[1]!), "tool.1");
         assert.deepEqual(
-          (await store.getEntries(session.id)).map((entry) => [entry.seq, entry.type]),
-          entries.map((entry) => [entry.seq, entry.type]),
+          (await store.getItems(session.id)).map((item) => [item.seq, item.kind]),
+          entries.map((entry) => [entry.seq, entry.kind]),
         );
         assert.equal((await signals.pending("tool-steer")).length, 0);
       }
@@ -554,11 +545,11 @@ test("a steer wakes a waiting background poll and lands without waiting out the 
     assert.equal(result.reply, "done");
     assert.deepEqual(waits, [30, undefined, 1]);
     assert.deepEqual(
-      sink.entries.map((entry) => entry.type),
-      ["user", "tool_call", "tool_result", "user", "tool_call", "tool_result", "assistant"],
+      sink.entries.map((entry) => entry.kind),
+      ["UserMessage", "ToolCall", "ToolResult", "SteeringMessage", "ToolCall", "ToolResult", "AgentMessage"],
     );
-    assert.equal((sink.entries[3]!.payload as { ts?: string }).ts, "poll.1");
-    assert.match(String((sink.entries[2]!.payload as { result?: unknown }).result), /still building/);
+    assert.equal(messageTs(sink.entries[3]!), "poll.1");
+    assert.match(sink.entries[2]!.text ?? "", /still building/);
   } finally {
     globalThis.fetch = realFetch;
     await agent.close?.();
@@ -609,11 +600,9 @@ test("a consumed steer is recorded when its acknowledgement fails", { timeout: 6
     });
     const result = await agent.runTurn(turn);
     assert.equal(result.reply, "done", "an acknowledgement failure does not tear down the live turn");
-    const steered = sink.entries.filter(
-      (entry) => entry.type === "user" && (entry.payload as { steered?: boolean }).steered,
-    );
+    const steered = sink.entries.filter((entry) => entry.kind === "SteeringMessage");
     assert.equal(steered.length, 1);
-    assert.equal((steered[0]!.payload as { ts?: string }).ts, "fail.1");
+    assert.equal(messageTs(steered[0]!), "fail.1");
     assert.equal(
       (await signals.pending("steer-failure")).filter((row) => row.signal.kind === "steer").length,
       1,
@@ -651,7 +640,7 @@ for (const abort of ["shutdown", "stop"] as const) {
     }) as typeof fetch;
     const shutdown = new AbortController();
     const cancel = new AbortController();
-    const entries: SessionEntry[] = [];
+    const entries: Item[] = [];
     const toolFinished = Promise.withResolvers<void>();
     try {
       await agent.runTurn(
@@ -681,14 +670,14 @@ for (const abort of ["shutdown", "stop"] as const) {
       );
       toolFinished.resolve();
       await new Promise((resolve) => setTimeout(resolve, 200));
-      const results = entries.filter((entry) => entry.type === "tool_result");
+      const results = entries.filter((entry) => entry.kind === "ToolResult");
       assert.equal(results.length, 1, "the late tool outcome does not add a second result");
       assert.deepEqual(
-        (({ interrupted, stopped }) => ({ interrupted, stopped }))(results[0]!.payload as Record<string, unknown>),
+        (({ interrupted, stopped }) => ({ interrupted, stopped }))(results[0]!.body),
         abort === "shutdown" ? { interrupted: true, stopped: undefined } : { interrupted: undefined, stopped: true },
       );
       const { resumeStrategy } = await import("../src/core/turn-resume.ts");
-      const userSeq = entries.find((entry) => entry.type === "user")!.seq;
+      const userSeq = entries.find((entry) => entry.kind === "UserMessage")!.seq;
       assert.equal(
         resumeStrategy(entries, { userSeq, workEntries: entries.filter((e) => e.seq > userSeq).length }).kind,
         "continue",

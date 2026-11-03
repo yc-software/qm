@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
@@ -23,9 +24,9 @@ test("speakers outside a project show their directory photo", async () => {
         matches: photos[id] ? [{ principalId: id, displayName: id, type: "internal", avatarUrl: photos[id] }] : [],
       });
     },
-    entries: [
-      { seq: 1, type: "user", createdAt: 1001, payload: { text: "hi", name: "Ada", speakerId: "ada@example.com" } },
-      { seq: 2, type: "user", createdAt: 1002, payload: { text: "yo", name: "Di", speakerId: "di@example.com" } },
+    items: [
+      item("UserMessage", { seq: 1, createdAt: 1001, text: "hi", body: { name: "Ada", speakerId: "ada@example.com" } }),
+      item("UserMessage", { seq: 2, createdAt: 1002, text: "yo", body: { name: "Di", speakerId: "di@example.com" } }),
     ],
   });
   try {

@@ -4,10 +4,6 @@ import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orches
 import type { ProvisionOptions, Sandbox, SandboxHandle, TeardownOptions } from "../src/sandbox/sandbox.ts";
 
 const OWN = "personal:alice";
-const layers = [
-  { scopeId: "org:global", mode: "ro", mountPath: "global" },
-  { scopeId: OWN, mode: "rw", mountPath: "" },
-];
 
 function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Error; teardownFails?: string[] } = {}) {
   const provisions: Array<ProvisionOptions | undefined> = [];
@@ -20,15 +16,12 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
   let n = 0;
   const sandbox: Partial<Sandbox> = {
     profile: { processSessions: false } as Sandbox["profile"],
-    async provision(provisionLayers, opts) {
+    async provision(owner, opts) {
       provisions.push(opts);
       await gates.shift();
       const failure = failNext.shift();
       if (failure) throw failure;
-      const owner = provisionLayers.find((layer) => layer.mode === "rw")?.scopeId;
-      const id = opts?.scratch
-        ? `scratch-${++n}`
-        : (opts?.sandboxId ?? (owner && owner !== OWN ? owner : `box-${++n}`));
+      const id = opts?.scratch ? `scratch-${++n}` : (opts?.sandboxId ?? (owner !== OWN ? owner : `box-${++n}`));
       return {
         id,
         resourceId: opts?.scratch ? undefined : id,
@@ -102,7 +95,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
     input: { origin: { kind: "user" }, runId: "run-1" },
     actor: { id: "alice", type: "internal" },
     session: { id: "s" },
-    resolution: { layers, orgScopeId: "org:global" },
+    resolution: { writableScopeId: OWN, readOnlyScopeIds: ["org:global"], orgScopeId: "org:global" },
     scopeId: OWN,
     memoryScopeId: OWN,
     transferId: "t",

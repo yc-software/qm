@@ -172,3 +172,30 @@ test("strict approval of an admin read cannot authorize an admin mutation", asyn
   assert.equal(approvals[0]?.approvalKey, "tool:admin:delete_memory");
   assert.match((blocked.content[0] as { text: string }).text, /needs human approval/);
 });
+
+test("admin session reads hand the model items without null columns", async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        session: { id: "s1" },
+        items: [{ kind: "UserMessage", seq: 0, text: "hi", callId: null, hidden: null, body: { name: "Ada" } }],
+        hasMore: false,
+      }),
+    );
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const call = createAdminCall(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "synthetic-capability");
+    const result = await call({ action: "session", scope: "org:test", id: "s1" });
+    assert.deepEqual(result.body, {
+      session: { id: "s1" },
+      items: [{ kind: "UserMessage", seq: 0, text: "hi", body: { name: "Ada" } }],
+      hasMore: false,
+    });
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

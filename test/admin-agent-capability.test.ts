@@ -709,9 +709,9 @@ for (const [name, input, expected] of [
       await selectDefaultSandbox(s.built, "admin-alice", "channel:C1");
       let cap: string | undefined;
       const provision = s.built.sandbox.provision.bind(s.built.sandbox);
-      s.built.sandbox.provision = (layers, opts) => {
+      s.built.sandbox.provision = (owner, opts) => {
         cap = opts?.env?.AGENT_API_TOKEN;
-        return provision(layers, opts);
+        return provision(owner, opts);
       };
       const admin = { externalId: "admin-alice" };
       const result = await s.built.app.turn({
