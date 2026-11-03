@@ -12,6 +12,7 @@ import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
@@ -70,20 +71,22 @@ test(
     a.scheduler.start(1000);
     b.scheduler.start(1000);
     try {
-      const cron = await a.crons.create({
-        schedule: { firstFireAt: Date.now() + 500 },
-        action: "remind me once",
-        owner: "U1",
-        createdBy: "U1",
-        ownerScopeId: scopeId("personal", "U1"),
-      });
+      const cron = await inTestTenant(() =>
+        a.crons.create({
+          schedule: { firstFireAt: Date.now() + 500 },
+          action: "remind me once",
+          owner: "U1",
+          createdBy: "U1",
+          ownerScopeId: scopeId("personal", "U1"),
+        }),
+      );
       a.scheduler.notifyChanged(cron.id);
       await until(() => calls.length >= 1, 30_000);
       assert.equal(calls.length, 1, "the due slot starts exactly one turn");
       await new Promise((r) => setTimeout(r, 16_000));
       assert.equal(calls.length, 1, "no sibling or reconcile re-run while (or after) the slow turn runs");
-      assert.equal((await b.crons.get(cron.id))?.enabled, false, "the one-shot ends disabled");
-      assert.equal((await b.crons.listFires(cron.id)).total, 1, "one fire recorded");
+      assert.equal((await inTestTenant(() => b.crons.get(cron.id)))?.enabled, false, "the one-shot ends disabled");
+      assert.equal((await inTestTenant(() => b.crons.listFires(cron.id))).total, 1, "one fire recorded");
     } finally {
       a.scheduler.stop();
       b.scheduler.stop();
@@ -103,13 +106,15 @@ test(
     a.scheduler.start(1000);
     b.scheduler.start(1000);
     try {
-      const cron = await a.crons.create({
-        schedule: { everyMs: 2000 },
-        action: "poll the queue",
-        owner: "U2",
-        createdBy: "U2",
-        ownerScopeId: scopeId("personal", "U2"),
-      });
+      const cron = await inTestTenant(() =>
+        a.crons.create({
+          schedule: { everyMs: 2000 },
+          action: "poll the queue",
+          owner: "U2",
+          createdBy: "U2",
+          ownerScopeId: scopeId("personal", "U2"),
+        }),
+      );
       a.scheduler.notifyChanged(cron.id);
       const fires = () => calls.filter((c) => c.idempotencyKey?.startsWith(`cron:${cron.id}:`)).length;
       await until(() => fires() >= 3, 45_000);
@@ -117,7 +122,7 @@ test(
       const keys = calls.map((c) => c.idempotencyKey);
       assert.equal(new Set(keys).size, keys.length, "no slot fires twice");
 
-      await b.crons.update(cron.id, { schedule: { everyMs: 60_000 } });
+      await inTestTenant(() => b.crons.update(cron.id, { schedule: { everyMs: 60_000 } }));
       b.scheduler.notifyChanged(cron.id);
       const at = fires();
       await new Promise((r) => setTimeout(r, 6_000));
@@ -138,13 +143,15 @@ test(
     const fires = createPostgresCronFireStore(testDatabaseUrl());
     const a = instance(calls, 0, fires);
     const b = instance(calls, 0, fires);
-    const cron = await a.crons.create({
-      schedule: { firstFireAt: Date.now() - 1000 },
-      action: "survive the crash",
-      owner: "U3",
-      createdBy: "U3",
-      ownerScopeId: scopeId("personal", "U3"),
-    });
+    const cron = await inTestTenant(() =>
+      a.crons.create({
+        schedule: { firstFireAt: Date.now() - 1000 },
+        action: "survive the crash",
+        owner: "U3",
+        createdBy: "U3",
+        ownerScopeId: scopeId("personal", "U3"),
+      }),
+    );
     a.scheduler.start(1000);
     b.scheduler.start(1000);
     try {
@@ -152,7 +159,7 @@ test(
       await until(() => fired() >= 1, 30_000);
       await new Promise((r) => setTimeout(r, 3_000));
       assert.equal(fired(), 1, "the orphaned slot fires exactly once across both instances");
-      assert.equal((await a.crons.listFires(cron.id)).total, 1);
+      assert.equal((await inTestTenant(() => a.crons.listFires(cron.id))).total, 1);
     } finally {
       a.scheduler.stop();
       b.scheduler.stop();
