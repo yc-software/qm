@@ -3,6 +3,7 @@ import type { ScopeId } from "../types.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
+import { claimAcrossTenants, rowTenant, type Claimed } from "../tenants/claim.ts";
 import { pgJsonText, pgTextSafe } from "../util/text.ts";
 import type { PackConfig } from "./normalize.ts";
 
@@ -42,6 +43,7 @@ export interface SkillPackStore {
   create(input: NewSkillPack): Promise<SkillPack>;
   get(id: string): Promise<SkillPack | null>;
   list(): Promise<SkillPack[]>;
+  acrossTenants(): Promise<Claimed<{ id: string }>[]>;
   update(id: string, patch: Partial<Omit<SkillPack, "id" | "createdAt">>): Promise<SkillPack>;
   remove(id: string): Promise<void>;
   recordImport(id: string, result: ImportRecord): Promise<void>;
@@ -206,6 +208,10 @@ export function createPostgresSkillPackStore(
     },
     async list() {
       return (await q(`SELECT * FROM skill_packs WHERE tenant_id = ${TENANT} ORDER BY id`)).map(packFromRow);
+    },
+    async acrossTenants() {
+      const { rows } = await claimAcrossTenants(`SELECT tenant_id, id FROM skill_packs ORDER BY tenant_id, id`);
+      return rows.map((row) => ({ id: String(row.id), ...rowTenant(row) }));
     },
     async update(id, patch) {
       const updated = await update(id, patch);
