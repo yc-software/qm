@@ -301,3 +301,9 @@ test("an unrelated message does not close an interrupted turn or supply its answ
   assert.deepEqual(findTrailingPartialTurn(entries, "my-turn"), { userSeq: 10, workEntries: 1 });
   assert.deepEqual(turnAtSeq(entries, 10), { userSeq: 10, workEntries: 1 });
 });
+
+test("a recorded interruption does not stop a later lone unrecorded call from being re-run", () => {
+  const killed = ent("tool_result", { callId: "c2", result: "[exit 143]", interrupted: true }, 3);
+  const entries = [user("build and deploy the release", 1), safeCall(2, true), killed, safeCall(4, true)];
+  assert.equal(resumeStrategy(entries, { userSeq: 1, workEntries: 3 }).kind, "retry");
+});

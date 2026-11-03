@@ -109,21 +109,16 @@ export function resumeStrategy(entries: readonly SessionEntry[], partial: Partia
   if (partial.workEntries === 0) return { kind: "restart" };
   const anchor = entries.find((e) => e.seq === partial.userSeq);
   const turn = entries.filter((e) => e.seq > partial.userSeq && (!anchor || !differentTurn(e, anchor)));
-  const answered = new Set<unknown>();
   const withResult = new Set<unknown>();
-  for (const e of turn) {
-    const payload = e.payload as { callId?: unknown; interrupted?: unknown } | null;
-    if (e.type !== "tool_result") continue;
-    withResult.add(payload?.callId);
-    if (payload?.interrupted !== true) answered.add(payload?.callId);
-  }
+  for (const e of turn)
+    if (e.type === "tool_result") withResult.add((e.payload as { callId?: unknown } | null)?.callId);
   const dangling = turn.filter(
-    (e) => e.type === "tool_call" && !answered.has((e.payload as { callId?: unknown } | null)?.callId),
+    (e) => e.type === "tool_call" && !withResult.has((e.payload as { callId?: unknown } | null)?.callId),
   );
   if (dangling.length === 0) return { kind: "continue" };
   const unrecorded = dangling.flatMap((e) => {
     const p = e.payload as { callId?: unknown; tool?: unknown } | null;
-    return typeof p?.callId === "string" && !withResult.has(p.callId)
+    return typeof p?.callId === "string"
       ? [{ callId: p.callId, tool: typeof p.tool === "string" ? p.tool : "tool" }]
       : [];
   });
@@ -138,7 +133,6 @@ export function resumeStrategy(entries: readonly SessionEntry[], partial: Partia
   if (
     payload?.retrySafe !== true ||
     typeof payload.callId !== "string" ||
-    withResult.has(payload.callId) ||
     typeof rerun?.tool !== "string" ||
     rerun.input === null ||
     typeof rerun.input !== "object" ||
