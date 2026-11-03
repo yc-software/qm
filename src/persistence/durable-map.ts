@@ -35,7 +35,7 @@ export function createPostgresMap<T>(
   table: string,
   indexedFields: readonly Extract<keyof T, string>[] = [],
 ): DurableMap<T> {
-  if (!/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error(`invalid table name: ${table}`);
+  if (!/^[a-z_][a-z0-9_]*$/.test(table)) throw new Error(`invalid table name: ${table}`);
   const migration = {
     id: `durable-map/${table}/0001`,
     statements: [
