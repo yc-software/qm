@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { inTestTenant } from "./support/test-tenants.ts";
 import {
   approvalDecisionMessage,
   approvalMessage,
@@ -219,25 +220,26 @@ test("recoveredApprovalContext refuses records it cannot replay", () => {
   );
 });
 
-test("createApprovalRegistry: begin marks in-flight (busy on double-click), release retries, settle deletes", () => {
-  const reg = createApprovalRegistry<{ command: string }>();
-  assert.deepEqual(reg.begin("r1"), { state: "missing" });
+test("createApprovalRegistry: begin marks in-flight (busy on double-click), release retries, settle deletes", () =>
+  inTestTenant(() => {
+    const reg = createApprovalRegistry<{ command: string }>();
+    assert.deepEqual(reg.begin("r1"), { state: "missing" });
 
-  reg.remember("r1", { command: "rm -rf /tmp/x" });
-  assert.deepEqual(reg.get("r1"), { command: "rm -rf /tmp/x" });
-  assert.deepEqual(reg.begin("r1"), { state: "ready", ctx: { command: "rm -rf /tmp/x" } });
-  assert.deepEqual(reg.begin("r1"), { state: "busy" }, "second click while the core call is in flight is rejected");
+    reg.remember("r1", { command: "rm -rf /tmp/x" });
+    assert.deepEqual(reg.get("r1"), { command: "rm -rf /tmp/x" });
+    assert.deepEqual(reg.begin("r1"), { state: "ready", ctx: { command: "rm -rf /tmp/x" } });
+    assert.deepEqual(reg.begin("r1"), { state: "busy" }, "second click while the core call is in flight is rejected");
 
-  reg.release("r1");
-  assert.deepEqual(
-    reg.begin("r1"),
-    { state: "ready", ctx: { command: "rm -rf /tmp/x" } },
-    "transient failure keeps the approval clickable",
-  );
+    reg.release("r1");
+    assert.deepEqual(
+      reg.begin("r1"),
+      { state: "ready", ctx: { command: "rm -rf /tmp/x" } },
+      "transient failure keeps the approval clickable",
+    );
 
-  reg.settle("r1");
-  assert.deepEqual(reg.begin("r1"), { state: "missing" }, "settled (core call succeeded) → deleted");
-});
+    reg.settle("r1");
+    assert.deepEqual(reg.begin("r1"), { state: "missing" }, "settled (core call succeeded) → deleted");
+  }));
 
 test("a quarantine-release card offers only Allow once and Deny, with the screen reason and preview", () => {
   const msg = approvalMessage([

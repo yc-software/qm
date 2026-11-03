@@ -315,14 +315,15 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
   assert.equal(replayed!.request.text, "still matters");
 });
 
-test("attributedSteerText prefixes foreign and ambient steers only", () => {
-  const eve = { id: "web-eve", displayName: "Eve Example" };
-  assert.equal(attributedSteerText(eve, "web-eve", "hello"), "hello");
-  assert.equal(attributedSteerText(eve, "web-alice", "hello"), "Eve Example: hello");
-  assert.equal(attributedSteerText({ id: "web-eve" }, "web-alice", "hello"), "web-eve: hello");
-  assert.equal(attributedSteerText({ id: "web-eve", displayName: "  " }, "web-alice", "hi"), "web-eve: hi");
-  assert.equal(attributedSteerText(eve, null, "hello"), "Eve Example: hello");
-});
+test("attributedSteerText prefixes foreign and ambient steers only", () =>
+  inTestTenant(() => {
+    const eve = { id: "web-eve", displayName: "Eve Example" };
+    assert.equal(attributedSteerText(eve, "web-eve", "hello"), "hello");
+    assert.equal(attributedSteerText(eve, "web-alice", "hello"), "Eve Example: hello");
+    assert.equal(attributedSteerText({ id: "web-eve" }, "web-alice", "hello"), "web-eve: hello");
+    assert.equal(attributedSteerText({ id: "web-eve", displayName: "  " }, "web-alice", "hi"), "web-eve: hi");
+    assert.equal(attributedSteerText(eve, null, "hello"), "Eve Example: hello");
+  }));
 
 test("core route: steer without text is rejected 400", async () => {
   const { run } = await inTestTenant(() => built.runs.enqueue({ sessionId: "t-notext", request: request("hi") }));
