@@ -498,21 +498,20 @@ export function createTurnMethods(
               ? `${a.name} (fetch via surface-file, ts ${origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs})`
               : a.name,
           );
+          if (!req.text.trim() && !fileNames.length) return { status: "refused", reason: "empty message" };
           const wake: Wake = {
             situation: origin.kind === "ambient" ? "ambientUpdate" : "addressed",
-            ts: String(Date.now()),
             text: injectedText,
             halt: origin.kind === "human" && isHalt(req.text),
             ...(fileNames.length ? { fileNames } : {}),
           };
-          const route = routeWake(wake, true, resolveTurnOrigin(targetRun.request).kind === "ambient");
-          if (route.kind === "steer" || route.kind === "drop") {
+          const route = routeWake(wake, resolveTurnOrigin(targetRun.request).kind === "ambient");
+          if (route.kind === "steer") {
             const steerTs = origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs;
             let redelivered = false;
             const routedRunId = await withCurrentProjectRoster(async () => {
-              if (route.kind === "steer" && route.signal === "abort") {
-                await stopRunTree(targetRun);
-              } else if (route.kind === "steer")
+              if (route.signal === "abort") await stopRunTree(targetRun);
+              else
                 redelivered = !(await deps.signals!.send(targetRun.id, {
                   kind: route.signal,
                   ...(route.text ? { text: route.text } : {}),
@@ -526,18 +525,16 @@ export function createTurnMethods(
               return { status: "refused", reason: "project membership changed; retry from the current project" };
             if (redelivered)
               return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
-            if (route.kind === "steer") {
-              const after = await deps.runs.get(targetRun.id);
-              if (!after || isTerminal(after.status)) {
-                const own = (await replayOrphanedRunSignals(targetRun.id)).find(
-                  (d) =>
-                    (d.signal.text === route.text ||
-                      (route.text !== undefined && d.signal.text === pgTextSafe(route.text))) &&
-                    d.signal.ts === steerTs,
-                );
-                if (own?.replayRunId)
-                  return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
-              }
+            const after = await deps.runs.get(targetRun.id);
+            if (!after || isTerminal(after.status)) {
+              const own = (await replayOrphanedRunSignals(targetRun.id)).find(
+                (d) =>
+                  (d.signal.text === route.text ||
+                    (route.text !== undefined && d.signal.text === pgTextSafe(route.text))) &&
+                  d.signal.ts === steerTs,
+              );
+              if (own?.replayRunId)
+                return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
             }
             return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
           }
