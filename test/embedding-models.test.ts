@@ -25,7 +25,7 @@ import {
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 import { testConfigStore, testConfigTables, testMap } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
 
 const definition = {
   kind: "embedding",
@@ -141,18 +141,17 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
   assert.equal(resolveEmbeddingModel("gateway/embed"), undefined);
 });
 
-test("org embedding selection is durable and survives chat runtime replacement and clearing", () =>
-  inTestTenant(async () => {
-    const tables = testConfigTables();
-    const first = testConfigStore("test", { tables });
-    await first.setEmbeddingModel("gateway/embed");
-    await first.setRuntimeSelection("org:test", { modelId: "gpt-5.5" });
-    await first.setRuntimeSelection("org:test", null);
-    const restarted = testConfigStore("test", { tables });
-    assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
-    await restarted.setEmbeddingModel(null);
-    assert.equal(await first.getEmbeddingModelDurable(), null);
-  }));
+tenantTest("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
+  const tables = testConfigTables();
+  const first = testConfigStore("test", { tables });
+  await first.setEmbeddingModel("gateway/embed");
+  await first.setRuntimeSelection("org:test", { modelId: "gpt-5.5" });
+  await first.setRuntimeSelection("org:test", null);
+  const restarted = testConfigStore("test", { tables });
+  assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
+  await restarted.setEmbeddingModel(null);
+  assert.equal(await first.getEmbeddingModelDurable(), null);
+});
 
 test("HTTP embedding selection accepts only known embedding models and survives a new recall", async (t) => {
   const config = testConfig({ openaiApiKey: "test-key" });

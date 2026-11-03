@@ -10,7 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testConfigTables } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
 
 const org = scopeId("org", "default-org");
 const internalActor = { externalId: "U1" };
@@ -29,18 +29,18 @@ function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "esp-")) }));
 }
 
-test("external-slack-participants: default off; the org flip is what turns it on", () =>
-  inTestTenant(async () => {
-    const c = testConfigStore("default-org");
-    assert.equal(c.getExternalSlackParticipants(org), false);
-    await c.setExternalSlackParticipants(org, true);
-    assert.equal(c.getExternalSlackParticipants(org), true);
-    await c.setExternalSlackParticipants(org, false);
-    assert.equal(c.getExternalSlackParticipants(org), false);
-  }));
+tenantTest("external-slack-participants: default off; the org flip is what turns it on", async () => {
+  const c = testConfigStore("default-org");
+  assert.equal(c.getExternalSlackParticipants(org), false);
+  await c.setExternalSlackParticipants(org, true);
+  assert.equal(c.getExternalSlackParticipants(org), true);
+  await c.setExternalSlackParticipants(org, false);
+  assert.equal(c.getExternalSlackParticipants(org), false);
+});
 
-test("external-slack-participants: the durable read sees a flip from another instance without a restart", () =>
-  inTestTenant(async () => {
+tenantTest(
+  "external-slack-participants: the durable read sees a flip from another instance without a restart",
+  async () => {
     const tables = testConfigTables();
     const a = testConfigStore("default-org", { tables });
     const b = testConfigStore("default-org", { tables });
@@ -50,7 +50,8 @@ test("external-slack-participants: the durable read sees a flip from another ins
 
     assert.equal(b.getExternalSlackParticipants(org), false, "the sibling's stale read-cache hasn't seen the flip");
     assert.equal(await b.getExternalSlackParticipantsDurable(org), true, "but the durable read picks it up at once");
-  }));
+  },
+);
 
 test("a Slack channel turn with an external in the audience is refused while the toggle is off", async () => {
   const { app } = freshApp();
