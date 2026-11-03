@@ -19,7 +19,7 @@ const ADMIN = {
   ...testTenantHeaders(),
 };
 
-afterEach(() => setCustomProviders([]));
+afterEach(() => inTestTenant(() => setCustomProviders([])));
 
 test("serverDeps wires the custom-provider store and resolves a custom boot default lazily", () =>
   inTestTenant(async () => {

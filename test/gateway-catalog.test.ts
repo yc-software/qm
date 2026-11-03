@@ -70,7 +70,7 @@ function fixture(models = [group()], aliases = {}) {
     },
   };
 }
-afterEach(() => setGatewayModels([]));
+afterEach(() => inTestTenant(() => setGatewayModels([])));
 
 test("gateway configuration no longer requires a model list", () =>
   inTestTenant(() => {
