@@ -1,5 +1,4 @@
 import { assertDocumentListing, assertSharedRecordIdentity } from "./support/file-document-listing.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,7 +13,7 @@ import { fileArtifactId, type PutFileInput } from "../src/files/file-artifact-st
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, testTenants } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenants } from "./support/test-tenants.ts";
 
 const [TEST_TENANT] = testTenants();
 
@@ -49,14 +48,14 @@ function put(over: Partial<PutFileInput> = {}): PutFileInput {
   };
 }
 
-test("fileArtifactId is deterministic per (seed, direction, index) and varies otherwise", () => {
+tenantTest("fileArtifactId is deterministic per (seed, direction, index) and varies otherwise", () => {
   assert.equal(fileArtifactId("run-1", "out", 0), fileArtifactId("run-1", "out", 0));
   assert.notEqual(fileArtifactId("run-1", "out", 0), fileArtifactId("run-1", "out", 1));
   assert.notEqual(fileArtifactId("run-1", "out", 0), fileArtifactId("run-1", "in", 0));
   assert.notEqual(fileArtifactId("run-1", "out", 0), fileArtifactId("run-2", "out", 0));
 });
 
-test("DurableByteStore (memory) round-trips binary intact and content-addresses (dedup)", async () => {
+tenantTest("DurableByteStore (memory) round-trips binary intact and content-addresses (dedup)", async () => {
   const bytes = createMemoryDurableByteStore();
   const a = await bytes.put(PNG);
   assert.equal(a.blobKey, `files/${a.sha256}`);
@@ -67,7 +66,7 @@ test("DurableByteStore (memory) round-trips binary intact and content-addresses 
   assert.deepEqual(back, PNG, "binary must survive the store byte-for-byte");
 });
 
-test("DurableByteStore (local-fs) round-trips binary intact across a fresh store instance", async () => {
+tenantTest("DurableByteStore (local-fs) round-trips binary intact across a fresh store instance", async () => {
   const dir = await mkdtemp(join(tmpdir(), "docstore-"));
   try {
     const w = createLocalDurableByteStore(dir);
@@ -82,7 +81,7 @@ test("DurableByteStore (local-fs) round-trips binary intact across a fresh store
   }
 });
 
-test("DurableByteStore (local-fs) accepts concurrent identical writes", async () => {
+tenantTest("DurableByteStore (local-fs) accepts concurrent identical writes", async () => {
   const dir = await mkdtemp(join(tmpdir(), "docstore-"));
   try {
     const bytes = createLocalDurableByteStore(dir);
@@ -97,18 +96,18 @@ test("DurableByteStore (local-fs) accepts concurrent identical writes", async ()
   }
 });
 
-test("DurableByteStore enforces maxBytes mid-stream", async () => {
+tenantTest("DurableByteStore enforces maxBytes mid-stream", async () => {
   const bytes = createMemoryDurableByteStore();
   await assert.rejects(bytes.put(Buffer.alloc(1000), { maxBytes: 10 }), ByteSourceTooLargeError);
 });
 
-test("DurableByteStore.open returns null for an absent or malformed key", async () => {
+tenantTest("DurableByteStore.open returns null for an absent or malformed key", async () => {
   const bytes = createMemoryDurableByteStore();
   assert.equal(await bytes.open("files/" + "0".repeat(64)), null);
   assert.equal(await bytes.open("not-a-key"), null);
 });
 
-test("put: deterministic id makes a requeue a no-op upsert (no dup, no byte re-store)", () =>
+tenantTest("put: deterministic id makes a requeue a no-op upsert (no dup, no byte re-store)", () =>
   inTestTenant(async () => {
     const bytes = createMemoryDurableByteStore();
     let putCount = 0;
@@ -131,9 +130,10 @@ test("put: deterministic id makes a requeue a no-op upsert (no dup, no byte re-s
 
     const page = await store.listOwnedByScopes([owner]);
     assert.equal(page.files.length, 1, "no duplicate row");
-  }));
+  }),
+);
 
-test("put + open round-trips binary through the artifact store", () =>
+tenantTest("put + open round-trips binary through the artifact store", () =>
   inTestTenant(async () => {
     const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     const { artifact } = await store.put(put());
@@ -142,9 +142,10 @@ test("put + open round-trips binary through the artifact store", () =>
     assert.equal(artifact.blobKey, `files/${artifact.sha256}`);
     const back = await drain(store, artifact.id);
     assert.deepEqual(back, PNG);
-  }));
+  }),
+);
 
-test("listOwnedByScopes: recency DESC, scope-filtered, keyset-paginated", () =>
+tenantTest("listOwnedByScopes: recency DESC, scope-filtered, keyset-paginated", () =>
   inTestTenant(async () => {
     const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     await store.put(put({ id: "a", path: "p/a", data: Buffer.from("a"), createdAt: 100 }));
@@ -171,9 +172,10 @@ test("listOwnedByScopes: recency DESC, scope-filtered, keyset-paginated", () =>
       ["a"],
     );
     assert.equal(p2.nextCursor, undefined, "last page has no cursor");
-  }));
+  }),
+);
 
-test("listOwnedByScopes: nameQuery matches names case-insensitively across the whole set", () =>
+tenantTest("listOwnedByScopes: nameQuery matches names case-insensitively across the whole set", () =>
   inTestTenant(async () => {
     const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     await store.put(
@@ -189,9 +191,10 @@ test("listOwnedByScopes: nameQuery matches names case-insensitively across the w
       "matches by name regardless of case, newest first",
     );
     assert.equal((await store.listOwnedByScopes([owner], { nameQuery: "missing" })).files.length, 0);
-  }));
+  }),
+);
 
-test("resolveByIds returns the SHARED set by (owner, id); disabled excluded", () =>
+tenantTest("resolveByIds returns the SHARED set by (owner, id); disabled excluded", () =>
   inTestTenant(async () => {
     const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     await store.put(put({ id: "a", path: "p/a", data: Buffer.from("a") }));
@@ -207,9 +210,10 @@ test("resolveByIds returns the SHARED set by (owner, id); disabled excluded", ()
     assert.equal((await store.resolveByIds([{ ownerScopeId: owner, id: "a" }])).length, 0, "disabled excluded");
     assert.equal(await store.get("a"), null, "get hides disabled by default");
     assert.ok(await store.get("a", { includeDisabled: true }), "get can surface disabled");
-  }));
+  }),
+);
 
-test("delete removes the ROW only — bytes shared with another row stay openable", () =>
+tenantTest("delete removes the ROW only — bytes shared with another row stay openable", () =>
   inTestTenant(async () => {
     const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     const { artifact: out } = await store.put(put({ id: "out", direction: "out", path: "p/out", data: PNG }));
@@ -220,14 +224,16 @@ test("delete removes the ROW only — bytes shared with another row stay openabl
     assert.equal(await store.get("out"), null, "row gone");
     const back = await drain(store, "in");
     assert.deepEqual(back, PNG, "the surviving row's bytes are intact (no inline byte delete)");
-  }));
+  }),
+);
 
-test("document listing groups authorized copies before pagination", () =>
+tenantTest("document listing groups authorized copies before pagination", () =>
   inTestTenant(async () => {
     await assertDocumentListing(createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()));
-  }));
+  }),
+);
 
-test("document listing keeps unknown hashes separate and picks deterministic representatives", () =>
+tenantTest("document listing keeps unknown hashes separate and picks deterministic representatives", () =>
   inTestTenant(async () => {
     const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     const { artifact: b } = await store.put(put({ id: "b", path: "b", createdAt: 100 }));
@@ -240,9 +246,10 @@ test("document listing keeps unknown hashes separate and picks deterministic rep
       (await store.listDocuments([owner], [])).files.map((f) => f.id),
       ["unknown-2", "unknown-1", "a"],
     );
-  }));
+  }),
+);
 
-test("local stream failure removes partial bytes and publishes nothing", async () => {
+tenantTest("local stream failure removes partial bytes and publishes nothing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "qm-file-failure-"));
   try {
     const bytes = createLocalDurableByteStore(dir);
@@ -257,9 +264,10 @@ test("local stream failure removes partial bytes and publishes nothing", async (
   }
 });
 
-test("shared file refs authorize only the exact record ID", () =>
+tenantTest("shared file refs authorize only the exact record ID", () =>
   inTestTenant(async () => {
     await assertSharedRecordIdentity(
       createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     );
-  }));
+  }),
+);

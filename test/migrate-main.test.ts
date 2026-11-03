@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { ownerUrlOf } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -22,7 +23,7 @@ test(
           PATH: process.env.PATH,
           NODE_ENV: "test",
           DATABASE_URL: databaseUrl,
-          DATABASE_OWNER_URL: databaseUrl,
+          DATABASE_OWNER_URL: ownerUrlOf(databaseUrl!),
           SANDBOX_BACKEND: "local",
           CONNECTOR_SECRET_KEY: "migration-test-connector-secret",
           CAPABILITY_SECRET: "migration-test-capability-secret",
@@ -35,7 +36,7 @@ test(
       const { stdout } = await migrate();
       assert.match(stdout, /\[qm:migrate\] database migrations applied/);
       assert.match(stdout, /tenant storage layout applied \(0 moved\)/);
-      const db = createPgPool(databaseUrl!);
+      const db = createPgPool(ownerUrlOf(databaseUrl!));
       await db.q("DELETE FROM qm_schema_migrations WHERE id = 'tenants/storage-layout'");
       await mkdir(join(dataDir, "workspaces", "personal__legacy"), { recursive: true });
       await writeFile(join(dataDir, "workspaces", "personal__legacy", "notes.md"), "kept");

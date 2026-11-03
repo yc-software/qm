@@ -1,5 +1,5 @@
 import { pollProcess } from "../src/sandbox/process-poll.ts";
-import { test, after, beforeEach } from "node:test";
+import { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +19,7 @@ import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { testAdvisoryLock, testMap, testRows } from "./support/test-database.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 let fake: FakeSmolmachines;
 let sandbox: Sandbox;
@@ -53,17 +54,20 @@ beforeEach(() => {
 });
 after(() => fake?.cleanup());
 
-test("a stored provider name addresses the existing machine for provisioning, status and retirement", async () => {
-  sandbox.useStoredNames!(async (id) => (id === scope ? "qmt-legacy-name" : null));
-  const h = await sandbox.provision(layers);
-  assert.equal(h.id, "qmt-legacy-name");
-  assert.equal(sandbox.scopeName!(scope), scopeName());
-  assert.equal((await sandbox.computerStatus!(scope)).provisioned, true);
-  await sandbox.destroyScope!(scope);
-  assert.ok(!fake.names().includes("qmt-legacy-name"));
-});
+tenantTest(
+  "a stored provider name addresses the existing machine for provisioning, status and retirement",
+  async () => {
+    sandbox.useStoredNames!(async (id) => (id === scope ? "qmt-legacy-name" : null));
+    const h = await sandbox.provision(layers);
+    assert.equal(h.id, "qmt-legacy-name");
+    assert.equal(sandbox.scopeName!(scope), scopeName());
+    assert.equal((await sandbox.computerStatus!(scope)).provisioned, true);
+    await sandbox.destroyScope!(scope);
+    assert.ok(!fake.names().includes("qmt-legacy-name"));
+  },
+);
 
-test("provision runs commands with env and cwd", async () => {
+tenantTest("provision runs commands with env and cwd", async () => {
   const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
   assert.equal(h.coldStart, true);
   const r = await sandbox.run(h, "pwd; echo VAR=$MY_VAR");
@@ -72,7 +76,7 @@ test("provision runs commands with env and cwd", async () => {
   assert.match(r.stdout, /VAR=v1/);
 });
 
-test("streams and exit codes are exact", async () => {
+tenantTest("streams and exit codes are exact", async () => {
   const h = await sandbox.provision(layers);
   const r = await sandbox.run(h, "echo out; echo err >&2; exit 3");
   assert.equal(r.code, 3);
@@ -80,7 +84,7 @@ test("streams and exit codes are exact", async () => {
   assert.equal(r.stderr.trim(), "err");
 });
 
-test("file roundtrip incl. large binary and missing file", async () => {
+tenantTest("file roundtrip incl. large binary and missing file", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.writeFile(h, "a/b.txt", "hello\n");
   assert.equal(await sandbox.readFile(h, "a/b.txt"), "hello\n");
@@ -97,7 +101,7 @@ test("file roundtrip incl. large binary and missing file", async () => {
   assert.ok(hugeBack && Buffer.from(hugeBack).equals(huge));
 });
 
-test("empty file roundtrip", async () => {
+tenantTest("empty file roundtrip", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.writeFileBytes(h, "empty.bin", Buffer.alloc(0));
   const back = await sandbox.readFileBytes(h, "empty.bin");
@@ -105,7 +109,7 @@ test("empty file roundtrip", async () => {
   assert.equal(back.length, 0);
 });
 
-test("process sessions capability works end to end", async () => {
+tenantTest("process sessions capability works end to end", async () => {
   assert.ok(supportsProcessSessions(sandbox));
   if (!supportsProcessSessions(sandbox)) return;
   const h = await sandbox.provision(layers);
@@ -116,23 +120,26 @@ test("process sessions capability works end to end", async () => {
   assert.match(output, /two/);
 });
 
-test("a configured egress proxy allow-lists only the proxy host at create and injects the proxy env", async () => {
-  const s = make({ egressProxyUrl: "https://proxy.example.com" });
-  assert.equal(s.profile.egressEnforcement, "domain");
-  const h = await s.provision(layers, { egressToken: await proxyToken() });
-  assert.deepEqual(fake.machine(h.id)?.network, { mode: "allowCidrs", hosts: ["proxy.example.com"] });
-  const r = await s.run(h, "echo PROXY=$HTTPS_PROXY");
-  assert.match(r.stdout, /PROXY=https?:\/\/[^ ]*proxy\.example\.com/);
-});
+tenantTest(
+  "a configured egress proxy allow-lists only the proxy host at create and injects the proxy env",
+  async () => {
+    const s = make({ egressProxyUrl: "https://proxy.example.com" });
+    assert.equal(s.profile.egressEnforcement, "domain");
+    const h = await s.provision(layers, { egressToken: await proxyToken() });
+    assert.deepEqual(fake.machine(h.id)?.network, { mode: "allowCidrs", hosts: ["proxy.example.com"] });
+    const r = await s.run(h, "echo PROXY=$HTTPS_PROXY");
+    assert.match(r.stdout, /PROXY=https?:\/\/[^ ]*proxy\.example\.com/);
+  },
+);
 
-test("without a proxy url machines are created open, with no proxy env and no enforcement claim", async () => {
+tenantTest("without a proxy url machines are created open, with no proxy env and no enforcement claim", async () => {
   assert.equal(sandbox.profile.egressEnforcement, "none");
   const h = await sandbox.provision(layers, { egressToken: "ignored" });
   assert.equal(h.env?.HTTPS_PROXY, undefined);
   assert.deepEqual(fake.machine(h.id)?.network, { mode: "open" });
 });
 
-test("force-through fails closed on a machine that was created with open networking", async () => {
+tenantTest("force-through fails closed on a machine that was created with open networking", async () => {
   const open = await sandbox.provision(layers);
   assert.deepEqual(fake.machine(open.id)?.network, { mode: "open" });
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
@@ -143,7 +150,7 @@ test("force-through fails closed on a machine that was created with open network
   assert.ok(fake.machine(open.id), "the open machine is left for the operator to destroy, never silently replaced");
 });
 
-test("machine is reused across provisions and warm start is reported", async () => {
+tenantTest("machine is reused across provisions and warm start is reported", async () => {
   const a = await sandbox.provision(layers);
   const b = await sandbox.provision(layers);
   assert.equal(a.id, b.id);
@@ -151,7 +158,7 @@ test("machine is reused across provisions and warm start is reported", async () 
   assert.equal(fake.names().filter((n) => n === a.id).length, 1);
 });
 
-test("exec on a stopped machine restarts it and retries", async () => {
+tenantTest("exec on a stopped machine restarts it and retries", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.writeFile(h, "keep.txt", "still here\n");
   fake.stop(h.id);
@@ -161,7 +168,7 @@ test("exec on a stopped machine restarts it and retries", async () => {
   assert.equal(fake.machine(h.id)?.state.toLowerCase(), "running");
 });
 
-test("a fresh core adopts a machine the API reports as Running without restarting it", async () => {
+tenantTest("a fresh core adopts a machine the API reports as Running without restarting it", async () => {
   const h = await sandbox.provision(layers);
   assert.equal(fake.machine(h.id)?.state, "Running");
   const s2 = make();
@@ -173,11 +180,11 @@ test("a fresh core adopts a machine the API reports as Running without restartin
   assert.equal(startsAfter, startsBefore, "a running machine is adopted as-is, never restarted");
 });
 
-test("an egress proxy url without a hostname is rejected at creation, never fail-open", () => {
+tenantTest("an egress proxy url without a hostname is rejected at creation, never fail-open", () => {
   assert.throws(() => make({ egressProxyUrl: "unix:///tmp/proxy.sock" }), /hostname/);
 });
 
-test("scratch machines are ephemeral and deleted at release", async () => {
+tenantTest("scratch machines are ephemeral and deleted at release", async () => {
   const h = await sandbox.provision(layers, { scratch: { key: "job-1" } });
   assert.equal(h.scratch, true);
   assert.equal(fake.machine(h.id)?.ephemeral, true);
@@ -185,7 +192,7 @@ test("scratch machines are ephemeral and deleted at release", async () => {
   assert.equal(fake.machine(h.id), null);
 });
 
-test("overlapping scratch leases on one key share a machine until the last release", async () => {
+tenantTest("overlapping scratch leases on one key share a machine until the last release", async () => {
   const a = await sandbox.provision(layers, { scratch: { key: "job-1" } });
   const b = await sandbox.provision(layers, { scratch: { key: "job-1" } });
   assert.equal(a.id, b.id);
@@ -198,7 +205,7 @@ test("overlapping scratch leases on one key share a machine until the last relea
   assert.equal(fake.machine(b.id), null);
 });
 
-test("teardown without destroy keeps the machine; destroy deletes it", async () => {
+tenantTest("teardown without destroy keeps the machine; destroy deletes it", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
   assert.ok(fake.machine(h.id));
@@ -206,7 +213,7 @@ test("teardown without destroy keeps the machine; destroy deletes it", async () 
   assert.equal(fake.machine(h.id), null);
 });
 
-test("command output is read byte-exact from the base64 stream past the 1 MiB text cap", async () => {
+tenantTest("command output is read byte-exact from the base64 stream past the 1 MiB text cap", async () => {
   const h = await sandbox.provision(layers);
   const size = 1500 * 1024;
   const r = await sandbox.run(
@@ -224,7 +231,7 @@ test("command output is read byte-exact from the base64 stream past the 1 MiB te
   );
 });
 
-test("a control plane without base64 output still fails closed on truncated text", async () => {
+tenantTest("a control plane without base64 output still fails closed on truncated text", async () => {
   const textOnly: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     if (!url.pathname.endsWith("/exec")) return fake.fetchImpl(input, init);
@@ -242,7 +249,7 @@ test("a control plane without base64 output still fails closed on truncated text
   await assert.rejects(s.run(h, "python3 -c \"print('x' * (1100 * 1024), end='')\""), /stdout truncated/);
 });
 
-test("a name conflict on create adopts the existing machine instead of failing", async () => {
+tenantTest("a name conflict on create adopts the existing machine instead of failing", async () => {
   await fake.fetchImpl("https://api.smolmachines.com/v1/machines", {
     method: "POST",
     body: JSON.stringify({ name: sandboxScopeName("qmt", scope), ephemeral: false }),
@@ -253,7 +260,7 @@ test("a name conflict on create adopts the existing machine instead of failing",
   assert.equal(r.stdout.trim(), "alive");
 });
 
-test("timeouts beyond the API's sync exec ceiling run detached and poll to completion", async () => {
+tenantTest("timeouts beyond the API's sync exec ceiling run detached and poll to completion", async () => {
   const h = await sandbox.provision(layers);
   const r = await sandbox.run(h, "echo long-path-ok; echo warn >&2; exit 9", { timeoutMs: 400_000 });
   assert.equal(r.code, 9);
@@ -263,7 +270,7 @@ test("timeouts beyond the API's sync exec ceiling run detached and poll to compl
   assert.equal(leftovers.stdout.trim(), "0");
 });
 
-test("configured resources are requested at create and advertised in the profile", async () => {
+tenantTest("configured resources are requested at create and advertised in the profile", async () => {
   const s = make({ cpus: 4, memoryMb: 8192, diskGb: 200 });
   const h = await s.provision(layers);
   assert.deepEqual(fake.machine(h.id)?.resources, { cpus: 4, memoryMb: 8192, diskGb: 200 });
@@ -272,7 +279,7 @@ test("configured resources are requested at create and advertised in the profile
   assert.equal(s.profile.spec?.cpus, 4);
 });
 
-test("profile advertises resident disk, process sessions, and the documented default shape", () => {
+tenantTest("profile advertises resident disk, process sessions, and the documented default shape", () => {
   assert.equal(sandbox.profile.backend, "smolmachines");
   assert.equal(sandbox.profile.writablePersistence, "resident_disk");
   assert.equal(sandbox.profile.processSessions, true);
@@ -286,13 +293,13 @@ test("profile advertises resident disk, process sessions, and the documented def
   assert.match(idle.profile.spec?.os ?? "", /900s idle/);
 });
 
-test("a machine the provider reports in error state fails fast with the provider's reason", async () => {
+tenantTest("a machine the provider reports in error state fails fast with the provider's reason", async () => {
   await preCreate(scopeName());
   fake.fail(scopeName(), "start failed: no capacity in region");
   await assert.rejects(sandbox.provision(layers), /error state: start failed: no capacity in region/);
 });
 
-test("started is not ready: provisioning polls until the machine reports ready", async () => {
+tenantTest("started is not ready: provisioning polls until the machine reports ready", async () => {
   await preCreate(scopeName());
   fake.notReadyFor(scopeName(), 2);
   const h = await sandbox.provision(layers);
@@ -306,7 +313,7 @@ test("started is not ready: provisioning polls until the machine reports ready",
   assert.equal((await sandbox.run(h, "echo up")).stdout.trim(), "up");
 });
 
-test("scratch machines carry a hard TTL and configured idle stop is sent on every create", async () => {
+tenantTest("scratch machines carry a hard TTL and configured idle stop is sent on every create", async () => {
   const s = make({ autoStopSec: 900 });
   const scratch = await s.provision(layers, { scratch: { key: "job-ttl" } });
   assert.equal(fake.machine(scratch.id)?.ttlSeconds, 24 * 3600);
@@ -320,7 +327,7 @@ test("scratch machines carry a hard TTL and configured idle stop is sent on ever
   assert.equal(fake.machine(plain.id)?.autoStopSeconds, undefined);
 });
 
-test("exec requests carry no stdin field", async () => {
+tenantTest("exec requests carry no stdin field", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.run(h, "echo x");
   const execCall = fake.calls.filter((c) => c.path.endsWith("/exec")).at(-1)!;
@@ -329,7 +336,7 @@ test("exec requests carry no stdin field", async () => {
   assert.ok(fake.execScripts().every((script) => !/stdin/.test(script)));
 });
 
-test("teardown snapshots the home to the configured store and a lost machine is rehydrated from it", async () => {
+tenantTest("teardown snapshots the home to the configured store and a lost machine is rehydrated from it", async () => {
   const snapshots = createMemorySnapshotStore();
   const s = make({ snapshots });
   const a = await s.provision(layers);
@@ -346,7 +353,7 @@ test("teardown snapshots the home to the configured store and a lost machine is 
   assert.equal(await s2.readFile(b, "notes.txt"), "keep me\n");
 });
 
-test("teardown snapshots are throttled by snapshotIntervalMs and skipped for scratch machines", async () => {
+tenantTest("teardown snapshots are throttled by snapshotIntervalMs and skipped for scratch machines", async () => {
   const counting = instrumentedSnapshotStore();
   const s = make({ snapshots: counting.store, snapshotIntervalMs: 60 * 60_000 });
   const a = await s.provision(layers);
@@ -359,34 +366,37 @@ test("teardown snapshots are throttled by snapshotIntervalMs and skipped for scr
   assert.equal(counting.puts(), 1, "scratch machines are never snapshotted");
 });
 
-test("a failing snapshot store is recorded in status and a failed hydration never cold-starts empty", async () => {
-  const flaky = instrumentedSnapshotStore();
-  const errors: string[] = [];
-  const s = make({
-    snapshots: flaky.store,
-    onError: (e: { code: string }) => {
-      errors.push(e.code);
-    },
-  });
-  const a = await s.provision(layers);
-  await s.writeFile(a, "precious.txt", "irreplaceable\n");
-  await s.teardown(a);
-  flaky.failWrites(true);
-  await s.teardown(await s.provision(layers));
-  assert.ok(errors.includes("teardown_snapshot_failed"));
-  assert.match((await s.computerStatus!(scope)).recovery?.error ?? "", /simulated S3 outage/);
-  flaky.failWrites(false);
-  fake.deleteBehindCore(a.id);
-  const restarted = make({ snapshots: flaky.store });
-  flaky.failReads(true);
-  await assert.rejects(restarted.provision(layers), /hydration failed/);
-  assert.equal(fake.machine(a.id), null, "the empty replacement is deleted rather than adopted");
-  flaky.failReads(false);
-  const b = await restarted.provision(layers);
-  assert.equal(await restarted.readFile(b, "precious.txt"), "irreplaceable\n");
-});
+tenantTest(
+  "a failing snapshot store is recorded in status and a failed hydration never cold-starts empty",
+  async () => {
+    const flaky = instrumentedSnapshotStore();
+    const errors: string[] = [];
+    const s = make({
+      snapshots: flaky.store,
+      onError: (e: { code: string }) => {
+        errors.push(e.code);
+      },
+    });
+    const a = await s.provision(layers);
+    await s.writeFile(a, "precious.txt", "irreplaceable\n");
+    await s.teardown(a);
+    flaky.failWrites(true);
+    await s.teardown(await s.provision(layers));
+    assert.ok(errors.includes("teardown_snapshot_failed"));
+    assert.match((await s.computerStatus!(scope)).recovery?.error ?? "", /simulated S3 outage/);
+    flaky.failWrites(false);
+    fake.deleteBehindCore(a.id);
+    const restarted = make({ snapshots: flaky.store });
+    flaky.failReads(true);
+    await assert.rejects(restarted.provision(layers), /hydration failed/);
+    assert.equal(fake.machine(a.id), null, "the empty replacement is deleted rather than adopted");
+    flaky.failReads(false);
+    const b = await restarted.provision(layers);
+    assert.equal(await restarted.readFile(b, "precious.txt"), "irreplaceable\n");
+  },
+);
 
-test("persistHomeSnapshot exists only with a snapshot store and stores the home on demand", async () => {
+tenantTest("persistHomeSnapshot exists only with a snapshot store and stores the home on demand", async () => {
   assert.equal(sandbox.persistHomeSnapshot, undefined);
   assert.equal((await sandbox.computerStatus!(scope)).recovery, undefined);
   const snapshots = createMemorySnapshotStore();
@@ -397,7 +407,7 @@ test("persistHomeSnapshot exists only with a snapshot store and stores the home 
   assert.ok(await snapshots.open(scope));
 });
 
-test("computerStatus reports a stopped machine as paused without waking it", async () => {
+tenantTest("computerStatus reports a stopped machine as paused without waking it", async () => {
   assert.deepEqual(await sandbox.computerStatus!(scope), {
     machine: "no machine provisioned yet",
     provisioned: false,
@@ -418,7 +428,7 @@ test("computerStatus reports a stopped machine as paused without waking it", asy
   assert.match((await sandbox.computerStatus!(scope)).machine, /error: auto-start failed: node lost/);
 });
 
-test("read and write refuse parent path segments before any provider request", async () => {
+tenantTest("read and write refuse parent path segments before any provider request", async () => {
   const h = await sandbox.provision(layers);
   fake.calls.length = 0;
   for (const rel of ["../../../../../machines", "../../../../m-2/files/root/x", "a/../../b"]) {
@@ -431,20 +441,23 @@ test("read and write refuse parent path segments before any provider request", a
   );
 });
 
-test("control-plane 429 and 5xx are retried with Retry-After honored; exhausted retries name the request id", async () => {
-  fake.failNext(429, { headers: { "retry-after": "0" } });
-  fake.failNext(503);
-  const h = await sandbox.provision(layers);
-  assert.equal(h.coldStart, true);
-  const listing = fake.calls.filter((c) => c.method === "GET" && c.path === "/v1/machines");
-  assert.equal(listing.length, 3, "the machine listing was retried after the 429 and the 503");
+tenantTest(
+  "control-plane 429 and 5xx are retried with Retry-After honored; exhausted retries name the request id",
+  async () => {
+    fake.failNext(429, { headers: { "retry-after": "0" } });
+    fake.failNext(503);
+    const h = await sandbox.provision(layers);
+    assert.equal(h.coldStart, true);
+    const listing = fake.calls.filter((c) => c.method === "GET" && c.path === "/v1/machines");
+    assert.equal(listing.length, 3, "the machine listing was retried after the 429 and the 503");
 
-  const other = make();
-  for (let i = 1; i <= 4; i++) fake.failNext(429, { headers: { "retry-after": "0", "x-request-id": `req-${i}` } });
-  await assert.rejects(other.provision(layers), /smolmachines GET \/v1\/machines: http 429 .*\[request id req-4\]/);
-});
+    const other = make();
+    for (let i = 1; i <= 4; i++) fake.failNext(429, { headers: { "retry-after": "0", "x-request-id": `req-${i}` } });
+    await assert.rejects(other.provision(layers), /smolmachines GET \/v1\/machines: http 429 .*\[request id req-4\]/);
+  },
+);
 
-test("exec is never retried and its failure names the request id", async () => {
+tenantTest("exec is never retried and its failure names the request id", async () => {
   const h = await sandbox.provision(layers);
   const before = fake.calls.filter((c) => c.path.endsWith("/exec")).length;
   fake.failNext(502, { headers: { "x-request-id": "req-exec" }, match: (c) => c.path.endsWith("/exec") });
@@ -453,7 +466,7 @@ test("exec is never retried and its failure names the request id", async () => {
 });
 
 for (const lostResponse of ["disconnect", "503"] as const) {
-  test(`accepted replacement create with ${lostResponse} restores the home on the next core`, async () => {
+  tenantTest(`accepted replacement create with ${lostResponse} restores the home on the next core`, async () => {
     const snapshots = createMemorySnapshotStore();
     const store = testRows(SMOLMACHINES_SANDBOX_BODIES);
     const advisoryLock = testAdvisoryLock();
@@ -483,7 +496,7 @@ for (const lostResponse of ["disconnect", "503"] as const) {
   });
 }
 
-test("destructive teardown waits for another core's lifecycle lock", async () => {
+tenantTest("destructive teardown waits for another core's lifecycle lock", async () => {
   const shared = testAdvisoryLock();
   const requested = Promise.withResolvers<void>();
   let destroying = false;

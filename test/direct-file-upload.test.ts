@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createDirectFileUploads, multipartChecksum, FILE_UPLOAD_PART_SIZE } from "../src/files/direct-file-upload.ts";
@@ -16,7 +15,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, testTenants } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenants } from "./support/test-tenants.ts";
 
 function tenantBound<T extends object>(store: T): T {
   return new Proxy(store, {
@@ -156,7 +155,7 @@ function fixture() {
   };
 }
 
-test("idle uploads keep their slot until the 24h cap; signing records last activity", async () => {
+tenantTest("idle uploads keep their slot until the 24h cap; signing records last activity", async () => {
   const hour = 60 * 60 * 1000;
   const f = fixture();
   const row = await f.service.begin(f.input);
@@ -174,21 +173,24 @@ test("idle uploads keep their slot until the 24h cap; signing records last activ
   assert.equal((await f.store.get(row.id))!.state, "aborted");
 });
 
-test("signed parts bind the exact size, checksum, upload and number; unpublished parts are invisible", async () => {
-  const f = fixture();
-  const row = await f.service.begin(f.input);
-  const signed = await f.service.sign(row.id, 1);
-  assert.equal(signed.headers["content-length"], "3");
-  assert.equal(signed.headers["x-amz-checksum-sha256"], checksum("abc"));
-  assert.equal(f.calls.at(-1)!.input.UploadId, "s3-upload");
-  assert.equal(f.calls.at(-1)!.input.PartNumber, 1);
-  assert.equal(await f.files.get(row.id), null);
-  await assert.rejects(f.service.sign(row.id, Number.NaN));
-  await assert.rejects(f.service.sign(row.id, 0));
-  await assert.rejects(f.service.sign(row.id, 2));
-});
+tenantTest(
+  "signed parts bind the exact size, checksum, upload and number; unpublished parts are invisible",
+  async () => {
+    const f = fixture();
+    const row = await f.service.begin(f.input);
+    const signed = await f.service.sign(row.id, 1);
+    assert.equal(signed.headers["content-length"], "3");
+    assert.equal(signed.headers["x-amz-checksum-sha256"], checksum("abc"));
+    assert.equal(f.calls.at(-1)!.input.UploadId, "s3-upload");
+    assert.equal(f.calls.at(-1)!.input.PartNumber, 1);
+    assert.equal(await f.files.get(row.id), null);
+    await assert.rejects(f.service.sign(row.id, Number.NaN));
+    await assert.rejects(f.service.sign(row.id, 0));
+    await assert.rejects(f.service.sign(row.id, 2));
+  },
+);
 
-test("begin retries use one durable session and reject reuse with a different manifest", async () => {
+tenantTest("begin retries use one durable session and reject reuse with a different manifest", async () => {
   const f = fixture();
   const input = { ...f.input, requestId: "a".repeat(32) };
   const a = await f.service.begin(input);
@@ -197,7 +199,7 @@ test("begin retries use one durable session and reject reuse with a different ma
   await assert.rejects(f.service.begin({ ...input, actorId: "U2" }), /already used/);
 });
 
-test("missing parts remain resumable and never publish", async () => {
+tenantTest("missing parts remain resumable and never publish", async () => {
   const f = fixture();
   const row = await f.service.begin(f.input);
   await assert.rejects(f.service.complete(row.id), /incomplete/);
@@ -206,7 +208,7 @@ test("missing parts remain resumable and never publish", async () => {
   assert.equal(await f.files.get(row.id), null);
 });
 
-test("completion recovers a lost S3 response and is idempotent", async () => {
+tenantTest("completion recovers a lost S3 response and is idempotent", async () => {
   const f = fixture();
   const row = await f.service.begin(f.input);
   f.uploadParts(row);
@@ -220,7 +222,7 @@ test("completion recovers a lost S3 response and is idempotent", async () => {
   await assert.rejects(f.service.abort(row.id), /completion/);
 });
 
-test("a new core recovers after S3 completion but before metadata publication", async () => {
+tenantTest("a new core recovers after S3 completion but before metadata publication", async () => {
   const f = fixture();
   const row = await f.service.begin(f.input);
   f.uploadParts(row);
@@ -236,7 +238,7 @@ test("a new core recovers after S3 completion but before metadata publication", 
   assert.equal(f.calls.filter((c) => c.name === "CompleteMultipartUploadCommand").length, 1);
 });
 
-test("wrong completed-object integrity cannot produce a file", async () => {
+tenantTest("wrong completed-object integrity cannot produce a file", async () => {
   const f = fixture();
   const row = await f.service.begin(f.input);
   await f.store.transition(row.id, ["pending"], "completing");
@@ -245,7 +247,7 @@ test("wrong completed-object integrity cannot produce a file", async () => {
   assert.equal(await f.files.get(row.id), null);
 });
 
-test("expiry prevents signing and sweeper aborts without publishing", async () => {
+tenantTest("expiry prevents signing and sweeper aborts without publishing", async () => {
   const f = fixture();
   const row = await f.service.begin(f.input);
   f.advance();
@@ -257,7 +259,7 @@ test("expiry prevents signing and sweeper aborts without publishing", async () =
   await f.service.abort(row.id);
 });
 
-test("abort wins the CAS before completion and prevents publication", async () => {
+tenantTest("abort wins the CAS before completion and prevents publication", async () => {
   const f = fixture();
   const row = await f.service.begin(f.input);
   f.uploadParts(row);
@@ -271,7 +273,7 @@ test("abort wins the CAS before completion and prevents publication", async () =
   assert.equal(f.calls.filter((c) => c.name === "CompleteMultipartUploadCommand").length, 0);
 });
 
-test("empty files and multi-part manifests use correctly sized signed requests", async () => {
+tenantTest("empty files and multi-part manifests use correctly sized signed requests", async () => {
   const f = fixture();
   const empty = await f.service.begin({ ...f.input, sizeBytes: 0, checksums: [checksum("")] });
   assert.equal((await f.service.sign(empty.id, 1)).headers["content-length"], "0");
@@ -285,7 +287,7 @@ test("empty files and multi-part manifests use correctly sized signed requests",
   assert.equal((await f.service.sign(next.id, 2)).headers["content-length"], "3");
 });
 
-test("invalid size, count and checksum rejected before allocating S3", async () => {
+tenantTest("invalid size, count and checksum rejected before allocating S3", async () => {
   const f = fixture();
   for (const update of [
     { sizeBytes: -1 },
@@ -298,7 +300,7 @@ test("invalid size, count and checksum rejected before allocating S3", async () 
   assert.equal(f.calls.length, 0);
 });
 
-test("an upload cannot reuse an unrelated artifact ID", async () => {
+tenantTest("an upload cannot reuse an unrelated artifact ID", async () => {
   const f = fixture();
   const id = "f".repeat(32);
   await f.files.put({
@@ -315,7 +317,7 @@ test("an upload cannot reuse an unrelated artifact ID", async () => {
   assert.equal(f.calls.length, 0);
 });
 
-test("recovery cannot resurrect a deleted file when the upload state update failed", async () => {
+tenantTest("recovery cannot resurrect a deleted file when the upload state update failed", async () => {
   const f = fixture();
   const row = await f.service.begin(f.input);
   f.uploadParts(row);
@@ -342,7 +344,7 @@ test("recovery cannot resurrect a deleted file when the upload state update fail
   );
 });
 
-test("missing multipart upload and object become terminal instead of retrying forever", async () => {
+tenantTest("missing multipart upload and object become terminal instead of retrying forever", async () => {
   const f = fixture();
   const row = await f.service.begin(f.input);
   await f.store.transition(row.id, ["pending"], "completing");
@@ -361,7 +363,7 @@ test("missing multipart upload and object become terminal instead of retrying fo
   await assert.rejects(f.service.complete(row.id), /no longer available/);
 });
 
-test("the app registers the upload table without object storage configured", async () => {
+tenantTest("the app registers the upload table without object storage configured", async () => {
   const config = testConfig();
   assert.ok(!(config.snapshotStore === "s3" && config.s3Bucket));
   stopAtEnd(buildApp(config));

@@ -1,4 +1,4 @@
-import { test, before, after } from "node:test";
+import { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync } from "node:fs";
@@ -18,6 +18,7 @@ import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
 import { randomUUID } from "node:crypto";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");
@@ -67,7 +68,7 @@ function makeSandbox(fake: FakeDocker, opts: Record<string, unknown> = {}) {
 }
 const rw = (scope: string) => [{ scopeId: scope, mountPath: "", mode: "rw" as const }];
 
-test("two tenants with the same scope get separate containers and home volumes", async () => {
+tenantTest("two tenants with the same scope get separate containers and home volumes", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
   const scope = scopeId("personal", "U1");
@@ -86,7 +87,7 @@ test("two tenants with the same scope get separate containers and home volumes",
   assert.throws(() => withoutTenant(() => localContainerName(scope)), /No tenant is bound/);
 });
 
-test("profile declares the local Docker substrate honestly", () => {
+tenantTest("profile declares the local Docker substrate honestly", () => {
   const sb = makeSandbox(installFakeDocker(daemonPort));
   assert.equal(sb.profile.backend, "local-docker");
   assert.equal(sb.profile.writablePersistence, "resident_disk");
@@ -94,7 +95,7 @@ test("profile declares the local Docker substrate honestly", () => {
   assert.equal(supportsProcessSessions(sb), true);
 });
 
-test("a stopped Docker daemon fails provision with the actionable message", async () => {
+tenantTest("a stopped Docker daemon fails provision with the actionable message", async () => {
   const fake = installFakeDocker(daemonPort);
   fake.daemonDown = true;
   const sb = makeSandbox(fake);
@@ -104,7 +105,7 @@ test("a stopped Docker daemon fails provision with the actionable message", asyn
   );
 });
 
-test("a label-inspection error does not misreport an existing image as missing", async () => {
+tenantTest("a label-inspection error does not misreport an existing image as missing", async () => {
   const fake = installFakeDocker(daemonPort);
   fake.labelInspectFails = true;
   const sb = makeSandbox(fake);
@@ -112,14 +113,14 @@ test("a label-inspection error does not misreport an existing image as missing",
   await sb.teardown(handle, { destroy: true });
 });
 
-test("a missing sandbox image fails provision with the build hint", async () => {
+tenantTest("a missing sandbox image fails provision with the build hint", async () => {
   const fake = installFakeDocker(daemonPort);
   fake.imageMissing = true;
   const sb = makeSandbox(fake);
   await assert.rejects(sb.provision(rw(scopeId("personal", "U0"))), /not found — run `npm run sandbox:local:build`/);
 });
 
-test("cold provision creates volume + container, run() execs over the daemon, bytes round-trip", async () => {
+tenantTest("cold provision creates volume + container, run() execs over the daemon, bytes round-trip", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
   const scope = scopeId("personal", "U1");
@@ -147,7 +148,7 @@ test("cold provision creates volume + container, run() execs over the daemon, by
   assert.equal(await sb.readFileBytes(h, "bin/missing.dat"), null);
 });
 
-test("teardown parks the container and the next provision restarts it warm", async () => {
+tenantTest("teardown parks the container and the next provision restarts it warm", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
   const layers = rw(scopeId("personal", "U2"));
@@ -162,7 +163,7 @@ test("teardown parks the container and the next provision restarts it warm", asy
   assert.equal(fake.containers.get(h1.id)!.running, true, "restarted");
 });
 
-test("a stale-image container is recreated while its home volume survives", async () => {
+tenantTest("a stale-image container is recreated while its home volume survives", async () => {
   const fake = installFakeDocker(daemonPort);
   const layers = rw(scopeId("personal", "U3"));
   const h1 = await makeSandbox(fake).provision(layers);
@@ -177,7 +178,7 @@ test("a stale-image container is recreated while its home volume survives", asyn
   assert.equal(h2.coldStart, false, "existing volume means a warm home");
 });
 
-test("a scratch box has no volume and is removed on teardown", async () => {
+tenantTest("a scratch box has no volume and is removed on teardown", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
   const h = await sb.provision(rw(scopeId("personal", "U4")), { scratch: { key: "k1" } });
@@ -188,7 +189,7 @@ test("a scratch box has no volume and is removed on teardown", async () => {
   assert.equal(fake.containers.has(h.id), false, "scratch container destroyed");
 });
 
-test("teardown destroy removes both the container and its volume", async () => {
+tenantTest("teardown destroy removes both the container and its volume", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
   const scope = scopeId("personal", "U5");
@@ -198,7 +199,7 @@ test("teardown destroy removes both the container and its volume", async () => {
   assert.equal(fake.volumes.has(localVolumeName(scope)), false);
 });
 
-test("concurrent provisions for one scope run a single container", async () => {
+tenantTest("concurrent provisions for one scope run a single container", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
   const layers = rw(scopeId("personal", "U6"));
@@ -207,7 +208,7 @@ test("concurrent provisions for one scope run a single container", async () => {
   assert.equal(fake.runCount, 1);
 });
 
-test("refcounted teardown: the container parks only after the last concurrent user releases", async () => {
+tenantTest("refcounted teardown: the container parks only after the last concurrent user releases", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
   const layers = rw(scopeId("personal", "U7"));
@@ -218,7 +219,7 @@ test("refcounted teardown: the container parks only after the last concurrent us
   assert.equal(fake.containers.get(b.id)!.running, false, "parked after the last release");
 });
 
-test("process sessions: start, read output, signal to exit", async () => {
+tenantTest("process sessions: start, read output, signal to exit", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
   assert.ok(supportsProcessSessions(sb));
@@ -241,7 +242,7 @@ test("process sessions: start, read output, signal to exit", async () => {
   assert.equal(status.state, "exited");
 });
 
-test("an aborted run returns control promptly", async () => {
+tenantTest("an aborted run returns control promptly", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
   const h = await sb.provision(rw(scopeId("personal", "U9")));
@@ -252,7 +253,7 @@ test("an aborted run returns control promptly", async () => {
   assert.ok(Date.now() - startedAt < 5_000, "run returned promptly after abort");
 });
 
-test("read-only layers materialize into the workspace once per content fingerprint", async () => {
+tenantTest("read-only layers materialize into the workspace once per content fingerprint", async () => {
   const fake = installFakeDocker(daemonPort);
   const dir = mkdtempSync(join(tmpdir(), "local-ws-"));
   const workspace = createLocalWorkspaceStore(dir);
@@ -266,7 +267,7 @@ test("read-only layers materialize into the workspace once per content fingerpri
   assert.equal(await sb.readFile(h, "shared/guide.md"), "shared doc");
 });
 
-test("each container runs on its own network; destroy removes it", async () => {
+tenantTest("each container runs on its own network; destroy removes it", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
   const scopeA = scopeId("personal", "U20");
@@ -284,7 +285,7 @@ test("each container runs on its own network; destroy removes it", async () => {
   await sb.teardown(hb);
 });
 
-test("concurrent teardown and provision for one scope serialize (no stop of a fresh user)", async () => {
+tenantTest("concurrent teardown and provision for one scope serialize (no stop of a fresh user)", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
   const scope = scopeId("personal", "U22");
@@ -297,7 +298,7 @@ test("concurrent teardown and provision for one scope serialize (no stop of a fr
   assert.equal(fake.containers.get(h2.id)!.running, false);
 });
 
-test("a replacement core reattaches to an already-running sandbox", async () => {
+tenantTest("a replacement core reattaches to an already-running sandbox", async () => {
   const fake = installFakeDocker(daemonPort);
   const fetchImpl: typeof fetch = (input) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -317,7 +318,7 @@ test("a replacement core reattaches to an already-running sandbox", async () => 
   await sb.teardown(second, { destroy: true });
 });
 
-test("containerized core joins each sandbox network and reaches the daemon by container name", async () => {
+tenantTest("containerized core joins each sandbox network and reaches the daemon by container name", async () => {
   const fake = installFakeDocker(daemonPort);
   const seen: string[] = [];
   const fetchImpl: typeof fetch = (input) => {
@@ -336,7 +337,7 @@ test("containerized core joins each sandbox network and reaches the daemon by co
   assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), false);
 });
 
-test("core attachment trusts the core's actual networks, not docker's connect error", async () => {
+tenantTest("core attachment trusts the core's actual networks, not docker's connect error", async () => {
   const fake = installFakeDocker(daemonPort);
   const fetchImpl: typeof fetch = (input) => {
     const url = typeof input === "string" ? input : input.toString();

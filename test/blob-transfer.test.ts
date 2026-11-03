@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,7 +26,7 @@ import {
   S3_PART_BYTES,
   type BlobTransferStore,
 } from "../src/persistence/blob-transfer.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { tenantTest, testTenants } from "./support/test-tenants.ts";
 
 const [TEST_TENANT] = testTenants();
 
@@ -132,7 +131,7 @@ const stores = (): Array<[string, BlobTransferStore, string | null]> => {
 };
 
 for (const [label, store, _dir] of stores()) {
-  test(`${label}: put a buffer, open it, and read the bytes back`, async () => {
+  tenantTest(`${label}: put a buffer, open it, and read the bytes back`, async () => {
     const data = Buffer.from("hello, world");
     const info = await store.put(data);
     assert.equal(info.sizeBytes, data.length);
@@ -143,47 +142,47 @@ for (const [label, store, _dir] of stores()) {
     assert.equal((await collectBlob(opened.stream)).toString("utf8"), "hello, world");
   });
 
-  test(`${label}: put a STREAM (multi-chunk) reassembles in order`, async () => {
+  tenantTest(`${label}: put a STREAM (multi-chunk) reassembles in order`, async () => {
     const chunks = ["alpha", "-", "beta", "-", "gamma"].map((s) => Buffer.from(s));
     const info = await store.put(Readable.from(chunks));
     const opened = await store.open(info.blobId);
     assert.equal((await collectBlob(opened!.stream)).toString("utf8"), "alpha-beta-gamma");
   });
 
-  test(`${label}: maxBytes trips BlobTooLargeError mid-stream`, async () => {
+  tenantTest(`${label}: maxBytes trips BlobTooLargeError mid-stream`, async () => {
     await assert.rejects(
       () => store.put(Buffer.alloc(1000), { maxBytes: 500 }),
       (e) => e instanceof BlobTooLargeError,
     );
   });
 
-  test(`${label}: a wrong expectedSha256 trips BlobHashMismatchError`, async () => {
+  tenantTest(`${label}: a wrong expectedSha256 trips BlobHashMismatchError`, async () => {
     await assert.rejects(
       () => store.put(Buffer.from("data"), { expectedSha256: "0".repeat(64) }),
       (e) => e instanceof BlobHashMismatchError,
     );
   });
 
-  test(`${label}: a correct expectedSha256 is accepted`, async () => {
+  tenantTest(`${label}: a correct expectedSha256 is accepted`, async () => {
     const data = Buffer.from("verify me");
     const sha = createHash("sha256").update(data).digest("hex");
     const info = await store.put(data, { expectedSha256: sha });
     assert.equal(info.sha256, sha);
   });
 
-  test(`${label}: open returns null for an unknown or malformed id`, async () => {
+  tenantTest(`${label}: open returns null for an unknown or malformed id`, async () => {
     assert.equal(await store.open("ffffffffffffffffffffffffffffffff"), null);
     assert.equal(await store.open("not-a-valid-id"), null);
   });
 
-  test(`${label}: delete removes a staged blob`, async () => {
+  tenantTest(`${label}: delete removes a staged blob`, async () => {
     const { blobId } = await store.put(Buffer.from("ephemeral"));
     assert.ok(await store.open(blobId));
     await store.delete(blobId);
     assert.equal(await store.open(blobId), null);
   });
 
-  test(`${label}: sweep(0) reclaims staged blobs`, async () => {
+  tenantTest(`${label}: sweep(0) reclaims staged blobs`, async () => {
     await store.put(Buffer.from("a"));
     await store.put(Buffer.from("b"));
     const removed = await store.sweep(0);
@@ -191,7 +190,7 @@ for (const [label, store, _dir] of stores()) {
   });
 }
 
-test("local-fs: a failed put (over cap) leaves no orphan blob file behind", async () => {
+tenantTest("local-fs: a failed put (over cap) leaves no orphan blob file behind", async () => {
   const dir = localDir();
   const store = createLocalBlobTransferStore(dir);
   await assert.rejects(
@@ -202,7 +201,7 @@ test("local-fs: a failed put (over cap) leaves no orphan blob file behind", asyn
   assert.deepEqual(leftover, []);
 });
 
-test("local-fs: a finalized blob is named by its id (no .part suffix lingering)", async () => {
+tenantTest("local-fs: a finalized blob is named by its id (no .part suffix lingering)", async () => {
   const dir = localDir();
   const store = createLocalBlobTransferStore(dir);
   const { blobId } = await store.put(Buffer.from("done"));
@@ -210,26 +209,26 @@ test("local-fs: a finalized blob is named by its id (no .part suffix lingering)"
   assert.deepEqual(readdirSync(join(dir, TEST_TENANT)), [blobId]);
 });
 
-test("s3: blobs are keyed under '<prefix>transfer/<tenant>/<id>' (snapshot-bucket coexistence)", async () => {
+tenantTest("s3: blobs are keyed under '<prefix>transfer/<tenant>/<id>' (snapshot-bucket coexistence)", async () => {
   const { objects, client } = fakeS3();
   const store = createS3BlobTransferStore({ bucket: "b", prefix: "core/", _client: client });
   const { blobId } = await store.put(Buffer.from("payload"));
   assert.deepEqual([...objects.keys()], [`core/transfer/${TEST_TENANT}/${blobId}`]);
 });
 
-test("s3: open returns null for a missing object (NoSuchKey is not an error)", async () => {
+tenantTest("s3: open returns null for a missing object (NoSuchKey is not an error)", async () => {
   const store = createS3BlobTransferStore({ bucket: "b", _client: fakeS3().client });
   assert.equal(await store.open("ffffffffffffffffffffffffffffffff"), null);
 });
 
-test("s3: open THROWS on a transient error (does NOT masquerade a 5xx/throttle as absent)", async () => {
+tenantTest("s3: open THROWS on a transient error (does NOT masquerade a 5xx/throttle as absent)", async () => {
   const boom = new Error("ServiceUnavailable") as Error & { $metadata: { httpStatusCode: number } };
   boom.$metadata = { httpStatusCode: 503 };
   const store = createS3BlobTransferStore({ bucket: "b", _client: { send: async () => Promise.reject(boom) } });
   await assert.rejects(() => store.open("ffffffffffffffffffffffffffffffff"), /ServiceUnavailable/);
 });
 
-test("local-fs: open THROWS on a non-ENOENT stat error (ENOTDIR), not a false 404", async () => {
+tenantTest("local-fs: open THROWS on a non-ENOENT stat error (ENOTDIR), not a false 404", async () => {
   const dir = localDir();
   const fileAsDir = join(dir, "not-a-dir");
   writeFileSync(fileAsDir, "i am a file");
@@ -242,7 +241,7 @@ test("local-fs: open THROWS on a non-ENOENT stat error (ENOTDIR), not a false 40
   assert.equal(await ok.open("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), null);
 });
 
-test("s3: a malformed blobId never touches S3 (anti-traversal guard)", async () => {
+tenantTest("s3: a malformed blobId never touches S3 (anti-traversal guard)", async () => {
   let sends = 0;
   const { client } = fakeS3();
   const guarded = { send: (c: unknown) => (sends++, client.send(c)) };
@@ -252,7 +251,7 @@ test("s3: a malformed blobId never touches S3 (anti-traversal guard)", async () 
   assert.equal(sends, 0);
 });
 
-test("s3: sweep deletes only blobs older than the cutoff, by LastModified", async () => {
+tenantTest("s3: sweep deletes only blobs older than the cutoff, by LastModified", async () => {
   const realNow = Date.now();
   let clock = realNow - 60_000;
   const { objects, client } = fakeS3(() => clock);
@@ -267,22 +266,25 @@ test("s3: sweep deletes only blobs older than the cutoff, by LastModified", asyn
   assert.deepEqual([...objects.keys()], [`transfer/${TEST_TENANT}/${fresh.blobId}`]);
 });
 
-test("s3 ensureExpiry installs a transfer-prefix lifecycle rule on a bucket with no existing config", async () => {
-  const fake = fakeS3();
-  const store = createS3BlobTransferStore({ bucket: "b", _client: fake.client });
-  const installed = await store.ensureExpiry!(1);
-  assert.equal(installed, true);
-  const cfg = fake.getLifecycle();
-  assert.ok(cfg, "a lifecycle config was PUT");
-  const ours = cfg!.Rules.find((r) => r.ID === "qm-transfer-expiry") as
-    { Filter?: unknown; Expiration?: unknown; Status?: unknown } | undefined;
-  assert.ok(ours, "our rule is present");
-  assert.deepEqual(ours!.Filter, { Prefix: "transfer/" }, "scoped to the disposable transfer/ prefix");
-  assert.deepEqual(ours!.Expiration, { Days: 1 });
-  assert.equal(ours!.Status, "Enabled");
-});
+tenantTest(
+  "s3 ensureExpiry installs a transfer-prefix lifecycle rule on a bucket with no existing config",
+  async () => {
+    const fake = fakeS3();
+    const store = createS3BlobTransferStore({ bucket: "b", _client: fake.client });
+    const installed = await store.ensureExpiry!(1);
+    assert.equal(installed, true);
+    const cfg = fake.getLifecycle();
+    assert.ok(cfg, "a lifecycle config was PUT");
+    const ours = cfg!.Rules.find((r) => r.ID === "qm-transfer-expiry") as
+      { Filter?: unknown; Expiration?: unknown; Status?: unknown } | undefined;
+    assert.ok(ours, "our rule is present");
+    assert.deepEqual(ours!.Filter, { Prefix: "transfer/" }, "scoped to the disposable transfer/ prefix");
+    assert.deepEqual(ours!.Expiration, { Days: 1 });
+    assert.equal(ours!.Status, "Enabled");
+  },
+);
 
-test("s3 ensureExpiry preserves unrelated rules and replaces only its own (idempotent)", async () => {
+tenantTest("s3 ensureExpiry preserves unrelated rules and replaces only its own (idempotent)", async () => {
   const fake = fakeS3();
   fake.seedLifecycle({
     Rules: [
@@ -302,12 +304,12 @@ test("s3 ensureExpiry preserves unrelated rules and replaces only its own (idemp
   assert.deepEqual((ours[0] as { Expiration?: unknown }).Expiration, { Days: 2 }, "our rule updated to the new age");
 });
 
-test("local + memory stores do not implement ensureExpiry (they stay on the in-process sweep)", () => {
+tenantTest("local + memory stores do not implement ensureExpiry (they stay on the in-process sweep)", () => {
   assert.equal(createLocalBlobTransferStore(localDir()).ensureExpiry, undefined);
   assert.equal(createMemoryBlobTransferStore().ensureExpiry, undefined);
 });
 
-test("s3: parts are carved to exactly one part regardless of how the source chunks it", async () => {
+tenantTest("s3: parts are carved to exactly one part regardless of how the source chunks it", async () => {
   const f = fakeS3();
   const store = createS3BlobTransferStore({ bucket: "b", _client: f.client });
   const ragged = [
@@ -334,7 +336,7 @@ test("s3: parts are carved to exactly one part regardless of how the source chun
   assert.ok(Buffer.from(await collectBlob(opened!.stream)).equals(body), "reassembles in order");
 });
 
-test("s3: a body of EXACTLY one part stays a single PutObject (no multipart upload opened)", async () => {
+tenantTest("s3: a body of EXACTLY one part stays a single PutObject (no multipart upload opened)", async () => {
   const f = fakeS3();
   const store = createS3BlobTransferStore({ bucket: "b", _client: f.client });
   const info = await store.put(Buffer.alloc(S3_PART_BYTES, 0x65));
@@ -343,14 +345,14 @@ test("s3: a body of EXACTLY one part stays a single PutObject (no multipart uplo
   assert.equal((await collectBlob(opened!.stream)).length, S3_PART_BYTES);
 });
 
-test("s3: a body that fits in one part never opens a multipart upload", async () => {
+tenantTest("s3: a body that fits in one part never opens a multipart upload", async () => {
   const f = fakeS3();
   const store = createS3BlobTransferStore({ bucket: "b", _client: f.client });
   await store.put(Buffer.from("small"));
   assert.equal(f.partSizes.length, 0, "single PutObject, exactly as before");
 });
 
-test("s3: maxBytes tripped mid-multipart aborts the upload instead of stranding parts", async () => {
+tenantTest("s3: maxBytes tripped mid-multipart aborts the upload instead of stranding parts", async () => {
   const f = fakeS3();
   const store = createS3BlobTransferStore({ bucket: "b", _client: f.client });
   const chunk = Buffer.alloc(S3_PART_BYTES, 0x62);
@@ -363,7 +365,7 @@ test("s3: maxBytes tripped mid-multipart aborts the upload instead of stranding 
   assert.equal(f.objects.size, 0, "and no object was completed");
 });
 
-test("s3: a wrong expectedSha256 on a multipart body deletes the object it already wrote", async () => {
+tenantTest("s3: a wrong expectedSha256 on a multipart body deletes the object it already wrote", async () => {
   const f = fakeS3();
   const store = createS3BlobTransferStore({ bucket: "b", _client: f.client });
   const chunk = Buffer.alloc(S3_PART_BYTES, 0x63);
@@ -374,7 +376,7 @@ test("s3: a wrong expectedSha256 on a multipart body deletes the object it alrea
   assert.equal(f.objects.size, 0, "the completed object is removed — a mismatch leaves nothing behind");
 });
 
-test("s3: a failed abort is reported, never silently swallowed (parts would bill forever)", async () => {
+tenantTest("s3: a failed abort is reported, never silently swallowed (parts would bill forever)", async () => {
   const f = fakeS3(() => Date.now(), {
     onAbort: () => {
       throw new Error("AccessDenied: s3:AbortMultipartUpload");
@@ -400,7 +402,7 @@ test("s3: a failed abort is reported, never silently swallowed (parts would bill
   );
 });
 
-test("s3: ensureExpiry also reaps incomplete multipart uploads (invisible to ListObjects)", async () => {
+tenantTest("s3: ensureExpiry also reaps incomplete multipart uploads (invisible to ListObjects)", async () => {
   const f = fakeS3();
   const store = createS3BlobTransferStore({ bucket: "b", _client: f.client });
   await store.ensureExpiry!(3);
