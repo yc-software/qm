@@ -78,6 +78,7 @@ export interface AwsServiceConfig {
   buildArgs?: Record<string, string>;
   dockerfile?: string;
   targetGroup?: string;
+  frontDoorTargetGroup?: string;
   publicPaths?: string[];
   logGroup?: string;
   stopTimeout?: number;
@@ -1355,21 +1356,25 @@ function validateAws(
       }
       service.desiredCount = desiredCount;
     }
-    if (value["targetGroup"] !== undefined) {
-      const targetGroup = requiredString(value["targetGroup"], `services.${name}.targetGroup`);
+    for (const field of ["targetGroup", "frontDoorTargetGroup"] as const) {
+      if (value[field] === undefined) continue;
+      if (field === "frontDoorTargetGroup" && name !== "core") {
+        throw new CliError(`${path}: "aws.services.${name}.frontDoorTargetGroup" is only valid on core`);
+      }
+      const targetGroup = requiredString(value[field], `services.${name}.${field}`);
       if (targetGroup.length > 32 || !/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(targetGroup)) {
         throw new CliError(
-          `${path}: "aws.services.${name}.targetGroup" must be a valid target group name (at most 32 letters, digits, and interior hyphens)`,
+          `${path}: "aws.services.${name}.${field}" must be a valid target group name (at most 32 letters, digits, and interior hyphens)`,
         );
       }
       const previous = coordinates.targetGroup.get(targetGroup);
       if (previous) {
         throw new CliError(
-          `${path}: "aws.services.${name}.targetGroup" duplicates aws.services.${previous}.targetGroup (${JSON.stringify(targetGroup)})`,
+          `${path}: "aws.services.${name}.${field}" duplicates aws.services.${previous} (${JSON.stringify(targetGroup)})`,
         );
       }
-      coordinates.targetGroup.set(targetGroup, name);
-      service.targetGroup = targetGroup;
+      coordinates.targetGroup.set(targetGroup, `${name}.${field}`);
+      service[field] = targetGroup;
     }
     if (value["logGroup"] !== undefined) {
       const logGroup = requiredString(value["logGroup"], `services.${name}.logGroup`);

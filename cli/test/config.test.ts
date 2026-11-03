@@ -735,6 +735,29 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
     ({ path }) => assert.throws(() => loadConfigAt(path), /duplicates aws\.services\.core\.targetGroup/),
   );
   withConfig(
+    { target: "aws", aws: { ...aws, services: { core: { ...service, frontDoorTargetGroup: "acme-portal-tg" } } } },
+    ({ path }) => assert.equal(loadConfigAt(path).config.aws!.services.core!.frontDoorTargetGroup, "acme-portal-tg"),
+  );
+  for (const [services, error] of [
+    [{ core: { ...service, frontDoorTargetGroup: "bad_name" } }, /aws\.services\.core\.frontDoorTargetGroup/],
+    [
+      { core: { ...service, targetGroup: "tg", frontDoorTargetGroup: "tg" } },
+      /duplicates aws\.services\.core\.targetGroup/,
+    ],
+    [
+      {
+        core: service,
+        linear: { ...service, ecrRepository: "linear", ecsService: "acme-linear", frontDoorTargetGroup: "tg" },
+      },
+      /aws\.services\.linear\.frontDoorTargetGroup" is only valid on core/,
+    ],
+  ] as const) {
+    withConfig(
+      { target: "aws", plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }], aws: { ...aws, services } },
+      ({ path }) => assert.throws(() => loadConfigAt(path), error),
+    );
+  }
+  withConfig(
     { target: "aws", aws: { ...aws, services: { core: { ...service, dockerfile: "layered/core.Dockerfile" } } } },
     ({ path }) => {
       assert.equal(loadConfigAt(path).config.aws?.services.core?.dockerfile, "layered/core.Dockerfile");

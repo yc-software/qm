@@ -69,11 +69,16 @@ interface FrontDoor {
   blueGreen?: boolean;
   coreHosts?: string[];
   coreTargetGroup?: string;
+  frontDoorTargetGroup?: string;
 }
 
 function frontDoorAttachments(door: FrontDoor): Array<Record<string, unknown>> {
   const routes = [
-    { route: "core-public", target: awsTargetGroupName(config, "core-public"), alternate: frontDoorAlternate },
+    {
+      route: "core-public",
+      target: door.frontDoorTargetGroup ?? awsTargetGroupName(config, "core-public"),
+      alternate: frontDoorAlternate,
+    },
     ...(door.coreHosts?.length
       ? [
           {
@@ -111,13 +116,14 @@ function fakeAws(
   const bin = join(dir, "aws-fake");
   const log = join(dir, "aws.log");
   const coreHosts = ingress.coreHosts ?? [];
-  const targetArn = targetGroupArn(awsTargetGroupName(config, "core-public"));
+  const frontDoorName = ingress.frontDoorTargetGroup ?? awsTargetGroupName(config, "core-public");
+  const targetArn = targetGroupArn(frontDoorName);
   const alternateArn = targetGroupArn(frontDoorAlternate, 2);
   const coreName = ingress.coreTargetGroup ?? awsTargetGroupName(config, "core");
   const coreArn = targetGroupArn(coreName);
   const coreAlternateArn = targetGroupArn(coreHostAlternate, 2);
   const groups = [
-    { TargetGroupArn: targetArn, TargetGroupName: awsTargetGroupName(config, "core-public") },
+    { TargetGroupArn: targetArn, TargetGroupName: frontDoorName },
     ...(ingress.blueGreen ? [{ TargetGroupArn: alternateArn, TargetGroupName: frontDoorAlternate }] : []),
     ...(coreHosts.length ? [{ TargetGroupArn: coreArn, TargetGroupName: coreName }] : []),
     ...(coreHosts.length && ingress.blueGreen
@@ -5566,6 +5572,40 @@ test("shared ALB validates company routes while rejecting sibling overlap", () =
       fake.restore();
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+});
+
+test("shared ALB finds a named front-door target group through core's frontDoorTargetGroup", () => {
+  const company = { ...config, aws: { ...config.aws!, sharedAlb: true, alb: "shared" } };
+  const door = { blueGreen: true, frontDoorTargetGroup: "acme-portal-tg" };
+  const services = new Map([["core", { loadBalancers: frontDoorAttachments(door) }]]);
+  const dir = mkdtempSync(join(tmpdir(), "qm-shared-alb-named-"));
+  const fake = fakeAws(dir, "", {
+    ...door,
+    sharedHost: new URL(company.publicUrl).hostname,
+    siblingHost: "other.example",
+  });
+  try {
+    assert.equal(
+      assertAwsPublicRouting(
+        {
+          ...company,
+          aws: {
+            ...company.aws,
+            services: {
+              ...company.aws.services,
+              core: { ...company.aws.services.core!, frontDoorTargetGroup: "acme-portal-tg" },
+            },
+          },
+        },
+        services,
+      ).get("core-public"),
+      targetGroupArn("acme-portal-tg"),
+    );
+    assert.throws(() => assertAwsPublicRouting(company, services), /target group for core-public is missing/);
+  } finally {
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

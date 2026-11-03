@@ -3964,7 +3964,7 @@ function awsIngressRoutes(config: QmConfig): ReadonlyMap<string, AwsIngressRoute
 export function awsTargetGroupName(config: QmConfig, route: string): string {
   const aws = requireAws(config);
   return (
-    aws.services[route]?.targetGroup ??
+    (route === CORE_PUBLIC_PORT_NAME ? aws.services.core?.frontDoorTargetGroup : aws.services[route]?.targetGroup) ??
     `${aws.cluster.slice(0, 20)}-${route.replaceAll("-", "").slice(0, 4)}-${createHash("sha1").update(`${aws.cluster}:${route}`).digest("hex").slice(0, 6)}`
   );
 }

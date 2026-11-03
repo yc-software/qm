@@ -157,6 +157,14 @@ public URL to core once, by hand, without a gap:
    `npm exec qm -- up --candidate candidate.json --yes` and
    `npm exec qm -- check --live`. Deploy with `qm up` from then on.
 
+On a shared ALB, the company's target groups and listener rule live outside
+this Terraform, and `aws.services.portal.targetGroup` no longer applies. Give
+core's front door its own primary and alternate target groups on port 8000 and
+name the primary in `aws.services.core.frontDoorTargetGroup`. In place of steps
+5 to 7, attach core to that pair and the company's listener rule, wait until
+core is stable, then delete the portal and web-ui services and their target
+groups.
+
 ## Agent-computer proof
 
 Copy the exact personal scope id shown for the signed-in administrator in
