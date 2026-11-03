@@ -138,11 +138,16 @@ spec:
               value: {{ $v | quote }}
             {{- end }}
           {{- end }}
-          {{- if or (include "qm.hasSecretEnv" $root) $root.Values.envFrom }}
+          {{- $databaseEnv := and (eq $name "core") (include "qm.hasDatabaseEnv" $root) }}
+          {{- if or (include "qm.hasSecretEnv" $root) $databaseEnv $root.Values.envFrom }}
           envFrom:
             {{- if include "qm.hasSecretEnv" $root }}
             - secretRef:
                 name: {{ include "qm.fullname" $root }}-env
+            {{- end }}
+            {{- if $databaseEnv }}
+            - secretRef:
+                name: {{ include "qm.fullname" $root }}-database
             {{- end }}
             {{- with $root.Values.envFrom }}
             {{- toYaml . | nindent 12 }}
@@ -172,11 +177,16 @@ spec:
               value: {{ $v | quote }}
             {{- end }}
           {{- end }}
-          {{- if or (include "qm.hasSecretEnv" $root) $root.Values.envFrom }}
+          {{- $databaseEnv := and (eq $name "core") (include "qm.hasDatabaseEnv" $root) }}
+          {{- if or (include "qm.hasSecretEnv" $root) $databaseEnv $root.Values.envFrom }}
           envFrom:
             {{- if include "qm.hasSecretEnv" $root }}
             - secretRef:
                 name: {{ include "qm.fullname" $root }}-env
+            {{- end }}
+            {{- if $databaseEnv }}
+            - secretRef:
+                name: {{ include "qm.fullname" $root }}-database
             {{- end }}
             {{- with $root.Values.envFrom }}
             {{- toYaml . | nindent 12 }}

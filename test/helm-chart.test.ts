@@ -304,6 +304,22 @@ test("Helm runs the database release in the core pod with core's environment bef
     );
 });
 
+test("Helm gives the database logins to the core pod only", options, () => {
+  const resources = render({
+    secretEnv: { DATABASE_URL: "postgres://acme_app:a@db/qm", DATABASE_OWNER_URL: "postgres://owner:o@db/qm" },
+  });
+  const secret = (name: string) => resources.find((r) => r.kind === "Secret" && r.metadata.name === name)?.stringData;
+  assert.deepEqual(Object.keys(secret("test-qm-database") ?? {}).sort(), ["DATABASE_OWNER_URL", "DATABASE_URL"]);
+  assert.equal(secret("test-qm-env")?.DATABASE_OWNER_URL, undefined);
+  assert.equal(secret("test-qm-env")?.DATABASE_URL, undefined);
+  const refs = (service: string) =>
+    ((container(resources, service) as { envFrom?: { secretRef?: { name: string } }[] }).envFrom ?? []).map(
+      (entry) => entry.secretRef?.name,
+    );
+  assert.ok(refs("core").includes("test-qm-database"));
+  for (const service of ["portal", "web-ui"]) assert.ok(!refs(service).includes("test-qm-database"));
+});
+
 test("Helm refuses tenant settings placed in service env", options, () => {
   for (const values of [
     { env: { AUTH_ALLOWED_EMAILS: "member@example.com" } },
