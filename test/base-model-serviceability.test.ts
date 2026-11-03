@@ -38,7 +38,9 @@ function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: 
 }
 
 async function effectiveModel(base: string): Promise<string> {
-  const res = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+  const res = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`, {
+    headers: testTenantHeaders(),
+  });
   assert.equal(res.status, 200);
   return ((await res.json()) as { effective: { modelId: string } }).effective.modelId;
 }
@@ -122,7 +124,9 @@ test("the declaration outranks a stray key from another vendor", async () => {
 test("company ChatGPT-only deployments offer their plain GPT default through managed availability", async () => {
   const srv = start({ codexAuthCredential: "company-chatgpt" });
   try {
-    const res = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+    const res = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`, {
+      headers: testTenantHeaders(),
+    });
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
       effective: { modelId: string };

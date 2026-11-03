@@ -8,6 +8,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SECRET = "deploy-redeploy-route-secret".repeat(2);
 
@@ -22,9 +23,10 @@ describe("deployment redeploy route", () => {
     return fetch(`${base}${path}`, {
       method: "POST",
       headers: {
+        ...testTenantHeaders(),
         "content-type": "application/json",
         "x-timestamp": String(ts),
-        "x-signature": signRequest(SECRET, ts, `POST\n${path}\n${raw}`),
+        "x-signature": signRequest(SECRET, ts, `POST\n${path}\n${testTenants()[0]}\n${raw}`),
       },
       body: raw,
     });

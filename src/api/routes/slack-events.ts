@@ -69,5 +69,5 @@ async function proxySlackEvents(ctx: BaseCtx): Promise<void> {
 }
 
 export const slackEventRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "POST", path: "/slack/events", auth: "public", handle: proxySlackEvents },
+  { method: "POST", path: "/slack/events", auth: "public", tenant: "row", handle: proxySlackEvents },
 ];

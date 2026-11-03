@@ -5,6 +5,7 @@ import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
 import { errMessage, swallow } from "../util/errors.ts";
+import { inTenantOf } from "../tenants/claim.ts";
 
 const PROCESS_REAPER_LEASE_KEY = "processes:reaper";
 
@@ -68,26 +69,25 @@ export interface ProcessReaperOptions {
 
 export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReaperOptions): ProcessReaper {
   const leaderLease = opts.leaderLease;
+  async function reap(rec: ProcessRecord): Promise<boolean> {
+    if (opts.kill) {
+      try {
+        await opts.kill(rec);
+      } catch (error) {
+        swallow(`process reaper: kill ${rec.processId}`, error);
+        return false;
+      }
+    }
+    if (!(await registry.markStatus(rec.processId, "reaped"))) return false;
+    if (opts.onReaped)
+      await opts.onReaped(rec).catch((err) => console.error("[process-reaper] onReaped hook failed:", errMessage(err)));
+    return true;
+  }
+
   async function sweep(): Promise<{ reaped: number }> {
     const expired = await registry.listExpired();
     let reaped = 0;
-    for (const rec of expired) {
-      if (opts.kill) {
-        try {
-          await opts.kill(rec);
-        } catch (error) {
-          swallow(`process reaper: kill ${rec.processId}`, error);
-          continue;
-        }
-      }
-      const flipped = await registry.markStatus(rec.processId, "reaped");
-      if (!flipped) continue;
-      reaped++;
-      if (opts.onReaped)
-        await opts
-          .onReaped(rec)
-          .catch((err) => console.error("[process-reaper] onReaped hook failed:", errMessage(err)));
-    }
+    for (const rec of expired) if (await inTenantOf(rec.tenantId, () => reap(rec))) reaped++;
     await opts.afterSweep?.();
     return { reaped };
   }
