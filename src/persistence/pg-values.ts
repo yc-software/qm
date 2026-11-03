@@ -1,3 +1,5 @@
+import type { Pool } from "pg";
+import { withPgTransaction } from "./pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
 export type Row = Record<string, unknown>;
@@ -31,4 +33,26 @@ export function columnList(columns: ReadonlyArray<readonly [string, string]>): {
     names: columns.map(([name]) => name).join(", "),
     values: columns.map(([, type], i) => `$${i + 1}::${type}`).join(", "),
   };
+}
+
+export interface LockedRow<T> {
+  select: string;
+  update: string;
+  read(row: Row): T;
+  params(value: T): unknown[];
+}
+
+export function updateLocked<T extends { id: string }>(
+  pool: Pool,
+  row: LockedRow<T>,
+  id: string,
+  apply: (current: T) => T,
+): Promise<T | null> {
+  return withPgTransaction(pool, async (client) => {
+    const current = await client.query(`${row.select} AND id = $1 FOR UPDATE`, [id]);
+    if (!current.rows[0]) return null;
+    const next = { ...apply(row.read(current.rows[0])), id };
+    await client.query(row.update, row.params(next));
+    return next;
+  });
 }

@@ -108,6 +108,20 @@ test("loops round-trip through typed columns and the indexed lookups", { skip },
   });
 });
 
+test("the same loop id in two tenants stays two rows that neither tenant can read or overwrite", { skip }, async () => {
+  await withTypedTableDb(loopTables, async ({ store, tenant, otherTenant }) => {
+    const { loop } = await withTenant(tenant, () => store.loopStore.create(loopInput()));
+    const twin = { ...loop, name: "Twin" };
+    assert.equal((await withTenant(otherTenant, () => store.loops.insertIfAbsent(twin))).created, true);
+    await withTenant(otherTenant, () => store.loops.update(loop.id, (l) => ({ ...l, name: "Changed twin" })));
+    assert.equal((await withTenant(tenant, () => store.loops.get(loop.id)))?.name, "Inbox");
+    assert.equal((await withTenant(otherTenant, () => store.loops.get(loop.id)))?.name, "Changed twin");
+    await withTenant(otherTenant, () => store.loops.delete(loop.id));
+    assert.equal((await withTenant(tenant, () => store.loops.get(loop.id)))?.name, "Inbox");
+    assert.equal(await withTenant(otherTenant, () => store.loops.get(loop.id)), null);
+  });
+});
+
 test(
   "a tenant cannot see or change another tenant's loop rows, and unbound access fails closed",
   { skip },

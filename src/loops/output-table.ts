@@ -1,5 +1,5 @@
 import type { LoopOutput } from "./types.ts";
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import {
@@ -13,6 +13,7 @@ import {
   text,
   texts,
   type Row,
+  updateLocked,
 } from "../persistence/pg-values.ts";
 
 export interface OutputRows {
@@ -191,16 +192,18 @@ export function createPostgresOutputRows(connectionString: string): OutputRows {
         ? where("loop_id = $1 AND state = 'ready'", [loopId], "created_at, id")
         : where("loop_id = $1 AND state = 'ready' AND created_at < $2", [loopId, createdBefore], "created_at, id"),
     async update(id, apply) {
-      return withPgTransaction(await pool(), async (client) => {
-        const current = await client.query(`${SELECT} WHERE ${MINE} AND id = $1 FOR UPDATE`, [id]);
-        if (!current.rows[0]) return null;
-        const next = { ...apply(fromRow(current.rows[0])), id };
-        await client.query(
-          `UPDATE loop_outputs SET (${COLUMNS}) = ROW(${PLACEHOLDERS}) WHERE ${MINE} AND id = $1`,
-          params(next),
-        );
-        return present<LoopOutput>(next as unknown as Row);
-      });
+      const next = await updateLocked(
+        await pool(),
+        {
+          select: `${SELECT} WHERE ${MINE}`,
+          update: `UPDATE loop_outputs SET (${COLUMNS}) = ROW(${PLACEHOLDERS}) WHERE ${MINE} AND id = $1`,
+          read: fromRow,
+          params,
+        },
+        id,
+        apply,
+      );
+      return next && present<LoopOutput>(next as unknown as Row);
     },
     async deleteByLoop(loopId) {
       await q(`DELETE FROM loop_outputs WHERE ${MINE} AND loop_id = $1`, [loopId]);

@@ -13,6 +13,7 @@ import {
   text,
   texts,
   type Row,
+  updateLocked,
 } from "../persistence/pg-values.ts";
 
 type ItemSummary = Omit<LoopItem, "proposal" | "agentDrafts" | "thread" | "sourcePayload"> &
@@ -259,16 +260,18 @@ export function createPostgresItemRows(connectionString: string): ItemRows {
       return inserted.length > 0;
     },
     async update(id, apply) {
-      return withPgTransaction(await pool(), async (client) => {
-        const current = await client.query(`${SELECT} WHERE ${MINE} AND id = $1 FOR UPDATE`, [id]);
-        if (!current.rows[0]) return null;
-        const next = { ...apply(fromRow(current.rows[0])), id };
-        await client.query(
-          `UPDATE loop_items SET (${COLUMNS}) = ROW(${PLACEHOLDERS}) WHERE ${MINE} AND id = $1`,
-          params(next),
-        );
-        return present<LoopItem>(next as unknown as Row);
-      });
+      const next = await updateLocked(
+        await pool(),
+        {
+          select: `${SELECT} WHERE ${MINE}`,
+          update: `UPDATE loop_items SET (${COLUMNS}) = ROW(${PLACEHOLDERS}) WHERE ${MINE} AND id = $1`,
+          read: fromRow,
+          params,
+        },
+        id,
+        apply,
+      );
+      return next && present<LoopItem>(next as unknown as Row);
     },
     async mutateMany(updates) {
       if (!updates.length) return [];

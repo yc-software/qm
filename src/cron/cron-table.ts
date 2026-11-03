@@ -1,10 +1,10 @@
 import { jsonbStringify } from "../util/text.ts";
-import { json, kvBigint, kvJsonb, kvText, ms, num, text } from "../persistence/pg-values.ts";
+import { json, kvBigint, kvJsonb, kvText, ms, num, text, updateLocked } from "../persistence/pg-values.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
 import type { Cron } from "../triggers/types.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import { CRON_SEARCH_DESCRIPTION, CRON_SEARCH_TITLE } from "../search/resource-search.ts";
 
 export type TenantCron = Cron & { tenantId: string };
@@ -183,20 +183,18 @@ export function createPostgresCronRows(connectionString: string): CronRows & { c
         [[...threadRefs]],
       );
     },
-    async update(id, apply) {
-      return withPgTransaction(await pool(), async (client) => {
-        const current = await client.query(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND id = $1 FOR UPDATE`, [
-          id,
-        ]);
-        if (!current.rows[0]) return null;
-        const next = { ...apply(rowToCron(current.rows[0])), id };
-        await client.query(
-          `UPDATE crons SET (${COLUMNS}) = (${VALUES}) WHERE tenant_id = qm_bound_tenant() AND id = $1`,
-          cronParams(next),
-        );
-        return next;
-      });
-    },
+    update: async (id, apply) =>
+      updateLocked(
+        await pool(),
+        {
+          select: `${SELECT} WHERE tenant_id = qm_bound_tenant()`,
+          update: `UPDATE crons SET (${COLUMNS}) = (${VALUES}) WHERE tenant_id = qm_bound_tenant() AND id = $1`,
+          read: rowToCron,
+          params: cronParams,
+        },
+        id,
+        apply,
+      ),
     async delete(id) {
       await q(`DELETE FROM crons WHERE tenant_id = qm_bound_tenant() AND id = $1`, [id]);
     },

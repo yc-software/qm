@@ -1,6 +1,6 @@
 import { claimAcrossTenants } from "../tenants/claim.ts";
 import type { Loop } from "./types.ts";
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import {
@@ -14,6 +14,7 @@ import {
   text,
   texts,
   type Row,
+  updateLocked,
 } from "../persistence/pg-values.ts";
 
 export type TenantLoop = Loop & { tenantId: string };
@@ -253,16 +254,18 @@ export function createPostgresLoopRows(connectionString: string): LoopRows {
     byOwner: (owner, surface) => first("owner = $1 AND surface = $2", [owner, surface]),
     byScope: (ownerScopeId, surface) => first("owner_scope_id = $1 AND surface = $2", [ownerScopeId, surface]),
     async update(id, apply) {
-      return withPgTransaction(await pool(), async (client) => {
-        const current = await client.query(`${SELECT} WHERE ${MINE} AND id = $1 FOR UPDATE`, [id]);
-        if (!current.rows[0]) return null;
-        const next = { ...apply(fromRow(current.rows[0])), id };
-        await client.query(
-          `UPDATE loops SET (${COLUMNS}) = ROW(${PLACEHOLDERS}) WHERE ${MINE} AND id = $1`,
-          params(next),
-        );
-        return present<Loop>(next as unknown as Row);
-      });
+      const next = await updateLocked(
+        await pool(),
+        {
+          select: `${SELECT} WHERE ${MINE}`,
+          update: `UPDATE loops SET (${COLUMNS}) = ROW(${PLACEHOLDERS}) WHERE ${MINE} AND id = $1`,
+          read: fromRow,
+          params,
+        },
+        id,
+        apply,
+      );
+      return next && present<Loop>(next as unknown as Row);
     },
     async delete(id) {
       await q(`DELETE FROM loops WHERE ${MINE} AND id = $1`, [id]);

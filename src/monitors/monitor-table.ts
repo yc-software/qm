@@ -1,9 +1,9 @@
-import { json, ms, num, text } from "../persistence/pg-values.ts";
+import { json, ms, num, text, updateLocked } from "../persistence/pg-values.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
 import type { Monitor } from "../triggers/types.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 
 export type TenantMonitor = Monitor & { tenantId: string };
 
@@ -152,20 +152,18 @@ export function createPostgresMonitorRows(connectionString: string): MonitorRows
         [[...threadRefs]],
       );
     },
-    async update(id, apply) {
-      return withPgTransaction(await pool(), async (client) => {
-        const current = await client.query(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND id = $1 FOR UPDATE`, [
-          id,
-        ]);
-        if (!current.rows[0]) return null;
-        const next = { ...apply(rowToMonitor(current.rows[0])), id };
-        await client.query(
-          `UPDATE monitors SET (${COLUMNS}) = (${VALUES}) WHERE tenant_id = qm_bound_tenant() AND id = $1`,
-          monitorParams(next),
-        );
-        return next;
-      });
-    },
+    update: async (id, apply) =>
+      updateLocked(
+        await pool(),
+        {
+          select: `${SELECT} WHERE tenant_id = qm_bound_tenant()`,
+          update: `UPDATE monitors SET (${COLUMNS}) = (${VALUES}) WHERE tenant_id = qm_bound_tenant() AND id = $1`,
+          read: rowToMonitor,
+          params: monitorParams,
+        },
+        id,
+        apply,
+      ),
     async delete(id) {
       await q(`DELETE FROM monitors WHERE tenant_id = qm_bound_tenant() AND id = $1`, [id]);
     },

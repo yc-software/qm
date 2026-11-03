@@ -1,4 +1,4 @@
-import { json, ms, text } from "../persistence/pg-values.ts";
+import { json, ms, text, updateLocked } from "../persistence/pg-values.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
 import type { Webhook } from "../triggers/types.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
@@ -178,20 +178,18 @@ export function createPostgresWebhookRows(connectionString: string): WebhookRows
     list: () => many(`${SELECT} WHERE tenant_id = qm_bound_tenant() ORDER BY id`),
     ownedBy: (scopeId) =>
       many(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND owner_scope_id = $1 ORDER BY id`, [scopeId]),
-    async update(id, apply) {
-      return withPgTransaction(await pool(), async (client) => {
-        const current = await client.query(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND id = $1 FOR UPDATE`, [
-          id,
-        ]);
-        if (!current.rows[0]) return null;
-        const next = { ...apply(rowToWebhook(current.rows[0])), id };
-        await client.query(
-          `UPDATE webhooks SET (${COLUMNS}) = (${VALUES}) WHERE tenant_id = qm_bound_tenant() AND id = $1`,
-          webhookParams(next),
-        );
-        return next;
-      });
-    },
+    update: async (id, apply) =>
+      updateLocked(
+        await pool(),
+        {
+          select: `${SELECT} WHERE tenant_id = qm_bound_tenant()`,
+          update: `UPDATE webhooks SET (${COLUMNS}) = (${VALUES}) WHERE tenant_id = qm_bound_tenant() AND id = $1`,
+          read: rowToWebhook,
+          params: webhookParams,
+        },
+        id,
+        apply,
+      ),
     async recordEvent(webhookId, event) {
       await withPgTransaction(await pool(), async (client) => {
         await client.query(

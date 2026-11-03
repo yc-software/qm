@@ -1,6 +1,6 @@
 import { claimAcrossTenants } from "../tenants/claim.ts";
 import type { IngressDelivery, LoopIngress } from "./ingress.ts";
-import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import {
@@ -14,6 +14,7 @@ import {
   text,
   texts,
   type Row,
+  updateLocked,
 } from "../persistence/pg-values.ts";
 
 type TenantIngress = LoopIngress & { tenantId: string };
@@ -245,16 +246,18 @@ export function createPostgresIngressSourceRows(connectionString: string): Ingre
       await q(`INSERT INTO loop_ingress(${SOURCE.names}) VALUES (${SOURCE.values})`, sourceParams(source));
     },
     async update(id, apply) {
-      return withPgTransaction(await pool(), async (client) => {
-        const current = await client.query(`${SELECT_SOURCE} WHERE ${MINE} AND id = $1 FOR UPDATE`, [id]);
-        if (!current.rows[0]) return null;
-        const next = { ...apply(sourceFromRow(current.rows[0])), id };
-        await client.query(
-          `UPDATE loop_ingress SET (${SOURCE.names}) = ROW(${SOURCE.values}) WHERE ${MINE} AND id = $1`,
-          sourceParams(next),
-        );
-        return present<LoopIngress>(next as unknown as Row);
-      });
+      const next = await updateLocked(
+        await pool(),
+        {
+          select: `${SELECT_SOURCE} WHERE ${MINE}`,
+          update: `UPDATE loop_ingress SET (${SOURCE.names}) = ROW(${SOURCE.values}) WHERE ${MINE} AND id = $1`,
+          read: sourceFromRow,
+          params: sourceParams,
+        },
+        id,
+        apply,
+      );
+      return next && present<LoopIngress>(next as unknown as Row);
     },
     async enabled() {
       return (await claimAcrossTenants(`${SELECT_SOURCE} WHERE enabled ORDER BY tenant_id, id`)).rows.map(tenantSource);
@@ -296,16 +299,18 @@ export function createPostgresIngressDeliveryRows(connectionString: string): Ing
       return rows.map(deliveryFromRow);
     },
     async update(id, apply) {
-      return withPgTransaction(await pool(), async (client) => {
-        const current = await client.query(`${SELECT_DELIVERY} WHERE ${MINE} AND id = $1 FOR UPDATE`, [id]);
-        if (!current.rows[0]) return null;
-        const next = { ...apply(deliveryFromRow(current.rows[0])), id };
-        await client.query(
-          `UPDATE loop_ingress_deliveries SET (${DELIVERY.names}) = ROW(${DELIVERY.values}) WHERE ${MINE} AND id = $1`,
-          deliveryParams(next),
-        );
-        return present<IngressDelivery>(next as unknown as Row);
-      });
+      const next = await updateLocked(
+        await pool(),
+        {
+          select: `${SELECT_DELIVERY} WHERE ${MINE}`,
+          update: `UPDATE loop_ingress_deliveries SET (${DELIVERY.names}) = ROW(${DELIVERY.values}) WHERE ${MINE} AND id = $1`,
+          read: deliveryFromRow,
+          params: deliveryParams,
+        },
+        id,
+        apply,
+      );
+      return next && present<IngressDelivery>(next as unknown as Row);
     },
     async pruneCompleted(before) {
       return (await claimAcrossTenants(`DELETE FROM loop_ingress_deliveries WHERE completed_at < $1`, [before]))
