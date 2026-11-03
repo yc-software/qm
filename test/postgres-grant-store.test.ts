@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -6,21 +6,11 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Grant, type Principal } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { ownerUrlOf, testDatabaseUrl } from "./support/test-database.ts";
 import { tenantBoundUrl, inTestTenant } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres grant-store tests";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS acl_grants CASCADE");
-  await p.query("DROP TABLE IF EXISTS acl_grants_version CASCADE");
-  await p.end();
-});
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");
@@ -128,7 +118,7 @@ test("pg grant persistence: the snapshot is served from cache until the version 
     await reader.all();
 
     const pg = (await import("pg")).default;
-    const p = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
+    const p = new pg.Pool({ connectionString: ownerUrlOf(URL!) });
     try {
       await p.query("ALTER TABLE acl_grants DISABLE TRIGGER acl_grants_bump");
       await p.query("DELETE FROM acl_grants WHERE path = $1", ["cached.md"]);

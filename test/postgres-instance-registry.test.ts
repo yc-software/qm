@@ -1,22 +1,14 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
-import { createPgPool, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { settle } from "./support/settle.ts";
 import { createAppLogin } from "./support/app-login.ts";
+import { ownerUrlOf } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the instance-registry tests";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS instance_heartbeats CASCADE");
-  await p.end();
-});
 
 test(
   "supersession: a newer different-sha instance drains the old one; same sha and stale beats don't",
@@ -29,7 +21,6 @@ test(
       startedAt: 1000,
       livenessMs: 200,
     });
-    await migrateRegisteredPgSchemas(URL!);
     assert.equal(await old.beat(), false, "alone: not superseded");
 
     const peer = createPostgresInstanceRegistry(pool, {
@@ -70,7 +61,6 @@ test(
       const built = buildApp(
         testConfig({ databaseUrl: URL, buildSha, backgroundWorkEnabled, workers: 1, reaperIntervalMs: 60_000 }),
       );
-      await migrateRegisteredPgSchemas(URL!);
       built.runtime.start();
       const count = async (): Promise<number> => {
         const { rows } = await pool.query("SELECT count(*)::int AS n FROM instance_heartbeats WHERE build_sha = $1", [
@@ -90,10 +80,8 @@ test(
 );
 
 test("an instance beats through the app login, which cannot create tables", { skip }, async (t) => {
-  const owner = createPostgresMapFactory(URL!).pool;
-  createPostgresInstanceRegistry(owner, { instanceId: "i-owner", buildSha: "sha-owner", startedAt: 1 });
-  await migrateRegisteredPgSchemas(URL!);
-  const login = await createAppLogin(URL!);
+  const owner = createPostgresMapFactory(ownerUrlOf(URL!)).pool;
+  const login = await createAppLogin(ownerUrlOf(URL!));
   t.after(() => login.drop());
   const registry = createPostgresInstanceRegistry(createPgPool(login.url), {
     instanceId: "i-app",
