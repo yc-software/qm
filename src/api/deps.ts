@@ -111,6 +111,11 @@ export interface ServerDeps {
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";
   slackEventsPort?: number;
+  partnerChatEvents?: (
+    timestamp: string | undefined,
+    signature: string | undefined,
+    rawBody: string,
+  ) => Promise<{ status: number; body: Record<string, unknown> }>;
   slackEnvBotToken?: string;
   oauthStateSecret?: string;
   oauthFetch?: FetchLike;

@@ -1,4 +1,5 @@
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
+import type { SurfacePromptHints } from "./surfaces/contract.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
@@ -120,6 +121,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
+  partnerChat?: { url: string; secret: string; label?: string; promptHints?: Partial<SurfacePromptHints> };
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
@@ -360,6 +362,29 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
     );
   }
   return declared;
+}
+
+const PROMPT_HINT_KEYS = ["mentionSyntax", "linkSyntax", "autonomousStyle", "conversationStyle"] as const;
+
+function partnerChatPromptHints(raw: string): Partial<SurfacePromptHints> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = null;
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    Object.entries(parsed).some(
+      ([k, v]) => !(PROMPT_HINT_KEYS as readonly string[]).includes(k) || typeof v !== "string",
+    )
+  )
+    throw new Error(
+      `PARTNER_CHAT_PROMPT_HINTS must be a JSON object of strings keyed by ${PROMPT_HINT_KEYS.join(", ")}`,
+    );
+  return parsed as Partial<SurfacePromptHints>;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -607,6 +632,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
+    ...(env.PARTNER_CHAT_URL?.trim() && env.PARTNER_CHAT_SECRET?.trim()
+      ? {
+          partnerChat: {
+            url: env.PARTNER_CHAT_URL.trim(),
+            secret: env.PARTNER_CHAT_SECRET.trim(),
+            ...(env.PARTNER_CHAT_LABEL?.trim() ? { label: env.PARTNER_CHAT_LABEL.trim() } : {}),
+            ...(env.PARTNER_CHAT_PROMPT_HINTS?.trim()
+              ? { promptHints: partnerChatPromptHints(env.PARTNER_CHAT_PROMPT_HINTS) }
+              : {}),
+          },
+        }
+      : {}),
     secretsBackend: secretsBackendEnvStrict(env.SECRETS_BACKEND, env.SECRETS_PREFIX ?? ""),
     secretsPrefix: env.SECRETS_PREFIX ?? "",
     layerEnv: { ...env },

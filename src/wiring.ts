@@ -391,6 +391,9 @@ import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import { createSurfaceRegistry } from "./surfaces/registry.ts";
 import { createSlackSurface } from "./surfaces/slack/adapter.ts";
+import { createPartnerChatSurface } from "./surfaces/partner-chat/adapter.ts";
+import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
+import { createPartnerChatDeliveries } from "./surfaces/partner-chat/outbound.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -481,6 +484,7 @@ export interface BuiltApp {
   scheduler: Scheduler;
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
+  partnerChatEvents?: ServerDeps["partnerChatEvents"];
   loopIngress: LoopIngressService;
   admin: AdminService;
   rateLimiter: RateLimiter;
@@ -2050,7 +2054,20 @@ export function buildApp(
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
-  const surfaces = createSurfaceRegistry({ surfaces: [createSlackSurface({ deliveries })] });
+  const surfaces = createSurfaceRegistry({
+    surfaces: [
+      createSlackSurface({ deliveries }),
+      ...(config.partnerChat
+        ? [
+            createPartnerChatSurface({
+              deliveries,
+              ...(config.partnerChat.label ? { label: config.partnerChat.label } : {}),
+              ...(config.partnerChat.promptHints ? { promptHints: config.partnerChat.promptHints } : {}),
+            }),
+          ]
+        : []),
+    ],
+  });
   const orchestratorDeps: OrchestratorDeps = {
     installSharedCanvas: async (actorId, fileId, where) => {
       const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
@@ -2430,6 +2447,21 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
+  const partnerChatInbound = config.partnerChat
+    ? createPartnerChatInbound({ secret: config.partnerChat.secret, app, surfaceCache })
+    : null;
+  const partnerChatOutbound = config.partnerChat
+    ? createPartnerChatDeliveries({
+        url: config.partnerChat.url,
+        secret: config.partnerChat.secret,
+        deliveries,
+        app,
+      })
+    : null;
+  if (partnerChatOutbound) deliveries.onEnqueue(() => void partnerChatOutbound.drain());
+  const partnerChatDeliverySweeper = partnerChatOutbound
+    ? createSweeper(() => partnerChatOutbound.drain(), 15_000, { label: "partner-chat-deliveries", immediate: true })
+    : null;
   const approvalDeliverySweeper = createSweeper(
     () => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending()),
     30_000,
@@ -2840,6 +2872,7 @@ export function buildApp(
       sessionReturnSweeper.start();
       runResultSweeper.start();
       approvalDeliverySweeper.start();
+      partnerChatDeliverySweeper?.start();
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -2872,6 +2905,7 @@ export function buildApp(
       sessionReturnSweeper.stop(),
       runResultSweeper.stop(),
       approvalDeliverySweeper.stop(),
+      partnerChatDeliverySweeper?.stop(),
       preemptionSweeper.stop(),
       ...workers.map((worker) => worker.stopClaims()),
     ];
@@ -2989,6 +3023,7 @@ export function buildApp(
     scheduler,
     loops,
     webhookReceiver,
+    ...(partnerChatInbound ? { partnerChatEvents: partnerChatInbound.handle } : {}),
     loopIngress,
     admin,
     rateLimiter,
@@ -3138,6 +3173,7 @@ export function serverDeps(
     ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
+    ...(built.partnerChatEvents ? { partnerChatEvents: built.partnerChatEvents } : {}),
     loopIngress: built.loopIngress,
     identity: built.identity,
     principalLinks: built.principalLinks,

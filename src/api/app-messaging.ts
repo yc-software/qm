@@ -83,6 +83,7 @@ export function createMessagingMethods(
   | "pendingDeliveries"
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
+  | "surfaceMirrored"
   | "searchSurface"
   | "readSurfaceMessages"
   | "activeSurfaceThreads"
@@ -312,6 +313,9 @@ export function createMessagingMethods(
     },
     async enqueueDelivery(input) {
       await deps.deliveries.enqueue(input);
+    },
+    surfaceMirrored(kind) {
+      return deps.surfaces.get(kind)?.capabilities.mirrored === true;
     },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };

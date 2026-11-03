@@ -34,7 +34,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     if (input.origin.kind !== "human" || !input.origin.messageTs) return;
     const container = input.conversation.channelRef ?? input.conversation.threadRef;
     void deps.surfaceCache
-      ?.markHandled(container, input.origin.messageTs)
+      ?.markHandled(container, input.origin.messageTs, { surface: input.surface })
       .catch((e) => swallow("ambient: mark handled", e));
   }
 
@@ -53,7 +53,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     const cursorKey = `${orgIdOf()}:${surface}:${container}`;
     const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
     const after = cursor?.lastJudgedTs;
-    const all = await deps.surfaceCache.readMessages(container, { limit: 60, noFallback: true });
+    const all = await deps.surfaceCache.readMessages(container, { surface, limit: 60, noFallback: true });
     const backdrop = after ? all.filter((m) => m.ts <= after).slice(-10) : [];
     const rawDelta = (after ? all.filter((m) => m.ts > after) : all).filter((m) => !m.self);
     const ledger = new Map<string, BotPolicy>();
@@ -136,7 +136,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       : (policy?.orders ?? "");
     let decision: AmbientDecision = { act: false };
     if (forJudge.length || scheduled) {
-      const containerKind = (await deps.surfaceCache.containerState(container).catch(() => null))?.kind;
+      const containerKind = (await deps.surfaceCache.containerState(container, { surface }).catch(() => null))?.kind;
       const judgeBatch: AmbientBatch = {
         container,
         surface,
