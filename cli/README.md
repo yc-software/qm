@@ -112,8 +112,9 @@ point (`aws rds restore-db-instance-to-point-in-time`);
 On AWS, `up` waits for every rolling service to reach `COMPLETED` with a single
 deployment, polling until `QM_AWS_ROLLOUT_DEADLINE_MS` (default 20 minutes); a
 timeout rolls the changed services back. ECS stops the old tasks once they exit
-or their `stopTimeout` elapses (core drains for `SHUTDOWN_DRAIN_MS`, 10 s by
-default), and a turn cut off there resumes on the new tasks. Core images older
+or their `stopTimeout` elapses (core drains for `SHUTDOWN_DRAIN_MS`, 30 s by
+default, and its `stopTimeout` defaults to that drain plus 30 s so core can hand
+turns back before ECS kills it), and a turn cut off there resumes on the new tasks. Core images older
 than this release protect their task while a turn runs, so the first `qm up`
 that replaces them cannot finish before their longest in-flight turn ends
 (protection expires after 60 minutes at most); run that one deploy with a

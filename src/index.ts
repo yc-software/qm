@@ -14,8 +14,7 @@ import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { backfillProviderNames } from "./sandbox/provider-name-backfill.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { migrateTenantStorageOnce } from "./tenants/storage-migration.ts";
-import { instanceTenant } from "./tenants/instance.ts";
-import { enterTenant } from "./tenants/context.ts";
+import { singleTenantResolver } from "./tenants/resolver.ts";
 
 const config = loadConfig();
 
@@ -23,8 +22,6 @@ const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 await migrateTenantStorageOnce(config);
 await backfillProviderNames(config);
-const tenant = await instanceTenant(config);
-if (tenant) enterTenant(tenant);
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
@@ -46,6 +43,7 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
 const server = createServer(built.app, {
   ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
   managedSlack,
+  tenants: singleTenantResolver(built.tenants),
 });
 
 await built.config.hydrate?.();

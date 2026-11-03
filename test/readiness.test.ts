@@ -15,7 +15,6 @@ async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) 
   const server = createServer(built.app, {
     ...serverDeps(config, built),
     ...(checkReadiness ? { checkReadiness } : {}),
-    requireSignedPortalIdentity: true,
     portalIdentitySecret: "readiness-test-portal-secret".repeat(3),
   });
   server.listen(0, "127.0.0.1");

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const coreTurnBodies: Array<Record<string, unknown>> = [];
 
@@ -35,7 +36,7 @@ await new Promise<void>((r) => surface.listen(0, r));
 const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
 const IDENTITY = {
   cookie: "webuiuser=alice",
-  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET),
+  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 }, SECRET),
   "content-type": "application/json",
 };
 

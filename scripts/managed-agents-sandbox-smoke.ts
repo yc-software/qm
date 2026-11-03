@@ -11,9 +11,7 @@ import { scopeId } from "../src/types.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { randomUUID } from "node:crypto";
-import { enterTenant } from "../src/tenants/context.ts";
-
-enterTenant(randomUUID());
+import { withTenant } from "../src/tenants/context.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
@@ -129,7 +127,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e: unknown) => {
+withTenant(randomUUID(), main).catch((e: unknown) => {
   console.error("[managed-agents-smoke] FAILED", e);
   process.exit(1);
 });

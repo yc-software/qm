@@ -100,16 +100,18 @@ export function createPostgresToolOutputStore(opts: {
       return setting.value;
     },
     async save(text) {
+      const id = currentTenant();
       const put = await opts.bytes.put(Buffer.from(text, "utf8"));
       await opts.pool.q(
         `INSERT INTO blobs(tenant_id, sha256, size, mime, storage_key, created_at, expires_at)
-         VALUES (qm_tenant_id(), decode($1, 'hex'), $2, 'text/plain; charset=utf-8', $3,
-                 to_timestamp($4::double precision / 1000), to_timestamp($5::double precision / 1000))
+         VALUES ($1::uuid, decode($2, 'hex'), $3, 'text/plain; charset=utf-8', $4,
+                 to_timestamp($5::double precision / 1000), to_timestamp($6::double precision / 1000))
          ON CONFLICT (tenant_id, sha256) DO NOTHING`,
         [
+          id,
           put.sha256,
           put.sizeBytes,
-          `${TOOL_OUTPUT_PATH}${currentTenant()}/${put.blobKey}`,
+          `${TOOL_OUTPUT_PATH}${id}/${put.blobKey}`,
           now(),
           now() + TOOL_OUTPUT_RETENTION_MS,
         ],
@@ -121,7 +123,7 @@ export function createPostgresToolOutputStore(opts: {
         `SELECT b.storage_key, i.created_at <= now() - interval '30 days' AS expired
            FROM items i
       LEFT JOIN blobs b ON b.tenant_id = i.tenant_id AND b.sha256 = i.blob_sha
-          WHERE i.tenant_id = qm_tenant_id() AND i.session_id = $1 AND i.kind = 'ToolResult'
+          WHERE i.tenant_id = qm_bound_tenant() AND i.session_id = $1 AND i.kind = 'ToolResult'
             AND md5(i.call_id) = $2 AND ($3::text IS NULL OR i.call_id = $3)
             AND i.blob_sha IS NOT NULL`,
         [sessionId, ref.digest, ref.callId ?? null],

@@ -5,16 +5,12 @@ import { shutdownOnUncaught } from "../util/process-guard.ts";
 import { backfillProviderNames } from "../sandbox/provider-name-backfill.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 import { migrateTenantStorageOnce } from "../tenants/storage-migration.ts";
-import { instanceTenant } from "../tenants/instance.ts";
-import { enterTenant } from "../tenants/context.ts";
 
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 await migrateTenantStorageOnce(config);
 await backfillProviderNames(config);
-const tenant = await instanceTenant(config);
-if (tenant) enterTenant(tenant);
 await built.config.hydrate?.();
 await built.identity.refresh();
 const { runtime } = built;

@@ -18,9 +18,8 @@ import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { randomUUID } from "node:crypto";
-import { enterTenant } from "../src/tenants/context.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
-enterTenant(randomUUID());
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 const maps = createPostgresMapFactory(databaseUrl);
@@ -128,84 +127,86 @@ const poller = createMonitorPoller({
   },
 });
 
-try {
-  console.log("%s", `[${ts()}] provisioning sprite for`, scope, "…");
-  h = await sb.provision([{ scopeId: scope, mountPath: "", mode: "rw" }]);
+await withTenant(randomUUID(), async () => {
+  try {
+    console.log("%s", `[${ts()}] provisioning sprite for`, scope, "…");
+    h = await sb.provision([{ scopeId: scope, mountPath: "", mode: "rw" }]);
 
-  console.log(`[${ts()}] staging job.sh + diffusion.py into the workspace …`);
-  await sb.writeFile(h, "job.sh", JOB_SH);
-  await sb.writeFile(h, "diffusion.py", DIFFUSION_PY);
+    console.log(`[${ts()}] staging job.sh + diffusion.py into the workspace …`);
+    await sb.writeFile(h, "job.sh", JOB_SH);
+    await sb.writeFile(h, "diffusion.py", DIFFUSION_PY);
 
-  console.log(`[${ts()}] background-start the diffusion job (ttl 60min) …`);
-  const s = await broker.start(h, "bash job.sh", "Image generation smoke test", 60 * 60_000);
-  ok(!!s.processId && s.status.state === "running", `job ${s.processId} is running`);
-  console.log("    early output:", JSON.stringify(s.output.trim().split("\n").slice(0, 2)));
+    console.log(`[${ts()}] background-start the diffusion job (ttl 60min) …`);
+    const s = await broker.start(h, "bash job.sh", "Image generation smoke test", 60 * 60_000);
+    ok(!!s.processId && s.status.state === "running", `job ${s.processId} is running`);
+    console.log("    early output:", JSON.stringify(s.output.trim().split("\n").slice(0, 2)));
 
-  console.log(`[${ts()}] arm the watch (pattern-filtered to PHASE/error lines) …`);
-  const w = await monitorBroker.watch(s.processId, {
-    pattern: "^PHASE:|Traceback|ERROR|error:",
-    instructions: "Briefly tell the user how the diffusion-model download/generation is going.",
-    sinceCursor: s.cursor,
-  });
-  if ("completed" in w) throw new Error(`job already ${w.registryStatus} before watch could be armed`);
-  ok(!w.reattached, `watch armed (monitor ${w.monitorId}, expires ${new Date(w.expiresAt).toISOString()})`);
+    console.log(`[${ts()}] arm the watch (pattern-filtered to PHASE/error lines) …`);
+    const w = await monitorBroker.watch(s.processId, {
+      pattern: "^PHASE:|Traceback|ERROR|error:",
+      instructions: "Briefly tell the user how the diffusion-model download/generation is going.",
+      sinceCursor: s.cursor,
+    });
+    if ("completed" in w) throw new Error(`job already ${w.registryStatus} before watch could be armed`);
+    ok(!w.reattached, `watch armed (monitor ${w.monitorId}, expires ${new Date(w.expiresAt).toISOString()})`);
 
-  console.log(`[${ts()}] polling every 10s until the exit wake (cap 35min) …`);
-  const deadline = Date.now() + 35 * 60_000;
-  let exited = false;
-  while (Date.now() < deadline && !exited) {
-    await poller.tick();
-    const m = await monitors.get(w.monitorId);
-    if (m && !m.enabled) exited = true;
-    else await sleep(10_000);
-  }
-
-  ok(exited, "watch disarmed itself after the job ended");
-  ok(wakes.length >= 2, `≥2 wakes fired (got ${wakes.length}: progress + exit)`);
-  ok(
-    wakes.some((q) => /exited with code/.test(q.text)),
-    "an exit wake reported the final status",
-  );
-  ok(
-    wakes.every((q) => q.conversation.threadRef === threadRef),
-    "every wake landed in the arming conversation",
-  );
-  ok(
-    wakes.every((q) => !/Successfully installed|Collecting /.test(q.text)),
-    "pattern filter kept pip noise out of wakes",
-  );
-  const pending = await deliveries.pending("smoke");
-  ok(pending.length === wakes.length, `one delivery per wake (${pending.length})`);
-
-  const exitWake = wakes.find((q) => /exited with code/.test(q.text));
-  const cleanExit = /exited with code 0/.test(exitWake?.text ?? "");
-  if (!cleanExit) {
-    console.log(`\n[${ts()}] job FAILED — full job log (what \`background poll\` would show):`);
-    let cursor = 0;
-    let log = "";
-    for (let i = 0; i < 50; i++) {
-      const p = await broker.poll(h, s.processId, { sinceCursor: cursor });
-      log += p.chunks;
-      if (p.cursor === cursor) break;
-      cursor = p.cursor;
+    console.log(`[${ts()}] polling every 10s until the exit wake (cap 35min) …`);
+    const deadline = Date.now() + 35 * 60_000;
+    let exited = false;
+    while (Date.now() < deadline && !exited) {
+      await poller.tick();
+      const m = await monitors.get(w.monitorId);
+      if (m && !m.enabled) exited = true;
+      else await sleep(10_000);
     }
-    console.log(
-      log
-        .split("\n")
-        .slice(-80)
-        .map((l) => "  ▸ " + l)
-        .join("\n"),
-    );
-  }
-  ok(cleanExit, "diffusion job exited 0");
-  const img = await sb.readFileBytes(h, "diffusion-out.png");
-  ok(!!img && img.length > 10_000, `generated image exists in the sandbox (${img?.length ?? 0} bytes)`);
-  const out = join(tmpdir(), "monitor-smoke-diffusion.png");
-  writeFileSync(out, img!);
-  console.log("    saved locally:", out);
 
-  console.log("\nALL MONITOR SMOKE CHECKS PASSED ✅");
-} finally {
-  console.log(`[${ts()}] tearing down: destroying the smoke sprite …`);
-  if (h) await sb.teardown(h, { destroy: true });
-}
+    ok(exited, "watch disarmed itself after the job ended");
+    ok(wakes.length >= 2, `≥2 wakes fired (got ${wakes.length}: progress + exit)`);
+    ok(
+      wakes.some((q) => /exited with code/.test(q.text)),
+      "an exit wake reported the final status",
+    );
+    ok(
+      wakes.every((q) => q.conversation.threadRef === threadRef),
+      "every wake landed in the arming conversation",
+    );
+    ok(
+      wakes.every((q) => !/Successfully installed|Collecting /.test(q.text)),
+      "pattern filter kept pip noise out of wakes",
+    );
+    const pending = await deliveries.pending("smoke");
+    ok(pending.length === wakes.length, `one delivery per wake (${pending.length})`);
+
+    const exitWake = wakes.find((q) => /exited with code/.test(q.text));
+    const cleanExit = /exited with code 0/.test(exitWake?.text ?? "");
+    if (!cleanExit) {
+      console.log(`\n[${ts()}] job FAILED — full job log (what \`background poll\` would show):`);
+      let cursor = 0;
+      let log = "";
+      for (let i = 0; i < 50; i++) {
+        const p = await broker.poll(h, s.processId, { sinceCursor: cursor });
+        log += p.chunks;
+        if (p.cursor === cursor) break;
+        cursor = p.cursor;
+      }
+      console.log(
+        log
+          .split("\n")
+          .slice(-80)
+          .map((l) => "  ▸ " + l)
+          .join("\n"),
+      );
+    }
+    ok(cleanExit, "diffusion job exited 0");
+    const img = await sb.readFileBytes(h, "diffusion-out.png");
+    ok(!!img && img.length > 10_000, `generated image exists in the sandbox (${img?.length ?? 0} bytes)`);
+    const out = join(tmpdir(), "monitor-smoke-diffusion.png");
+    writeFileSync(out, img!);
+    console.log("    saved locally:", out);
+
+    console.log("\nALL MONITOR SMOKE CHECKS PASSED ✅");
+  } finally {
+    console.log(`[${ts()}] tearing down: destroying the smoke sprite …`);
+    if (h) await sb.teardown(h, { destroy: true });
+  }
+});
