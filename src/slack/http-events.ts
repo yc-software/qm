@@ -4,6 +4,7 @@ import type { Receiver, ReceiverEvent, App as BoltApp } from "@slack/bolt";
 import { createDeferredEnvelopeAck, describeEnvelope, envelopeStageFor, isGatedEnvelope } from "./deferred-ack.ts";
 import type { EnvelopeStaging } from "./envelope-staging.ts";
 import { errMessage } from "../util/errors.ts";
+import { withTenant } from "../tenants/context.ts";
 import { PayloadTooLargeError, readBody } from "../../plugins/chassis/src/http.ts";
 
 const { isValidSlackRequest } = bolt;
@@ -14,6 +15,7 @@ const MAX_BODY_BYTES = 5_000_000;
 export interface HttpEventsReceiverOptions {
   signingSecret: string;
   port: number;
+  tenantFor(body: Record<string, unknown>): Promise<string | null>;
   host?: string;
   path?: string;
   capMs?: number;
@@ -69,7 +71,12 @@ export function createHttpEventsReceiver(opts: HttpEventsReceiverOptions): Recei
       return respond(res, 400, { error: "invalid_json" });
     }
     if (body.type === "url_verification") return respond(res, 200, { challenge: body.challenge });
+    const tenant = await opts.tenantFor(body).catch(() => null);
+    if (!tenant) return respond(res, 403, { error: "unknown_team" });
+    await withTenant(tenant, () => dispatch(req, res, body));
+  }
 
+  async function dispatch(req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>): Promise<void> {
     const label = describeEnvelope(body);
     const { ack, gate } = createDeferredEnvelopeAck(async (response?: unknown) => respond(res, 200, response ?? {}), {
       gated: isGatedEnvelope(body),

@@ -1,3 +1,4 @@
+import { withTenant } from "../tenants/context.ts";
 import { SocketModeClient } from "@slack/socket-mode";
 import type { Receiver, ReceiverEvent, App as BoltApp } from "@slack/bolt";
 import { errMessage } from "../util/errors.ts";
@@ -120,6 +121,7 @@ export function describeEnvelope(body: Record<string, unknown>): string {
 
 export interface DeferredAckReceiverOptions {
   appToken: string;
+  tenantFor(body: Record<string, unknown>): Promise<string | null>;
   logLevel?: string;
   capMs?: number;
   slackApiUrl?: string;
@@ -145,25 +147,33 @@ export function createDeferredAckReceiver(opts: DeferredAckReceiverOptions): Rec
       retry_num?: number;
       retry_reason?: string;
     }) => {
-      const { ack, gate } = createDeferredEnvelopeAck(args.ack, {
-        gated: isGatedEnvelope(args.body),
-        ...(opts.capMs !== undefined ? { capMs: opts.capMs } : {}),
-        label: describeEnvelope(args.body),
-        ...envelopeStageFor(opts.staging, args.body),
-      });
-      const event: ReceiverEvent = {
-        body: args.body,
-        ack,
-        ...(args.retry_num !== undefined ? { retryNum: args.retry_num } : {}),
-        ...(args.retry_reason !== undefined ? { retryReason: args.retry_reason } : {}),
-        customProperties: { ackGate: gate },
-      };
-      try {
-        await app?.processEvent(event);
-        gate.persisted();
-      } catch (err) {
-        gate.failed(errMessage(err));
+      const tenant = await opts.tenantFor(args.body).catch(() => null);
+      if (!tenant) {
+        console.warn(`[slack-plugin] refused ${describeEnvelope(args.body)} from a workspace outside this tenant`);
+        await args.ack();
+        return;
       }
+      await withTenant(tenant, async () => {
+        const { ack, gate } = createDeferredEnvelopeAck(args.ack, {
+          gated: isGatedEnvelope(args.body),
+          ...(opts.capMs !== undefined ? { capMs: opts.capMs } : {}),
+          label: describeEnvelope(args.body),
+          ...envelopeStageFor(opts.staging, args.body),
+        });
+        const event: ReceiverEvent = {
+          body: args.body,
+          ack,
+          ...(args.retry_num !== undefined ? { retryNum: args.retry_num } : {}),
+          ...(args.retry_reason !== undefined ? { retryReason: args.retry_reason } : {}),
+          customProperties: { ackGate: gate },
+        };
+        try {
+          await app?.processEvent(event);
+          gate.persisted();
+        } catch (err) {
+          gate.failed(errMessage(err));
+        }
+      });
     },
   );
 

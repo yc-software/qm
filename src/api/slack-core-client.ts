@@ -4,16 +4,16 @@ import {
   createSlackSessionStatus,
   type SlackStatusActivity,
   type SlackSessionStatus,
-  type SlackSessionStatusState,
+  type SlackSessionStatusRows,
 } from "../slack/session-status.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { decideDeploymentAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
-import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
+import { createTaskAcknowledgements, type TaskAckRows, type TaskAcknowledgements } from "../slack/task-ack.ts";
 import { orgId as configOrgId } from "../config.ts";
-import type { StagedEnvelope } from "../slack/envelope-staging.ts";
+import type { StagedEnvelopeRows } from "../slack/envelope-staging.ts";
 import { resolveBranding } from "../resolution/branding.ts";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
@@ -34,7 +34,7 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { swallowAs } from "../util/errors.ts";
 import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
@@ -108,8 +108,7 @@ export interface SlackCoreClient {
   failDelivery(id: string, reason: string): Promise<void>;
 
   holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
-  holdEnvelopeReplay<T>(account: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
-  stagedEnvelopes?: DurableMap<StagedEnvelope>;
+  stagedEnvelopes?: StagedEnvelopeRows;
   holdDirectorySync<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   onDeliveryEnqueued(listener: () => void): () => void;
   pendingContextRequests(): Promise<SurfaceContextRequest[]>;
@@ -143,8 +142,8 @@ export type { SurfaceContextRequest };
 export interface SlackCoreClientDeps {
   identity: IdentityService;
   keychainApprovals?: KeychainApprovals;
-  taskAcknowledgements?: DurableMap<TaskAckState>;
-  sessionStatus?: DurableMap<SlackSessionStatusState>;
+  taskAcknowledgements?: TaskAckRows;
+  sessionStatus?: SlackSessionStatusRows;
   statusActivity?: SlackStatusActivity;
   featureFlags?: FeatureFlagStore;
   app: App;
@@ -160,7 +159,7 @@ export interface SlackCoreClientDeps {
   ackModelId?: () => string | undefined;
   brandingDefault?: OrgBranding;
   leaderLease: LeaderLease;
-  stagedEnvelopes?: DurableMap<StagedEnvelope>;
+  stagedEnvelopes?: StagedEnvelopeRows;
   surfaceCache?: SurfaceCache;
   memory?: MemoryService;
   inboxEvent?(event: ConversationEvent): Promise<void>;
@@ -444,10 +443,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return lease.hold("slack:delivery-dispatch", fn);
     },
     holdDirectorySync(fn) {
-      return lease.hold("slack:directory-sync", fn);
-    },
-    holdEnvelopeReplay(account, fn) {
-      return lease.hold(`slack:envelope-replay:${account}`, fn);
+      return lease.hold(`slack:directory-sync:${currentTenant()}`, fn);
     },
     stagedEnvelopes: deps.stagedEnvelopes,
 

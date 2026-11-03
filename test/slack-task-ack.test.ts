@@ -8,7 +8,10 @@ import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
 function setup() {
-  const store = testMap<TaskAckState>();
+  const map = testMap<TaskAckState>();
+  const store = Object.assign(map, {
+    unsettled: async () => (await map.entries()).filter(([, state]) => !state.synced || !state.finished),
+  });
   const events: string[] = [];
   const client = {
     reactions: {

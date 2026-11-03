@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import { testDeliveryPoller } from "./support/slack-delivery-poller.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/lib.ts";
 
 const mixedFiles = [
@@ -93,7 +93,7 @@ async function deliver(
       },
     },
   };
-  const poller = createDeliveryPoller({
+  const poller = testDeliveryPoller({
     core: core as never,
     webUiPublicUrl,
     flow: {

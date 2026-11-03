@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import { testDeliveryPoller } from "./support/slack-delivery-poller.ts";
 import { statusPlaceholderKey } from "../src/slack/lib.ts";
 
 const RECOVERED_AGE_MS = 60_000;
@@ -41,7 +41,7 @@ function agent(opts: { thread?: Array<Record<string, unknown>>; errors?: Record<
       acknowledgements.push(id);
     },
   };
-  const poller = createDeliveryPoller({
+  const poller = testDeliveryPoller({
     core: core as never,
     flow: { inFlightRuns: new Set<string>() } as never,
     threads: { mark: () => {} } as never,
