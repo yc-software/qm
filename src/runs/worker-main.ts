@@ -3,14 +3,15 @@ import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
+import { unboundTenantAllowed } from "../tenants/context.ts";
 
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 if (!config.backgroundDeploymentId) await built.rewriteSurfaceOrigins();
 await built.sandboxResources.initialize();
-await built.config.hydrate?.();
-await built.identity.refresh();
+await built.registerTenants();
+if (unboundTenantAllowed()) await built.tenantLoader.load();
 const { runtime } = built;
 runtime.start();
 console.log(`[qm:worker] draining runs (org=${config.orgId}, workers=${config.workers})`);

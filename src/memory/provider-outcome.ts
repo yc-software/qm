@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
-import { orgId } from "../config.ts";
+import { orgIdentity } from "../config.ts";
 import { McpCallError, type McpEnvelope } from "../mcp/mcp-client.ts";
 import { TimeoutError } from "../util/async.ts";
 import { reportFailure } from "../util/errors.ts";
@@ -122,7 +122,7 @@ export async function withProviders<T>(
 
 function writeKey(turn: string, scope: ScopeId, facts: readonly string[]): string {
   const hex = createHash("sha256")
-    .update(JSON.stringify([orgId(), turn, scope, facts]))
+    .update(JSON.stringify([orgIdentity(), turn, scope, facts]))
     .digest("hex");
   const variant = ((Number.parseInt(hex[16]!, 16) & 0x3) | 0x8).toString(16);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;

@@ -1,5 +1,5 @@
 import { boundTenant } from "../../tenants/context.ts";
-import { orgId as configOrgId } from "../../config.ts";
+import { orgIdentity } from "../../config.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,
@@ -219,7 +219,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
   const dest = resolveCapabilityDestination(capability, undefined);
   const { dropId } = await deps.secretDrops.mint({
     ownerId,
-    orgId: configOrgId(),
+    orgId: orgIdentity(),
     service: b.service.trim(),
     ...(typeof b.envKey === "string" && b.envKey.trim() ? { envKey: b.envKey.trim() } : {}),
     ...(typeof b.host === "string" && b.host.trim() ? { host: b.host.trim() } : {}),
@@ -338,7 +338,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 404, { error: "not_found", message });
   }
   const drop = redeemed.rec;
-  if (drop.orgId !== undefined && drop.orgId !== configOrgId())
+  if (drop.orgId !== undefined && drop.orgId !== orgIdentity())
     return sendJson(res, 404, { error: "not_found", message: "this drop link is for a different org" });
   try {
     const meta = await deps.keychain.save({

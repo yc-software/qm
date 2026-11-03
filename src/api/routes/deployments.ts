@@ -1,5 +1,5 @@
 import { TENANT_HEADER } from "../../../plugins/chassis/src/source-auth-sign.ts";
-import { withTenant } from "../../tenants/context.ts";
+import { withLoadedTenant } from "../tenant-ingress.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
@@ -1222,7 +1222,9 @@ async function runGitHttpBackend(input: {
 async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
   const token = ctx.secret ? gitTokenFrom(ctx) : null;
   const access = ctx.secret && token ? await verifyDeployGitAccess(ctx.secret, token) : null;
-  return access?.tenant ? withTenant(access.tenant, () => serveGit(ctx, access)) : serveGit(ctx, access);
+  return access?.tenant
+    ? withLoadedTenant(access.tenant, () => serveGit(ctx, access), ctx.deps.loadTenant)
+    : serveGit(ctx, access);
 }
 
 async function serveGit(ctx: BaseCtx, access: Awaited<ReturnType<typeof verifyDeployGitAccess>>): Promise<void> {

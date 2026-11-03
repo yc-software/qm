@@ -78,10 +78,12 @@ import {
   baseModelProviders,
   companySubscriptionAuth,
   configuredModel,
+  orgIdentity,
   providerKeysPresent,
   type Config,
 } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
+import { createTenantLoader, registerTenants, withInstallTenant, type TenantLoader } from "./tenants/context.ts";
 import { enabledSandboxBackends } from "./sandbox/sandbox-settings.ts";
 import {
   actorAssertionActive,
@@ -447,6 +449,8 @@ export interface BuiltApp {
   deploymentLayerStore: DeploymentLayerStore;
   deploymentLayerReady: Promise<unknown>;
   deploymentLayerRefresh: Sweeper;
+  registerTenants: () => Promise<void>;
+  tenantLoader: TenantLoader;
   sessions: SessionStore;
   runs: RunStore;
   signals: RunSignalStore;
@@ -687,9 +691,13 @@ export function buildApp(
       : {}),
   });
   const deploymentLayerReady = deploymentLayerStore.hydrate();
-  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
-    label: "deployment layer refresh",
-  });
+  const deploymentLayerRefresh = createUntrackedSweeper(
+    () => withInstallTenant(() => deploymentLayerStore.hydrate()),
+    30_000,
+    {
+      label: "deployment layer refresh",
+    },
+  );
   let skillsReady: Promise<void>;
   if (config.seedSkills) {
     const installCatalogs = async (): Promise<void> => {
@@ -1330,6 +1338,11 @@ export function buildApp(
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
+  const tenantLoader = createTenantLoader([
+    () => configStore.hydrate?.() ?? Promise.resolve(),
+    refreshCustomProviders,
+    () => identity.refresh(),
+  ]);
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
     await refreshCustomProviders();
@@ -1594,7 +1607,7 @@ export function buildApp(
           },
         })
       : undefined;
-  const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
+  const productAnalytics = createProductAnalytics(orgIdentity, config.productAnalytics);
   runs.onTerminal((run) => void productAnalytics.responseFinished(run));
 
   let processes: ProcessRegistry | undefined;
@@ -2960,6 +2973,15 @@ export function buildApp(
     brokeredTools,
     deploymentLayerReady,
     deploymentLayerRefresh,
+    registerTenants: async () => {
+      const [install] = await pgArtifactMap.pool.q("SELECT qm_tenant_id()::text AS id");
+      const all = await pgArtifactMap.pool.q("SELECT id::text AS id FROM tenants");
+      registerTenants(
+        String(install?.id),
+        all.map((row) => String(row.id)),
+      );
+    },
+    tenantLoader,
     rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(pgArtifactMap.pool),
     sessions,
     runs,
@@ -3069,6 +3091,7 @@ export function serverDeps(
     resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,
     checkReadiness: built.checkReadiness,
+    loadTenant: built.tenantLoader.load,
     ...(built.backgroundOwnership
       ? {
           backgroundOwnership: built.backgroundOwnership,

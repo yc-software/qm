@@ -61,6 +61,7 @@ import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError 
 import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
+import { boundTenant } from "../../chassis/src/tenant.ts";
 import {
   json,
   escapeHtml,
@@ -115,20 +116,32 @@ function playgroundIntEnv(name: string, fallback: number): number {
 const PLAYGROUND_MINTS_PER_IP = playgroundIntEnv("PORTAL_PLAYGROUND_MINTS_PER_IP", 30);
 const PLAYGROUND_MINT_WINDOW_S = playgroundIntEnv("PORTAL_PLAYGROUND_MINT_WINDOW_S", 3600);
 const NEUTRAL_ACCENT = "#4f46e5";
-let brandAccent = NEUTRAL_ACCENT;
-let modelProviderConfigured: boolean | undefined;
-let surfaceConfigNextAt = 0;
-let surfaceConfigInflight: Promise<void> | null = null;
+interface SurfaceConfig {
+  brandAccent: string;
+  modelProviderConfigured?: boolean;
+  nextAt: number;
+  inflight: Promise<void> | null;
+}
+const surfaceConfigs = new Map<string, SurfaceConfig>();
+function surfaceConfig(): SurfaceConfig {
+  const key = boundTenant() ?? "";
+  const existing = surfaceConfigs.get(key);
+  if (existing) return existing;
+  const fresh: SurfaceConfig = { brandAccent: NEUTRAL_ACCENT, nextAt: 0, inflight: null };
+  surfaceConfigs.set(key, fresh);
+  return fresh;
+}
 function refreshSurfaceConfig(): Promise<void> {
-  if (Date.now() >= surfaceConfigNextAt) {
-    surfaceConfigNextAt = Date.now() + 5_000;
-    surfaceConfigInflight = fetchSurfaceConfig().finally(() => {
-      surfaceConfigInflight = null;
+  const config = surfaceConfig();
+  if (Date.now() >= config.nextAt) {
+    config.nextAt = Date.now() + 5_000;
+    config.inflight = fetchSurfaceConfig(config).finally(() => {
+      config.inflight = null;
     });
   }
-  return surfaceConfigInflight ?? Promise.resolve();
+  return config.inflight ?? Promise.resolve();
 }
-async function fetchSurfaceConfig(): Promise<void> {
+async function fetchSurfaceConfig(config: SurfaceConfig): Promise<void> {
   try {
     const path = withSourceAuthNonce("/v1/surface-config", CORE_SIGNING_SECRET);
     const r = await fetch(`${CORE}${path}`, {
@@ -137,10 +150,10 @@ async function fetchSurfaceConfig(): Promise<void> {
     });
     if (r.ok) {
       const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
-      brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
-      modelProviderConfigured =
+      config.brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
+      config.modelProviderConfigured =
         typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
-      surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
+      config.nextAt = Date.now() + (config.modelProviderConfigured === false ? 5_000 : 30_000);
     }
   } catch {
     void 0;
@@ -568,7 +581,7 @@ export function notConfiguredHtml(): string {
 }
 
 const connectStyle = (): string => `<style>
-  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${brandAccent}; --radius-md:10px; }
+  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${surfaceConfig().brandAccent}; --radius-md:10px; }
   html,body{ height:100%; margin:0; }
   body{ background:var(--bg); color:var(--text); display:grid; place-items:center; padding:40px 20px;
     font:14px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing:antialiased; }
@@ -1292,7 +1305,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const settingsPath = pathname === "/settings" || pathname.startsWith("/settings/");
   if (method === "GET" && wantsHtml(req) && !settingsPath) {
     await refreshSurfaceConfig();
-    if (modelProviderConfigured === false) {
+    if (surfaceConfig().modelProviderConfigured === false) {
       if (await isAdmin(session.sub)) {
         res.writeHead(302, { location: "/settings/onboarding", "cache-control": "no-store" });
         return void res.end();

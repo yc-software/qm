@@ -52,6 +52,7 @@ export async function withRequestTenant(
   route: Pick<Route, "auth"> | undefined,
   capabilitySecret: string | undefined,
   next: () => Promise<void> | void,
+  loadTenant?: () => Promise<void>,
 ): Promise<void> {
   if (route?.auth === "public") return next();
   const { tenant, refusal } = await claimedTenant(req, route?.auth, capabilitySecret);
@@ -59,5 +60,16 @@ export async function withRequestTenant(
     sendJson(res, 400, { error: "bad_request", message: refusal });
     return void req.resume();
   }
-  return tenant ? withTenant(tenant, next) : next();
+  return tenant ? withLoadedTenant(tenant, next, loadTenant) : next();
+}
+
+export function withLoadedTenant(
+  tenant: string,
+  next: () => Promise<void> | void,
+  loadTenant: (() => Promise<void>) | undefined,
+): Promise<void> {
+  return withTenant(tenant, async () => {
+    await loadTenant?.();
+    await next();
+  });
 }

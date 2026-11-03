@@ -94,6 +94,7 @@ export interface ServerDeps {
   allowUnauthenticatedCore?: boolean;
   signingSecret?: string;
   capabilitySecret?: string;
+  loadTenant?: () => Promise<void>;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
   requireSignedPortalIdentity?: boolean;

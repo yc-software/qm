@@ -1,4 +1,5 @@
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
+import { cacheTenant, isInstallTenant } from "./tenants/context.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
@@ -208,6 +209,10 @@ export function orgId(): string {
 
 export function orgScope(): string {
   return `org:${orgId()}`;
+}
+
+export function orgIdentity(): string {
+  return isInstallTenant() ? orgId() : cacheTenant();
 }
 
 export const CONFIG_DEFAULTS = {
