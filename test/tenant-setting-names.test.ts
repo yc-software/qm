@@ -4,8 +4,6 @@ import { readFileSync } from "node:fs";
 import { TENANT_SETTING_KEYS } from "../src/tenants/settings.ts";
 import { PROVIDERS } from "../src/connectors/oauth.ts";
 import { MODEL_PROVIDERS } from "../src/model/pi-models.ts";
-import { orgScope } from "../src/config.ts";
-import { ORG_SCOPE } from "../cli/src/tenant-import.ts";
 import {
   MODEL_KEY_ENV,
   OAUTH_CLIENT_ENV,
@@ -30,14 +28,4 @@ test("Helm refuses exactly the CLI's tenant names in service env", () => {
   const listed = [...template.split("\n")[0]!.matchAll(/"([A-Z0-9_]+)"/g)].map((match) => match[1]!);
   assert.equal(new Set(listed).size, listed.length);
   assert.deepEqual([...listed].sort(), [...TENANT_ENV_NAMES].sort());
-});
-
-test("the CLI writes admin values to the org scope core uses when ORG_ID is unset", () => {
-  const prior = process.env.ORG_ID;
-  delete process.env.ORG_ID;
-  try {
-    assert.equal(ORG_SCOPE, orgScope());
-  } finally {
-    if (prior !== undefined) process.env.ORG_ID = prior;
-  }
 });

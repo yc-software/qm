@@ -39,7 +39,7 @@ test("old env names map to tenant settings and the admin values they configure",
 
 test("the import writes settings, then each admin value only if the tenant has none", async () => {
   const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
-  const existing = new Set(["/v1/admin/scopes/org:default-org/security-posture", "/v1/admin/model-providers/openai"]);
+  const existing = new Set(["/v1/admin/scopes/tenant/security-posture", "/v1/admin/model-providers/openai"]);
   const call: OperatorCall = async (signed, body) => {
     const [path = "", query = ""] = signed.split("?");
     assert.match(query, /^nonce=[0-9a-f-]{36}$/);
@@ -67,12 +67,12 @@ test("the import writes settings, then each admin value only if the tenant has n
     [
       "/v1/install/tenant",
       "/v1/tenant-settings",
-      "/v1/admin/scopes/org:default-org/branding",
-      "/v1/admin/scopes/org:default-org/security-posture",
-      "/v1/admin/scopes/org:default-org/sharing-posture",
-      "/v1/admin/scopes/org:default-org/connectors",
-      "/v1/admin/scopes/org:default-org/feature-flags",
-      "/v1/admin/scopes/org:default-org/feature-flags",
+      "/v1/admin/scopes/tenant/branding",
+      "/v1/admin/scopes/tenant/security-posture",
+      "/v1/admin/scopes/tenant/sharing-posture",
+      "/v1/admin/scopes/tenant/connectors",
+      "/v1/admin/scopes/tenant/feature-flags",
+      "/v1/admin/scopes/tenant/feature-flags",
       "/v1/admin/model-providers/anthropic",
       "/v1/admin/model-providers/openai",
     ],

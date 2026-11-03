@@ -93,7 +93,7 @@ export type OperatorCall = (path: string, body: Record<string, unknown>) => Prom
 
 export class OperatorRouteError extends Error {}
 
-export const ORG_SCOPE = "org:default-org";
+const TENANT_ROOT_SCOPE = "tenant";
 
 const personal = (id: string): string => `personal:${id.includes("@") ? id.toLowerCase() : id}`;
 
@@ -112,7 +112,7 @@ export async function applyTenantImport(
   };
   const applied: string[] = [];
   const unsaved: string[] = [];
-  const resource = (name: string): string => `/v1/admin/scopes/${ORG_SCOPE}/${name}`;
+  const resource = (name: string): string => `/v1/admin/scopes/${TENANT_ROOT_SCOPE}/${name}`;
   const putIfUnset = async (label: string, path: string, body: Record<string, unknown>): Promise<void> => {
     if (!(await put(path, { ...body, ifUnset: true })).unchanged) applied.push(label);
   };

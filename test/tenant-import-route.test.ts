@@ -78,6 +78,16 @@ test("the CLI import lands in the named tenant through core's operator routes an
       assert.equal((await built.config.getBrandingDurable(orgScope()))?.orgName, "Acme");
       assert.equal(await built.config.getSecurityPostureOwnDurable(orgScope()), "strict");
       assert.equal((await built.config.getConnectorClientSecret(orgScope(), "google"))?.clientId, "gid");
+      const aliased = await call("/v1/admin/scopes/tenant/security-posture?nonce=alias", {
+        tenant: SLUG,
+        posture: "strict",
+      });
+      assert.equal(aliased.status, 200, aliased.body);
+      assert.equal(
+        JSON.parse(aliased.body).scopeId,
+        orgScope(),
+        "the tenant alias resolves to the tenant's root scope",
+      );
       assert.equal(await built.featureFlags.enabled("inbox_loops", "personal:ada@example.com"), true);
       assert.equal(await built.modelCredentials.resolve("anthropic"), "sk-ant-pushed");
       await built.config.setSecurityPosture(orgScope(), "auto");

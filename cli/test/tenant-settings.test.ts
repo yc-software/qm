@@ -123,7 +123,7 @@ test("seeding creates the install tenant, then pushes its settings with the oper
       [
         "/v1/install/tenant",
         "/v1/tenant-settings",
-        "/v1/admin/scopes/org:default-org/branding",
+        "/v1/admin/scopes/tenant/branding",
         "/v1/admin/model-providers/anthropic",
       ],
     );
