@@ -3798,6 +3798,22 @@ test("execute and write provision a sandbox that is released after the turn", as
   assert.equal(boxes.provisioned, 2, "write must provision");
 });
 
+test("runtime stop waits for a synchronous turn's detached tail to reclaim its box", async () => {
+  const built = freshApp();
+  const teardown = built.sandbox.teardown.bind(built.sandbox);
+  built.sandbox.teardown = async (handle, opts) => {
+    await new Promise((r) => setTimeout(r, 300));
+    return teardown(handle, opts);
+  };
+  const boxes = spyProvisioning(built.sandbox);
+
+  const run = await built.app.turn(dm("!run echo short-lived"));
+  assert.equal(run.status, "ok");
+  assert.equal(boxes.provisioned, 1);
+  await built.runtime.stop();
+  assert.equal(boxes.live, 0, "a process that stops right after the turn must not leak its box");
+});
+
 test("thinking always reaches the run activity feed, with the model-bound signature stripped", async () => {
   const built = freshApp();
   const { app, runs } = built;

@@ -1,3 +1,4 @@
+import type { AdmittedWork } from "../../util/admitted-work.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { GoalCreateInput } from "../../agent/goal.ts";
 import type { RunStop } from "../../runs/run-store.ts";
@@ -109,6 +110,8 @@ export interface OrchestratorInput extends Omit<
 }
 
 export interface OrchestratorDeps {
+  /** Tracks each turn's detached tail so shutdown drains it (box reclaim, fallback title). */
+  admittedWork?: AdmittedWork;
   externalSlackPolicies?: ExternalSlackPolicies;
   swarms?: SwarmService;
   refreshModels?: () => Promise<void>;

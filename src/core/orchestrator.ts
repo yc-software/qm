@@ -3847,7 +3847,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         await catchUpMessageRevisions();
         await deps.sessions.releaseLease(lease);
         leaseReleased = true;
-        void tail().catch(swallowAs("orchestrator: turn tail", undefined));
+        const work = deps.admittedWork;
+        void (work?.canRun() ? work.run(tail) : tail()).catch(swallowAs("orchestrator: turn tail", undefined));
         await deps.errors?.flush();
         return finalResult;
       } catch (err) {
