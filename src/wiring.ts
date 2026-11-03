@@ -107,7 +107,8 @@ import { createPostgresMapFactory, type DurableMap } from "./persistence/durable
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
-import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
+import { TENANCY_BASE } from "./tenants/migrations.ts";
+import { configurePgCaTrust, configurePgPooling, registerPgMigrations } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
@@ -165,7 +166,7 @@ import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { AWS_DEPLOY_BODIES, createAwsDeployProvider } from "./deploy/aws-deploy-provider.ts";
 import { createFlyDeployProvider } from "./deploy/fly-deploy-provider.ts";
-import { createFlyPortClaims, FLY_DEPLOY_CONFIGS } from "./deploy/fly-deploy-stores.ts";
+import { createFlyPortClaims, FLY_DEPLOY_CONFIGS, FLY_DEPLOY_PORTS } from "./deploy/fly-deploy-stores.ts";
 import { createPorterDeployProvider, PORTER_DEPLOY_BODIES } from "./deploy/porter-deploy-provider.ts";
 import {
   createE2bDeployProvider,
@@ -550,6 +551,21 @@ export function buildApp(
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   const databaseUrl = config.databaseUrl;
   if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
+  registerPgMigrations(databaseUrl, [
+    TENANCY_BASE,
+    FLY_DEPLOY_PORTS,
+    ...[
+      SPRITES_INITIALIZATION,
+      RENDER_SANDBOX_BASES,
+      RENDER_DEPLOY_CREDENTIALS,
+      RENDER_APP_STORAGE,
+      AWS_DEPLOY_BODIES,
+      FLY_PEER_CLAIMS,
+      FLY_DEPLOY_CONFIGS,
+      PORTER_DEPLOY_BODIES,
+      E2B_DEPLOY_BODIES,
+    ].flatMap((table) => table.migrations),
+  ]);
   if (!config.connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
   configurePgPooling({
     databaseUrl,
