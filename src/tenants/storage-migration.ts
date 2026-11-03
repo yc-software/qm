@@ -224,9 +224,8 @@ async function moveStorage(client: PoolClient, config: Config): Promise<void> {
   console.log(`[qm:migrate] tenant storage layout applied (${moved} moved)`);
 }
 
-export async function migrateTenantStorageOnce(config: Config): Promise<void> {
-  if (!config.databaseUrl) return;
-  const db = createPgPool(config.databaseUrl);
+export async function migrateTenantStorageOnce(config: Config, databaseUrl: string): Promise<void> {
+  const db = createPgPool(databaseUrl);
   try {
     const client = await (await db.pool()).connect();
     try {

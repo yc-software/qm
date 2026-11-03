@@ -23,13 +23,12 @@ function legacyScopeName(prefix: string, id: string): string {
 
 const MARKER = "sandbox/provider-names";
 
-export async function backfillProviderNames(config: Config): Promise<number> {
-  if (!config.databaseUrl) return 0;
+export async function backfillProviderNames(config: Config, databaseUrl: string): Promise<number> {
   const prefixes = {
     sprites: config.spritesSandbox.namePrefix ?? "qm",
     smolmachines: config.smolmachinesSandbox.namePrefix ?? "qm",
   };
-  const db = createPgPool(config.databaseUrl);
+  const db = createPgPool(databaseUrl);
   const client = await (await db.pool()).connect();
   try {
     await client.query("SELECT pg_advisory_lock(hashtext($1))", [MARKER]);

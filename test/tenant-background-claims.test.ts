@@ -46,6 +46,7 @@ test("only startup hands the owner database url to the claim helper", async () =
   assert.deepEqual(readers.sort(), [
     "src/config.ts",
     "src/index.ts",
+    "src/migrate-main.ts",
     "src/runs/worker-main.ts",
     "src/tenants/claim.ts",
   ]);

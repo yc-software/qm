@@ -118,15 +118,14 @@ test(
         store.records.put("smol", resource("smol", { backend: "smolmachines", backingScopeId: "sandbox-b" })),
       );
       const config = {
-        databaseUrl: String(admin.options.connectionString),
         spritesSandbox: { namePrefix: "qmt" },
         smolmachinesSandbox: { namePrefix: "a-very-long-deployment-prefix-that-eats-the-budget" },
       } as unknown as Config;
-      assert.equal(await backfillProviderNames(config), 2);
+      assert.equal(await backfillProviderNames(config, String(admin.options.connectionString)), 2);
       await withTenant(tenant, () =>
         store.records.put("late", resource("late", { backingScopeId: "personal:late", legacy: true })),
       );
-      assert.equal(await backfillProviderNames(config), 0);
+      assert.equal(await backfillProviderNames(config, String(admin.options.connectionString)), 0);
       await withTenant(tenant, async () => {
         assert.equal(await store.records.providerName("sprites", "personal:alice"), "qmt-personal-alice-84c212");
         assert.equal(await store.records.providerName("sprites", "sandbox-named"), "qmt-tenant-name");

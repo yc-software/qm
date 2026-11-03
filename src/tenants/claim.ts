@@ -13,13 +13,17 @@ export function useOwnerDatabase(url: string | undefined): void {
   ownerDatabaseUrl = new URL(url);
 }
 
-function ownerPool(appDatabaseUrl: string): PgPool {
+export function ownerDatabaseUrlFor(appDatabaseUrl: string): string {
   const owner = ownerDatabaseUrl;
   if (!owner) throw new Error("Cross-tenant claims need useOwnerDatabase at startup");
   const url = new URL(appDatabaseUrl);
   url.username = owner.username;
   url.password = owner.password;
-  const key = url.toString();
+  return url.toString();
+}
+
+function ownerPool(appDatabaseUrl: string): PgPool {
+  const key = ownerDatabaseUrlFor(appDatabaseUrl);
   const existing = ownerPools.get(key);
   if (existing) return existing;
   const pool = createPgPool(key);
