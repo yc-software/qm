@@ -1,9 +1,10 @@
 import type { CronScript } from "../triggers/types.ts";
 import type { ExecResult } from "../sandbox/sandbox.ts";
 import { errMessage } from "../util/errors.ts";
+import { headSlice, tailSlice } from "../util/text.ts";
+import { DEFAULT_INLINE_TOKENS } from "../sessions/tool-output.ts";
 
-const OUTPUT_MAX_CHARS = 4000;
-const VERDICT_MAX_CHARS = 300;
+const OUTPUT_INLINE_CHARS = DEFAULT_INLINE_TOKENS * 4;
 
 type Execute = (
   command: string,
@@ -16,8 +17,11 @@ export interface CronScriptRun {
   escalation?: string;
 }
 
-function clip(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 3)}...`;
+function inline(output: string): string {
+  if (output.length <= OUTPUT_INLINE_CHARS) return output;
+  const head = headSlice(output, OUTPUT_INLINE_CHARS / 2);
+  const tail = tailSlice(output, OUTPUT_INLINE_CHARS / 2);
+  return `${head}\n…[${output.length - head.length - tail.length} chars cut]…\n${tail}`;
 }
 
 function lastLine(text: string): string | undefined {
@@ -49,7 +53,7 @@ export async function runCronScript(
   if (failure !== undefined) exit = `could not run: ${failure}`;
   else if (result?.timedOut) exit = "timed out";
   const summary = result ? (lastLine(result.stdout) ?? lastLine(result.stderr)) : undefined;
-  const reason = clip((handled ? summary : (summary ?? exit)) ?? "", VERDICT_MAX_CHARS);
+  const reason = (handled ? summary : (summary ?? exit)) ?? "";
   const live = script.mode === "live";
   const verdict = handled
     ? `${live ? "handled by script" : "shadow: script would have handled it"}${reason ? `: ${reason}` : ""}`
@@ -67,9 +71,7 @@ export async function runCronScript(
     escalation: [
       "[Cron script]",
       `This cron's script ran first and handed this fire to you (${exit}). Script: ${script.command}`,
-      output
-        ? `Its output:\n${output.length > OUTPUT_MAX_CHARS ? `...${output.slice(-OUTPUT_MAX_CHARS)}` : output}`
-        : "It printed nothing.",
+      output ? `Its output:\n${inline(output)}` : "It printed nothing.",
       "[End cron script]",
     ].join("\n"),
   };
