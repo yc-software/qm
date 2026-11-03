@@ -40,7 +40,10 @@ beforeEach(() => {
   createdInTest = [];
 });
 afterEach(() => {
-  if (createdInTest?.length) startDatabaseWorker().worker.postMessage({ release: createdInTest });
+  if (createdInTest?.length) {
+    restoreFileOwner();
+    startDatabaseWorker().worker.postMessage({ release: createdInTest });
+  }
   createdInTest = undefined;
 });
 
