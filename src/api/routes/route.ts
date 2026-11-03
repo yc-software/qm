@@ -28,6 +28,7 @@ export interface ApiCtx extends BaseCtx {
   body: unknown;
   capability: CapabilityClaims | null;
   actor?: PortalIdentity | null;
+  operator?: boolean;
 }
 
 export type RouteAuth = "either" | "source" | "public" | { aud: string; bearer?: true };
@@ -45,6 +46,7 @@ export type Route<C extends BaseCtx = ApiCtx> = {
   auth: RouteAuth;
   actor?: RouteActor;
   admin?: AdminAccess;
+  operator?: true;
   allowedInStrict?: true;
   maxBodyBytes?: number;
   unbound?: true;

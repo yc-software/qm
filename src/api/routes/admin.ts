@@ -93,7 +93,13 @@ const routes: Route<ApiCtx>[] = [
     { method: "PUT", path: "/v1/admin/slack-installation", auth: "either", handle: putSlackInstallation },
     { method: "DELETE", path: "/v1/admin/slack-installation", auth: "either", handle: deleteSlackInstallation },
     { method: "GET", path: "/v1/admin/model-providers", auth: "either", handle: getModelProviders },
-    { method: "PUT", path: "/v1/admin/model-providers/:provider", auth: "either", handle: putModelProvider },
+    {
+      method: "PUT",
+      path: "/v1/admin/model-providers/:provider",
+      auth: "either",
+      operator: true,
+      handle: putModelProvider,
+    },
     { method: "GET", path: "/v1/admin/mcp-servers", auth: "either", handle: getMcpServers },
     {
       method: "PUT",
@@ -118,7 +124,13 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       handle: testAutoFlagger,
     },
-    { method: "PUT", path: "/v1/admin/scopes/:scope/:resource", auth: "either", handle: putScopeConfig },
+    {
+      method: "PUT",
+      path: "/v1/admin/scopes/:scope/:resource",
+      auth: "either",
+      operator: true,
+      handle: putScopeConfig,
+    },
     { method: "GET", path: "/v1/admin/whoami", auth: "either", admin: { agent: "anyone" }, handle: whoami },
     {
       method: "GET",

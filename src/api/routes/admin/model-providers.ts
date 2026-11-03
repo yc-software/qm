@@ -3,7 +3,7 @@ import { providerBaseUrl } from "../../../model/provider-endpoints.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 
 const VALIDATION_REQUESTS: Record<
   ModelProvider,
@@ -84,6 +84,9 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
   if (typeof apiKey !== "string" || !apiKey.trim()) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "API key is required" });
   }
+  const current = async () => (await ctx.deps.modelCredentials!.statuses()).find((item) => item.provider === provider);
+  if (isObj(ctx.body) && ctx.body.ifUnset === true && (await current())?.configured)
+    return sendJson(ctx.res, 200, { ok: true, status: await current(), unchanged: true });
   if (!(await validateProviderApiKey(ctx, provider, apiKey.trim()))) {
     return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
   }
@@ -94,8 +97,7 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
     resource: provider,
     scopeLabel: orgScope(ctx.deps),
   });
-  const status = (await ctx.deps.modelCredentials.statuses()).find((item) => item.provider === provider);
-  return sendJson(ctx.res, 200, { ok: true, status });
+  return sendJson(ctx.res, 200, { ok: true, status: await current() });
 }
 
 export async function deleteModelProvider(ctx: ApiCtx): Promise<void> {

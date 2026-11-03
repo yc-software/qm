@@ -29,7 +29,7 @@ export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "capability" |
 }
 
 export async function authorizeAdmin(
-  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor">,
+  ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor" | "operator">,
   _scope: string,
 ): Promise<Principal | null> {
   const { res, deps } = ctx;
@@ -37,6 +37,7 @@ export async function authorizeAdmin(
     sendJson(res, 404, { error: "not_found" });
     return null;
   }
+  if (ctx.operator) return { id: "operator", type: "internal" };
   const grants = await deps.admin.listGrants();
   const actor = adminActorFrom(ctx);
   if (actor && !(await activePrincipal(deps, actor.id))) {
