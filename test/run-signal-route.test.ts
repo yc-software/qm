@@ -711,7 +711,10 @@ test("web proxy: /api/runs/active tracks queued runs — the live one first, the
   const threadRef = `web:carol:${crypto.randomUUID()}`;
   const submitTwice = async (text: string): Promise<string> => {
     const r = (await (
-      await fetch(`${webBase}/api/turn`, asUser("carol", { method: "POST", body: JSON.stringify({ text, threadRef }) }))
+      await fetch(
+        `${webBase}/api/turn`,
+        asUser("carol", { method: "POST", body: JSON.stringify({ text, threadRef, midTurn: "queue" }) }),
+      )
     ).json()) as { runId?: string };
     assert.ok(r.runId);
     return r.runId!;
@@ -743,7 +746,7 @@ test("web steering atomically transfers file-only queues and deduplicates retrie
       `${webBase}/api/turn`,
       asUser("U1", {
         method: "POST",
-        body: JSON.stringify({ text, threadRef, attachments: files }),
+        body: JSON.stringify({ text, threadRef, attachments: files, midTurn: "queue" }),
       }),
     );
     return ((await res.json()) as { runId: string }).runId;

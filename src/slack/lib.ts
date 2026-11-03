@@ -49,9 +49,6 @@ export {
   dedupeKey,
   createDeduper,
   dedupedRun,
-  isBareStop,
-  createInFlightThreadMap,
-  maybeInterceptStop,
 } from "./message-gating.ts";
 export {
   type SlackFile,

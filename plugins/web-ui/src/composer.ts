@@ -1385,11 +1385,19 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   ): Promise<boolean> {
     const idempotencyKey = queueSendKey(threadRef, text, filesKey);
     try {
-      const queued = await queueTurn(threadRef, text, agent, ctx.chat.currentTurnOptions, idempotencyKey, attachments);
+      const { steered, steerTs, ...queued } = await queueTurn(
+        threadRef,
+        text,
+        agent,
+        ctx.chat.currentTurnOptions,
+        idempotencyKey,
+        attachments,
+        steer ? "steer" : "queue",
+      );
       failedQueueSend = null;
       bumpSessionActivity(threadRef);
-      if (steer && canSteer(agent) && threadRef === ctx.chat.state.threadRef) void steerQueued(agent, queued, true);
-      else addQueuedRun(threadRef, queued);
+      if (steerTs) markSteering(threadRef, { ...queued, ts: steerTs });
+      else if (!steered) addQueuedRun(threadRef, queued);
       return true;
     } catch (err) {
       failedQueueSend = { threadRef, text, filesKey, idempotencyKey };
@@ -1456,35 +1464,31 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     setQueuedRuns(threadRef, [...queuedRunsFor(threadRef).filter((r) => r.runId !== queued.runId), queued]);
   }
 
-  function markSteering(threadRef: string, queued: QueuedRun): void {
+  function markSteering(threadRef: string, steering: QueuedRun & { ts: string }): void {
     steeringRuns.set(threadRef, [
-      ...(steeringRuns.get(threadRef) ?? []).filter((run) => run.runId !== queued.runId),
-      { ...queued, ts: `queued-steer:${threadRef}:${queued.runId}` },
+      ...(steeringRuns.get(threadRef) ?? []).filter((run) => run.ts !== steering.ts),
+      steering,
     ]);
   }
 
-  function unmarkSteering(threadRef: string, runId: string): void {
-    const rest = (steeringRuns.get(threadRef) ?? []).filter((run) => run.runId !== runId);
+  function unmarkSteering(threadRef: string, ts: string): void {
+    const rest = (steeringRuns.get(threadRef) ?? []).filter((run) => run.ts !== ts);
     if (rest.length) steeringRuns.set(threadRef, rest);
     else steeringRuns.delete(threadRef);
   }
 
-  async function steerQueued(agent: Agent, queued: QueuedRun, fresh = false): Promise<void> {
+  async function steerQueued(agent: Agent, queued: QueuedRun): Promise<void> {
     const threadRef = ctx.chat.state.threadRef;
-    if (!threadRef || !ctx.chat.hasLiveRun() || pendingSteers.has(queued.runId)) {
-      if (fresh && threadRef) addQueuedRun(threadRef, queued);
-      return;
-    }
+    if (!threadRef || !ctx.chat.hasLiveRun() || pendingSteers.has(queued.runId)) return;
     pendingSteers.add(queued.runId);
     composerState.error = "";
-    markSteering(threadRef, queued);
+    const ts = `queued-steer:${threadRef}:${queued.runId}`;
+    markSteering(threadRef, { ...queued, ts });
     let steered = false;
-    let fallBackToQueue = fresh;
     try {
       const outcome = await ctx.chat.signalLiveRun("steer", queued.text, queued.runId);
       steered = outcome.ok;
       if (outcome.ok || outcome.replayed) {
-        fallBackToQueue = false;
         forgetQueuedRun(threadRef, queued.runId);
         bumpSessionActivity(threadRef);
         if (
@@ -1500,16 +1504,18 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
           } as unknown as AgentMessage);
         }
       } else if (outcome.reason === "queued_started" || outcome.reason === "not_found") {
-        fallBackToQueue = false;
         forgetQueuedRun(threadRef, queued.runId);
       } else {
-        reportHandledError("web:steer_refused", new Error(outcome.reason ?? "steer refused"));
-        if (
-          outcome.reason === "queued_changed" &&
-          agent === ctx.chat.state.agent &&
-          threadRef === ctx.chat.state.threadRef
-        )
-          composerState.error = "The queued message changed. Try steering it again.";
+        reportHandledError(
+          "web:steer_refused",
+          new Error([outcome.reason ?? "steer refused", outcome.why].filter(Boolean).join(": ")),
+        );
+        if (agent === ctx.chat.state.agent && threadRef === ctx.chat.state.threadRef) {
+          if (outcome.reason === "queued_changed")
+            composerState.error = "The queued message changed. Try steering it again.";
+          if (outcome.reason === "not_steerable")
+            composerState.error = "This message will run as its own turn after the current one.";
+        }
       }
     } catch (err) {
       reportHandledError("web:steer_queued", err);
@@ -1517,9 +1523,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         composerState.error = errMessage(err, "Could not confirm steering. Try again.");
     } finally {
       pendingSteers.delete(queued.runId);
-      if (!steered) unmarkSteering(threadRef, queued.runId);
+      if (!steered) unmarkSteering(threadRef, ts);
     }
-    if (fallBackToQueue) addQueuedRun(threadRef, queued);
     if (agent !== ctx.chat.state.agent || threadRef !== ctx.chat.state.threadRef) return;
     ctx.chat.drawActiveChat(agent);
     ctx.chat.resumeIfIdle();

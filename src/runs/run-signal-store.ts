@@ -1,4 +1,3 @@
-import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { ClientToolResult, TurnRequest } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 
@@ -10,7 +9,6 @@ export interface RunSignal {
   ts?: string;
   request?: TurnRequest;
   dedupeKey?: string;
-  sessionRequest?: OrchestratorInput;
   queuedRunId?: string;
   callId?: string;
   result?: ClientToolResult;
@@ -19,7 +17,7 @@ export interface RunSignal {
 
 export interface RunSignalStore {
   send(runId: string, signal: RunSignal): Promise<boolean>;
-  hasDedupeKey(dedupeKey: string): Promise<boolean>;
+  runForDedupeKey(dedupeKey: string): Promise<string | undefined>;
   pending(runId: string): Promise<Array<{ id: string; signal: RunSignal }>>;
   acknowledge(runId: string, id: string): Promise<void>;
   takePending(runId: string): Promise<RunSignal[]>;

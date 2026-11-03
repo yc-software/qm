@@ -1,3 +1,4 @@
+import { stopsLiveWork } from "../wake/route-incoming.ts";
 import {
   externalSlackNamespace,
   extractPrivateContinuation,
@@ -41,7 +42,6 @@ import {
   isExternallyShared,
   isMpim,
   type SurfaceHeaderClient,
-  maybeInterceptStop,
   postThenAckRunDelivery,
   type PostMessageArgs,
   postWithVerify,
@@ -166,7 +166,7 @@ export function createTurnHandler(deps: {
     deps;
   const { classifyUserCached, classifyActor, getChannelInfo, channelMembership } = directory;
   const { mirrorMessageEvent } = mirror;
-  const { callCore, inFlightRuns, inFlightRunByThread, ackRunDelivery } = flow;
+  const { callCore, inFlightRuns, ackRunDelivery } = flow;
 
   const reactionsInFlight = new Set<string>();
 
@@ -364,19 +364,6 @@ export function createTurnHandler(deps: {
     const finishTaskAck = async () => {
       if (taskManaged && queuedRunId) await core.taskAcknowledgements!.finish(client, queuedRunId);
     };
-    if (!inc.unprompted) {
-      const intercepted = await maybeInterceptStop({
-        text,
-        botHandle: ids.botHandle,
-        threadRef,
-        getInFlightRun: async (ref) =>
-          (await core.activeRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined))) ??
-          inFlightRunByThread.get(ref),
-        signalAbort: (runId) => core.signalRunAbort(runId),
-        stopConversation: (ref) => core.stopConversation(ref),
-      }).catch(swallowAs("slack: abort signal", true));
-      if (intercepted) return;
-    }
 
     let ack: AckPresenter | undefined;
     const statusKey = (): string | undefined => (queuedRunId ? statusPlaceholderKey(queuedRunId) : undefined);
@@ -441,7 +428,12 @@ export function createTurnHandler(deps: {
     let overheard: OverheardMessage[] | undefined;
     let detectContext: string | undefined;
     let detectOpener: string | undefined;
-    if (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs)) {
+    const halt = stopsLiveWork({
+      origin: inc.unprompted ? "ambient" : "human",
+      text,
+      ...(ids.botHandle ? { selfHandle: ids.botHandle } : {}),
+    });
+    if (!halt && (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs))) {
       const serialize = () =>
         serializer.serializeSlackConversation(client, inc, {
           audience,
@@ -565,7 +557,6 @@ export function createTurnHandler(deps: {
             }),
         onQueued: async (runId) => {
           queuedRunId = runId;
-          inFlightRunByThread.set(threadRef, runId);
           accepted = true;
           inc.ackGate?.persisted();
           await moveTaskAck(runId, inc.ts, true);
@@ -608,7 +599,6 @@ export function createTurnHandler(deps: {
       return;
     } finally {
       if (queuedRunId) {
-        inFlightRunByThread.clear(threadRef, queuedRunId);
         deps.onSettled?.();
       }
     }

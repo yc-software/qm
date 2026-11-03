@@ -336,6 +336,7 @@ export interface ClientToolResult {
 
 export interface TurnRequest {
   desktopClientId?: string;
+  midTurn?: "steer" | "queue";
   slackSource?: {
     accountId: string;
     teamId: string;
@@ -484,6 +485,7 @@ export interface TurnResult {
   adminUrl?: string;
   runId?: string;
   steered?: true;
+  steerTs?: string;
   stopped?: boolean;
   pendingApprovals?: PendingApproval[];
   attachments?: OutgoingAttachment[];

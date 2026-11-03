@@ -987,7 +987,7 @@ export function hasLiveRun(slot: RunSlot): boolean {
   return slot.runId !== null;
 }
 
-export type SignalOutcome = { ok: true } | { ok: false; reason: string; replayed?: boolean };
+export type SignalOutcome = { ok: true } | { ok: false; reason: string; why?: string; replayed?: boolean };
 
 export interface SteerContext {
   threadRef: string | null;
@@ -1029,10 +1029,11 @@ export async function signalLiveRun(
     // text as a fresh turn when it can; surface that outcome instead of failing so the
     // caller can attach to the replay run or resend, rather than dropping the message.
     if (err instanceof ApiError && (err.status === 409 || err.status === 404)) {
-      const body = (err.body ?? {}) as { reason?: string; replayed?: boolean };
+      const body = (err.body ?? {}) as { reason?: string; why?: string; replayed?: boolean };
       return {
         ok: false,
         reason: body.reason ?? (err.status === 404 ? "not_found" : "terminal"),
+        ...(body.why ? { why: body.why } : {}),
         ...(body.replayed ? { replayed: true } : {}),
       };
     }
@@ -1078,16 +1079,27 @@ export async function queueTurn(
   getTurnOptions?: () => TurnOptions,
   idempotencyKey?: string,
   attachments: CoreAttachment[] = [],
-): Promise<QueuedRun> {
-  const submit = await api<{ status?: string; runId?: string; reason?: string }>("/api/turn", {
-    method: "POST",
-    body: JSON.stringify(
-      turnRequestBody(threadRef, text, agent.state.model, agent, getTurnOptions, { idempotencyKey, attachments }),
-    ),
-  });
+  midTurn: "steer" | "queue" = "queue",
+): Promise<QueuedRun & { steered?: boolean; steerTs?: string }> {
+  const submit = await api<{ status?: string; runId?: string; reason?: string; steered?: boolean; steerTs?: string }>(
+    "/api/turn",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ...turnRequestBody(threadRef, text, agent.state.model, agent, getTurnOptions, { idempotencyKey, attachments }),
+        midTurn,
+      }),
+    },
+  );
   if (submit.status === "pending_approval") throw new Error(submit.reason ?? PENDING_APPROVAL_REASON);
-  if (!submit.runId) throw new Error("Could not queue the message.");
-  return { runId: submit.runId, text, ...(attachments.length ? { hasAttachments: true } : {}) };
+  if (!submit.runId && !submit.steered) throw new Error("Could not queue the message.");
+  return {
+    runId: submit.runId ?? "",
+    text,
+    ...(attachments.length ? { hasAttachments: true } : {}),
+    ...(submit.steered ? { steered: true } : {}),
+    ...(submit.steerTs ? { steerTs: submit.steerTs } : {}),
+  };
 }
 
 export async function editQueuedRun(runId: string, text: string, expectedText: string): Promise<void> {
@@ -1336,6 +1348,7 @@ async function drive(
       method: "POST",
       body: JSON.stringify({
         ...turnRequestBody(threadRef, text, model, agent, getTurnOptions, { idempotencyKey, attachments }),
+        midTurn: "queue",
         ...(opener ? { proactiveOpener: true, desktopClientId: undefined } : {}),
       }),
     });
