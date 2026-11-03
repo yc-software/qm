@@ -10,6 +10,7 @@ import { applyPgMigrations, createPgPool, registeredPgMigrations, type PgPool } 
 import { pgRows, type RowTable } from "../../src/persistence/keyed-rows.ts";
 import { createPostgresDeploymentRows } from "../../src/deploy/deploy-store.ts";
 import { createSandboxResourceStores } from "../../src/sandbox/sandbox-resource-store.ts";
+import { tenantBoundUrl } from "./test-tenants.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
@@ -165,15 +166,15 @@ export function testAdminGrantStore(
 }
 
 export function testRows<T, K extends string>(spec: RowTable<T, K>) {
-  return pgRows(testDatabaseUrl(), spec);
+  return pgRows(tenantBoundUrl(testDatabaseUrl()), spec);
 }
 
 export function testSandboxResourceStores() {
-  return createSandboxResourceStores(testDatabaseUrl());
+  return createSandboxResourceStores(tenantBoundUrl(testDatabaseUrl()));
 }
 
 export function testDeploymentRows() {
-  return createPostgresDeploymentRows(testDatabaseUrl());
+  return createPostgresDeploymentRows(tenantBoundUrl(testDatabaseUrl()));
 }
 
 export function testDeployBackings(

@@ -24,7 +24,7 @@ const COLUMNS: RowColumns<BackgroundOwnership, "id"> = {
 const OWNED = `json ? 'ownerDeploymentId' AND (NOT json ? 'desiredDeploymentId'
   OR json->'desiredDeploymentId' = json->'ownerDeploymentId')`;
 
-const BACKGROUND_OWNERSHIP_MIGRATION = {
+export const BACKGROUND_OWNERSHIP_MIGRATION = {
   id: "tenancy/background_ownership/0001-typed",
   statements: [
     `SET LOCAL lock_timeout = '5s'`,

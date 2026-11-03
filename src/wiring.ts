@@ -31,6 +31,7 @@ import {
   createBackgroundOwnershipStore,
   type BackgroundOwnershipControl,
   createBackgroundOwnershipRows,
+  BACKGROUND_OWNERSHIP_MIGRATION,
 } from "./runs/background-ownership.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
@@ -555,6 +556,7 @@ export function buildApp(
   registerPgMigrations(databaseUrl, [
     TENANCY_BASE,
     FLY_DEPLOY_PORTS,
+    BACKGROUND_OWNERSHIP_MIGRATION,
     ...[
       SPRITES_INITIALIZATION,
       RENDER_SANDBOX_BASES,
