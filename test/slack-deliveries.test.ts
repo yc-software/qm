@@ -17,7 +17,13 @@ async function deliver(
   sourceThreadRef?: string,
   webUiPublicUrl?: string,
   text = "two screenshots and the notes",
-  row: { createdAt?: number; history?: Record<string, unknown>[]; loseAck?: boolean; approval?: unknown } = {},
+  row: {
+    createdAt?: number;
+    history?: Record<string, unknown>[];
+    loseAck?: boolean;
+    approval?: unknown;
+    updateError?: string;
+  } = {},
 ) {
   const delivery = {
     id: "D1",
@@ -34,6 +40,7 @@ async function deliver(
   const acknowledgements: string[] = [];
   const uploads: Record<string, unknown>[] = [];
   const posts: Record<string, unknown>[] = [];
+  const updates: Record<string, unknown>[] = [];
   const marks: Array<{ channel: string; ts: string }> = [];
   const probes: Record<string, unknown>[] = [];
   const history = row.history ?? [];
@@ -72,6 +79,11 @@ async function deliver(
       info: async () => ({ file: { shares: { private: { C1: [{ ts: "101.300" }] } } } }),
     },
     chat: {
+      update: async (args: Record<string, unknown>) => {
+        updates.push(args);
+        if (row.updateError) throw Object.assign(new Error(row.updateError), { data: { error: row.updateError } });
+        return { ok: true };
+      },
       postMessage: async (args: Record<string, unknown>) => {
         posts.push(args);
         history.push({ ...args, ts: "separate-message" });
@@ -92,7 +104,7 @@ async function deliver(
   });
 
   await poller.pollDeliveries(client);
-  return { acknowledgements, uploads, posts, marks, probes, conversationsOpened };
+  return { acknowledgements, uploads, posts, updates, marks, probes, conversationsOpened };
 }
 
 for (const type of ["slack", "group", "principal"]) {
@@ -405,3 +417,32 @@ for (const type of ["slack", "group", "principal"]) {
     assert.deepEqual(recovered.acknowledgements, ["D1"]);
   });
 }
+
+test("an explicit edit rewrites the target message in place and posts nothing new", async () => {
+  const { updates, posts, uploads, acknowledgements } = await deliver(
+    { target: "C1", edit: { messageTs: "99.100" } },
+    undefined,
+    undefined,
+    "corrected numbers",
+  );
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0]!.channel, "C1");
+  assert.equal(updates[0]!.ts, "99.100");
+  assert.equal(updates[0]!.text, "corrected numbers");
+  assert.deepEqual(posts, []);
+  assert.deepEqual(uploads, []);
+  assert.deepEqual(acknowledgements, ["D1"]);
+});
+
+test("a failed explicit edit never falls back to posting the text as a new message", async () => {
+  const { updates, posts, uploads } = await deliver(
+    { target: "C1", edit: { messageTs: "99.100" } },
+    undefined,
+    undefined,
+    "corrected numbers",
+    { updateError: "cant_update_message" },
+  );
+  assert.equal(updates.length, 1);
+  assert.deepEqual(posts, []);
+  assert.deepEqual(uploads, []);
+});

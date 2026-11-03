@@ -285,6 +285,34 @@ export function createDeliveryPoller(deps: {
                 }
                 return undefined;
               }
+              if (d.destination.edit) {
+                const { messageTs } = d.destination.edit;
+                const text = toSlackMrkdwn(stripSlackDirectives(d.text));
+                if (!text.trim()) {
+                  console.error(`[slack-plugin] delivery ${d.id} edit skipped: no text left to write`);
+                  return undefined;
+                }
+                const footer = deliveryFooter(d);
+                const unfurlLinks = d.destination.unfurlLinks;
+                try {
+                  await client.chat.update({
+                    channel,
+                    ts: messageTs,
+                    text,
+                    blocks: [
+                      ...slackSectionBlocks(text),
+                      ...(footer.length ? [{ type: "context", elements: footer }] : []),
+                    ],
+                    ...botIdentityArgs(),
+                    ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
+                  });
+                } catch (err) {
+                  console.error(
+                    `[slack-plugin] delivery ${d.id} edit failed: ${slackErrorCode(err) ?? (err as Error).message} (own messages only)`,
+                  );
+                }
+                return undefined;
+              }
               let editRef = d.destination.editRef;
               if (!editRef && runId) {
                 const placeholder = await findPostedByKey(

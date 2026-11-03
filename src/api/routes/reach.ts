@@ -43,13 +43,7 @@ function parseDelete(v: unknown): { messageTs: string } | undefined {
   return { messageTs: ts };
 }
 
-function parseEdit(v: unknown): { messageTs: string; text: string } | undefined {
-  if (!isObj(v)) return undefined;
-  const ts = (v as { ts?: unknown }).ts;
-  const text = (v as { text?: unknown }).text;
-  if (typeof ts !== "string" || !ts.trim() || typeof text !== "string" || !text.trim()) return undefined;
-  return { messageTs: ts.trim(), text };
-}
+const SLACK_TS = /^\d+\.\d+$/;
 
 async function reachNow(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, body, capability } = ctx;
@@ -64,22 +58,18 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
   else if (typeof b.message === "string") text = b.message;
   const react = parseReact(b.react);
   const del = parseDelete(b.delete);
-  const edit = parseEdit(b.edit);
-  if (b.edit !== undefined && !edit) {
+  const editTs = isObj(b.edit) ? (b.edit as { ts?: unknown }).ts : undefined;
+  if (b.edit !== undefined && (typeof editTs !== "string" || !SLACK_TS.test(editTs.trim()))) {
     return sendJson(res, 400, {
       error: "bad_request",
-      message: "edit needs { ts, text } — the ts of your own message and its complete new text",
+      message: 'edit needs { ts } — the ts string of your own message, e.g. "1723497600.123456"',
     });
   }
-  if (edit && text !== undefined) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "an edit carries its new text in edit.text — drop the top-level text",
-    });
-  }
+  const edit = typeof editTs === "string" ? { messageTs: editTs.trim() } : undefined;
+  const action = react ?? del ?? edit;
   let threadTs: string | undefined;
   if (b.threadTs !== undefined) {
-    if (typeof b.threadTs !== "string" || !/^\d+\.\d+$/.test(b.threadTs.trim())) {
+    if (typeof b.threadTs !== "string" || !SLACK_TS.test(b.threadTs.trim())) {
       return sendJson(res, 400, {
         error: "bad_request",
         message:
@@ -87,7 +77,7 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
       });
     }
     threadTs = b.threadTs.trim();
-    if (react || del || edit) {
+    if (action) {
       return sendJson(res, 400, {
         error: "bad_request",
         message: "threadTs threads a text post — react/edit/delete already name their target message ts",
@@ -112,20 +102,21 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
     }
     if (files.some((f) => typeof f === "string")) requestedSandboxId = b.sandbox_id.trim();
   }
-  if (files.length && (react || del || edit)) {
+  if (files.length && action) {
     return sendJson(res, 400, {
       error: "bad_request",
       message: "files compose into a text post — a react/edit/delete carries no attachments",
     });
   }
-  if (!react && !del && !edit && (text === undefined || text.trim() === "")) {
+  if (!(react || del) && (text === undefined || text.trim() === "")) {
     return sendJson(res, 400, {
       error: "bad_request",
-      message:
-        "text (the exact message to send), react ({ ts, emoji }), edit ({ ts, text }), or delete ({ ts }) required",
+      message: edit
+        ? "an edit needs text — the complete new message"
+        : "text (the exact message to send), react ({ ts, emoji }), or delete ({ ts }) required",
     });
   }
-  if ((react || del || edit) && typeof b.recipient === "string") {
+  if (action && typeof b.recipient === "string") {
     return sendJson(res, 400, {
       error: "bad_request",
       message:
@@ -236,12 +227,11 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
       }
     }
   }
-  const outText = edit ? edit.text : text;
   const result = await app.reachNow({
     senderId: capability.actorId,
     senderScope: capability.scopeId,
-    ...(outText !== undefined ? { text: outText } : {}),
-    ...(edit ? { edit: { messageTs: edit.messageTs } } : {}),
+    ...(text !== undefined ? { text } : {}),
+    ...(edit ? { edit } : {}),
     ...(threadTs !== undefined ? { threadTs } : {}),
     ...(react ? { react } : {}),
     ...(del ? { delete: del } : {}),

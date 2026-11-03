@@ -64,39 +64,36 @@ describe("POST /v1/reach with edit", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it("rewrites a message in a named channel in place: editRef = ts, text = the new text", async () => {
-    const d = await delivery(await post({ channel: "eng", edit: { ts: TS, text: "corrected numbers" } }));
+  it("rewrites a message in a named channel in place: edit = ts, text = the new text", async () => {
+    const d = await delivery(await post({ channel: "eng", edit: { ts: TS }, text: "corrected numbers" }));
     assert.equal(d.destination.target, "C-eng");
-    assert.equal(d.destination.editRef, TS);
+    assert.deepEqual(d.destination.edit, { messageTs: TS });
     assert.equal(d.text, "corrected numbers");
-    assert.equal(d.destination.delete, undefined);
-    assert.equal(d.destination.react, undefined);
   });
 
   it("with no target, edits in this conversation's Slack surface", async () => {
     const here: Destination = { type: "slack", target: `C-eng:${TS}`, audienceScopeId: scopeId("channel", "C-eng") };
-    const d = await delivery(await post({ edit: { ts: "1723497601.000001", text: "fixed" } }, here));
+    const d = await delivery(await post({ edit: { ts: "1723497601.000001" }, text: "fixed" }, here));
     assert.equal(d.destination.target, `C-eng:${TS}`);
-    assert.equal(d.destination.editRef, "1723497601.000001");
+    assert.deepEqual(d.destination.edit, { messageTs: "1723497601.000001" });
     assert.equal(d.text, "fixed");
   });
 
   it("refuses an edit outside Slack", async () => {
     const web: Destination = { type: "web", target: "web:carol:s1", audienceScopeId: scopeId("personal", "U-carol") };
-    const res = await post({ edit: { ts: TS, text: "fixed" } }, web);
+    const res = await post({ edit: { ts: TS }, text: "fixed" }, web);
     assert.equal(res.status, 400);
   });
 
   it("rejects malformed or conflicting edits", async () => {
     for (const body of [
       { channel: "eng", edit: { ts: TS } },
-      { channel: "eng", edit: { ts: TS, text: "  " } },
-      { channel: "eng", edit: { text: "no ts" } },
-      { channel: "eng", edit: { ts: TS, text: "x" }, text: "also top-level" },
-      { channel: "eng", edit: { ts: TS, text: "x" }, delete: { ts: TS } },
-      { channel: "eng", edit: { ts: TS, text: "x" }, react: { ts: TS, emoji: "eyes" } },
-      { channel: "eng", edit: { ts: TS, text: "x" }, threadTs: TS },
-      { recipient: "Alice", edit: { ts: TS, text: "x" } },
+      { channel: "eng", edit: {}, text: "no ts" },
+      { channel: "eng", edit: { ts: "latest" }, text: "not a Slack ts" },
+      { channel: "eng", edit: { ts: TS }, text: "x", delete: { ts: TS } },
+      { channel: "eng", edit: { ts: TS }, text: "x", react: { ts: TS, emoji: "eyes" } },
+      { channel: "eng", edit: { ts: TS }, text: "x", threadTs: TS },
+      { recipient: "Alice", edit: { ts: TS }, text: "x" },
     ]) {
       const res = await post(body);
       assert.equal(res.status, 400, JSON.stringify(body));
