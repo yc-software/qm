@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { continuableContext, createAgent } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
+import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { SessionEntry } from "../src/types.ts";
 
@@ -43,10 +43,10 @@ function turnInput(sink: Sink, overrides: Partial<AgentTurnInput>): AgentTurnInp
     tools: {} as AgentTurnInput["tools"],
     scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
-    emit: async (e: NewEntry) => {
-      const appended = { ...e, seq: seq++, createdAt: Date.now() };
-      sink.entries.push({ seq: appended.seq, type: e.type, payload: e.payload });
-      return appended as unknown as SessionEntry;
+    emit: async (item) => {
+      const stored = storedItem(item, { sessionId: "resume", seq: seq++, createdAt: Date.now() });
+      sink.entries.push(entryFromItem(stored, "personal:tester"));
+      return stored;
     },
     recordModelCall: () => {},
     ...overrides,

@@ -8,7 +8,7 @@ import * as Sentry from "@sentry/node";
 import { flushErrorReporting, initializeErrorReporting, traceQueued } from "../plugins/chassis/src/error-reporting.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem } from "../src/sessions/items.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
@@ -100,7 +100,7 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
       } as AgentTurnInput["tools"],
       scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
       orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
-      emit: async (entry) => ({ ...entry, seq: seq++, createdAt: Date.now() }) as unknown as SessionEntry,
+      emit: async (item) => storedItem(item, { sessionId: "traced-tool-step", seq: seq++, createdAt: Date.now() }),
       recordModelCall: () => {},
       cancel: AbortSignal.timeout(10_000),
     }),

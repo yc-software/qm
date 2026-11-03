@@ -1,4 +1,3 @@
-import { useOwnerDatabase } from "../src/tenants/claim.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -8,7 +7,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, pointOwnerAtSchema, restoreFileOwner } from "./support/test-database.ts";
 import { seedTestTenants } from "./support/tenant-seed.ts";
 import { tenantBoundUrl } from "./support/test-tenants.ts";
 
@@ -35,14 +34,12 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
   url.searchParams.set("options", `-c search_path=${schema}`);
   url.searchParams.set("application_name", schema);
   await seedTestTenants(url.toString());
-  const owner = new URL(process.env.DATABASE_OWNER_URL!);
-  owner.searchParams.set("options", `-c search_path=${schema}`);
-  useOwnerDatabase(owner.toString());
+  pointOwnerAtSchema(schema);
   return {
     url: url.toString(),
     admin,
     async cleanup() {
-      useOwnerDatabase(process.env.DATABASE_OWNER_URL);
+      restoreFileOwner();
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
       await admin.end();
     },

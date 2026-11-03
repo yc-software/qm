@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { windowedTranscript, type SessionStore } from "../src/sessions/session-store.ts";
-import { scopeId, type ScopeId, type SessionEntry, type TurnRequest } from "../src/types.ts";
+import { scopeId, type SessionEntry, type TurnRequest } from "../src/types.ts";
+import { entryFromItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -55,18 +56,20 @@ async function toolHeavySession(sessions: SessionStore, turns = 1) {
   const session = await sessions.getOrCreateByThread("web:U1:tool-pins", "dm", scope, undefined, "web");
   await sessions.addParticipant(session.id, "U1", undefined, { includeHistory: true });
   const writer = { sessionId: session.id };
-  const emit = (type: SessionEntry["type"], payload: unknown) =>
-    sessions.append(writer, { type, payload, scopeLabel: scope as ScopeId });
-  let narration: SessionEntry | undefined;
-  let reply: SessionEntry | undefined;
+  const emit = (item: NewItem) => sessions.append(writer, item);
+  let narration: Item | undefined;
+  let reply: Item | undefined;
   for (let turn = 0; turn < turns; turn++) {
-    const ask = `codex, tidy queue ${turn}`;
-    await emit("user", { text: ask });
-    const turnNarration = await emit("text", { text: turn === 0 ? "queue narration detail" : `narration ${turn}` });
+    await emit({ kind: "UserMessage", text: `codex, tidy queue ${turn}` });
+    const turnNarration = await emit({
+      kind: "AgentMessage",
+      variant: "narration",
+      text: turn === 0 ? "queue narration detail" : `narration ${turn}`,
+    });
     narration ??= turnNarration;
-    await emit("tool_call", { tool: "execute", callId: `c${turn}`, command: "tidy" });
-    await emit("tool_result", { tool: "execute", callId: `c${turn}`, isError: false, result: "tidied" });
-    reply = await emit("assistant", { text: `Queue ${turn} tidied.` });
+    await emit({ kind: "ToolCall", tool: "execute", callId: `c${turn}`, body: { command: "tidy" } });
+    await emit({ kind: "ToolResult", tool: "execute", callId: `c${turn}`, isError: false, text: "tidied" });
+    reply = await emit({ kind: "AgentMessage", text: `Queue ${turn} tidied.` });
   }
   return { session, narration: narration!, reply: reply! };
 }
@@ -78,7 +81,10 @@ test("transcripts retain tool detail and exact bounded counts", async () => {
     await inTestTenant(async () => {
       const { session, narration } = await toolHeavySession(built.sessions, 30);
       const full = (await built.app.getSessionForViewer(session.id, "U1", { tailTurns: 9999 }))!;
-      assert.deepEqual(full.entries, await built.sessions.getEntries(session.id));
+      assert.deepEqual(
+        full.entries,
+        (await built.sessions.getItems(session.id)).map((item) => entryFromItem(item, session.scopeId)),
+      );
       assert.equal(full.entries.length, 150);
       const bounded = (await built.app.getSessionForViewer(session.id, "U1", { tailTurns: 1 }))!;
       assert.deepEqual(bounded.entries, full.entries.slice(-5));
@@ -97,9 +103,9 @@ test("earlier pages bound entry reads, widen for dense turns, and match full-rea
   try {
     await inTestTenant(async () => {
       const { session } = await toolHeavySession(built.sessions, 100);
-      const canonical = built.sessions.getEntries.bind(built.sessions);
+      const canonical = built.sessions.getItems.bind(built.sessions);
       const calls: Array<{ limit?: number; beforeSeq?: number } | undefined> = [];
-      built.sessions.getEntries = async (id, opts) => {
+      built.sessions.getItems = async (id, opts) => {
         calls.push(opts);
         return canonical(id, opts);
       };
@@ -119,11 +125,7 @@ test("earlier pages bound entry reads, widen for dense turns, and match full-rea
       }
       const writer = { sessionId: session.id };
       for (let i = 0; i < 180; i++)
-        await built.sessions.append(writer, {
-          type: "text",
-          payload: { text: `detail ${i}` },
-          scopeLabel: session.scopeId,
-        });
+        await built.sessions.append(writer, { kind: "AgentMessage", variant: "narration", text: `detail ${i}` });
       calls.length = 0;
       const page = await built.app.getSession(session.id, { beforeSeq: 680, tailTurns: 1 });
       assert.equal(page!.entries[0]!.seq, 495);
@@ -145,16 +147,8 @@ test("earlier pages respect viewer tenure boundaries", async () => {
       await built.sessions.addParticipant(session.id, "late");
       const writer = { sessionId: session.id };
       for (let i = 0; i < 10; i++) {
-        await built.sessions.append(writer, {
-          type: "user",
-          payload: { text: `late question ${i}` },
-          scopeLabel: session.scopeId,
-        });
-        await built.sessions.append(writer, {
-          type: "assistant",
-          payload: { text: `late reply ${i}` },
-          scopeLabel: session.scopeId,
-        });
+        await built.sessions.append(writer, { kind: "UserMessage", text: `late question ${i}` });
+        await built.sessions.append(writer, { kind: "AgentMessage", text: `late reply ${i}` });
       }
       for (const viewer of ["late", "U1", "stranger"]) {
         const full = await built.app.getSessionForViewer(session.id, viewer);
@@ -181,10 +175,10 @@ test("incremental transcript reads bound entry storage and preserve windows and 
     await inTestTenant(async () => {
       const { session, narration } = await toolHeavySession(built.sessions, 100);
       await built.app.pinConversationItem(session.threadRef, "U1", { entrySeq: narration.seq });
-      const canonical = built.sessions.getEntries.bind(built.sessions);
+      const canonical = built.sessions.getItems.bind(built.sessions);
       const calls: Array<{ sinceSeq?: number; beforeSeq?: number } | undefined> = [];
       let loadedRows = 0;
-      built.sessions.getEntries = async (id, opts) => {
+      built.sessions.getItems = async (id, opts) => {
         calls.push(opts);
         const rows = await canonical(id, opts);
         loadedRows += rows.length;
@@ -201,23 +195,11 @@ test("incremental transcript reads bound entry storage and preserve windows and 
       await built.sessions.addParticipant(session.id, "late");
       const writer = { sessionId: session.id };
       for (let i = 0; i < 10; i++) {
-        await built.sessions.append(writer, {
-          type: "user",
-          payload: { text: `new question ${i}` },
-          scopeLabel: session.scopeId,
-        });
-        await built.sessions.append(writer, {
-          type: "assistant",
-          payload: { text: `new reply ${i}` },
-          scopeLabel: session.scopeId,
-        });
+        await built.sessions.append(writer, { kind: "UserMessage", text: `new question ${i}` });
+        await built.sessions.append(writer, { kind: "AgentMessage", text: `new reply ${i}` });
       }
       await built.sessions.removeParticipant(session.id, "U1");
-      await built.sessions.append(writer, {
-        type: "user",
-        payload: { text: "after departure" },
-        scopeLabel: session.scopeId,
-      });
+      await built.sessions.append(writer, { kind: "UserMessage", text: "after departure" });
       for (const viewer of [undefined, "U1", "late", "stranger"]) {
         const read = (window?: { sinceSeq?: number; beforeSeq?: number }) =>
           viewer === undefined

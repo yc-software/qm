@@ -149,12 +149,16 @@ test("a working subagent reports its current run start and latest purpose from t
   const child = await app.turn(dm("child", "web:U1:c"));
   await sessions.setParentSession(child.sessionId!, parent.sessionId!);
   const say = async (purpose: string, runId: string) => {
-    const writer = { sessionId: child.sessionId! };
-    await sessions.append(writer, {
-      type: "tool_call",
-      payload: { tool: "execute", callId: purpose, purpose, runId },
-      scopeLabel: "personal:U1",
-    });
+    await sessions.append(
+      { sessionId: child.sessionId! },
+      {
+        kind: "ToolCall",
+        tool: "execute",
+        callId: purpose,
+        turnId: runId,
+        body: { purpose },
+      },
+    );
   };
   await say("Old task", randomUUID());
   await runs.enqueue({ sessionId: "web:U1:c", request: enqueueRequest() });

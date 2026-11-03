@@ -5,6 +5,7 @@ import { parseSlackThreadRef, slackThreadRefCandidates } from "./message-gating.
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
 import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { sleep } from "../util/async.ts";
+import { entryFromItem, isAgentReply, isUserItem, itemFromEntry } from "../sessions/items.ts";
 
 export interface MessageRevisionPayload {
   kind: "message_revision";
@@ -22,7 +23,7 @@ interface MessageRevisionSource {
   text?: string;
 }
 
-export type RevisionSessions = Pick<SessionStore, "append" | "sessionsByThreadRefs" | "getEntries">;
+export type RevisionSessions = Pick<SessionStore, "append" | "sessionsByThreadRefs" | "getItems">;
 
 export type RevisionRuns = Pick<RunStore, "inFlightForThread">;
 
@@ -113,6 +114,11 @@ function revisionToRecord(
   return { kind: "message_revision", action: "edited", ts: source.ts, text, ...named };
 }
 
+const sessionEntries = async (
+  sessions: Pick<SessionStore, "getItems">,
+  session: RevisionSession,
+): Promise<SessionEntry[]> => (await sessions.getItems(session.id)).map((item) => entryFromItem(item, session.scopeId));
+
 async function recordRevision(
   sessions: Pick<SessionStore, "append">,
   writer: SessionWriter,
@@ -122,7 +128,7 @@ async function recordRevision(
 ): Promise<boolean> {
   const payload = revisionToRecord(entries, source);
   if (!payload) return false;
-  await sessions.append(writer, { type: "system", payload, scopeLabel: session.scopeId });
+  await sessions.append(writer, itemFromEntry({ type: "system", payload }));
   return true;
 }
 
@@ -140,11 +146,11 @@ async function recordWhenIdle(
   source: MessageRevisionSource,
   retry: IdleRetry,
 ): Promise<void> {
-  if (!revisionToRecord(await sessions.getEntries(session.id), source)) return;
+  if (!revisionToRecord(await sessionEntries(sessions, session), source)) return;
   for (let attempt = 0; attempt < retry.attempts; attempt++) {
     if (attempt > 0) await sleep(retry.retryMs, { unref: true });
     if (await hasRunningRun(runs, session.threadRef)) continue;
-    await recordRevision(sessions, { sessionId: session.id }, session, await sessions.getEntries(session.id), source);
+    await recordRevision(sessions, { sessionId: session.id }, session, await sessionEntries(sessions, session), source);
     return;
   }
 }
@@ -166,14 +172,14 @@ export async function recordMessageRevisions(
 const ANCHOR_WALK_BACK = 8;
 
 export async function revisionAnchorAt(
-  sessions: Pick<SessionStore, "latestEntrySeq" | "getEntry">,
+  sessions: Pick<SessionStore, "latestItemSeq" | "getItem">,
   sessionId: string,
 ): Promise<number | undefined> {
-  let seq = await sessions.latestEntrySeq(sessionId);
+  let seq = await sessions.latestItemSeq(sessionId);
   for (let steps = 0; seq >= 0 && steps < ANCHOR_WALK_BACK; steps++, seq--) {
-    const entry = await sessions.getEntry(sessionId, seq);
-    if (!entry) return undefined;
-    if (entry.type === "user" || entry.type === "assistant") return entry.createdAt;
+    const item = await sessions.getItem(sessionId, seq);
+    if (!item) return undefined;
+    if (isUserItem(item) || isAgentReply(item)) return item.createdAt;
   }
   return undefined;
 }
@@ -184,7 +190,7 @@ export function slackTsToMs(ts: string | undefined): number | undefined {
 }
 
 export async function reconcileMessageRevisions(opts: {
-  sessions: Pick<SessionStore, "append" | "getEntries">;
+  sessions: Pick<SessionStore, "append" | "getItems">;
   surfaceCache: Pick<SurfaceCache, "revisedSince">;
   writer: SessionWriter;
   session: RevisionSession & { threadRef: string };
@@ -197,7 +203,7 @@ export async function reconcileMessageRevisions(opts: {
   const since = Math.max(1, Math.min(opts.anchorAt ?? opts.fallbackSince, slackTsToMs(opts.triggerTs) ?? Infinity));
   const revised = await opts.surfaceCache.revisedSince(ref.container, since, ref.root ? { thread: ref.root } : {});
   if (!revised.length) return 0;
-  const entries = await opts.sessions.getEntries(opts.session.id);
+  const entries = await sessionEntries(opts.sessions, opts.session);
   let recorded = 0;
   for (const row of revised) {
     if (await recordRevision(opts.sessions, opts.writer, opts.session, entries, row)) recorded++;

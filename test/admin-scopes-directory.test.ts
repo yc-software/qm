@@ -65,13 +65,7 @@ test("the admin scope directory lists every known scope with labels and counts (
     );
     await inTestTenant(() => s.built.sessions.addParticipant(session.id, "U1"));
     const writer = { sessionId: session.id };
-    await inTestTenant(() =>
-      s.built.sessions.append(writer, {
-        type: "user",
-        payload: { text: "ship the board deck" },
-        scopeLabel: "channel:C9",
-      }),
-    );
+    await inTestTenant(() => s.built.sessions.append(writer, { kind: "UserMessage", text: "ship the board deck" }));
     await inTestTenant(() =>
       s.built.app.createCron({
         ownerScopeId: "channel:GONE",

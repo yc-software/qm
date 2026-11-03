@@ -1,5 +1,4 @@
 import "./run-availability.ts";
-import { useOwnerDatabase } from "../src/tenants/claim.ts";
 import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
@@ -136,7 +135,7 @@ test("pg participant presence checks seek into the visible history window", { sk
         [session.id, owner, window.fromSeq, window.toSeq, window.from, window.to],
       );
       assert.deepEqual(
-        (await store.visibleEntries(session.id, owner)).map((entry) => entry.seq),
+        (await store.visibleItems(session.id, owner)).map((entry) => entry.seq),
         window.visible,
       );
       assert.equal((await store.listByParticipant(owner))[0]!.hasEntries, window.visible.length > 0);
@@ -166,9 +165,9 @@ test("pg participant activity uses the latest user entry, including overheard en
   await store.addParticipant(session.id, owner);
   const writer = { sessionId: session.id };
   at = 300_000;
-  await store.append(writer, { type: "user", payload: { text: "overheard", overheard: true }, scopeLabel: scope });
+  await store.append(writer, { kind: "UserMessage", text: "overheard", body: { overheard: true } });
   at = 500_000;
-  await store.append(writer, { type: "assistant", payload: { text: "later reply" }, scopeLabel: scope });
+  await store.append(writer, { kind: "AgentMessage", text: "later reply" });
   at = 400_000;
   const empty = await store.getOrCreateByThread(`${owner}-empty`, "dm", scope);
   await store.addParticipant(empty.id, owner);
@@ -352,9 +351,6 @@ test(
     const url = new globalThis.URL(URL!);
     url.searchParams.set("options", `-c search_path=${schema}`);
     await seedTestTenants(url.toString());
-    const owner = new globalThis.URL(process.env.DATABASE_OWNER_URL!);
-    owner.searchParams.set("options", `-c search_path=${schema}`);
-    useOwnerDatabase(owner.toString());
     const day = 86_400_000;
     const base = Date.UTC(2025, 5, 1);
     let clock = base + 3 * day;
@@ -413,7 +409,6 @@ test(
       await slowPass();
       assert.deepEqual(await pending(), [1]);
     } finally {
-      useOwnerDatabase(process.env.DATABASE_OWNER_URL);
       await raw.end();
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
       await admin.end();
@@ -655,26 +650,26 @@ test("pg session store: one-per-thread, monotonic log, visibility window", { ski
   assert.equal(union.filter((r) => r.turnSeq === null).length, 1, "…and unions in the orphan");
 
   const writer = { sessionId: a.id };
-  const e0 = await s.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
-  const e1 = await s.append(writer, { type: "assistant", payload: { text: "yo" }, scopeLabel: scope });
+  const e0 = await s.append(writer, { kind: "UserMessage", text: "hi" });
+  const e1 = await s.append(writer, { kind: "AgentMessage", text: "yo" });
   assert.deepEqual([e0.seq, e1.seq], [0, 1], "monotonic seq");
   assert.deepEqual(
-    (await s.getEntries(a.id)).map((e) => e.type),
-    ["user", "assistant"],
+    (await s.getItems(a.id)).map((e) => e.kind),
+    ["UserMessage", "AgentMessage"],
   );
-  assert.equal((await s.getEntries(a.id, { limit: 1 }))[0]!.seq, 1, "limit returns the most recent");
-  assert.equal((await s.getEntry(a.id, 0))!.type, "user", "point fetch returns exactly the requested seq");
-  assert.equal((await s.getEntry(a.id, 1))!.seq, 1);
-  assert.equal(await s.getEntry(a.id, 99), undefined, "a missing seq is undefined");
-  assert.equal(await s.getEntry("nope", 0), undefined, "an unknown session is undefined");
+  assert.equal((await s.getItems(a.id, { limit: 1 }))[0]!.seq, 1, "limit returns the most recent");
+  assert.equal((await s.getItem(a.id, 0))!.kind, "UserMessage", "point fetch returns exactly the requested seq");
+  assert.equal((await s.getItem(a.id, 1))!.seq, 1);
+  assert.equal(await s.getItem(a.id, 99), undefined, "a missing seq is undefined");
+  assert.equal(await s.getItem("nope", 0), undefined, "an unknown session is undefined");
 
   now += 70;
   await s.addParticipant(a.id, "U1");
-  assert.equal((await s.visibleEntries(a.id, "U1")).length, 0, "a late joiner sees none of the pre-tenure backlog");
-  await s.append(writer, { type: "user", payload: { text: "after-join" }, scopeLabel: scope });
-  const seen = await s.visibleEntries(a.id, "U1");
+  assert.equal((await s.visibleItems(a.id, "U1")).length, 0, "a late joiner sees none of the pre-tenure backlog");
+  await s.append(writer, { kind: "UserMessage", text: "after-join" });
+  const seen = await s.visibleItems(a.id, "U1");
   assert.deepEqual(
-    seen.map((e) => (e.payload as { text?: string }).text),
+    seen.map((e) => e.text),
     ["after-join"],
     "only entries from the member's tenure are visible",
   );
@@ -696,7 +691,7 @@ test("pg session store: one-per-thread, monotonic log, visibility window", { ski
     "old entries fall outside the new tenure",
   );
   now += 5;
-  await s.append(writer, { type: "user", payload: { text: "re-joined" }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: "re-joined" });
   assert.equal(
     (await s.listByParticipant("U1")).find((x) => x.id === a.id)?.hasEntries,
     true,
@@ -704,16 +699,16 @@ test("pg session store: one-per-thread, monotonic log, visibility window", { ski
   );
 });
 
-test("pg latestEntrySeq and participant windows round-trip", { skip }, async () => {
+test("pg latestItemSeq and participant windows round-trip", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "proj-reads");
   const session = await s.getOrCreateByThread("pg-projection-reads", "dm", scope);
   const writer = { sessionId: session.id };
 
-  assert.equal(await s.latestEntrySeq(session.id), -1);
-  await s.append(writer, { type: "user", payload: { text: "one" }, scopeLabel: scope });
-  await s.append(writer, { type: "assistant", payload: { text: "two" }, scopeLabel: scope });
-  assert.equal(await s.latestEntrySeq(session.id), 1);
+  assert.equal(await s.latestItemSeq(session.id), -1);
+  await s.append(writer, { kind: "UserMessage", text: "one" });
+  await s.append(writer, { kind: "AgentMessage", text: "two" });
+  assert.equal(await s.latestItemSeq(session.id), 1);
 
   await s.addParticipant(session.id, "proj-reads", undefined, { includeHistory: true });
   await s.addParticipant(session.id, "late-joiner");
@@ -735,21 +730,21 @@ test("pg participant tenure remains exact when every event shares a timestamp", 
   const scope = scopeId("personal", "SAME-TICK");
   const session = await s.getOrCreateByThread("same-tick-window", "dm", scope);
   const writer = { sessionId: session.id };
-  await s.append(writer, { type: "user", payload: { text: "before" }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: "before" });
   await s.addParticipant(session.id, "SAME-TICK");
-  assert.deepEqual(await s.visibleEntries(session.id, "SAME-TICK"), []);
-  await s.append(writer, { type: "user", payload: { text: "during" }, scopeLabel: scope });
+  assert.deepEqual(await s.visibleItems(session.id, "SAME-TICK"), []);
+  await s.append(writer, { kind: "UserMessage", text: "during" });
   assert.deepEqual(
-    (await s.visibleEntries(session.id, "SAME-TICK")).map((entry) => entry.seq),
+    (await s.visibleItems(session.id, "SAME-TICK")).map((entry) => entry.seq),
     [1],
   );
   await s.removeParticipant(session.id, "SAME-TICK");
-  await s.append(writer, { type: "user", payload: { text: "gap" }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: "gap" });
   await s.addParticipant(session.id, "SAME-TICK");
-  assert.deepEqual(await s.visibleEntries(session.id, "SAME-TICK"), []);
-  await s.append(writer, { type: "user", payload: { text: "after" }, scopeLabel: scope });
+  assert.deepEqual(await s.visibleItems(session.id, "SAME-TICK"), []);
+  await s.append(writer, { kind: "UserMessage", text: "after" });
   assert.deepEqual(
-    (await s.visibleEntries(session.id, "SAME-TICK")).map((entry) => entry.seq),
+    (await s.visibleItems(session.id, "SAME-TICK")).map((entry) => entry.seq),
     [3],
   );
 });
@@ -762,7 +757,7 @@ test("pg deleteSession: hard-removes the session and its rows, leaves others", {
   await s.addParticipant(a.id, "DEL1");
   await s.addParticipant(keep.id, "DEL1");
   const writer = { sessionId: a.id };
-  await s.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: "hi" });
   await s.recordLlmRequest(a.id, {
     turnSeq: 0,
     step: 0,
@@ -775,7 +770,7 @@ test("pg deleteSession: hard-removes the session and its rows, leaves others", {
 
   assert.equal(await s.get(a.id), null, "session row gone");
   assert.equal(await s.getByThread("del-t1"), null, "thread index gone");
-  assert.equal((await s.getEntries(a.id)).length, 0, "entries gone");
+  assert.equal((await s.getItems(a.id)).length, 0, "entries gone");
   assert.equal((await s.listLlmRequests(a.id)).length, 0, "llm requests gone");
   assert.equal(
     (await s.listByParticipant("DEL1")).some((x) => x.id === a.id),
@@ -786,7 +781,7 @@ test("pg deleteSession: hard-removes the session and its rows, leaves others", {
   assert.ok(keptRow, "other sessions untouched");
   assert.equal(keptRow!.hasEntries, false, "an entry-less session reads back hasEntries=false");
   await assert.rejects(
-    s.append({ sessionId: a.id }, { type: "user", payload: { text: "late" }, scopeLabel: scope }),
+    s.append({ sessionId: a.id }, { kind: "UserMessage", text: "late" }),
     /foreign key/,
     "no append lands on a deleted session",
   );
@@ -803,9 +798,9 @@ test("pg scopeSessionSummaries: counts via aggregate, not per-transcript reads",
   const b = await s.getOrCreateByThread("sumB", "channel", team);
   const c = await s.getOrCreateByThread("sumC", "channel", other);
   const writer = { sessionId: a.id };
-  await s.append(writer, { type: "user", payload: { text: "1" }, scopeLabel: team });
-  await s.append(writer, { type: "assistant", payload: { text: "ack" }, scopeLabel: team });
-  await s.append(writer, { type: "user", payload: { text: "2" }, scopeLabel: team });
+  await s.append(writer, { kind: "UserMessage", text: "1" });
+  await s.append(writer, { kind: "AgentMessage", text: "ack" });
+  await s.append(writer, { kind: "UserMessage", text: "2" });
 
   const cron = await s.getOrCreateByThread("agent:main:cron:c1", "channel", team);
   const webhook = await s.getOrCreateByThread("agent:main:webhook:wh1", "channel", team);
@@ -990,7 +985,7 @@ test("pg scopeSessionSummaries: keyset cursor pages stitch into the full listing
   for (let i = 0; i < 5; i++) {
     const sess = await s.getOrCreateByThread(`keyset:${i}`, "channel", scope);
     const writer = { sessionId: sess.id };
-    await s.append(writer, { type: "user", payload: { text: `m${i}` }, scopeLabel: scope });
+    await s.append(writer, { kind: "UserMessage", text: `m${i}` });
   }
   const all = await s.scopeSessionSummaries(scope, false, { limit: 10 });
   const page1 = await s.scopeSessionSummaries(scope, false, { limit: 2 });
@@ -1046,26 +1041,22 @@ test("pg scopeSessionSummaries: previews are stored on append and match the JS e
   const scope = scopeId("channel", "pvw");
   const obj = await s.getOrCreateByThread("pvwA", "channel", scope);
   const writer = { sessionId: obj.id };
-  await s.append(writer, {
-    type: "user",
-    payload: { text: `[${"c".repeat(3000)}]\n\nthe real opener` },
-    scopeLabel: scope,
-  });
-  await s.append(writer, { type: "user", payload: { text: "x".repeat(300) }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: `[${"c".repeat(3000)}]\n\nthe real opener` });
+  await s.append(writer, { kind: "UserMessage", text: "x".repeat(300) });
   const strp = await s.getOrCreateByThread("pvwB", "channel", scope);
   const lease2 = { sessionId: strp.id };
-  await s.append(lease2, { type: "user", payload: "a bare string payload", scopeLabel: scope });
-  await s.append(lease2, { type: "user", payload: { text: "nul\u0000byte" }, scopeLabel: scope });
+  await s.append(lease2, { kind: "UserMessage", text: "a bare string payload" });
+  await s.append(lease2, { kind: "UserMessage", text: "nul\u0000byte" });
   const nontext = await s.getOrCreateByThread("pvwC", "channel", scope);
   const lease3 = { sessionId: nontext.id };
-  await s.append(lease3, { type: "user", payload: { text: 42 }, scopeLabel: scope });
+  await s.append(lease3, { kind: "UserMessage", body: { text: 42 } });
 
   const rows = await s.scopeSessionSummaries(scope, false, { limit: 500 });
   const ra = rows.find((r) => r.id === obj.id)!;
   assert.equal(ra.firstMessage, "the real opener", "bracketed boilerplate stripped (even a >2KB block)");
   assert.equal(ra.lastMessage, "x".repeat(99) + "…", "last-message preview truncated to 100 like before");
   const rb = rows.find((r) => r.id === strp.id)!;
-  assert.equal(rb.firstMessage, "a bare string payload", "a bare-string payload still previews");
+  assert.equal(rb.firstMessage, "a bare string payload", "a plain message previews");
   assert.equal(rb.lastMessage, "nulbyte", "a null byte never reaches the text column");
   assert.equal(rows.find((r) => r.id === nontext.id)!.firstMessage, "", "a non-string text field has no preview");
 
@@ -1096,10 +1087,10 @@ test("pg append returns the same sanitized text it stores for a lone surrogate",
   const session = await s.getOrCreateByThread("surrogateA", "channel", scope);
   const writer = { sessionId: session.id };
   const cut = "emoji 😀".slice(0, 7);
-  const appended = await s.append(writer, { type: "user", payload: { text: `${cut}\u0000` }, scopeLabel: scope });
-  const [stored] = await s.getEntries(session.id);
-  assert.deepEqual(appended.payload, { text: "emoji \uFFFD" });
-  assert.deepEqual(stored!.payload, appended.payload);
+  const appended = await s.append(writer, { kind: "UserMessage", text: `${cut}\u0000` });
+  const [stored] = await s.getItems(session.id);
+  assert.equal(appended.text, "emoji \uFFFD");
+  assert.deepEqual(stored, appended);
 });
 
 test("pg appendMany maintains first/last user previews across batches", { skip }, async () => {
@@ -1113,17 +1104,17 @@ test("pg appendMany maintains first/last user previews across batches", { skip }
   assert.deepEqual(await preview(), ["", "", 0], "a fresh session has no preview");
   const writer = { sessionId: session.id };
   await s.appendMany(writer, [
-    { type: "assistant", payload: { text: "greeting" }, scopeLabel: scope },
-    { type: "user", payload: { text: "an overheard aside", overheard: true }, scopeLabel: scope },
-    { type: "user", payload: { text: "first ask" }, scopeLabel: scope },
-    { type: "user", payload: { text: "second ask" }, scopeLabel: scope },
+    { kind: "AgentMessage", text: "greeting" },
+    { kind: "UserMessage", text: "an overheard aside", body: { overheard: true } },
+    { kind: "UserMessage", text: "first ask" },
+    { kind: "UserMessage", text: "second ask" },
   ]);
   assert.deepEqual(await preview(), ["first ask", "second ask", 2], "one batch sets both ends, skipping overheard");
-  await s.appendMany(writer, [{ type: "assistant", payload: { text: "reply" }, scopeLabel: scope }]);
+  await s.appendMany(writer, [{ kind: "AgentMessage", text: "reply" }]);
   assert.deepEqual(await preview(), ["first ask", "second ask", 2], "a batch without user turns keeps both");
-  await s.append(writer, { type: "user", payload: { text: "third ask" }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: "third ask" });
   assert.deepEqual(await preview(), ["first ask", "third ask", 3], "later user turns move only the last preview");
-  await s.append(writer, { type: "user", payload: { text: "eavesdrop", overheard: true }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: "eavesdrop", body: { overheard: true } });
   assert.deepEqual(await preview(), ["first ask", "third ask", 3], "an overheard turn is not the last message");
 });
 
@@ -1138,7 +1129,7 @@ test(
     const bare = await s.getOrCreateByThread("pvwLegacyBare", "channel", scope);
     for (const session of [titled, bare]) {
       const writer = { sessionId: session.id };
-      await s.append(writer, { type: "user", payload: { text: "open" }, scopeLabel: scope });
+      await s.append(writer, { kind: "UserMessage", text: "open" });
     }
     const pg = (await import("pg")).default;
     const raw = new pg.Pool({ connectionString: URL });
@@ -1214,7 +1205,7 @@ test("pg scopeSessionSummaries: the listing plan is an index walk with no per-ro
   const scope = scopeId("channel", "plan-shape");
   const session = await s.getOrCreateByThread("plan-shape", "channel", scope);
   const writer = { sessionId: session.id };
-  await s.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: "hi" });
   const pg = (await import("pg")).default;
   const execute = pg.Client.prototype.query;
   const captured: { text: string; values: unknown[] }[] = [];
@@ -1301,21 +1292,21 @@ test("pg append debounces last_activity by 60s but keeps counters exact", { skip
     (await s.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === session.id)!;
 
   nowRef.v = t0 + 30_000;
-  await s.append(writer, { type: "user", payload: { text: "within the window" }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: "within the window" });
   let row = await activityOf();
   assert.equal(row.lastActivity, t0, "an append within 60s leaves last_activity alone");
   assert.equal(row.messages, 1, "…while messages stays exact");
   assert.equal(row.turns, 1, "…and turns stays exact");
 
   nowRef.v = t0 + 90_000;
-  await s.append(writer, { type: "user", payload: { text: "past the window" }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: "past the window" });
   row = await activityOf();
   assert.equal(row.lastActivity, t0 + 90_000, "an append past 60s advances last_activity");
   assert.equal(row.messages, 2);
   assert.equal(row.turns, 2);
 
   nowRef.v = t0 + 120_000;
-  await s.append(writer, { type: "assistant", payload: { text: "still within" }, scopeLabel: scope });
+  await s.append(writer, { kind: "AgentMessage", text: "still within" });
   row = await activityOf();
   assert.equal(row.lastActivity, t0 + 90_000, "the window measures from the stored value, not the last append");
   assert.equal(row.messages, 3);
@@ -1330,7 +1321,7 @@ test("pg store startup never rewrites or waits on session rows", { skip }, async
   nowRef.v += 10_000;
   for (const id of ids) {
     const writer = { sessionId: id };
-    await s.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+    await s.append(writer, { kind: "UserMessage", text: "hi" });
   }
   const [held, writing, ...idle] = ids as [string, string, ...string[]];
   const pg = (await import("pg")).default;
@@ -1354,7 +1345,7 @@ test("pg store startup never rewrites or waits on session rows", { skip }, async
     await within(Promise.all(boots.map((b) => b.get(held))), "concurrent fresh-store startup");
     const writer = { sessionId: writing };
     await within(
-      boots[0]!.append(writer, { type: "assistant", payload: { text: "beside a boot" }, scopeLabel: scope }),
+      boots[0]!.append(writer, { kind: "AgentMessage", text: "beside a boot" }),
       "append on a freshly booted store",
     );
     assert.deepEqual(await rowVersions(), before, "startup writes no session rows");
@@ -1402,9 +1393,9 @@ test("pg attributedTurns: covering join credits only user entries, per principal
   await s.addParticipant(a.id, "UET1");
   await s.addParticipant(b.id, "UET1");
   const writer = { sessionId: a.id };
-  const u0 = await s.append(writer, { type: "user", payload: { text: "1" }, scopeLabel: scope });
-  await s.append(writer, { type: "assistant", payload: { text: "ack" }, scopeLabel: scope });
-  const u1 = await s.append(writer, { type: "user", payload: { text: "2" }, scopeLabel: scope });
+  const u0 = await s.append(writer, { kind: "UserMessage", text: "1" });
+  await s.append(writer, { kind: "AgentMessage", text: "ack" });
+  const u1 = await s.append(writer, { kind: "UserMessage", text: "2" });
 
   const rows = await s.attributedTurns();
   const forA = rows.filter((r) => r.sessionId === a.id);
@@ -1433,15 +1424,15 @@ test(
     await s.addParticipant(sess.id, "COV1");
     const writer = { sessionId: sess.id };
     nowRef.v = t0 + 1000;
-    const early = await s.append(writer, { type: "user", payload: { text: "early" }, scopeLabel: scope });
+    const early = await s.append(writer, { kind: "UserMessage", text: "early" });
     nowRef.v = t0 + 2000;
     await s.addParticipant(sess.id, "COV2");
     nowRef.v = t0 + 3000;
-    const mid = await s.append(writer, { type: "user", payload: { text: "both" }, scopeLabel: scope });
+    const mid = await s.append(writer, { kind: "UserMessage", text: "both" });
     nowRef.v = t0 + 4000;
     await s.removeParticipant(sess.id, "COV2");
     nowRef.v = t0 + 5000;
-    const late = await s.append(writer, { type: "user", payload: { text: "late" }, scopeLabel: scope });
+    const late = await s.append(writer, { kind: "UserMessage", text: "late" });
 
     const rows = await s.attributedTurns();
     const c1 = rows.filter((r) => r.principalId === "COV1" && r.sessionId === sess.id);
@@ -1473,16 +1464,18 @@ test(
     await s.addParticipant(a.id, "OV1");
     const writer = { sessionId: a.id };
     await s.append(writer, {
-      type: "user",
-      payload: { overheard: true, ts: "1", name: "Alice", text: "overheard chatter" },
-      scopeLabel: scope,
+      kind: "UserMessage",
+      externalId: "1",
+      text: "overheard chatter",
+      body: { overheard: true, name: "Alice" },
     });
-    await s.append(writer, { type: "user", payload: { text: "the real question" }, scopeLabel: scope });
-    await s.append(writer, { type: "assistant", payload: { text: "answer" }, scopeLabel: scope });
+    await s.append(writer, { kind: "UserMessage", text: "the real question" });
+    await s.append(writer, { kind: "AgentMessage", text: "answer" });
     await s.append(writer, {
-      type: "user",
-      payload: { overheard: true, ts: "2", name: "Bob", text: "more chatter" },
-      scopeLabel: scope,
+      kind: "UserMessage",
+      externalId: "2",
+      text: "more chatter",
+      body: { overheard: true, name: "Bob" },
     });
 
     const row = (await s.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === a.id)!;
@@ -1506,13 +1499,9 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   const a = await s.getOrCreateByThread("nulA", "channel", scope);
   await s.addParticipant(a.id, "NUL1");
   const writer = { sessionId: a.id };
-  const e = await s.append(writer, { type: "user", payload: { text: "a\u0000b" }, scopeLabel: scope });
-  assert.equal(
-    (e.payload as { text?: string }).text,
-    "ab",
-    "append returns the sanitized payload, matching what is stored",
-  );
-  assert.equal(((await s.getEntries(a.id))[0]!.payload as { text?: string }).text, "ab", "null byte stripped at write");
+  const e = await s.append(writer, { kind: "UserMessage", text: "a\u0000b" });
+  assert.equal(e.text, "ab", "append returns the sanitized text, matching what is stored");
+  assert.equal((await s.getItems(a.id))[0]!.text, "ab", "null byte stripped at write");
 
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
@@ -1532,7 +1521,7 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
     "both user turns counted",
   );
   const lease2 = { sessionId: a.id };
-  await s.append(lease2, { type: "user", payload: { text: "z" }, scopeLabel: scope });
+  await s.append(lease2, { kind: "UserMessage", text: "z" });
   const row = (await s.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === a.id)!;
   assert.equal(row.turns, 3, "append recounts NULL turns");
   assert.equal(row.messages, 3, "messages self-heal from the entry seq");
@@ -1547,9 +1536,9 @@ test(
     const a = await s.getOrCreateByThread("countersA", "channel", scope);
     const b = await s.getOrCreateByThread("countersB", "channel", scope);
     const writer = { sessionId: a.id };
-    await s.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
-    await s.append(writer, { type: "assistant", payload: { text: "yo" }, scopeLabel: scope });
-    await s.append(writer, { type: "user", payload: { text: "heard", overheard: true }, scopeLabel: scope });
+    await s.append(writer, { kind: "UserMessage", text: "hi" });
+    await s.append(writer, { kind: "AgentMessage", text: "yo" });
+    await s.append(writer, { kind: "UserMessage", text: "heard", body: { overheard: true } });
 
     const pg = (await import("pg")).default;
     const raw = new pg.Pool({ connectionString: URL });
@@ -1562,18 +1551,14 @@ test(
       const ra = rows.find((r) => r.id === a.id)!;
       assert.equal(ra.messages, 0, "startup no longer backfills: an idle legacy row reads as zero until it is written");
       assert.equal(ra.lastActivity, ra.createdAt, "…and sorts by created_at");
-      assert.equal((await s2.getEntries(a.id)).length, 3, "its stored messages are all still readable");
+      assert.equal((await s2.getItems(a.id)).length, 3, "its stored messages are all still readable");
       const rb = rows.find((r) => r.id === b.id)!;
       assert.equal(rb.messages, 0, "entry-less legacy session reads as zero");
       assert.equal(rb.lastActivity, rb.createdAt, "entry-less last-activity falls back to created_at");
 
       const legacyWriter = { sessionId: a.id };
-      await s2.append(legacyWriter, {
-        type: "assistant",
-        payload: { text: "first write on new code" },
-        scopeLabel: scope,
-      });
-      const entries = await s2.getEntries(a.id);
+      await s2.append(legacyWriter, { kind: "AgentMessage", text: "first write on new code" });
+      const entries = await s2.getItems(a.id);
       const legacy = (await s2.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === a.id)!;
       assert.equal(legacy.messages, 4, "append counts every entry of a legacy row");
       assert.equal(legacy.turns, 1, "append recount excludes overheard user rows");
@@ -1584,7 +1569,7 @@ test(
         [a.id, 4, { text: "from the old instance" }, Date.now()],
       );
       const lease2 = { sessionId: a.id };
-      await s2.append(lease2, { type: "user", payload: { text: "back on new code" }, scopeLabel: scope });
+      await s2.append(lease2, { kind: "UserMessage", text: "back on new code" });
       const healed = (await s2.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === a.id)!;
       assert.equal(healed.messages, 6, "messages self-heal from the entry seq");
       assert.equal(healed.turns, 3, "seq/messages mismatch triggers a full turns recount");
@@ -1597,8 +1582,7 @@ test(
       const s3 = createPostgresSessionStore(URL!);
       const stale = (await s3.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === b.id)!;
       assert.equal(stale.messages, 0, "a fresh store leaves stale non-NULL counters alone");
-      const leaseB = { sessionId: b.id };
-      await s3.append(leaseB, { type: "assistant", payload: { text: "next" }, scopeLabel: scope });
+      await s3.append({ sessionId: b.id }, { kind: "AgentMessage", text: "next" });
       const rb2 = (await s3.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === b.id)!;
       assert.equal(rb2.messages, 3, "the next append repairs stale non-NULL counters");
       assert.equal(rb2.turns, 1, "…and restores turns the old writer never counted");
@@ -1606,7 +1590,7 @@ test(
       const future = Date.now() + 5_000_000;
       await raw.query("UPDATE sessions SET last_activity = $2 WHERE id = $1", [a.id, future]);
       const lease3 = { sessionId: a.id };
-      await s3.append(lease3, { type: "assistant", payload: { text: "late clock" }, scopeLabel: scope });
+      await s3.append(lease3, { kind: "AgentMessage", text: "late clock" });
       const ra2 = (await s3.scopeSessionSummaries(scope, false, { limit: 500 })).find((r) => r.id === a.id)!;
       assert.equal(ra2.lastActivity, future, "an older-clocked append never moves last_activity backwards");
       const ra3 = (await createPostgresSessionStore(URL!).scopeSessionSummaries(scope, false, { limit: 500 })).find(
@@ -2252,24 +2236,17 @@ test("pg search: full-text over entries with prefix match, window ACL, and type 
   await s.addParticipant(sess.id, "USRCH", undefined, { includeHistory: true });
 
   const writer = { sessionId: sess.id };
+  await s.append(writer, { kind: "UserMessage", text: "can you refresh the memo board data?", body: { name: "josh" } });
+  await s.append(writer, { kind: "AgentMessage", text: "Done — pushed the memo board refresh." });
   await s.append(writer, {
-    type: "user",
-    payload: { text: "can you refresh the memo board data?", name: "josh" },
-    scopeLabel: scope,
-  });
-  await s.append(writer, {
-    type: "assistant",
-    payload: { text: "Done — pushed the memo board refresh." },
-    scopeLabel: scope,
-  });
-  await s.append(writer, {
-    type: "tool_call",
-    payload: { tool: "execute", callId: "noise", text: "memo board tool noise" },
-    scopeLabel: scope,
+    kind: "ToolCall",
+    tool: "execute",
+    callId: "noise",
+    body: { text: "memo board tool noise" },
   });
   // A latecomer joins without history, then one more message lands.
   await s.addParticipant(sess.id, "ULATE");
-  await s.append(writer, { type: "user", payload: { text: "memo board postscript" }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: "memo board postscript" });
 
   const hits = await s.searchEntries("USRCH", "memo boar");
   assert.equal(hits.length, 3, "prefix terms match user and assistant text; tool calls are ignored");
@@ -2292,7 +2269,7 @@ test("pg search: own chats and side chats only, no subagents or automations", { 
     const sess = await s.getOrCreateByThread(threadRef, "dm", scope, undefined, surface);
     await s.addParticipant(sess.id, "UOWN", undefined, { includeHistory: true });
     const writer = { sessionId: sess.id };
-    await s.append(writer, { type: "user", payload: { text }, scopeLabel: scope });
+    await s.append(writer, { kind: "UserMessage", text });
     await s.updateTitle(sess.id, "Ownchat harbor");
     return sess.id;
   };
@@ -2325,7 +2302,7 @@ test("pg search: participation windows filter global matches before the result l
   const writer = { sessionId: session.id };
   const append = async (text: string) => {
     at += 1;
-    return s.append(writer, { type: "user", payload: { text }, scopeLabel: scope });
+    return s.append(writer, { kind: "UserMessage", text });
   };
   await append("limitwindow before joining");
   await s.addParticipant(session.id, "SEARCH-WINDOW");
@@ -2336,11 +2313,7 @@ test("pg search: participation windows filter global matches before the result l
   const hidden = await s.getOrCreateByThread("search-hidden-limit", "dm", scope);
   const hiddenWriter = { sessionId: hidden.id };
   at += 1;
-  await s.append(hiddenWriter, {
-    type: "user",
-    payload: { text: "limitwindow inaccessible session" },
-    scopeLabel: scope,
-  });
+  await s.append(hiddenWriter, { kind: "UserMessage", text: "limitwindow inaccessible session" });
 
   for (const limit of [1, 200]) {
     const hits = await s.searchEntries("SEARCH-WINDOW", "limitwindow", limit);
@@ -2358,42 +2331,32 @@ test("pg search: message writes populate the index and tool results stay unfinda
   const sess = await s.getOrCreateByThread("srch-idx-1", "dm", scope);
   await s.addParticipant(sess.id, "UIDX", undefined, { includeHistory: true });
   const writer = { sessionId: sess.id };
+  await s.append(writer, { kind: "UserMessage", text: "please rotate the deploy key", body: { name: "alex" } });
   await s.append(writer, {
-    type: "user",
-    payload: { text: "please rotate the deploy key", name: "alex" },
-    scopeLabel: scope,
+    kind: "ToolResult",
+    tool: "execute",
+    callId: "c1",
+    isError: false,
+    text: "secret broker value QQ17",
   });
-  await s.append(writer, {
-    type: "tool_result",
-    payload: { tool: "execute", callId: "c1", isError: false, result: "secret broker value QQ17" },
-    scopeLabel: scope,
-  });
-  await s.append(writer, {
-    type: "assistant",
-    payload: { text: "Rotated the deploy key." },
-    scopeLabel: scope,
-  });
+  await s.append(writer, { kind: "AgentMessage", text: "Rotated the deploy key." });
 
   const before = await s.searchEntries("UIDX", "deploy key");
   assert.equal(before.length, 2, "message writes are searchable immediately");
   assert.equal(before.find((hit) => hit.type === "user")?.author, "alex");
 
-  await s.append(writer, { type: "user", payload: { text: "also rotate the staging deploy key" }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: "also rotate the staging deploy key" });
   assert.equal((await s.searchEntries("UIDX", "deploy key")).length, 3, "a new message is indexed immediately");
 
   assert.deepEqual(await s.searchEntries("UIDX", "secret broker"), [], "tool results are unfindable");
 
   await s.addParticipant(sess.id, "ULATE2");
-  await s.append(writer, { type: "user", payload: { text: "deploy key postscript" }, scopeLabel: scope });
+  await s.append(writer, { kind: "UserMessage", text: "deploy key postscript" });
   const late = await s.searchEntries("ULATE2", "deploy key");
   assert.equal(late.length, 1, "a latecomer only searches messages inside their window");
   assert.equal(late[0]!.text, "deploy key postscript");
 
-  await s.append(writer, {
-    type: "user",
-    payload: { text: "nul\u0000riddled deploy key", name: "e\u0000ve" },
-    scopeLabel: scope,
-  });
+  await s.append(writer, { kind: "UserMessage", text: "nul\u0000riddled deploy key", body: { name: "e\u0000ve" } });
   const nulHits = await s.searchEntries("UIDX", "nulriddled");
   assert.equal(nulHits.length, 1, "a NUL byte in the text never wedges the index write");
   assert.equal(nulHits[0]!.author, "eve");
@@ -2407,7 +2370,7 @@ test("pg deleteSession: racing an append never orphans entries", { skip }, async
     const sess = await s.getOrCreateByThread(`web:UHARD:${i}`, "dm", scope);
     ids.push(sess.id);
     await Promise.allSettled([
-      s.append({ sessionId: sess.id }, { type: "user", payload: { text: "racing" }, scopeLabel: scope }),
+      s.append({ sessionId: sess.id }, { kind: "UserMessage", text: "racing" }),
       s.deleteSession(sess.id),
     ]);
     assert.equal(await s.get(sess.id), null, "the session is gone either way");
@@ -2425,7 +2388,7 @@ test("pg deleteSessionIfEmpty: racing an append either discards the session or k
   for (let i = 0; i < 15; i++) {
     const sess = await s.getOrCreateByThread(`web:URACE:${i}`, "dm", scope);
     const [appended, discarded] = await Promise.allSettled([
-      s.append({ sessionId: sess.id }, { type: "user", payload: { text: "racing" }, scopeLabel: scope }),
+      s.append({ sessionId: sess.id }, { kind: "UserMessage", text: "racing" }),
       s.deleteSessionIfEmpty(sess.id),
     ]);
     assert.equal(discarded.status, "fulfilled");
@@ -2434,7 +2397,7 @@ test("pg deleteSessionIfEmpty: racing an append either discards the session or k
       assert.equal(await s.get(sess.id), null);
     } else {
       assert.equal(appended.status, "fulfilled", "when the discard is refused the append landed");
-      assert.equal((await s.getEntries(sess.id)).length, 1, "the session survives with its entry");
+      assert.equal((await s.getItems(sess.id)).length, 1, "the session survives with its entry");
     }
   }
 });
@@ -2443,7 +2406,7 @@ test("pg deleteSessionIfEmpty: landed entries refuse the discard atomically", { 
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "UDISC");
   const sess = await s.getOrCreateByThread("web:UDISC:seed", "dm", scope);
-  await s.append({ sessionId: sess.id }, { type: "user", payload: { text: "seed" }, scopeLabel: scope });
+  await s.append({ sessionId: sess.id }, { kind: "UserMessage", text: "seed" });
   assert.equal(await s.deleteSessionIfEmpty(sess.id), false, "entries block the discard");
   assert.ok(await s.get(sess.id), "the refused discard leaves the session intact");
 
@@ -2467,11 +2430,7 @@ test("pg search: globally limits indexed hits across sessions", { skip }, async 
     await store.addParticipant(session.id, "ULIMITSEARCH", undefined, { includeHistory: true });
     const writer = { sessionId: session.id };
     for (let j = 0; j < 4; j++) {
-      const entry = await store.append(writer, {
-        type: "user",
-        payload: { text: "document limit" },
-        scopeLabel: scope,
-      });
+      const entry = await store.append(writer, { kind: "UserMessage", text: "document limit" });
       expected.push({ sessionId: session.id, seq: entry.seq });
     }
   }
@@ -2496,11 +2455,7 @@ test(
     const pool = new pg.Pool({ connectionString: URL });
     const writer = { sessionId: session.id };
     try {
-      const entry = await store.append(writer, {
-        type: "user",
-        payload: { text: "original document" },
-        scopeLabel: session.scopeId,
-      });
+      const entry = await store.append(writer, { kind: "UserMessage", text: "original document" });
       await assert.rejects(
         pool.query("UPDATE items SET body=$3 WHERE session_id=$1 AND seq=$2", [
           session.id,
@@ -2555,12 +2510,9 @@ test("pg transcript write failure rolls back the entry and its counters", { skip
     `CREATE TRIGGER reject_transcript_test BEFORE INSERT ON items FOR EACH ROW WHEN (NEW.session_id = '${session.id}') EXECUTE FUNCTION reject_transcript_test()`,
   );
   try {
-    await assert.rejects(
-      s.append(writer, { type: "user", payload: { text: "must rollback" }, scopeLabel: scope }),
-      /transcript unavailable/,
-    );
-    assert.deepEqual(await s.getEntries(session.id), []);
-    assert.equal(await s.latestEntrySeq(session.id), -1);
+    await assert.rejects(s.append(writer, { kind: "UserMessage", text: "must rollback" }), /transcript unavailable/);
+    assert.deepEqual(await s.getItems(session.id), []);
+    assert.equal(await s.latestItemSeq(session.id), -1);
     const counters = (await client.query("SELECT messages FROM sessions WHERE id=$1", [session.id])).rows[0];
     assert.equal(counters.messages, 0);
   } finally {
@@ -2721,7 +2673,7 @@ test("pg late joiners start after any stored sequence gap", { skip }, async () =
   const session = await store.getOrCreateByThread("slack:gap-C1:1", "channel", scope, "eng");
   await store.addParticipant(session.id, "gap-early");
   const writer = { sessionId: session.id };
-  await store.append(writer, { type: "user", payload: { text: "before" }, scopeLabel: scope });
+  await store.append(writer, { kind: "UserMessage", text: "before" });
   const pg = (await import("pg")).default;
   const pool = new pg.Pool({ connectionString: URL });
   await pool.query("UPDATE sessions SET messages = messages + 3 WHERE id = $1", [session.id]);
@@ -2803,12 +2755,12 @@ test("pg session pages sort by the person's last message, which appends keep", {
     await s.addParticipant(session.id, me, `Chat ${i}`);
     ids.push(session.id);
   }
-  const say = async (sessionId: string, type: "user" | "assistant") => {
+  const say = async (sessionId: string, kind: "UserMessage" | "AgentMessage") => {
     const writer = { sessionId: sessionId };
-    await s.append(writer, { type, payload: { text: type }, scopeLabel: personal });
+    await s.append(writer, { kind, text: kind });
   };
-  await say(ids[0]!, "user");
-  await say(ids[2]!, "assistant");
+  await say(ids[0]!, "UserMessage");
+  await say(ids[2]!, "AgentMessage");
   const order = async () => {
     const first = await s.listParticipantPage(me, { limit: 2 });
     const rest = first.next ? await s.listParticipantPage(me, { limit: 2, before: first.next }) : null;

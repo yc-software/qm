@@ -8,6 +8,7 @@ import { probeModel } from "../src/model/model-runtime.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { withResolvedRuntime } from "../src/agent/runtime-choice.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { storedItem } from "../src/sessions/items.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { withModelRequestContext } from "../src/model/request-context.ts";
 import { mintCapabilityToken } from "../src/auth/capability-token.ts";
@@ -54,7 +55,7 @@ function turn(extra: Partial<AgentTurnInput> = {}): AgentTurnInput {
     tools: {} as AgentTurnInput["tools"],
     scopeLabel: "channel:C123",
     orgScopeId: "org:test",
-    emit: async (entry) => ({ ...entry, sessionId: "session-cron", seq: seq++, parentSeq: null, createdAt: 0 }),
+    emit: async (item) => storedItem(item, { sessionId: "session-cron", seq: seq++, createdAt: 0 }),
     recordModelCall: () => {},
     cancel: AbortSignal.timeout(10_000),
     ...extra,

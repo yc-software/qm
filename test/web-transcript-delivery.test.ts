@@ -13,6 +13,8 @@ import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnResult } 
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { entryFromItem } from "../src/sessions/items.ts";
+import { randomUUID } from "node:crypto";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 import { withoutTenant } from "../src/tenants/context.ts";
@@ -62,26 +64,25 @@ test("enqueue stays a plain insert; the drain writes the text durably before the
       idempotencyKey: "agent:main:cron:c1:100",
       provenance: cronProvenance(),
     });
-    assert.equal((await sessions.getEntries(session.id)).length, 0, "no transcript side effect at enqueue time");
+    assert.equal((await sessions.getItems(session.id)).length, 0, "no transcript side effect at enqueue time");
 
     const drained = await deliveries.pending("web");
     assert.equal(drained.length, 1, "the delivery is visible once its text is durable");
 
-    const entries = await sessions.getEntries(session.id);
+    const entries = await sessions.getItems(session.id);
     assert.deepEqual(
-      entries.map((e) => [e.type, e.payload]),
+      entries.map(({ kind, variant, text, turnId, body }) => ({ kind, variant, text, turnId, body })),
       [
-        [
-          "assistant",
-          {
-            text: "Reminder: standup in 10 minutes",
-            via: "cron",
-            runId: drained[0]!.id,
-          },
-        ],
+        {
+          kind: "AgentMessage",
+          variant: null,
+          text: "Reminder: standup in 10 minutes",
+          turnId: drained[0]!.id,
+          body: { via: "cron" },
+        },
       ],
     );
-    const messages = reconstructMessagesFromHistory(entries);
+    const messages = reconstructMessagesFromHistory(entries.map((e) => entryFromItem(e, SCOPE)));
     assert.equal(messages.at(-1)!.role, "assistant");
     assert.match(JSON.stringify(messages), /Reminder: standup in 10 minutes/);
     assert.doesNotMatch(JSON.stringify(messages), /toolCall|toolResult/);
@@ -100,12 +101,12 @@ test("the recorded entry renders through the transcript source", () =>
     });
     await deliveries.pending("web");
 
-    const projected = (await createTranscriptSource(sessions).forRender(session.id)).entries;
+    const projected = (await createTranscriptSource(sessions).forRender(session.id)).items;
     assert.deepEqual(
-      projected.map((e) => e.type),
-      ["assistant"],
+      projected.map((e) => e.kind),
+      ["AgentMessage"],
     );
-    assert.equal((projected[0]!.payload as { text?: string }).text, "cron reply body");
+    assert.equal(projected[0]!.text, "cron reply body");
   }));
 
 test("repeated drains and a restarted decorator never duplicate the transcript entry", () =>
@@ -124,7 +125,7 @@ test("repeated drains and a restarted decorator never duplicate the transcript e
     const restarted = withWebTranscriptDeliveries(inner, sessions, runs);
     await restarted.pending("web");
 
-    assert.equal((await sessions.getEntries(session.id)).length, 1, "one delivery across drains and restarts");
+    assert.equal((await sessions.getItems(session.id)).length, 1, "one delivery across drains and restarts");
   }));
 
 test("a failed transcript write converges on retry: one entry", () =>
@@ -155,7 +156,7 @@ test("a failed transcript write converges on retry: one entry", () =>
     const drained = await deliveries.pending("web");
     assert.equal(drained.length, 1, "the retry dedupes on the entry and delivers");
 
-    assert.equal((await sessions.getEntries(session.id)).length, 1);
+    assert.equal((await sessions.getItems(session.id)).length, 1);
   }));
 
 test("a live turn holds the delivery back, unacked, until the write lands", () =>
@@ -171,12 +172,12 @@ test("a live turn holds the delivery back, unacked, until the write lands", () =
       provenance: cronProvenance(),
     });
     assert.deepEqual(await deliveries.pending("web"), [], "not visible (and so never acked) while the turn runs");
-    assert.equal((await sessions.getEntries(session.id)).length, 0);
+    assert.equal((await sessions.getItems(session.id)).length, 0);
 
     await finishTurn();
     const drained = await deliveries.pending("web");
     assert.equal(drained.length, 1);
-    assert.equal((await sessions.getEntries(session.id)).length, 1);
+    assert.equal((await sessions.getItems(session.id)).length, 1);
   }));
 
 test("a turn wedged past the giveup window degrades to a loud nudge-only delivery", () =>
@@ -201,7 +202,7 @@ test("a turn wedged past the giveup window degrades to a loud nudge-only deliver
       restore();
     }
     assert.ok(lines.some((line) => line.includes("k-wedged")));
-    assert.equal((await sessions.getEntries(session!.id)).length, 0);
+    assert.equal((await sessions.getItems(session!.id)).length, 0);
     assert.equal((await inner.pending("web")).length, 1, "still pending for the BFF's own giveup/ack");
   }));
 
@@ -216,7 +217,7 @@ test("non-web deliveries pass through untouched", () =>
       provenance: cronProvenance(),
     });
     assert.equal((await deliveries.pending("slack")).length, 1);
-    assert.equal((await sessions.getEntries(session.id)).length, 0);
+    assert.equal((await sessions.getItems(session.id)).length, 0);
   }));
 
 test("legacy rows without provenance or a note are delivered as a nudge, never rewritten", () =>
@@ -230,7 +231,7 @@ test("legacy rows without provenance or a note are delivered as a nudge, never r
     });
     const drained = await deliveries.pending("web");
     assert.equal(drained.length, 1);
-    assert.equal((await sessions.getEntries(session.id)).length, 0, "cutover rows keep pre-reshape behavior");
+    assert.equal((await sessions.getItems(session.id)).length, 0, "cutover rows keep pre-reshape behavior");
   }));
 
 test("a spine post to the session's own thread is nudged, not settled and not rewritten", () =>
@@ -245,7 +246,7 @@ test("a spine post to the session's own thread is nudged, not settled and not re
     });
     const drained = await deliveries.pending("web");
     assert.equal(drained.length, 1, "open tabs still get their refetch nudge");
-    assert.equal((await sessions.getEntries(session.id)).length, 0);
+    assert.equal((await sessions.getItems(session.id)).length, 0);
     assert.equal((await inner.pending("web")).length, 1, "not acked at drain — the BFF settles it");
   }));
 
@@ -306,18 +307,17 @@ test("a parked web run's failure note lands as a turn_failure entry the web tran
 
     const drained = await deliveries.pending("web");
     assert.equal(drained.length, 1, "the failure note still nudges");
-    const entries = await sessions.getEntries(session.id);
+    const entries = await sessions.getItems(session.id);
     assert.equal(entries.length, 1);
-    assert.equal(entries[0]!.type, "system");
-    const payload = entries[0]!.payload as { kind?: string; message?: string; runId?: string };
-    assert.equal(payload.kind, "turn_failure");
-    assert.match(payload.message ?? "", /I couldn't finish that turn: something went wrong on my end/);
+    assert.equal(entries[0]!.kind, "Error");
+    assert.equal(entries[0]!.errorCode, "turn_failure");
+    assert.match(entries[0]!.text ?? "", /I couldn't finish that turn: something went wrong on my end/);
     assert.doesNotMatch(
-      payload.message ?? "",
+      entries[0]!.text ?? "",
       /lease expired/,
       "the internal park reason never reaches the transcript",
     );
-    assert.ok(payload.runId, "carries the run id so the surface-agnostic onTerminal recorder stays idempotent");
+    assert.ok(entries[0]!.turnId, "carries the run id so the surface-agnostic onTerminal recorder stays idempotent");
   }));
 
 test("an onTerminal-recorded failure entry suppresses the web drain's duplicate for the same run", () =>
@@ -338,8 +338,8 @@ test("an onTerminal-recorded failure entry suppresses the web drain's duplicate 
       drained = await deliveries.pending("web");
     }
     assert.equal(drained.length, 1, "the nudge still flows");
-    const failures = (await sessions.getEntries(session.id)).filter(
-      (e) => e.type === "system" && (e.payload as { kind?: string }).kind === "turn_failure",
+    const failures = (await sessions.getItems(session.id)).filter(
+      (e) => e.kind === "Error" && e.errorCode === "turn_failure",
     );
     assert.equal(failures.length, 1, "one durable record per failed run across both writers");
   }));
@@ -349,19 +349,12 @@ test("a failure the orchestrator already recorded for this run is not written tw
     const { sessions, inner, deliveries } = wired();
     const session = await webSession(sessions);
     await terminalRun(deliveries, inner, { fail: "boom" }, async () => {
-      await sessions.append(
-        { sessionId: session.id },
-        {
-          type: "system",
-          payload: { kind: "turn_failure", message: "boom" },
-          scopeLabel: SCOPE,
-        },
-      );
+      await sessions.append({ sessionId: session.id }, { kind: "Error", errorCode: "turn_failure", text: "boom" });
     });
     await deliveries.pending("web");
 
-    const failures = (await sessions.getEntries(session.id)).filter(
-      (e) => e.type === "system" && (e.payload as { kind?: string }).kind === "turn_failure",
+    const failures = (await sessions.getItems(session.id)).filter(
+      (e) => e.kind === "Error" && e.errorCode === "turn_failure",
     );
     assert.equal(failures.length, 1, "the in-turn record already covers the failure");
   }));
@@ -372,20 +365,22 @@ test("another run's failure record never suppresses this run's note", () =>
     const session = await webSession(sessions);
     const writer = { sessionId: session.id };
     await sessions.append(writer, {
-      type: "system",
-      payload: { kind: "turn_failure", message: "earlier run, delivered note", runId: "earlier-run" },
-      scopeLabel: SCOPE,
+      kind: "Error",
+      errorCode: "turn_failure",
+      text: "earlier run, delivered note",
+      turnId: randomUUID(),
     });
     await sessions.append(writer, {
-      type: "system",
-      payload: { kind: "turn_failure", message: "overlapping run, in-turn record", runId: "other-run" },
-      scopeLabel: SCOPE,
+      kind: "Error",
+      errorCode: "turn_failure",
+      text: "overlapping run, in-turn record",
+      turnId: randomUUID(),
     });
     await terminalRun(deliveries, inner, { fail: "boom" });
     await deliveries.pending("web");
 
-    const failures = (await sessions.getEntries(session.id)).filter(
-      (e) => e.type === "system" && (e.payload as { kind?: string }).kind === "turn_failure",
+    const failures = (await sessions.getItems(session.id)).filter(
+      (e) => e.kind === "Error" && e.errorCode === "turn_failure",
     );
     assert.equal(failures.length, 3, "suppression is keyed to this run's own record");
   }));
@@ -402,7 +397,7 @@ test("a recovered reply already recorded by its own turn is settled without a re
     });
 
     assert.deepEqual(await deliveries.pending("web"), [], "nothing new to fetch, so nothing to nudge");
-    assert.equal((await sessions.getEntries(session.id)).length, 0);
+    assert.equal((await sessions.getItems(session.id)).length, 0);
     assert.deepEqual(await inner.pending("web"), [], "the row is acked, not stuck pending");
   }));
 
@@ -422,7 +417,7 @@ test("a recovered attachments-only reply is nudged, never silently settled away"
     const drained = await deliveries.pending("web");
     assert.equal(drained.length, 1, "the attachments ride the nudge instead of being acked away");
     assert.deepEqual(drained[0]!.attachments, atts);
-    assert.equal((await sessions.getEntries(session.id)).length, 0);
+    assert.equal((await sessions.getItems(session.id)).length, 0);
   }));
 
 test("a recovered reply the turn never recorded is written into the transcript as the agent's delivery", () =>
@@ -433,11 +428,11 @@ test("a recovered reply the turn never recorded is written into the transcript a
 
     const drained = await deliveries.pending("web");
     assert.equal(drained.length, 1);
-    const entries = await sessions.getEntries(session.id);
+    const entries = await sessions.getItems(session.id);
     assert.equal(entries.length, 1);
-    assert.equal(entries[0]!.type, "assistant");
-    assert.equal((entries[0]!.payload as { text: string }).text, "recovered reply");
-    const model = JSON.stringify(reconstructMessagesFromHistory(entries));
+    assert.equal(entries[0]!.kind, "AgentMessage");
+    assert.equal(entries[0]!.text, "recovered reply");
+    const model = JSON.stringify(reconstructMessagesFromHistory(entries.map((e) => entryFromItem(e, SCOPE))));
     assert.match(model, /recovered reply/);
     assert.doesNotMatch(model, /"via"/, "the turn's own reply carries no delivery badge");
   }));
@@ -475,27 +470,28 @@ test("Slack send receipts survive a restart, retry a busy session, and collapse 
       idempotencyKey: "slack-reply:session:D123:123.789",
     };
     await deliveries.enqueue(input);
-    assert.equal((await sessions.getEntries(session.id)).length, 0);
+    assert.equal((await sessions.getItems(session.id)).length, 0);
     assert.equal((await inner.pending("web")).length, 1);
     await finishTurn();
     const restarted = withWebTranscriptDeliveries(inner, sessions, runs);
     assert.equal((await restarted.pending("web")).length, 1);
     await restarted.enqueue(input);
-    const entries = (await createTranscriptSource(sessions).forRender(session.id)).entries;
+    const entries = (await createTranscriptSource(sessions).forRender(session.id)).items;
     assert.equal(entries.length, 1);
-    assert.equal(entries[0]!.type, "user");
-    assert.equal((entries[0]!.payload as { text: string }).text, input.text);
+    assert.equal(entries[0]!.kind, "UserMessage");
+    assert.equal(entries[0]!.text, input.text);
     await sessions.append(
       { sessionId: session.id },
       {
-        type: "user",
-        scopeLabel: SCOPE,
-        payload: { text: input.text, name: "Alice", ts: "123.789" },
+        kind: "UserMessage",
+        text: input.text,
+        externalId: "123.789",
+        body: { name: "Alice" },
       },
     );
-    const visible = (await createTranscriptSource(sessions).forRender(session.id)).entries;
+    const visible = (await createTranscriptSource(sessions).forRender(session.id)).items;
     assert.equal(visible.length, 1);
-    assert.equal((visible[0]!.payload as { slackReplyReceipt?: boolean }).slackReplyReceipt, undefined);
+    assert.equal(visible[0]!.body.slackReplyReceipt, undefined);
   }));
 
 test("Slack send receipts are recorded immediately without a listener and skip an already recorded event", () =>
@@ -507,7 +503,7 @@ test("Slack send receipts are recorded immediately without a listener and skip a
       webTranscript: { kind: "slack_reply", sessionId: session.id, ts: "123.789", name: "Alice" },
     };
     await deliveries.enqueue({ destination, text: "Hello", idempotencyKey: "send-1" });
-    assert.equal((await sessions.getEntries(session.id)).length, 1);
+    assert.equal((await sessions.getItems(session.id)).length, 1);
     await deliveries.enqueue({ destination, text: "Hello", idempotencyKey: "send-2" });
-    assert.equal((await sessions.getEntries(session.id)).length, 1);
+    assert.equal((await sessions.getItems(session.id)).length, 1);
   }));

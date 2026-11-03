@@ -67,30 +67,29 @@ test("a run's tool entries include rounds after a mid-run goal prompt and stop a
     const run = await settled(built, first.runId!);
     const session = (await inTestTenant(() => built.sessions.getByThread(run.sessionId)))!;
     const writer = { sessionId: session.id };
-    const scopeLabel = session.scopeId;
     await inTestTenant(() =>
       built.sessions.append(writer, {
-        type: "user",
-        payload: {
-          text: "[goal] The active goal is not marked complete. Continue working toward it.",
-          hidden: true,
-          runId: run.id,
-        },
-        scopeLabel,
+        kind: "UserMessage",
+        text: "[goal] The active goal is not marked complete. Continue working toward it.",
+        hidden: true,
+        turnId: run.id,
       }),
     );
     const call = await inTestTenant(() =>
       built.sessions.append(writer, {
-        type: "tool_call",
-        payload: { tool: "execute", command: "make test", callId: "goal-round" },
-        scopeLabel,
+        kind: "ToolCall",
+        tool: "execute",
+        callId: "goal-round",
+        body: { command: "make test" },
       }),
     );
     await inTestTenant(() =>
       built.sessions.append(writer, {
-        type: "tool_result",
-        payload: { tool: "execute", callId: "goal-round", isError: false, result: "ok" },
-        scopeLabel,
+        kind: "ToolResult",
+        tool: "execute",
+        callId: "goal-round",
+        isError: false,
+        text: "ok",
       }),
     );
     const second = await inTestTenant(() => built.app.turn(dm("!run echo again")));
@@ -118,7 +117,7 @@ test("each tool entry nudges the run stream once it is durable", async () => {
   const append = built.sessions.append.bind(built.sessions);
   built.sessions.append = async (writer, entry) => {
     const appended = await append(writer, entry);
-    log.push(appended.type);
+    log.push(appended.kind);
     return appended;
   };
   try {
@@ -132,7 +131,7 @@ test("each tool entry nudges the run stream once it is durable", async () => {
     built.runtime.start();
     await settled(built, turn.runId!);
     unsubscribe();
-    for (const type of ["tool_call", "tool_result"]) {
+    for (const type of ["ToolCall", "ToolResult"]) {
       const at = log.indexOf(type);
       assert.ok(at >= 0, `${type} was appended`);
       assert.equal(log[at + 1], "refresh", `${type} is followed by a refresh before anything else is appended`);

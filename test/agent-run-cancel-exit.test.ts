@@ -4,7 +4,7 @@ import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/
 import { createGoalRecord, type GoalRecord } from "../src/agent/goal.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
+import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { SessionEntry } from "../src/types.ts";
 
 function cancelTurn(
@@ -23,10 +23,10 @@ function cancelTurn(
     tools: {} as AgentTurnInput["tools"],
     scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
-    emit: async (entry: NewEntry) => {
-      const appended = { ...entry, seq: seq++, createdAt: Date.now() };
-      sink.entries.push({ seq: appended.seq, type: entry.type, payload: entry.payload });
-      return appended as unknown as SessionEntry;
+    emit: async (item) => {
+      const stored = storedItem(item, { sessionId, seq: seq++, createdAt: Date.now() });
+      sink.entries.push(entryFromItem(stored, "personal:tester"));
+      return stored;
     },
     recordModelCall: () => {},
     ...overrides,

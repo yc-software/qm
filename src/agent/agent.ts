@@ -13,7 +13,8 @@ import type {
   TurnRequest,
   TurnRuntime,
 } from "../types.ts";
-import type { LlmCallUsage, LlmTransportMeta, NewEntry } from "../sessions/session-store.ts";
+import type { LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
+import type { Item, NewItem } from "../sessions/items.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
 import type { GrindMeter } from "./goal.ts";
@@ -99,7 +100,7 @@ export interface AgentTurnInput {
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
   toolApprovalGate?(tool: string, callKey?: string): boolean;
-  emit(entry: NewEntry): Promise<SessionEntry>;
+  emit(item: NewItem): Promise<Item>;
   resumeToolCall?: ResumableToolCall;
   scopeLabel: ScopeId;
   orgScopeId: ScopeId;
