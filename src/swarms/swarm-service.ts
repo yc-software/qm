@@ -406,7 +406,6 @@ export function createSwarmService(deps: {
         const recipient = memberById(swarm, recipientId);
         if (!recipient || recipient.state === "reserved") continue;
         const control = controlState(swarm, recipient.id);
-        if (control === "paused") continue;
         if (recipient.state === "failed" || control === "stopped" || swarmExpired(swarm)) {
           await step(() =>
             store.update(swarm.id, (current) => {
@@ -415,6 +414,7 @@ export function createSwarmService(deps: {
           );
           continue;
         }
+        if (control === "paused") continue;
         const request = dispatchRequest(swarm, message, recipient);
         const { run } = await step(() =>
           runs.enqueue({

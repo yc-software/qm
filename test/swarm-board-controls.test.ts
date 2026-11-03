@@ -55,6 +55,24 @@ test("pausing holds delivery, resuming releases it, and stopping is terminal", a
   );
 });
 
+test("an expired swarm settles a paused worker's held notification instead of sweeping it forever", async () => {
+  const fixture = await swarmFixture();
+  const [worker] = await fixture.service.spawn(fixture.caller, { requestId: "one", text: "Work" });
+  await fixture.service.control(fixture.caller, { memberId: worker!.id, state: "paused" });
+  await fixture.service.sweep();
+  await fixture.store.update(fixture.root.id, (swarm) => {
+    swarm.expiresAt = Date.now() - 1;
+  });
+  assert.deepEqual(
+    (await fixture.store.pending()).map((swarm) => swarm.id),
+    [fixture.root.id],
+  );
+  await fixture.service.sweep();
+  const swarm = (await fixture.store.get(fixture.root.id))!;
+  assert.equal(swarm.messages[0]!.notifications[worker!.id]!.state, "failed");
+  assert.deepEqual(await fixture.store.pending(), []);
+});
+
 test("a worker cannot control a sibling", async () => {
   const fixture = await swarmFixture();
   const [first, second] = await fixture.service.spawn(fixture.caller, { requestId: "pool", text: "Work", count: 2 });
