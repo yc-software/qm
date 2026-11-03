@@ -82,7 +82,6 @@ export interface ToolContextRef {
 
 export interface AgentToolsOptions {
   sessionTools?: boolean;
-  reachExec?: boolean;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
@@ -106,7 +105,6 @@ export type CoreToolOptions = Omit<
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
     sandboxResources: true,
-    reachExec: config.reachExecEnabled,
     controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
     execTimeoutMs: config.execTimeoutDefaultMs,
     execTimeoutCeilingMs: config.execTimeoutMaxMs,

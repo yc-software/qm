@@ -8,7 +8,6 @@ import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { sendBuffered } from "../../chassis/src/http.ts";
-const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const SECRET = "web-ui-compression-test";
 
@@ -57,9 +56,7 @@ test.after(() => {
 });
 
 function identityHeaders(): Record<string, string> {
-  return {
-    [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 }, SECRET),
-  };
+  return { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET) };
 }
 
 interface RawResponse {

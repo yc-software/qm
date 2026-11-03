@@ -6,6 +6,9 @@ import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+
+const sessions = createPostgresSessionStore(testDatabaseUrl());
 
 const request: OrchestratorInput = {
   actor: { id: "retry-test", type: "internal" },
@@ -42,7 +45,7 @@ test("workers delay all failed-turn retries and respect terminal budgets", async
   for (let i = 0; i < 3; i++) {
     const claimed = await runs.claim("worker", 60_000);
     assert.ok(claimed);
-    await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 60_000 }, claimed), error);
+    await assert.rejects(processRun({ runs, sessions, orchestrator, leaseTtlMs: 60_000 }, claimed), error);
     if (i < 2) {
       assert.equal((await runs.get(run.id))?.status, "pending");
       assert.equal(await runs.claim("other-worker", 60_000), null);
@@ -60,7 +63,7 @@ test("workers delay all failed-turn retries and respect terminal budgets", async
         throw error;
       },
     } as unknown as Orchestrator;
-    await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 60_000 }, lease), error);
+    await assert.rejects(processRun({ runs, sessions, orchestrator, leaseTtlMs: 60_000 }, lease), error);
     if (error instanceof NonRetryableTurnError) assert.equal((await runs.get(run.id))?.status, "failed");
     else {
       assert.equal(await runs.claimById(run.id, "other", 60_000), null);

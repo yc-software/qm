@@ -26,7 +26,7 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
-import { currentTenant, withTenant } from "../../tenants/context.ts";
+import { tenantClaim, withTenant } from "../../tenants/context.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
@@ -131,17 +131,6 @@ async function connectorProviderStatus(
   return Object.fromEntries(entries);
 }
 
-async function oauthFlowTenant(deps: ServerDeps, secret: string | undefined, param: string): Promise<string | null> {
-  if (deps.oauthFlows) {
-    const tenants = deps.rowTenants ? await deps.rowTenants("oauth_flows", ["id"], param) : [];
-    return tenants.length === 1 ? tenants[0]! : null;
-  }
-  return openOAuthState(param, { secret: oauthStateSecret(deps, secret), maxAgeMs: OAUTH_STATE_MAX_AGE_MS }).then(
-    (state) => state.tenant,
-    () => null,
-  );
-}
-
 async function oauthCallback(ctx: BaseCtx): Promise<void> {
   const { res, deps, secret, url } = ctx;
   if (!deps.connectorTokens)
@@ -151,24 +140,30 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
   const providerError = url.searchParams.get("error");
   if (providerError) return sendJson(res, 400, { error: "oauth_denied", message: providerError });
   if (!code || !stateParam) return sendJson(res, 400, { error: "bad_request", message: "code and state required" });
-  const tenant = await oauthFlowTenant(deps, secret, stateParam);
-  if (!tenant) return sendJson(res, 400, { error: "oauth_callback_failed", message: "invalid OAuth state" });
-  return withTenant(tenant, () => completeOAuthCallback(ctx, deps.connectorTokens!, code, stateParam));
+  const connectorTokens = deps.connectorTokens;
+  let state: OAuthState;
+  try {
+    state = await resumeOAuthFlow(deps, secret, stateParam);
+  } catch (e) {
+    return sendJson(res, 400, { error: "oauth_callback_failed", message: errMessage(e) });
+  }
+  const complete = () => completeOAuthCallback(ctx, connectorTokens, code, state);
+  return state.tenant ? withTenant(state.tenant, complete) : complete();
 }
 
 async function completeOAuthCallback(
   ctx: BaseCtx,
   connectorTokens: ConnectorTokenStore,
   code: string,
-  stateParam: string,
+  state: OAuthState,
 ): Promise<void> {
-  const { res, deps, secret, pathname } = ctx;
+  const { res, deps, pathname } = ctx;
   const oauthRoute = parseOAuthRoute(pathname)!;
-  let state;
   try {
-    state = await resumeOAuthFlow(deps, secret, stateParam);
     if (state.provider !== oauthRoute.provider) throw new Error("OAuth provider mismatch");
-    if (state.tenant !== currentTenant()) throw new Error("OAuth state is for a different tenant");
+    if (state.orgId !== undefined && state.orgId !== configOrgId()) {
+      throw new Error("OAuth state is for a different org");
+    }
     if (
       !deps.replayDedupe ||
       !(await deps.replayDedupe.claim(`oauth:${state.nonce}`, state.issuedAt + OAUTH_STATE_MAX_AGE_MS))
@@ -263,7 +258,8 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       provider: rec.provider,
       principalId: rec.principalId,
       redirectUri: rec.redirectUri,
-      tenant: currentTenant(),
+      orgId: configOrgId(),
+      ...tenantClaim(),
       ...(rec.accountType !== "default" ? { accountType: rec.accountType } : {}),
       clientRef: client.clientRef,
       ...(returnTo ? { returnTo } : {}),
@@ -394,7 +390,8 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
       provider: oauthRoute.provider,
       principalId,
       redirectUri,
-      tenant: currentTenant(),
+      orgId: configOrgId(),
+      ...tenantClaim(),
       ...(accountType !== "default" ? { accountType } : {}),
       clientRef: client.clientRef,
       ...(safeReturnTo(url.searchParams.get("returnTo"))

@@ -73,10 +73,12 @@ test("deploy provider defaults to docker and rejects unknown values", () => {
   assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "flly" }), /DEPLOY_PROVIDER="flly" is not recognized/);
 });
 
-test("production is parsed once", () => {
+test("production and unauthenticated-core escape hatch are parsed once", () => {
   assert.throws(() => loadConfig({ NODE_ENV: "production" }), /missing or insecure required core secrets/);
   assert.equal(loadConfig(productionEnv).production, true);
   assert.equal(loadConfig({}).production, false);
+  assert.equal(loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "yes" }).allowUnauthenticatedCore, true);
+  assert.throws(() => loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "sometimes" }), /not a recognized boolean/);
 });
 
 test("agent security posture defaults to auto and validates named modes", () => {
@@ -180,19 +182,19 @@ test("boolEnv: one vocabulary for every boolean env knob", () => {
 test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   const off = loadConfig({
     SEED_SKILLS: "off",
-    REACH_EXEC: "off",
+    SURFACE_DEBUG_FOOTER: "off",
     PI_CAPTURE_REQUESTS: "off",
   });
   assert.equal(off.seedSkills, false);
-  assert.equal(off.reachExecEnabled, false);
+  assert.equal(off.surfaceDebugFooter, false);
   assert.equal(off.captureLlmRequests, false);
 
   const on = loadConfig({
     SEED_SKILLS: "yes",
-    REACH_EXEC: "1",
+    SURFACE_DEBUG_FOOTER: "1",
   });
   assert.equal(on.seedSkills, true);
-  assert.equal(on.reachExecEnabled, true);
+  assert.equal(on.surfaceDebugFooter, true);
 
   const unset = loadConfig({});
   assert.equal(unset.captureLlmRequests, true, "capture defaults on");
@@ -208,10 +210,13 @@ test("numEnv: empty and non-numeric values fall back instead of poisoning config
 test("a set-but-unparseable env value refuses to boot instead of silently taking the default", () => {
   assert.throws(() => loadConfig({ WORKERS: "not-a-number" }), /WORKERS="not-a-number" is not a number/);
   assert.throws(() => loadConfig({ BUDGET_USD_PER_WINDOW: "10$" }), /BUDGET_USD_PER_WINDOW="10\$" is not a number/);
-  assert.throws(() => loadConfig({ REACH_EXEC: "2" }), /REACH_EXEC="2" is not a recognized boolean/);
+  assert.throws(
+    () => loadConfig({ SURFACE_DEBUG_FOOTER: "2" }),
+    /SURFACE_DEBUG_FOOTER="2" is not a recognized boolean/,
+  );
   assert.throws(() => loadConfig({ SANDBOX_BACKEND: "docker" }), /SANDBOX_BACKEND="docker" is not recognized/);
   assert.equal(loadConfig({ WORKERS: "  " }).workers, CONFIG_DEFAULTS.workers);
-  assert.equal(loadConfig({ REACH_EXEC: "" }).reachExecEnabled, false);
+  assert.equal(loadConfig({ SURFACE_DEBUG_FOOTER: "" }).surfaceDebugFooter, false);
 });
 
 test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
@@ -303,8 +308,6 @@ test("defaults come from CONFIG_DEFAULTS, set exactly once", () => {
   const def = loadConfig({});
   assert.equal(CONFIG_DEFAULTS.workers, 16);
   assert.equal(def.workers, CONFIG_DEFAULTS.workers);
-  assert.equal(def.rateLimitPerWindow, CONFIG_DEFAULTS.rateLimitPerWindow);
-  assert.equal(def.rateLimitWindowMs, CONFIG_DEFAULTS.rateLimitWindowMs);
   assert.equal(def.monitorPollMs, CONFIG_DEFAULTS.monitorPollMs);
   assert.equal(def.approvalSummaryTimeoutMs, CONFIG_DEFAULTS.approvalSummaryTimeoutMs);
   assert.equal(def.deployDialTimeoutMs, CONFIG_DEFAULTS.deployDialTimeoutMs);
