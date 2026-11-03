@@ -85,7 +85,7 @@ const migration = (id: string, statements: string[]) => ({
   statements: [`SET LOCAL lock_timeout = '3s'`, ...HELPERS, ...statements, ...DROPS],
 });
 
-export const SURFACE_ORIGIN_MIGRATIONS = [
+const OVERLAP_ORIGIN_MIGRATIONS = [
   migration("surfaces/0001-neutral-origin-and-account", [
     ifTable(
       "runs",
@@ -130,6 +130,10 @@ export const SURFACE_ORIGIN_MIGRATIONS = [
       `UPDATE sessions SET spawn_meta = pg_temp.qm_surface_request_text(spawn_meta) WHERE ${oldKeysIn("spawn_meta")}`,
     ),
   ]),
+];
+
+export const SURFACE_ORIGIN_MIGRATIONS = [
+  ...OVERLAP_ORIGIN_MIGRATIONS,
   migration("surfaces/0003-neutral-origin-settled-runs", [
     ifTable(
       "runs",
@@ -145,8 +149,11 @@ export const SURFACE_ORIGIN_MIGRATIONS = [
 
 export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
   const pool = await pg.pool();
-  for (const migration of SURFACE_ORIGIN_MIGRATIONS.slice(0, 2))
+  for (const migration of OVERLAP_ORIGIN_MIGRATIONS)
     await withPgTransaction(pool, async (client) => {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('qm:surface-origin-rewrite'))");
       for (const statement of migration.statements) await client.query(statement);
+    }).catch((error: unknown) => {
+      throw new Error(`surface origin overlap rewrite ${migration.id} failed`, { cause: error });
     });
 }
