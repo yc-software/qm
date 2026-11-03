@@ -1433,7 +1433,7 @@ test("usage summaries authorize before reads and include only the requested scop
   const read = t.mock.method(srv.built.serviceCreds, "listServiceCredentials");
   const summarize = t.mock.method(srv.built.credentialUsage, "summary");
   const path = `${srv.base}/v1/admin/scopes/org:default-org/credential-usage`;
-  assert.equal((await fetch(path, { headers: { "x-admin-actor": "nobody@default-org" } })).status, 403);
+  assert.equal((await fetch(path, { headers: { ...ADMIN, "x-admin-actor": "nobody@default-org" } })).status, 403);
   assert.equal(read.mock.callCount(), 0);
   assert.equal(summarize.mock.callCount(), 0);
   const response = await fetch(path, { headers: ADMIN });
