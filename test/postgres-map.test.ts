@@ -159,7 +159,7 @@ test("pg map: all()/entries() stay coherent across instances despite the read ca
   assert.ok(!(await reader.entries()).some(([id]) => id === "c1"), "take is visible");
 });
 
-test("pg map: a write made outside the map invalidates every instance's read cache", { skip }, async () => {
+test("pg map: a write made outside the map is visible to a cached reader", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const reader = factory.map<Widget>("map_widgets");
   await reader.put("raw", { name: "raw", tags: [], nested: { n: 1 } });

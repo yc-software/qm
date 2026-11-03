@@ -47,7 +47,7 @@ export function createPostgresMap<T>(
   table: string,
   indexedFields: readonly Extract<keyof T, string>[] = [],
 ): DurableMap<T> {
-  if (!/^[a-z_][a-z0-9_]*$/.test(table)) throw new Error(`invalid table name: ${table}`);
+  if (!/^[a-z][a-z0-9_]*$/.test(table)) throw new Error(`invalid table name: ${table}`);
   const migration = {
     id: `durable-map/${table}/0001`,
     statements: [
@@ -59,8 +59,7 @@ export function createPostgresMap<T>(
     id: `durable-map/${table}/version-trigger`,
     statements: [
       `SET LOCAL lock_timeout = '3s'`,
-      `DROP TRIGGER IF EXISTS ${table}_bump_version ON ${table}`,
-      `CREATE TRIGGER ${table}_bump_version BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON ${table}
+      `CREATE OR REPLACE TRIGGER ${table}_bump_version BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON ${table}
       FOR EACH STATEMENT EXECUTE FUNCTION durable_map_bump_version()`,
     ],
   };
@@ -115,11 +114,8 @@ export function createPostgresMap<T>(
     }
     return readyP;
   }
-  async function write(text: string, params: unknown[]) {
-    await ready();
-    return pg.query(text, params);
-  }
-  const bumpSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
+  const bumpSql = `LOCK TABLE ${table} IN ROW EXCLUSIVE MODE;
+     INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
      ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
   async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
     await ready();
@@ -194,26 +190,32 @@ export function createPostgresMap<T>(
       return rows.length ? (rows[0]!.json as T) : null;
     },
     async put(id, value) {
-      await write(
-        `INSERT INTO ${table} (id, json) VALUES ($1, $2)
+      await withBump((client) =>
+        client.query(
+          `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO UPDATE SET json = EXCLUDED.json`,
-        [id, jsonbStringify(value)],
+          [id, jsonbStringify(value)],
+        ),
       );
     },
     async putIfAbsent(id, value) {
-      const res = await write(
-        `INSERT INTO ${table} (id, json) VALUES ($1, $2)
+      const res = await withBump((client) =>
+        client.query(
+          `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO UPDATE SET json = ${table}.json
            RETURNING json`,
-        [id, jsonbStringify(value)],
+          [id, jsonbStringify(value)],
+        ),
       );
       return res.rows[0]!.json as T;
     },
     async insertIfAbsent(id, value) {
-      const inserted = await write(
-        `INSERT INTO ${table} (id, json) VALUES ($1, $2)
+      const inserted = await withBump((client) =>
+        client.query(
+          `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO NOTHING`,
-        [id, jsonbStringify(value)],
+          [id, jsonbStringify(value)],
+        ),
       );
       return (inserted.rowCount ?? 0) > 0;
     },
@@ -221,9 +223,12 @@ export function createPostgresMap<T>(
       const entries = Object.entries(patch);
       const removeKeys = entries.filter(([, v]) => v === undefined).map(([k]) => k);
       const set = Object.fromEntries(entries.filter(([, v]) => v !== undefined));
-      const res = await write(
-        `UPDATE ${table} SET json = (json - $2::text[]) || $3::jsonb WHERE id = $1 RETURNING json`,
-        [id, removeKeys, jsonbStringify(set)],
+      const res = await withBump((client) =>
+        client.query(`UPDATE ${table} SET json = (json - $2::text[]) || $3::jsonb WHERE id = $1 RETURNING json`, [
+          id,
+          removeKeys,
+          jsonbStringify(set),
+        ]),
       );
       return res.rows.length ? (res.rows[0]!.json as T) : null;
     },
@@ -267,10 +272,10 @@ export function createPostgresMap<T>(
       });
     },
     async delete(id) {
-      await write(`DELETE FROM ${table} WHERE id = $1`, [id]);
+      await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1`, [id]));
     },
     async take(id) {
-      const res = await write(`DELETE FROM ${table} WHERE id = $1 RETURNING json`, [id]);
+      const res = await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1 RETURNING json`, [id]));
       return res.rows.length ? (res.rows[0]!.json as T) : null;
     },
   };
