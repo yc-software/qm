@@ -593,7 +593,7 @@ export function buildApp(
   }
   const gatewayCatalog = config.modelGateway
     ? createGatewayCatalog(
-        { ...config.modelGateway, actorKey: config.capabilitySecret ?? config.signingSecret },
+        { ...config.modelGateway, actorKey: config.capabilitySecret },
         overrides.modelCredentialFetch,
       )
     : undefined;
