@@ -33,6 +33,7 @@ export const CREDENTIAL_BROKER_AUD = "credential-broker";
 export const EGRESS_PROXY_AUD = "egress-proxy";
 export const BLOB_TRANSFER_AUD = "blob-transfer";
 export const SECRET_DROP_AUD = "secret-drop";
+export const SPEND_EXPORT_AUD = "spend-export";
 
 interface BlobGrant {
   dir: "read" | "write";

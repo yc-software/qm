@@ -13,7 +13,8 @@ export interface PortalIdentity {
 export const PORTAL_IDENTITY_HEADER = "x-portal-identity";
 
 export function mintPortalIdentity(claims: PortalIdentity, secret: string): Promise<string> {
-  return mintSignedPayload(claims, secret);
+  const tenant = claims.t ?? boundTenant();
+  return mintSignedPayload(tenant ? { ...claims, t: tenant } : claims, secret);
 }
 
 export async function verifyPortalIdentity(

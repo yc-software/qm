@@ -9,6 +9,7 @@ import { mintPortalIdentity, verifyPortalIdentity } from "../src/auth/portal-ide
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { openOAuthState, sealOAuthState } from "../src/connectors/oauth.ts";
 import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
+import * as edgeIdentity from "../plugins/chassis/src/portal-identity.ts";
 import { canonicalPayload, signedRequestHeaders, TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 
 const TENANT_A = "0d6f6f1e-5a3c-4a7e-9a52-3c1f0b8e2a11";
@@ -46,6 +47,23 @@ describe("tenant claims", () => {
     assert.equal((await withTenant(TENANT_A, () => verifyPortalIdentity(token, IDENTITY, Date.now())))?.p, "U1");
     assert.equal(await withTenant(TENANT_B, () => verifyPortalIdentity(token, IDENTITY, Date.now())), null);
     assert.equal(await withoutTenant(() => verifyPortalIdentity(token, IDENTITY, Date.now())), null);
+  });
+
+  it("edge-minted portal identities carry the bound tenant and the edge binds it back", async () => {
+    const token = withTenant(TENANT_A, () =>
+      edgeIdentity.mintPortalIdentity({ p: "U1", exp: Date.now() + 60_000 }, IDENTITY),
+    );
+    assert.equal(edgeIdentity.verifyPortalIdentity(token, IDENTITY, Date.now())?.t, TENANT_A);
+    assert.equal(
+      edgeIdentity.withIdentityTenant(token, IDENTITY, () => boundTenant()),
+      TENANT_A,
+    );
+    assert.equal((await withTenant(TENANT_A, () => verifyPortalIdentity(token, IDENTITY, Date.now())))?.p, "U1");
+    const unbound = edgeIdentity.mintPortalIdentity({ p: "U1", exp: Date.now() + 60_000 }, IDENTITY);
+    assert.equal(
+      edgeIdentity.withIdentityTenant(unbound, IDENTITY, () => boundTenant()),
+      undefined,
+    );
   });
 
   it("OAuth state carries the tenant that started the flow", async () => {
