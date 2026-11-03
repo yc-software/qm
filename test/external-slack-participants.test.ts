@@ -11,7 +11,6 @@ import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 const org = scopeId("org", "default-org");
 const internalActor = { externalId: "U1" };
@@ -104,7 +103,7 @@ test("a bot assertion can enter the turn pipeline", async () => {
 
 test("admin resource: org-only PUT, read-back, and the surface-config echo", async () => {
   const built = freshApp();
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,

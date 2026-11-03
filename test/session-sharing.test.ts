@@ -12,8 +12,6 @@ import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { scopeId, type SessionEntry } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
-import { TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
-import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
   return {
@@ -136,13 +134,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       params: { id: "s1", token: parts[3], fileId: parts[5] },
       body: body ? JSON.parse(body) : null,
       actor: null,
-      deps: {
-        identity,
-        sessionShares: store,
-        sessionShareBytes: countedBytes,
-        deliveries,
-        rowTenants: async () => [TEST_TENANT],
-      },
+      deps: { identity, sessionShares: store, sessionShareBytes: countedBytes, deliveries },
       app: {
         canViewSessionSnapshot: async (_id: string, user: string, bounds: { minSeq: number }) =>
           accessible && user === "alice" && visible.some((entry) => entry.seq === bounds.minSeq),
@@ -197,10 +189,6 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.equal((await (await read(second.share.token)).text()).includes("New message"), true);
   const external = (await (await create("external")).json()) as { share: { token: string } };
   assert.equal((await read(external.share.token, "external", "", "")).status, 200);
-  const foreign = await fetch(`${base}/v1/public-shares/${external.share.token}?inline=1`, {
-    headers: { [TENANT_HEADER]: OTHER_TENANT },
-  });
-  assert.equal(foreign.status, 404);
   assert.equal((await read(external.share.token)).status, 404);
   assert.equal((await read(second.share.token, "internal", `/files/${fileId}`)).status, 404);
   visible = [entry("user", { text: "Generate file" }, 1), entry("assistant", { text: "Generated" }, 2)];

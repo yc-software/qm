@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { currentTenant } from "../tenants/context.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 const TOOL_OUTPUT_SETTING = "tool_result_inline_tokens";
 export const DEFAULT_INLINE_TOKENS = 4096;
@@ -91,11 +91,12 @@ export function createPostgresToolOutputStore(opts: {
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
   let setting: { value: number; at: number } | null = null;
-  const tenantBytes = new Map<string, DurableByteStore>();
-  const bytesOf = (id: string): DurableByteStore => {
-    let bytes = tenantBytes.get(id);
-    if (!bytes) tenantBytes.set(id, (bytes = opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`)));
-    return bytes;
+  const stores = new Map<string, DurableByteStore>();
+  const tenantBytes = (): { id: string; bytes: DurableByteStore } => {
+    const id = currentTenant();
+    let bytes = stores.get(id);
+    if (!bytes) stores.set(id, (bytes = opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`)));
+    return { id, bytes };
   };
   return {
     async inlineTokens() {
@@ -105,8 +106,8 @@ export function createPostgresToolOutputStore(opts: {
       return setting.value;
     },
     async save(text) {
-      const id = currentTenant();
-      const put = await bytesOf(id).put(Buffer.from(text, "utf8"));
+      const { id, bytes } = tenantBytes();
+      const put = await bytes.put(Buffer.from(text, "utf8"));
       await opts.pool.q(
         `INSERT INTO blobs(tenant_id, sha256, size, mime, storage_key, created_at, expires_at)
          VALUES ($1::uuid, decode($2, 'hex'), $3, 'text/plain; charset=utf-8', $4,
@@ -138,9 +139,9 @@ export function createPostgresToolOutputStore(opts: {
       if (row.expired === true) return { expired: true };
       if (typeof row.storage_key !== "string")
         throw new Error(`tool output ${ref.digest}: the result names a parked blob with no blobs row`);
-      const id = currentTenant();
+      const { bytes, id } = tenantBytes();
       const key = String(row.storage_key).slice(`${TOOL_OUTPUT_PATH}${id}/`.length);
-      const text = await readText(bytesOf(id), key);
+      const text = await readText(bytes, key);
       if (text === null)
         throw new Error(`tool output ${ref.digest}: parked bytes ${row.storage_key} are missing from storage`);
       return { text };

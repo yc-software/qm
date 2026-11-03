@@ -13,7 +13,6 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 import { testKeychainRows } from "./support/credential-stores.ts";
 
 function start() {
@@ -23,7 +22,7 @@ function start() {
     ...testKeychainRows(),
     key: deriveConnectorKey("admin-keychain-test-key"),
   });
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,

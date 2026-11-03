@@ -11,13 +11,12 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
 function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "policy-route-")) }));
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,

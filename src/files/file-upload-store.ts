@@ -29,6 +29,7 @@ export interface FileUploadStore {
   touch(id: string, at: number): Promise<boolean>;
   active(actorId: string, now: number): Promise<FileUpload[]>;
   expired(now: number): Promise<FileUpload[]>;
+  completingUploadId(id: string): Promise<string | null>;
 }
 
 export class FileUploadError extends Error {
@@ -130,7 +131,7 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
     async expired(now) {
       return (
         await claimAcrossTenants(
-          db,
+          connectionString,
           `WITH due AS (
                SELECT id FROM file_uploads
                WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
@@ -140,6 +141,14 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
           [now],
         )
       ).rows.map(decode);
+    },
+    async completingUploadId(id) {
+      const { rows } = await claimAcrossTenants(
+        connectionString,
+        "SELECT data->>'uploadId' AS upload_id FROM file_uploads WHERE id=$1 AND state='completing'",
+        [id],
+      );
+      return rows[0] ? String(rows[0].upload_id) : null;
     },
   };
 }

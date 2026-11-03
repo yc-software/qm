@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { OneTimeRows } from "./link-tables.ts";
 import type { OAuthState } from "./oauth.ts";
 import { swallowAs } from "../util/errors.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { currentTenant, tenantClaim } from "../tenants/context.ts";
 
 export interface OAuthFlowStore {
   start(state: Omit<OAuthState, "issuedAt" | "nonce">, now?: number): Promise<string>;
@@ -22,7 +22,7 @@ export function createOAuthFlowStore(
   return {
     async start(state, now) {
       const { tenant, ...flow } = state;
-      if (tenant !== currentTenant()) throw new Error("OAuth state is for a different tenant");
+      if (tenant !== undefined && tenant !== currentTenant()) throw new Error("OAuth state is for a different tenant");
       const flowId = randomBytes(32).toString("base64url");
       await backing.insert(flowId, { ...flow, issuedAt: now ?? clock(), nonce: flowId });
       return flowId;
@@ -31,7 +31,7 @@ export function createOAuthFlowStore(
       const rec = await backing.take(flowId).catch(swallowAs("oauth flow: take state", null));
       if (!rec) return null;
       if ((now ?? clock()) - rec.issuedAt > ttl) return null;
-      return { ...rec, tenant: currentTenant() };
+      return { ...rec, ...tenantClaim() };
     },
   };
 }

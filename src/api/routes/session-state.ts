@@ -42,5 +42,5 @@ async function streamSessionStates(ctx: BaseCtx): Promise<void> {
 }
 
 export const sessionStateRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "GET", path: "/v1/session-state/events", auth: "source", unbound: true, handle: streamSessionStates },
+  { method: "GET", path: "/v1/session-state/events", auth: "source", handle: streamSessionStates },
 ];

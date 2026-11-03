@@ -1,3 +1,4 @@
+import type { Claimed } from "../tenants/claim.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
@@ -490,7 +491,7 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   listAsks(filter: AskListFilter): Promise<KeychainAsk[]>;
   approveAsk(input: ApproveAskInput): Promise<{ ask: KeychainAsk; grant: KeychainGrant }>;
   declineAsk(input: { askId: string; ownerId: string; note?: string }): Promise<KeychainAsk>;
-  unnotifiedResolvedAsks(now: number): Promise<KeychainAsk[]>;
+  unnotifiedResolvedAsks(now: number): Promise<Array<Claimed<KeychainAsk>>>;
   markAskNotified(id: string, status: KeychainAsk["status"]): Promise<void>;
 
   composioKey(ownerId: string, credentialId: string): Promise<string | null>;

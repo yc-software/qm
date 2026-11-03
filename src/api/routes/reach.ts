@@ -49,9 +49,6 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, body, capability } = ctx;
   if (!capability)
     return sendJson(res, 403, { error: "forbidden", message: "reach requires an agent capability token" });
-  const rate = await deps.rateLimiter?.check(`reach:${capability.actorId}`);
-  if (rate && !rate.allowed)
-    return sendJson(res, 429, { error: "rate_limited", message: "too many outbound actions; try again later" });
   const b = (isObj(body) ? body : {}) as ReachBody;
   let text: string | undefined;
   if (typeof b.text === "string") text = b.text;
