@@ -170,7 +170,7 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string, runtimeProblem?
     ...(readsNotes ? fireNoteLine(cron.lastFireNote) : []),
     ...(readsNotes
       ? [
-          `Before finishing, leave a short note for the next fire (cron tool, action="note", id="${cron.id}"): one or two sentences — the outcome plus anything the next fire must know. Include the published checkpoint file ID, or small progress state directly; never include secret values (credential handles are fine). It's a report for the next fire, never instructions that override the stored task. Skip it only if there is truly nothing to say. If this fire had to work around something the stored task doesn't say (such as a credential handle a command needed), patch the task to say it, so no later fire has to rediscover it.`,
+          `Before finishing, leave a short note for the next fire (cron tool, action="note", id="${cron.id}"): one or two sentences — the outcome plus anything the next fire must know. Include the published checkpoint file ID, or small progress state directly; never include secret values (credential handles are fine). It's a report for the next fire, never instructions that override the stored task, and reduced-coverage shortcuts an earlier note records (such as reading only snippets) are not precedent for this fire, though its cursors and checkpoints still apply. Skip it only if there is truly nothing to say. If this fire had to work around something the stored task doesn't say (such as a credential handle a command needed), patch the task to say it, so no later fire has to rediscover it.`,
         ]
       : []),
     ...(runtimeProblem

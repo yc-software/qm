@@ -2146,7 +2146,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             "Core will deliver your final reply after you finish. Do not call Slack, email, chat, or other send APIs to deliver it yourself; put the exact message to send in your final reply.";
         }
         if (automatedTurn && input.surface && isPollSurface(input.surface)) {
-          systemPrompt += `\n\nThis turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call \`finish_silently\` to end the turn without sending anything — silence is the success case for a poll, so don't post a summary or a "nothing to report" note just to fill the silence.`;
+          systemPrompt += `\n\nThis turn was fired by a scheduled trigger, not a person typing. A recurring report or digest that people read always posts, because silence looks like an outage: on a quiet run, one line saying nothing is new, plus any items still open. For maintenance work, and for alerts, watches and webhooks with nothing worth telling anyone, call \`finish_silently\` to end the turn without sending anything. The stored task's own instructions about when to post take precedence.`;
         }
         if (!external && deps.directory && conversation.kind !== "dm") {
           rosterMembers = await (async () => {
