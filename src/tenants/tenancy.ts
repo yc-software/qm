@@ -1,7 +1,8 @@
 import { LRUCache } from "lru-cache";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { isTenantId, withTenant } from "./context.ts";
-import { tenantSettingsSchema, type TenantSettings } from "./settings.ts";
+import { replaceLoadedTenantSettings, tenantSettingsSchema, type TenantSettings } from "./settings.ts";
+import { createSweeper, type Sweeper } from "../util/sweeper.ts";
 
 export interface HostTenant {
   tenant?: string;
@@ -20,6 +21,8 @@ export interface Tenancy {
   multi(): Promise<boolean>;
   soleTenant(): Promise<string | undefined>;
   settings(tenant: string): Promise<TenantSettings>;
+  refreshSettings(): Promise<void>;
+  keepSettingsFresh(): Sweeper;
   hosts(tenant: string): Promise<string[] | undefined>;
   mapHost(tenant: string, host: string): Promise<"mapped" | "taken" | "unknown_tenant">;
   unmapHost(tenant: string, host: string): Promise<boolean>;
@@ -61,6 +64,13 @@ export function createTenancy(pool: PgPool, owner: PgPool = pool): Tenancy {
     return resolved;
   };
 
+  const refreshSettings = async (): Promise<void> => {
+    const rows = await owner.q("SELECT id::text AS id, settings FROM tenants");
+    const all = new Map(rows.map((row) => [String(row.id), parsedSettings(row.settings)]));
+    for (const [tenant, settings] of all) settingsCache.set(tenant, settings);
+    replaceLoadedTenantSettings(all);
+  };
+
   return {
     hostTenant,
     multi: async () => (await hostTenant("")).multi,
@@ -75,6 +85,12 @@ export function createTenancy(pool: PgPool, owner: PgPool = pool): Tenancy {
       const settings = parsedSettings(rows[0]?.settings);
       settingsCache.set(tenant, settings);
       return settings;
+    },
+    refreshSettings,
+    keepSettingsFresh() {
+      const sweeper = createSweeper(refreshSettings, CACHE_TTL_MS, { label: "tenant settings" });
+      sweeper.start();
+      return sweeper;
     },
     async hosts(tenant) {
       if (!(await knownTenant(tenant))) return undefined;
