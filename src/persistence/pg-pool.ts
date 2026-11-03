@@ -168,12 +168,16 @@ async function beginTransaction(client: PoolClient): Promise<void> {
   if (settings.length) await client.query(settingsQuery(settings));
 }
 
-export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+export function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  return pinTenant(() => runPgTransaction(pool, fn));
+}
+
+async function runPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   let rollbackError: Error | undefined;
   try {
     await beginTransaction(client);
-    const result = await pinTenant(() => fn(client));
+    const result = await fn(client);
     await client.query("COMMIT");
     return result;
   } catch (error) {

@@ -353,8 +353,8 @@ const SESSION_TABLES = tenantTables(
 export const TENANT_BACKFILL: PgMigrationDefinition = {
   id: "sessions/store/0050-tenant-backfill",
   statements: [
-    `INSERT INTO tenants(id, slug, name)
-     SELECT id, id::text, id::text FROM qm_tenant
+    `INSERT INTO tenants(id)
+     SELECT id FROM qm_tenant
      ON CONFLICT (id) DO NOTHING`,
   ],
 };
