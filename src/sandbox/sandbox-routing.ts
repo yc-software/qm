@@ -16,7 +16,7 @@ import {
   type TeardownOptions,
 } from "./sandbox.ts";
 
-import type { SandboxBackendName } from "../tenants/settings-parse.ts";
+import { sandboxBackendName, type SandboxBackendName } from "../tenants/settings-parse.ts";
 
 export type { SandboxBackendName };
 
@@ -45,7 +45,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
   };
 
   const forHandle = (handle: SandboxHandle): Sandbox => {
-    const sandbox = handle.backend ? backends[handle.backend as SandboxBackendName] : undefined;
+    const name = sandboxBackendName(handle.backend);
+    const sandbox = name ? backends[name] : undefined;
     if (!sandbox) throw new Error(`sandbox backend unavailable: ${handle.backend ?? "none"}`);
     return sandbox;
   };

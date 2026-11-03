@@ -3,7 +3,7 @@ import { completeClaudeLogin, startClaudeLogin } from "../../model/subscription-
 import { createCodexDeviceLogin } from "../../model/codex-device-login.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
-import { validateProviderApiKey } from "./admin/model-providers.ts";
+import { rejectUnusableApiKey } from "./admin/model-providers.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { audit } from "./shared.ts";
 
@@ -88,9 +88,7 @@ async function putApiKey(ctx: ApiCtx): Promise<void> {
   const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
   if (!provider) return sendJson(ctx.res, 400, { error: "bad_request", message: "provider must be claude or chatgpt" });
   if (!apiKey) return sendJson(ctx.res, 400, { error: "bad_request", message: "API key is required" });
-  if (!(await validateProviderApiKey(ctx, provider, apiKey))) {
-    return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
-  }
+  if (await rejectUnusableApiKey(ctx, provider, apiKey)) return;
   await ctx.deps.userModelCredentials.setApiKey(principal, provider, apiKey);
   audit(ctx.deps, {
     principalId: principal,

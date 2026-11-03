@@ -65,9 +65,13 @@ const SANDBOX_BACKEND_NAMES = [
 
 export type SandboxBackendName = (typeof SANDBOX_BACKEND_NAMES)[number];
 
+export function sandboxBackendName(value: string | undefined): SandboxBackendName | undefined {
+  return SANDBOX_BACKEND_NAMES.find((name) => name === value);
+}
+
 function parseSandboxBackend(name: string, value: string): SandboxBackendName {
-  const backend = value.trim();
-  if ((SANDBOX_BACKEND_NAMES as readonly string[]).includes(backend)) return backend as SandboxBackendName;
+  const backend = sandboxBackendName(value.trim());
+  if (backend) return backend;
   throw new TenantSettingsInvalidError(
     `${name}=${JSON.stringify(value)} is not recognized — use ${SANDBOX_BACKEND_NAMES.join(", ")}, or unset it.`,
   );

@@ -232,6 +232,7 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
     tenantSettings: testTenantSettings({ OPENAI_BASE_URL: providerUrl }),
   });
   databaseFixture.stop = () => built.runtime.stop();
+  await migrateRegisteredPgSchemas(databaseUrl);
   await built.tenantSettings.get();
   await built.modelCredentials.set("openai", "test", "admin");
   await built.config.setSharingPosture("org:default-org", "open");
