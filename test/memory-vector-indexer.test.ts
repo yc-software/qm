@@ -5,6 +5,8 @@ import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import type { MemoryVectorStore, MemoryVector } from "../src/memory/postgres-vector-store.ts";
 import type { MemoryEmbedder } from "../src/model/embeddings.ts";
 
+const pendingTenants = async () => ["00000000-0000-4000-8000-0000000000a1"];
+
 function fixture() {
   let now = 1000;
   const requests: Array<{ model: string; limit: number; dimensions?: number; afterId?: string }> = [];
@@ -39,6 +41,7 @@ function fixture() {
     },
   };
   const indexer = createMemoryVectorIndexer({
+    pendingTenants,
     resolve: async () => ({ store, embedder }),
     leaderLease: createNoopLeaderLease(),
     now: () => now,
@@ -144,6 +147,7 @@ test("indexer refuses malformed batches and never writes after losing its leader
     return texts.map(() => [1, 0]);
   };
   const indexer = createMemoryVectorIndexer({
+    pendingTenants,
     resolve: async () => ({ store: f.store, embedder: f.embedder }),
     leaderLease: { hold: async (_key, fn) => fn(lost) },
     onError: (error) => {

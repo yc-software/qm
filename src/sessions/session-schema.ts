@@ -369,6 +369,14 @@ const TENANT_ROW_SECURITY: PgMigrationDefinition = {
   ]),
 };
 
+const AGENT_REPLY_INDEX: PgMigrationDefinition = {
+  id: "sessions/store/0052-agent-reply-index",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_agent_reply ON items(tenant_id, session_id, created_at)
+      WHERE kind = 'AgentMessage'`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
@@ -377,4 +385,5 @@ export const SESSION_MIGRATIONS = [
   TENANT_BACKFILL,
   SESSION_TABLES,
   TENANT_ROW_SECURITY,
+  AGENT_REPLY_INDEX,
 ];
