@@ -339,14 +339,13 @@ test(
       const claimedOther = (await runtime.runs.claim("other-worker", 5_000))[0] ?? null;
       assert.equal(claimedOther?.id, other.id, "a locked head blocks its siblings without blocking another session");
       assert.equal((await runtime.runs.claim("waiting-worker", 5_000))[0] ?? null, null);
-      assert.equal(await runtime.runs.claimById(second.id, "inline-worker", 5_000), null);
-      assert.equal(await runtime.runs.claimForSession("ordered", "inline-worker", 5_000), null);
+      assert.equal(await runtime.runs.claimById(second.id, "targeted-worker", 5_000), null);
       await holder.query("ROLLBACK");
-      const claimedFirst = await runtime.runs.claimForSession("ordered", "head-worker", 5_000);
+      const claimedFirst = await runtime.runs.claimById(first.id, "head-worker", 5_000);
       assert.equal(claimedFirst?.id, first.id);
-      assert.equal(await runtime.runs.claimById(second.id, "inline-worker", 5_000), null);
+      assert.equal(await runtime.runs.claimById(second.id, "targeted-worker", 5_000), null);
       await runtime.runs.complete(first.id, claimedFirst!.leaseToken!, { status: "ok" });
-      const claimedSecond = await runtime.runs.claimById(second.id, "inline-worker", 5_000);
+      const claimedSecond = await runtime.runs.claimById(second.id, "targeted-worker", 5_000);
       assert.equal(claimedSecond?.id, second.id);
     } finally {
       await holder.query("ROLLBACK");

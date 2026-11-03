@@ -75,7 +75,7 @@ export function createTurnMethods(
 > {
   const {
     withAdminLink,
-    drive,
+    awaitRun,
     approvalRecordIsCurrent,
     approvalResumable,
     approvalVisibleToViewer,
@@ -438,7 +438,7 @@ export function createTurnMethods(
                 await deps.sessions
                   .append({ sessionId: session.id }, steerWithheldItem(actor.displayName?.trim() || actor.id))
                   .catch((error) => swallow("turn: withheld steer note", error));
-              return req.async ? { status: "queued", runId: targetRun.id, steered: true } : drive(targetRun.id);
+              return req.async ? { status: "queued", runId: targetRun.id, steered: true } : awaitRun(targetRun.id);
             }
             if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
           }
@@ -473,7 +473,7 @@ export function createTurnMethods(
             if (!routedRunId)
               return { status: "refused", reason: "project membership changed; retry from the current project" };
             if (redelivered)
-              return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
+              return req.async ? { status: "queued", runId: routedRunId, steered: true } : awaitRun(routedRunId);
             const after = await deps.runs.get(targetRun.id);
             if (!after || isTerminal(after.status)) {
               const own = (await replayOrphanedRunSignals(targetRun.id)).find(
@@ -483,9 +483,9 @@ export function createTurnMethods(
                   d.signal.ts === steerTs,
               );
               if (own?.replayRunId)
-                return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
+                return req.async ? { status: "queued", runId: own.replayRunId } : awaitRun(own.replayRunId);
             }
-            return req.async ? { status: "queued", runId: routedRunId, steered: true } : drive(routedRunId);
+            return req.async ? { status: "queued", runId: routedRunId, steered: true } : awaitRun(routedRunId);
           }
         }
       }
@@ -535,14 +535,14 @@ export function createTurnMethods(
                   d.signal.ts === origin.messageTs,
               );
               if (own?.replayRunId)
-                return req.async ? { status: "queued", runId: own.replayRunId } : drive(own.replayRunId);
+                return req.async ? { status: "queued", runId: own.replayRunId } : awaitRun(own.replayRunId);
             }
             // Deliberately NOT flagged `steered`. Unlike the mid-turn branch above, this run's owner
             // is the UNPROMPTED ambient handler, which stays silent on a refusal or failure
             // (bystander restraint) and whose recovery copy is suppressed for the same reason. The
             // addressed caller is the only one that would ever report that, so standing it down
             // would trade a duplicate reply for silence on a message someone actually addressed.
-            return req.async ? { status: "queued", runId: routedRunId } : drive(routedRunId);
+            return req.async ? { status: "queued", runId: routedRunId } : awaitRun(routedRunId);
           }
         }
       }
@@ -562,7 +562,7 @@ export function createTurnMethods(
       if (spineRouted) deps.engaged?.engage(conversation.threadRef);
       if (deduped && run.result && isTerminal(run.status)) return withAdminLink(run.result);
       if (req.async) return { status: "queued", runId: run.id };
-      return drive(run.id);
+      return awaitRun(run.id);
     },
 
     subscribeSessionStates(cb, opts) {
