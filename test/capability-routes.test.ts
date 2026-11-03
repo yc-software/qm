@@ -763,6 +763,16 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(patched.status, 200);
     assert.equal(((await patched.json()) as any).cron.owner, "U1");
     assert.equal((await post(`/v1/crons/${cron.id}/disable`, {}, teammate)).status, 200);
+    const script = { command: "./standup.sh", mode: "live" };
+    assert.equal((await patch(`/v1/crons/${cron.id}`, { script }, teammate)).status, 403);
+    const scripted = await patch(
+      `/v1/crons/${cron.id}`,
+      { script },
+      { "x-agent-capability": await capChannelMembers("U1") },
+    );
+    assert.equal(scripted.status, 200);
+    assert.deepEqual(((await scripted.json()) as any).cron.script, script);
+    assert.equal((await patch(`/v1/crons/${cron.id}`, { script: null }, teammate)).status, 403);
   });
 
   it("a channel cron is readable by a member but never administrable by them (your boss's channel cron stays out of your DM's control)", async () => {

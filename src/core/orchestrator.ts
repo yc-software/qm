@@ -2605,7 +2605,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const tools = external ? externalTools(baseTools, accessResource) : baseTools;
         const cronScript =
-          input.cronScript && !isRetry
+          input.cronScript && input.surface === "cron" && !input.sessionSenderId && !isRetry
             ? await runCronScript(
                 input.cronScript,
                 {
@@ -2620,7 +2620,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       ),
                       { stopUnclean: true, signal: turnAbort.signal },
                     );
-                    return cleanVerdict(verdict) ? output : "The script's output was withheld by the security screen.";
+                    return cleanVerdict(verdict) || !enforceScreen
+                      ? output
+                      : "The script's output was withheld by the security screen.";
                   },
                   inlineTokens: async () =>
                     (await deps.toolOutput
@@ -2631,7 +2633,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 turnAbort.signal,
               )
             : undefined;
-        if (cronScript) audit({ action: "cron.script", resource: conversation.threadRef, detail: cronScript.verdict });
+        if (cronScript)
+          audit({
+            action: "cron.script",
+            resource: conversation.threadRef,
+            detail: JSON.stringify({
+              command: input.cronScript!.command,
+              mode: input.cronScript!.mode,
+              verdict: cronScript.verdict,
+            }),
+          });
         if (cronScript?.handled && input.cronScript?.mode === "live")
           return { status: "silent", sessionId: session.id, scriptVerdict: cronScript.verdict };
 
