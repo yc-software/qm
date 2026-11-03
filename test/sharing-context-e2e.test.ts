@@ -157,9 +157,9 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   for (const person of parent.request.conversation.audience) await b.sessions.addParticipant(child.id, person.id);
   let token: string | undefined;
   const provision = b.sandbox.provision.bind(b.sandbox);
-  b.sandbox.provision = async (layers, opts) => {
+  b.sandbox.provision = async (owner, opts) => {
     token = opts?.env?.AGENT_API_TOKEN;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   b.runtime.startBackground();
   const childTurn = async (text: string, expectedStatus: "ok" | "refused" = "ok") => {
@@ -309,7 +309,7 @@ test("sharing e2e: writes and memory capture remain local while reading carried 
   assert.match(await b.turn("!write notes.txt ROOM_WRITE", true), /wrote/);
   assert.match(await b.turn("!memoryremember ROOM_CAPTURE_ONLY", true), /remembered 1/);
   assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "SOURCE_UNCHANGED");
-  assert.equal(await b.workspace.read("channel:C1", "notes.txt"), "ROOM_WRITE");
+  assert.equal(await b.turn("!read notes.txt", true), "ROOM_WRITE");
   assert.match(await b.memory.read("channel:C1"), /ROOM_CAPTURE_ONLY/);
   assert.doesNotMatch(await b.memory.read("personal:U1"), /ROOM_CAPTURE_ONLY/);
   assert.match(await b.turn("!memoryremember PERSONAL_CAPTURE_ONLY"), /remembered 1/);
@@ -331,7 +331,6 @@ test("sharing e2e: binary carry never materializes bytes and text artifacts use 
     data: Buffer.from("CURRENT_ARTIFACT"),
     direction: "out",
   });
-  await b.workspace.write("personal:U1", path, "STALE_WORKSPACE_SNAPSHOT");
   assert.equal(await b.turn(`!read shared/open-personal-U1/${id}/report.txt`, true), "CURRENT_ARTIFACT");
   await b.file("personal:U1", "binary.dat", Buffer.from([0xff, 0xfe, 0, 1]));
   assert.match(
@@ -429,9 +428,9 @@ test("sharing e2e: the execution capability excludes carried memories in both di
   const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "test-ingress-secret" });
   let token: string | undefined;
   const provision = b.sandbox.provision.bind(b.sandbox);
-  b.sandbox.provision = async (layers, opts) => {
+  b.sandbox.provision = async (owner, opts) => {
     token = opts?.env?.AGENT_API_TOKEN;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   assert.equal(await b.turn("!run echo ROOM", true), "ROOM");
   assert.ok(token);
@@ -498,7 +497,6 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
   assert.match(prompt, /### U1\n(?:(?!###)[\s\S])*`npm:/);
   assert.doesNotMatch(prompt, /### U2\n/);
   assert.ok(!prompt.includes("npm_U1"));
-  await b.workspace.write("channel:C1", "room-only.txt", "room_data");
   const probe = `python3 -c 'import os,pathlib; p=pathlib.Path.home()/".custom-cli/auth"; print("|".join([os.getenv("NPM_TOKEN","unset"),os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset"),p.read_text() if p.exists() else "absent",str(bool(os.getenv("AGENT_API_TOKEN"))),"room" if pathlib.Path("room-only.txt").exists() else "isolated"]))'`;
   const selected = (id = "U1") =>
     `!execute ${JSON.stringify({ command: probe.replace('os.getenv("NPM_TOKEN","unset")', `str(os.getenv("NPM_TOKEN") == "npm_${id}")`).replace('os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset")', `str(os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM") == "gmail_${id}")`), credentials: [...handles.get(id)!, "connector:gmail.googleapis.com:default"] })}`;
@@ -651,8 +649,8 @@ test("shared conversations run named credentials on the turn's scratch computer 
   const scratchBoxes = new Set<string>();
   const provisions: string[] = [];
   const provision = b.sandbox.provision.bind(b.sandbox);
-  b.sandbox.provision = async (layers, opts) => {
-    const handle = await provision(layers, opts);
+  b.sandbox.provision = async (owner, opts) => {
+    const handle = await provision(owner, opts);
     provisions.push(opts?.scratch?.key ?? "scoped");
     if (opts?.scratch) scratchBoxes.add(handle.id);
     return handle;

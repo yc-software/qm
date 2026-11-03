@@ -146,6 +146,21 @@ for (const [name, legacy] of [
     assert.match(json.message, new RegExp(`^body\\.(${fields.join("|")}): `));
   });
 
+test("an in-process turn request with retired origin fields and no origin is refused, not run as direct", async () => {
+  const request = {
+    surface: "webhook",
+    actor: { externalId: "internal:owner" },
+    conversation: { kind: "dm", threadRef: "t-legacy-in-process" },
+    text: "x",
+    async: true,
+    triggered: true,
+    securityScreenData: "external event",
+  } as unknown as Parameters<typeof built.app.turn>[0];
+  const res = await built.app.turn(request);
+  assert.equal(res.status, "refused");
+  assert.equal(res.runId, undefined);
+});
+
 test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn steer folding", async () => {
   const turnBody = (text: string, extra: Record<string, unknown> = {}): string =>
     JSON.stringify({

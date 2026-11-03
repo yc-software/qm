@@ -189,6 +189,7 @@ async function handBack(
 }
 
 export interface WorkerDeps extends ProcessDeps {
+  slots?: number;
   pollMs?: number;
   recoveryPollMs?: number;
   workerId?: string;
@@ -196,9 +197,16 @@ export interface WorkerDeps extends ProcessDeps {
   admittedWork?: AdmittedWork;
 }
 
+interface HeldRun {
+  run: Run;
+  claimedAt: number;
+  shutdown: AbortController;
+}
+
 export interface Worker {
+  readonly slots: number;
   start(): void;
-  held(): { run: Run; claimedAt: number; shutdown: AbortController } | null;
+  held(): HeldRun[];
   preempt(runId: string): void;
   stopClaims(): Promise<void>;
   drained(): Promise<void>;
@@ -210,9 +218,11 @@ const STOP_DRAIN_MS = 2_000;
 
 export function createWorker(deps: WorkerDeps): Worker {
   const workerId = deps.workerId ?? `w-${randomUUID().slice(0, 8)}`;
+  const slots = Math.max(1, deps.slots ?? 1);
   const pollMs = deps.pollMs ?? 50;
   const recoveryPollMs = deps.recoveryPollMs ?? 5_000;
   const notifications = Boolean(deps.runs.subscribeAvailable);
+  const admitted = (): boolean => !deps.canClaim || deps.canClaim();
   let generation = 0;
   let wake: (() => void) | null = null;
   let unsubscribe: (() => void) | undefined;
@@ -220,6 +230,7 @@ export function createWorker(deps: WorkerDeps): Worker {
     generation++;
     wake?.();
   };
+  let full = false;
   async function waitForWork(observed: number): Promise<void> {
     if (stopped || observed !== generation) return;
     await new Promise<void>((resolve) => {
@@ -228,74 +239,21 @@ export function createWorker(deps: WorkerDeps): Worker {
         wake = null;
         resolve();
       };
-      const timer = setTimeout(done, notifications ? recoveryPollMs : pollMs);
+      const timer = full ? undefined : setTimeout(done, notifications ? recoveryPollMs : pollMs);
       wake = done;
     });
   }
   let stopped = false;
   let loopDone: Promise<void> | null = null;
   let claimDone: Promise<void> | null = null;
-  let inFlight: {
-    run: Run;
-    claimedAt: number;
-    shutdown: AbortController;
-    done: Promise<void>;
-  } | null = null;
+  const inFlight = new Set<HeldRun & { done: Promise<void> }>();
 
-  async function loop(): Promise<void> {
-    let claimFailures = 0;
-    while (!stopped) {
-      if (deps.canClaim && !deps.canClaim()) {
-        await sleep(pollMs);
-        continue;
-      }
-      const observed = generation;
-      let run: Run | null;
-      let claimed!: () => void;
-      claimDone = new Promise<void>((resolve) => {
-        claimed = resolve;
-      });
-      try {
-        run = await deps.runs.claim(workerId, deps.leaseTtlMs);
-        claimFailures = 0;
-      } catch (e) {
-        claimed();
-        claimDone = null;
-        claimFailures += 1;
-        if (claimFailures === CLAIM_FAIL_REPORT_CONSECUTIVE) reportFailure("worker: persistent claim failure", e);
-        swallow("worker: claim failed (transient, retrying)", e);
-        await sleep(Math.min(pollMs * 2 ** Math.min(claimFailures, 5), 5_000));
-        continue;
-      }
-      if (!run) {
-        claimed();
-        claimDone = null;
-        await waitForWork(observed);
-        continue;
-      }
-      if (stopped || (deps.canClaim && !deps.canClaim())) {
-        if (run.leaseToken !== null)
-          await deps.runs
-            .releaseLease(run.id, run.leaseToken)
-            .catch((e) => swallow("worker: post-stop claim handback failed", e));
-        claimed();
-        claimDone = null;
-        break;
-      }
-      const shutdown = new AbortController();
-      let settled!: () => void;
-      const current: NonNullable<typeof inFlight> = {
-        run,
-        claimedAt: Date.now(),
-        shutdown,
-        done: new Promise<void>((resolve) => {
-          settled = resolve;
-        }),
-      };
-      inFlight = current;
-      console.log(`[worker] claimed worker=${workerId} run=${run.id} thread=${run.sessionId}`);
-      claimed();
-      claimDone = null;
+  function begin(run: Run): void {
+    const shutdown = new AbortController();
+    const held = { run, claimedAt: Date.now(), shutdown, done: Promise.resolve() };
+    inFlight.add(held);
+    console.log(`[worker] claimed worker=${workerId} run=${run.id} thread=${run.sessionId}`);
+    held.done = (async () => {
       try {
         const work = () => processRun(deps, run, { shutdown: shutdown.signal });
         if (deps.admittedWork) await deps.admittedWork.run(work);
@@ -305,8 +263,58 @@ export function createWorker(deps: WorkerDeps): Worker {
       } finally {
         if (shutdown.signal.aborted)
           console.log(`[worker] shutdown settled worker=${workerId} run=${run.id} thread=${run.sessionId}`);
-        inFlight = null;
-        settled();
+        inFlight.delete(held);
+        if (full) wake?.();
+      }
+    })();
+  }
+
+  async function claimBatch(limit: number): Promise<number> {
+    const batch = await deps.runs.claim(workerId, deps.leaseTtlMs, limit);
+    if (batch.length && (stopped || !admitted())) {
+      await Promise.all(
+        batch.map((run) =>
+          deps.runs
+            .releaseLease(run.id, run.leaseToken!)
+            .catch((e) => swallow("worker: post-stop claim handback failed", e)),
+        ),
+      );
+      return limit;
+    }
+    for (const run of batch) begin(run);
+    return batch.length;
+  }
+
+  async function loop(): Promise<void> {
+    let claimFailures = 0;
+    while (!stopped) {
+      if (!admitted()) {
+        await sleep(pollMs);
+        continue;
+      }
+      const free = slots - inFlight.size;
+      full = free <= 0;
+      if (full) {
+        await waitForWork(generation);
+        continue;
+      }
+      const observed = generation;
+      const claiming = claimBatch(free);
+      claimDone = claiming.then(
+        () => {},
+        () => {},
+      );
+      try {
+        const claimed = await claiming;
+        claimFailures = 0;
+        if (claimed < free) await waitForWork(observed);
+      } catch (e) {
+        claimFailures += 1;
+        if (claimFailures === CLAIM_FAIL_REPORT_CONSECUTIVE) reportFailure("worker: persistent claim failure", e);
+        swallow("worker: claim failed (transient, retrying)", e);
+        await sleep(Math.min(pollMs * 2 ** Math.min(claimFailures, 5), 5_000));
+      } finally {
+        claimDone = null;
       }
     }
   }
@@ -319,35 +327,51 @@ export function createWorker(deps: WorkerDeps): Worker {
     return claimDone ?? Promise.resolve();
   }
 
+  const settled = async (): Promise<void> => {
+    await Promise.all([...inFlight.values()].map((held) => held.done));
+  };
+  const drained = async (): Promise<void> => {
+    await loopDone;
+    await settled();
+  };
+  function run(): void {
+    loopDone = loop().then(
+      () => {
+        loopDone = null;
+        if (!stopped) run();
+      },
+      (e: unknown) => {
+        loopDone = null;
+        reportFailure("worker: claim loop crashed", e);
+      },
+    );
+  }
+
   return {
-    held: () => inFlight,
+    slots,
+    held: () => [...inFlight.values()],
     preempt(runId) {
-      if (inFlight?.run.id !== runId || inFlight.shutdown.signal.aborted) return;
-      inFlight.shutdown.abort(PARKED);
+      for (const held of inFlight)
+        if (held.run.id === runId && !held.shutdown.signal.aborted) held.shutdown.abort(PARKED);
     },
     start() {
-      if (loopDone) return;
       stopped = false;
-      unsubscribe = deps.runs.subscribeAvailable?.(notify, {
+      unsubscribe ??= deps.runs.subscribeAvailable?.(notify, {
         pollMs,
         onResync: notify,
       });
-      loopDone = loop().finally(() => {
-        loopDone = null;
-      });
+      if (!loopDone) run();
     },
     async releaseInFlight() {
       await stopClaims();
-      const held = inFlight;
-      if (!held) return;
-      held.shutdown.abort();
-      await held.done;
+      for (const held of inFlight.values()) held.shutdown.abort();
+      await settled();
     },
     stopClaims,
-    drained: () => loopDone ?? Promise.resolve(),
+    drained,
     async stop(drainMs = STOP_DRAIN_MS) {
       void stopClaims();
-      await Promise.race([loopDone, sleep(drainMs, { unref: true })]);
+      await Promise.race([drained(), sleep(drainMs, { unref: true })]);
     },
   };
 }
@@ -360,20 +384,20 @@ function runStopFor(err: unknown): RunStop {
 
 export function createRunPreemption(deps: {
   runs: RunStore;
-  workers: readonly Worker[];
+  worker: Worker;
   canClaim?: () => boolean;
   graceMs?: number;
 }): { sweep(): Promise<boolean> } {
   return {
     async sweep() {
       if (deps.canClaim && !deps.canClaim()) return false;
-      const held = deps.workers.map((worker) => ({ worker, held: worker.held() }));
-      if (held.some(({ held }) => !held || held.shutdown.signal.aborted)) return false;
+      const held = deps.worker.held();
+      if (held.length < deps.worker.slots || held.some(({ shutdown }) => shutdown.signal.aborted)) return false;
       const victim = held
-        .filter(({ held }) => held!.run.priority === 2 && held!.run.preemptions < MAX_PREEMPTIONS)
-        .sort((a, b) => b.held!.claimedAt - a.held!.claimedAt)[0];
+        .filter(({ run }) => run.priority === 2 && run.preemptions < MAX_PREEMPTIONS)
+        .sort((a, b) => b.claimedAt - a.claimedAt)[0];
       if (!victim || !(await deps.runs.personWaiting(Date.now() - (deps.graceMs ?? 1_000)))) return false;
-      victim.worker.preempt(victim.held!.run.id);
+      deps.worker.preempt(victim.run.id);
       return true;
     },
   };

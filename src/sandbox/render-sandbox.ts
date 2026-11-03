@@ -1,5 +1,4 @@
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
@@ -73,7 +72,7 @@ export interface RenderSandboxOptions extends BlobStagingOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
-export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandboxOptions): Sandbox {
+export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
   const { client, store, scratchStore, cleanupStore, advisoryLock, base: goldens } = opts;
   const prefix = opts.namePrefix ?? "qm";
   const homeDir = opts.homeDir ?? "/root";
@@ -419,7 +418,6 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
   }
 
   const base = createExecSandboxBase({
-    workspace,
     label: "render",
     prefix,
     homeDir,
@@ -505,11 +503,8 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
         },
       },
     },
-    async provision(layers, options) {
-      const writable = layers.find((layer) => layer.mode === "rw") ?? layers[0];
-      const name = options?.scratch
-        ? sandboxScopeName(`${prefix}-scratch`, options.scratch.key)
-        : nameFor(writable?.scopeId ?? "default");
+    async provision(scope, options) {
+      const name = options?.scratch ? sandboxScopeName(`${prefix}-scratch`, options.scratch.key) : nameFor(scope);
       await goldens.ready(options?.onStatus);
       return withLifecycle(name, async () => {
         if (options?.scratch) {
@@ -521,7 +516,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
         }
         let handle: SandboxHandle;
         try {
-          handle = await base.provision(layers, options);
+          handle = await base.provision(scope, options);
         } catch (error) {
           const temporary = scratch.get(name);
           if (error instanceof SandboxProvisionCleanupError && temporary) error.handle.providerSandboxId = temporary.id;

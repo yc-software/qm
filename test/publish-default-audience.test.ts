@@ -68,14 +68,11 @@ function ctxFor(
   const deps: ToolContextDeps = {
     sandbox: fileSandbox(),
     provision: async () => ({}) as SandboxHandle,
-    layers: [
-      { scopeId: orgScope, mountPath: "global", mode: "ro" },
-      { scopeId: opts.contextScope, mountPath: "", mode: "rw" },
-    ],
+    writableScopeId: opts.contextScope,
+    readOnlyScopeIds: [orgScope],
     commandPolicy: () => ({}) as never,
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace: {} as never,
     deploy,
     acl,
     createdBy: opts.actor,

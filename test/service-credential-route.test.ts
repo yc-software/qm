@@ -1030,9 +1030,9 @@ function buildWithCapture() {
   );
   let captured: Record<string, string> | undefined;
   const realProvision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = async (layers, opts) => {
+  built.sandbox.provision = async (owner, opts) => {
     captured = opts?.env;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
   let executed: Record<string, string> | undefined;
   const realRun = built.sandbox.run.bind(built.sandbox);

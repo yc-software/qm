@@ -254,12 +254,12 @@ test("timed-out provider calls retain bounded execution slots across repeated sw
   let active = 0;
   let maximum = 0;
   const provision = first.backend.provision;
-  first.backend.provision = async (layers, options) => {
-    entered.push(layers.find((layer) => layer.mode === "rw")!.scopeId);
+  first.backend.provision = async (owner, options) => {
+    entered.push(owner);
     maximum = Math.max(maximum, ++active);
     try {
       if (entered.length <= SWARM_LIMITS.sweepConcurrency) await new Promise<void>((resolve) => releases.push(resolve));
-      return await provision(layers, options);
+      return await provision(owner, options);
     } finally {
       active--;
     }
@@ -494,8 +494,7 @@ test("initial pool creates durable ordinary sessions with distinct blank Modal d
   const { service, caller, sandbox, root, sessions, store, runs } = fixture;
   const parent = await fixture.sandboxes.create("alice", root.scopeId, "modal", "Parent");
   await fixture.sandboxes.setDefault("alice", root.scopeId, parent.id);
-  const layers = [{ scopeId: root.scopeId, mode: "rw" as const, mountPath: "/" }];
-  const parentHandle = await sandbox.provision(layers);
+  const parentHandle = await sandbox.provision(root.scopeId);
   await sandbox.writeFile(parentHandle, "private-file", "do not copy");
   const workers = await service.spawn(caller, {
     requestId: "pool",
@@ -514,7 +513,7 @@ test("initial pool creates durable ordinary sessions with distinct blank Modal d
     assert.equal(session?.scopeId, root.scopeId);
     assert.equal(session?.surface, "swarm");
     assert.match(session!.title!, /Swarm worker/);
-    const handle = await sandbox.provision(layers, { sandboxId: peer.sandboxId });
+    const handle = await sandbox.provision(root.scopeId, { sandboxId: peer.sandboxId });
     handles.push(handle);
     assert.equal(handle.scopeId, root.scopeId);
     assert.equal(await sandbox.readFile(handle, "private-file"), null);
@@ -522,7 +521,7 @@ test("initial pool creates durable ordinary sessions with distinct blank Modal d
   assert.equal(new Set(handles.map((handle) => handle.id)).size, 3);
   await sandbox.writeFile(handles[0]!, "result", "worker only");
   assert.equal(await sandbox.readFile(handles[1]!, "result"), null);
-  assert.equal((await sandbox.provision(layers)).id, parentHandle.id);
+  assert.equal((await sandbox.provision(root.scopeId)).id, parentHandle.id);
   const message = (await store.get(root.id))!.messages[0]!;
   assert.equal(message.author, "agent");
   for (const notification of Object.values(message.notifications)) {
@@ -773,9 +772,9 @@ test("slow provisioning does not accumulate overlapping outbox sweeps", async ()
     release = resolve;
   });
   const provision = backend.provision;
-  backend.provision = async (layers, options) => {
+  backend.provision = async (owner, options) => {
     await gate;
-    return provision(layers, options);
+    return provision(owner, options);
   };
   await service.spawn(caller, { requestId: "one", text: "Work" });
   const first = service.sweep();
@@ -819,13 +818,12 @@ test("explicit forum supplements private worker disks and remains scope-authoriz
   const peers = (await service.inspect(caller)).peers.slice(1);
   assert.ok(peers.every((member) => member.forumSandboxId === forum.id && member.sandboxId !== forum.id));
   assert.equal(new Set(peers.map((member) => member.sandboxId)).size, 2);
-  const layers = [{ scopeId: root.scopeId, mode: "rw" as const, mountPath: "/" }];
-  const shared = await sandbox.provision(layers, { sandboxId: forum.id });
+  const shared = await sandbox.provision(root.scopeId, { sandboxId: forum.id });
   await sandbox.writeFile(shared, "shared-result", "for peers");
   for (const peer of peers) {
-    const own = await sandbox.provision(layers, { sandboxId: peer.sandboxId });
+    const own = await sandbox.provision(root.scopeId, { sandboxId: peer.sandboxId });
     assert.equal(await sandbox.readFile(own, "shared-result"), null);
-    const selected = await sandbox.provision(layers, { sandboxId: peer.forumSandboxId });
+    const selected = await sandbox.provision(root.scopeId, { sandboxId: peer.forumSandboxId });
     assert.equal(await sandbox.readFile(selected, "shared-result"), "for peers");
   }
 });
@@ -954,20 +952,19 @@ test("swarm store has transaction rollback and detached read parity", async () =
   assert.equal((await store.get(root.id))!.notificationCount, 1);
 });
 
-test("the orchestrator sandbox path selects worker storage without changing authorization layers", async () => {
+test("the orchestrator sandbox path selects worker storage without changing the authorized scope", async () => {
   const { service, caller, sandbox, sandboxes, runs, root } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();
   const run = (await runs.list()).find((item) => item.request.swarm)!;
   const binding = (await service.binding({ ...run.request, runId: run.id }))!;
   const storageScopeId = "environment:shared";
-  const layers = [{ scopeId: storageScopeId, mountPath: "/", mode: "rw" as const }];
   const turn = createTurnSandboxes({
     deps: { sandbox, sandboxResources: sandboxes, swarms: service },
     input: { ...run.request, runId: run.id },
     actor: run.request.actor,
     session: { id: binding.member.sessionId },
-    resolution: { layers, egress: { allowedHosts: [] } },
+    resolution: { writableScopeId: storageScopeId, readOnlyScopeIds: [], egress: { allowedHosts: [] } },
     scopeId: root.scopeId,
     memoryScopeId: storageScopeId,
     transferId: "transfer",
@@ -985,7 +982,6 @@ test("the orchestrator sandbox path selects worker storage without changing auth
   const handle = await turn.provision();
   assert.equal(handle.resourceId, binding.sandboxId);
   assert.equal(handle.scopeId, root.scopeId);
-  assert.equal(layers[0]!.scopeId, storageScopeId);
   const forum = await sandboxes.create("alice", root.scopeId, "modal", "Forum");
   assert.equal((await turn.provisionResource(forum.id)).resourceId, forum.id);
   const foreign = await sandboxes.create("bob", "personal:bob", "modal", "Other scope");
