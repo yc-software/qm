@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +8,7 @@ import { testConfig } from "./support/test-config.ts";
 import { parseToolDescriptor } from "../src/deployment/deployment-layer.ts";
 import { BASE_EPHEMERAL_CRED_LINKS, BASE_RESIDENT_AUTH_PATHS } from "../src/credentials/resident-paths.ts";
 import { evaluateCommandWithLayer } from "../src/policy/command-policy.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 const credentialFile = (path: string) => ({ path, kind: "file" as const });
 const credentialDirectory = (path: string) => ({ path, kind: "directory" as const });
@@ -37,7 +37,7 @@ const ACMECLI_SHAPED = {
   },
 };
 
-test("loadDeploymentLayer derives the runtime shapes from tool descriptors", () => {
+tenantTest("loadDeploymentLayer derives the runtime shapes from tool descriptors", () => {
   const layer = loadDeploymentLayer(layerDir({ acmecli: ACMECLI_SHAPED, jq: { id: "jq" } }));
   assert.deepEqual(
     layer.tools.map((t) => t.id),
@@ -58,7 +58,7 @@ test("loadDeploymentLayer derives the runtime shapes from tool descriptors", () 
   ]);
 });
 
-test("brokered tools resolve to service, binary, and quarantine roots", () => {
+tenantTest("brokered tools resolve to service, binary, and quarantine roots", () => {
   const layer = loadDeploymentLayer(
     layerDir({
       acmecli: {
@@ -97,7 +97,7 @@ test("brokered tools resolve to service, binary, and quarantine roots", () => {
   );
 });
 
-test("a layer declaring brokers on two tools is rejected at load", () => {
+tenantTest("a layer declaring brokers on two tools is rejected at load", () => {
   const broker = { kind: "aws-role", roleArnEnv: "R_ARN", region: "us-west-2", sessionActions: ["execute-api:Invoke"] };
   assert.throws(
     () =>
@@ -111,14 +111,14 @@ test("a layer declaring brokers on two tools is rejected at load", () => {
   );
 });
 
-test("loadDeploymentLayer: an authless tool contributes no paths", () => {
+tenantTest("loadDeploymentLayer: an authless tool contributes no paths", () => {
   const layer = loadDeploymentLayer(layerDir({ helper: { id: "helper", advertise: "helper tool" } }));
   assert.deepEqual(layer.credentialPaths, []);
   assert.deepEqual(layer.splitEnvTemplates, []);
   assert.deepEqual(layer.advertisedTools, ["helper tool"]);
 });
 
-test("command-form approval rules target install.binary and are enforced by policy evaluation", () => {
+tenantTest("command-form approval rules target install.binary and are enforced by policy evaluation", () => {
   const layer = loadDeploymentLayer(
     layerDir({
       acme: {
@@ -138,18 +138,18 @@ test("command-form approval rules target install.binary and are enforced by poli
   assert.equal(evaluateCommandWithLayer("acmectl deleteall", policy, layer.commandRules).decision, "allow");
 });
 
-test("loadDeploymentLayer: a dir with no tools/ is a valid, empty layer", () => {
+tenantTest("loadDeploymentLayer: a dir with no tools/ is a valid, empty layer", () => {
   const dir = mkdtempSync(join(tmpdir(), "layer-empty-"));
   const layer = loadDeploymentLayer(dir);
   assert.deepEqual(layer.tools, []);
   assert.deepEqual(layer.advertisedTools, []);
 });
 
-test("loadDeploymentLayer throws when the configured dir itself is missing", () => {
+tenantTest("loadDeploymentLayer throws when the configured dir itself is missing", () => {
   assert.throws(() => loadDeploymentLayer("/definitely/does/not/exist"), /does not exist/);
 });
 
-test("loadDeploymentLayer throws on a malformed descriptor (boot fails loudly)", () => {
+tenantTest("loadDeploymentLayer throws on a malformed descriptor (boot fails loudly)", () => {
   const dir = mkdtempSync(join(tmpdir(), "layer-bad-"));
   const toolDir = join(dir, "tools", "broken");
   mkdirSync(toolDir, { recursive: true });
@@ -157,12 +157,12 @@ test("loadDeploymentLayer throws on a malformed descriptor (boot fails loudly)",
   assert.throws(() => loadDeploymentLayer(dir), /not valid JSON/);
 });
 
-test("loadDeploymentLayer rejects duplicate tool ids across descriptor dirs", () => {
+tenantTest("loadDeploymentLayer rejects duplicate tool ids across descriptor dirs", () => {
   const dir = layerDir({ a: { id: "same" }, b: { id: "same" } });
   assert.throws(() => loadDeploymentLayer(dir), /duplicate tool id/);
 });
 
-test("loadDeploymentLayer rejects misplaced tool entries instead of silently losing tools", () => {
+tenantTest("loadDeploymentLayer rejects misplaced tool entries instead of silently losing tools", () => {
   const noDescriptor = mkdtempSync(join(tmpdir(), "layer-nodesc-"));
   mkdirSync(join(noDescriptor, "tools", "empty"), { recursive: true });
   assert.throws(() => loadDeploymentLayer(noDescriptor), /has no tool\.json/);
@@ -189,7 +189,7 @@ test("loadDeploymentLayer rejects misplaced tool entries instead of silently los
   assert.throws(() => loadDeploymentLayer(linked), /must be a regular file/);
 });
 
-test("overlapping credential paths across tools are rejected while disjoint exact paths work", () => {
+tenantTest("overlapping credential paths across tools are rejected while disjoint exact paths work", () => {
   const dir = layerDir({
     a: { id: "a", auth: { check: "c", reauth: "r", credentialPaths: [credentialDirectory(".acme")] } },
     b: { id: "b", auth: { check: "c", reauth: "r", credentialPaths: [credentialFile(".acme/token")] } },
@@ -205,7 +205,7 @@ test("overlapping credential paths across tools are rejected while disjoint exac
 const withCredentialPaths = (paths: Array<{ path: string; kind: "file" | "directory" }>): string =>
   JSON.stringify({ id: "t", auth: { check: "c", reauth: "r", credentialPaths: paths } });
 
-test("a credentialPath overlapping a built-in resident path is rejected (ancestors and descendants)", () => {
+tenantTest("a credentialPath overlapping a built-in resident path is rejected (ancestors and descendants)", () => {
   const platformManaged = new Set<string>([
     ...BASE_RESIDENT_AUTH_PATHS,
     ...BASE_EPHEMERAL_CRED_LINKS.map((l) => l.rel),
@@ -230,7 +230,7 @@ test("a credentialPath overlapping a built-in resident path is rejected (ancesto
   );
 });
 
-test("credentialPaths within one descriptor must be disjoint", () => {
+tenantTest("credentialPaths within one descriptor must be disjoint", () => {
   assert.throws(
     () =>
       parseToolDescriptor(withCredentialPaths([credentialDirectory(".acme"), credentialFile(".acme/token")]), "t.json"),
@@ -241,7 +241,7 @@ test("credentialPaths within one descriptor must be disjoint", () => {
   );
 });
 
-test("credentialPaths reject empty segments alongside traversal", () => {
+tenantTest("credentialPaths reject empty segments alongside traversal", () => {
   for (const bad of ["", "/abs", "~/home", "a/../b", "./a", "a//b", "a/"]) {
     assert.throws(
       () => parseToolDescriptor(withCredentialPaths([credentialFile(bad)]), "t.json"),
@@ -266,7 +266,7 @@ const BROKERED_ACME = {
   },
 };
 
-test("a layer installed after boot reaches the app that booted without one", async () => {
+tenantTest("a layer installed after boot reaches the app that booted without one", async () => {
   const built = buildApp(testConfig({ orgId: "acme" }));
   await built.deploymentLayerStore.hydrate();
   const layer = () => built.deploymentLayerStore.runtime();
@@ -284,7 +284,7 @@ test("a layer installed after boot reaches the app that booted without one", asy
   assert.equal(layer().brokeredTools[0]?.service, "acme");
 });
 
-test("replaceDeploymentLayer reaches every holder of the runtime arrays", () => {
+tenantTest("replaceDeploymentLayer reaches every holder of the runtime arrays", () => {
   const runtime = emptyDeploymentLayer();
   const brokeredTools = runtime.brokeredTools;
   const commandRules = runtime.commandRules;

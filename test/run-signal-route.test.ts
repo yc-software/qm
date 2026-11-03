@@ -66,7 +66,7 @@ async function coreSignal(runId: string, body: unknown): Promise<{ status: numbe
   const raw = JSON.stringify(body);
   const r = await fetch(`${coreBase}${path}`, {
     method: "POST",
-    headers: inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
+    headers: await inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
     body: raw,
   });
   return { status: r.status, json: (await r.json()) as Record<string, unknown> };
@@ -237,7 +237,7 @@ test("core route: a portal identity that does not match the request actor is ref
   const r = await fetch(`${coreBase}${path}`, {
     method: "POST",
     headers: {
-      ...inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
+      ...(await inTestTenant(() => signedHeaders(SECRET, "POST", path, raw))),
       [PORTAL_IDENTITY_HEADER]: await mintTenantPortalIdentity(
         { p: "eve", t: testTenants()[0], exp: Date.now() + 60_000 },
         SECRET,
@@ -846,7 +846,7 @@ async function coreTurn(body: unknown): Promise<{ status: number; json: Record<s
   const raw = JSON.stringify(body);
   const r = await fetch(`${coreBase}${path}`, {
     method: "POST",
-    headers: inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
+    headers: await inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
     body: raw,
   });
   return { status: r.status, json: (await r.json()) as Record<string, unknown> };

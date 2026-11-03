@@ -1,6 +1,5 @@
 import { externalSlackNamespace } from "../src/slack/external-access.ts";
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
 import { Readable } from "node:stream";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
@@ -14,7 +13,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["safe"] };
 const externalSlackPolicies = { batch: policy };
@@ -42,128 +41,134 @@ function request(text: string): TurnRequest {
   };
 }
 
-test("external Slack strips private and org preloads before the prompt, but keeps shared-safe code useful", async (t) => {
-  const b = buildApp(
-    testConfig({
-      memoryCapture: "off",
-      externalSlackPolicies,
-      signingSecret: "synthetic-signing-key",
-      apiBaseUrl: "https://core.example.test",
-    }),
-  );
-  await inTestTenant(() => b.identity.ready());
-  await b.config.hydrate?.();
-  await b.identity.refresh();
-  await b.deploymentLayerStore.hydrate();
-  t.after(async () => {
-    b.scheduler.stop();
-    await b.runtime.stop();
-  });
-  await inTestTenant(async () => {
-    await b.config.setSharingPosture("org:default-org", "open");
-    await b.config.setSoul("org:default-org", "ORG_SOUL_SENTINEL");
-    await b.memory.capture("personal:U1", ["PERSONAL_MEMORY_SENTINEL"], Date.now(), "U1");
-    await b.memory.capture("org:default-org", ["ORG_MEMORY_SENTINEL"], Date.now(), "U1");
-    await b.workspace.write("org:default-org", "secret.txt", "ORG_FILE_SENTINEL");
-    await b.workspace.write("personal:U1", "secret.txt", "PERSONAL_FILE_SENTINEL");
-    for (const slug of ["safe", "confidential"]) {
-      await b.serviceCreds.setServiceCredential("org:default-org", {
-        slug,
-        name: slug,
-        delivery: "env",
-        envKey: slug.toUpperCase(),
-        secret: `SYNTHETIC_${slug}`,
-        host: "",
-      });
-      await b.acl.grant({
-        ownerScopeId: "org:default-org",
-        ref: encodeRef(serviceCredRef(slug)),
-        granteeScopeId: "org:default-org",
-        permission: "read",
-        grantedBy: "U1",
-      });
-    }
-    const mustNotRead = async (): Promise<never> => {
-      throw new Error("PRIVATE_PRELOAD_CALLED");
-    };
-    b.keychain!.listByOwners = mustNotRead;
-    b.keychain!.listByOwner = mustNotRead;
-    b.keychain!.grantsForScope = mustNotRead;
-    b.keychain!.listConnectorsByOwners = mustNotRead;
-    const prompt = await b.app.turn(request("!sysprompt"));
-    assert.equal(prompt.status, "ok", JSON.stringify(prompt));
-    assert.doesNotMatch(
-      prompt.reply!,
-      /PERSONAL_MEMORY_SENTINEL|ORG_MEMORY_SENTINEL|ORG_SOUL_SENTINEL|PERSONAL_FILE_SENTINEL|ORG_FILE_SENTINEL|confidential/,
+tenantTest(
+  "external Slack strips private and org preloads before the prompt, but keeps shared-safe code useful",
+  async (t) => {
+    const b = buildApp(
+      testConfig({
+        memoryCapture: "off",
+        externalSlackPolicies,
+        signingSecret: "synthetic-signing-key",
+        apiBaseUrl: "https://core.example.test",
+      }),
     );
-    assert.match(prompt.reply!, /safe/);
-    await selectDefaultSandbox(b, "U1", scopeId("channel", `${namespace}:C1`));
-    const provisions: string[][] = [];
-    const provision = b.sandbox.provision.bind(b.sandbox);
-    b.sandbox.provision = (layers, opts) => {
-      provisions.push(layers.map((l) => l.scopeId));
-      return provision(layers, opts);
-    };
-    const run = b.sandbox.run.bind(b.sandbox);
-    const seenClaims: CapabilityClaims[] = [];
-    let safeEnv;
-    b.sandbox.run = async (handle, command, opts) => {
-      if (handle.env?.AGENT_API_TOKEN)
-        seenClaims.push((await verifyCapabilityToken(handle.env.AGENT_API_TOKEN, TEST_CAPABILITY_SECRET))!);
-      if (handle.env?.SAFE) safeEnv = handle.env.SAFE;
-      assert.equal(handle.env?.CONFIDENTIAL, undefined);
-      return run(handle, command, opts);
-    };
-    const code = await b.app.turn(
-      request(`!execute ${JSON.stringify({ command: "printf external-code-ok", credentials: ["safe"] })}`),
+    await inTestTenant(() => b.identity.ready());
+    await b.config.hydrate?.();
+    await b.identity.refresh();
+    await b.deploymentLayerStore.hydrate();
+    t.after(async () => {
+      b.scheduler.stop();
+      await b.runtime.stop();
+    });
+    await inTestTenant(async () => {
+      await b.config.setSharingPosture("org:default-org", "open");
+      await b.config.setSoul("org:default-org", "ORG_SOUL_SENTINEL");
+      await b.memory.capture("personal:U1", ["PERSONAL_MEMORY_SENTINEL"], Date.now(), "U1");
+      await b.memory.capture("org:default-org", ["ORG_MEMORY_SENTINEL"], Date.now(), "U1");
+      await b.workspace.write("org:default-org", "secret.txt", "ORG_FILE_SENTINEL");
+      await b.workspace.write("personal:U1", "secret.txt", "PERSONAL_FILE_SENTINEL");
+      for (const slug of ["safe", "confidential"]) {
+        await b.serviceCreds.setServiceCredential("org:default-org", {
+          slug,
+          name: slug,
+          delivery: "env",
+          envKey: slug.toUpperCase(),
+          secret: `SYNTHETIC_${slug}`,
+          host: "",
+        });
+        await b.acl.grant({
+          ownerScopeId: "org:default-org",
+          ref: encodeRef(serviceCredRef(slug)),
+          granteeScopeId: "org:default-org",
+          permission: "read",
+          grantedBy: "U1",
+        });
+      }
+      const mustNotRead = async (): Promise<never> => {
+        throw new Error("PRIVATE_PRELOAD_CALLED");
+      };
+      b.keychain!.listByOwners = mustNotRead;
+      b.keychain!.listByOwner = mustNotRead;
+      b.keychain!.grantsForScope = mustNotRead;
+      b.keychain!.listConnectorsByOwners = mustNotRead;
+      const prompt = await b.app.turn(request("!sysprompt"));
+      assert.equal(prompt.status, "ok", JSON.stringify(prompt));
+      assert.doesNotMatch(
+        prompt.reply!,
+        /PERSONAL_MEMORY_SENTINEL|ORG_MEMORY_SENTINEL|ORG_SOUL_SENTINEL|PERSONAL_FILE_SENTINEL|ORG_FILE_SENTINEL|confidential/,
+      );
+      assert.match(prompt.reply!, /safe/);
+      await selectDefaultSandbox(b, "U1", scopeId("channel", `${namespace}:C1`));
+      const provisions: string[][] = [];
+      const provision = b.sandbox.provision.bind(b.sandbox);
+      b.sandbox.provision = (layers, opts) => {
+        provisions.push(layers.map((l) => l.scopeId));
+        return provision(layers, opts);
+      };
+      const run = b.sandbox.run.bind(b.sandbox);
+      const seenClaims: CapabilityClaims[] = [];
+      let safeEnv;
+      b.sandbox.run = async (handle, command, opts) => {
+        if (handle.env?.AGENT_API_TOKEN)
+          seenClaims.push((await verifyCapabilityToken(handle.env.AGENT_API_TOKEN, TEST_CAPABILITY_SECRET))!);
+        if (handle.env?.SAFE) safeEnv = handle.env.SAFE;
+        assert.equal(handle.env?.CONFIDENTIAL, undefined);
+        return run(handle, command, opts);
+      };
+      const code = await b.app.turn(
+        request(`!execute ${JSON.stringify({ command: "printf external-code-ok", credentials: ["safe"] })}`),
+      );
+      assert.equal(code.status, "ok", JSON.stringify(code));
+      assert.match(code.reply!, /external-code-ok/);
+      assert.equal(safeEnv, "SYNTHETIC_safe");
+      assert.ok(provisions.length);
+      assert.ok(provisions.every((scopes) => scopes.every((scope) => scope.startsWith("channel:external-slack:"))));
+      assert.equal(seenClaims.at(-1)?.externalSlack, true);
+      assert.equal(seenClaims.at(-1)?.ownerConnections, undefined);
+      assert.equal(seenClaims.at(-1)?.memory, undefined);
+      const missing = request("!sysprompt");
+      delete missing.externalSlack;
+      assert.equal((await b.app.turn(missing)).status, "refused");
+      const privateRequest = {
+        ...missing,
+        slackSource: { accountId: "batch", teamId: "T1", userId: "U1" },
+        conversation: { kind: "dm" as const, threadRef: "slack-account:T1:dm:D1" },
+      };
+      assert.equal((await b.app.turn(privateRequest)).status, "refused");
+      assert.equal((await b.app.turn({ ...privateRequest, slackSource: undefined })).status, "refused");
+    });
+  },
+);
+
+tenantTest(
+  "external native tool ceiling cannot delegate, switch sandboxes, read confidential data or invoke MCP",
+  async () => {
+    let runs = 0;
+    const tools = externalTools(
+      new Proxy({} as ToolContext, {
+        get: () => () => {
+          runs++;
+          return Promise.resolve("ok");
+        },
+      }),
     );
-    assert.equal(code.status, "ok", JSON.stringify(code));
-    assert.match(code.reply!, /external-code-ok/);
-    assert.equal(safeEnv, "SYNTHETIC_safe");
-    assert.ok(provisions.length);
-    assert.ok(provisions.every((scopes) => scopes.every((scope) => scope.startsWith("channel:external-slack:"))));
-    assert.equal(seenClaims.at(-1)?.externalSlack, true);
-    assert.equal(seenClaims.at(-1)?.ownerConnections, undefined);
-    assert.equal(seenClaims.at(-1)?.memory, undefined);
-    const missing = request("!sysprompt");
-    delete missing.externalSlack;
-    assert.equal((await b.app.turn(missing)).status, "refused");
-    const privateRequest = {
-      ...missing,
-      slackSource: { accountId: "batch", teamId: "T1", userId: "U1" },
-      conversation: { kind: "dm" as const, threadRef: "slack-account:T1:dm:D1" },
-    };
-    assert.equal((await b.app.turn(privateRequest)).status, "refused");
-    assert.equal((await b.app.turn({ ...privateRequest, slackSource: undefined })).status, "refused");
-  });
-});
+    await tools.execute("printf safe");
+    assert.equal(runs, 1);
+    for (const opts of [{ scratch: true }, { sandboxId: "private" }])
+      await assert.rejects(tools.execute("unsafe", opts), /private access/);
+    for (const call of [
+      () => tools.memoryRead(),
+      () => tools.read("global/secret"),
+      () => tools.callMcpTool("private", {}),
+      () => tools.cronList(),
+    ])
+      assert.throws(call, /private access/);
+    assert.equal(tools.sessionSyscalls, undefined);
+    assert.equal(runs, 1);
+  },
+);
 
-test("external native tool ceiling cannot delegate, switch sandboxes, read confidential data or invoke MCP", async () => {
-  let runs = 0;
-  const tools = externalTools(
-    new Proxy({} as ToolContext, {
-      get: () => () => {
-        runs++;
-        return Promise.resolve("ok");
-      },
-    }),
-  );
-  await tools.execute("printf safe");
-  assert.equal(runs, 1);
-  for (const opts of [{ scratch: true }, { sandboxId: "private" }])
-    await assert.rejects(tools.execute("unsafe", opts), /private access/);
-  for (const call of [
-    () => tools.memoryRead(),
-    () => tools.read("global/secret"),
-    () => tools.callMcpTool("private", {}),
-    () => tools.cronList(),
-  ])
-    assert.throws(call, /private access/);
-  assert.equal(tools.sessionSyscalls, undefined);
-  assert.equal(runs, 1);
-});
-
-test("external broker requires the current run lease and both external-safe and ordinary grants", () =>
+tenantTest("external broker requires the current run lease and both external-safe and ordinary grants", () =>
   inTestTenant(async () => {
     const { externalSlackCapabilityAllowed } = await import("../src/api/external-slack-capability.ts");
     const { createAclStore } = await import("../src/acl/acl-store.ts");
@@ -224,36 +229,43 @@ test("external broker requires the current run lease and both external-safe and 
       );
     await acl.revoke("org:default-org", encodeRef(serviceCredRef("safe")), "org:default-org", "U1");
     assert.equal(await externalSlackCapabilityAllowed(claims, { runs, acl, externalSlackPolicies }), false);
-  }));
+  }),
+);
 
-test("external policy changes invalidate retained requests while untouched workspaces stay unchanged", async () => {
-  const { externalSlackRequestAllowed } = await import("../src/resolution/external-slack.ts");
-  const req = request("test");
-  assert.equal(externalSlackRequestAllowed(req, externalSlackPolicies), true);
-  assert.equal(externalSlackRequestAllowed(req, {}), false);
-  assert.equal(externalSlackRequestAllowed(req, { batch: { ...policy, serviceCredentials: [] } }), false);
-  assert.equal(externalSlackRequestAllowed(req, { batch: { ...policy, companyTeamIds: ["TOTHER"] } }), false);
-  const legacy = {
-    ...req,
-    externalSlack: undefined,
-    conversation: { ...req.conversation, channelRef: "C1", threadRef: "C1:old" },
-  };
-  assert.equal(externalSlackRequestAllowed(legacy, externalSlackPolicies), false);
-  assert.equal(externalSlackRequestAllowed({ ...legacy, surface: "web" }, externalSlackPolicies, true), false);
-  assert.equal(
-    externalSlackRequestAllowed(
-      { ...legacy, slackSource: { accountId: "staff", teamId: "STAFF", userId: "U1" } },
-      externalSlackPolicies,
-    ),
-    true,
-  );
-  assert.equal(
-    externalSlackRequestAllowed({ ...legacy, conversation: { kind: "dm", threadRef: "dm:U1" } }, externalSlackPolicies),
-    true,
-  );
-});
+tenantTest(
+  "external policy changes invalidate retained requests while untouched workspaces stay unchanged",
+  async () => {
+    const { externalSlackRequestAllowed } = await import("../src/resolution/external-slack.ts");
+    const req = request("test");
+    assert.equal(externalSlackRequestAllowed(req, externalSlackPolicies), true);
+    assert.equal(externalSlackRequestAllowed(req, {}), false);
+    assert.equal(externalSlackRequestAllowed(req, { batch: { ...policy, serviceCredentials: [] } }), false);
+    assert.equal(externalSlackRequestAllowed(req, { batch: { ...policy, companyTeamIds: ["TOTHER"] } }), false);
+    const legacy = {
+      ...req,
+      externalSlack: undefined,
+      conversation: { ...req.conversation, channelRef: "C1", threadRef: "C1:old" },
+    };
+    assert.equal(externalSlackRequestAllowed(legacy, externalSlackPolicies), false);
+    assert.equal(externalSlackRequestAllowed({ ...legacy, surface: "web" }, externalSlackPolicies, true), false);
+    assert.equal(
+      externalSlackRequestAllowed(
+        { ...legacy, slackSource: { accountId: "staff", teamId: "STAFF", userId: "U1" } },
+        externalSlackPolicies,
+      ),
+      true,
+    );
+    assert.equal(
+      externalSlackRequestAllowed(
+        { ...legacy, conversation: { kind: "dm", threadRef: "dm:U1" } },
+        externalSlackPolicies,
+      ),
+      true,
+    );
+  },
+);
 
-test("external account DMs require admission under the current policy", async () => {
+tenantTest("external account DMs require admission under the current policy", async () => {
   const { externalSlackRequestAllowed } = await import("../src/resolution/external-slack.ts");
   const dm = {
     surface: "slack",
@@ -273,7 +285,7 @@ test("external account DMs require admission under the current policy", async ()
   assert.equal(externalSlackRequestAllowed(dm, {}), true);
 });
 
-test("external sandbox API token cannot reach private APIs, while its safe broker token works", async (t) => {
+tenantTest("external sandbox API token cannot reach private APIs, while its safe broker token works", async (t) => {
   const { createServer } = await import("../src/api/server.ts");
   const { mintCapabilityToken } = await import("../src/auth/capability-token.ts");
   const { serverDeps } = await import("../src/wiring.ts");

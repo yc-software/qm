@@ -32,51 +32,33 @@ function provider(baseUrl: string) {
   return { id: "shared", name: "Shared", protocol: "openai" as const, baseUrl, models: [{ id: "m1" }] };
 }
 
-test("custom providers registered in one tenant are invisible to another and fail closed when unbound", () => {
-  withTenant(A, () => setCustomProviders([provider("https://a.example/v1")]));
-  withTenant(B, () => setCustomProviders([provider("https://b.example/v1")]));
-  assert.equal(
-    withTenant(A, () => resolveCustomModel("custom/shared/m1")?.baseUrl),
-    "https://a.example/v1",
-  );
-  assert.equal(
-    withTenant(B, () => resolveCustomModel("custom/shared/m1")?.baseUrl),
-    "https://b.example/v1",
-  );
-  const versionB = withTenant(B, customProvidersVersion);
-  withTenant(A, () => setCustomProviders([]));
-  assert.equal(
-    withTenant(A, () => resolveCustomModel("custom/shared/m1")),
-    undefined,
-  );
-  assert.equal(withTenant(B, customProvidersVersion), versionB);
-  assert.equal(
-    withTenant(B, () => customModelCatalog().length),
-    1,
-  );
+test("custom providers registered in one tenant are invisible to another and fail closed when unbound", async () => {
+  await withTenant(A, () => setCustomProviders([provider("https://a.example/v1")]));
+  await withTenant(B, () => setCustomProviders([provider("https://b.example/v1")]));
+  assert.equal(await withTenant(A, () => resolveCustomModel("custom/shared/m1")?.baseUrl), "https://a.example/v1");
+  assert.equal(await withTenant(B, () => resolveCustomModel("custom/shared/m1")?.baseUrl), "https://b.example/v1");
+  const versionB = await withTenant(B, customProvidersVersion);
+  await withTenant(A, () => setCustomProviders([]));
+  assert.equal(await withTenant(A, () => resolveCustomModel("custom/shared/m1")), undefined);
+  assert.equal(await withTenant(B, customProvidersVersion), versionB);
+  assert.equal(await withTenant(B, () => customModelCatalog().length), 1);
   assert.throws(() => withoutTenant(() => resolveCustomModel("custom/shared/m1")), UNBOUND);
   assert.throws(() => withoutTenant(() => setCustomProviders([])), UNBOUND);
-  withTenant(B, () => setCustomProviders([]));
+  await withTenant(B, () => setCustomProviders([]));
 });
 
-test("model overlays, unavailable reasons and the overlay version are per tenant", () => {
-  const versionB = withTenant(B, modelOverlayVersion);
-  withTenant(A, () => setModelOverlays(["vendor/gone"]));
-  assert.match(withTenant(A, () => modelUnavailableReason("vendor/gone")) ?? "", /deleted/);
-  assert.equal(
-    withTenant(B, () => modelUnavailableReason("vendor/gone")),
-    undefined,
-  );
-  assert.equal(withTenant(B, modelOverlayVersion), versionB);
-  withTenant(B, () => setModelOverlays(["vendor/other"]));
-  withTenant(A, () => setModelOverlays([]));
-  assert.equal(
-    withTenant(A, () => modelUnavailableReason("vendor/gone")),
-    undefined,
-  );
-  assert.match(withTenant(B, () => modelUnavailableReason("vendor/other")) ?? "", /deleted/);
+test("model overlays, unavailable reasons and the overlay version are per tenant", async () => {
+  const versionB = await withTenant(B, modelOverlayVersion);
+  await withTenant(A, () => setModelOverlays(["vendor/gone"]));
+  assert.match((await withTenant(A, () => modelUnavailableReason("vendor/gone"))) ?? "", /deleted/);
+  assert.equal(await withTenant(B, () => modelUnavailableReason("vendor/gone")), undefined);
+  assert.equal(await withTenant(B, modelOverlayVersion), versionB);
+  await withTenant(B, () => setModelOverlays(["vendor/other"]));
+  await withTenant(A, () => setModelOverlays([]));
+  assert.equal(await withTenant(A, () => modelUnavailableReason("vendor/gone")), undefined);
+  assert.match((await withTenant(B, () => modelUnavailableReason("vendor/other"))) ?? "", /deleted/);
   assert.throws(() => withoutTenant(() => resolveModel("claude-opus-5")), UNBOUND);
-  withTenant(B, () => setModelOverlays([]));
+  await withTenant(B, () => setModelOverlays([]));
 });
 
 test("public OAuth clients registered for one tenant do not resolve in another", async () => {
@@ -89,19 +71,16 @@ test("public OAuth clients registered for one tenant do not resolve in another",
     clientId,
     label: "Acme",
   });
-  withTenant(A, () => setPublicOAuthClients([client("client-a")]));
-  withTenant(B, () => setPublicOAuthClients([client("client-b")]));
+  await withTenant(A, () => setPublicOAuthClients([client("client-a")]));
+  await withTenant(B, () => setPublicOAuthClients([client("client-b")]));
   const resolve = withPublicOAuthClients(async () => ({ id: "fallback", secret: "", clientRef: "fallback" }));
   assert.equal((await withTenant(A, () => resolve("acme", {} as never)))?.id, "client-a");
   assert.equal((await withTenant(B, () => resolve("acme", {} as never)))?.id, "client-b");
-  withTenant(A, () => setPublicOAuthClients([]));
-  assert.equal(
-    withTenant(A, () => oauthProvider("acme")),
-    undefined,
-  );
-  assert.ok(withTenant(B, () => oauthProvider("acme")));
+  await withTenant(A, () => setPublicOAuthClients([]));
+  assert.equal(await withTenant(A, () => oauthProvider("acme")), undefined);
+  assert.ok(await withTenant(B, () => oauthProvider("acme")));
   assert.throws(() => withoutTenant(() => oauthProvider("acme")), UNBOUND);
-  withTenant(B, () => setPublicOAuthClients([]));
+  await withTenant(B, () => setPublicOAuthClients([]));
 });
 
 test("a cold tenant loads its own public OAuth clients before resolving one", async () => {
@@ -129,10 +108,7 @@ test("a cold tenant loads its own public OAuth clients before resolving one", as
   assert.equal((await withTenant(D, () => resolve("acme", {} as never)))?.id, "fallback");
   await withTenant(C, () => publicOAuthClientsReady());
   assert.equal(loads, 2);
-  assert.equal(
-    withTenant(D, () => oauthProvider("acme")),
-    undefined,
-  );
+  assert.equal(await withTenant(D, () => oauthProvider("acme")), undefined);
   await assert.rejects(
     withoutTenant(() => publicOAuthClientsReady()),
     UNBOUND,

@@ -186,6 +186,7 @@ test("slack backend intersects private-channel visibility across all principals"
 test("file search retains common artifact identities when viewers own different copies", () =>
   inTestTenant(async () => {
     const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "search-copies-")) }));
+    await built.identity.ready();
     const project = scopeId("group", "search-copy-project");
     const ids = ["shared-copy-alice", "shared-copy-bob"];
     for (const [index, author] of principals.entries()) {

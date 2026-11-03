@@ -16,10 +16,7 @@ import { inTestTenant } from "./support/test-tenants.ts";
 // the repo's host-backed Sprites transport. This does not test VM isolation.
 async function fixture(t: TestContext, config: Partial<Config> = {}) {
   const built = buildApp(testConfig({ memoryCapture: "off", ...config }));
-  await inTestTenant(() => built.identity.ready());
-  await built.config.hydrate?.();
-  await built.identity.refresh();
-  await built.deploymentLayerStore.hydrate();
+  await inTestTenant(() => undefined);
   t.after(async () => {
     built.scheduler.stop();
     await built.runtime.stop();

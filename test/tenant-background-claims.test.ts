@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { glob, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,6 +12,9 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { createProcessReaper } from "../src/processes/process-reaper.ts";
+import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { claimAcrossTenants, crossTenantLoop, inTenantOf, useOwnerDatabase, rowTenant } from "../src/tenants/claim.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -124,22 +127,16 @@ test("loop bodies and sweeps run unbound even when started under a tenant", asyn
   const seen: Array<string | undefined> = [];
   await withTenant(A, () => crossTenantLoop(async () => void seen.push(boundTenant()))());
   const sweeper = createSweeper(() => seen.push(boundTenant()), 60_000, { immediate: true });
-  withTenant(A, () => sweeper.start());
+  await withTenant(A, () => sweeper.start());
   await sweeper.stop();
   assert.deepEqual(seen, [undefined, undefined]);
 });
 
-test("a claimed row binds its own tenant, and a row without one runs unbound", () => {
+test("a claimed row binds its own tenant, and a row without one runs unbound", async () => {
   assert.deepEqual(rowTenant({ tenant_id: A }), { tenantId: A });
   assert.deepEqual(rowTenant({ tenant_id: null }), {});
-  assert.equal(
-    withTenant(B, () => inTenantOf(A, boundTenant)),
-    A,
-  );
-  assert.equal(
-    withTenant(B, () => inTenantOf(undefined, boundTenant)),
-    undefined,
-  );
+  assert.equal(await withTenant(B, () => inTenantOf(A, boundTenant)), A);
+  assert.equal(await withTenant(B, () => inTenantOf(undefined, boundTenant)), undefined);
 });
 
 test("one worker claims across tenants and runs each turn under its run's tenant", { skip }, async () => {
@@ -156,7 +153,7 @@ test("one worker claims across tenants and runs each turn under its run's tenant
         return { status: "silent" as const };
       },
     } as unknown as Orchestrator;
-    const worker = withTenant(A, () => createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 }));
+    const worker = await withTenant(A, () => createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 }));
     withTenant(B, () => worker.start());
     for (let i = 0; i < 400 && ran.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 5));
     await worker.stop(1);
@@ -338,3 +335,81 @@ test("pruning ended cron fires keeps the newest per cron within each tenant", { 
     await raw.end();
   }
 });
+
+test("work a cross-tenant claim binds to a cold tenant sees that tenant's roster loaded", { skip }, async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cold-claim-")), workers: 0 }));
+  try {
+    const { rows } = await claimAcrossTenants("SELECT id AS tenant_id FROM tenants WHERE id = $1", [B]);
+    assert.equal(rows.length, 1);
+    const principal = await inTenantOf(rowTenant(rows[0]!).tenantId, () => built.identity.classify("U1"));
+    assert.equal(principal.type, "internal");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("pruning consumed run signals deletes old consumed rows in every tenant", { skip }, async () => {
+  const url = testDatabaseUrl();
+  const signals = createPostgresRunSignalStore(url);
+  const raw = new pg.Pool({ connectionString: ownerUrlOf(url), max: 1 });
+  try {
+    for (const tenant of [A, B])
+      await withTenant(tenant, async () => {
+        await signals.send(`consumed-${tenant}`, { kind: "abort" });
+        await signals.send(`pending-${tenant}`, { kind: "abort" });
+        await signals.takePending(`consumed-${tenant}`);
+      });
+    await signals.prune(-1);
+    const kept = await raw.query("SELECT tenant_id, run_id FROM run_signals");
+    assert.deepEqual(
+      kept.rows.map((row) => [row.tenant_id, row.run_id]).sort(),
+      [
+        [A, `pending-${A}`],
+        [B, `pending-${B}`],
+      ].sort(),
+    );
+  } finally {
+    await signals.close?.();
+    await raw.end();
+  }
+});
+
+test(
+  "the process reaper claims expired sessions across tenants and reaps each under its own tenant",
+  { skip },
+  async () => {
+    const url = testDatabaseUrl();
+    const registry = createPostgresProcessRegistry(url);
+    const raw = new pg.Pool({ connectionString: ownerUrlOf(url), max: 1 });
+    const ids = new Map([
+      [A, randomUUID()],
+      [B, randomUUID()],
+    ]);
+    try {
+      for (const [tenant, processId] of ids)
+        await withTenant(tenant, () =>
+          registry.register({ processId, scopeId: "s", sandboxId: "vm", kind: "build", command: "x", ttlMs: -1 }),
+        );
+      const killed: Array<[string, string | undefined]> = [];
+      const notified: Array<[string, string | undefined]> = [];
+      const reaper = createProcessReaper(registry, {
+        intervalMs: 60_000,
+        leaderLease: createNoopLeaderLease(),
+        kill: async (rec) => void killed.push([rec.processId, boundTenant()]),
+        onReaped: async (rec) => void notified.push([rec.processId, boundTenant()]),
+      });
+      assert.equal((await reaper.sweep()).reaped, 2);
+      const expected = [...ids].map(([tenant, processId]) => [processId, tenant]).sort();
+      assert.deepEqual(killed.sort(), expected);
+      assert.deepEqual(notified.sort(), expected);
+      const rows = await raw.query("SELECT process_id, tenant_id, status FROM process_sessions");
+      assert.deepEqual(
+        rows.rows.map((row) => [row.process_id, row.tenant_id, row.status]).sort(),
+        expected.map(([processId, tenant]) => [processId, tenant, "reaped"]),
+      );
+    } finally {
+      registry.close?.();
+      await raw.end();
+    }
+  },
+);

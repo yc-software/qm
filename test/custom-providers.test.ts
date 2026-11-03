@@ -1,4 +1,4 @@
-import { test, afterEach } from "node:test";
+import { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   setCustomProviders,
@@ -12,8 +12,9 @@ import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { createCustomProviderStore, type StoredCustomProvider } from "../src/model/model-credential-store.ts";
 import { modelSupported, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { testMap } from "./support/test-database.ts";
+import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
 
-afterEach(() => setCustomProviders([]));
+afterEach(() => inTestTenant(() => setCustomProviders([])));
 
 const GATEWAY = {
   id: "acme-gateway",
@@ -23,7 +24,7 @@ const GATEWAY = {
   models: [{ id: "acme-large", name: "Acme Large", contextWindow: 200_000, maxTokens: 16_000, input: 2, output: 8 }],
 };
 
-test("a registered custom model resolves with the provider's protocol and base URL", () => {
+tenantTest("a registered custom model resolves with the provider's protocol and base URL", () => {
   setCustomProviders([GATEWAY]);
   const model = resolveCustomModel("custom/acme-gateway/acme-large");
   assert.ok(model);
@@ -34,7 +35,7 @@ test("a registered custom model resolves with the provider's protocol and base U
   assert.equal(model.cost.input, 2);
 });
 
-test("anthropic-protocol providers produce anthropic-messages models with defaults", () => {
+tenantTest("anthropic-protocol providers produce anthropic-messages models with defaults", () => {
   setCustomProviders([
     {
       id: "eu-anthropic",
@@ -51,7 +52,7 @@ test("anthropic-protocol providers produce anthropic-messages models with defaul
   assert.equal(model.cost.input, 0);
 });
 
-test("openai-responses survives both custom model mappings", () => {
+tenantTest("openai-responses survives both custom model mappings", () => {
   setCustomProviders([
     {
       id: "responses-gateway",
@@ -66,19 +67,19 @@ test("openai-responses survives both custom model mappings", () => {
   assert.equal(generated.providers["responses-gateway"]?.api, "openai-responses");
 });
 
-test("custom models resolve in their own namespace, so they never shadow a built-in of the same name", () => {
+tenantTest("custom models resolve in their own namespace, so they never shadow a built-in of the same name", () => {
   setCustomProviders([{ ...GATEWAY, models: [{ id: "acme-large" }, { id: "claude-opus-5", name: "impostor" }] }]);
   assert.equal(resolveModel("custom/acme-gateway/acme-large")?.provider, "acme-gateway");
   assert.equal(resolveModel("custom/acme-gateway/claude-opus-5")?.name, "impostor");
   assert.equal(String(resolveModel("claude-opus-5")?.provider), "anthropic");
 });
 
-test("custom models are gated to the agent", () => {
+tenantTest("custom models are gated to the agent", () => {
   setCustomProviders([GATEWAY]);
   assert.equal(modelSupported("custom/acme-gateway/acme-large"), true);
 });
 
-test("a registered custom model is serviceable regardless of built-in key availability", () => {
+tenantTest("a registered custom model is serviceable regardless of built-in key availability", () => {
   setCustomProviders([GATEWAY]);
   assert.equal(
     modelServiceable("custom/acme-gateway/acme-large", { anthropic: false, openai: false, openrouter: false }),
@@ -86,7 +87,7 @@ test("a registered custom model is serviceable regardless of built-in key availa
   );
 });
 
-test("catalog lists custom models; clearing the registry removes them", () => {
+tenantTest("catalog lists custom models; clearing the registry removes them", () => {
   setCustomProviders([GATEWAY]);
   assert.deepEqual(customModelCatalog(), [
     { id: "custom/acme-gateway/acme-large", name: "Acme Large", provider: "acme-gateway" },
@@ -96,7 +97,7 @@ test("catalog lists custom models; clearing the registry removes them", () => {
   assert.equal(resolveModel("custom/acme-gateway/acme-large"), undefined);
 });
 
-test("spec validation rejects reserved ids, bad slugs, bad URLs, and empty model lists", () => {
+tenantTest("spec validation rejects reserved ids, bad slugs, bad URLs, and empty model lists", () => {
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, id: "openai" }), /reserved/);
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, id: "Not A Slug" }), /slug/);
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, baseUrl: "ftp://x" }), /http/);
@@ -105,7 +106,7 @@ test("spec validation rejects reserved ids, bad slugs, bad URLs, and empty model
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "a" }, { id: "a" }] }), /duplicate/);
 });
 
-test("store round-trip: upsert encrypts the key, statuses never leak it, delete disables", async () => {
+tenantTest("store round-trip: upsert encrypts the key, statuses never leak it, delete disables", async () => {
   const backing = testMap<StoredCustomProvider>();
   const store = createCustomProviderStore({ backing, keyMaterial: "test-key-material" });
 
@@ -133,7 +134,7 @@ test("store round-trip: upsert encrypts the key, statuses never leak it, delete 
   assert.equal(await store.delete("never-existed", "admin@example.com"), false);
 });
 
-test("store validates specs on upsert", async () => {
+tenantTest("store validates specs on upsert", async () => {
   const store = createCustomProviderStore({
     backing: testMap<StoredCustomProvider>(),
     keyMaterial: "k",
@@ -141,7 +142,7 @@ test("store validates specs on upsert", async () => {
   await assert.rejects(store.upsert({ ...GATEWAY, id: "anthropic" }, "k", "a@b.c"), /reserved/);
 });
 
-test("registered models surface in the catalog and vanish on unregister", () => {
+tenantTest("registered models surface in the catalog and vanish on unregister", () => {
   setCustomProviders([
     {
       id: "deepseek",
@@ -159,7 +160,7 @@ test("registered models surface in the catalog and vanish on unregister", () => 
   assert.ok(!builtInModelCatalog().some((m) => m.id === "custom/deepseek/deepseek-chat"));
 });
 
-test("catalog cache invalidates immediately when the custom registry changes", async () => {
+tenantTest("catalog cache invalidates immediately when the custom registry changes", async () => {
   const { selectableModelCatalog } = await import("../src/model/model-catalog.ts");
   const fetcher: typeof fetch = async () => new Response(JSON.stringify({ data: [] }), { status: 200 });
   setCustomProviders([]);
@@ -188,7 +189,7 @@ test("catalog cache invalidates immediately when the custom registry changes", a
 });
 
 for (const field of ["contextWindow", "maxTokens"] as const) {
-  test(`custom provider ${field} must be a positive safe integer`, () => {
+  tenantTest(`custom provider ${field} must be a positive safe integer`, () => {
     for (const value of [0, -1, 2048.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity]) {
       assert.throws(
         () => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "acme-large", [field]: value }] }),
@@ -207,7 +208,7 @@ for (const field of ["contextWindow", "maxTokens"] as const) {
 
 for (const protocol of ["openai", "openai-responses", "anthropic"] as const) {
   for (const reasoning of [undefined, false, true]) {
-    test(`custom ${protocol} reasoning=${reasoning} survives persistence and runtime mappings`, async () => {
+    tenantTest(`custom ${protocol} reasoning=${reasoning} survives persistence and runtime mappings`, async () => {
       const spec = { ...GATEWAY, protocol, models: [{ ...GATEWAY.models[0]!, reasoning }] };
       const backing = testMap<StoredCustomProvider>();
       const store = createCustomProviderStore({ backing, keyMaterial: "reasoning-test" });
@@ -226,7 +227,7 @@ for (const protocol of ["openai", "openai-responses", "anthropic"] as const) {
   }
 }
 
-test("custom provider reasoning rejects non-boolean capabilities", () => {
+tenantTest("custom provider reasoning rejects non-boolean capabilities", () => {
   for (const reasoning of ["true", "false", 0, 1, null, {}]) {
     assert.throws(
       () => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "acme-large", reasoning } as never] }),

@@ -54,8 +54,8 @@ describe("tenant claims", () => {
     assert.equal((await openOAuthState(sealed, { secret: SECRET, maxAgeMs: 60_000 })).tenant, TENANT_A);
   });
 
-  it("signed requests cover the tenant header", () => {
-    const headers = withTenant(TENANT_A, () => signedRequestHeaders(SECRET, "GET", "/v1/x", "", {}, 1));
+  it("signed requests cover the tenant header", async () => {
+    const headers = await withTenant(TENANT_A, () => signedRequestHeaders(SECRET, "GET", "/v1/x", "", {}, 1));
     assert.equal(headers[TENANT_HEADER], TENANT_A);
     assert.notEqual(canonicalPayload("GET", "/v1/x", "", TENANT_A), canonicalPayload("GET", "/v1/x", "", TENANT_B));
   });

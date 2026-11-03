@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
-import { tenantReady } from "../src/tenants/context.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const identityFailure = new Error("identity persistence unavailable");
 const configFailure = new Error("configuration persistence unavailable");
@@ -47,7 +47,10 @@ test("a failed first-bind load fails closed and runs again on the next use", asy
   const built = buildApp(testConfig());
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
-      await assert.rejects(tenantReady(), (error: unknown) => error === identityFailure || error === configFailure);
+      await assert.rejects(
+        inTestTenant(() => undefined),
+        (error: unknown) => error === identityFailure || error === configFailure,
+      );
     }
   } finally {
     await built.runtime.stop();

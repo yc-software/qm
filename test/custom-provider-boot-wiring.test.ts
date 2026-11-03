@@ -5,13 +5,13 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, afterEach } from "node:test";
+import { afterEach } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { defaultModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { testTenantHeaders } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -19,9 +19,9 @@ const ADMIN = {
   ...testTenantHeaders(),
 };
 
-afterEach(() => setCustomProviders([]));
+afterEach(() => inTestTenant(() => setCustomProviders([])));
 
-test("serverDeps wires the custom-provider store and resolves a custom boot default lazily", async () => {
+tenantTest("serverDeps wires the custom-provider store and resolves a custom boot default lazily", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "custom-provider-boot-")),
     modelId: "custom/acme-gateway/acme-large",
