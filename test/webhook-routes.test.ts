@@ -14,16 +14,17 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testTenantHeaders } from "./support/test-tenants.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const HOOK_SECRET = "hook-secret";
 
 function start(signingSecret?: string, publicUrl?: string): { base: string; close: () => Promise<void> } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wh-")) }));
+  const databaseUrl = testMigratedDatabaseUrl();
+  const built = buildApp(testConfig({ databaseUrl, dataDir: mkdtempSync(join(tmpdir(), "wh-")) }));
   const deps = { ...(publicUrl ? { publicUrl } : {}), webhookReceiver: built.webhookReceiver };
   const server = signingSecret
-    ? createServer(built.app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), ...deps, signingSecret })
+    ? createServer(built.app, { replayDedupe: createPostgresReplayDedupe(databaseUrl), ...deps, signingSecret })
     : createInsecureTestServer(built.app, deps);
   server.listen(0);
   return {

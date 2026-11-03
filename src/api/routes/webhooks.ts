@@ -1,3 +1,4 @@
+import { inTenantOf } from "../../tenants/claim.ts";
 import type { Webhook } from "../../triggers/types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
@@ -66,7 +67,10 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
       return sendJson(res, 413, { error: "payload_too_large", message: errMessage(e) });
     throw e;
   }
-  const out = await deps.webhookReceiver.deliver(id, { headers: req.headers, rawBody });
+  const receiver = deps.webhookReceiver;
+  const tenant = await receiver.tenantOf(id);
+  if (!tenant) return sendJson(res, 404, { error: "not_found" });
+  const out = await inTenantOf(tenant, () => receiver.deliver(id, { headers: req.headers, rawBody }));
   if (out.status === 200) {
     res.writeHead(200, { "content-type": "text/plain" });
     res.end(out.body);

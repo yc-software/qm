@@ -480,19 +480,18 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         await mergeSource(id, { enabled });
       });
     },
-    receive: crossTenantLoop(
-      async (
-        id: string,
-        request: { headers: VerifierInput["headers"]; rawBody: string },
-      ): Promise<{ status: number; body: string }> => {
-        if (Buffer.byteLength(request.rawBody) > 64_000)
-          return { status: 413, body: "Event payload must be under 64 KB" };
-        if (id === "gmail") return receiveGmail(c, request);
-        const source = await deps.sources.claim(id);
-        if (!source) return { status: 404, body: "Not found" };
-        return inTenantOf(source.tenantId, () => receiveSigned(c, source, request));
-      },
-    ),
+    tenantOf: crossTenantLoop(async (id: string) => (await deps.sources.claim(id))?.tenantId),
+    async receive(
+      id: string,
+      request: { headers: VerifierInput["headers"]; rawBody: string },
+    ): Promise<{ status: number; body: string }> {
+      if (Buffer.byteLength(request.rawBody) > 64_000)
+        return { status: 413, body: "Event payload must be under 64 KB" };
+      if (id === "gmail") return crossTenantLoop(() => receiveGmail(c, request))();
+      const source = await deps.sources.get(id);
+      if (!source) return { status: 404, body: "Not found" };
+      return receiveSigned(c, source, request);
+    },
     maintain: crossTenantLoop(async () => {
       if (Date.now() >= nextCleanupAt) {
         await deps.deliveries.pruneCompleted(Date.now() - 30 * 86_400_000);
