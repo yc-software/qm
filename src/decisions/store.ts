@@ -1,6 +1,8 @@
 import type { PoolClient } from "pg";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { checkRuleSet, type DecisionHook, type DecisionProvider, type DecisionRule } from "./decisions.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 interface DecisionWriter {
   actorId: string;
@@ -55,20 +57,42 @@ const MAX_STORED_RULES = 100;
 const MAX_PROVIDERS = 20;
 
 export function createPostgresDecisionStore(connectionString: string): DecisionStore {
-  const { q, pool } = createPgPool(connectionString, [{ id: "decisions/0001", statements: SCHEMA }]);
-  const active = new Map<DecisionHook, { at: number; rules: Promise<DecisionRule[]> }>();
-  let known: { at: number; providers: Promise<DecisionProvider[]> } | undefined;
+  const { q, pool } = createPgPool(connectionString, [
+    TENANCY_BASE,
+    { id: "decisions/0001", statements: SCHEMA },
+    tenantTables(
+      "decisions/0002-tenants",
+      [
+        { table: "decision_providers", primaryKey: "provider_id" },
+        { table: "decision_rules", primaryKey: "rule_id" },
+      ],
+      {
+        foreignKeys: [
+          {
+            table: "decision_rules",
+            name: "decision_rules_provider_id_fkey",
+            columns: "provider_id",
+            references: "decision_providers(tenant_id, provider_id)",
+          },
+        ],
+      },
+    ),
+  ]);
+  const active = new Map<string, { at: number; rules: Promise<DecisionRule[]> }>();
+  const known = new Map<string, { at: number; providers: Promise<DecisionProvider[]> }>();
   const write = async (fn: (db: PoolClient) => Promise<unknown>) => {
     await withPgTransaction(await pool(), async (db) => {
       await db.query("LOCK TABLE decision_rules IN SHARE ROW EXCLUSIVE MODE");
       await fn(db);
     });
     active.clear();
-    known = undefined;
+    known.clear();
   };
   return {
     async providers(ids) {
-      if (!known || Date.now() - known.at >= CACHE_MS) {
+      const tenant = currentTenant();
+      let cached = known.get(tenant);
+      if (!cached || Date.now() - cached.at >= CACHE_MS) {
         const providers = q("SELECT * FROM decision_providers ORDER BY provider_id").then((rows) =>
           rows.map((r) => ({
             id: r.provider_id as string,
@@ -76,19 +100,21 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
             ...(r.base_url ? { baseUrl: r.base_url as string, credential: r.credential as string } : {}),
           })),
         );
-        known = { at: Date.now(), providers };
-        providers.catch(() => (known = undefined));
+        cached = { at: Date.now(), providers };
+        known.set(tenant, cached);
+        providers.catch(() => known.delete(tenant));
       }
-      const all = await known.providers;
+      const all = await cached.providers;
       return ids ? all.filter((p) => ids.includes(p.id)) : all;
     },
     async rules(hook) {
       if (!hook) return (await q(`${RULES} ORDER BY rule_id`)).map(toRule);
-      const hit = active.get(hook);
+      const key = `${currentTenant()}\n${hook}`;
+      const hit = active.get(key);
       if (hit && Date.now() - hit.at < CACHE_MS) return hit.rules;
       const rules = q(`${RULES} WHERE hook = $1 AND mode <> 'off' ORDER BY rule_id`, [hook]).then((r) => r.map(toRule));
-      active.set(hook, { at: Date.now(), rules });
-      rules.catch(() => active.delete(hook));
+      active.set(key, { at: Date.now(), rules });
+      rules.catch(() => active.delete(key));
       return rules;
     },
     saveProvider: (p, by) =>
@@ -101,7 +127,7 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
         await db.query(
           `INSERT INTO decision_providers (provider_id, protocol, base_url, credential, updated_by, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (provider_id) DO UPDATE SET protocol = $2, base_url = $3, credential = $4, updated_by = $5, updated_at = $6`,
+           ON CONFLICT (tenant_id, provider_id) DO UPDATE SET protocol = $2, base_url = $3, credential = $4, updated_by = $5, updated_at = $6`,
           [p.id, p.protocol, p.baseUrl ?? null, p.credential ?? null, by.actorId, Date.now()],
         );
       }),
@@ -126,7 +152,7 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
           `INSERT INTO decision_rules
              (rule_id, hook, question, options, provider_id, model, mode, on_error, updated_by, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT (rule_id) DO UPDATE SET hook = $2, question = $3, options = $4, provider_id = $5, model = $6,
+           ON CONFLICT (tenant_id, rule_id) DO UPDATE SET hook = $2, question = $3, options = $4, provider_id = $5, model = $6,
              mode = $7, on_error = $8, updated_by = $9, updated_at = $10`,
           [
             rule.id,

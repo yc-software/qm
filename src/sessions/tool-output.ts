@@ -6,11 +6,9 @@ import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
 
-const TOOL_OUTPUT_SETTING = "tool_result_inline_tokens";
 export const DEFAULT_INLINE_TOKENS = 4096;
 const CHARS_PER_TOKEN = 4;
 const TOOL_OUTPUT_RETENTION_MS = 30 * 24 * 60 * 60_000;
-const SETTING_CACHE_MS = 30_000;
 const TOOL_OUTPUT_PATH = "tool-output/";
 const DIGEST_DIR = "md5/";
 
@@ -29,12 +27,6 @@ export interface ToolOutputStore {
   inlineTokens(): Promise<number>;
   save(text: string): Promise<string>;
   read(sessionId: string, key: ParkedOutputKey): Promise<{ text: string } | { expired: true } | null>;
-}
-
-export function inlineTokensFrom(value: unknown): number {
-  if (value === undefined || value === null) return DEFAULT_INLINE_TOKENS;
-  const n = typeof value === "string" ? Number(value) : value;
-  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_INLINE_TOKENS;
 }
 
 const md5Hex = (text: string): string => createHash("md5").update(text, "utf8").digest("hex");
@@ -90,7 +82,6 @@ export function createPostgresToolOutputStore(opts: {
   now?: () => number;
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
-  let setting: { value: number; at: number } | null = null;
   const tenantStores = new Map<string, DurableByteStore>();
   const tenantBytes = (): { id: string; bytes: DurableByteStore } => {
     const id = currentTenant();
@@ -100,10 +91,7 @@ export function createPostgresToolOutputStore(opts: {
   };
   return {
     async inlineTokens() {
-      if (setting && now() - setting.at < SETTING_CACHE_MS) return setting.value;
-      const rows = await opts.pool.q("SELECT value FROM qm_settings WHERE key = $1", [TOOL_OUTPUT_SETTING]);
-      setting = { value: inlineTokensFrom(rows[0]?.value), at: now() };
-      return setting.value;
+      return DEFAULT_INLINE_TOKENS;
     },
     async save(text) {
       const { id, bytes } = tenantBytes();

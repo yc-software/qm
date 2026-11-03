@@ -1,5 +1,6 @@
 import { createPostgresEventSink, type EventColumn } from "./scoped-event-sink.ts";
 import type { EgressAuditRecord, EgressAuditSink } from "./egress-audit-sink.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 const COLUMNS: readonly EventColumn<keyof EgressAuditRecord & string>[] = [
   ["ts", "ts", "BIGINT", "number", true],
@@ -20,7 +21,13 @@ export function createPostgresEgressAuditSink(connectionString: string): EgressA
     table: "egress_events",
     columns: COLUMNS,
 
-    schema: { expectedChecksum: "cfbf4ab51c2b0a4ac45eaeeb7a7011d7b2a4a4d9c21072473ed27400b03fe054" },
+    schema: {
+      expectedChecksum: "cfbf4ab51c2b0a4ac45eaeeb7a7011d7b2a4a4d9c21072473ed27400b03fe054",
+      followUps: [
+        TENANCY_BASE,
+        tenantTables("admin/scoped-events/egress_events/0002-tenants", [{ table: "egress_events", primaryKey: "id" }]),
+      ],
+    },
     defaultLimit: 5000,
     equalityFilters: { scopeId: "scope_label", source: "source" },
     persistErrorMessage: "[egress-audit] failed to persist egress decision:",

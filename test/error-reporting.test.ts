@@ -142,7 +142,8 @@ test("operator error records send one classified event with the record details",
     const { withErrorReporting } = await import('./src/admin/error-log.ts');
     const { createPostgresErrorLog } = await import('./src/admin/postgres-error-log.ts');
     const { testDatabaseUrl } = await import('./test/support/test-database.ts');
-    const errors = withErrorReporting(createPostgresErrorLog(testDatabaseUrl()));
+    const { tenantBoundUrl } = await import('./test/support/test-tenants.ts');
+    const errors = withErrorReporting(createPostgresErrorLog(tenantBoundUrl(testDatabaseUrl())));
     const error = new Error('private-job-failure');
     console.error('[worker] private-job-failure');
     errors.record({category:'turn', code:'failed', message:error.message, scopeLabel:'private-scope'}, error);
@@ -319,7 +320,8 @@ test("reportFailure sends one classified event per distinct failure and skips ca
     const { withErrorReporting } = await import('./src/admin/error-log.ts');
     const { createPostgresErrorLog } = await import('./src/admin/postgres-error-log.ts');
     const { testDatabaseUrl } = await import('./test/support/test-database.ts');
-    const errors = withErrorReporting(createPostgresErrorLog(testDatabaseUrl()));
+    const { tenantBoundUrl } = await import('./test/support/test-tenants.ts');
+    const errors = withErrorReporting(createPostgresErrorLog(tenantBoundUrl(testDatabaseUrl())));
     const recorded = new Error('private-turn-failure');
     errors.record({category:'turn', code:'error', message:recorded.message, scopeLabel:'private-scope'}, recorded);
     reportFailure('scheduler: fire', recorded);

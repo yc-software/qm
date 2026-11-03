@@ -1,5 +1,6 @@
 import { likeContains } from "../persistence/like.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import type { ScopeId } from "../types.ts";
 import type { DurableByteStore } from "./durable-byte-store.ts";
 import {
@@ -68,6 +69,7 @@ export function createPostgresFileArtifactStore(
   byteStore: DurableByteStore,
 ): FileArtifactStore {
   const { q, query, pool } = createPgPool(connectionString, [
+    TENANCY_BASE,
     { id: "files/artifacts/0001", statements: SCHEMA },
     {
       id: "files/artifacts/0002",
@@ -75,6 +77,10 @@ export function createPostgresFileArtifactStore(
         "CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)",
       ],
     },
+    tenantTables("files/artifacts/0003-tenants", [
+      { table: "file_artifacts", primaryKey: "id" },
+      { table: "file_artifact_deletions", primaryKey: "id" },
+    ]),
   ]);
 
   async function getRow(id: string): Promise<FileArtifact | null> {
@@ -169,7 +175,7 @@ export function createPostgresFileArtifactStore(
            (id, kind, owner_scope_id, path, name, mimetype, size_bytes, blob_key, sha256,
             direction, created_by, created_in_scope, created_at, updated_at, enabled, source)
          VALUES ($1,'file',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,TRUE,'live')
-         ON CONFLICT (id) DO NOTHING`,
+         ON CONFLICT (tenant_id, id) DO NOTHING`,
           [
             input.id,
             input.ownerScopeId,
@@ -230,7 +236,7 @@ export function createPostgresFileArtifactStore(
       await withPgTransaction(await pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-artifact:${id}`]);
         await client.query(
-          "INSERT INTO file_artifact_deletions(id,deleted_at) VALUES($1,$2) ON CONFLICT(id) DO NOTHING",
+          "INSERT INTO file_artifact_deletions(id,deleted_at) VALUES($1,$2) ON CONFLICT(tenant_id, id) DO NOTHING",
           [id, Date.now()],
         );
         await client.query("DELETE FROM file_artifacts WHERE id=$1", [id]);

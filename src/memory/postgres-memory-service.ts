@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import type { ScopeId } from "../types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import { createNotebookMemory, type FactStoreTx, type MemoryService } from "./memory-service.ts";
 import { isMemorySensitivity, type MemoryFact } from "./facts.ts";
 
@@ -82,6 +83,7 @@ const LIVE = `SELECT id, text, sensitivity, sources, source_unknown, author, cre
   FROM memory_facts WHERE scope_id = $1 AND deleted_at IS NULL ORDER BY id`;
 
 export const MEMORY_FACTS_MIGRATIONS = [
+  TENANCY_BASE,
   {
     id: "memory/facts/0000-records-column",
     statements: ["ALTER TABLE IF EXISTS memory_revisions ADD COLUMN IF NOT EXISTS records JSONB"],
@@ -103,6 +105,7 @@ export const MEMORY_FACTS_MIGRATIONS = [
       "ALTER TABLE memory_facts ALTER COLUMN text_hash SET NOT NULL",
     ],
   },
+  tenantTables("memory/facts/0003-tenants", [{ table: "memory_facts", primaryKey: "id" }]),
 ];
 
 export function createPostgresMemoryService(connectionString: string): MemoryService {

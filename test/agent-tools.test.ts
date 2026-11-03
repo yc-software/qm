@@ -8,7 +8,7 @@ import { resumeStrategy } from "../src/core/turn-resume.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
-import { createPostgresToolOutputStore, parkedOutputKey } from "../src/sessions/tool-output.ts";
+import { createPostgresToolOutputStore, DEFAULT_INLINE_TOKENS, parkedOutputKey } from "../src/sessions/tool-output.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -724,12 +724,10 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   const session = await store.getOrCreateByThread("web:park", "dm", "personal:U1" as SessionEntry["scopeLabel"]);
   const { lease } = await store.acquireLease(session.id);
   assert.ok(lease);
-  await pool.q("INSERT INTO qm_settings(key, value) VALUES ('tool_result_inline_tokens', '100')");
-  const clock = { at: Date.now() };
   const bytes = createMemoryDurableByteStore();
-  const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes, now: () => clock.at });
+  const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes });
   const appends: Promise<unknown>[] = [];
-  const full = Array.from({ length: 2_000 }, (_, i) => `line ${i}`).join("\n");
+  const full = Array.from({ length: 20_000 }, (_, i) => `line ${i}`).join("\n");
   const tc = {
     ...fakeToolContext(),
     toolOutput: outputs,
@@ -760,18 +758,12 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   const marker = parkedOutputKey(/tool-output\/\S+(?=;)/.exec(seen)![0])!;
   const parked = await outputs.read(session.id, marker);
   assert.ok(parked && "text" in parked, "the marker names the parked file");
-  assert.ok(payload.output.shownChars <= 400 && seen.length < 1_000, `cut to the 100-token budget (${seen.length})`);
+  assert.ok(
+    payload.output.shownChars <= DEFAULT_INLINE_TOKENS * 4 && seen.length < full.length / 2,
+    `cut to the default budget (${seen.length})`,
+  );
   assert.equal(parked.text.length, payload.output.chars);
-  assert.ok(parked.text.includes("line 1999"));
-
-  await pool.q("UPDATE qm_settings SET value = '0' WHERE key = 'tool_result_inline_tokens'");
-  clock.at += 60_000;
-  emitted.length = 0;
-  ref.emit = (e) => void emitted.push(e as Emitted);
-  await call(execute, { command: "seq", purpose: "Run test command" });
-  const uncapped = emitted.find((e) => e.type === "tool_result")!.payload as { result: string; output?: unknown };
-  assert.equal(uncapped.output, undefined, "0 turns the cap off");
-  assert.ok(uncapped.result.includes("line 1000"));
+  assert.ok(parked.text.includes("line 19999"));
   await store.releaseLease(lease);
   await pool.close();
 });

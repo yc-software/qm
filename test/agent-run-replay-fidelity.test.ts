@@ -580,7 +580,6 @@ async function withPgSession(
     );
     const { lease } = await store.acquireLease(session.id);
     assert.ok(lease);
-    await raw.query("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
     await fn({
       toolOutput: createPostgresToolOutputStore({
         pool: { q: async (sql, params) => (await raw.query(sql, params)).rows },
