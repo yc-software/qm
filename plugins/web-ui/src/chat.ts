@@ -3186,7 +3186,7 @@ export function createChatSurface(
               </div>
             </details>`
           : nothing;
-      if (stopped && last && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
+      if (ending && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
       const said = tail.trim()
         ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}" dir="auto">
             ${markdown(tail, animating, streamedAnswer(baseline, work))}
