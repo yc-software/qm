@@ -2845,7 +2845,9 @@ export function createChatSurface(
             ? html`<span class="subagent-row-purpose" dir="auto">${row.session.purpose}</span>`
             : nothing
         }
-        <span class="subagent-row-meta">${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}</span>
+        <span class="subagent-row-meta"
+          >${row.state === "working" ? elapsed : `${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}`}</span
+        >
       </button>
       ${
         row.state === "failed"
