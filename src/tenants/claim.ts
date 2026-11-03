@@ -5,19 +5,17 @@ export type Claimed<T> = T & { tenantId?: string };
 
 const ownerPools = new Map<string, PgPool>();
 
-function ownerDatabaseUrl(): URL {
-  const url = process.env.DATABASE_OWNER_URL;
+let ownerDatabaseUrl: URL | undefined;
+
+export function useOwnerDatabase(url: string | undefined): void {
   if (!url)
     throw new Error("Set DATABASE_OWNER_URL to the table owner login so background work can claim across tenants");
-  return new URL(url);
-}
-
-export function requireOwnerDatabase(): void {
-  ownerDatabaseUrl();
+  ownerDatabaseUrl = new URL(url);
 }
 
 function ownerPool(appDatabaseUrl: string): PgPool {
-  const owner = ownerDatabaseUrl();
+  const owner = ownerDatabaseUrl;
+  if (!owner) throw new Error("Cross-tenant claims need useOwnerDatabase at startup");
   const url = new URL(appDatabaseUrl);
   url.username = owner.username;
   url.password = owner.password;

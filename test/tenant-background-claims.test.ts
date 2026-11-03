@@ -7,13 +7,7 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
-import {
-  claimAcrossTenants,
-  crossTenantLoop,
-  inTenantOf,
-  requireOwnerDatabase,
-  rowTenant,
-} from "../src/tenants/claim.ts";
+import { claimAcrossTenants, crossTenantLoop, inTenantOf, useOwnerDatabase, rowTenant } from "../src/tenants/claim.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
@@ -56,20 +50,19 @@ test("a cross-tenant claim refuses to run under a bound tenant", async () => {
 });
 
 test("startup fails without an owner database url", () => {
-  const saved = process.env.DATABASE_OWNER_URL;
-  delete process.env.DATABASE_OWNER_URL;
-  try {
-    assert.throws(requireOwnerDatabase, /DATABASE_OWNER_URL/);
-  } finally {
-    if (saved !== undefined) process.env.DATABASE_OWNER_URL = saved;
-  }
+  assert.throws(() => useOwnerDatabase(undefined), /DATABASE_OWNER_URL/);
 });
 
-test("only the claim helper reads the owner database url", async () => {
+test("only startup hands the owner database url to the claim helper", async () => {
   const readers: string[] = [];
   for await (const file of glob("src/**/*.ts"))
-    if ((await readFile(file, "utf8")).includes("DATABASE_OWNER_URL")) readers.push(file);
-  assert.deepEqual(readers, ["src/tenants/claim.ts"]);
+    if (/DATABASE_OWNER_URL|databaseOwnerUrl/.test(await readFile(file, "utf8"))) readers.push(file);
+  assert.deepEqual(readers.sort(), [
+    "src/config.ts",
+    "src/index.ts",
+    "src/runs/worker-main.ts",
+    "src/tenants/claim.ts",
+  ]);
 });
 
 test(

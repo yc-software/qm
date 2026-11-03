@@ -11,11 +11,11 @@ import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
-import { requireOwnerDatabase } from "./tenants/claim.ts";
+import { useOwnerDatabase } from "./tenants/claim.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 
 const config = loadConfig();
-requireOwnerDatabase();
+useOwnerDatabase(config.databaseOwnerUrl);
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);

@@ -8,6 +8,9 @@ import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
+import { useOwnerDatabase } from "../../src/tenants/claim.ts";
+
+if (process.env.DATABASE_OWNER_URL) useOwnerDatabase(process.env.DATABASE_OWNER_URL);
 
 function baseDatabaseUrl(): URL {
   const base = process.env.DATABASE_URL;
