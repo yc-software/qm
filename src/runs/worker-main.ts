@@ -12,7 +12,6 @@ const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 await built.sandboxResources.initialize();
 await built.config.hydrate?.();
-await built.identity.refresh();
 void built.deploymentLayerReady().catch(reportFailureAs("worker: deployment layer", undefined));
 const { runtime } = built;
 runtime.start();
