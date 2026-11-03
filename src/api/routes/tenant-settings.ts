@@ -1,4 +1,4 @@
-import { currentTenant } from "../../tenants/context.ts";
+import { currentTenant, isTenantId } from "../../tenants/context.ts";
 import { PLUGIN_SETTING_KEYS } from "../../tenants/settings.ts";
 import { TenantSettingsInvalidError } from "../../tenants/settings-parse.ts";
 import { sendJson } from "../http.ts";
@@ -6,25 +6,20 @@ import { requireOperatorControl } from "./background-work.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
-const TENANT_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-
 export async function operatorTenant(ctx: ApiCtx): Promise<string | null> {
   const { deps, body, res } = ctx;
   if (!deps.tenantSettings) {
     sendJson(res, 404, { error: "not_found" });
     return null;
   }
-  const slug = isObj(body) ? body.tenant : undefined;
-  if (typeof slug !== "string" || !TENANT_SLUG.test(slug)) {
-    sendJson(res, 400, {
-      error: "invalid_tenant",
-      message: "tenant must be a tenant slug: lowercase letters, digits and inner hyphens",
-    });
+  const tenant = isObj(body) ? body.tenant : undefined;
+  if (!isTenantId(tenant)) {
+    sendJson(res, 400, { error: "invalid_tenant", message: "tenant must be a tenant id: a lowercase uuid" });
     return null;
   }
-  const tenant = await deps.tenantSettings.tenantForSlug(slug);
-  if (!tenant) sendJson(res, 404, { error: "unknown_tenant", message: `No tenant has the slug ${slug}`, tenant: slug });
-  return tenant;
+  if (await deps.tenantSettings.hasTenant(tenant)) return tenant;
+  sendJson(res, 404, { error: "unknown_tenant", message: `No tenant has the id ${tenant}`, tenant });
+  return null;
 }
 
 async function putTenantSettings(ctx: ApiCtx): Promise<void> {

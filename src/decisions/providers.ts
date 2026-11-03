@@ -1,5 +1,6 @@
 import { posix } from "node:path";
 import { asError, type DecisionBackend, type DecisionProvider, type DecisionQuestion } from "./decisions.ts";
+import { modelGatewayHeaders, type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 
 const MAX_RESPONSE_BYTES = 1_000_000;
 
@@ -146,7 +147,9 @@ const PROTOCOLS: Record<
 
 export function createDecisionBackend(opts: {
   providers: (ids: string[]) => readonly DecisionProvider[] | Promise<readonly DecisionProvider[]>;
-  gateway?: () => Promise<{ url: string; apiKey: string; apiKeyHeader?: string } | undefined>;
+  gateway?: () => Promise<
+    Pick<ModelGatewayTransportConfig, "url" | "apiKey" | "apiKeyHeader" | "actorKey"> | undefined
+  >;
   credential: (slug: string) => Promise<{ host: string; enabled: boolean; headers: Record<string, string> } | null>;
   fetch?: typeof fetch;
 }): DecisionBackend {
@@ -155,11 +158,7 @@ export function createDecisionBackend(opts: {
     if (!provider.baseUrl) {
       const gateway = await opts.gateway?.();
       if (!gateway) throw new Error(`decision provider ${provider.id}: no model gateway is configured`);
-      const header = gateway.apiKeyHeader;
-      return {
-        base: gateway.url,
-        auth: header ? { [header]: gateway.apiKey } : { authorization: `Bearer ${gateway.apiKey}` },
-      };
+      return { base: gateway.url, auth: modelGatewayHeaders(gateway, "decision") };
     }
     const rec = await opts.credential(provider.credential!);
     if (!rec?.enabled)

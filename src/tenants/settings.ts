@@ -113,8 +113,7 @@ function associatedData(tenant: string, key: TenantSettingKey): string {
 }
 
 interface TenantSettingsBacking {
-  tenants(): Promise<string[]>;
-  tenantForSlug(slug: string): Promise<string | null>;
+  hasTenant(tenant: string): Promise<boolean>;
   read(tenant: string): Promise<TenantSettingValues>;
   write(tenant: string, changes: TenantSettingChanges): Promise<void>;
 }
@@ -123,11 +122,7 @@ function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettin
   const sealKey = deriveConnectorKey(keyMaterial, "tenant-settings");
   const columns = TENANT_SETTING_KEYS.map(tenantSettingColumn).join(", ");
   return {
-    tenants: async () => (await db.q("SELECT id::text AS id FROM tenants")).map((row) => String(row.id)),
-    tenantForSlug: async (slug) => {
-      const [row] = await db.q("SELECT id::text AS id FROM tenants WHERE slug = $1", [slug]);
-      return row ? String(row.id) : null;
-    },
+    hasTenant: async (tenant) => (await db.q("SELECT 1 FROM tenants WHERE id = $1", [tenant])).length > 0,
     async read(tenant) {
       const [row] = await db.q(`SELECT ${columns} FROM tenant_settings WHERE tenant_id = ${TENANT}`);
       const values: TenantSettingValues = {};
@@ -176,11 +171,9 @@ function applyChanges(values: TenantSettingValues, changes: TenantSettingChanges
 export interface TenantSettingsStore {
   get(): Promise<TenantSettings>;
   peek(): TenantSettings;
-  refreshAll(): Promise<void>;
   start(): void;
   stop(): Promise<void>;
-  onlyTenant(): Promise<string | null>;
-  tenantForSlug(slug: string): Promise<string | null>;
+  hasTenant(tenant: string): Promise<boolean>;
   update(changes: TenantSettingChanges): Promise<TenantSettings>;
 }
 
@@ -249,14 +242,7 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
       stopListening = undefined;
       await stopping?.();
     },
-    tenantForSlug: (slug) => backing.tenantForSlug(slug),
-    async onlyTenant() {
-      const tenants = await backing.tenants();
-      return tenants.length === 1 ? tenants[0]! : null;
-    },
-    async refreshAll() {
-      await Promise.allSettled((await backing.tenants()).map((tenant) => read(tenant)));
-    },
+    hasTenant: (tenant) => backing.hasTenant(tenant),
     async update(changes) {
       const tenant = currentTenant();
       const unknown = Object.keys(changes).filter((key) => !isTenantSettingKey(key));

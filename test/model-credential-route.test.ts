@@ -16,6 +16,7 @@ import { createModelCredentialStore, type StoredModelCredential } from "../src/m
 import { getRequiredModel, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
 import { testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -70,7 +71,7 @@ async function start(
   close: () => Promise<void>;
 }> {
   const built = await buildWith(options, modelCredentialFetch);
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     modelCredentials: built.modelCredentials,
     userModelCredentials: built.userModelCredentials,

@@ -20,7 +20,7 @@ export async function seedSettingsTenants(url: string): Promise<void> {
   const pool = new pg.Pool({ connectionString: url, max: 1 });
   try {
     for (const tenant of [THIRD_TENANT, FOURTH_TENANT, FIFTH_TENANT])
-      await pool.query("INSERT INTO tenants(id, slug, name) VALUES ($1, $2, $2)", [tenant, tenant]);
+      await pool.query("INSERT INTO tenants(id) VALUES ($1)", [tenant]);
   } finally {
     await pool.end();
   }

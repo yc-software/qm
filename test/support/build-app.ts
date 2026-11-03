@@ -50,10 +50,6 @@ export function testTenantSettings(values: TenantSettingValues = {}, databaseUrl
       if (!seededOk) throw new TenantSettingsNotLoadedError();
       return store.peek();
     },
-    refreshAll: async () => {
-      await seeded;
-      return store.refreshAll();
-    },
     start: () => {
       void seeded.then(
         () => stopped || store.start(),
@@ -64,9 +60,9 @@ export function testTenantSettings(values: TenantSettingValues = {}, databaseUrl
       stopped = true;
       return store.stop();
     },
-    tenantForSlug: async (slug) => {
+    hasTenant: async (tenant) => {
       await seeded;
-      return store.tenantForSlug(slug);
+      return store.hasTenant(tenant);
     },
     update: async (changes) => {
       await seeded;

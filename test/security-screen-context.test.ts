@@ -8,6 +8,7 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { scopeId } from "../src/types.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 for (const surface of ["web", "slack", "swarm"]) {
   test(`HTTP ${surface} tool screening carries current request on every output chunk`, async () => {
@@ -25,7 +26,7 @@ for (const surface of ["web", "slack", "swarm"]) {
     await built.config.setSecurityPosture(scopeId("org", config.orgId), "auto");
     await built.modelCredentials.set("anthropic", "test-anthropic-key", "test");
     await selectDefaultSandbox(built, "U1", "personal:U1");
-    const server = createInsecureTestServer(built.app);
+    const server = createInsecureTestServer(TEST_TENANT, built.app);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const request = `!screened-run printf '%s' "$(printf 'x%.0s' $(seq 1 20000)) quoted transcript"`;

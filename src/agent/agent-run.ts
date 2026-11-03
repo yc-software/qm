@@ -71,7 +71,11 @@ import {
   contextTokenBudgetForModel,
   modelHasPrices,
 } from "../model/pi-models.ts";
-import { modelGatewayRequest, type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
+import {
+  modelGatewayRequest,
+  type ModelGatewayTransportConfig,
+  type ModelRequestPurpose,
+} from "../model/provider-endpoints.ts";
 import {
   type Agent,
   type CompactInput,
@@ -730,11 +734,12 @@ export async function oneShot(
   opts?: {
     signal?: AbortSignal;
     modelGateway?: ModelGatewayTransportConfig;
+    purpose?: ModelRequestPurpose;
     thinkingLevel?: LegacyThinkingLevel;
     recordLlmRequest?: (rec: TurnLlmRequestRecord) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
-  const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway);
+  const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway, opts?.purpose);
   const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
     prefix,
     systemPrompt,
@@ -908,7 +913,7 @@ export function createAgent(opts?: AgentOptions): Agent {
   ): Promise<{ entry: TurnSession }> {
     const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
 
-    const modelRuntime = await buildModelRuntime(turnModels.keys, turnModels.gateway, "long");
+    const modelRuntime = await buildModelRuntime(turnModels.keys, turnModels.gateway, "turn", "long");
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
       systemPrompt,
@@ -1116,6 +1121,8 @@ export function createAgent(opts?: AgentOptions): Agent {
         let thinkTail: Promise<unknown> = Promise.resolve();
         let triggerSeen = continueTurn;
         const toolAbort = new AbortController();
+        let steerWake = new AbortController();
+        entry.ref.steered = steerWake.signal;
         const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
         let persistError: Error | undefined;
         const persist = (write: () => Promise<unknown>): void => {
@@ -1143,6 +1150,10 @@ export function createAgent(opts?: AgentOptions): Agent {
             const text = textFromContent((message as { content?: unknown }).content);
             const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
             const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
+            if (steerWake.signal.aborted && !entry.agentSession.agent.hasQueuedMessages()) {
+              steerWake = new AbortController();
+              entry.ref.steered = steerWake.signal;
+            }
             persist(() =>
               steer
                 ? recordSteerIntake(turn, steer)
@@ -1271,6 +1282,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                           data: image.dataBase64,
                         })),
                       );
+                      steerWake.abort();
                     } catch (error) {
                       const at = pendingSteers.indexOf(steer);
                       if (at >= 0) pendingSteers.splice(at, 1);
@@ -1503,6 +1515,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           entry.ref.onModelRequest = undefined;
           toolAbort.abort();
           entry.ref.abortSignal = undefined;
+          entry.ref.steered = undefined;
           entry.ref.screenToolResult = undefined;
         }
         if (persistError) throw persistError;
@@ -1594,6 +1607,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       const out = (
         (await oneShot("pi-detect", model, models.keys, detectSystemPrompt, prompt, {
           modelGateway: models.gateway,
+          purpose: "detect",
           ...(detect.recordLlmRequest ? { recordLlmRequest: detect.recordLlmRequest } : {}),
         })) ?? ""
       ).trim();
@@ -1603,7 +1617,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     async compactHistory(input: CompactInput): Promise<string> {
       const models = await resolveModels();
       const primaryId = resolveModelId();
-      const runtime = await buildModelRuntime(models.keys, models.gateway);
+      const runtime = await buildModelRuntime(models.keys, models.gateway, "compaction");
       const summarize = (compactModelId: string) =>
         summarizeHistory(input.history, requiredModel(compactModelId), (summaryModel, context, options) => {
           input.recordModelCall({
@@ -1641,19 +1655,25 @@ export function createAgent(opts?: AgentOptions): Agent {
       return contextTokenBudgetForModel(id);
     },
 
-    async oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
+    async oneShot(systemPrompt: string, prompt: string, purpose?: ModelRequestPurpose): Promise<string | undefined> {
       const models = await resolveModels();
       const model = requiredModel(resolveModelId());
       if (!keyForModel(models, model)) return undefined;
-      return oneShot("pi-oneshot", model, models.keys, systemPrompt, prompt, { modelGateway: models.gateway });
+      return oneShot("pi-oneshot", model, models.keys, systemPrompt, prompt, { modelGateway: models.gateway, purpose });
     },
 
-    async judge(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
+    async judge(
+      systemPrompt: string,
+      prompt: string,
+      signal?: AbortSignal,
+      purpose: ModelRequestPurpose = "judge",
+    ): Promise<string | undefined> {
       const models = await resolveModels();
       const model = requiredModel(judgeModelId());
       if (!keyForModel(models, model)) return undefined;
       return oneShot("pi-judge", model, models.keys, systemPrompt, prompt, {
         modelGateway: models.gateway,
+        purpose,
         signal,
         thinkingLevel: "low",
       });
@@ -1682,6 +1702,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           await oneShot("pi-security-screen", model, models.keys, systemPrompt, payload, {
             signal,
             modelGateway: models.gateway,
+            purpose: "security_screen",
           }),
         );
       } catch (e) {
@@ -1698,7 +1719,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       const models = await resolveModels();
       if (!keyForModel(models, model)) return undefined;
       const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-      const runtime = await buildModelRuntime(models.keys, models.gateway);
+      const runtime = await buildModelRuntime(models.keys, models.gateway, "ack_emoji");
       const reply = await runtime.completeSimple(
         model,
         { systemPrompt: ACK_EMOJI_PROMPT, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
@@ -1718,6 +1739,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       if (!keyForModel(models, model)) return undefined;
       const out = await oneShot("pi-title", model, models.keys, TITLE_GENERATION_PROMPT, titleUserPrompt(transcript), {
         modelGateway: models.gateway,
+        purpose: "title",
       });
       return sanitizeTitle(out);
     },
@@ -1737,6 +1759,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       const out = (
         await oneShot("pi-approval-summary", model, models.keys, APPROVAL_SUMMARY_PROMPT, prompt, {
           modelGateway: models.gateway,
+          purpose: "approval_summary",
         })
       )?.trim();
       if (!out || out === "NONE") return undefined;

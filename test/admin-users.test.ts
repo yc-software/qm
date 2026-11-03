@@ -7,10 +7,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
+import type { ServerDeps } from "../src/api/deps.ts";
+import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { computeUsers } from "../src/admin/users.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 test("computeUsers dedupes participants, credits in-window turns, and joins admin status", () => {
   const participants = [
@@ -61,9 +64,10 @@ test("computeUsers includes a grant-holder who has never participated", () => {
   assert.equal(rows[0]!.admin.isAdmin, true);
 });
 
-function start() {
+function start(extra: Partial<ServerDeps> = {}) {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-users-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+    ...extra,
     admin: built.admin,
     sessions: built.sessions,
     files: built.files,
@@ -105,6 +109,35 @@ test("/v1/admin/users: org_admin sees the roster + grants; a non-admin is denied
     assert.ok((await s.built.auditLog.events()).some((e) => e.action === "users.read"));
   } finally {
     await s.close();
+  }
+});
+
+test("/v1/admin/users: each person carries the pseudonym the model gateway receives for them", async () => {
+  const gateway = { url: "https://gateway.test", apiKey: "k", apiKeyHeader: "api-key", models: {} };
+  const s = start({ modelGatewayTransport: async () => ({ ...gateway, actorKey: "gateway-actor-key" }) });
+  const unkeyed = start({ modelGatewayTransport: async () => gateway });
+  try {
+    const dm: TurnRequest = {
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "dm:U1:pseudonym" },
+      text: "hello",
+    };
+    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    const roster = async (base: string) =>
+      (
+        (await (
+          await fetch(`${base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice@default-org" } })
+        ).json()) as {
+          users: Array<{ principalId: string; gatewayActor?: string }>;
+        }
+      ).users.find((u) => u.principalId === "U1");
+    assert.equal((await roster(s.base))?.gatewayActor, gatewayActorId("U1", "gateway-actor-key"));
+    assert.equal((await unkeyed.built.app.turn(dm)).status, "ok");
+    assert.equal((await roster(unkeyed.base))?.gatewayActor, undefined);
+  } finally {
+    await s.close();
+    await unkeyed.close();
   }
 });
 
@@ -250,7 +283,7 @@ test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty 
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-dir-")) }), {
     tenantSettings: testTenantSettings({ AUTH_ALLOWED_EMAILS: "new@example.com" }),
   });
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     memory: built.memory,

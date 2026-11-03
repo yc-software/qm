@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
@@ -9,6 +10,7 @@ import { afterEach, test } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
+import { withModelRequestContext } from "../src/model/request-context.ts";
 import { createModelVerifier } from "../src/model/model-verification.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
@@ -24,6 +26,7 @@ import {
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const definition = {
   kind: "embedding",
@@ -89,6 +92,7 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
       apiKey: "gateway-key",
       apiKeyHeader: "x-gateway-key",
       models: { "gpt-5.5": "embed" },
+      actorKey: "test-actor-key",
     },
     async (url, init) => {
       calls.push({ url: String(url), init });
@@ -110,19 +114,29 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
   assert.equal(resolveModel("gateway/embed"), undefined);
   assert.equal(catalog.transport.models["gpt-5.5"], undefined);
   assert.deepEqual(gatewayModelsJson(), {});
-  const embedder = createMemoryEmbedder(
-    resolveEmbeddingModel("gateway/embed")!,
-    "must-not-leak",
-    catalog.transport,
-    async (url, init) => {
-      calls.push({ url: String(url), init });
-      return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
-    },
+  const embedder = withModelRequestContext({ actorId: "U1" }, () =>
+    createMemoryEmbedder(
+      resolveEmbeddingModel("gateway/embed")!,
+      "must-not-leak",
+      catalog.transport,
+      async (url, init) => {
+        calls.push({ url: String(url), init });
+        return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
+      },
+    ),
   );
-  assert.deepEqual(await embedder.embed(["query"], AbortSignal.timeout(1000)), [[0.6, 0.8]]);
+  assert.deepEqual(
+    await withModelRequestContext({ actorId: "U2" }, () => embedder.embed(["query"], AbortSignal.timeout(1000))),
+    [[0.6, 0.8]],
+  );
   const request = calls.at(-1)!;
   assert.equal(request.url, "https://gateway.example/v1/embeddings");
-  assert.deepEqual(request.init?.headers, { "content-type": "application/json", "x-gateway-key": "gateway-key" });
+  assert.deepEqual(request.init?.headers, {
+    "content-type": "application/json",
+    "x-gateway-key": "gateway-key",
+    "x-qm-actor": gatewayActorId("U2", "test-actor-key"),
+    "x-qm-purpose": "embedding",
+  });
   assert.equal(JSON.parse(String(request.init?.body)).model, "embed");
   setGatewayModels([]);
   assert.equal(resolveEmbeddingModel("gateway/embed"), undefined);
@@ -148,7 +162,7 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   await built.modelCredentials.set("openai", "test-key", "admin");
   await built.modelRegistry.upsert(definition, "admin");
   await built.refreshModels();
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/scopes/org:default-org/memory-embedding-model`;

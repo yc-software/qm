@@ -14,6 +14,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TENANT_HEADERS } from "./support/tenant.ts";
 
 const SECRET = "surface-context-test-secret".repeat(3);
 
@@ -43,12 +44,15 @@ describe("surface-context pulls", async () => {
   let pollSeq = 0;
   const pendingPath = () => `/v1/surface-context/pending?source=slack&t=${pollSeq++}`;
   const signedGet = (path: string) =>
-    fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path, "") });
+    fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path, "", { ...TENANT_HEADERS }) });
   const signedPost = (path: string, body: unknown) => {
     const raw = JSON.stringify(body);
     return fetch(`${base}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", ...signedRequestHeaders(SECRET, "POST", path, raw) },
+      headers: {
+        "content-type": "application/json",
+        ...signedRequestHeaders(SECRET, "POST", path, raw, { ...TENANT_HEADERS }),
+      },
       body: raw,
     });
   };

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { currentTenant } from "../../../tenants/context.ts";
+import { gatewayActorId } from "../../../model/provider-endpoints.ts";
 import { mintSignedPayload } from "../../../auth/signed-token.ts";
 import { scopeId as makeScopeId } from "../../../types.ts";
 import { adminStatusFromGrants, AdminError } from "../../../admin/admin-service.ts";
@@ -60,9 +62,12 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
     ...(deps.inviteMailer ? {} : { problem: INVITE_EMAIL_NOT_CONFIGURED }),
     ...(signInUrl ? { signInUrl } : {}),
   };
+  const actorKey = (await deps.modelGatewayTransport?.())?.actorKey;
   return sendJson(res, 200, {
     scopeId: scope,
-    users,
+    users: actorKey
+      ? users.map((user) => ({ ...user, gatewayActor: gatewayActorId(user.principalId, actorKey) }))
+      : users,
     grants,
     externalUsers,
     inviteEmail,
@@ -184,7 +189,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
             purpose: "teammate-invite",
             inviteId: member.inviteId,
             email,
-            org: scope,
+            tenant: currentTenant(),
             aud: deps.portalUrl!.replace(/\/+$/, ""),
             iat: now,
             exp: now + 24 * 60 * 60 * 1000,

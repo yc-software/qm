@@ -134,7 +134,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.0.0",
-    "@types/pg": "^8.11.10",
+    "@types/pg": "^8.23.1",
     "@types/tar-stream": "^3.1.4",
     "@types/ws": "^8.18.1",
     "@yc-software/qm": "file:./cli",
