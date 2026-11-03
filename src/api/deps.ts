@@ -106,7 +106,6 @@ export interface ServerDeps {
   managedSlack?: ManagedSlack;
   slackInstallation?: SlackInstallationStore;
   composioNamespace?: () => Promise<string>;
-  tenantName?: () => Promise<string>;
   slackInstallationFetch?: typeof fetch;
   slackWebClient?: SlackWebClientFactory;
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
