@@ -80,18 +80,6 @@ export function guidanceUpdateEvent(
   const newer = guidance.revisions.filter((r) => r.version > previous.version);
   const sources = [...new Set(newer.map((r) => r.sessionId))];
   if (sources.length === 1 && sources[0] === sessionId) return { text: "", record };
-  const lines = (version: number) =>
-    new Set(
-      (guidance.revisions.find((r) => r.version === version)?.content ?? "")
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean),
-    );
-  const before = lines(previous.version);
-  const after = lines(guidance.version);
-  const added = [...after].filter((line) => !before.has(line));
-  const removed = [...before].filter((line) => !after.has(line));
-  if (!added.length && !removed.length) return { text: "", record };
   const elsewhere = sources.filter((s): s is string => !!s && s !== sessionId).map((s) => s.slice(0, 7));
   let where = "";
   if (elsewhere.length) where = `In a different session (${elsewhere.join(", ")}) `;
@@ -99,10 +87,27 @@ export function guidanceUpdateEvent(
   const who = guidance.personal
     ? "the user updated their standing guidance"
     : "this conversation's standing guidance was updated";
-  const change = [
-    added.length ? `: "${added.join("\n")}"` : "",
-    removed.length ? `${added.length ? ". It no longer says" : ", removing"}: "${removed.join("\n")}"` : "",
-  ].join("");
+  const content = (version: number) => guidance.revisions.find((r) => r.version === version)?.content;
+  const lines = (text: string) =>
+    new Set(
+      text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
+    );
+  const baseline = previous.version === 0 ? "" : content(previous.version);
+  let change = "; the current text is in your instructions";
+  if (baseline !== undefined) {
+    const before = lines(baseline);
+    const after = lines(content(guidance.version) ?? "");
+    const added = [...after].filter((line) => !before.has(line));
+    const removed = [...before].filter((line) => !after.has(line));
+    if (!added.length && !removed.length) return { text: "", record };
+    change = [
+      added.length ? `: "${added.join("\n")}"` : "",
+      removed.length ? `${added.length ? ". It no longer says" : ", removing"}: "${removed.join("\n")}"` : "",
+    ].join("");
+  }
   const sentence = `${where}${who}${change}.`;
   return {
     text: `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)} Follow it moving forward but no need to directly mention you're doing so.`,

@@ -177,3 +177,13 @@ test("removed guidance and edits made outside any session are announced too", ()
       "Follow it moving forward but no need to directly mention you're doing so.",
   );
 });
+
+test("when the revision this session last saw has been pruned, the notice points at the current instructions", () => {
+  const first = guidanceTurn(1, { version: 1, personal: true, revisions: [revision(1, "Be brief.")] }, []);
+  assert.equal(
+    guidanceTurn(2, { version: 40, personal: true, revisions: [revision(40, "Be terse.", "other")] }, first.history)
+      .event.text,
+    "In a different session (other) the user updated their standing guidance; the current text is in your instructions. " +
+      "Follow it moving forward but no need to directly mention you're doing so.",
+  );
+});
