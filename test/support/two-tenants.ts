@@ -34,6 +34,15 @@ export async function twoTenantDatabase(registerStores: (ownerUrl: string) => un
   const owner = new pg.Pool({ connectionString: ownerUrl, max: 2 });
   const role = pooledUrl ? "qm_app" : `qmt_app_${randomBytes(6).toString("hex")}`;
   const database = new URL(ownerUrl).pathname.slice(1);
+  if (pooledUrl)
+    await owner.query(
+      `DO $clear$ DECLARE t text; BEGIN
+         FOR t IN SELECT tablename FROM pg_tables
+           WHERE schemaname = 'public' AND tablename NOT IN ('qm_schema_migrations', 'tenants', 'qm_tenant') LOOP
+           EXECUTE format('TRUNCATE %I CASCADE', t);
+         END LOOP;
+       END $clear$`,
+    );
   await owner.query("INSERT INTO tenants(id) VALUES ($1), ($2) ON CONFLICT (id) DO NOTHING", [TENANT_A, TENANT_B]);
   await owner.query(
     `DO $role$ BEGIN
