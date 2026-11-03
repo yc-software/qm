@@ -28,7 +28,7 @@ async function tenantSeenBy(headers: Record<string, string>, auth: "source" | "p
   let seen: string | undefined = "unset";
   const req = requestWith(headers);
   const res = new ServerResponse(req);
-  await withRequestTenant(req, res, { auth }, SECRET, () => {
+  await withRequestTenant(req, res, { auth }, SECRET, undefined, () => {
     seen = boundTenant();
   });
   return seen === "unset" ? res.statusCode : seen;
