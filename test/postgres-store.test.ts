@@ -2967,3 +2967,38 @@ test("pg session pages sort by the person's last message, which appends keep", {
     ].sort(),
   );
 });
+
+test("pg session pages apply every filter whether or not a scope narrows them", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const me = `filters-${randomUUID()}`;
+  const personal = scopeId("personal", me);
+  const channel = scopeId("channel", `C-${me}`);
+  const chat = async (ref: string, scope: typeof personal, surface: string, title: string) => {
+    const session = await s.getOrCreateByThread(`${ref}:${me}`, "dm", scope, undefined, surface);
+    await s.addParticipant(session.id, me, title);
+    return session.id;
+  };
+  const alpha = await chat("web:a", personal, "web", "Alpha");
+  const beta = await chat("slack:b", channel, "slack", "Beta");
+  const gamma = await chat("web:g", personal, "web", "Gamma");
+  const child = await chat("subagent:c", personal, "web", "Child");
+  await s.setParentSession(child, alpha);
+  await chat("cron:d", personal, "cron", "Nightly");
+  const theirs = await s.getOrCreateByThread(`web:theirs:${me}`, "dm", personal, undefined, "web");
+  await s.addParticipant(theirs.id, `${me}-other`, "Theirs");
+  await s.updateParticipantView(beta, me, { archived: true });
+  await s.updateParticipantView(gamma, me, { pinned: true });
+
+  const ids = async (query: Omit<Parameters<typeof s.listParticipantPage>[1], "limit">) =>
+    (await s.listParticipantPage(me, { limit: 10, ...query })).sessions.map((row) => row.id).sort();
+  assert.deepEqual(await ids({ archived: false, pinned: false }), [alpha]);
+  assert.deepEqual(await ids({ archived: false, pinned: true }), [gamma]);
+  assert.deepEqual(await ids({ archived: true }), [beta]);
+  assert.deepEqual(await ids({ archived: false }), [alpha, gamma].sort());
+  assert.deepEqual(await ids({ archived: false, scopeId: personal }), [alpha, gamma].sort());
+  assert.deepEqual(await ids({ archived: true, scopeId: channel }), [beta]);
+  assert.deepEqual(await ids({ archived: false, scopeId: channel }), []);
+  assert.deepEqual(await ids({ archived: false, sessionIds: [gamma, theirs.id, child] }), [gamma]);
+  assert.deepEqual(await ids({ archived: false, surface: "web", titleQuery: "alp" }), [alpha]);
+  assert.deepEqual(await ids({ archived: false, scopeId: personal, titleQuery: "gam" }), [gamma]);
+});
