@@ -1,5 +1,5 @@
 import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
-import { orgId as orgIdOf } from "../config.ts";
+import { orgId as orgIdOf, orgIdentity } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
@@ -113,7 +113,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
       await advanceCursor();
       return { act: false };
     }
-    const self = ambientSelf.get(`${orgIdOf()}:${surface}`);
+    const self = ambientSelf.get(`${orgIdentity()}:${surface}`);
     const unmentioned = delta.filter((m) => !m.mentionsSelf);
     const forJudge = unmentioned.filter((m) => m.text.trim());
     if (unmentioned.length < delta.length)

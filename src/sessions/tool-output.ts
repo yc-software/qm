@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { perTenant } from "../tenants/context.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
@@ -90,28 +89,22 @@ export function createPostgresToolOutputStore(opts: {
   now?: () => number;
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
-  const cached = perTenant<{
-    setting?: { value: number; at: number };
-    tenant?: Promise<{ id: string; bytes: DurableByteStore }>;
-  }>(() => ({}));
-  const tenantBytes = (): Promise<{ id: string; bytes: DurableByteStore }> => {
-    const state = cached();
-    return (state.tenant ??= opts.pool.q("SELECT qm_tenant_id()::text AS id").then((rows) => {
+  let setting: { value: number; at: number } | null = null;
+  let tenant: Promise<{ id: string; bytes: DurableByteStore }> | null = null;
+  const tenantBytes = (): Promise<{ id: string; bytes: DurableByteStore }> =>
+    (tenant ??= opts.pool.q("SELECT qm_tenant_id()::text AS id").then((rows) => {
       const id = rows[0]?.id as string;
       return { id, bytes: opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`) };
     })).catch((err: unknown) => {
-      state.tenant = undefined;
+      tenant = null;
       throw err;
     });
-  };
   return {
     async inlineTokens() {
-      const state = cached();
-      const { setting } = state;
       if (setting && now() - setting.at < SETTING_CACHE_MS) return setting.value;
       const rows = await opts.pool.q("SELECT value FROM qm_settings WHERE key = $1", [TOOL_OUTPUT_SETTING]);
-      state.setting = { value: inlineTokensFrom(rows[0]?.value), at: now() };
-      return state.setting.value;
+      setting = { value: inlineTokensFrom(rows[0]?.value), at: now() };
+      return setting.value;
     },
     async save(text) {
       const { id, bytes } = await tenantBytes();
