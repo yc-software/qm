@@ -551,7 +551,7 @@ test("a consumed steer is recorded when its acknowledgement fails", async () => 
 });
 
 for (const abort of ["shutdown", "stop"] as const) {
-  test(`a Pi tool result recorded after ${abort === "shutdown" ? "shutdown is marked interrupted and leaves its call open" : "a user Stop stays a real answer"}`, async () => {
+  test(`a tool still running at ${abort === "shutdown" ? "shutdown is recorded interrupted and leaves its call open" : "a user Stop is recorded stopped and answered"} without waiting for it`, async () => {
     const agent = createAgent({ apiKey: "sk-test" });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
@@ -577,6 +577,7 @@ for (const abort of ["shutdown", "stop"] as const) {
     const shutdown = new AbortController();
     const cancel = new AbortController();
     const entries: SessionEntry[] = [];
+    const toolFinished = Promise.withResolvers<void>();
     try {
       await agent.runTurn(
         turnInput(
@@ -591,7 +592,7 @@ for (const abort of ["shutdown", "stop"] as const) {
               memoryRead: async () => {
                 if (abort === "shutdown") shutdown.abort();
                 cancel.abort();
-                await new Promise((resolve) => setTimeout(resolve, 10));
+                await toolFinished.promise;
                 return "[exit 143]";
               },
             } as AgentTurnInput["tools"],
@@ -603,13 +604,13 @@ for (const abort of ["shutdown", "stop"] as const) {
           },
         ),
       );
-      const result = entries.find((entry) => entry.type === "tool_result");
-      assert.ok(result);
+      toolFinished.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const results = entries.filter((entry) => entry.type === "tool_result");
+      assert.equal(results.length, 1, "the late tool outcome does not add a second result");
       assert.deepEqual(
-        (({ interrupted, result }) => ({ interrupted, result }))(result.payload as Record<string, unknown>),
-        abort === "shutdown"
-          ? { interrupted: true, result: "[exit 143]" }
-          : { interrupted: undefined, result: "[exit 143]" },
+        (({ interrupted, stopped }) => ({ interrupted, stopped }))(results[0]!.payload as Record<string, unknown>),
+        abort === "shutdown" ? { interrupted: true, stopped: undefined } : { interrupted: undefined, stopped: true },
       );
       const { resumeStrategy } = await import("../src/core/turn-resume.ts");
       const userSeq = entries.find((entry) => entry.type === "user")!.seq;
