@@ -329,7 +329,7 @@ const SESSION_FACTS: PgMigrationDefinition = {
 };
 
 const SESSION_FACTS_COPY: PgMigrationDefinition = {
-  id: "sessions/store/0053-session-facts-copy",
+  id: "sessions/store/0054-session-facts-copy",
   autocommit: true,
   statements: [
     `CREATE OR REPLACE PROCEDURE qm_copy_session_facts() LANGUAGE plpgsql AS $session_facts$
@@ -337,7 +337,8 @@ DECLARE
   after_id TEXT := '';
   page TEXT[];
 BEGIN
-  IF to_regclass('runs') IS NULL THEN
+  IF to_regclass('runs') IS NULL
+    OR EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id = 'sessions/store/0053-session-facts-copy') THEN
     RETURN;
   END IF;
   LOOP
@@ -374,18 +375,28 @@ BEGIN
       END AS context
     FROM sessions x
     LEFT JOIN LATERAL (
-      SELECT request::jsonb->'slackSource' AS value FROM runs
-      WHERE session_id = x.thread_ref AND COALESCE(request::jsonb->'slackSource', 'null') <> 'null'
+      SELECT request->'slackSource' AS value FROM (
+        SELECT CASE WHEN pg_input_is_valid(request, 'jsonb') THEN request::jsonb END AS request, created_at, seq
+        FROM runs WHERE session_id = x.thread_ref
+      ) parsed
+      WHERE COALESCE(request->'slackSource', 'null') <> 'null'
       ORDER BY created_at DESC, seq DESC LIMIT 1
     ) binding ON x.surface = 'slack'
     LEFT JOIN LATERAL (
-      SELECT result::jsonb->'runtime' AS value FROM runs
-      WHERE session_id = x.thread_ref AND COALESCE(result::jsonb->'runtime', 'null') <> 'null'
+      SELECT result->'runtime' AS value FROM (
+        SELECT CASE WHEN pg_input_is_valid(result, 'jsonb') THEN result::jsonb END AS result, created_at, seq
+        FROM runs WHERE session_id = x.thread_ref
+      ) parsed
+      WHERE COALESCE(result->'runtime', 'null') <> 'null'
       ORDER BY created_at DESC, seq DESC LIMIT 1
     ) label ON true
     LEFT JOIN LATERAL (
-      SELECT request FROM (SELECT request::jsonb AS request, created_at, seq FROM runs WHERE session_id = x.thread_ref) owned
-      WHERE COALESCE(request->>'privateSessionMessage', 'false') <> 'true'
+      SELECT request FROM (
+        SELECT CASE WHEN pg_input_is_valid(request, 'jsonb') THEN request::jsonb END AS request, created_at, seq
+        FROM runs WHERE session_id = x.thread_ref
+      ) owned
+      WHERE request IS NOT NULL
+        AND COALESCE(request->>'privateSessionMessage', 'false') <> 'true'
         AND COALESCE(request->>'sessionSenderId', '') = ''
         AND COALESCE(request->>'delegatingRunId', '') = ''
         AND COALESCE(request->'swarm', 'null') IN ('null', 'false')

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import pg from "pg";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
@@ -488,4 +489,31 @@ test("editing pending text preserves identity, order, attachments and rejects st
   assert.equal(await runs.editPendingText(first.id, "late", "revised"), false);
   await runs.fail(first.id, claimed!.leaseToken!, "retry", { retry: true });
   assert.equal(await runs.editPendingText(first.id, "retry edit", "revised"), false);
+});
+
+test("a run's result and stop stay readable as jsonb when their text carries NUL bytes", async () => {
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
+  const done = (await runs.enqueue({ sessionId: "nul", request: turn("hi") })).run;
+  const doneLease = (await runs.claimById(done.id, "w", 5_000))!.leaseToken!;
+  await runs.complete(done.id, doneLease, { status: "ok", reply: "a\u0000b" });
+  const failed = (await runs.enqueue({ sessionId: "nul-failed", request: turn("hi"), maxAttempts: 3 })).run;
+  const failedLease = (await runs.claimById(failed.id, "w", 5_000))!.leaseToken!;
+  await runs.fail(failed.id, failedLease, "Markets error: \u0015\u0003\u0003\u0000", {
+    retry: true,
+    stop: { kind: "error", code: "tls\u0000" },
+  });
+  const raw = new pg.Pool({ connectionString: url, max: 1 });
+  try {
+    const { rows } = await raw.query<{ id: string; result: { reply?: string } | null; stop: { code?: string } | null }>(
+      "SELECT id, result::jsonb AS result, last_stop::jsonb AS stop FROM runs WHERE id = ANY($1)",
+      [[done.id, failed.id]],
+    );
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    assert.equal(byId.get(done.id)?.result?.reply, "ab");
+    assert.equal(byId.get(failed.id)?.stop?.code, "tls");
+  } finally {
+    await raw.end();
+  }
+  assert.equal((await runs.get(done.id))?.result?.reply, "ab");
 });

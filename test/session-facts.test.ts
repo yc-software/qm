@@ -145,3 +145,59 @@ test("the session facts migration copies each conversation's facts from its late
   assert.equal(untouched.surfaceBinding ?? untouched.runtime ?? untouched.spawnMeta, undefined);
   await runtime.close?.();
 });
+
+test("the session facts migration reads past runs whose stored JSON Postgres cannot hold", async () => {
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const runtime = createPostgresRunStore(url);
+  const { runs } = runtime;
+  const slack = await sessions.getOrCreateByThread("slack:dm:nul", "dm", scope, undefined, "slack");
+  const readable = request(slack.threadRef, previousRelease);
+  const finish = async (input: OrchestratorInput, modelId: string) => {
+    const { run } = await runs.enqueue({ sessionId: slack.threadRef, request: input });
+    const lease = (await runs.claimById(run.id, "w", 60_000))!.leaseToken!;
+    await runs.complete(run.id, lease, { status: "ok", reply: "ok", runtime: { modelId } });
+    return run.id;
+  };
+  await finish(readable, "m5");
+  const unreadable = await finish(request(slack.threadRef, { ...previousRelease, timezone: "UTC" }), "m6");
+
+  const raw = new pg.Pool({ connectionString: url, max: 1 });
+  const facts = SESSION_MIGRATIONS.filter((m) => m.id.includes("-session-facts")).map(definePgMigration);
+  const runtimeOf = async () =>
+    (await raw.query<{ runtime: unknown }>("SELECT runtime FROM sessions WHERE id = $1", [slack.id])).rows[0]?.runtime;
+  try {
+    await raw.query(
+      `UPDATE runs SET request = replace(request, '"text":"hi"', '"text":"hi\\u0000"'),
+         result = replace(result, '"reply":"ok"', '"reply":"Markets error: \\u0015\\u0003\\u0003\\u0000"')
+       WHERE id = $1`,
+      [unreadable],
+    );
+    await raw.query(
+      "ALTER TABLE sessions DROP COLUMN slack_binding, DROP COLUMN runtime; UPDATE sessions SET spawn_meta = NULL; DELETE FROM qm_schema_migrations WHERE id LIKE 'sessions/store/005_-session-facts%'",
+    );
+    await applyPgMigrations(raw, facts);
+    const { rows } = await raw.query<{ slack_binding: unknown }>("SELECT slack_binding FROM sessions WHERE id = $1", [
+      slack.id,
+    ]);
+    assert.deepEqual(rows[0]?.slack_binding, slackSource);
+    const filled = (await sessions.get(slack.id))!;
+    assert.deepEqual(filled.runtime, { modelId: "m5" }, "the label comes from the newest run Postgres can read");
+    assert.deepEqual(
+      filled.spawnMeta,
+      sessionContextOf(readable),
+      "context comes from the newest readable owning turn",
+    );
+
+    await raw.query("UPDATE sessions SET runtime = NULL WHERE id = $1", [slack.id]);
+    await raw.query("DELETE FROM qm_schema_migrations WHERE id = $1", [facts.at(-1)!.id]);
+    await raw.query(
+      "INSERT INTO qm_schema_migrations(id, checksum) VALUES ('sessions/store/0053-session-facts-copy', 'x')",
+    );
+    await applyPgMigrations(raw, facts);
+    assert.equal(await runtimeOf(), null, "a database that already ran the first copy is not copied again");
+  } finally {
+    await raw.end();
+  }
+  await runtime.close?.();
+});
