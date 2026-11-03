@@ -7,6 +7,10 @@ import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persist
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import pg from "pg";
 import { applyPgMigrations, createPgPool, registeredPgMigrations, type PgPool } from "../../src/persistence/pg-pool.ts";
+import { pgRows, type RowTable } from "../../src/persistence/keyed-rows.ts";
+import { createPostgresDeploymentRows } from "../../src/deploy/deploy-store.ts";
+import { createSandboxResourceStores } from "../../src/sandbox/sandbox-resource-store.ts";
+import { tenantBoundUrl } from "./test-tenants.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
@@ -65,6 +69,11 @@ after(finishEndedTests);
 export function atTestEnd(end: () => Promise<void>): boolean {
   openTests.at(-1)?.ends.push(end);
   return openTests.length > 0;
+}
+
+function closedAfterTest<S extends { close(): Promise<void> }>(store: S): S {
+  atTestEnd(() => store.close());
+  return store;
 }
 
 function createDatabaseSync(request: { template?: string }, scope: "test" | "file" = "test"): string {
@@ -184,13 +193,20 @@ export function testAdminGrantStore(
   return createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl(createDatabaseSync({}))), { seed });
 }
 
+export function testRows<T, K extends string>(spec: RowTable<T, K>) {
+  return closedAfterTest(pgRows(tenantBoundUrl(testDatabaseUrl()), spec));
+}
+
+export function testSandboxResourceStores() {
+  return closedAfterTest(createSandboxResourceStores(tenantBoundUrl(testDatabaseUrl())));
+}
+
+export function testDeploymentRows(url = testDatabaseUrl()) {
+  return createPostgresDeploymentRows(tenantBoundUrl(url));
+}
+
 export function testDeployBackings(
   backings: Partial<Parameters<typeof import("../../src/deploy/deploy-store.ts").createDeployStore>[0]> = {},
 ) {
-  const maps = createPostgresMapFactory(databaseUrl(createDatabaseSync({})));
-  return {
-    deployments: maps.map<import("../../src/deploy/deploy-store.ts").Deployment>("deployments"),
-    pg: maps.pool,
-    ...backings,
-  };
+  return { ...backings, deployments: backings.deployments ?? testDeploymentRows() };
 }

@@ -7,7 +7,8 @@ import { makeTar } from "../sandbox/tar.ts";
 import { sleep } from "../util/async.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows } from "../persistence/keyed-rows.ts";
+import type { FlyPortClaims } from "./fly-deploy-stores.ts";
 import {
   appBoot,
   appGone,
@@ -324,13 +325,13 @@ export interface FlyDeployProviderOptions {
   token: string;
   appPrefix: string;
   sharedAppName?: string;
-  portStore?: DurableMap<string>;
+  portStore?: FlyPortClaims;
   privateTransport?: { ensure(): Promise<number> };
   baseImage: string;
   org: string;
   region?: string;
   dataVolumeSizeGb?: number;
-  configStore?: DurableMap<FlyMachineConfig>;
+  configStore?: Pick<KeyedRows<FlyMachineConfig>, "get" | "put">;
   machineStartTimeoutMs?: number;
   appReadyTimeoutMs?: number;
   pollIntervalMs?: number;
@@ -401,7 +402,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     const first = createHash("sha256").update(d.id).digest().readUInt32BE(0) % 45536;
     for (let offset = 0; offset < 45536; offset++) {
       const port = 20000 + ((first + offset) % 45536);
-      if ((await opts.portStore!.putIfAbsent(`${opts.sharedAppName}:${port}`, d.id)) === d.id) return port;
+      if ((await opts.portStore!.claim(opts.sharedAppName, port, d.id)) === d.id) return port;
     }
     throw new Error("Fly shared app has no available deployment ports");
   }

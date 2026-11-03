@@ -14,7 +14,6 @@ test("an upload in a scope without a default sandbox still reaches the agent", (
       [{ channelId: "C1", name: "synthetic-upload", isPrivate: true }],
       [{ channelId: "C1", principalId: "U1" }],
     );
-    await built.sandboxResources.initialize();
     const request: Omit<TurnRequest, "text"> = {
       surface: "slack",
       actor: { externalId: "U1" },

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAppPageViewLog } from "../src/deploy/page-views.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const view = () => ({
@@ -21,7 +21,11 @@ test("pg page-view log stores one row per view with clipped request fields", { s
     const pg = (await import("pg")).default;
     const admin = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
     try {
-      await admin.query(`INSERT INTO deployments (id, json) VALUES ('dep-1', '{}')`);
+      await admin.query(
+        `INSERT INTO deployments (tenant_id, id, owner_scope_id, created_by, current_version, status, versions)
+         VALUES ($1, 'dep-1', 'personal:U1', 'U1', 1, 'running', '[]')`,
+        [testTenants()[0]],
+      );
       const log = createPostgresAppPageViewLog(URL!);
       await log.record({
         deploymentId: "dep-1",
@@ -68,10 +72,8 @@ test("pg page-view log stores one row per view with clipped request fields", { s
         log.record({ ...view(), deploymentId: "no-such-app" }),
         (err: { code?: string }) => err.code === "23503",
       );
-      await assert.rejects(
-        admin.query("DELETE FROM deployments WHERE id = 'dep-1'"),
-        (err: { code?: string }) => err.code === "23503",
-      );
+      await admin.query("DELETE FROM deployments WHERE id = 'dep-1'");
+      assert.equal((await admin.query("SELECT 1 FROM app_page_views WHERE deployment_id = 'dep-1'")).rowCount, 0);
     } finally {
       await admin.end();
     }

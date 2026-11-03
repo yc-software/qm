@@ -13,12 +13,17 @@ import { createAppLogin, type AppLogin } from "./support/app-login.ts";
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenant table tests";
 const [a, b] = process.env.DATABASE_URL ? testTenants() : ["", ""];
 const UNTENANTED_REASONS: Record<string, string> = {
+  background_ownership: "which deployment runs background work for the whole install",
   durable_map_versions: "version counters of the durable map store itself",
+  fly_deploy_ports: "ports on a shared Fly app, unique across every tenant's deployments",
+  fly_peer_claims: "WireGuard peer leases of the install's Fly tunnel",
   instance_heartbeats: "liveness and build of each server process, shared by every tenant",
   qm_schema_migrations: "the migration ledger of the database",
   qm_settings: "install-wide settings",
   qm_tenant: "the legacy single-install tenant id, copied into tenants by the upgrade",
+  render_sandbox_bases: "the base snapshot for each configured sandbox image, shared by every tenant",
   source_auth_replay: "replay guard for signed source requests, checked before any tenant is known",
+  superserve_config_epochs: "the sandbox config generation of each deployment, shared by every tenant",
   tenants: "the tenant registry",
 };
 const UNTENANTED = Object.keys(UNTENANTED_REASONS);

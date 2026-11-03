@@ -1,10 +1,11 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { orgId as configOrgId } from "../config.ts";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
+import type { KeyedRows, RowColumns, RowTable } from "../persistence/keyed-rows.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { scopeStorageKey } from "../../cli/src/scope-storage-key.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
@@ -60,8 +61,43 @@ export interface StoredMicrovm {
   lastActivityMs?: number;
   homeDirty?: boolean;
   provisioning?: boolean;
-  orgId?: string;
 }
+
+const AWS_SANDBOX_BODIES_COLUMNS: RowColumns<StoredMicrovm, "scopeId"> = {
+  scopeId: "text",
+  microvmId: "text",
+  endpoint: "text",
+  imageVersion: "text",
+  createdAtMs: "bigint",
+  lastSnapshotMs: "bigint",
+  lastActivityMs: "bigint",
+  homeDirty: "boolean",
+  provisioning: "boolean",
+};
+
+export const AWS_SANDBOX_BODIES: RowTable<StoredMicrovm, "scopeId"> = {
+  table: "aws_sandbox_bodies",
+  key: "scopeId",
+  columns: AWS_SANDBOX_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "aws_sandbox_bodies",
+      columns: [
+        "scope_id TEXT NOT NULL",
+        "microvm_id TEXT NOT NULL",
+        "endpoint TEXT NOT NULL",
+        "image_version TEXT",
+        "created_at_ms BIGINT NOT NULL",
+        "last_snapshot_ms BIGINT",
+        "last_activity_ms BIGINT",
+        "home_dirty BOOLEAN",
+        "provisioning BOOLEAN",
+      ],
+      primaryKey: ["scope_id"],
+      backfill: { ...jsonBackfill("aws_sandbox_bodies", AWS_SANDBOX_BODIES_COLUMNS), scope_id: "id" },
+    }),
+  ],
+};
 
 export interface AwsSandboxOptions extends BlobStagingOptions {
   region: string;
@@ -83,7 +119,7 @@ export interface AwsSandboxOptions extends BlobStagingOptions {
   cpus?: number;
   memoryMb?: number;
   diskGb?: number;
-  store: DurableMap<StoredMicrovm>;
+  store: Pick<KeyedRows<StoredMicrovm>, "get" | "entries" | "put" | "merge" | "delete">;
   advisoryLock: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
@@ -228,7 +264,6 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
           microvmId: run.microvmId,
           endpoint: run.endpoint ?? "",
           createdAtMs: Date.now(),
-          orgId: configOrgId(),
           provisioning: true,
         });
       const ready = await api.waitForState(run.microvmId, "RUNNING");
@@ -294,7 +329,6 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         ...(opts.imageVersion ? { imageVersion: opts.imageVersion } : {}),
         createdAtMs: Date.now(),
         ...(hydrated ? { lastSnapshotMs: Date.now(), homeDirty: false } : {}),
-        orgId: configOrgId(),
       });
       return { id: body.id, endpoint: body.endpoint, coldStart: !hydrated };
     });
@@ -552,7 +586,6 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         await withScopeLock(scope, async () => {
           const rec = await store.get(scope);
           if (!rec || rec.microvmId !== candidate.microvmId) return;
-          if (rec.orgId && rec.orgId !== configOrgId()) return;
           if (!rec.lastActivityMs || rec.lastActivityMs > cutoff) return;
           if (activeByMicrovm.has(rec.microvmId)) return;
           const desc = await api.tryGetMicrovm(rec.microvmId);

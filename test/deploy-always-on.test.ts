@@ -10,7 +10,7 @@ import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import type { DeployEndpoint } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { testDeployBackings, testDatabaseUrl, testDeploymentRows } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -24,7 +24,8 @@ function svc(
     park?: DeployProvider["park"];
   } = {},
 ) {
-  const deployStore = createDeployStore(testDeployBackings());
+  const url = testDatabaseUrl();
+  const deployStore = createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) }));
   let applies = 0;
   let resolves = 0;
   const provider: DeployProvider = {
@@ -52,7 +53,7 @@ function svc(
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    acl: createAclStore(createPostgresGrantStore(url)),
     deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
   });
   return {
@@ -138,7 +139,8 @@ test("deployOrUpdate carries alwaysOn on create and on update", () =>
 
 test("alwaysOn is visible to the provider at first launch (not applied after the fact)", () =>
   inTestTenant(async () => {
-    const deployStore = createDeployStore(testDeployBackings());
+    const url = testDatabaseUrl();
+    const deployStore = createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) }));
     const seen: Array<boolean | undefined> = [];
     const provider: DeployProvider = {
       profile: { managedScaleToZero: true },
@@ -153,7 +155,7 @@ test("alwaysOn is visible to the provider at first launch (not applied after the
       deployStore,
       provider,
       auditLog: { record() {}, events: async () => [], tail: async () => [] },
-      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      acl: createAclStore(createPostgresGrantStore(url)),
       deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
     });
     await deploy.deployOrUpdate({ ...owner, name: "warm-launch", entrypoint: "x", files: [], alwaysOn: true });
@@ -174,7 +176,8 @@ test("rename and rollback branches carry alwaysOn too", () =>
   }));
 
 test("reaper re-checks alwaysOn under the deploy lock (no stale-snapshot destroy)", async () => {
-  const deployStore = createDeployStore(testDeployBackings());
+  const url = testDatabaseUrl();
+  const deployStore = createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) }));
   let destroys = 0;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: false },
@@ -188,14 +191,14 @@ test("reaper re-checks alwaysOn under the deploy lock (no stale-snapshot destroy
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    acl: createAclStore(createPostgresGrantStore(url)),
     deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
   });
   const d = await inTestTenant(() => deploy.deploy({ ...owner, entrypoint: "x", files: [] }));
 
-  const realList = deployStore.list.bind(deployStore);
-  deployStore.list = async () => {
-    const snapshot = (await realList()).map((x) => ({ ...x, alwaysOn: undefined }));
+  const realRunning = deployStore.running.bind(deployStore);
+  deployStore.running = async () => {
+    const snapshot = (await realRunning()).map((x) => ({ ...x, alwaysOn: undefined }));
     await inTestTenant(() => deployStore.setAlwaysOn(d.id, true));
     return snapshot;
   };
@@ -224,9 +227,9 @@ test("maintainDeployments skips a deployment whose flag was turned off after the
   const { deploy, deployStore } = ctx;
   const d = await inTestTenant(() => deploy.deploy({ ...owner, entrypoint: "x", files: [] }));
   await inTestTenant(() => deploy.setDeploymentAlwaysOn(d.id, true));
-  const realList = deployStore.list.bind(deployStore);
-  deployStore.list = async () => {
-    const snapshot = await realList();
+  const realRunning = deployStore.running.bind(deployStore);
+  deployStore.running = async () => {
+    const snapshot = await realRunning();
     await inTestTenant(() => deployStore.setAlwaysOn(d.id, false));
     return snapshot;
   };

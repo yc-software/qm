@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
+import { createSmolmachinesSandbox, SMOLMACHINES_SANDBOX_BODIES } from "../src/sandbox/smolmachines-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
@@ -17,9 +17,8 @@ import {
 } from "./support/fake-smolmachines.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
-import type { StoredSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testMap, testRows } from "./support/test-database.ts";
 
 let fake: FakeSmolmachines;
 let sandbox: Sandbox;
@@ -446,7 +445,7 @@ test("exec is never retried and its failure names the request id", async () => {
 for (const lostResponse of ["disconnect", "503"] as const) {
   test(`accepted replacement create with ${lostResponse} restores the home on the next core`, async () => {
     const snapshots = createMemorySnapshotStore();
-    const store = testMap<StoredSmolmachinesSandbox>();
+    const store = testRows(SMOLMACHINES_SANDBOX_BODIES);
     const advisoryLock = testAdvisoryLock();
     const first = make({ snapshots, store, advisoryLock });
     const original = await first.provision(layers);

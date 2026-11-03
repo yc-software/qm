@@ -1,6 +1,8 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { createHmac, randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallow } from "../util/errors.ts";
@@ -64,6 +66,45 @@ export interface StoredRenderDeploy {
   pending?: RenderPending;
 }
 
+const RENDER_DEPLOY_BODIES_COLUMNS: RowColumns<StoredRenderDeploy, "deploymentId"> = {
+  deploymentId: "text",
+  appRegion: "text",
+  serviceId: "text",
+  environmentId: "text",
+  host: "text",
+  token: "text",
+  liveVersion: "bigint",
+  suspended: "boolean",
+  pending: "jsonb",
+};
+
+export const RENDER_DEPLOY_BODIES: RowTable<StoredRenderDeploy, "deploymentId"> = {
+  table: "render_deploy_bodies",
+  key: "deploymentId",
+  recordKey: true,
+  columns: RENDER_DEPLOY_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "render_deploy_bodies",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "app_region TEXT NOT NULL",
+        "service_id TEXT",
+        "environment_id TEXT",
+        "host TEXT",
+        "token TEXT NOT NULL",
+        "live_version BIGINT",
+        "suspended BOOLEAN NOT NULL",
+        "pending JSONB",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("render_deploy_bodies", RENDER_DEPLOY_BODIES_COLUMNS), deployment_id: "id" },
+    }),
+  ],
+};
+
+export type RenderDeployBodies = Pick<KeyedRows<StoredRenderDeploy>, "get" | "put" | "putIfAbsent" | "merge">;
+
 export interface RenderDeployProviderOptions {
   apiKey: string;
   workspaceId: string;
@@ -72,7 +113,7 @@ export interface RenderDeployProviderOptions {
   source: { repo: string; branch: string; commit: string };
   region?: string;
   appRegion?: string;
-  store: DurableMap<StoredRenderDeploy>;
+  store: RenderDeployBodies;
   artifacts: RenderDeployArtifacts;
   resources: { ensure(deploymentId: string, repair?: boolean): Promise<Record<string, string>> };
   deployTimeoutMs?: number;

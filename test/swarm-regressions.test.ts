@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { testMap } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 test("explicit self-recipient remains in shared history without waking itself", () =>
@@ -93,7 +92,7 @@ test("provider default is pinned before retries and child provisioning, with no 
     const f = await swarmFixture();
     const options: Parameters<typeof createSandboxResources>[0] = {
       records: f.records,
-      defaults: testMap(),
+      defaults: f.defaults,
       backends: { aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
       defaultBackend: "aws",
       lock: f.serviceOptions.lock,
@@ -121,7 +120,7 @@ test("selected scope computer determines new worker provider, but its private di
     const f = await swarmFixture();
     const sandboxes = createSandboxResources({
       records: f.records,
-      defaults: testMap(),
+      defaults: f.defaults,
       backends: { modal: f.backend, aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
       defaultBackend: "modal",
       lock: f.serviceOptions.lock,

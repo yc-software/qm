@@ -29,20 +29,19 @@ const clip = (value: string | null, max: number): string | null => (value === nu
 export const APP_PAGE_VIEW_MIGRATIONS: readonly PgMigrationDefinition[] = [
   TENANCY_BASE,
   {
-    id: "deploy/app-page-views/0001",
+    id: "deploy/app-page-views/0002-standalone",
     statements: [
-      "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
       `CREATE TABLE IF NOT EXISTS app_page_views(
-      id BIGSERIAL PRIMARY KEY,
-      deployment_id TEXT NOT NULL REFERENCES deployments(id),
-      version INTEGER,
-      viewer TEXT,
-      auth_mode TEXT NOT NULL,
-      at BIGINT NOT NULL,
-      path TEXT NOT NULL,
-      ip TEXT,
-      user_agent TEXT
-    )`,
+    id BIGSERIAL PRIMARY KEY,
+    deployment_id TEXT NOT NULL,
+    version INTEGER,
+    viewer TEXT,
+    auth_mode TEXT NOT NULL,
+    at BIGINT NOT NULL,
+    path TEXT NOT NULL,
+    ip TEXT,
+    user_agent TEXT
+  )`,
       `CREATE INDEX IF NOT EXISTS app_page_views_by_deployment_at ON app_page_views(deployment_id, at DESC)`,
       `CREATE INDEX IF NOT EXISTS app_page_views_by_at ON app_page_views(at)`,
     ],
