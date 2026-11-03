@@ -30,7 +30,7 @@ test(
         timeout: 35_000,
         killSignal: "SIGKILL",
       });
-      assert.match(stdout, /\[qm:migrate\] database migrations applied/);
+      assert.match(stdout, /\[qm:migrate\] .*; database migrations applied/);
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }

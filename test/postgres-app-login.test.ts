@@ -8,9 +8,8 @@ import {
   migrateRegisteredPgSchemas,
   ownerDatabaseUrl,
 } from "../src/persistence/pg-pool.ts";
-import { setLoginPasswords } from "../src/persistence/login-passwords.ts";
+import { ensureAppLogin } from "../src/persistence/app-login.ts";
 import { scramVerifier } from "../cli/src/scram-verifier.ts";
-import { derivedLoginPassword } from "../cli/src/database-logins.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the managed login password test";
@@ -22,10 +21,6 @@ test("scramVerifier emits a SCRAM-SHA-256 verifier and refuses non-ASCII passwor
   assert.notEqual(verifier, scramVerifier("secret"));
   assert.throws(() => scramVerifier("pässword"), /printable ASCII/);
 });
-
-const ROLES = `DO $$ BEGIN
-  CREATE ROLE qm_app LOGIN NOSUPERUSER NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-  DO $$ BEGIN CREATE ROLE qm_reader LOGIN NOSUPERUSER NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$`;
 
 async function logsIn(url: string): Promise<boolean> {
   const client = new pg.Client({ connectionString: url });
@@ -39,29 +34,46 @@ async function logsIn(url: string): Promise<boolean> {
   return true;
 }
 
+function loginUrl(name: string, password: string): string {
+  const url = new globalThis.URL(URL!);
+  url.username = name;
+  url.password = password;
+  return url.toString();
+}
+
 test(
-  "the release step sets the qm_app and qm_reader passwords only when DATABASE_URL does not log in",
+  "the release step creates the login DATABASE_URL names, and sets its password only when it does not log in",
   { skip },
   async () => {
     const admin = new pg.Client({ connectionString: URL! });
     await admin.connect();
+    const name = `qm-app-${randomUUID().slice(0, 8)}`;
     try {
-      await admin.query(ROLES);
-      const appUrl = new globalThis.URL(URL!);
-      appUrl.username = "qm_app";
-      appUrl.password = randomBytes(24).toString("base64url");
-      const readerUrl = new globalThis.URL(URL!);
-      readerUrl.username = "qm_reader";
-      readerUrl.password = derivedLoginPassword(decodeURIComponent(new globalThis.URL(URL!).password), "qm_reader");
-      await admin.query(`ALTER ROLE qm_app PASSWORD '${scramVerifier(randomBytes(24).toString("base64url"))}'`);
-      assert.equal(await logsIn(appUrl.toString()), false);
-      assert.deepEqual(await setLoginPasswords(URL!, appUrl.toString()), ["qm_app", "qm_reader"]);
-      assert.equal(await logsIn(appUrl.toString()), true);
-      assert.equal(await logsIn(readerUrl.toString()), true);
-      assert.deepEqual(await setLoginPasswords(URL!, appUrl.toString()), [], "a working login is left alone");
-      const owner = new globalThis.URL(URL!);
-      await assert.rejects(setLoginPasswords(URL!, owner.toString()), /DATABASE_URL must log in as qm_app/);
+      const appUrl = loginUrl(name, randomBytes(24).toString("base64url"));
+      assert.equal(await ensureAppLogin(URL!, appUrl), "created");
+      assert.equal(await logsIn(appUrl), true);
+      const role = await admin.query(
+        "SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname = $1",
+        [name],
+      );
+      assert.deepEqual(role.rows[0], {
+        rolsuper: false,
+        rolbypassrls: false,
+        rolcreaterole: false,
+        rolcreatedb: false,
+      });
+      assert.equal(await ensureAppLogin(URL!, appUrl), "unchanged", "a working login is left alone");
+      const rotated = loginUrl(name, randomBytes(24).toString("base64url"));
+      assert.equal(await logsIn(rotated), false);
+      assert.equal(await ensureAppLogin(URL!, rotated), "password set");
+      assert.equal(await logsIn(rotated), true);
+      await assert.rejects(
+        ensureAppLogin(URL!, URL!),
+        /is the table owner|the table owner; give it a login of its own/,
+      );
+      await assert.rejects(ensureAppLogin(URL!, loginUrl("x".repeat(64), "p")), /longer than the 63 bytes/);
     } finally {
+      await admin.query(`DROP ROLE IF EXISTS ${admin.escapeIdentifier(name)}`);
       await admin.end();
     }
   },
@@ -80,7 +92,7 @@ test(
     appUrl.username = "qm_app";
     appUrl.password = password;
     await admin.query(`CREATE SCHEMA ${schema}`);
-    await admin.query(ROLES);
+    await ensureAppLogin(ownerUrl.toString(), appUrl.toString());
     configurePgPooling({ databaseUrl: appUrl.toString(), ownerUrl: ownerUrl.toString() });
     const store = createPgPool(appUrl.toString(), [
       {
@@ -96,7 +108,6 @@ test(
       assert.equal(ownerDatabaseUrl(appUrl.toString()), ownerUrl.toString(), "pg-boss and migrations use the owner");
       assert.equal(ownerDatabaseUrl("postgres://other@db/x"), "postgres://other@db/x");
       await migrateRegisteredPgSchemas(appUrl.toString());
-      await setLoginPasswords(ownerUrl.toString(), appUrl.toString());
       const owner = await admin.query(`SELECT tableowner FROM pg_tables WHERE schemaname = $1`, [schema]);
       assert.equal(owner.rows[0].tableowner, decodeURIComponent(ownerUrl.username));
       await store.q(`INSERT INTO login_probe VALUES (1)`);

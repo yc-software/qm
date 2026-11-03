@@ -3,7 +3,6 @@ import { CliError } from "./log.ts";
 
 export const OWNER_LOGIN = "qm_owner";
 export const APP_LOGIN = "qm_app";
-export const READER_LOGIN = "qm_reader";
 
 export interface DatabaseLoginEnv {
   DATABASE_OWNER_URL: string;
@@ -39,7 +38,7 @@ export function loginUrl(baseUrl: string, login: string, password: string): stri
 export function databaseLoginEnv(ownerUrl: string, appPassword?: string): DatabaseLoginEnv {
   const owner = parsedDatabaseUrl(ownerUrl, "DATABASE_OWNER_URL");
   const ownerLogin = decodeURIComponent(owner.username);
-  if (ownerLogin === APP_LOGIN || ownerLogin === READER_LOGIN)
+  if (ownerLogin === APP_LOGIN)
     throw new CliError(`DATABASE_OWNER_URL must name the login that owns the tables, not ${ownerLogin}`);
   const ownerPassword = decodeURIComponent(owner.password);
   return {

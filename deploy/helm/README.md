@@ -127,12 +127,11 @@ sign-in, real turns, sandbox provider and backup/restore in your target cluster.
 
 Core keeps durable state in two places: Postgres and an object store for file
 bytes. Postgres takes two URLs: `DATABASE_OWNER_URL` owns the tables and runs
-migrations, and `DATABASE_URL` is the `qm_app` login requests use (not the owner,
-not a superuser, no `BYPASSRLS`). Before core starts, the core pod's `database`
-init container runs `node src/migrate-main.ts`: it applies the migrations, which
-create `qm_app` and `qm_reader`, and when `DATABASE_URL` does not log in it sets
-the `qm_app` password from that URL and the `qm_reader` password derived from the
-owner's. Core refuses to start without `DATABASE_OWNER_URL`, or when
+migrations, and `DATABASE_URL` is the login requests use (not the owner, not a
+superuser, no `BYPASSRLS`). Before core starts, the core pod's `database` init
+container runs `node src/migrate-main.ts`: when `DATABASE_URL` does not log in,
+it creates the login that URL names, or sets its password from the URL, using the
+owner login; then it applies the migrations. Core refuses to start without `DATABASE_OWNER_URL`, or when
 `DATABASE_URL` logs in as the owner, a superuser or a role that bypasses
 row-level security.
 Choose one of two layouts.

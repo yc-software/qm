@@ -500,7 +500,7 @@ function runDatabaseRelease(ctx: DockerCtx, image: string): void {
   const cleanup = pushEnvArgs(args, serviceEnv(ctx, "core"), secretEnvKeys(ctx, "core"));
   args.push(image, "node", "src/migrate-main.ts");
   try {
-    dockerInherit(args, "the core image could not apply migrations or set the qm_app and qm_reader passwords");
+    dockerInherit(args, "the core image could not set up the app database login or apply migrations");
   } finally {
     cleanup();
   }

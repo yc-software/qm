@@ -67,7 +67,7 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
       });
     const cold = await Promise.all([run(), run()]);
     for (const result of [...cold, await run()]) {
-      assert.match(result.stdout, /\[qm:migrate\] database migrations applied/);
+      assert.match(result.stdout, /\[qm:migrate\] .*; database migrations applied/);
     }
     const applied = await admin.query(`SELECT id FROM ${PG_MIGRATIONS_TABLE} ORDER BY id`);
     assert.ok(applied.rowCount! > 10);
@@ -76,7 +76,7 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
       const failure = error as Error & { code: number; stdout: string; stderr: string };
       assert.equal(failure.code, 1);
       assert.match(failure.stderr, /checksum mismatch/);
-      assert.doesNotMatch(failure.stdout, /\[qm:migrate\] database migrations applied/);
+      assert.doesNotMatch(failure.stdout, /\[qm:migrate\] .*; database migrations applied/);
       return true;
     });
   });

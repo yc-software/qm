@@ -248,7 +248,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     name: "DATABASE_URL",
     service: "core",
     required: { when: { kind: "target", target: "aws" } },
-    description: "Postgres URL of the qm_app login: not the table owner, no superuser, no BYPASSRLS.",
+    description: "Postgres URL of the login core runs as: not the table owner, no superuser, no BYPASSRLS.",
     managedBy: { default: "terraform", render: "render" },
   },
   {

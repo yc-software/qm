@@ -12,7 +12,6 @@ test("the app login is derived from the owner login and keeps its host, database
   const app = new URL(env.DATABASE_URL);
   assert.equal(app.username, "qm_app");
   assert.equal(app.password, derivedLoginPassword("s3cret", "qm_app"));
-  assert.notEqual(app.password, derivedLoginPassword("s3cret", "qm_reader"));
   assert.notEqual(app.password, "s3cret");
   assert.equal(app.host, "db.internal:5432");
   assert.equal(app.pathname, "/qm");

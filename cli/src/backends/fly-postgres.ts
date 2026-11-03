@@ -1,10 +1,4 @@
-import {
-  APP_LOGIN,
-  DATABASE_LOGIN_ENV_NAMES,
-  READER_LOGIN,
-  databaseLoginEnv,
-  type DatabaseLoginEnv,
-} from "../database-logins.ts";
+import { APP_LOGIN, DATABASE_LOGIN_ENV_NAMES, databaseLoginEnv, type DatabaseLoginEnv } from "../database-logins.ts";
 import { CliError, note } from "../log.ts";
 import { fly, flySensitive, secretNames, stageSecret } from "./fly-cli.ts";
 
@@ -136,7 +130,6 @@ function flyDatabaseLogins(target: FlyPostgresTarget, existing: ReadonlySet<stri
   const clusterId = mpgClusterOfUrl(ownerUrl);
   if (!clusterId) return databaseLoginEnv(ownerUrl);
   ensureMpgLogin(clusterId, APP_LOGIN, "writer");
-  ensureMpgLogin(clusterId, READER_LOGIN, "reader");
   return databaseLoginEnv(ownerUrl, mpgLoginPassword(clusterId, APP_LOGIN));
 }
 
@@ -148,5 +141,5 @@ export function ensureFlyPostgres(target: FlyPostgresTarget): void {
     return;
   }
   for (const [name, value] of Object.entries(flyDatabaseLogins(target, existing))) stageSecret(app, name, value);
-  note(`postgres: owner and qm_app connections staged on ${app}`);
+  note(`postgres: owner and ${APP_LOGIN} connections staged on ${app}`);
 }

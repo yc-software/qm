@@ -370,7 +370,6 @@ export function createMcpToolService(opts: {
   const unsubscribe = opts.servers.onChange(refreshInBackground);
   const timer = setInterval(refreshInBackground, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
   timer.unref?.();
-  refreshInBackground();
 
   return {
     toolDefs: () => snapshot,

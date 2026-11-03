@@ -22,7 +22,7 @@ export async function assertRuntimeLogin(databaseUrl: string): Promise<void> {
     ].filter(Boolean);
     if (problems.length)
       throw new Error(
-        `DATABASE_URL logs in as ${role!.login}, which is ${problems.join(" and ")}; point DATABASE_URL at the qm_app login and DATABASE_OWNER_URL at the table owner`,
+        `DATABASE_URL logs in as ${role!.login}, which is ${problems.join(" and ")}; point DATABASE_URL at a login of its own and DATABASE_OWNER_URL at the table owner`,
       );
   } finally {
     await client.end();

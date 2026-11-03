@@ -65,10 +65,10 @@ any other way.
    below), and so is the LoadBalancer in front of the egress proxy ("Forcing sandbox
    egress through the proxy" — without it egress runs fail-open).
 4. **Provision Postgres and set `DATABASE_OWNER_URL` and `DATABASE_URL` before
-   first boot.** The owner URL runs migrations; `DATABASE_URL` names the `qm_app`
-   login the migrations create. Run `node src/migrate-main.ts` with core's
-   environment before core starts (a pre-deploy job); it applies the migrations and
-   sets the `qm_app` password from `DATABASE_URL`. Sign-in is not
+   first boot.** The owner URL runs migrations; `DATABASE_URL` names the login
+   core runs as. Run `node src/migrate-main.ts` with core's environment before
+   core starts (a pre-deploy job); it creates that login with the owner (or sets
+   its password from `DATABASE_URL`) and applies the migrations. Sign-in is not
    optional here: the auth broker's single-use claim endpoint needs core's durable
    store, so an instance without a database accepts no sign-ins at all. The Porter
    path has no `qm`-CLI database provisioning — create a datastore in the dashboard
