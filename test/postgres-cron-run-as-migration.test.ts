@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DROP_RUN_AS_MIGRATION } from "../src/cron/cron-store.ts";
 
-const URL = process.env.DATABASE_URL;
+const URL = process.env.DATABASE_OWNER_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron run-mode migration test";
 
 test("dropping run modes hands floor crons to their conversation and strips mode fields", { skip }, async () => {

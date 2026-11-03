@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresBrokerSessions } from "../src/auth/broker-sessions.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantBoundUrl } from "./support/test-tenants.ts";
 
 const url = process.env.DATABASE_URL;
 
@@ -14,7 +14,7 @@ test(
     inTestTenant(async () => {
       const a = createPostgresBrokerSessions(url!);
       const b = createPostgresBrokerSessions(url!);
-      const pool = new pg.Pool({ connectionString: url });
+      const pool = new pg.Pool({ connectionString: tenantBoundUrl(url!) });
       const email = `${randomUUID()}@example.com`;
       try {
         const first = await a.create(email, 30 * 86400, 90 * 86400);

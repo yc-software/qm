@@ -1,8 +1,9 @@
-import { test, beforeEach } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { MemoryFactsMissing } from "../src/memory/facts.ts";
 import { scopeId } from "../src/types.ts";
+import { migrateTestDatabase } from "./support/test-database.ts";
 import { testTenants, inTestTenant } from "./support/test-tenants.ts";
 
 const [TEST_TENANT] = testTenants();
@@ -13,7 +14,7 @@ const at = Date.UTC(2026, 4, 31);
 
 async function sql(text: string, params: unknown[] = []) {
   const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: URL });
+  const pool = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
   try {
     return (await pool.query(text, params)).rows;
   } finally {
@@ -21,14 +22,15 @@ async function sql(text: string, params: unknown[] = []) {
   }
 }
 
-beforeEach(async () => {
-  if (!URL) return;
-  await sql("DROP TABLE IF EXISTS qm_schema_migrations, memory_revisions, memory_facts CASCADE");
-});
+async function resetMemorySchema() {
+  await sql("DROP TABLE IF EXISTS memory_revisions, memory_facts CASCADE");
+  await sql("DELETE FROM qm_schema_migrations WHERE id LIKE 'memory/facts/%'");
+  await sql("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
+}
 
 test("pg memory: notebook snapshots migrate into one row per fact, in order", { skip }, () =>
   inTestTenant(async () => {
-    await sql("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
+    await resetMemorySchema();
     await sql(`CREATE TABLE memory_revisions(id BIGSERIAL PRIMARY KEY, scope_id TEXT NOT NULL, seq BIGINT NOT NULL,
     op TEXT NOT NULL, body TEXT NOT NULL, author TEXT, at BIGINT NOT NULL, records JSONB, UNIQUE (scope_id, seq))`);
     const records = {
@@ -60,6 +62,7 @@ test("pg memory: notebook snapshots migrate into one row per fact, in order", { 
     ]);
 
     const memory = createPostgresMemoryService(URL!);
+    await migrateTestDatabase(URL);
     const one = await memory.facts!("personal:U1");
     assert.deepEqual(
       one.map(({ text, sensitivity, sources, sourceUnknown }) => ({ text, sensitivity, sources, sourceUnknown })),
@@ -79,6 +82,7 @@ test("pg memory: notebook snapshots migrate into one row per fact, in order", { 
 
 test("pg memory: notebooks written before the records column migrate into fact rows", { skip }, () =>
   inTestTenant(async () => {
+    await resetMemorySchema();
     await sql(`CREATE TABLE memory_revisions(id BIGSERIAL PRIMARY KEY, scope_id TEXT NOT NULL, seq BIGINT NOT NULL,
     op TEXT NOT NULL, body TEXT NOT NULL, author TEXT, at BIGINT NOT NULL, UNIQUE (scope_id, seq))`);
     await sql("INSERT INTO memory_revisions(scope_id, seq, op, body, at) VALUES ($1, 1, 'replace', $2, $3)", [
@@ -87,6 +91,7 @@ test("pg memory: notebooks written before the records column migrate into fact r
       at,
     ]);
     const memory = createPostgresMemoryService(URL!);
+    await migrateTestDatabase(URL);
     assert.deepEqual(
       (await memory.facts!("personal:U3")).map((fact) => fact.text),
       ["Owns billing"],

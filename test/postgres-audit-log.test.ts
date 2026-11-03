@@ -1,8 +1,9 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { scopeId } from "../src/types.ts";
+import { migrateTestDatabase } from "./support/test-database.ts";
 import { testTenants, inTestTenant } from "./support/test-tenants.ts";
 
 const [TEST_TENANT] = testTenants();
@@ -10,27 +11,24 @@ const [TEST_TENANT] = testTenants();
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres audit-log tests";
 
-async function reset(dropOldMap: boolean): Promise<void> {
+async function ownerSql(...statements: string[]): Promise<void> {
   if (!URL) return;
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS audit_log CASCADE");
-  if (dropOldMap) await p.query("DROP TABLE IF EXISTS audit_events CASCADE");
-  await p.end();
+  const p = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
+  try {
+    for (const statement of statements) await p.query(statement);
+  } finally {
+    await p.end();
+  }
 }
 
 function ev(at: number, action: string, scope = scopeId("personal", "U1")): AuditEvent {
   return { at, principalId: "U1", action, resource: `r-${action}`, scopeLabel: scope };
 }
 
-before(async () => {
-  await reset(true);
-});
-
 test("pg audit log: tail returns newest `limit`, scoped, and reads-its-writes", { skip }, () =>
   inTestTenant(async () => {
-    await reset(true);
+    await ownerSql("TRUNCATE audit_log");
     const log = createPostgresAuditLog(URL!);
     const s1 = scopeId("personal", "U1");
     const s2 = scopeId("channel", "C1");
@@ -71,9 +69,9 @@ test("pg audit log: tail returns newest `limit`, scoped, and reads-its-writes", 
 
 test("pg audit log: migrates rows once from the legacy audit_events JSONB map", { skip }, () =>
   inTestTenant(async () => {
-    await reset(true);
+    await ownerSql("DROP TABLE audit_log", "DELETE FROM qm_schema_migrations WHERE id LIKE 'admin/audit-log/%'");
     const pg = (await import("pg")).default;
-    const p = new pg.Pool({ connectionString: URL });
+    const p = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
     await p.query("CREATE TABLE audit_events (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
     await p.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
     const rows: AuditEvent[] = [ev(10, "old-a"), ev(30, "old-c"), ev(20, "old-b")];
@@ -82,6 +80,7 @@ test("pg audit log: migrates rows once from the legacy audit_events JSONB map", 
     await p.end();
 
     const log = createPostgresAuditLog(URL!);
+    await migrateTestDatabase(URL);
     const migrated = await log.events();
     assert.deepEqual(
       migrated.map((e) => e.action),
@@ -96,7 +95,7 @@ test("pg audit log: migrates rows once from the legacy audit_events JSONB map", 
 
 test("pg audit log: recordOnce is durable and idempotent across instances", { skip }, () =>
   inTestTenant(async () => {
-    await reset(true);
+    await ownerSql("TRUNCATE audit_log");
     const first = createPostgresAuditLog(URL!);
     const second = createPostgresAuditLog(URL!);
     await first.recordOnce!("deployment-layer:org:default-org:1", ev(1, "layer-updated"));
@@ -109,7 +108,7 @@ test("pg audit log: recordOnce is durable and idempotent across instances", { sk
 
 test("pg audit log: resource filter treats % and _ as literal characters", { skip }, () =>
   inTestTenant(async () => {
-    await reset(true);
+    await ownerSql("TRUNCATE audit_log");
     const log = createPostgresAuditLog(URL!);
     const s1 = scopeId("personal", "U1");
     log.record({ ...ev(1, "file.read", s1), resource: "my_report.pdf" });

@@ -8,6 +8,16 @@ const url = process.env.DATABASE_URL;
 const skip = url ? false : "set DATABASE_URL (a Postgres) to run the query timeout tests";
 configurePgPooling({ queryMax: 1 });
 
+async function asOwner(...statements: string[]): Promise<void> {
+  const owner = new pg.Client({ connectionString: process.env.DATABASE_OWNER_URL });
+  await owner.connect();
+  try {
+    for (const statement of statements) await owner.query(statement);
+  } finally {
+    await owner.end();
+  }
+}
+
 async function connectionState(store: ReturnType<typeof createPgPool>) {
   const client = await (await store.pool()).connect();
   try {
@@ -26,8 +36,7 @@ test("a query with a timeout returns what the same query returns without one", {
     const text = "SELECT $1::int8 AS big, $2::jsonb AS doc FROM generate_series(1, 3)";
     const values = ["9007199254740993", JSON.stringify({ a: [1] })];
     assert.deepEqual(await store.query(text, values, { timeoutMs: 1000 }), await store.query(text, values));
-    await store.q("DROP TABLE IF EXISTS timeout_rows");
-    await store.q("CREATE TABLE timeout_rows(n int)");
+    await asOwner("DROP TABLE IF EXISTS timeout_rows", "CREATE TABLE timeout_rows(n int)");
     assert.equal(
       (await store.query("INSERT INTO timeout_rows SELECT generate_series(1, $1::int)", [4], { timeoutMs: 1000 }))
         .rowCount,
@@ -136,8 +145,7 @@ test("an abort before COMMIT is sent rolls back even when the cancel cannot reac
   const locker = new pg.Client({ connectionString: url });
   await locker.connect();
   try {
-    await store.q("DROP TABLE IF EXISTS aborted_rows");
-    await store.q("CREATE TABLE aborted_rows(n int PRIMARY KEY)");
+    await asOwner("DROP TABLE IF EXISTS aborted_rows", "CREATE TABLE aborted_rows(n int PRIMARY KEY)");
     await locker.query("BEGIN");
     await locker.query("INSERT INTO aborted_rows VALUES (1)");
     const controller = new AbortController();
@@ -156,6 +164,7 @@ test("an abort before COMMIT is sent rolls back even when the cancel cannot reac
   } finally {
     await locker.end();
     await store.close();
+    if (proxy.listening) proxy.close();
     sockets.forEach((socket) => socket.destroy());
   }
 });
@@ -165,8 +174,10 @@ test("an abort after COMMIT is sent returns the committed result", { skip }, asy
   const locker = new pg.Client({ connectionString: url });
   await locker.connect();
   try {
-    await store.q("DROP TABLE IF EXISTS commit_edge_rows");
-    await store.q("CREATE TABLE commit_edge_rows(n int UNIQUE DEFERRABLE INITIALLY DEFERRED)");
+    await asOwner(
+      "DROP TABLE IF EXISTS commit_edge_rows",
+      "CREATE TABLE commit_edge_rows(n int UNIQUE DEFERRABLE INITIALLY DEFERRED)",
+    );
     await locker.query("BEGIN");
     await locker.query("INSERT INTO commit_edge_rows VALUES (1)");
     const controller = new AbortController();
@@ -190,8 +201,7 @@ test(
     const locker = new pg.Client({ connectionString: url });
     await locker.connect();
     try {
-      await store.q("DROP TABLE IF EXISTS locked_rows");
-      await store.q("CREATE TABLE locked_rows(n int)");
+      await asOwner("DROP TABLE IF EXISTS locked_rows", "CREATE TABLE locked_rows(n int)");
       await locker.query("BEGIN");
       await locker.query("LOCK TABLE locked_rows IN ACCESS EXCLUSIVE MODE");
       const controller = new AbortController();
@@ -213,8 +223,7 @@ test(
 test("caught database errors keep the pooled connection", { skip }, async () => {
   const store = createPgPool(url!);
   try {
-    await store.q("DROP TABLE IF EXISTS unique_rows");
-    await store.q("CREATE TABLE unique_rows(n int PRIMARY KEY)");
+    await asOwner("DROP TABLE IF EXISTS unique_rows", "CREATE TABLE unique_rows(n int PRIMARY KEY)");
     await store.q("INSERT INTO unique_rows VALUES (1)");
     const pids = new Set<number>();
     for (const options of [{ timeoutMs: 1000 }, { timeoutMs: 1000, signal: new AbortController().signal }]) {

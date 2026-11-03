@@ -16,7 +16,7 @@ import {
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
 import { itemFromEntry, type Item, type NewItem } from "../src/sessions/items.ts";
-import { seedTestTenants } from "./support/tenant-seed.ts";
+import { ownerUrlOf, testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -25,8 +25,7 @@ const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items contr
 const stored = ({ sessionId: _sessionId, createdAt: _createdAt, ...item }: Item) =>
   Object.fromEntries(Object.entries(item).filter(([, value]) => value !== null));
 
-async function withSchema(
-  prefix: string,
+async function withDatabase(
   fn: (ctx: {
     raw: import("pg").Pool;
     url: string;
@@ -34,25 +33,18 @@ async function withSchema(
   }) => Promise<void>,
 ): Promise<void> {
   const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: URL });
-  const schema = `${prefix}_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new globalThis.URL(URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
-  await seedTestTenants(url.toString());
-  const raw = new pg.Pool({ connectionString: url.toString() });
+  const url = testMigratedDatabaseUrl();
+  const raw = new pg.Pool({ connectionString: ownerUrlOf(url) });
   try {
-    await fn({ raw, url: url.toString(), store: createPostgresSessionStore(url.toString()) });
+    await fn({ raw, url, store: createPostgresSessionStore(url) });
   } finally {
     await raw.end();
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.end();
   }
 }
 
 test("pg items keep turn, author and time in typed columns", { skip }, () =>
   inTestTenant(async () => {
-    await withSchema("items_columns", async ({ raw, store }) => {
+    await withDatabase(async ({ raw, store }) => {
       const scope = scopeId("personal", "alice");
       const session = await store.getOrCreateByThread("web:columns", "dm", scope);
       const writer = { sessionId: session.id };
@@ -119,7 +111,7 @@ test("pg items keep turn, author and time in typed columns", { skip }, () =>
 
 test("pg items reject a second call with the same call id, leaving the log untouched", { skip }, () =>
   inTestTenant(async () => {
-    await withSchema("items_calls", async ({ store }) => {
+    await withDatabase(async ({ store }) => {
       const scope = scopeId("personal", "alice");
       const session = await store.getOrCreateByThread("web:calls", "dm", scope);
       const writer = { sessionId: session.id };
@@ -144,7 +136,7 @@ test(
   { skip },
   () =>
     inTestTenant(async () => {
-      await withSchema("items_tool_output", async ({ raw, url, store }) => {
+      await withDatabase(async ({ raw, url, store }) => {
         const dir = await mkdtemp(join(tmpdir(), "tool-output-"));
         const pool = createPgPool(url);
         try {
@@ -232,7 +224,7 @@ test(
 
 test("pg items hide a Slack reply receipt once the real message arrives", { skip }, () =>
   inTestTenant(async () => {
-    await withSchema("items_receipts", async ({ store }) => {
+    await withDatabase(async ({ store }) => {
       const scope = scopeId("personal", "alice");
       const session = await store.getOrCreateByThread("slack:T1:C1:1.0", "dm", scope);
       const writer = { sessionId: session.id };
@@ -262,7 +254,7 @@ test("pg items hide a Slack reply receipt once the real message arrives", { skip
 
 test("message-only transcript reads filter before pagination and retain visibility", { skip }, () =>
   inTestTenant(async () => {
-    await withSchema("message_pages", async ({ store }) => {
+    await withDatabase(async ({ store }) => {
       const scope = scopeId("personal", "alice");
       const session = await store.getOrCreateByThread("web:message-pages", "dm", scope);
       await store.addParticipant(session.id, "alice");
@@ -285,7 +277,7 @@ test("message-only transcript reads filter before pagination and retain visibili
 
 test("legacy entries are written as the same item rows", { skip }, () =>
   inTestTenant(async () => {
-    await withSchema("items_legacy", async ({ store }) => {
+    await withDatabase(async ({ store }) => {
       const scope = scopeId("personal", "alice");
       const session = await store.getOrCreateByThread("web:legacy", "dm", scope);
       const runId = randomUUID();
