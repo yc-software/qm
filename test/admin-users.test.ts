@@ -126,9 +126,7 @@ test("/v1/admin/users: each person carries the pseudonym the model gateway recei
     assert.equal((await s.built.app.turn(dm)).status, "ok");
     const roster = async (base: string) =>
       (
-        (await (
-          await fetch(`${base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice@default-org" } })
-        ).json()) as {
+        (await (await fetch(`${base}/v1/admin/users`, { headers: { "x-admin-actor": "admin-alice" } })).json()) as {
           users: Array<{ principalId: string; gatewayActor?: string }>;
         }
       ).users.find((u) => u.principalId === "U1");

@@ -12,7 +12,7 @@ import { getRequiredModel } from "../src/model/pi-models.ts";
 import { withModelRequestContext } from "../src/model/request-context.ts";
 import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.ts";
 import type { Config } from "../src/config.ts";
 import type { Session, SessionEntry } from "../src/types.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
@@ -367,13 +367,13 @@ test("API work carries its token's turn, the admin replaying screens, or the mem
 
   const enabled = await fetch(`${base}/v1/admin/model-registry/claude-haiku-4-5/enable`, {
     method: "POST",
-    headers: { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" },
+    headers: { "x-admin-actor": "admin-alice", "content-type": "application/json" },
     body: JSON.stringify({ provider: "anthropic", verify: true }),
   });
   assert.equal(enabled.status, 200, await enabled.text());
   assert.deepEqual(sent("probe"), {
     "x-qm-actor": pseudonym("admin-alice"),
-    "x-qm-scope": "org:default-org",
+    "x-qm-scope": TEST_ROOT_SCOPE,
     "x-qm-purpose": "probe",
   });
 });

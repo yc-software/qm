@@ -1143,7 +1143,7 @@ test("admin observability enforces scope grants (authz is the boundary)", async 
     const UMA = { "x-admin-actor": "user-uma" };
     assert.equal((await get(s.base, `/v1/admin/sessions?scope=${TEST_ROOT_SCOPE}`, UMA)).status, 403);
     assert.equal(
-      (await get(s.base, "/v1/admin/errors?scope=org:default-org", { "x-admin-actor": "nobody@default-org" })).status,
+      (await get(s.base, "/v1/admin/errors?scope=org:default-org", { "x-admin-actor": "nobody" })).status,
       403,
     );
     assert.equal((await get(s.base, "/v1/admin/files")).status, 400);
