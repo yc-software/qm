@@ -171,7 +171,6 @@ export interface Config extends SandboxSettings, DeploySettings {
     endpoint: string;
     token: string;
   };
-  reachExecEnabled: boolean;
   surfaceDebugFooter: boolean;
 }
 
@@ -668,7 +667,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       CONFIG_DEFAULTS.approvalSummaryTimeoutMs,
     turnLeaseWaitMs: numEnvStrict("TURN_LEASE_WAIT_MS", env.TURN_LEASE_WAIT_MS) ?? CONFIG_DEFAULTS.turnLeaseWaitMs,
     securityScreenTimeoutMs,
-    reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
     surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,
     ...sandbox,
     ...deploy,

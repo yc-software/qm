@@ -24,7 +24,6 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!run ",
   "!execute ",
   "!scratch ",
-  "!reach ",
   "!paused-approval ",
   "!collect-approval ",
   "!collect-exec ",
@@ -456,25 +455,6 @@ export function createMockAgent(): Agent {
         } else {
           await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
           reply = output;
-        }
-        turn.onProgress?.({ toolCalls: 1 });
-        usedTool = true;
-      } else if (command0.startsWith("!reach ")) {
-        const rest = command0.slice("!reach ".length);
-        const sp = rest.indexOf(" ");
-        const room = sp === -1 ? rest : rest.slice(0, sp);
-        const command = sp === -1 ? "" : rest.slice(sp + 1);
-        await turn.emit({
-          type: "tool_call",
-          payload: { tool: "execute", command, scope: room },
-          scopeLabel: turn.scopeLabel,
-        });
-        try {
-          const result = await turn.tools.execute(command, { reachTarget: room });
-          await turn.emit({ type: "tool_result", payload: { ...result }, scopeLabel: turn.scopeLabel });
-          reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
-        } catch (e) {
-          reply = `[reach error] ${e instanceof Error ? e.message : String(e)}`;
         }
         turn.onProgress?.({ toolCalls: 1 });
         usedTool = true;
