@@ -83,7 +83,6 @@ struct NativeInboxLoop: Decodable, Identifiable {
   let ingestionActive: Bool?
 }
 struct NativeInboxFeed: Decodable {
-  let migrationPending: Bool
   let selected: [NativeInboxLoop]
   let available: [NativeInboxLoop]
   let items: [NativeInboxItem]
@@ -102,7 +101,6 @@ final class InboxModel {
   var selected: [NativeInboxLoop] = []
   var available: [NativeInboxLoop] = []
   var nextCursor: String?
-  var migrationPending = false
   var loading = false
   var busy = false
   var error: String?
@@ -130,7 +128,6 @@ final class InboxModel {
       guard current == revision else { return }
       selected = result.selected
       available = result.available
-      migrationPending = result.migrationPending
       if reset { items = [] }
       var ids = Set(items.map(\.id))
       items.append(contentsOf: result.items.filter { ids.insert($0.id).inserted })
@@ -182,9 +179,6 @@ struct NativeInboxView: View {
       Picker("Source", selection: $loop) {
         Text("All").tag("all")
         ForEach(model.selected) { Text($0.name).tag($0.id) }
-      }
-      if model.migrationPending {
-        Text("Your inbox is being prepared. Refresh shortly.").foregroundStyle(.secondary)
       }
       if let error = model.error { Text(error).foregroundStyle(.red) }
       ForEach(model.items) { item in

@@ -24,6 +24,17 @@ struct NativeSentEmail: Decodable, Identifiable {
   let attachments: [String]?
   let rfcMessageId: String?
   var plainBody: String { html == true ? Self.plain(body ?? "") : body ?? "" }
+  static let chatLimit = 50000
+  var chatSource: String {
+    guard let conversation, !conversation.isEmpty else { return plainBody }
+    return conversation.map { "\($0.from) to \($0.to):\n\($0.body)" }.joined(separator: "\n\n")
+  }
+  var chatTrimmed: Bool { chatSource.utf16.count > Self.chatLimit }
+  var chatText: String {
+    let text = chatSource
+    guard text.utf16.count > Self.chatLimit else { return text }
+    return String(text[..<String.Index(utf16Offset: Self.chatLimit, in: text)])
+  }
   static func plain(_ html: String) -> String {
     var text = html.replacingOccurrences(
       of: "(?is)<(script|style)\\b[^>]*>.*?</\\1\\s*>", with: "", options: .regularExpression
@@ -188,6 +199,11 @@ struct NativeSentMailDetail: View {
         Button("Ask QM about this email", systemImage: "bubble.left.and.bubble.right") {
           Task { await openChat(detail) }
         }.disabled(busy)
+        if detail.chatTrimmed {
+          Text(
+            "This email is longer than \(NativeSentEmail.chatLimit.formatted()) characters. QM will only see the first \(NativeSentEmail.chatLimit.formatted())."
+          ).font(.caption).foregroundStyle(.secondary)
+        }
       }
       if let error {
         Text(error).foregroundStyle(.red)
@@ -216,15 +232,11 @@ struct NativeSentMailDetail: View {
     busy = true
     defer { busy = false }
     do {
-      let text =
-        detail.conversation?.isEmpty == false
-        ? detail.conversation!.map { "\($0.from) to \($0.to):\n\($0.body)" }.joined(
-          separator: "\n\n") : detail.plainBody
       var body: [String: Any] = [
         "accountType": detail.accountType ?? original.accountType ?? "default",
         "messageId": detail.id, "threadId": detail.threadId, "subject": detail.subject,
         "from": detail.from ?? "", "to": detail.to, "cc": detail.cc ?? "",
-        "text": String(text.prefix(50000)),
+        "text": detail.chatText,
       ]
       if let id = detail.rfcMessageId { body["rfcMessageId"] = id }
       let result: NativeInboxDetail = try await client.fetch("api/inbox/sent-chat", body: body)

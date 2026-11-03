@@ -2,11 +2,15 @@ import SwiftUI
 
 struct NativeFeatureFlag: Decodable, Identifiable {
   let featureName: String
+  let label: String?
+  let personalOnly: Bool?
+  let hint: String?
   let enabledScopes: [String]
   var id: String { featureName }
-  static let names = [
-    "command_scoped_credentials", "persistent_subagents", "responsive_spine", "inbox_loops",
-  ]
+  var title: String { label ?? featureName.replacingOccurrences(of: "_", with: " ") }
+  func accepts(_ scopeId: String) -> Bool {
+    personalOnly != true || scopeId.hasPrefix("personal:")
+  }
 }
 
 struct NativeAdminFlags: View {
@@ -21,7 +25,7 @@ struct NativeAdminFlags: View {
   let scope: String
   @State private var flags: [NativeFeatureFlag] = []
   @State private var scopes: [NativeAdminScope] = []
-  @State private var feature = NativeFeatureFlag.names[0]
+  @State private var feature = ""
   @State private var selectedScope = ""
   @State private var change: Change?
   @State private var busy = false
@@ -34,16 +38,16 @@ struct NativeAdminFlags: View {
           "Organization enablement includes every scope. Removing a narrower entry does not override organization enablement."
         ).font(.caption)
       }
-      ForEach(NativeFeatureFlag.names, id: \.self) { name in
-        Section(name.replacingOccurrences(of: "_", with: " ").capitalized) {
-          let enabled = flags.first { $0.featureName == name }?.enabledScopes ?? []
+      ForEach(flags) { flag in
+        Section(flag.title) {
+          let enabled = flag.enabledScopes
           if enabled.isEmpty { Text("No enabled scopes").foregroundStyle(.secondary) }
           ForEach(enabled, id: \.self) { target in
             HStack {
               Text(scopes.first { $0.id == target }?.label ?? target)
               Spacer()
               Button("Remove", role: .destructive) {
-                change = .init(feature: name, scope: target, on: false)
+                change = .init(feature: flag.featureName, scope: target, on: false)
               }
             }
           }
@@ -51,18 +55,21 @@ struct NativeAdminFlags: View {
       }
       Section("Enable for a scope") {
         Picker("Feature", selection: $feature) {
-          ForEach(NativeFeatureFlag.names, id: \.self) {
-            Text($0.replacingOccurrences(of: "_", with: " ")).tag($0)
-          }
+          ForEach(flags) { Text($0.title).tag($0.featureName) }
+        }.onChange(of: feature) {
+          if selected?.accepts(selectedScope) == false { selectedScope = "" }
         }
+        if let hint = selected?.hint { Text(hint).font(.caption) }
         Picker("Scope", selection: $selectedScope) {
           Text("Choose scope").tag("")
-          Text("Entire organization").tag(scope)
-          ForEach(scopes.filter { $0.id != scope }) { Text($0.label ?? $0.id).tag($0.id) }
+          if selected?.accepts(scope) != false { Text("Entire organization").tag(scope) }
+          ForEach(scopes.filter { $0.id != scope && selected?.accepts($0.id) != false }) {
+            Text($0.label ?? $0.id).tag($0.id)
+          }
         }
         Button("Enable feature") {
           change = .init(feature: feature, scope: selectedScope, on: true)
-        }.disabled(selectedScope.isEmpty || !loaded)
+        }.disabled(selectedScope.isEmpty || selected == nil || !loaded)
       }
       if let error { Text(error).foregroundStyle(.red) }
     }.disabled(busy).navigationTitle("Feature rollout").navigationBarTitleDisplayMode(.inline)
@@ -82,6 +89,11 @@ struct NativeAdminFlags: View {
         )
       }
   }
+  private var selected: NativeFeatureFlag? { flags.first { $0.featureName == feature } }
+  private func show(_ rows: [NativeFeatureFlag]) {
+    flags = rows
+    if selected == nil { feature = rows.first?.featureName ?? "" }
+  }
   private func load() async {
     guard !busy else { return }
     busy = true
@@ -90,7 +102,7 @@ struct NativeAdminFlags: View {
       let result: Configuration = try await client.fetch(
         "admin/api/scopes/\(scope.apiComponent)", query: [.init(name: "view", value: "customize")])
       let listing: NativeAdminScopes = try await client.fetch("admin/api/scopes")
-      flags = result.featureFlags ?? []
+      show(result.featureFlags ?? [])
       scopes = listing.scopes
       loaded = true
       error = nil
@@ -107,7 +119,7 @@ struct NativeAdminFlags: View {
         method: "PUT")
       let result: Configuration = try await client.fetch(
         "admin/api/scopes/\(scope.apiComponent)", query: [.init(name: "view", value: "customize")])
-      flags = result.featureFlags ?? []
+      show(result.featureFlags ?? [])
       error = nil
     } catch { self.error = error.localizedDescription }
   }
