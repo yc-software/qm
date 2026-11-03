@@ -500,7 +500,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return "block";
       };
       if (!deps.securityScreener && !deps.agent.screenSecurity) return block("no-screener");
-      if (!(await deps.rateLimiter.check(actor.id)).allowed) return block("rate-limited");
       if (deps.budget && !(await deps.budget.check(actor.id)).allowed) return block("over-budget");
       if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
       if (!bounded || bounded.truncated) return block("oversize-input");
@@ -736,14 +735,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             reason: "internal-only: shared audience includes a non-internal participant",
           };
         }
-      }
-
-      const rl = await deps.rateLimiter.check(actor.id);
-      if (!rl.allowed) {
-        return {
-          status: "refused",
-          reason: `rate limit exceeded — try again in ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)}s`,
-        };
       }
 
       if (deps.budget) {
