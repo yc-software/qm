@@ -148,12 +148,12 @@ test("a failed tidy does not count, and run-now always runs", async () => {
   await inTestTenant(() =>
     f.crons.recordFire(id, { fireKey: "k1", threadRef: "t1", firedAt: 5, endedAt: 6, status: "failed" }),
   );
-  assert.equal(await f.service.skipFire(await f.cronOf(alice)), undefined);
+  assert.equal(await inTestTenant(async () => f.service.skipFire(await f.cronOf(alice))), undefined);
 
   await inTestTenant(() =>
     f.crons.recordFire(id, { fireKey: "k2", threadRef: "t2", firedAt: 7, endedAt: 8, status: "ok" }),
   );
-  assert.ok(await f.service.skipFire(await f.cronOf(alice)));
+  assert.ok(await inTestTenant(async () => f.service.skipFire(await f.cronOf(alice))));
   const result = await inTestTenant(() => f.scheduler.runNow(id));
   assert.ok(result.started);
   await result.settled;
