@@ -10,7 +10,8 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { settle } from "./support/settle.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { installPrincipalLinks, UnattestableActor } from "../src/directory/person.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
@@ -332,7 +333,8 @@ test("an attested connector refuses a call outside its person's own conversation
   const shared = testMap<McpServer>();
   const otherInstance = createMcpServerStore(shared);
   const store = createMcpServerStore(shared);
-  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+  const audit = createPostgresAuditLog(testDatabaseUrl());
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, audit, refreshIntervalMs: 3600_000 });
   const records = server({ id: "records", name: "Records", url: mcp.url, catalog: true });
   await store.put(records);
   await service.refresh();
@@ -347,6 +349,13 @@ test("an attested connector refuses a call outside its person's own conversation
   await assert.rejects(service.call("records", invoke, "U1", undefined, "channel:C1"), privateOnly);
   await assert.rejects(service.call("records", invoke, "U2", undefined, "personal:U1"), privateOnly);
   assert.equal(mcp.requests.length, 0);
+  assert.deepEqual(
+    (await audit.tail({ limit: 10, action: "mcp.call", resourceContains: "records" }))
+      .filter((event) => privateOnly.test(event.status ?? ""))
+      .map((event) => event.principalId)
+      .sort(),
+    ["U1", "U1", "U2"],
+  );
   await service.call("records", invoke, "U1", undefined, "personal:U1");
   assert.deepEqual(
     mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.actor),
@@ -365,7 +374,8 @@ test("attested connectors send one canonical person and never call for an actor 
     tools: [{ name: "find-record", description: "Find a record", inputSchema: { type: "object" } }],
   });
   const store = createMcpServerStore(testMap<McpServer>());
-  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+  const audit = createPostgresAuditLog(testDatabaseUrl());
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, audit, refreshIntervalMs: 3600_000 });
   await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
   await service.refresh();
   for (const person of ["alice@example.com", "U_ALICE"])
@@ -385,6 +395,12 @@ test("attested connectors send one canonical person and never call for an actor 
       (error: unknown) => error instanceof UnattestableActor && /POST \/v1\/admin\/principal-links/.test(error.message),
     );
   assert.equal(mcp.requests.length, sent);
+  assert.equal(
+    (await audit.tail({ limit: 10, action: "mcp.call", resourceContains: "records" })).filter((event) =>
+      /principal-links/.test(event.status ?? ""),
+    ).length,
+    2,
+  );
   service.close();
 });
 
