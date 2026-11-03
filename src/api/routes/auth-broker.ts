@@ -1,3 +1,4 @@
+import { boundTenant } from "../../tenants/context.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
@@ -133,6 +134,7 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
     !isObj(claims) ||
     claims.purpose !== "trusted-entry-admin" ||
     claims.org !== orgScope() ||
+    claims.tenant !== boundTenant() ||
     typeof claims.issuer !== "string" ||
     typeof claims.subject !== "string" ||
     !claims.subject ||

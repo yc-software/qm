@@ -1,5 +1,4 @@
 import type { BaseCtx, Route } from "./route.ts";
-import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { verifyOrReject } from "../http.ts";
 
 const HEARTBEAT_MS = 25_000;
@@ -12,7 +11,7 @@ async function streamSessionStates(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, ""),
+      { method, path: pathname + url.search, body: "" },
       false,
       ctx.allowUnsignedSourceAuth,
     ))

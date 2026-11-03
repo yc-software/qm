@@ -1,3 +1,4 @@
+import { boundTenant } from "../../tenants/context.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import {
   mintCapabilityToken,
@@ -122,6 +123,7 @@ async function dropLinkClaims(
     !claims ||
     claims.aud !== SECRET_DROP_AUD ||
     claims.drop !== dropId ||
+    claims.tenant !== boundTenant() ||
     !samePerson(claims.actorId, rec.ownerId) ||
     (rec.audienceScopeId && claims.scopeId !== rec.audienceScopeId)
   )

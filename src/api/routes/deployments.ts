@@ -1,3 +1,5 @@
+import { TENANT_HEADER } from "../../../plugins/chassis/src/source-auth-sign.ts";
+import { withTenant } from "../../tenants/context.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
@@ -15,7 +17,6 @@ import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
-import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
@@ -71,7 +72,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, principal),
+      { method, path: pathname + url.search, body: principal },
       false,
       ctx.allowUnsignedSourceAuth,
     ))
@@ -140,7 +141,7 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, actorHeader),
+      { method, path: pathname + url.search, body: actorHeader },
       false,
       ctx.allowUnsignedSourceAuth,
     ))
@@ -169,6 +170,7 @@ const GATEWAY_AUTH_HEADERS = [
   "x-as-principal",
   "x-admin-actor",
   "x-agent-capability",
+  TENANT_HEADER,
   PORTAL_IDENTITY_HEADER,
 ];
 
@@ -1218,6 +1220,12 @@ async function runGitHttpBackend(input: {
 }
 
 async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
+  const token = ctx.secret ? gitTokenFrom(ctx) : null;
+  const access = ctx.secret && token ? await verifyDeployGitAccess(ctx.secret, token) : null;
+  return access?.tenant ? withTenant(access.tenant, () => serveGit(ctx, access)) : serveGit(ctx, access);
+}
+
+async function serveGit(ctx: BaseCtx, access: Awaited<ReturnType<typeof verifyDeployGitAccess>>): Promise<void> {
   const parts = deploymentGitParts(ctx.pathname);
   if (!parts) return sendJson(ctx.res, 404, { error: "not_found" });
   const service = gitServiceOf(parts.tail, ctx.url);
@@ -1225,10 +1233,7 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
   const isPush = service === "git-receive-pack";
   if (isPush && !ctx.secret)
     return sendJson(ctx.res, 503, { error: "unavailable", message: "deployment git push requires core signing" });
-  let access: Awaited<ReturnType<typeof verifyDeployGitAccess>> = null;
   if (ctx.secret) {
-    const token = gitTokenFrom(ctx);
-    access = token ? await verifyDeployGitAccess(ctx.secret, token) : null;
     if (!access) return rejectGitAuth(ctx.res);
     if (access.deploymentId !== parts.id)
       return sendJson(ctx.res, 403, { error: "forbidden", message: "token is for a different deployment" });

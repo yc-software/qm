@@ -7,7 +7,7 @@ import { boolEnv, boolEnvStrict, numEnvStrict, optNum } from "./util/env.ts";
 import { sandboxSettings, type SandboxSettings } from "./sandbox/sandbox-settings.ts";
 import { deploySettings, type DeploySettings } from "./deploy/deploy-settings.ts";
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
-import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
+import { isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
 import { existsSync, readdirSync } from "node:fs";
 import {
@@ -105,7 +105,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   backgroundWorkEnabled: boolean;
   backgroundDeploymentId?: string;
   deploymentControlSecret?: string;
-  spendExportToken?: string;
   buildSha?: string;
   monitorPollMs: number;
   skillSyncPollMs: number;
@@ -376,14 +375,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         "AWS_ENDPOINT_URL_S3 must be an HTTP or HTTPS URL without credentials, query parameters, or a fragment",
       );
   }
-  const token = env.SPEND_EXPORT_TOKEN;
-  if (token) {
-    const reused = Object.entries(env).some(([name, value]) => name !== "SPEND_EXPORT_TOKEN" && value === token);
-    if (!isStrongSigningSecret(token) || !isBearerSecret(token) || reused)
-      throw new Error(
-        "SPEND_EXPORT_TOKEN must be at least 32 characters, have no surrounding whitespace and differ from every other environment value",
-      );
-  }
   if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
     if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
       throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");
@@ -575,7 +566,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.BACKGROUND_DEPLOYMENT_ID
       ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
       : {}),
-    ...(env.SPEND_EXPORT_TOKEN ? { spendExportToken: env.SPEND_EXPORT_TOKEN } : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
     monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,
     skillSyncPollMs: numEnvStrict("SKILL_SYNC_POLL_MS", env.SKILL_SYNC_POLL_MS) ?? CONFIG_DEFAULTS.skillSyncPollMs,

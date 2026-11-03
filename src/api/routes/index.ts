@@ -1,3 +1,4 @@
+import { SPEND_EXPORT_AUD } from "../../auth/capability-token.ts";
 import { browserModelRoutes } from "./browser-model.ts";
 import { sandboxModelRoutes } from "./sandbox-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
@@ -72,7 +73,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
     },
   },
   ...slackEventRawRoutes,
-  { method: "GET", path: "/v1/spend/export", auth: "public", handle: spendExport },
+  { method: "GET", path: "/v1/spend/export", auth: { aud: SPEND_EXPORT_AUD, bearer: true }, handle: spendExport },
   { match: (_m, p) => p.startsWith(GIT_HTTP_BROKER_PREFIX), auth: { aud: "credential-broker" }, handle: brokerGitHttp },
   ...connectorRawRoutes,
   ...deploymentRawRoutes,
