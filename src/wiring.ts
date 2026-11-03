@@ -1875,7 +1875,7 @@ export function buildApp(
   const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
   const cronChanged: { notify?: (id: string) => void } = {};
   const cronFires = createPostgresCronFireStore(databaseUrl);
-  const cronsBase = createCronStore(artifactMap<Cron>("crons", ["ownerScopeId"]), {
+  const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
     staleRunningMs: config.runMaxAgeMs,
     fires: cronFires,
   });

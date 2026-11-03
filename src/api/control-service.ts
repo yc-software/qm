@@ -209,6 +209,15 @@ async function ownsCron(
   return !(await app.membershipControlsScope(cron.ownerScopeId)) || app.managesScope(actorId, cron.ownerScopeId);
 }
 
+function deliversTo(cron: Cron, capability: CapabilityClaims): boolean {
+  return cron.destination?.audienceScopeId === capability.scopeId;
+}
+
+function audienceView(cron: Cron): Cron {
+  const { action: _action, message: _message, lastFireNote: _note, unattendedGrants: _grants, ...rest } = cron;
+  return rest;
+}
+
 export async function canAdministerCron(
   app: Pick<
     App,
@@ -522,7 +531,10 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       const admits = await Promise.all(all.map((c) => canAdministerCron(app, c, capability.actorId, isActor)));
       const administered = all.filter((_, i) => admits[i]);
       const ids = new Set(administered.map((c) => c.id));
-      return { crons: administered, visible: visible.filter((c) => !ids.has(c.id)) };
+      const shared = visible.filter((c) => !ids.has(c.id));
+      for (const c of shared) ids.add(c.id);
+      const deliveredHere = all.filter((c) => !ids.has(c.id) && deliversTo(c, capability)).map(audienceView);
+      return { crons: administered, visible: [...shared, ...deliveredHere] };
     },
 
     async getCron(id, capability) {
@@ -531,14 +543,18 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (await canAdministerCron(app, cron, capability.actorId)) return { ok: true, cron };
       const { visible } = await app.listCronsForViewer(capability.actorId);
       if (visible.some((c) => c.id === id)) return { ok: true, cron };
+      if (deliversTo(cron, capability)) return { ok: true, cron: audienceView(cron) };
       return { ok: false, code: "forbidden", message: "not your cron" };
     },
 
     async getCronRuns(id, req, capability) {
-      const cron = await app.getCron(id);
-      if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability.actorId)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+      const found = await app.getCron(id);
+      if (!found) return { ok: false, code: "not_found", message: `no cron ${id}` };
+      let cron = found;
+      if (!(await canAdministerCron(app, found, capability.actorId))) {
+        if (!deliversTo(found, capability)) return { ok: false, code: "forbidden", message: "not your cron" };
+        cron = audienceView(found);
+      }
       if (req.limit !== undefined && (!Number.isInteger(req.limit) || req.limit < 1)) {
         return { ok: false, code: "bad_request", message: "limit must be a positive integer" };
       }

@@ -1545,7 +1545,7 @@ test("scheduled-work changes update the next turn's system block without rewriti
   await crons.setEnabled(cron.id, false);
   assert.equal((await orchestrator.handleTurn({ ...input, text: "third" })).status, "ok");
   delete sandbox.profile.spec;
-  crons.ownedBy = async () => {
+  crons.scheduledIn = async () => {
     throw new Error("inventory unavailable");
   };
   assert.equal((await orchestrator.handleTurn({ ...input, text: "fourth" })).status, "ok");
@@ -1557,6 +1557,34 @@ test("scheduled-work changes update the next turn's system block without rewriti
   assert.doesNotMatch(seen[1]!.systemPrompt, /Other Linux|8 vCPU|\/new\/workspace/);
   assert.deepEqual(seen[1]!.history, originalItems);
   assert.deepEqual((await sessions.getItems(first.sessionId!)).slice(0, originalItems.length), originalItems);
+});
+
+test("scheduled work lists crons that deliver into this conversation from another owner", async () => {
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const seen: AgentTurnInput[] = [];
+  const agent = createMockAgent();
+  const runTurn = agent.runTurn;
+  agent.runTurn = async (turn) => {
+    seen.push(turn);
+    return runTurn(turn);
+  };
+  const { orchestrator } = buildOrchestrator({ crons, agent });
+  for (const [title, audienceScopeId] of [
+    ["Team digest", scopeId("personal", actor.id)],
+    ["Someone else's digest", scopeId("personal", "U3")],
+  ] as const)
+    await crons.create({
+      owner: "U2",
+      createdBy: "U2",
+      ownerScopeId: scopeId("personal", "U2"),
+      schedule: { everyMs: 300_000 },
+      title,
+      action: "summarize my private inbox",
+      destination: { type: "slack", target: "D1", audienceScopeId },
+    });
+  assert.equal((await orchestrator.handleTurn(dm("dm:U1:delivered-here", "hello"))).status, "ok");
+  assert.match(seen[0]!.systemPrompt, /- Team digest — every 5 min \(delivers here, owned elsewhere: read-only\)/);
+  assert.doesNotMatch(seen[0]!.systemPrompt, /Someone else's digest|summarize my private inbox/);
 });
 
 for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as const) {
