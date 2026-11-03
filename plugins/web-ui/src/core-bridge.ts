@@ -2302,7 +2302,12 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     } else if (e.kind === "Error" && e.text && e.errorCode !== "turn_failure") {
       spillHeldPosts();
       flushWork("", e.createdAt);
-      out.push({ role: "system-note", note: "notice", content: e.text, timestamp: e.createdAt } as unknown as AgentMessage);
+      out.push({
+        role: "system-note",
+        note: "notice",
+        content: e.text,
+        timestamp: e.createdAt,
+      } as unknown as AgentMessage);
     } else if (e.kind === "Error" && e.text) {
       spillHeldPosts();
       flushWork("", e.createdAt);
