@@ -22,8 +22,24 @@ function admin(): Promise<pg.Client> {
 const released = new Set<string>();
 let dropping = Promise.resolve();
 
+async function connectionsTo(dropper: pg.Client, names: string[]): Promise<number> {
+  const { rows } = await dropper.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = ANY($1)",
+    [names],
+  );
+  return rows[0]!.n;
+}
+
+async function untilClosingConnectionsLeave(dropper: pg.Client, names: string[]): Promise<void> {
+  for (let before = -1, now = await connectionsTo(dropper, names); now > 0 && now !== before;) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    [before, now] = [now, await connectionsTo(dropper, names)];
+  }
+}
+
 async function dropIdle(): Promise<void> {
   const dropper = await (dropClient ??= connect());
+  await untilClosingConnectionsLeave(dropper, [...released]);
   for (const name of released) {
     released.delete(name);
     await dropper.query(`DROP DATABASE IF EXISTS ${quoted(name)} WITH (FORCE)`).catch(() => released.add(name));
