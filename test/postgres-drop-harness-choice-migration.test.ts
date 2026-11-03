@@ -26,6 +26,7 @@ const migrate = (url: string) =>
     timeout: 120_000,
     env: {
       PATH: process.env.PATH,
+      DATABASE_OWNER_URL: process.env.DATABASE_OWNER_URL,
       NODE_ENV: "test",
       DATABASE_URL: url,
       SANDBOX_BACKEND: "local",

@@ -162,5 +162,9 @@ export function withWebTranscriptDeliveries(
       const rows = await store.claimPending(type, ttlMs);
       return type === "web" ? drained(rows) : rows;
     },
+    async claimPendingAcrossTenants(type, ttlMs) {
+      const rows = await store.claimPendingAcrossTenants(type, ttlMs);
+      return type === "web" ? drained(rows) : rows;
+    },
   };
 }

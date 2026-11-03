@@ -7,7 +7,8 @@ import {
   exerciseDeliveryFail,
   exerciseDeliveryStore,
 } from "./delivery-store-contract.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres delivery-store tests";
@@ -104,4 +105,27 @@ test("pg delivery store: a permanently refused row fails once and never revives"
   inTestTenant(async () => {
     await exerciseDeliveryFail((opts) => createPostgresDeliveryStore(URL!, opts));
   }),
+);
+
+test(
+  "pg delivery store: the route claims only its tenant's rows and the poller claims every tenant's with their tenant",
+  { skip },
+  async () => {
+    const [tenant, other] = testTenants();
+    const store = createPostgresDeliveryStore(URL!);
+    const enqueue = (owner: string, key: string) =>
+      withTenant(owner, () =>
+        store.enqueue({ destination: { type: "relay", target: key }, text: key, idempotencyKey: key }),
+      );
+    const mine = await enqueue(tenant, "relay-mine");
+    const theirs = await enqueue(other, "relay-theirs");
+    assert.deepEqual(
+      (await withTenant(tenant, () => store.claimPending("relay", 60_000))).map((d) => d.id),
+      [mine.id],
+    );
+    assert.deepEqual(
+      (await store.claimPendingAcrossTenants("relay", 60_000)).map((d) => [d.id, d.tenantId]),
+      [[theirs.id, other]],
+    );
+  },
 );

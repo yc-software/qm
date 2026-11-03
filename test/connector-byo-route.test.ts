@@ -16,7 +16,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
+import { testTenantHeaders, inTestTenant, testTenants } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -37,7 +37,10 @@ function start(socketAppId = "A-ACME", managed = false): { base: string; built: 
             serviceUrl: "https://bridge.example",
             token: "test-token",
             appId: "A123",
+            stateSecret: "byo-route-state-secret",
             store: built.slackInstallation,
+            teamTenant: async () => testTenants()[0],
+            runtimes: { current: () => [], accounts: async () => [], refresh: async () => {} },
           }),
         }
       : {}),

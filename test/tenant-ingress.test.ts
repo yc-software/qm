@@ -1,6 +1,6 @@
 import { after, before, describe, it, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { createServer as createHttpServer, request, type Server } from "node:http";
+import { request, type Server } from "node:http";
 import { createServer } from "../src/api/server.ts";
 import { CAPABILITY_HEADER } from "../src/api/contract.ts";
 import { apiRoutes, rawRoutes } from "../src/api/routes/index.ts";
@@ -11,6 +11,12 @@ import { mintDeployGitAccess } from "../src/deploy/access-token.ts";
 import type { SecretDropStore } from "../src/credentials/secret-drop.ts";
 import type { DeliverResult } from "../src/webhooks/webhook-receiver.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+import { createHmac } from "node:crypto";
+import type { App as BoltApp, ReceiverEvent } from "@slack/bolt";
+import type { AckGate } from "../src/slack/deferred-ack.ts";
+import { createHttpEventsReceiver } from "../src/slack/http-events.ts";
+import { slackTeamOf } from "../src/slack/index.ts";
+import { slackTeamTenant } from "../src/slack/slack-tables.ts";
 import { boundTenant, isTenantId, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
@@ -38,10 +44,10 @@ const UNBOUND_ROUTES: Record<string, { tenant: RouteTenant; gap?: string }> = {
   "GET /readyz": { tenant: "none" },
   "GET /v1/background-work": { tenant: "none" },
   "POST /v1/background-work": { tenant: "none" },
-  "POST /slack/events": { tenant: "row", gap: "T8" },
-  "POST /v1/slack/managed/installation": { tenant: "row", gap: "T8" },
-  "DELETE /v1/slack/managed/installation": { tenant: "row", gap: "T8" },
-  "POST /v1/slack/managed/events": { tenant: "row", gap: "T8" },
+  "POST /slack/events": { tenant: "row" },
+  "POST /v1/slack/managed/installation": { tenant: "row" },
+  "DELETE /v1/slack/managed/installation": { tenant: "row" },
+  "POST /v1/slack/managed/events": { tenant: "row" },
   "GET /v1/connectors/oauth/github/callback": { tenant: "row" },
   "GET /v1/deployments/dep-1/git/info/refs": { tenant: "row" },
   "POST /v1/webhooks/incoming/x": { tenant: "row", gap: "K2" },
@@ -70,23 +76,48 @@ function portOf(server: Server): number {
 const [TENANT] = testTenants();
 const config = testConfig();
 const built = buildApp(config);
+const MANAGED_TOKEN = "managed-slack-ingress-token-0123456789";
+const SLACK_SIGNING_SECRET = "slack-ingress-signing-secret";
+const TEAM = "TINGRESS";
 const managedSlack = createManagedSlack({
   serviceUrl: "https://slack-service.ingress.test",
-  token: "managed-slack-ingress-token-0123456789",
+  token: MANAGED_TOKEN,
+  stateSecret: "managed-slack-ingress-state-secret",
   store: built.slackInstallation,
+  teamTenant: slackTeamTenant(),
+  runtimes: { current: () => [], accounts: async () => [], refresh: async () => {} },
 });
 const slackSeen: Array<string | undefined> = [];
 const dedupeSeen: Array<{ id: string; tenant: string | undefined }> = [];
 let core: Server;
-let slackReceiver: Server;
+let slackReceiver: ReturnType<typeof createHttpEventsReceiver>;
 
 before(async () => {
-  slackReceiver = createHttpServer((req, res) => {
-    slackSeen.push(boundTenant());
-    req.resume();
-    res.writeHead(200).end();
+  await withTenant(TENANT, () =>
+    built.slackInstallation.set({
+      botToken: "xoxb-ingress",
+      teamId: TEAM,
+      installId: "install-ingress",
+      updatedBy: "test",
+    }),
+  );
+  const teamTenant = slackTeamTenant();
+  slackReceiver = createHttpEventsReceiver({
+    signingSecret: SLACK_SIGNING_SECRET,
+    port: 0,
+    tenantFor: async (body) => {
+      const team = slackTeamOf(body);
+      return team ? teamTenant(team) : null;
+    },
   });
-  await new Promise<void>((resolve) => slackReceiver.listen(0, "127.0.0.1", resolve));
+  slackReceiver.init?.({
+    processEvent: async (event: ReceiverEvent) => {
+      slackSeen.push(boundTenant());
+      await event.ack();
+      (event.customProperties?.ackGate as AckGate | undefined)?.persisted();
+    },
+  } as unknown as BoltApp);
+  await slackReceiver.start(0 as never);
   core = createServer(built.app, {
     ...serverDeps(config, built),
     signingSecret: SIGNING_SECRET,
@@ -97,7 +128,7 @@ before(async () => {
       },
     },
     managedSlack,
-    slackEventsPort: portOf(slackReceiver),
+    slackEventsPort: portOf(slackReceiver.server),
     deployAppsDomain: APPS_DOMAIN,
     deployGateSecret: "deploy-gate-secret-for-ingress-tests-0123",
   });
@@ -106,7 +137,7 @@ before(async () => {
 
 after(async () => {
   await new Promise<void>((resolve) => core.close(() => resolve()));
-  await new Promise<void>((resolve) => slackReceiver.close(() => resolve()));
+  await slackReceiver.stop(0 as never);
 });
 
 function send(
@@ -293,30 +324,44 @@ describe("row- and signed-source-resolved routes bind before tenant work", () =>
     );
   }
 
-  it(
-    "managed Slack binds a tenant before handling",
-    { todo: "T8 resolves the Slack installation's tenant" },
-    async (t) => {
-      const seen: Array<string | undefined> = [];
-      t.mock.method(
-        managedSlack,
-        "handle",
-        async (_req: unknown, res: { writeHead(status: number): { end(): void } }) => {
-          recordTenant(seen);
-          res.writeHead(204).end();
-        },
-      );
-      await send("POST", "/v1/slack/managed/events", { "content-type": "application/json" }, "{}");
-      assert.equal(seen.length, 1);
-      assert.ok(isTenantId(seen[0]));
-    },
-  );
+  it("managed Slack binds the verified installation's tenant before handling", async (t) => {
+    const seen: Array<string | undefined> = [];
+    t.mock.method(
+      managedSlack,
+      "handle",
+      async (_req: unknown, res: { writeHead(status: number): { end(): void } }) => {
+        recordTenant(seen);
+        res.writeHead(204).end();
+      },
+    );
+    const body = JSON.stringify({ installId: "install-ingress", body: { team_id: TEAM, api_app_id: "AINGRESS" } });
+    await send(
+      "POST",
+      "/v1/slack/managed/events",
+      { "content-type": "application/json", authorization: `Bearer ${MANAGED_TOKEN}` },
+      body,
+    );
+    assert.deepEqual(seen, [TENANT]);
+  });
 
-  it("Slack events reach the receiver bound to a tenant", { todo: "T8 resolves the Slack team's tenant" }, async () => {
+  it("Slack events reach the receiver bound to the tenant that installed the workspace", async () => {
     slackSeen.length = 0;
-    await send("POST", "/slack/events", { "content-type": "application/json" }, "{}");
-    assert.equal(slackSeen.length, 1);
-    assert.ok(isTenantId(slackSeen[0]));
+    const raw = JSON.stringify({
+      type: "event_callback",
+      team_id: TEAM,
+      event_id: "EvIngress",
+      event: { type: "app_mention", channel: "C1", ts: "1.1" },
+    });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = `v0=${createHmac("sha256", SLACK_SIGNING_SECRET).update(`v0:${timestamp}:${raw}`).digest("hex")}`;
+    const response = await send(
+      "POST",
+      "/slack/events",
+      { "content-type": "application/json", "x-slack-signature": signature, "x-slack-request-timestamp": timestamp },
+      raw,
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(slackSeen, [TENANT]);
   });
 
   it(

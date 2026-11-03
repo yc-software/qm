@@ -92,11 +92,13 @@ function fixture(
     } as any,
   });
   async function fire(event: Record<string, unknown>, gate?: ReturnType<typeof createDeferredEnvelopeAck>) {
-    await app.processEvent({
-      body: { type: "event_callback", team_id: "T1", event_id: "Ev1", event },
-      ack: gate?.ack ?? (async () => {}),
-      customProperties: { ackGate: gate?.gate },
-    });
+    await inTestTenant(() =>
+      app.processEvent({
+        body: { type: "event_callback", team_id: "T1", event_id: "Ev1", event },
+        ack: gate?.ack ?? (async () => {}),
+        customProperties: { ackGate: gate?.gate },
+      }),
+    );
     gate?.gate.persisted();
   }
   return { mirror, events, dispatches, refreshes, inbox, fire };

@@ -9,7 +9,10 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 function setup() {
-  const store = testMap<TaskAckState>();
+  const map = testMap<TaskAckState>();
+  const store = Object.assign(map, {
+    unsettled: async () => (await map.entries()).filter(([, state]) => !state.synced || !state.finished),
+  });
   const events: string[] = [];
   const client = {
     reactions: {
@@ -159,7 +162,7 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
     );
     await manager.move(client, run.id, "D1", "10.1");
     const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), { runs, deliveries });
-    await restarted.reconcile(client);
+    await inTestTenant(() => restarted.reconcile(client));
     assert.equal((await store.get(run.id))?.finished, false);
     const claimed = await inTestTenant(() => runs.claimById(run.id, "test", 10000));
     assert.ok(claimed);
@@ -179,13 +182,13 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
       ),
     );
     if (finalDelivery) {
-      await restarted.reconcile(client);
+      await inTestTenant(() => restarted.reconcile(client));
       assert.equal((await store.get(run.id))?.finished, false);
       assert.ok(!events.some((event) => event.startsWith("remove:")));
-      if (outbound === "run") await restarted.finish(client, run.id);
+      if (outbound === "run") await inTestTenant(() => restarted.finish(client, run.id));
       await deliveries.ack(finalDelivery.id, Date.now());
     }
-    await restarted.reconcile(client);
+    await inTestTenant(() => restarted.reconcile(client));
     assert.equal((await store.get(run.id))?.finished, true);
     assert.equal(events.at(-1), "remove:10.1:eyes");
   });

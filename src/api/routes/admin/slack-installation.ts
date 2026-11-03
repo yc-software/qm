@@ -1,3 +1,4 @@
+import { serveManagedSlack } from "../../../surfaces/slack-managed.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
@@ -171,6 +172,7 @@ export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
 }
 
 export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.managedSlack) return sendJson(ctx.res, 404, { error: "not_configured" });
-  await ctx.deps.managedSlack.handle(ctx.req, ctx.res, ctx.body);
+  const managed = ctx.deps.managedSlack;
+  if (!managed) return sendJson(ctx.res, 404, { error: "not_configured" });
+  await serveManagedSlack(managed, ctx.req, ctx.res, ctx.body);
 }

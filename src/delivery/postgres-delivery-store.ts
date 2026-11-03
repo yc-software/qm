@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
-import { rowTenant } from "../tenants/claim.ts";
+import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -96,9 +96,11 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
   ]);
 
   const enqueueListeners = new Set<() => void>();
+  type Rows = (text: string, params: unknown[]) => Promise<Record<string, unknown>[]>;
+  const acrossTenants: Rows = async (text, params) => (await claimAcrossTenants(text, params)).rows;
 
-  async function expireOveraged(): Promise<void> {
-    const rows = await q(
+  async function expireOveraged(rowsOf: Rows): Promise<void> {
+    const rows = await rowsOf(
       `UPDATE deliveries
           SET expired_at = ${NOW_MS_SQL}
         WHERE id IN (
@@ -117,6 +119,25 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const d = rowToDelivery(r);
       logDeliveryExpiry(d, d.expiredAt ?? Date.now());
     }
+  }
+
+  async function claimPending(rowsOf: Rows, type: string, ttlMs: number): Promise<Delivery[]> {
+    await expireOveraged(rowsOf);
+    const rows = await rowsOf(
+      `UPDATE deliveries
+          SET claim_expires_at = ${NOW_MS_SQL} + $2
+        WHERE id IN (
+          SELECT id FROM deliveries
+           WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
+             AND (claim_expires_at IS NULL
+               OR claim_expires_at <= ${NOW_MS_SQL})
+           ORDER BY created_at
+             FOR UPDATE SKIP LOCKED
+        )
+        RETURNING *`,
+      [type, ttlMs],
+    );
+    return rows.map(rowToDelivery).sort((a, b) => a.createdAt - b.createdAt);
   }
 
   return {
@@ -164,24 +185,8 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       );
       return rows.map(rowToDelivery);
     },
-    async claimPending(type, ttlMs) {
-      await expireOveraged();
-      const rows = await q(
-        `UPDATE deliveries
-            SET claim_expires_at = ${NOW_MS_SQL} + $2
-          WHERE id IN (
-            SELECT id FROM deliveries
-             WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
-               AND (claim_expires_at IS NULL
-                 OR claim_expires_at <= ${NOW_MS_SQL})
-             ORDER BY created_at
-               FOR UPDATE SKIP LOCKED
-          )
-          RETURNING *`,
-        [type, ttlMs],
-      );
-      return rows.map(rowToDelivery).sort((a, b) => a.createdAt - b.createdAt);
-    },
+    claimPending: (type, ttlMs) => claimPending(q, type, ttlMs),
+    claimPendingAcrossTenants: (type, ttlMs) => claimPending(acrossTenants, type, ttlMs),
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
       const rows = await q(
