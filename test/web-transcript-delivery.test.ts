@@ -277,7 +277,7 @@ async function terminalRun(
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   wireRunResultDeliveries(runs, deliveries);
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await duringTurn?.();
   if ("fail" in result) await runs.fail(run.id, claimed?.leaseToken ?? "", result.fail, { retry: true });
   else await runs.complete(run.id, claimed?.leaseToken ?? "", result);
@@ -308,7 +308,7 @@ test("an onTerminal-recorded failure entry suppresses the web drain's duplicate 
   const runs = createPostgresRunStore(testDatabaseUrl()).runs;
   wireRunResultDeliveries(runs, inner, undefined, sessions);
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.fail(run.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
   const deadline = Date.now() + 2_000;
   while ((await inner.pending("web")).length === 0 && Date.now() < deadline) await sleep(5);

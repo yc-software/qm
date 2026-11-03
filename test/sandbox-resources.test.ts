@@ -879,7 +879,7 @@ test("two concurrent turns on one parking computer: only the last turn to finish
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const start = async (sessionId: string) => {
     await runs.enqueue({ sessionId, request: { origin: { kind: "direct" }, text: "x" } as never });
-    return (await runs.claim("worker", 60_000))!;
+    return ((await runs.claim("worker", 60_000))[0] ?? null)!;
   };
   const turn = (runId: string, sessionId: string) =>
     createTurnSandboxes({
