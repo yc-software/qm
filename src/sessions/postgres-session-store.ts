@@ -994,7 +994,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const rows = await q(
         `WITH RECURSIVE up(leaf_scope, id, scope_id, parent_id, depth, path) AS (
            SELECT l.scope_id, p.id, p.scope_id, p.parent_session_id, 1, ARRAY[l.id, p.id]
-             FROM sessions l JOIN sessions p ON p.id = l.parent_session_id WHERE l.thread_ref = ANY($1::text[])
+             FROM sessions l JOIN sessions p ON p.id = l.parent_session_id AND p.id <> l.id WHERE l.thread_ref = ANY($1::text[])
            UNION ALL
            SELECT u.leaf_scope, p.id, p.scope_id, p.parent_session_id, u.depth + 1, u.path || p.id FROM up u
              CROSS JOIN LATERAL (SELECT * FROM sessions WHERE id = u.parent_id OFFSET 0) p WHERE NOT p.id = ANY(u.path)
