@@ -1134,6 +1134,7 @@ test("the turn's intake names a steer's author the way it names a new message's 
     { text: "use my linear key" },
   ]);
   assert.notEqual(prepared[2]?.text, "use my linear key", "a blank display name still names the sender");
+  assert.ok(prepared[2]?.authorName?.trim(), "a blank display name still records who sent the steer");
 });
 
 test("the turn's intake screens an unprompted mid-turn update with its author label before the model sees it", async () => {

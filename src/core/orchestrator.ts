@@ -133,6 +133,7 @@ import {
   intakeOf,
   midTurnPrompt,
   senderLine,
+  speakerName,
   wordsToScreen,
   type IncomingMessage,
   type Speaker,
@@ -3226,7 +3227,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     origin: { kind: "direct" },
                     fromSession: false,
                   };
-              const by = { author, ...(speaker.name?.trim() ? { authorName: speaker.name.trim() } : {}) };
+              const by = {
+                author,
+                ...(samePerson(author, actor.id) ? {} : { authorName: speakerName(speaker, nameOf) }),
+              };
               let said = [text.trim() ? speakerLine(speaker) : "", text].filter(Boolean).join("\n");
               const screened = [wordsToScreen(said, speaker, actor.id), ...(request?.inboundNotes ?? [])]
                 .filter(Boolean)
@@ -3243,7 +3247,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     text: screen
                       ? "A mid-turn message was withheld by the security screen."
                       : "A mid-turn message was withheld because the security screen could not check it.",
-                    ...by,
+                    author,
                     withheld: true,
                   };
                 if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;
