@@ -2962,6 +2962,7 @@ test("runtime persistence failure does not latch a handoff", async () => {
     scopeLabel: "personal:U1",
     emit: async (e) => {
       if (e.kind === "ToolResult") throw new Error("disk failed");
+      return undefined;
     },
   };
   await assert.rejects(
@@ -3747,6 +3748,7 @@ for (const cancel of [false, true]) {
       runtimeInFlight: new Set([gate.promise]),
       emit: async (entry) => {
         if (!cancel && entry.kind === "ToolResult") throw new Error("write failed");
+        return undefined;
       },
     };
     const tool = createAgentTools(ref).find((t) => t.name === "context");
