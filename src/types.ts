@@ -124,6 +124,8 @@ export interface Session {
   parentSessionId?: string;
   origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
+  slackBinding?: TurnRequest["slackSource"];
+  runtime?: TurnRuntime;
   lastActivityAt?: number;
   hasEntries?: boolean;
   working?: boolean;

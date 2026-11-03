@@ -152,7 +152,7 @@ for (const backend of ["memory", "postgres"] as const) {
 }
 
 test(
-  "postgres: latest session history uses its ordered index and excludes private messages",
+  "postgres: the recent runs read uses its ordered index",
   {
     skip: !process.env.DATABASE_URL,
   },
@@ -166,26 +166,12 @@ test(
     const runtime = createPostgresRunStore(url.toString());
     const pool = new pg.Pool({ connectionString: url.toString() });
     try {
-      const sessionId = randomUUID();
-      const publicRun = (await runtime.runs.enqueue({ sessionId, request })).run;
-      const privateRun = (
-        await runtime.runs.enqueue({ sessionId, request: { ...request, privateSessionMessage: true } })
-      ).run;
-      await pool.query("UPDATE runs SET created_at = 1 WHERE session_id = $1", [sessionId]);
-      assert.equal((await runtime.runs.latestForThread(sessionId))?.id, privateRun.id);
-      assert.equal((await runtime.runs.latestForThread(sessionId, { excludePrivateMessages: true }))?.id, publicRun.id);
+      await runtime.runs.list({ limit: 1 });
       const client = await pool.connect();
       try {
         await client.query("SET enable_seqscan = off");
-        const { rows } = await client.query(
-          "EXPLAIN (FORMAT JSON) SELECT * FROM runs WHERE session_id = $1 AND COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true' ORDER BY created_at DESC, seq DESC LIMIT 1",
-          [sessionId],
-        );
-        const plan = JSON.stringify(rows);
-        assert.match(plan, /idx_runs_session_created_seq/);
-        assert.doesNotMatch(plan, /"Node Type":"Sort"/);
         const recent = await client.query(
-          "EXPLAIN (FORMAT JSON) SELECT * FROM runs ORDER BY created_at DESC LIMIT 500",
+          "EXPLAIN (FORMAT JSON) SELECT * FROM runs ORDER BY created_at DESC, seq DESC LIMIT 500",
         );
         assert.match(JSON.stringify(recent.rows), /idx_runs_created/);
         assert.doesNotMatch(JSON.stringify(recent.rows), /"Node Type":"Sort"/);

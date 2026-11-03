@@ -126,6 +126,42 @@ test("concurrent index retry resolves indexes in the target table schema", { ski
   }
 });
 
+test("an autocommit migration can commit between pages and is recorded once", { skip }, async () => {
+  const a = new pg.Pool({ connectionString: databaseUrl });
+  const b = new pg.Pool({ connectionString: databaseUrl });
+  const { id, table } = names();
+  const migration = definePgMigration({
+    id,
+    autocommit: true,
+    statements: [
+      `CREATE OR REPLACE PROCEDURE ${table}_fill() LANGUAGE plpgsql AS $fill$
+BEGIN
+  FOR page IN 1..3 LOOP
+    INSERT INTO ${table}(value) VALUES (page);
+    COMMIT;
+  END LOOP;
+END $fill$`,
+      `CALL ${table}_fill()`,
+      `DROP PROCEDURE ${table}_fill()`,
+    ],
+  });
+  try {
+    await a.query(`CREATE TABLE ${table}(value INT NOT NULL)`);
+    await Promise.all([applyPgMigrations(a, [migration]), applyPgMigrations(b, [migration])]);
+    const rows = await a.query(`SELECT value FROM ${table} ORDER BY value`);
+    assert.deepEqual(
+      rows.rows.map((row) => row.value),
+      [1, 2, 3],
+    );
+    const ledger = await a.query(`SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
+    assert.deepEqual(ledger.rows, [{ checksum: migration.checksum }]);
+  } finally {
+    await a.query(`DROP TABLE IF EXISTS ${table}`);
+    await a.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
+    await Promise.all([a.end(), b.end()]);
+  }
+});
+
 test("concurrent migrators apply one version exactly once", { skip }, async () => {
   const a = new pg.Pool({ connectionString: databaseUrl });
   const b = new pg.Pool({ connectionString: databaseUrl });

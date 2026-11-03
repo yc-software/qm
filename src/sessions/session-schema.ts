@@ -320,6 +320,85 @@ const SPEND_RECOVERY_INDEX: PgMigrationDefinition = {
   ],
 };
 
+const SESSION_FACTS: PgMigrationDefinition = {
+  id: "sessions/store/0052-session-facts",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS slack_binding JSONB, ADD COLUMN IF NOT EXISTS runtime JSONB`,
+  ],
+};
+
+const SESSION_FACTS_COPY: PgMigrationDefinition = {
+  id: "sessions/store/0053-session-facts-copy",
+  autocommit: true,
+  statements: [
+    `CREATE OR REPLACE PROCEDURE qm_copy_session_facts() LANGUAGE plpgsql AS $session_facts$
+DECLARE
+  after_id TEXT := '';
+  page TEXT[];
+BEGIN
+  IF to_regclass('runs') IS NULL THEN
+    RETURN;
+  END IF;
+  LOOP
+  SELECT array_agg(id ORDER BY id) INTO page FROM (SELECT id FROM sessions WHERE id > after_id ORDER BY id LIMIT 2000) next_page;
+  EXIT WHEN page IS NULL;
+  after_id := page[array_length(page, 1)];
+  UPDATE sessions s
+  SET slack_binding = COALESCE(s.slack_binding, facts.slack_binding),
+      runtime = COALESCE(s.runtime, facts.runtime),
+      spawn_meta = COALESCE(s.spawn_meta, facts.context::text)
+  FROM (
+    SELECT x.id,
+      NULLIF(latest.request->'slackSource', 'null') AS slack_binding,
+      NULLIF(latest.result->'runtime', 'null') AS runtime,
+      CASE WHEN public.request IS NOT NULL
+        AND COALESCE(public.request->>'sessionSenderId', '') = ''
+        AND COALESCE(public.request->>'delegatingRunId', '') = ''
+        AND COALESCE(public.request->'swarm', 'null') IN ('null', 'false')
+      THEN (
+        SELECT COALESCE(jsonb_object_agg(key, value), '{}') FROM jsonb_each(public.request)
+        WHERE key IN ('surfaceTools', 'deliveryCandidates', 'unattendedGrants', 'externalSlack', 'scopeVersion',
+          'sessionParticipantIds', 'conversation', 'actor', 'deliveryTarget', 'timezone', 'readOnly', 'model',
+          'thinkingLevel', 'fastMode')
+          AND value <> 'null' AND (key = 'fastMode' OR value NOT IN ('false', '""'))
+      ) || jsonb_build_object(
+        'surface', COALESCE(NULLIF(public.request->'surface', 'null'), '"web"'),
+        'origin', CASE
+          WHEN public.request->'origin'->>'kind' = 'automation' OR public.request->>'triggered' = 'true' THEN
+            jsonb_strip_nulls(jsonb_build_object('kind', 'automation', 'destination',
+              COALESCE(public.request->'origin'->'destination', public.request->'triggerDestination')))
+          WHEN public.request->'origin'->>'kind' = 'ambient' OR public.request->>'unprompted' = 'true' THEN
+            CASE WHEN public.request->'origin'->>'live' = 'true' OR public.request->>'liveActor' = 'true'
+              THEN '{"kind": "ambient", "live": true}'::jsonb ELSE '{"kind": "ambient"}'::jsonb END
+          WHEN public.request->'origin'->>'kind' = 'human' OR public.request->>'liveActor' = 'true' THEN '{"kind": "human"}'::jsonb
+          WHEN public.request->'origin' IS NULL OR public.request->'origin'->>'kind' = 'direct' THEN '{"kind": "direct"}'::jsonb
+          ELSE '{"kind": "automation"}'::jsonb
+        END)
+      END AS context
+    FROM sessions x
+    CROSS JOIN LATERAL (
+      SELECT request::jsonb AS request, result::jsonb AS result FROM runs
+      WHERE session_id = x.thread_ref ORDER BY created_at DESC, seq DESC LIMIT 1
+    ) latest
+    LEFT JOIN LATERAL (
+      SELECT request::jsonb AS request FROM runs
+      WHERE session_id = x.thread_ref AND COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true'
+      ORDER BY created_at DESC, seq DESC LIMIT 1
+    ) public ON x.thread_ref NOT LIKE 'agent:main:subagent:%' AND x.thread_ref NOT LIKE 'swarm:%'
+    WHERE x.id = ANY(page)
+  ) facts
+  WHERE s.id = facts.id
+    AND ((s.slack_binding IS NULL AND facts.slack_binding IS NOT NULL) OR (s.runtime IS NULL AND facts.runtime IS NOT NULL)
+      OR (s.spawn_meta IS NULL AND facts.context IS NOT NULL));
+  COMMIT;
+  END LOOP;
+END $session_facts$`,
+    `CALL qm_copy_session_facts()`,
+    `DROP PROCEDURE qm_copy_session_facts()`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
@@ -327,4 +406,6 @@ export const SESSION_MIGRATIONS = [
   DROP_ITEMS_SEARCH,
   TENANT_BACKFILL,
   SPEND_RECOVERY_INDEX,
+  SESSION_FACTS,
+  SESSION_FACTS_COPY,
 ];
