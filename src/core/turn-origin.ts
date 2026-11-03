@@ -118,6 +118,14 @@ export function sessionTurnOrigin(origin: TurnOrigin | undefined, text: string):
   return origin;
 }
 
+export function automationOriginFrom(origin: TurnOrigin | undefined, screenData?: string): TurnOrigin {
+  return {
+    kind: "automation",
+    ...(screenData !== undefined ? { screenData } : {}),
+    ...(origin?.kind === "automation" && origin.destination ? { destination: origin.destination } : {}),
+  };
+}
+
 export function desktopClientForTurn(
   input: Partial<LegacyTurnOrigin> &
     Partial<

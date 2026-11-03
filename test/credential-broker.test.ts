@@ -456,9 +456,23 @@ test("an actor-attested credential answers only to its person in their own priva
   const own = await call("personal:U1");
   assert.equal(own.result.status, 200);
   assert.equal(own.calls[0]!.headers["x-qm-actor"], "U1");
-  const app = await call("personal:publisher", { actorId: "publisher", deployment: "dpl-1" });
-  assert.equal(app.result.status, 200);
-  assert.equal(app.calls[0]!.headers["x-qm-actor"], "publisher");
+  const published = {
+    ...claims(["x-firehose"]),
+    actorId: "publisher",
+    scopeId: "personal:publisher",
+    deployment: "dpl-1",
+  };
+  delete published.audienceScopeId;
+  const appCalls = captureFetch();
+  const app = await brokerCredentialCall(
+    base({
+      claims: published,
+      reader: reader({ slug: "x-firehose", injection: { actor: true } }),
+      fetchImpl: appCalls.fetch,
+    }),
+  );
+  assert.equal(app.status, 200, "a published app's token attests its publisher");
+  assert.equal(appCalls.calls[0]!.headers["x-qm-actor"], "publisher");
   const unaddressed = claims(["x-firehose"]);
   delete unaddressed.audienceScopeId;
   const silent = captureFetch();

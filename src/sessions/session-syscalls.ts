@@ -1,5 +1,5 @@
 import { commonEntrySeqs } from "./transcript-source.ts";
-import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
+import { automationOriginFrom, isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
 import { TURN_STOPPED_KIND } from "../agent/replay.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
@@ -1072,12 +1072,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     : {
         ...currentContext!,
         actor: run.request.actor,
-        origin: {
-          kind: "automation" as const,
-          ...(currentContext!.origin?.kind === "automation" && currentContext!.origin.destination
-            ? { destination: currentContext!.origin.destination }
-            : {}),
-        },
+        origin: automationOriginFrom(currentContext!.origin),
         unattendedGrants: undefined,
       };
   const title = child.title?.trim() || child.id;

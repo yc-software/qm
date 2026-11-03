@@ -1838,7 +1838,6 @@ export function buildApp(
                 {
                   actorId: deployment.createdBy,
                   scopeId: personalScope(deployment.createdBy),
-                  audienceScopeId: personalScope(deployment.createdBy),
                   aud: CREDENTIAL_BROKER_AUD,
                   credentials,
                   deployment: deployment.id,
