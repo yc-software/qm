@@ -190,7 +190,7 @@ these, not through them.
   cron task and changes nothing, and each export is audited, but the token is
   not bound to a caller. Rotating it means replacing the secret in core and in every
   consumer; core accepts only the current value after it restarts with the new one.
-- **Everyone sees the spend of the spaces they can see.** The web Spend page shows each
+- **Everyone sees the spend of the spaces they can see.** The My spend tab in Settings shows each
   signed-in person their own model-call spend plus the spend of every channel, group DM
   and project their Projects page lists, which for internal users includes every public
   channel the bot is in. It splits that spend by the crons that ran there, naming only
