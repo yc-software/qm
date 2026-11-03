@@ -97,7 +97,7 @@
     "modal": "^0.10.1",
     "nodemailer": "^10.2.1",
     "officeparser": "^8.0.0",
-    "pg": "^8.13.1",
+    "pg": "8.23.1",
     "pg-boss": "^12.26.1",
     "pg-connection-string": "2.14.0",
     "porter-sandbox": "^0.1.41",

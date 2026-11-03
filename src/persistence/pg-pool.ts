@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { ClientConfig, Pool, PoolClient } from "pg";
+import type { ClientConfig, Pool, PoolClient, PoolConfig, QueryResult } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
@@ -52,7 +52,14 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     connectionString,
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
   );
-  const pool = guardedPool(new pg.Pool({ ...connection, max, connectionTimeoutMillis: 10_000, allowExitOnIdle: true }));
+  const options: PoolConfig & { pipeline: boolean } = {
+    ...connection,
+    max,
+    connectionTimeoutMillis: 10_000,
+    allowExitOnIdle: true,
+    pipeline: kind === "query",
+  };
+  const pool = guardedPool(new pg.Pool(options));
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }
@@ -120,23 +127,31 @@ export interface PgPool {
   close(): Promise<void>;
 }
 
-async function withStatementTimeout<T>(
-  client: PoolClient,
-  timeoutMs: number | undefined,
-  run: () => Promise<T>,
-): Promise<T> {
-  if (timeoutMs === undefined) return run();
+type PgSetting = readonly [name: string, value: string];
+
+function querySettings(timeoutMs: number | undefined): PgSetting[] {
+  if (timeoutMs === undefined) return [];
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error("Query timeout must be a positive finite number");
-  await client.query("BEGIN");
-  try {
-    await client.query(`SET LOCAL statement_timeout = ${Math.round(timeoutMs)}`);
-    const result = await run();
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    await client.query("ROLLBACK").catch(swallowAs("pg-pool: rollback query timeout", undefined));
-    throw error;
-  }
+  return [["statement_timeout", String(Math.round(timeoutMs))]];
+}
+
+async function pipelinedTransaction(
+  client: PoolClient,
+  settings: readonly PgSetting[],
+  text: string,
+  values: unknown[],
+): Promise<QueryResult> {
+  if (!settings.length) return client.query({ text, values });
+  const assignments = settings.map((_, i) => `set_config($${2 * i + 1}, $${2 * i + 2}, true)`);
+  const [, , result] = await Promise.all([
+    client.query("BEGIN"),
+    client.query(`SELECT ${assignments.join(", ")}`, settings.flat()),
+    client.query({ text, values }),
+    client.query("COMMIT"),
+  ]);
+  const status = (client as PoolClient & { getTransactionStatus(): string | null }).getTransactionStatus();
+  if (status !== "I") throw new Error(`pg-pool: pipelined query left its connection in transaction status ${status}`);
+  return result;
 }
 
 async function rollbackOrReport(client: PoolClient, context: string): Promise<Error | undefined> {
@@ -456,8 +471,9 @@ export function createPgPool(
     params: unknown[] = [],
     { signal, timeoutMs }: PgQueryOptions = {},
   ): Promise<{ rows: Rows; rowCount: number }> {
+    const settings = querySettings(timeoutMs);
     const p = await pool();
-    if (!signal && timeoutMs === undefined) {
+    if (!signal && !settings.length) {
       const res = await p.query(text, params);
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     }
@@ -475,14 +491,8 @@ export function createPgPool(
     }
     let queryError: Error | undefined;
     try {
-      return await withAbort(
-        () =>
-          withStatementTimeout(client, timeoutMs, async () => {
-            const res = await client.query({ text, values: params });
-            return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
-          }),
-        signal,
-      );
+      const res = await withAbort(() => pipelinedTransaction(client, settings, text, params), signal);
+      return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     } catch (error) {
       queryError = error instanceof Error ? error : new Error(String(error));
       throw error;
