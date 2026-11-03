@@ -138,7 +138,6 @@ export async function buildModelRuntime(
     );
     const hasConfiguredAuth = runtime.hasConfiguredAuth.bind(runtime);
     runtime.hasConfiguredAuth = (provider) => providers.has(provider) || hasConfiguredAuth(provider);
-    // pi's AgentSession.setModel (used for mid-turn model switches) gates on checkAuth, not hasConfiguredAuth.
     const checkAuth = runtime.checkAuth.bind(runtime);
     runtime.checkAuth = async (provider) =>
       providers.has(provider) ? { type: "api_key", source: "model gateway" } : checkAuth(provider);
