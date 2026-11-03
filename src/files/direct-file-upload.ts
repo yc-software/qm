@@ -365,8 +365,7 @@ export function createDirectFileUploads(options: {
             continue;
           const id = upload.Key.slice(`${options.prefix ?? ""}files/uploads/`.length);
           if (!/^[0-9a-f]{32}$/.test(id)) continue;
-          const row = await store.get(id);
-          if (row?.state === "completing" && row.uploadId === upload.UploadId) continue;
+          if ((await store.completingUploadId(id)) === upload.UploadId) continue;
           await client.send(
             new AbortMultipartUploadCommand({ Bucket: options.bucket, Key: upload.Key, UploadId: upload.UploadId }),
           );

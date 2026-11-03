@@ -1,3 +1,4 @@
+import type { Claimed } from "../tenants/claim.ts";
 import { randomUUID } from "node:crypto";
 import type { Monitor } from "../triggers/types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -25,7 +26,7 @@ export interface MonitorStore {
   get(id: string): Promise<Monitor | null>;
   list(): Promise<Monitor[]>;
   ownedBy(scopeId: string): Promise<Monitor[]>;
-  enabled(): Promise<Monitor[]>;
+  enabled(): Promise<Array<Claimed<Monitor>>>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   delete(id: string): Promise<void>;
   deleteDefunct(now: number): Promise<number>;

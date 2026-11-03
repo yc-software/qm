@@ -1,9 +1,17 @@
+import type { PgPool, PgQueryOptions } from "../persistence/pg-pool.ts";
 import { boundTenant, withoutTenant, withTenant } from "./context.ts";
 
-export function claimAcrossTenants<T>(claim: () => Promise<T>): Promise<T> {
+export type Claimed<T> = T & { tenantId?: string };
+
+export function claimAcrossTenants(
+  pg: Pick<PgPool, "query">,
+  text: string,
+  params: unknown[] = [],
+  options?: PgQueryOptions,
+): ReturnType<PgPool["query"]> {
   if (boundTenant() !== undefined)
     return Promise.reject(new Error("A cross-tenant claim cannot run while a tenant is bound"));
-  return claim();
+  return pg.query(text, params, options);
 }
 
 export function crossTenantLoop<A extends unknown[], R>(body: (...args: A) => R): (...args: A) => R {

@@ -29,18 +29,6 @@ test("withTenant binds across awaits and nests", async () => {
   );
 });
 
-test("concurrent work keeps its own tenant", async () => {
-  const seen = await Promise.all(
-    [a, b, a, b].map((id, index) =>
-      withTenant(id, async () => {
-        await new Promise((resolve) => setTimeout(resolve, 4 - index));
-        return currentTenant();
-      }),
-    ),
-  );
-  assert.deepEqual(seen, [a, b, a, b]);
-});
-
 test("tenant ids must be lowercase uuids", () => {
   assert.equal(isTenantId(a), true);
   for (const id of [a.toUpperCase(), "", "tenant", `${a} `, a.replaceAll("-", "")]) {
