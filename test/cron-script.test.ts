@@ -18,6 +18,7 @@ import { createToolContext } from "../src/tools/primitives.ts";
 import type { ExecResult, Sandbox } from "../src/sandbox/sandbox.ts";
 
 const OWNER = "U1";
+const trusted = async () => undefined;
 const HOME = scopeId("personal", OWNER);
 
 function claims(): CapabilityClaims {
@@ -43,6 +44,7 @@ async function fireOnce(script: CronScriptRequest) {
   const created = await control.createCron(
     { schedule: { everyMs: 3_600_000 }, action: "post the new rows", script, session: false },
     claims(),
+    trusted,
   );
   assert.ok(created.ok, created.ok ? "" : created.message);
   await runNowSettled(built.scheduler, created.cron.id);
@@ -83,22 +85,24 @@ test("a script needs a task cron and is removed by patch null or a switch to tex
   const relay = await control.createCron(
     { schedule: { everyMs: 3_600_000 }, text: "standup!", script: { command: "true" } },
     claims(),
+    trusted,
   );
   assert.deepEqual(relay, { ok: false, code: "bad_request", message: "script needs a cron with a task for the agent" });
 
   const created = await control.createCron(
     { schedule: { everyMs: 3_600_000 }, action: "check", script: { command: "./check.sh", credentials: ["gh"] } },
     claims(),
+    trusted,
   );
   assert.ok(created.ok);
   assert.deepEqual(created.cron.script, { command: "./check.sh", credentials: ["gh"] });
 
-  const removed = await control.patchCron(created.cron.id, { script: null }, claims());
+  const removed = await control.patchCron(created.cron.id, { script: null }, claims(), trusted);
   assert.ok(removed.ok);
   assert.equal(removed.cron.script, undefined);
 
-  await control.patchCron(created.cron.id, { script: { command: "./check.sh" } }, claims());
-  const relayed = await control.patchCron(created.cron.id, { text: "standup!" }, claims());
+  await control.patchCron(created.cron.id, { script: { command: "./check.sh" } }, claims(), trusted);
+  const relayed = await control.patchCron(created.cron.id, { text: "standup!" }, claims(), trusted);
   assert.ok(relayed.ok);
   assert.equal(relayed.cron.script, undefined);
 });
@@ -127,17 +131,18 @@ test("setting a script runs it once first and keeps it only when that run exits 
     "./slow.sh": { stdout: "still going\n", stderr: "", code: 124, timedOut: true },
     "./denied.sh": new Error("unknown credential handle: gh"),
   };
-  const tools = {
-    ...ctx,
-    execute: async (command: string, opts?: { credentials?: string[]; sandboxId?: string }) => {
-      ran.push({ command, ...opts });
-      const outcome = outcomes[command]!;
-      if (outcome instanceof Error) throw outcome;
-      return outcome;
-    },
+  ctx.execute = async (command: string, opts?: { credentials?: string[]; sandboxId?: string }) => {
+    ran.push({
+      command,
+      ...(opts?.credentials ? { credentials: opts.credentials } : {}),
+      ...(opts?.sandboxId ? { sandboxId: opts.sandboxId } : {}),
+    });
+    const outcome = outcomes[command]!;
+    if (outcome instanceof Error) throw outcome;
+    return outcome;
   };
   const create = (command: string) =>
-    tools.cronCreate({
+    ctx.cronCreate({
       schedule: { everyMs: 3_600_000 },
       action: "check",
       script: { command, credentials: ["gh"], sandboxId: "sb-1" },
@@ -161,7 +166,7 @@ test("setting a script runs it once first and keeps it only when that run exits 
   assert.match(await refusal("./slow.sh"), /trial run timed out;.*\nstill going$/s);
   assert.match(await refusal("./denied.sh"), /trial run failed: unknown credential handle: gh;/);
 
-  const patched = await tools.cronPatch(quiet.cron.id, { script: { command: "./typo.sh" } });
+  const patched = await ctx.cronPatch(quiet.cron.id, { script: { command: "./typo.sh" } });
   assert.ok(!("unavailable" in patched) && !patched.ok);
   assert.deepEqual((await built.app.getCron(quiet.cron.id))?.script, {
     command: "./quiet.sh",
@@ -169,4 +174,37 @@ test("setting a script runs it once first and keeps it only when that run exits 
     sandboxId: "sb-1",
   });
   assert.equal((await built.app.listCrons()).length, 2);
+
+  const before = ran.length;
+  const relay = await ctx.cronCreate({
+    schedule: { everyMs: 3_600_000 },
+    text: "hi",
+    script: { command: "./quiet.sh" },
+  });
+  assert.ok(!("unavailable" in relay) && !relay.ok);
+  const missing = await ctx.cronPatch("no-such-cron", { script: { command: "./quiet.sh" } });
+  assert.ok(!("unavailable" in missing) && !missing.ok);
+  assert.equal(ran.length, before, "a request refused for other reasons never runs the script");
+});
+
+test("a script is refused from a conversation other than the one that owns the cron", async () => {
+  const { control } = await setup();
+  const CHANNEL = scopeId("channel", "C");
+  const trials: unknown[] = [];
+  const r = await control.createCron(
+    { schedule: { everyMs: 3_600_000 }, action: "check", scope: "personal", script: { command: "./check.sh" } },
+    {
+      ...claims(),
+      scopeId: CHANNEL,
+      destination: { type: "slack", target: "C", audienceScopeId: CHANNEL },
+      destinations: [{ key: "k-c", type: "slack", target: "C", audienceScopeId: CHANNEL, label: "#eng" }],
+      defaultDestinationKey: "k-c",
+    },
+    async (script) => void trials.push(script),
+  );
+  assert.equal(
+    r.ok ? "" : r.message,
+    "set a cron's script from the conversation that owns the cron, so its trial run uses the computer and credentials its fires will",
+  );
+  assert.deepEqual(trials, []);
 });

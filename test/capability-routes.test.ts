@@ -777,7 +777,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     const script = { command: "./standup.sh" };
     const byTeammate = await control.patchCron(cron.id, { script }, channelClaims("U2"));
     assert.equal(byTeammate.ok ? "" : byTeammate.code, "forbidden");
-    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"));
+    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"), async () => undefined);
     assert.deepEqual(byOwner.ok && byOwner.cron.script, script);
     const removed = await control.patchCron(cron.id, { script: null }, channelClaims("U2"));
     assert.equal(removed.ok ? "" : removed.code, "forbidden");

@@ -224,7 +224,7 @@ export function cronTools(kit: ToolKit) {
       ),
       offset: Type.Optional(Type.Integer({ minimum: 0, description: "list: page offset from the previous footer." })),
     }),
-    async execute(callId, params) {
+    async execute(callId, params, signal) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
       await recordCall(callId, { tool: "cron", action: params.action, ...(params.id ? { id: params.id } : {}) });
@@ -253,22 +253,25 @@ export function cronTools(kit: ToolKit) {
               true,
             );
           }
-          const r = await tc.cronCreate({
-            schedule: params.schedule,
-            ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
-            ...(params.title !== undefined ? { title: params.title } : {}),
-            ...(params.task !== undefined ? { action: params.task } : {}),
-            ...(params.text !== undefined ? { text: params.text } : {}),
-            ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
-            ...(params.channel !== undefined ? { channel: params.channel } : {}),
-            ...(params.scope !== undefined ? { scope: params.scope } : {}),
-            ...(Array.isArray(params.participants) ? { participants: params.participants } : {}),
-            ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
-            ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
-            ...(params.session !== undefined ? { session: params.session } : {}),
-            ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
-            ...(params.script ? { script: params.script } : {}),
-          });
+          const r = await tc.cronCreate(
+            {
+              schedule: params.schedule,
+              ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
+              ...(params.title !== undefined ? { title: params.title } : {}),
+              ...(params.task !== undefined ? { action: params.task } : {}),
+              ...(params.text !== undefined ? { text: params.text } : {}),
+              ...(params.recipient !== undefined ? { recipient: params.recipient } : {}),
+              ...(params.channel !== undefined ? { channel: params.channel } : {}),
+              ...(params.scope !== undefined ? { scope: params.scope } : {}),
+              ...(Array.isArray(params.participants) ? { participants: params.participants } : {}),
+              ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
+              ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
+              ...(params.session !== undefined ? { session: params.session } : {}),
+              ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
+              ...(params.script ? { script: params.script } : {}),
+            },
+            signal,
+          );
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) {
             const cand = r.candidates?.length
@@ -359,19 +362,23 @@ export function cronTools(kit: ToolKit) {
         case "patch": {
           const id = needId();
           if (!id) return missingId();
-          const r = await tc.cronPatch(id, {
-            ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
-            ...(params.title !== undefined ? { title: params.title } : {}),
-            ...(params.task !== undefined ? { action: params.task } : {}),
-            ...(params.text !== undefined ? { text: params.text } : {}),
-            ...(params.schedule !== undefined ? { schedule: params.schedule } : {}),
-            ...(params.enabled !== undefined ? { enabled: params.enabled } : {}),
-            ...(params.archived !== undefined ? { archived: params.archived } : {}),
-            ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
-            ...(params.session !== undefined ? { session: params.session } : {}),
-            ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
-            ...(params.script !== undefined ? { script: params.script } : {}),
-          });
+          const r = await tc.cronPatch(
+            id,
+            {
+              ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
+              ...(params.title !== undefined ? { title: params.title } : {}),
+              ...(params.task !== undefined ? { action: params.task } : {}),
+              ...(params.text !== undefined ? { text: params.text } : {}),
+              ...(params.schedule !== undefined ? { schedule: params.schedule } : {}),
+              ...(params.enabled !== undefined ? { enabled: params.enabled } : {}),
+              ...(params.archived !== undefined ? { archived: params.archived } : {}),
+              ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
+              ...(params.session !== undefined ? { session: params.session } : {}),
+              ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
+              ...(params.script !== undefined ? { script: params.script } : {}),
+            },
+            signal,
+          );
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
           return recordResult(callId, { tool: "cron", id }, text(`Updated cron ${fmtCronLine(r.cron)}`));

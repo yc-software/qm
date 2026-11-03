@@ -143,8 +143,9 @@ export async function trialCronScript(
   script: CronScript,
   execute: Execute,
   toolOutput?: Pick<ToolOutputStore, "inlineTokens">,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const { result, error } = await runOnce(script, execute);
+  const { result, error } = await runOnce(script, execute, signal);
   if (result && !result.timedOut && (result.code === 0 || result.code === 1)) return undefined;
   const output = outputOf(result);
   const outcome = !result ? `failed: ${error}` : result.timedOut ? "timed out" : `exited ${result.code}`;

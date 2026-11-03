@@ -1,4 +1,4 @@
-import { cronScriptFrom, trialCronScript, type CronScriptRequest } from "../cron/script.ts";
+import { trialCronScript } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
 import { parkedOutputKey, type ToolOutputStore } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
@@ -83,6 +83,7 @@ import type {
   WebhookCreateResult,
   ControlOk,
   ControlErr,
+  CronScriptTrial,
 } from "../api/control-service.ts";
 import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
 import type { Cron, Webhook } from "../triggers/types.ts";
@@ -273,7 +274,7 @@ export interface ToolContext extends SurfaceToolDeps {
     opts?: { instructions?: string; pattern?: string; sinceCursor?: number },
   ): Promise<BackgroundWatchResult>;
   backgroundUnwatch(monitorId: string): Promise<BackgroundUnwatchResult>;
-  cronCreate(req: CronCreateRequest): Promise<CronCreateResult | ControlUnavailable>;
+  cronCreate(req: CronCreateRequest, signal?: AbortSignal): Promise<CronCreateResult | ControlUnavailable>;
   cronList(): Promise<{ crons: Cron[]; visible: VisibleCron[] } | ControlUnavailable>;
   cronGet(id: string): Promise<ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden"> | ControlUnavailable>;
   cronRuns(
@@ -283,6 +284,7 @@ export interface ToolContext extends SurfaceToolDeps {
   cronPatch(
     id: string,
     req: CronPatchRequest,
+    signal?: AbortSignal,
   ): Promise<
     | ControlOk<{ cron: Cron }>
     | ControlErr<"not_found" | "forbidden" | "bad_request" | "cron_update_failed">
@@ -634,15 +636,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
   const runId = deps.runId;
 
-  async function trialScript(
-    req: CronScriptRequest | null | undefined,
-    cron: Parameters<typeof cronScriptFrom>[1],
-    tools: Pick<ToolContext, "execute">,
-  ): Promise<{ ok: false; code: "bad_request"; message: string } | undefined> {
-    const script = req ? cronScriptFrom(req, cron) : undefined;
-    if (!script || typeof script === "string") return undefined;
-    const refused = await trialCronScript(script, (command, opts) => tools.execute(command, opts), deps.toolOutput);
-    return refused === undefined ? undefined : { ok: false, code: "bad_request", message: refused };
+  function trial(signal?: AbortSignal): CronScriptTrial {
+    return (script) => trialCronScript(script, (command, opts) => ctx.execute(command, opts), deps.toolOutput, signal);
   }
 
   function controlOp<R>(
@@ -732,7 +727,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     };
   };
 
-  return {
+  const ctx: ToolContext = {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.installSharedCanvas ? { installSharedCanvas: deps.installSharedCanvas } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
@@ -1284,17 +1279,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.monitorBroker!.unwatch(monitorId);
     },
 
-    async cronCreate(req) {
-      return (await trialScript(req.script, req, this)) ?? (await controlOp((c, cl) => c.createCron(req, cl)));
-    },
+    cronCreate: (req, signal) => controlOp((c, cl) => c.createCron(req, cl, trial(signal))),
     cronList: () => controlOp((c, cl) => c.listCrons(cl)),
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
-    async cronPatch(id, req) {
-      return (
-        (await trialScript(req.script, { action: "" }, this)) ?? (await controlOp((c, cl) => c.patchCron(id, req, cl)))
-      );
-    },
+    cronPatch: (id, req, signal) => controlOp((c, cl) => c.patchCron(id, req, cl, trial(signal))),
     cronNote: (id, note) => controlOp((c, cl) => c.noteCron(id, note, cl)),
     cronDelete: (id) => controlOp((c, cl) => c.deleteCron(id, cl)),
     cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(id, enabled, cl)),
@@ -1328,6 +1317,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         ? deps.attach(files, sandboxId)
         : Promise.resolve({ ok: false as const, message: ATTACH_UNAVAILABLE_MESSAGE }),
   };
+  return ctx;
 }
 
 const ATTACH_UNAVAILABLE_MESSAGE =

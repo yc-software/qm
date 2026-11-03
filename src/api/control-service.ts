@@ -3,6 +3,8 @@ import { isDeepStrictEqual } from "node:util";
 import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronSchedule, Webhook } from "../triggers/types.ts";
 import { cronScriptFrom, type CronScriptRequest } from "../cron/script.ts";
+import type { CronScript } from "../triggers/types.ts";
+
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -32,6 +34,22 @@ import {
 import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
+
+export const CRON_SCRIPT_TOOL_ONLY = "set a cron's script with the cron tool, which runs it once first";
+
+export type CronScriptTrial = (script: CronScript) => Promise<string | undefined>;
+
+async function trialRefusal(
+  script: CronScript,
+  ownerScopeId: string,
+  capability: CapabilityClaims,
+  trial: CronScriptTrial | undefined,
+): Promise<string | undefined> {
+  if (!trial) return CRON_SCRIPT_TOOL_ONLY;
+  if (ownerScopeId !== capability.scopeId)
+    return "set a cron's script from the conversation that owns the cron, so its trial run uses the computer and credentials its fires will";
+  return trial(script);
+}
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -120,7 +138,7 @@ export type ControlOk<T> = { ok: true } & T;
 export type ControlErr<C extends string> = { ok: false; code: C; message: string };
 
 export interface ControlService {
-  createCron(req: CronCreateRequest, claims: CapabilityClaims): Promise<CronCreateResult>;
+  createCron(req: CronCreateRequest, claims: CapabilityClaims, trial?: CronScriptTrial): Promise<CronCreateResult>;
   listCrons(claims: CapabilityClaims): Promise<{ crons: Cron[]; visible: VisibleCron[] }>;
   getCron(
     id: string,
@@ -135,6 +153,7 @@ export interface ControlService {
     id: string,
     req: CronPatchRequest,
     claims: CapabilityClaims,
+    trial?: CronScriptTrial,
   ): Promise<ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden" | "bad_request" | "cron_update_failed">>;
   noteCron(
     id: string,
@@ -352,7 +371,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       ...(detail ? { detail } : {}),
     });
   return {
-    async createCron(req, capability): Promise<CronCreateResult> {
+    async createCron(req, capability, trial): Promise<CronCreateResult> {
       if (req.unattendedGrants !== undefined) {
         const invalid = validateUnattendedGrants(req.unattendedGrants);
         if (invalid) return { ok: false, code: "bad_request", message: invalid };
@@ -480,6 +499,8 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       }
       if (destination) destination = withSlackUnfurlOption(destination, req.unfurlLinks);
 
+      const refused = script ? await trialRefusal(script, ownerScopeId, capability, trial) : undefined;
+      if (refused) return { ok: false, code: "bad_request", message: refused };
       const input: CreateCronInput = {
         schedule: withDefaultTimezone(req.schedule, capability),
         ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
@@ -540,7 +561,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       return { ok: true, cron, runs, total };
     },
 
-    async patchCron(id, req, capability) {
+    async patchCron(id, req, capability, trial) {
       const before = await app.getCron(id);
       if (!before) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, before, capability.actorId)))
@@ -569,6 +590,10 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         const refusal = await unattendedGrantRefusal(app, admin, before, capability);
         if (refusal) return { ok: false, ...refusal };
       }
+      const refused = patch.script
+        ? await trialRefusal(patch.script, before.ownerScopeId, capability, trial)
+        : undefined;
+      if (refused) return { ok: false, code: "bad_request", message: refused };
       try {
         const cron = await app.updateCron(id, patch);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
