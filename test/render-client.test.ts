@@ -183,6 +183,16 @@ test("Render SDK adapter creates the default sandbox group of a workspace that h
   assert.equal(http.groupCreates(), creates);
 });
 
+test("Render SDK adapter starts a one-day sandbox on a workspace that caps lifetime at one day", async (t) => {
+  const fake = createFakeRender();
+  t.after(() => fake.cleanup());
+  const http = serveFakeRenderApi(t, fake);
+  http.capLifetime(86400);
+  const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
+  const created = await client.create({ lifetimeSec: 2592000 });
+  assert.equal(http.lifetimeOf(created.id), 86400);
+});
+
 test("Render SDK adapter runs scripts with the environment of the QM sandbox base image", async (t) => {
   const fake = createFakeRender();
   t.after(() => fake.cleanup());

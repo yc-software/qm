@@ -25,6 +25,8 @@ const STALE_SCRIPT_MINUTES = 5;
 const IMAGE_ENV =
   'export PATH="/opt/agent-venv/bin:$PATH" VIRTUAL_ENV=/opt/agent-venv ANONYMIZED_TELEMETRY=false BROWSER_USE_CLOUD_SYNC=false\n';
 
+const DAY_SEC = 86400;
+
 const sdkErrors = {
   statusOf: (error: unknown): number | undefined =>
     error instanceof ClientError || error instanceof ServerError ? error.statusCode : undefined,
@@ -207,12 +209,19 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
       else if (image) source = { image };
       const created = await retryOperation(
         () =>
-          api.create({
-            plan: RENDER_SANDBOX_PLAN,
-            timeoutSeconds: lifetimeSec,
-            idleTimeoutSeconds: 0,
-            ...source,
-          }),
+          api
+            .create({ plan: RENDER_SANDBOX_PLAN, timeoutSeconds: lifetimeSec, idleTimeoutSeconds: 0, ...source })
+            .catch((error: unknown) => {
+              // Hobby workspaces cap sandbox lifetime at one day; a computer that ends sooner is restored from its checkpoint.
+              if (!(error instanceof ClientError && error.code === "invalid_timeout_seconds" && lifetimeSec > DAY_SEC))
+                throw error;
+              return api.create({
+                plan: RENDER_SANDBOX_PLAN,
+                timeoutSeconds: DAY_SEC,
+                idleTimeoutSeconds: 0,
+                ...source,
+              });
+            }),
         "refused",
         {
           ...sdkErrors,
