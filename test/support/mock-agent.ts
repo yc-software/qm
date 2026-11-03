@@ -11,9 +11,9 @@ import { NeedsApproval } from "../../src/tools/primitives.ts";
 import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/agent/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
-import { emitEntry, recordStoppedTurn } from "../../src/agent/turn-support.ts";
+import { recordStoppedTurn } from "../../src/agent/turn-support.ts";
 import type { NewEntry } from "../../src/sessions/session-store.ts";
-import type { SessionEntry } from "../../src/types.ts";
+import { isAgentReply, isUserItem, type Item, itemFromEntry } from "../../src/sessions/items.ts";
 import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
@@ -65,22 +65,17 @@ function streamChunks(text: string): string[] {
   return chunks;
 }
 
-function textPayload(payload: unknown): string {
-  const text = (payload as { text?: unknown } | null)?.text;
-  return typeof text === "string" ? text : "";
-}
-
 function mockProviderMessages(
   history: AgentTurnInput["history"],
 ): Array<{ role: "user" | "assistant"; content: string }> {
   return history.flatMap((e) => {
-    if (e.type !== "user" && e.type !== "assistant") return [];
-    const content = textPayload(e.payload);
-    return content.trim() ? [{ role: e.type, content }] : [];
+    if (!isUserItem(e) && !isAgentReply(e)) return [];
+    const content = e.text ?? "";
+    return content.trim() ? [{ role: isUserItem(e) ? ("user" as const) : ("assistant" as const), content }] : [];
   });
 }
 
-type RecordEntry = (entry: Pick<NewEntry, "type" | "payload" | "author">) => Promise<SessionEntry>;
+type RecordEntry = (entry: Pick<NewEntry, "type" | "payload" | "author">) => Promise<Item>;
 
 function withCallIds(emit: RecordEntry): RecordEntry {
   const open: string[] = [];
@@ -106,7 +101,7 @@ export function createMockAgent(): Agent {
   const agent: Agent = {
     async runTurn(input: AgentTurnInput): Promise<AgentTurnResult> {
       let turn: AgentTurnInput = input;
-      const record = withCallIds((entry) => emitEntry(input, entry));
+      const record = withCallIds((entry) => input.emit(itemFromEntry(entry)));
       const continued = turn.continueTurn ? turn.history.find((e) => e.seq === turn.resumeUserSeq) : undefined;
       if (continued) turn = { ...turn, input: "", environment: undefined };
       const userEntry =
