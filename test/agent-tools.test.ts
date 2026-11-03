@@ -664,26 +664,6 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
   };
   const calm = (await call(execute, { command: "echo ok", purpose: "p" })) as { content: Array<{ text?: string }> };
   assert.doesNotMatch(calm.content[0]!.text!, /\[pressure\]/);
-
-  ref.current = {
-    ...pressured,
-    execute: async () => ({
-      stdout: "ok",
-      stderr: "",
-      code: 0,
-      timedOut: false,
-      pressure: { ioFull10: 80, ioFull60: 62.4, load1: 12 },
-      reached: { scopeId: "personal:other", label: "Other" },
-    }),
-  };
-  const reached = (await call(execute, { command: "echo ok", scope: "person:other", purpose: "p" })) as {
-    content: Array<{ text?: string }>;
-  };
-  assert.doesNotMatch(
-    reached.content[0]!.text!,
-    /\[pressure\]/,
-    "pressure advice about the local computer must not attach to another computer's exec",
-  );
 });
 
 test("a giant tool result is capped for the model, keeping the tail and matching the persisted replay record", async () => {
@@ -1531,8 +1511,8 @@ test("the surface tool is NAMED after its surface — a telegram surface produce
 
 test("readOnly exposes observation and constrained session coordination without execution tools", () => {
   const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U1" };
-  const full = createAgentTools(ref, { controlTools: true, reachExec: true });
-  const readOnly = createAgentTools(ref, { controlTools: true, reachExec: true, readOnly: true });
+  const full = createAgentTools(ref, { controlTools: true });
+  const readOnly = createAgentTools(ref, { controlTools: true, readOnly: true });
 
   const names = (ts: ReturnType<typeof createAgentTools>) => new Set(ts.map((t) => t.name));
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
@@ -2573,31 +2553,6 @@ test("background job output is external while background bookkeeping stays inter
   assert.deepEqual(seen, ["external", "external", "external", "internal"]);
 });
 
-test("execute output from a reached room is external even for a local-looking command", async () => {
-  const seen: Array<{ provenance: string; source?: string }> = [];
-  const tc = {
-    ...fakeToolContext(),
-    execute: async () => ({
-      stdout: "notes",
-      stderr: "",
-      code: 0,
-      timedOut: false,
-      reached: { scopeId: "channel:C2" as const, label: "#other" },
-    }),
-  };
-  const ref: ToolContextRef = {
-    current: tc,
-    scopeLabel: "personal:U1",
-    screenToolResult: async ({ provenance, source }) => {
-      seen.push({ provenance, ...(source ? { source } : {}) });
-      return { outcome: "allow" };
-    },
-  };
-  const [execute] = createAgentTools(ref, { reachExec: true });
-  await call(execute, { command: "cat notes.md", scope: "channel:C2", purpose: "Run test command" });
-  assert.deepEqual(seen, [{ provenance: "external", source: "reached room" }]);
-});
-
 test("sandbox management and explicit execution preserve independent target arguments", async () => {
   const sink: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] } = {};
   const operations: unknown[] = [];
@@ -2734,39 +2689,37 @@ test("only execute advertises command starts and sandbox is lifecycle-only", asy
       throw new Error("must not start");
     },
   };
-  for (const options of [{}, { reachExec: true }]) {
-    const tools = createAgentTools({ current }, { ...options, sandboxResources: true });
-    const execute = tools.find((t) => t.name === "execute")!;
-    const sandbox = tools.find((t) => t.name === "sandbox")!;
-    const background = tools.find((t) => t.name === "background")!;
-    for (const detached of [false, true])
-      assert.equal(
-        Check(execute.parameters, {
-          command: "pwd",
-          purpose: "Check computer",
-          sandbox_id: "box-a",
-          background: detached,
-        }),
-        true,
-      );
-    for (const tool of [sandbox, background]) {
-      assert.equal("command" in (tool.parameters as { properties: object }).properties, false);
-      for (const action of ["exec", "start", "start_process"]) {
-        assert.equal(Check(tool.parameters, { action, command: "forbidden", purpose: "Test old route" }), false);
-        assert.match(
-          textOut(await call(tool, { action, command: "forbidden", purpose: "Test old route" })),
-          /invalid (sandbox|background) arguments/,
-        );
-      }
-    }
-    for (const input of [{ scope: "scratch" }, { scope: "#room" }, { sandbox_id: null }])
+  const tools = createAgentTools({ current }, { sandboxResources: true });
+  const execute = tools.find((t) => t.name === "execute")!;
+  const sandbox = tools.find((t) => t.name === "sandbox")!;
+  const background = tools.find((t) => t.name === "background")!;
+  for (const detached of [false, true])
+    assert.equal(
+      Check(execute.parameters, {
+        command: "pwd",
+        purpose: "Check computer",
+        sandbox_id: "box-a",
+        background: detached,
+      }),
+      true,
+    );
+  for (const tool of [sandbox, background]) {
+    assert.equal("command" in (tool.parameters as { properties: object }).properties, false);
+    for (const action of ["exec", "start", "start_process"]) {
+      assert.equal(Check(tool.parameters, { action, command: "forbidden", purpose: "Test old route" }), false);
       assert.match(
-        textOut(
-          await call(execute, { command: "forbidden", purpose: "Test invalid routing", background: true, ...input }),
-        ),
-        /background jobs require|invalid execute arguments/,
+        textOut(await call(tool, { action, command: "forbidden", purpose: "Test old route" })),
+        /invalid (sandbox|background) arguments/,
       );
+    }
   }
+  for (const input of [{ scope: "scratch" }, { scope: "#room" }, { sandbox_id: null }])
+    assert.match(
+      textOut(
+        await call(execute, { command: "forbidden", purpose: "Test invalid routing", background: true, ...input }),
+      ),
+      /background jobs require|invalid execute arguments/,
+    );
   assert.equal(dispatched, 0);
 });
 
@@ -2785,13 +2738,11 @@ test("execute preserves routing, credentials, abort and external output provenan
     },
     {
       sandboxResources: true,
-      reachExec: true,
     },
   ).find((t) => t.name === "execute")!;
   for (const [scope, route] of [
     ["scoped", {}],
     ["scratch", { scratch: true }],
-    ["#room", { reachTarget: "#room" }],
   ] as const) {
     await call(tool, {
       scope,
@@ -2804,7 +2755,7 @@ test("execute preserves routing, credentials, abort and external output provenan
   }
   assert.deepEqual(
     screens,
-    Array.from({ length: 3 }, () => ["execute", "external"]),
+    Array.from({ length: 2 }, () => ["execute", "external"]),
   );
 });
 
