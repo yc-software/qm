@@ -146,7 +146,7 @@ test(
   },
 );
 
-test("the deployment layer row backfills into one install-wide row that every tenant shares", { skip }, async () => {
+test("the deployment layer row backfills and stays per tenant", { skip }, async () => {
   const layer: StoredDeploymentLayer = {
     contentHash: "abc",
     version: 3,
@@ -158,15 +158,19 @@ test("the deployment layer row backfills into one install-wide row that every te
   } as unknown as StoredDeploymentLayer;
   await withTypedTableDb(
     table(DEPLOYMENT_LAYER),
-    async ({ store, otherTenant }) => {
-      assert.deepEqual(await store.get("current"), layer);
+    async ({ store, tenant, otherTenant }) => {
+      await withTenant(tenant, async () => assert.deepEqual(await store.get("current"), layer));
       await withTenant(otherTenant, async () => {
-        assert.equal((await store.putIfAbsent("current", { ...layer, contentHash: "mine" })).contentHash, "abc");
+        assert.equal(await store.get("current"), null);
+        assert.equal(await store.update("current", (current) => ({ ...current, version: 9 })), null);
+        assert.equal((await store.putIfAbsent("current", { ...layer, contentHash: "mine" })).contentHash, "mine");
+      });
+      await withTenant(tenant, async () => {
         const next = await store.update("current", (current) => ({ ...current, version: 4, pendingAudits: undefined }));
         assert.equal(next?.version, 4);
+        const { pendingAudits: _cleared, ...rest } = layer;
+        assert.deepEqual(await store.get("current"), { ...rest, version: 4 });
       });
-      const { pendingAudits: _cleared, ...rest } = layer;
-      assert.deepEqual(await store.get("current"), { ...rest, version: 4 });
     },
     (admin) => seedKeyValueTable(admin, "deployment_layer", { current: layer }),
   );
