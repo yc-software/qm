@@ -132,7 +132,9 @@ superuser, no `BYPASSRLS`). Before core starts, the core pod's `database` init
 container runs `node src/migrate-main.ts` as the owner login: it creates the login
 `DATABASE_URL` names when that login does not exist, then applies the migrations.
 It never changes an existing login's password, since Postgres logins are shared by
-every database on the server; name a login of this deployment's own. Core refuses to start without `DATABASE_OWNER_URL`, or when
+every database on the server; name a login of this deployment's own. Both URLs go
+into their own Secret, mounted only into the core pod; portal, web-ui and the
+other pods never receive them. Core refuses to start without `DATABASE_OWNER_URL`, or when
 `DATABASE_URL` logs in as the owner, a superuser or a role that bypasses
 row-level security.
 Choose one of two layouts.
