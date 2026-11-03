@@ -1170,6 +1170,10 @@ test("the skills tool saves a skill into the turn's scope and edits it through t
     assert.equal(await jordan({ action: "edit", id: sk.id }), "[error] description or body required");
     assert.equal((await srv.skills.get(sk.id))!.version, version);
 
+    assert.match(
+      await skills({ action: "save", name: " padded-name\n", description: "d", body: "# b" }),
+      /^Saved skill padded-name \(/,
+    );
     const again = await skills({ action: "save", name: "investor-update", description: "d", body: "# b" });
     assert.match(again, /already exists here/);
   } finally {

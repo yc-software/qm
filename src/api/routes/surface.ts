@@ -1102,7 +1102,7 @@ async function createSkill(ctx: ApiCtx): Promise<void> {
   if (typeof b.name !== "string" || !b.name.trim()) {
     return sendJson(res, 400, { error: "bad_request", message: "name required" });
   }
-  if (!isSafeSkillName(b.name)) return sendJson(res, 400, { error: "bad_request", message: SKILL_NAME_RULE });
+  if (!isSafeSkillName(b.name.trim())) return sendJson(res, 400, { error: "bad_request", message: SKILL_NAME_RULE });
   if (typeof b.description !== "string" || !b.description.trim()) {
     return sendJson(res, 400, { error: "bad_request", message: "description required" });
   }
