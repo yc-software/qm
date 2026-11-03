@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildLoadedApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -21,7 +21,7 @@ const DIRECTIVE = [
 
 test("exemplar (piratey X-link): the worker gets the standing order verbatim and threads its reply under the trigger", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-exemplar-pirate-"));
-  const built = buildApp(testConfig({ dataDir }));
+  const built = await buildLoadedApp(testConfig({ dataDir }));
   built.runtime.start();
   try {
     const container = "C-pirate";
