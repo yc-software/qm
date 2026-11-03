@@ -29,12 +29,16 @@ function freshApp(overrides: Partial<Config> = {}) {
 
 async function waitForOnboardingSkill(built: ReturnType<typeof buildApp>): Promise<void> {
   const { skills } = built;
-  await built.deploymentLayerReady();
+  await inTestTenant(() => built.deploymentLayerReady());
   await settle(async () =>
-    (await skills.listAll()).some((s) => s.manifest.name === "onboarding" && s.status === "published"),
+    (await inTestTenant(() => skills.listAll())).some(
+      (s) => s.manifest.name === "onboarding" && s.status === "published",
+    ),
   );
   assert.ok(
-    (await skills.listAll()).some((s) => s.manifest.name === "onboarding" && s.status === "published"),
+    (await inTestTenant(() => skills.listAll())).some(
+      (s) => s.manifest.name === "onboarding" && s.status === "published",
+    ),
     "onboarding skill was not seeded",
   );
 }
