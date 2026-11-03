@@ -78,6 +78,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
   const prefix = opts.namePrefix ?? "qm";
   const homeDir = opts.homeDir ?? "/root";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
+  const rotationMarginMs = (defaultTimeoutSec + 60) * 1000;
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? 5 * 60_000;
   const scratch = new Map<string, RenderSandboxInfo>();
   const nameFor = (scope: string): string => sandboxScopeName(prefix, scope);
@@ -133,7 +134,15 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     return stored.sandboxId;
   };
   const exec = async (name: string, script: string, timeoutSec: number): Promise<ExecResult> => {
-    const result = await client.runScript(await idFor(name, true), script, timeoutSec);
+    const sandboxId = await idFor(name, true);
+    const result = await client.runScript(sandboxId, script, timeoutSec).catch(async (error: unknown) => {
+      const info = await client.get(sandboxId).catch(() => undefined);
+      if (info === undefined || (info && info.status !== "terminated" && info.status !== "errored")) throw error;
+      await store.merge(scopeFor(name), { stopped: true });
+      throw new Error("This Render computer has stopped; the next turn restores it from its last checkpoint", {
+        cause: error,
+      });
+    });
     return { stdout: result.stdout, stderr: result.stderr, code: result.exitCode, timedOut: result.exitCode === 124 };
   };
   const writeAbsBytes = async (name: string, path: string, data: Uint8Array): Promise<void> =>
@@ -258,6 +267,14 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     if (stored) stored = await cleanupRetired(scope, stored);
     const info = stored ? await client.get(stored.sandboxId) : null;
     if (!stored || info?.status !== "running") return withUse(name, () => replace(scope, stored, info, onStatus));
+    const running = stored;
+    const rotated =
+      info.expiresAtMs > Date.now() + rotationMarginMs
+        ? null
+        : await tryUse(name, async () =>
+            (await hasLiveProcesses(info.id)) ? null : replace(scope, running, info, onStatus),
+          );
+    if (rotated) return rotated;
     await store.merge(scope, { lastActivityMs: Date.now(), ...(stored.stopped ? { stopped: undefined } : {}) });
     return { coldStart: false };
   }
@@ -589,7 +606,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
       const cutoff = Date.now() - Math.min(idleMs > 0 ? idleMs : Infinity, RENDER_IDLE_STOP_MS);
       const stale = (stored: StoredRenderSandbox): boolean => stored.homeDirty !== false && !recentlySaved(stored);
       const due = (stored: StoredRenderSandbox): boolean =>
-        !stored.stopped && stored.expiresAtMs > Date.now() && (stored.lastActivityMs <= cutoff || stale(stored));
+        !stored.stopped && (stored.expiresAtMs <= Date.now() || stored.lastActivityMs <= cutoff || stale(stored));
       for (const [scope] of await cleanupStore.entries())
         await tryLock(lifecycleKey(nameFor(scope)), () => finishCleanup(scope)).catch(
           swallowAs(`render-sandbox: finish cleanup of ${scope}`, undefined),

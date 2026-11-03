@@ -451,7 +451,7 @@ test("Render does not replay a command when an exec call fails", async (t) => {
   const sandbox = make();
   const handle = await sandbox.provision(layers);
   await fake.client.terminate((await store.get(scope))!.sandboxId);
-  await assert.rejects(sandbox.run(handle, "side-effect"), /no longer running/);
+  await assert.rejects(sandbox.run(handle, "side-effect"), /has stopped; the next turn restores it/);
   assert.equal(fake.createdFrom.length, 1);
 });
 
@@ -885,6 +885,41 @@ test("Render checkpoints at teardown once per interval and skips an unused compu
   assert.equal((await store.get(scope))!.savedAtMs, stale);
   await sandbox.teardown(handle);
   assert.ok((await store.get(scope))!.savedAtMs! > stale);
+});
+
+test("Render replaces an idle computer near the end of its lifetime at turn start", async (t) => {
+  const { make, fake, layers, store, scope } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision(layers);
+  await sandbox.writeFile(handle, "kept", "work");
+  const first = (await store.get(scope))!.sandboxId;
+  fake.sandboxes.get(first)!.expiresAtMs = Date.now() + 60_000;
+  const next = await sandbox.provision(layers);
+  assert.notEqual((await store.get(scope))!.sandboxId, first);
+  assert.equal(fake.sandboxes.get(first)?.status, "terminated");
+  assert.equal(await sandbox.readFile(next, "kept"), "work");
+});
+
+test("Render tells a turn that its sandbox ended and restores it on the next turn", async (t) => {
+  const { make, fake, layers, store, scope, errors } = setup(t);
+  const sandbox = make();
+  const handle = await sandbox.provision(layers);
+  await sandbox.writeFile(handle, "kept", "work");
+  await sandbox.reapDeepIdle!(0);
+  const first = (await store.get(scope))!.sandboxId;
+  await sandbox.provision(layers);
+  await fake.client.terminate((await store.get(scope))!.sandboxId);
+  await assert.rejects(sandbox.run(handle, "true"), /has stopped; the next turn restores it from its last checkpoint/);
+  assert.equal((await store.get(scope))!.stopped, true);
+  await store.merge(scope, { expiresAtMs: Date.now() - 1 });
+  await sandbox.reapDeepIdle!(3600_000);
+  const restored = await sandbox.provision(layers);
+  assert.notEqual((await store.get(scope))!.sandboxId, first);
+  assert.equal(await sandbox.readFile(restored, "kept"), "work");
+  assert.deepEqual(
+    errors.filter((error) => error.code === "computer_ended"),
+    [],
+  );
 });
 
 test("Render does not report a computer that QM itself restarted as ended", async (t) => {
