@@ -38,14 +38,14 @@ export async function withTypedTableDb<S extends Closable>(
     await seed?.(admin);
     await applyPgMigrations(admin, [definePgMigration(TENANCY_BASE)]);
     const tenant = randomUUID();
-    await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'main', 'Main')`, [tenant]);
+    await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [tenant]);
     await migrateRegisteredPgSchemas(ownerUrl.toString());
     await owner.close?.();
     await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD 'app' NOSUPERUSER NOBYPASSRLS`);
     await grantAppLogin(admin, appUrl.toString());
     await admin.query(`GRANT CREATE ON SCHEMA ${schema} TO ${role}`);
     const otherTenant = randomUUID();
-    await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [otherTenant]);
+    await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [otherTenant]);
     store = make(appUrl.toString());
     await fn({ store, admin, url: appUrl.toString(), tenant, otherTenant });
   } finally {
