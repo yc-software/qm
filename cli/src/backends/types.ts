@@ -16,6 +16,7 @@ export interface BackendUpOptions {
   candidate?: string;
   candidateOut?: string;
   inactive?: boolean;
+  skipDrainWait?: boolean;
 }
 
 export interface Backend {

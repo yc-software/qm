@@ -253,6 +253,7 @@ function statefulAws(
     failPromotion?: boolean;
     promotionAlreadyCurrent?: boolean;
     drainPolls?: number;
+    taskHealth?: "HEALTHY" | "UNKNOWN";
     inactiveDeploymentRunning?: number;
     primaryFailedTasks?: boolean;
     rolloutFailed?: boolean;
@@ -350,6 +351,9 @@ else if (a.includes("ecs describe-services")) {
   const blocked = s.blockDisabledDrain && names.some((name) => s.definitions[s.services[name]?.taskDefinition]?.containerDefinitions?.some((container) => container.name === "core" && container.environment?.some((entry) => entry.name === "BACKGROUND_WORK_ENABLED" && entry.value === "0")));
   const draining = (s.drainPolls || 0) > 0 || blocked;
   if (s.drainPolls > 0) { s.drainPolls--; save(); }
+  const drainingNames = names.filter((name) => (s.serviceDrain?.[name] || 0) > 0);
+  for (const name of drainingNames) s.serviceDrain[name]--;
+  if (drainingNames.length) save();
   const transientFailedTaskPolls = ${JSON.stringify(opts.transientFailedTaskPolls ?? 0)};
   let transientlyFailing = false;
   if (transientFailedTaskPolls && s.updated) {
@@ -377,7 +381,8 @@ else if (a.includes("ecs describe-services")) {
     if (name === staleName && service.previousTaskDefinition) {
       return [{ serviceName: name, status: "ACTIVE", desiredCount: service.desiredCount, runningCount: service.desiredCount, taskDefinition: service.previousTaskDefinition, deployments: [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.previousTaskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: 0 }], tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }], ...(s.serviceOverrides?.[name] || {}) }];
     }
-    const deployments = draining
+    const serviceDraining = draining || drainingNames.includes(name);
+    const deployments = serviceDraining
       ? [
           { id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "IN_PROGRESS", runningCount: service.desiredCount, failedTasks: 1 },
           { id: "old", status: "ACTIVE", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: 1, failedTasks: 0 },
@@ -389,7 +394,7 @@ else if (a.includes("ecs describe-services")) {
         : blueGreenBakePolls
           ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: 0 }]
         : [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: transientFailedTaskPolls && s.updated ? 1 : 0 }];
-    return [{ serviceName: name, status: "ACTIVE", launchType: "FARGATE", platformVersion: "1.4.0", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-a", "subnet-b"], securityGroups: ["sg-core"], assignPublicIp: "ENABLED" } }, desiredCount: service.desiredCount, runningCount: draining ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deploymentConfiguration: { strategy: blueGreenBakePolls ? "BLUE_GREEN" : "ROLLING" }, deployments: [...deployments, ...(${JSON.stringify(opts.inactiveDeploymentRunning === undefined ? [] : [{ id: "inactive", status: "INACTIVE", rolloutState: "COMPLETED", runningCount: opts.inactiveDeploymentRunning, failedTasks: 0 }])}).map(deployment => ({ taskDefinition: service.taskDefinition, ...deployment }))].map(deployment => ({ pendingCount: 0, ...deployment })), pendingCount: 0, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)}, ...(blueGreenBakePolls ? { advancedConfiguration: { alternateTargetGroupArn: ${JSON.stringify(frontAlternateArn)}, productionListenerRule: ${JSON.stringify(productionRuleArn)} } } : {}) }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }], ...(s.serviceOverrides?.[name] || {}) }];
+    return [{ serviceName: name, status: "ACTIVE", launchType: "FARGATE", platformVersion: "1.4.0", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-a", "subnet-b"], securityGroups: ["sg-core"], assignPublicIp: "ENABLED" } }, desiredCount: service.desiredCount, runningCount: serviceDraining ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deploymentConfiguration: { strategy: blueGreenBakePolls ? "BLUE_GREEN" : "ROLLING" }, deployments: [...deployments, ...(${JSON.stringify(opts.inactiveDeploymentRunning === undefined ? [] : [{ id: "inactive", status: "INACTIVE", rolloutState: "COMPLETED", runningCount: opts.inactiveDeploymentRunning, failedTasks: 0 }])}).map(deployment => ({ taskDefinition: service.taskDefinition, ...deployment }))].map(deployment => ({ pendingCount: 0, ...deployment })), pendingCount: 0, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)}, ...(blueGreenBakePolls ? { advancedConfiguration: { alternateTargetGroupArn: ${JSON.stringify(frontAlternateArn)}, productionListenerRule: ${JSON.stringify(productionRuleArn)} } } : {}) }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }], ...(s.serviceOverrides?.[name] || {}) }];
   }), failures: names.filter((name) => !s.services[name]).map((name) => ({ arn: name, reason: "MISSING" })) }));
 }
 else if (a.includes("ecs list-service-deployments") && ${JSON.stringify(opts.failNativeStatusOnceAfterUpdate ?? false)} && s.updated && !s.nativeStatusFailedOnce) {
@@ -416,6 +421,20 @@ else if (a.includes("ecs describe-service-revisions")) {
     const service = name ? s.services[name] : undefined;
     return service ? [{ serviceRevisionArn: arn, taskDefinition: arn.endsWith("/previous") ? service.previousTaskDefinition : service.taskDefinition }] : [];
   }) }));
+}
+else if (a.includes("ecs list-tasks") && ${JSON.stringify(opts.taskHealth ?? null)}) {
+  const name = after("--service-name");
+  const prefix = "arn:aws:ecs:us-west-2:123456789012:task/rollout/" + name + "/";
+  const running = [...Array.from({ length: s.services[name].desiredCount }, (_, i) => prefix + "new-" + i), ...((s.serviceDrain?.[name] || 0) > 0 ? [prefix + "old-0"] : [])];
+  console.log(JSON.stringify({ taskArns: after("--desired-status") === "RUNNING" ? running : [] }));
+}
+else if (a.includes("ecs describe-tasks") && a.includes(":task/rollout/")) {
+  const tasks = args.filter((arg) => arg.includes(":task/rollout/")).map((arn) => {
+    const service = s.services[arn.split("/").at(-2)];
+    const old = arn.endsWith("/old-0");
+    return { taskArn: arn, startedBy: old ? "old" : service.deploymentId, taskDefinitionArn: service.taskDefinition, lastStatus: "RUNNING", healthStatus: old ? "HEALTHY" : ${JSON.stringify(opts.taskHealth ?? null)} };
+  });
+  console.log(JSON.stringify({ tasks, failures: [] }));
 }
 else if (a.includes("ecs list-tasks") && s.taskInventory) console.log(JSON.stringify({ taskArns: (s.taskInventory[after("--service-name")] || []).filter(task => task.desiredStatus === after("--desired-status")).map(task => task.taskArn) }));
 else if (a.includes("ecs describe-tasks") && s.taskInventory) {
@@ -457,6 +476,7 @@ else if (a.includes("ecs update-service")) {
   if (s.failNextWebRollout && service.workload === "web-ui") { s.failedTaskDefinition = service.taskDefinition; s.failNextWebRollout = false; }
   s.updated = true;
   s.drainPolls = ${JSON.stringify(opts.drainPolls ?? 0)};
+  s.serviceDrain = { ...s.serviceDrain, [name]: s.serviceDrainPolls?.[name] || 0 };
   s.blueGreenPolls = 0;
   if (s.failNextUpdatesAfterMutation > 0 || (${JSON.stringify(opts.failFirstUpdateAfterMutation ?? false)} && !s.failedFirstUpdate)) {
     if (s.failNextUpdatesAfterMutation > 0) s.failNextUpdatesAfterMutation--;
@@ -5128,6 +5148,80 @@ for (const mode of ["draining", "stale", "failed"] as const) {
     }
   });
 }
+
+for (const scenario of [
+  { name: "a healthy web UI returns before its prior tasks stop", workload: "web-ui", health: "HEALTHY", flag: true },
+  { name: "core still waits for its prior tasks to stop", workload: "core", health: "HEALTHY", flag: true },
+  { name: "tasks without a health check still wait", workload: "web-ui", health: "UNKNOWN", flag: true },
+  { name: "without the flag the web UI waits", workload: "web-ui", health: "HEALTHY", flag: false },
+] as const) {
+  test(`AWS up --skip-drain-wait: ${scenario.name}`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-aws-skip-drain-"));
+    writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
+    chmodSync(join(dir, "docker"), 0o755);
+    const service = `acme-${scenario.workload}`;
+    const fake = statefulAws(dir, config, {}, { taskHealth: scenario.health });
+    const priorPath = process.env.PATH;
+    process.env.PATH = `${dir}:${priorPath}`;
+    const notes: string[] = [];
+    const priorLog = console.log;
+    console.log = (...args: unknown[]) => void notes.push(args.join(" "));
+    const spec = config.aws!.services[scenario.workload]!;
+    const resized: QmConfig = {
+      ...config,
+      aws: {
+        ...config.aws!,
+        services: { ...config.aws!.services, [scenario.workload]: { ...spec, memory: spec.memory! * 2 } },
+      },
+    };
+    try {
+      await awsUp(config, dir, { yes: true });
+      const armed = JSON.parse(readFileSync(fake.state, "utf8"));
+      armed.serviceDrainPolls = { [service]: 12 };
+      writeFileSync(fake.state, JSON.stringify(armed));
+      writeFileSync(fake.log, "");
+      notes.length = 0;
+      await awsUp(resized, dir, { yes: true, only: [scenario.workload], skipDrainWait: scenario.flag });
+      console.log = priorLog;
+      const after = JSON.parse(readFileSync(fake.state, "utf8"));
+      const early = scenario.workload !== "core" && scenario.health === "HEALTHY" && scenario.flag;
+      assert.equal(after.serviceDrain[service] > 0, early, "returns before prior tasks stop only when allowed");
+      assert.equal(
+        notes.some((line) => line.includes("not waiting for prior tasks to stop")),
+        early,
+      );
+      const currentId = after.dynamo["deployment/current"].manifestId.S;
+      const current = JSON.parse(after.dynamo[`deployment/manifest/${currentId}`].manifest.S);
+      assert.equal(current.tasks[scenario.workload], after.services[service].taskDefinition);
+      assert.notEqual(current.tasks[scenario.workload], armed.services[service].taskDefinition);
+      const calls = readFileSync(fake.log, "utf8");
+      assert.match(calls, /dynamodb transact-write-items/);
+      assert.ok(
+        calls.lastIndexOf("dynamodb transact-write-items") <
+          calls.lastIndexOf("dynamodb delete-item --table-name acme-qm-deploy-locks"),
+        "the deploy lease is released after the manifest is recorded",
+      );
+    } finally {
+      console.log = priorLog;
+      process.env.PATH = priorPath;
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("AWS up rejects --skip-drain-wait with --build-only", async () => {
+  await assert.rejects(
+    () =>
+      awsUp(config, tmpdir(), {
+        buildOnly: true,
+        skipDrainWait: true,
+        imageLabel: "candidate",
+        candidateOut: join(tmpdir(), "candidate.json"),
+      }),
+    /--build-only and --skip-drain-wait are mutually exclusive/,
+  );
+});
 
 test("AWS private canary reaches core without a core ingress target and refuses missing current tasks", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-private-canary-"));

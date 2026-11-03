@@ -259,6 +259,7 @@ const aws: HostingProvider = {
     "inactive",
     "restart",
     "build-concurrency",
+    "skip-drain-wait",
   ],
   upOptions: (ctx, flags, dryRun) => {
     const only = workloadOptions(flags);
@@ -274,6 +275,7 @@ const aws: HostingProvider = {
       yes: flags["yes"] === true,
       buildOnly: flags["build-only"] === true,
       inactive: flags["inactive"] === true,
+      skipDrainWait: flags["skip-drain-wait"] === true,
       ...buildFromOptions(flags),
       ...(imageLabel ? { imageLabel } : {}),
       ...(candidate ? { candidate } : {}),
@@ -297,6 +299,7 @@ const aws: HostingProvider = {
         ...(opts.buildConcurrency !== undefined ? { buildConcurrency: opts.buildConcurrency } : {}),
         ...(opts.restart ? { restart: opts.restart } : {}),
         ...(opts.inactive ? { inactive: true } : {}),
+        ...(opts.skipDrainWait ? { skipDrainWait: true } : {}),
         ...(opts.only ? { only: opts.only } : {}),
         sandboxDir: ctx.sandboxDir,
         ...(ctx.envFile ? { envFile: ctx.envFile } : {}),

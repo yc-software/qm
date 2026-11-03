@@ -216,6 +216,7 @@ export interface AwsUpOpts {
   candidate?: string;
   candidateOut?: string;
   inactive?: boolean;
+  skipDrainWait?: boolean;
 }
 
 interface AwsMigrationService {
@@ -1418,6 +1419,42 @@ const DEPLOYMENT_POINTER_KEY = "deployment/current";
 const DEPLOYMENT_MANIFEST_PREFIX = "deployment/manifest/";
 const ECS_SERVICE_BATCH_SIZE = 10;
 
+function runningServiceTasks(
+  config: QmConfig,
+  workload: string,
+): Array<{
+  taskArn?: string;
+  taskDefinitionArn?: string;
+  lastStatus?: string;
+  healthStatus?: string;
+  startedBy?: string;
+}> {
+  const aws = requireAws(config);
+  const taskArns =
+    awsJson<{ taskArns?: string[] }>(aws, [
+      "ecs",
+      "list-tasks",
+      "--cluster",
+      aws.cluster,
+      "--service-name",
+      aws.services[workload]!.ecsService,
+      "--desired-status",
+      "RUNNING",
+    ]).taskArns ?? [];
+  return chunks(taskArns, 100).flatMap((batch) => {
+    const response = awsJson<{ tasks?: ReturnType<typeof runningServiceTasks>; failures?: unknown[] }>(aws, [
+      "ecs",
+      "describe-tasks",
+      "--cluster",
+      aws.cluster,
+      "--tasks",
+      ...batch,
+    ]);
+    if (response.failures?.length) throw new CliError(`cannot prove every running ${workload} task identity`);
+    return response.tasks ?? [];
+  });
+}
+
 function chunks<T>(values: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size));
@@ -1513,13 +1550,14 @@ interface RolloutTarget {
   taskDefinition: string;
   desiredCount: number;
   deploymentId?: string;
+  healthyIsEnough?: boolean;
 }
 
 async function awaitServiceTargets(
   config: QmConfig,
   expected: Record<string, RolloutTarget>,
   timeoutMs?: number,
-): Promise<void> {
+): Promise<string[]> {
   const pollMs = envNum("QM_AWS_ROLLOUT_POLL_MS", 15_000);
   const deadline = Date.now() + (timeoutMs ?? envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 20 * 60_000));
   let failurePolls = new Map<string, number>();
@@ -1528,12 +1566,20 @@ async function awaitServiceTargets(
   for (;;) {
     let states: ReadonlyMap<string, EcsServiceState>;
     let nativeStatuses: ReadonlyMap<string, string | undefined>;
+    let servingTasks: ReadonlyMap<string, ReturnType<typeof runningServiceTasks>>;
     try {
       states = describedServices(config, Object.keys(expected));
       nativeStatuses = new Map(
         Object.entries(expected).flatMap(([workload, want]) =>
           states.get(workload)?.deploymentConfiguration?.strategy === "BLUE_GREEN"
             ? [[workload, nativeBlueGreenStatus(config, workload, want.taskDefinition)] as const]
+            : [],
+        ),
+      );
+      servingTasks = new Map(
+        Object.entries(expected).flatMap(([workload, want]) =>
+          want.healthyIsEnough && want.desiredCount > 0
+            ? [[workload, runningServiceTasks(config, workload)] as const]
             : [],
         ),
       );
@@ -1549,6 +1595,7 @@ async function awaitServiceTargets(
     const fail = (workload: string, kind: string, message: string): void =>
       void failures.push({ identity: `${workload}:${kind}`, message });
     const waiting: string[] = [];
+    const servingBeforeDrain: string[] = [];
     const failingNow = new Set<string>();
     for (const [workload, want] of Object.entries(expected)) {
       const state = states.get(workload)!;
@@ -1616,7 +1663,18 @@ async function awaitServiceTargets(
         deployment.rolloutState !== "COMPLETED" ||
         (state.deployments ?? []).some((item) => item !== deployment && (item.runningCount ?? 0) > 0)
       ) {
-        waiting.push(`${workload} (prior tasks are still stopping)`);
+        const healthy = servingTasks
+          .get(workload)
+          ?.filter(
+            (task) =>
+              task.startedBy !== undefined &&
+              task.startedBy === deployment.id &&
+              task.taskDefinitionArn === want.taskDefinition &&
+              task.lastStatus === "RUNNING" &&
+              task.healthStatus === "HEALTHY",
+          );
+        if (healthy && healthy.length >= want.desiredCount) servingBeforeDrain.push(workload);
+        else waiting.push(`${workload} (prior tasks are still stopping)`);
       }
     }
     for (const workload of failing.keys()) {
@@ -1642,7 +1700,7 @@ async function awaitServiceTargets(
       continue;
     }
     failurePolls = new Map();
-    if (waiting.length === 0) return;
+    if (waiting.length === 0) return servingBeforeDrain;
     if (Date.now() > deadline) {
       throw new CliError(`timed out waiting for the AWS rollout: ${waiting.join(", ")}`);
     }
@@ -1998,6 +2056,7 @@ async function applyServiceTargets(
     timeoutMs?: number;
     webBeforePortal?: boolean;
     onSubmitted?: () => void;
+    healthyIsEnough?: (workload: string) => boolean;
   } = {},
 ): Promise<void> {
   const aws = requireAws(config);
@@ -2051,6 +2110,7 @@ async function applyServiceTargets(
           {
             taskDefinition: targets[workload]!,
             desiredCount: expectedCounts[workload]!,
+            ...(options.healthyIsEnough?.(workload) ? { healthyIsEnough: true } : {}),
           },
         ]),
       ),
@@ -2302,6 +2362,9 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   }
   for (const service of services) workloadArchitecture(config, service);
   if (opts.buildOnly && opts.candidate) throw new CliError("--build-only and --candidate are mutually exclusive");
+  if (opts.buildOnly && opts.skipDrainWait)
+    throw new CliError("--build-only and --skip-drain-wait are mutually exclusive");
+  const healthyIsEnough = (service: string): boolean => opts.skipDrainWait === true && service !== "core";
   if (opts.candidate && opts.buildFrom) throw new CliError("--candidate and --build-from are mutually exclusive");
   if (opts.inactive && (opts.dryRun || !opts.candidate)) {
     throw new CliError("--inactive is only valid for an exact candidate deployment");
@@ -2590,21 +2653,28 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         {
           webBeforePortal: !unchangedWebRouting(config, current, desired),
           onSubmitted: reportProgress ? () => reportProgress(targets) : undefined,
+          healthyIsEnough,
         },
       );
       applied = true;
     } else {
       reportProgress?.(targets);
     }
-    await awaitServiceTargets(
+    const servingBeforeDrain = await awaitServiceTargets(
       config,
       Object.fromEntries(
         services.map((service) => [
           service,
-          { taskDefinition: targets[service]!, desiredCount: workloadDesiredCount(config, service) },
+          {
+            taskDefinition: targets[service]!,
+            desiredCount: workloadDesiredCount(config, service),
+            ...(healthyIsEnough(service) ? { healthyIsEnough: true } : {}),
+          },
         ]),
       ),
     );
+    if (servingBeforeDrain.length)
+      note(`${servingBeforeDrain.join(", ")} healthy on the new tasks; not waiting for prior tasks to stop`);
     if (desiredLayerBody) {
       layerAttempted = true;
       await syncAwsLayerAfterRoll(
@@ -3111,26 +3181,7 @@ async function awsBackgroundCohort(
     await awaitServiceTargets(config, {
       core: { taskDefinition: before.tasks.core!, desiredCount: count },
     });
-  const taskArns =
-    awsJson<{ taskArns?: string[] }>(aws, [
-      "ecs",
-      "list-tasks",
-      "--cluster",
-      aws.cluster,
-      "--service-name",
-      aws.services.core!.ecsService,
-      "--desired-status",
-      "RUNNING",
-    ]).taskArns ?? [];
-  const tasks = chunks(taskArns, 100).flatMap((batch) => {
-    const response = awsJson<{
-      tasks?: Array<{ taskArn?: string; taskDefinitionArn?: string; lastStatus?: string; healthStatus?: string }>;
-      failures?: unknown[];
-    }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", ...batch]);
-    if (response.failures?.length) throw new CliError("cannot prove every running core task identity");
-    return response.tasks ?? [];
-  });
-  const current = tasks.filter(
+  const current = runningServiceTasks(config, "core").filter(
     (task) =>
       task.taskDefinitionArn === before.tasks.core && task.lastStatus === "RUNNING" && task.healthStatus === "HEALTHY",
   );
