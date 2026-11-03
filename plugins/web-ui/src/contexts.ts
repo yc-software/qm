@@ -23,6 +23,7 @@ import {
   type CoreProject,
   type CoreSession,
   fileContentUrl,
+  type ProjectIcon,
 } from "./core-bridge";
 import { UI_BASE } from "./deep-link";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
@@ -1132,9 +1133,9 @@ function pickDetailIcon(event: Event, scopeId: string): void {
     current: project.icon,
     onPick: async (value) => {
       const latest = contextsState.list.find((context) => context.scopeId === scopeId)?.project;
-      if (!latest) return;
-      await setProjectIcon(latest, value);
+      const error = latest ? await setProjectIcon(latest, value) : "This project is no longer available.";
       renderList();
+      return error;
     },
   });
 }
@@ -1143,7 +1144,8 @@ onCustomEmojiLoaded(() => {
   if (appState.currentView === "contexts") drawContexts();
 });
 
-export async function setProjectIcon(project: CoreProject, value: string | null): Promise<boolean> {
+/** Saves a project's icon; resolves to an error message, or null on success. */
+export async function setProjectIcon(project: CoreProject, value: ProjectIcon | null): Promise<string | null> {
   try {
     const updated = projectFromResponse(
       await api(`/api/projects/${encodeURIComponent(project.id)}`, {
@@ -1151,14 +1153,12 @@ export async function setProjectIcon(project: CoreProject, value: string | null)
         body: JSON.stringify({ icon: value }),
       }),
     );
-    if (!updated) return false;
+    if (!updated) return "Couldn't change the project icon: unexpected response from the server.";
     upsertProject(updated);
     if (appState.currentView === "contexts") drawContexts();
-    return true;
+    return null;
   } catch (e) {
-    contextsNotice = errMessage(e, "Couldn't change the project icon.");
-    if (appState.currentView === "contexts") drawContexts();
-    return false;
+    return errMessage(e, "Couldn't change the project icon.");
   }
 }
 

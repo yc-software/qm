@@ -1,6 +1,7 @@
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { validProjectIcon, type ProjectIcon } from "../../projects/project-store.ts";
 
 function capabilityPrincipal(ctx: ApiCtx, requested: string): string | null {
   if (!ctx.capability) return requested;
@@ -41,7 +42,7 @@ function mutationResponse(ctx: ApiCtx, result: Awaited<ReturnType<ApiCtx["app"][
   if (result.status === "invalid_icon")
     return sendJson(ctx.res, 400, {
       error: "invalid_icon",
-      message: "icon must be one emoji, a :custom_emoji: shortcode, or null",
+      message: 'icon must be {kind:"emoji",value:<one emoji>}, {kind:"custom",name:<workspace custom emoji>}, or null',
     });
   if (result.status === "invalid_channel")
     return sendJson(ctx.res, 400, {
@@ -79,13 +80,15 @@ async function renameProject(ctx: ApiCtx): Promise<void> {
   const hasIcon = Object.hasOwn(body, "icon");
   if (!principalId || (!name && !hasIcon))
     return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and name or icon required" });
-  if (hasIcon && body.icon !== null && typeof body.icon !== "string")
-    return sendJson(ctx.res, 400, { error: "invalid_icon", message: "icon must be a string or null" });
+  if (hasIcon && !validProjectIcon(body.icon)) return mutationResponse(ctx, { status: "invalid_icon" });
   if (name) {
     const renamed = await ctx.app.renameProject(ctx.params.id!, principalId, name);
     if (!hasIcon || renamed.status !== "ok") return mutationResponse(ctx, renamed);
   }
-  return mutationResponse(ctx, await ctx.app.setProjectIcon(ctx.params.id!, principalId, body.icon as string | null));
+  return mutationResponse(
+    ctx,
+    await ctx.app.setProjectIcon(ctx.params.id!, principalId, body.icon as ProjectIcon | null),
+  );
 }
 
 async function removeProjectMember(ctx: ApiCtx): Promise<void> {

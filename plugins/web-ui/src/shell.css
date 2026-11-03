@@ -13020,29 +13020,10 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .project-icon-picker-top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding: 0 8px 0 12px;
   border-bottom: 1px solid var(--border);
   min-height: 38px;
-}
-.project-icon-picker-tab {
-  position: relative;
-  align-self: stretch;
-  display: inline-flex;
-  align-items: center;
-  font-size: var(--font-13, 13px);
-  font-weight: 500;
-  color: var(--foreground);
-}
-.project-icon-picker-tab::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--foreground);
 }
 .project-icon-picker-remove {
   border: 0;
@@ -13057,6 +13038,11 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .project-icon-picker-remove:hover {
   background: var(--secondary);
   color: var(--foreground);
+}
+.project-icon-error {
+  padding: 6px 12px;
+  font-size: var(--font-12-5);
+  color: var(--destructive);
 }
 .project-icon-search {
   display: flex;

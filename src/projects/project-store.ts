@@ -23,7 +23,7 @@ export interface Project {
   memberIds: string[];
   channelMemberIds?: string[];
   slackChannel?: ProjectSlackChannel;
-  icon?: string;
+  icon?: ProjectIcon;
   createdAt: number;
   updatedAt: number;
 }
@@ -41,7 +41,12 @@ export interface ProjectStore {
   addMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   removeMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   rename(id: string, ownerId: string, name: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
-  setIcon(id: string, actorId: string, icon: string | null, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
+  setIcon(
+    id: string,
+    actorId: string,
+    icon: ProjectIcon | null,
+    effect?: ProjectMutationEffect,
+  ): Promise<ProjectMutation>;
   setSlackChannel(
     id: string,
     actorId: string,
@@ -83,19 +88,27 @@ export function isProjectGroupRef(ref: string): boolean {
   return ref.startsWith(PROJECT_GROUP_PREFIX);
 }
 
-const CUSTOM_EMOJI = /^:[a-z0-9_+'-]{1,100}:$/;
-const PICTOGRAPH = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
+/** A project's sidebar icon: one Unicode emoji, or a workspace custom emoji by name. */
+export type ProjectIcon = { kind: "emoji"; value: string } | { kind: "custom"; name: string };
 
-/** A project icon is one Unicode emoji ("🚢") or a workspace custom emoji shortcode (":shipit:"). */
-export function validProjectIcon(value: unknown): value is string | null {
+/** Exactly one emoji from Unicode's recommended (RGI) emoji set. */
+const ONE_EMOJI = /^\p{RGI_Emoji}$/v;
+
+/** Shape check only; whether a custom name exists in the workspace catalog is checked by the caller. */
+export function validProjectIcon(value: unknown): value is ProjectIcon | null {
   if (value === null) return true;
-  if (typeof value !== "string" || !value || value.length > 100) return false;
-  if (CUSTOM_EMOJI.test(value)) return true;
-  return (
-    value.length <= 32 &&
-    !/[\s\p{L}\p{N}]/u.test(value.replace(/[\u{E0061}-\u{E007A}]/gu, "")) &&
-    PICTOGRAPH.test(value)
-  );
+  if (typeof value !== "object" || !value) return false;
+  const icon = value as Record<string, unknown>;
+  if (icon.kind === "emoji")
+    return Object.keys(icon).length === 2 && typeof icon.value === "string" && ONE_EMOJI.test(icon.value);
+  if (icon.kind === "custom")
+    return Object.keys(icon).length === 2 && typeof icon.name === "string" && icon.name.length > 0;
+  return false;
+}
+
+function sameIcon(a: ProjectIcon | null | undefined, b: ProjectIcon | null | undefined): boolean {
+  if (!a || !b) return !a && !b;
+  return a.kind === "emoji" ? b.kind === "emoji" && a.value === b.value : b.kind === "custom" && a.name === b.name;
 }
 
 function cleanName(name: string): string {
@@ -254,7 +267,7 @@ export function createProjectStore(
             return project;
           }
           outcome.status = "ok";
-          if ((project.icon ?? null) === icon) return project;
+          if (sameIcon(project.icon ?? null, icon)) return project;
           changed = true;
           if (icon === null) {
             const { icon: _dropped, ...rest } = project;

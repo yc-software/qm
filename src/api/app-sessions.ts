@@ -927,6 +927,10 @@ export function createSessionMethods(
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
       if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (icon?.kind === "custom") {
+        const catalog = await deps.config.getSlackEmojiCatalogDurable(scopeId("org", orgIdOf()));
+        if (!catalog?.emoji[icon.name]) return { status: "invalid_icon" };
+      }
       const result = await deps.projects.setIcon(id, principalId, icon, async ({ project, changed }) => {
         if (changed)
           deps.auditLog.record({

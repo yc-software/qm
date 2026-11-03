@@ -664,8 +664,9 @@ function changeProjectIcon(event: Event, scopeId: string): void {
     current: project.icon,
     onPick: async (value) => {
       const latest = projectOf(scopeId);
-      if (latest) await setProjectIcon(latest, value);
+      const error = latest ? await setProjectIcon(latest, value) : "This project is no longer available.";
       renderList();
+      return error;
     },
   });
 }

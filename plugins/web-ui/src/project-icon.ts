@@ -1,31 +1,29 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { Shuffle } from "lucide";
-import emojiSource from "emoji-datasource/emoji.json" with { type: "json" };
-import { api } from "./core-bridge";
+import { api, type ProjectIcon } from "./core-bridge";
+import { EMOJI_ROWS, filterEmoji, type EmojiRow } from "./emoji-picker";
 import { icon } from "./icons";
+import { errMessage } from "../../chassis/src/errors";
 
 /**
- * Project icons: one Unicode emoji ("🚢") or a workspace custom emoji shortcode (":shipit:").
- * Custom emoji resolve through the catalog the Slack surface publishes (`/api/custom-emoji`).
+ * Project icons: one Unicode emoji or a workspace custom emoji. Standard emoji come from the shared
+ * emoji table; custom emoji from the catalog the Slack surface publishes (`/api/custom-emoji`).
  */
 
-interface PickerEmoji {
-  /** Stored value: the character itself, or `:name:` for a custom emoji. */
-  value: string;
+interface PickerItem {
+  icon: ProjectIcon;
   name: string;
-  keywords: string[];
   url?: string;
 }
 
 interface PickerSection {
   label: string;
-  items: PickerEmoji[];
+  items: PickerItem[];
 }
 
 const RECENT_KEY = "qm.projectIcon.recent";
 const RECENT_MAX = 16;
-const CUSTOM_ICON = /^:([a-z0-9_+'-]{1,100}):$/;
 
 let customEmoji: Record<string, string> | null = null;
 let customLoad: Promise<void> | null = null;
@@ -40,7 +38,9 @@ export function loadCustomEmoji(): Promise<void> {
     .then((body) => {
       customEmoji = body.emoji ?? {};
     })
-    .catch(() => {
+    .catch((e: unknown) => {
+      // Custom icons render blank until the catalog loads; keep the reason, retry on the next use.
+      console.error("custom emoji catalog failed to load", errMessage(e));
       customEmoji = {};
       customLoad = null;
     })
@@ -50,26 +50,23 @@ export function loadCustomEmoji(): Promise<void> {
   return customLoad;
 }
 
-function customUrl(value: string): string | null {
-  const name = CUSTOM_ICON.exec(value)?.[1];
-  if (!name) return null;
+function customUrl(name: string): string | null {
   if (!customEmoji) void loadCustomEmoji();
   return customEmoji?.[name] ?? null;
 }
 
 /** The icon glyph for a project, or `null` when it has none (callers fall back to the folder). */
-export function projectIconTpl(value: string | undefined, size = 16): TemplateResult | null {
+export function projectIconTpl(value: ProjectIcon | undefined, size = 16): TemplateResult | null {
   if (!value) return null;
-  if (CUSTOM_ICON.test(value)) {
-    const url = customUrl(value);
-    return html`<span class="project-icon" style=${`--project-icon-size:${size}px`} aria-hidden="true"
+  const style = `--project-icon-size:${size}px`;
+  if (value.kind === "custom") {
+    const url = customUrl(value.name);
+    return html`<span class="project-icon" style=${style} aria-hidden="true"
       >${url ? html`<img src=${url} alt="" draggable="false" />` : nothing}</span
     >`;
   }
-  return html`<span class="project-icon" style=${`--project-icon-size:${size}px`} aria-hidden="true">${value}</span>`;
+  return html`<span class="project-icon" style=${style} aria-hidden="true">${value.value}</span>`;
 }
-
-let standardSections: PickerSection[] | null = null;
 
 const CATEGORY_LABELS: Record<string, string> = {
   "Smileys & Emotion": "Smileys",
@@ -83,99 +80,80 @@ const CATEGORY_LABELS: Record<string, string> = {
   Flags: "Flags",
 };
 
+function standardItem(row: EmojiRow): PickerItem {
+  return { icon: { kind: "emoji", value: row.c }, name: row.n };
+}
+
+let standardSections: PickerSection[] | null = null;
+
 function standard(): PickerSection[] {
-  if (standardSections) return standardSections;
-  const byCategory = new Map<string, PickerEmoji[]>();
-  for (const row of [...emojiSource].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))) {
-    const label = CATEGORY_LABELS[row.category];
-    if (!label || !row.unified) continue;
-    const value = String.fromCodePoint(...row.unified.split("-").map((hex) => parseInt(hex, 16)));
-    const list = byCategory.get(label) ?? [];
-    list.push({ value, name: row.short_name, keywords: row.short_names });
-    byCategory.set(label, list);
-  }
-  standardSections = Object.values(CATEGORY_LABELS)
-    .map((label) => ({ label, items: byCategory.get(label) ?? [] }))
+  standardSections ??= Object.entries(CATEGORY_LABELS)
+    .map(([category, label]) => ({
+      label,
+      items: EMOJI_ROWS.filter((row) => row.g === category).map(standardItem),
+    }))
     .filter((section) => section.items.length);
   return standardSections;
 }
 
-function customItems(): PickerEmoji[] {
-  return Object.entries(customEmoji ?? {})
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, url]) => ({ value: `:${name}:`, name, keywords: [name], url }));
+function customRows(): EmojiRow[] {
+  return Object.keys(customEmoji ?? {})
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => ({ n: name, c: "", a: [], g: "Custom" }));
 }
 
-function lookup(value: string): PickerEmoji | null {
-  const custom = CUSTOM_ICON.exec(value)?.[1];
-  if (custom) {
-    const url = customEmoji?.[custom];
-    return url ? { value, name: custom, keywords: [custom], url } : null;
-  }
-  for (const section of standard()) {
-    const hit = section.items.find((item) => item.value === value);
-    if (hit) return hit;
-  }
-  return null;
+function customItem(name: string): PickerItem | null {
+  const url = customEmoji?.[name];
+  return url ? { icon: { kind: "custom", name }, name, url } : null;
 }
 
-function readRecent(): string[] {
+function customItems(rows: readonly EmojiRow[]): PickerItem[] {
+  return rows.flatMap((row) => customItem(row.n) ?? []);
+}
+
+function itemFor(value: ProjectIcon): PickerItem | null {
+  if (value.kind === "custom") return customItem(value.name);
+  const row = EMOJI_ROWS.find((candidate) => candidate.c === value.value);
+  return row ? standardItem(row) : null;
+}
+
+function sameIcon(a: ProjectIcon | null | undefined, b: ProjectIcon | null | undefined): boolean {
+  if (!a || !b) return !a && !b;
+  return a.kind === "emoji" ? b.kind === "emoji" && a.value === b.value : b.kind === "custom" && a.name === b.name;
+}
+
+function readRecent(): ProjectIcon[] {
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((v): v is ProjectIcon => typeof v === "object" && v !== null && "kind" in v)
+      : [];
   } catch {
     return [];
   }
 }
 
-function rememberRecent(value: string): void {
+function rememberRecent(value: ProjectIcon): void {
   try {
     localStorage.setItem(
       RECENT_KEY,
-      JSON.stringify([value, ...readRecent().filter((v) => v !== value)].slice(0, RECENT_MAX)),
+      JSON.stringify([value, ...readRecent().filter((v) => !sameIcon(v, value))].slice(0, RECENT_MAX)),
     );
   } catch {
     // Recents are a convenience; private mode or a full quota just skips them.
   }
 }
 
-function normalizeQuery(query: string): string {
-  return query
-    .trim()
-    .toLowerCase()
-    .replace(/^:+|:+$/g, "")
-    .replaceAll("-", "_");
-}
-
-/** 0 = exact name, 1 = prefix, 2 = word prefix, 3 = substring, -1 = no match. */
-function rank(item: PickerEmoji, needle: string): number {
-  let best = -1;
-  for (const keyword of item.keywords) {
-    const k = keyword.toLowerCase().replaceAll("-", "_");
-    let score = -1;
-    if (k === needle) score = 0;
-    else if (k.startsWith(needle)) score = 1;
-    else if (k.includes(`_${needle}`)) score = 2;
-    else if (k.includes(needle)) score = 3;
-    if (score >= 0 && (best < 0 || score < best)) best = score;
-  }
-  return best;
-}
-
 function sections(query: string): PickerSection[] {
-  const needle = normalizeQuery(query);
-  const custom = customItems();
-  if (needle) {
-    const hits = [...custom, ...standard().flatMap((section) => section.items)]
-      .map((item, order) => ({ item, order, score: rank(item, needle) }))
-      .filter((hit) => hit.score >= 0)
-      .sort((a, b) => a.score - b.score || a.order - b.order)
-      .map((hit) => hit.item);
+  if (query.trim()) {
+    const hits = [
+      ...customItems(filterEmoji(customRows(), query)),
+      ...filterEmoji(EMOJI_ROWS, query).map(standardItem),
+    ];
     return hits.length ? [{ label: "Results", items: hits }] : [];
   }
-  const recent = readRecent()
-    .map(lookup)
-    .filter((item): item is PickerEmoji => item !== null);
+  const recent = readRecent().flatMap((value) => itemFor(value) ?? []);
+  const custom = customItems(customRows());
   return [
     ...(recent.length ? [{ label: "Recent", items: recent }] : []),
     ...(custom.length ? [{ label: "Custom", items: custom }] : []),
@@ -185,27 +163,25 @@ function sections(query: string): PickerSection[] {
 
 interface PickerOptions {
   anchor: HTMLElement;
-  current: string | undefined;
-  onPick: (value: string | null) => void | Promise<void>;
-  align?: "start" | "end";
+  current: ProjectIcon | undefined;
+  /** Saves the choice; resolves to an error message to show in the picker, or null on success. */
+  onPick: (value: ProjectIcon | null) => Promise<string | null>;
 }
 
 interface PickerState extends PickerOptions {
   query: string;
   active: number;
-  flat: PickerEmoji[];
+  flat: PickerItem[];
+  error: string;
+  saving: boolean;
 }
 
 let host: HTMLDivElement | null = null;
 let state: PickerState | null = null;
 
-export function projectIconPickerOpen(): boolean {
-  return state !== null;
-}
-
 export function openProjectIconPicker(options: PickerOptions): void {
   closeProjectIconPicker();
-  state = { ...options, query: "", active: 0, flat: [] };
+  state = { ...options, query: "", active: 0, flat: [], error: "", saving: false };
   host = document.createElement("div");
   host.className = "project-icon-picker-host";
   document.body.append(host);
@@ -247,26 +223,35 @@ function place(): void {
   const width = panel.offsetWidth;
   const height = panel.offsetHeight;
   const margin = 8;
-  let left = state.align === "end" ? rect.right - width : rect.left;
-  left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+  const left = Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin));
   let top = rect.bottom + 6;
   if (top + height > window.innerHeight - margin) top = Math.max(margin, rect.top - height - 6);
   panel.style.left = `${left}px`;
   panel.style.top = `${top}px`;
 }
 
-async function choose(value: string | null): Promise<void> {
-  if (!state) return;
-  const { onPick } = state;
+async function choose(value: ProjectIcon | null): Promise<void> {
+  if (!state || state.saving) return;
+  const picking = state;
+  picking.saving = true;
+  picking.error = "";
+  draw();
+  const error = await picking.onPick(value);
+  if (state !== picking) return;
+  if (error) {
+    picking.saving = false;
+    picking.error = error;
+    draw();
+    return;
+  }
   if (value) rememberRecent(value);
   closeProjectIconPicker();
-  await onPick(value);
 }
 
 function random(): void {
-  const pool = [...customItems(), ...standard().flatMap((section) => section.items)];
+  const pool = [...customItems(customRows()), ...standard().flatMap((section) => section.items)];
   const pick = pool[Math.floor(Math.random() * pool.length)];
-  if (pick) void choose(pick.value);
+  if (pick) void choose(pick.icon);
 }
 
 function setActive(index: number, reveal: boolean): void {
@@ -295,26 +280,30 @@ function onKey(event: KeyboardEvent): void {
   } else if (event.key === "Enter") {
     event.preventDefault();
     const item = state.flat[state.active];
-    if (item) void choose(item.value);
+    if (item) void choose(item.icon);
   } else if (event.key in moves && (event.key === "ArrowDown" || event.key === "ArrowUp" || state.query)) {
     event.preventDefault();
     moveActive(moves[event.key]!);
   }
 }
 
-function cell(item: PickerEmoji, index: number, current: string | undefined): TemplateResult {
+function glyph(value: ProjectIcon): string | typeof nothing {
+  return value.kind === "emoji" ? value.value : nothing;
+}
+
+function cell(item: PickerItem, index: number, current: ProjectIcon | undefined): TemplateResult {
   const active = state?.active === index;
   return html`<button
-    class="project-icon-cell ${active ? "active" : ""} ${item.value === current ? "current" : ""}"
+    class="project-icon-cell ${active ? "active" : ""} ${sameIcon(item.icon, current) ? "current" : ""}"
     type="button"
     role="option"
     aria-label=${item.name.replaceAll("_", " ")}
     title=${`:${item.name}:`}
     data-index=${index}
     @pointerenter=${() => setActive(index, false)}
-    @click=${() => void choose(item.value)}
+    @click=${() => void choose(item.icon)}
   >
-    ${item.url ? html`<img src=${item.url} alt="" loading="lazy" draggable="false" />` : item.value}
+    ${item.url ? html`<img src=${item.url} alt="" loading="lazy" draggable="false" />` : glyph(item.icon)}
   </button>`;
 }
 
@@ -333,16 +322,14 @@ function draw(): void {
       @keydown=${onKey}
       ${ref((el) => el && requestAnimationFrame(place))}
     >
-      <div class="project-icon-picker-top">
-        <span class="project-icon-picker-tab">Emoji</span>
-        ${
-          current
-            ? html`<button class="project-icon-picker-remove" type="button" @click=${() => void choose(null)}>
-                Remove
-              </button>`
-            : nothing
-        }
-      </div>
+      ${
+        current
+          ? html`<div class="project-icon-picker-top">
+              <button class="project-icon-picker-remove" type="button" @click=${() => void choose(null)}>Remove</button>
+            </div>`
+          : nothing
+      }
+      ${state.error ? html`<div class="project-icon-error" role="alert">${state.error}</div>` : nothing}
       <div class="project-icon-search">
         <input
           type="text"

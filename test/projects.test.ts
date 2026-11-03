@@ -113,11 +113,20 @@ test("ProjectStore rename is owner-only and cleans the name", async () => {
   assert.ok(same.status === "ok" && !same.changed);
 });
 
-test("validProjectIcon accepts one emoji or a custom shortcode", () => {
-  for (const ok of ["🚢", "👩🏽‍💻", "🏳️‍🌈", "🇺🇸", "❤️", ":shipit:", ":rsi_fire:", ":+1:", null])
-    assert.ok(validProjectIcon(ok), `accepts ${String(ok)}`);
-  for (const bad of ["", "abc", "🚢 ship", ":Bad Name:", "shipit", "<img>", 42, "🚢".repeat(20)])
-    assert.ok(!validProjectIcon(bad), `rejects ${String(bad)}`);
+test("validProjectIcon accepts exactly one emoji or a named custom emoji", () => {
+  const emoji = (value: string) => ({ kind: "emoji", value });
+  for (const ok of [...["🚢", "👩🏽‍💻", "🏳️‍🌈", "🇺🇸", "❤️"].map(emoji), { kind: "custom", name: "party_parrot" }])
+    assert.ok(validProjectIcon(ok), `accepts ${JSON.stringify(ok)}`);
+  assert.ok(validProjectIcon(null));
+  for (const bad of [
+    ...["", "abc", "🚢 ship", "🚢🚢", "©️🚢", "<img>"].map(emoji),
+    { kind: "custom", name: "" },
+    { kind: "custom", name: "x", extra: 1 },
+    "🚢",
+    ":shipit:",
+    42,
+  ])
+    assert.ok(!validProjectIcon(bad), `rejects ${JSON.stringify(bad)}`);
 });
 
 test("ProjectStore icon is member-managed, validated, and not a roster change", async () => {
@@ -127,13 +136,18 @@ test("ProjectStore icon is member-managed, validated, and not a roster change", 
   await projects.addMember(project.id, "owner", "member");
   const groupRef = projectGroupRef(project.id);
   const versionBefore = await projects.version(groupRef);
-  assert.equal((await projects.setIcon(project.id, "mallory", "🚢")).status, "forbidden");
-  assert.equal((await projects.setIcon("missing", "owner", "🚢")).status, "not_found");
-  assert.equal((await projects.setIcon(project.id, "owner", "not an emoji")).status, "invalid_icon");
-  const set = await projects.setIcon(project.id, "member", ":shipit:");
-  assert.ok(set.status === "ok" && set.changed && set.project.icon === ":shipit:");
-  assert.equal((await projects.get(project.id))?.icon, ":shipit:");
-  const same = await projects.setIcon(project.id, "owner", ":shipit:");
+  assert.equal((await projects.setIcon(project.id, "mallory", { kind: "emoji", value: "🚢" })).status, "forbidden");
+  assert.equal((await projects.setIcon("missing", "owner", { kind: "emoji", value: "🚢" })).status, "not_found");
+  assert.equal(
+    (await projects.setIcon(project.id, "owner", { kind: "emoji", value: "not an emoji" })).status,
+    "invalid_icon",
+  );
+  const shipit = { kind: "custom", name: "shipit" } as const;
+  const set = await projects.setIcon(project.id, "member", shipit);
+  assert.ok(set.status === "ok" && set.changed);
+  assert.deepEqual(set.project.icon, shipit);
+  assert.deepEqual((await projects.get(project.id))?.icon, shipit);
+  const same = await projects.setIcon(project.id, "owner", { ...shipit });
   assert.ok(same.status === "ok" && !same.changed);
   const cleared = await projects.setIcon(project.id, "owner", null);
   assert.ok(cleared.status === "ok" && cleared.changed && !("icon" in cleared.project));
