@@ -1,6 +1,5 @@
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -10,6 +9,7 @@ import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/br
 import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
 import { zeroUsage } from "../src/model/model-runtime.ts";
 import { stopAtEnd } from "./support/build-app.ts";
+import { test } from "./support/test-tenants.ts";
 
 test("browser follows durable user AI access and personal model defaults", async () => {
   const built = stopAtEnd(buildApp(testConfig()));

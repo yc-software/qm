@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
 import { testConfigStore, testConfigTables } from "./support/test-database.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const ORG = "org:default-org" as const;
 const PERSONAL = "personal:alice" as const;
 
-tenantTest("runtime selection is sparse, revisioned, and acknowledges a changed org default", async () => {
+test("runtime selection is sparse, revisioned, and acknowledges a changed org default", async () => {
   const config = testConfigStore("default-org");
   await config.setRuntimeSelection(ORG, { modelId: "claude-opus-4-8" });
   await config.setRuntimeSelection(PERSONAL, { modelId: "claude-sonnet-5" });
@@ -27,26 +27,23 @@ tenantTest("runtime selection is sparse, revisioned, and acknowledges a changed 
   assert.equal(config.getRuntimeSelection(PERSONAL), null);
 });
 
-tenantTest(
-  "runtime resolution uses explicit choice, then scope, then org and rejects unapproved requests",
-  async () => {
-    const config = testConfigStore("default-org");
-    await config.setRuntimeSelection(ORG, { modelId: "claude-opus-4-8" });
-    await config.setRuntimeSelection(PERSONAL, { modelId: "gpt-5.5" });
-    const fallback = { modelId: "claude-opus-4-8" };
+test("runtime resolution uses explicit choice, then scope, then org and rejects unapproved requests", async () => {
+  const config = testConfigStore("default-org");
+  await config.setRuntimeSelection(ORG, { modelId: "claude-opus-4-8" });
+  await config.setRuntimeSelection(PERSONAL, { modelId: "gpt-5.5" });
+  const fallback = { modelId: "claude-opus-4-8" };
 
-    assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, fallback), { modelId: "gpt-5.5" });
-    assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "claude-sonnet-4-6" }), {
-      modelId: "claude-sonnet-4-6",
-    });
-    await assert.rejects(
-      async () => resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "no-such-model" }),
-      /not approved/,
-    );
-  },
-);
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, fallback), { modelId: "gpt-5.5" });
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "claude-sonnet-4-6" }), {
+    modelId: "claude-sonnet-4-6",
+  });
+  await assert.rejects(
+    async () => resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "no-such-model" }),
+    /not approved/,
+  );
+});
 
-tenantTest("runtime resolution carries reasoning and fast-mode defaults into turns", async () => {
+test("runtime resolution carries reasoning and fast-mode defaults into turns", async () => {
   const config = testConfigStore("default-org");
   await config.setRuntimeSelection(ORG, {
     modelId: "claude-opus-5",
@@ -88,7 +85,7 @@ tenantTest("runtime resolution carries reasoning and fast-mode defaults into tur
   );
 });
 
-tenantTest("runtime resolution reads selections from shared durable state on every turn", async () => {
+test("runtime resolution reads selections from shared durable state on every turn", async () => {
   const tables = testConfigTables();
   const writer = testConfigStore("default-org", { tables });
   const reader = testConfigStore("default-org", { tables });
@@ -103,7 +100,7 @@ tenantTest("runtime resolution reads selections from shared durable state on eve
   });
 });
 
-tenantTest("every write that changes a scope's served model notifies listeners", async () => {
+test("every write that changes a scope's served model notifies listeners", async () => {
   const config = testConfigStore("default-org");
   const seen: string[] = [];
   config.onRuntimeSelectionChanged((id) => seen.push(id));
@@ -116,7 +113,7 @@ tenantTest("every write that changes a scope's served model notifies listeners",
   assert.deepEqual(seen, [ORG, PERSONAL, PERSONAL, PERSONAL]);
 });
 
-tenantTest("a listener that throws cannot break the write that notified it", async () => {
+test("a listener that throws cannot break the write that notified it", async () => {
   const config = testConfigStore("default-org");
   config.onRuntimeSelectionChanged(() => {
     throw new Error("surface unreachable");
@@ -125,45 +122,42 @@ tenantTest("a listener that throws cannot break the write that notified it", asy
   assert.equal((await config.getRuntimeSelectionDurable(ORG))?.modelId, "claude-opus-4-8");
 });
 
-tenantTest(
-  "durable runtime resolution hydrates the model catalog before rejecting an unknown dynamic model",
-  async () => {
-    const config = testConfigStore("default-org");
-    await config.setRuntimeSelection(PERSONAL, { modelId: "testvendor/cold-router-model" });
-    const fallback = { modelId: "claude-opus-4-8" };
+test("durable runtime resolution hydrates the model catalog before rejecting an unknown dynamic model", async () => {
+  const config = testConfigStore("default-org");
+  await config.setRuntimeSelection(PERSONAL, { modelId: "testvendor/cold-router-model" });
+  const fallback = { modelId: "claude-opus-4-8" };
 
-    assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, fallback), fallback);
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, fallback), fallback);
 
-    let hydrations = 0;
-    const hydrate = async () => {
-      hydrations += 1;
-      registerOpenRouterCatalogModel({
-        id: "testvendor/cold-router-model",
-        name: "Cold Router Model",
-        contextWindow: 1_048_576,
-        maxTokens: 131_072,
-        input: ["text"],
-        reasoning: true,
-        cost: { input: 0, output: 0 },
-      });
-    };
-    assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, undefined, hydrate), {
-      modelId: "testvendor/cold-router-model",
+  let hydrations = 0;
+  const hydrate = async () => {
+    hydrations += 1;
+    registerOpenRouterCatalogModel({
+      id: "testvendor/cold-router-model",
+      name: "Cold Router Model",
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+      input: ["text"],
+      reasoning: true,
+      cost: { input: 0, output: 0 },
     });
-    assert.equal(hydrations, 1);
+  };
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, undefined, hydrate), {
+    modelId: "testvendor/cold-router-model",
+  });
+  assert.equal(hydrations, 1);
 
-    assert.deepEqual(
-      await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "testvendor/cold-router-model" }, hydrate),
-      { modelId: "testvendor/cold-router-model" },
-    );
+  assert.deepEqual(
+    await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "testvendor/cold-router-model" }, hydrate),
+    { modelId: "testvendor/cold-router-model" },
+  );
 
-    const before = hydrations;
-    await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, undefined, hydrate);
-    assert.equal(hydrations, before);
-  },
-);
+  const before = hydrations;
+  await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, undefined, hydrate);
+  assert.equal(hydrations, before);
+});
 
-tenantTest("explicit runtime validation rejects a revoked scoped model and unsupported fast mode", async () => {
+test("explicit runtime validation rejects a revoked scoped model and unsupported fast mode", async () => {
   const config = testConfigStore("default-org");
   await config.setRuntimeSelection(ORG, { modelId: "claude-sonnet-5" });
   await config.setRuntimeSelection(PERSONAL, { modelId: "gpt-6-astra" });

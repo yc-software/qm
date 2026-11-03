@@ -1,5 +1,4 @@
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
 import { mkdtempSync } from "node:fs";
@@ -26,7 +25,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
@@ -3428,7 +3427,12 @@ test("Auto screens text attachment contents (strict quarantines) and fails open 
     suspicious.app.turn(
       dm("please inspect this", {
         attachments: [
-          { name: "instructions.txt", mimetype: "text/plain", sizeBytes: injected.sizeBytes, blobId: injected.blobId },
+          {
+            name: "instructions.txt",
+            mimetype: "text/plain",
+            sizeBytes: injected.sizeBytes,
+            blobId: injected.blobId,
+          },
         ],
       }),
     ),

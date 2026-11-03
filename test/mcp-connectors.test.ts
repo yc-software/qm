@@ -11,7 +11,7 @@ import { settle } from "./support/settle.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { installPrincipalLinks, UnattestableActor } from "../src/directory/person.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {
@@ -27,7 +27,7 @@ function server(partial?: Partial<McpServer>): McpServer {
   };
 }
 
-tenantTest("mcp client lists every page of tools and calls one over JSON and SSE responses", async (t) => {
+test("mcp client lists every page of tools and calls one over JSON and SSE responses", async (t) => {
   const tools = ["a", "b", "c"].map((name) => ({
     name,
     description: `tool ${name}`,
@@ -48,7 +48,7 @@ tenantTest("mcp client lists every page of tools and calls one over JSON and SSE
   }
 });
 
-tenantTest("mcp client keeps the server's own description, else its instructions", async (t) => {
+test("mcp client keeps the server's own description, else its instructions", async (t) => {
   const both = await startMcpTestServer(t, { description: "Track orders.", instructions: "Call search first." });
   const listed = await createMcpClient({ fetch: loopbackFetch, url: both.url, auth: { mode: "none" } }).listTools();
   assert.equal(listed.about, "Track orders.");
@@ -58,7 +58,7 @@ tenantTest("mcp client keeps the server's own description, else its instructions
   assert.equal(about, "Call search first.\nThen update.");
 });
 
-tenantTest("mcp client caps a server's tool list", async (t) => {
+test("mcp client caps a server's tool list", async (t) => {
   const tools = Array.from({ length: 100 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: "object" as const } }));
   const mcp = await startMcpTestServer(t, { tools, pageSize: 40 });
   const listed = (await createMcpClient({ fetch: loopbackFetch, url: mcp.url, auth: { mode: "none" } }).listTools())
@@ -68,7 +68,7 @@ tenantTest("mcp client caps a server's tool list", async (t) => {
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2);
 });
 
-tenantTest("mcp client surfaces tool errors and protocol errors", async (t) => {
+test("mcp client surfaces tool errors and protocol errors", async (t) => {
   const mcp = await startMcpTestServer(t, {
     call: (name) => ({ isError: true, content: [{ type: "text", text: `${name} exploded` }] }),
   });
@@ -80,7 +80,7 @@ tenantTest("mcp client surfaces tool errors and protocol errors", async (t) => {
   );
 });
 
-tenantTest("mcp client starts a fresh session after the server forgets its sessions", async (t) => {
+test("mcp client starts a fresh session after the server forgets its sessions", async (t) => {
   const mcp = await startMcpTestServer(t);
   const client = createMcpClient({ fetch: loopbackFetch, url: mcp.url, auth: { mode: "none" } });
   assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
@@ -89,7 +89,7 @@ tenantTest("mcp client starts a fresh session after the server forgets its sessi
   assert.equal(mcp.requests.filter((r) => r.rpc === "initialize").length, 2);
 });
 
-tenantTest("mcp client sends bearer auth", async (t) => {
+test("mcp client sends bearer auth", async (t) => {
   const mcp = await startMcpTestServer(t, { authorize: (auth) => auth === "Bearer sekret" });
   const good = createMcpClient({ fetch: loopbackFetch, url: mcp.url, auth: { mode: "bearer", token: "sekret" } });
   assert.equal((await good.listTools()).tools.length, 2);
@@ -97,7 +97,7 @@ tenantTest("mcp client sends bearer auth", async (t) => {
   await assert.rejects(bad.listTools(), /^Error: mcp tools\/list failed \(HTTP 401\)$/);
 });
 
-tenantTest("mcp client posts to the configured endpoint path", async (t) => {
+test("mcp client posts to the configured endpoint path", async (t) => {
   const mcp = await startMcpTestServer(t);
   const cases: Array<[string, string]> = [
     [`${mcp.url}/mcp/consumer`, "/mcp/consumer"],
@@ -114,31 +114,28 @@ tenantTest("mcp client posts to the configured endpoint path", async (t) => {
   }
 });
 
-tenantTest(
-  "mcp client mints client-credentials tokens on the server's origin and reuses them until rejected",
-  async (t) => {
-    const mcp = await startMcpTestServer(t, { clients: { id: "secret" } });
-    const client = createMcpClient({
-      fetch: loopbackFetch,
-      url: `${mcp.url}/mcp`,
-      auth: { mode: "client-credentials", clientId: "id", clientSecret: "secret" },
-    });
-    assert.equal((await client.listTools()).tools.length, 2);
-    assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
-    assert.deepEqual(mcp.tokenRequests, ["id"]);
-    mcp.revokeTokens();
-    assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
-    assert.equal(mcp.tokenRequests.length, 2);
-    const wrong = createMcpClient({
-      fetch: loopbackFetch,
-      url: mcp.url,
-      auth: { mode: "client-credentials", clientId: "id", clientSecret: "guess" },
-    });
-    await assert.rejects(wrong.listTools());
-  },
-);
+test("mcp client mints client-credentials tokens on the server's origin and reuses them until rejected", async (t) => {
+  const mcp = await startMcpTestServer(t, { clients: { id: "secret" } });
+  const client = createMcpClient({
+    fetch: loopbackFetch,
+    url: `${mcp.url}/mcp`,
+    auth: { mode: "client-credentials", clientId: "id", clientSecret: "secret" },
+  });
+  assert.equal((await client.listTools()).tools.length, 2);
+  assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
+  assert.deepEqual(mcp.tokenRequests, ["id"]);
+  mcp.revokeTokens();
+  assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
+  assert.equal(mcp.tokenRequests.length, 2);
+  const wrong = createMcpClient({
+    fetch: loopbackFetch,
+    url: mcp.url,
+    auth: { mode: "client-credentials", clientId: "id", clientSecret: "guess" },
+  });
+  await assert.rejects(wrong.listTools());
+});
 
-tenantTest("mcp client never sends client credentials to an authorization server on another origin", async (t) => {
+test("mcp client never sends client credentials to an authorization server on another origin", async (t) => {
   const elsewhere = await startMcpTestServer(t, { clients: { id: "secret" } });
   const mcp = await startMcpTestServer(t, { clients: { id: "secret" }, authorizationServer: elsewhere.url });
   const client = createMcpClient({
@@ -151,7 +148,7 @@ tenantTest("mcp client never sends client credentials to an authorization server
   assert.deepEqual(mcp.tokenRequests, []);
 });
 
-tenantTest("server id validation", () => {
+test("server id validation", () => {
   assert.ok(isValidMcpServerId("salesforce"));
   assert.ok(isValidMcpServerId("crm-2"));
   assert.ok(!isValidMcpServerId("Nope"));
@@ -159,7 +156,7 @@ tenantTest("server id validation", () => {
   assert.ok(!isValidMcpServerId("has space"));
 });
 
-tenantTest("tool service exposes namespaced tools and calls through", async (t) => {
+test("tool service exposes namespaced tools and calls through", async (t) => {
   const mcp = await startMcpTestServer(t, { description: "CRM records" });
   const store = createMcpServerStore(testMap<McpServer>());
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
@@ -173,7 +170,7 @@ tenantTest("tool service exposes namespaced tools and calls through", async (t) 
   service.close();
 });
 
-tenantTest("destructive annotations mark MCP tools for approval unless the server overrides the policy", async (t) => {
+test("destructive annotations mark MCP tools for approval unless the server overrides the policy", async (t) => {
   const mcp = await startMcpTestServer(t, {
     tools: [
       { name: "read", inputSchema: { type: "object" }, annotations: { readOnlyHint: true, destructiveHint: true } },
@@ -194,7 +191,7 @@ tenantTest("destructive annotations mark MCP tools for approval unless the serve
   service.close();
 });
 
-tenantTest("a catalog server is one tool that searches, describes, and invokes as the attested person", async (t) => {
+test("a catalog server is one tool that searches, describes, and invokes as the attested person", async (t) => {
   const mcp = await startMcpTestServer(t, {
     tools: [
       { name: "find-record", description: "Find a record by name", inputSchema: { type: "object" } },
@@ -274,7 +271,7 @@ tenantTest("a catalog server is one tool that searches, describes, and invokes a
   service.close();
 });
 
-tenantTest("attested connectors send one canonical person and never call for an actor QM can't attest", async (t) => {
+test("attested connectors send one canonical person and never call for an actor QM can't attest", async (t) => {
   installPrincipalLinks({
     canonical: (key) => (key === "alice@example.com" || key === "U_ALICE" ? "U_ALICE" : undefined),
     aliases: () => [],
@@ -301,7 +298,7 @@ tenantTest("attested connectors send one canonical person and never call for an 
   service.close();
 });
 
-tenantTest("disabled server's tools disappear and calls fail", async (t) => {
+test("disabled server's tools disappear and calls fail", async (t) => {
   const mcp = await startMcpTestServer(t);
   const store = createMcpServerStore(testMap<McpServer>());
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
@@ -314,7 +311,7 @@ tenantTest("disabled server's tools disappear and calls fail", async (t) => {
   service.close();
 });
 
-tenantTest("unknown tool call rejects", async () => {
+test("unknown tool call rejects", async () => {
   const store = createMcpServerStore(testMap<McpServer>());
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
   await assert.rejects(() => service.call("nope_tool", {}), /unknown MCP tool/);
@@ -331,7 +328,7 @@ function tokenStore() {
   });
 }
 
-tenantTest("per-user calls resolve only the caller's fresh token while discovery uses catalog auth", async (t) => {
+test("per-user calls resolve only the caller's fresh token while discovery uses catalog auth", async (t) => {
   const mcp = await startMcpTestServer(t, {
     call: (_name, args) => ({ content: [{ type: "text", text: String(args.q) }] }),
   });
@@ -382,7 +379,7 @@ tenantTest("per-user calls resolve only the caller's fresh token while discovery
   assert.equal(authFor("tools/call").length, 3);
 });
 
-tenantTest("per-user mode fails closed without a keychain and shared mode preserves existing behavior", async (t) => {
+test("per-user mode fails closed without a keychain and shared mode preserves existing behavior", async (t) => {
   const mcp = await startMcpTestServer(t, { authorize: (auth) => auth === "Bearer shared-token" });
   const store = createMcpServerStore(testMap<McpServer>());
   const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
@@ -406,7 +403,7 @@ tenantTest("per-user mode fails closed without a keychain and shared mode preser
   assert.equal(await service.call("crm_query", {}), "ran query");
 });
 
-tenantTest("MCP HTTP transport refuses redirects before sending a user token to another endpoint", async (t) => {
+test("MCP HTTP transport refuses redirects before sending a user token to another endpoint", async (t) => {
   let targetRequests = 0;
   const target = createServer((_req, res) => {
     targetRequests++;
@@ -433,7 +430,7 @@ tenantTest("MCP HTTP transport refuses redirects before sending a user token to 
   assert.equal(targetRequests, 0);
 });
 
-tenantTest("per-user connectors select an explicit account slot without falling back to another slot", async (t) => {
+test("per-user connectors select an explicit account slot without falling back to another slot", async (t) => {
   const store = createMcpServerStore(testMap<McpServer>());
   const users = tokenStore();
   const host = "accounts.example.com";
@@ -458,95 +455,89 @@ tenantTest("per-user connectors select an explicit account slot without falling 
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });
 
-tenantTest(
-  "background MCP refresh contains registry failures at startup, on change, and once stale on read",
-  async (t) => {
-    let clock = 0;
-    const backing = testMap<McpServer>();
-    const store = createMcpServerStore(backing);
-    const mcp = await startMcpTestServer(t);
-    const list = t.mock.method(store, "list", async () => {
-      throw new Error("registry unavailable");
-    });
-    const errors = t.mock.method(console, "error", () => {});
-    const service = createMcpToolService({
-      fetch: loopbackFetch,
-      servers: store,
-      refreshIntervalMs: 100,
-      now: () => clock,
-    });
-    t.after(() => service.close());
-    const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
-    await tick();
-    assert.equal(list.mock.callCount(), 1);
-    await store.put(server({ url: mcp.url }));
-    await tick();
-    assert.equal(list.mock.callCount(), 2);
-    assert.deepEqual(await service.toolDefs(), []);
-    await tick();
-    assert.equal(list.mock.callCount(), 2);
-    clock += 100;
-    assert.deepEqual(await service.toolDefs(), []);
-    await tick();
-    assert.equal(list.mock.callCount(), 3);
-    assert.equal(errors.mock.callCount(), 3);
-    await assert.rejects(service.refresh(), /registry unavailable/);
-    list.mock.restore();
-    clock += 100;
-    await service.toolDefs();
-    await settle(async () => (await service.toolDefs()).length > 0);
-    assert.deepEqual(
-      (await service.toolDefs()).map((tool) => tool.name),
-      ["crm_query", "crm_update"],
-    );
-    assert.equal(await service.call("crm_query", {}), "ran query");
-  },
-);
+test("background MCP refresh contains registry failures at startup, on change, and once stale on read", async (t) => {
+  let clock = 0;
+  const backing = testMap<McpServer>();
+  const store = createMcpServerStore(backing);
+  const mcp = await startMcpTestServer(t);
+  const list = t.mock.method(store, "list", async () => {
+    throw new Error("registry unavailable");
+  });
+  const errors = t.mock.method(console, "error", () => {});
+  const service = createMcpToolService({
+    fetch: loopbackFetch,
+    servers: store,
+    refreshIntervalMs: 100,
+    now: () => clock,
+  });
+  t.after(() => service.close());
+  const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+  await tick();
+  assert.equal(list.mock.callCount(), 1);
+  await store.put(server({ url: mcp.url }));
+  await tick();
+  assert.equal(list.mock.callCount(), 2);
+  assert.deepEqual(await service.toolDefs(), []);
+  await tick();
+  assert.equal(list.mock.callCount(), 2);
+  clock += 100;
+  assert.deepEqual(await service.toolDefs(), []);
+  await tick();
+  assert.equal(list.mock.callCount(), 3);
+  assert.equal(errors.mock.callCount(), 3);
+  await assert.rejects(service.refresh(), /registry unavailable/);
+  list.mock.restore();
+  clock += 100;
+  await service.toolDefs();
+  await settle(async () => (await service.toolDefs()).length > 0);
+  assert.deepEqual(
+    (await service.toolDefs()).map((tool) => tool.name),
+    ["crm_query", "crm_update"],
+  );
+  assert.equal(await service.call("crm_query", {}), "ran query");
+});
 
-tenantTest(
-  "optional intent and locale parameters are left out of the schema the model sees, required ones are kept",
-  async (t) => {
-    const store = createMcpServerStore(testMap<McpServer>());
-    const sent: Array<Record<string, unknown>> = [];
-    const mcp = await startMcpTestServer(t, {
-      tools: [
-        {
-          name: "search",
-          description: "Search",
-          inputSchema: {
-            type: "object",
-            properties: {
-              query: { type: "string" },
-              intent: { type: "string", description: "Why this call is made; logged for analytics." },
-              locale: { type: "string", description: "Language tag." },
-            },
-            required: ["query"],
+test("optional intent and locale parameters are left out of the schema the model sees, required ones are kept", async (t) => {
+  const store = createMcpServerStore(testMap<McpServer>());
+  const sent: Array<Record<string, unknown>> = [];
+  const mcp = await startMcpTestServer(t, {
+    tools: [
+      {
+        name: "search",
+        description: "Search",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            intent: { type: "string", description: "Why this call is made; logged for analytics." },
+            locale: { type: "string", description: "Language tag." },
           },
+          required: ["query"],
         },
-        {
-          name: "translate",
-          description: "Translate",
-          inputSchema: {
-            type: "object",
-            properties: { text: { type: "string" }, locale: { type: "string" } },
-            required: ["text", "locale"],
-          },
-        },
-      ],
-      call: (_name, args) => {
-        sent.push(args);
-        return { content: [{ type: "text", text: "ok" }] };
       },
-    });
-    const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
-    t.after(() => service.close());
-    await store.put(server({ url: `${mcp.url}/mcp` }));
-    await service.refresh();
-    const schemas = Object.fromEntries((await service.toolDefs()).map((d) => [d.name, d.inputSchema]));
-    assert.deepEqual(Object.keys(schemas.crm_search!.properties as object), ["query"]);
-    assert.deepEqual(schemas.crm_search!.required, ["query"]);
-    assert.deepEqual(Object.keys(schemas.crm_translate!.properties as object), ["text", "locale"]);
-    assert.equal(await service.call("crm_search", { query: "tacos" }), "ok");
-    assert.deepEqual(sent, [{ query: "tacos" }]);
-  },
-);
+      {
+        name: "translate",
+        description: "Translate",
+        inputSchema: {
+          type: "object",
+          properties: { text: { type: "string" }, locale: { type: "string" } },
+          required: ["text", "locale"],
+        },
+      },
+    ],
+    call: (_name, args) => {
+      sent.push(args);
+      return { content: [{ type: "text", text: "ok" }] };
+    },
+  });
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store });
+  t.after(() => service.close());
+  await store.put(server({ url: `${mcp.url}/mcp` }));
+  await service.refresh();
+  const schemas = Object.fromEntries((await service.toolDefs()).map((d) => [d.name, d.inputSchema]));
+  assert.deepEqual(Object.keys(schemas.crm_search!.properties as object), ["query"]);
+  assert.deepEqual(schemas.crm_search!.required, ["query"]);
+  assert.deepEqual(Object.keys(schemas.crm_translate!.properties as object), ["text", "locale"]);
+  assert.equal(await service.call("crm_search", { query: "tacos" }), "ok");
+  assert.deepEqual(sent, [{ query: "tacos" }]);
+});

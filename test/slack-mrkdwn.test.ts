@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   decodeSlackEntities,
@@ -12,6 +11,7 @@ import {
   inlineCode,
 } from "../src/slack/lib.ts";
 import { resolveMentions } from "../src/slack/mrkdwn.ts";
+import { test } from "./support/test-tenants.ts";
 
 test("inlineCode clamps long text and neutralizes backticks", () => {
   const clamped = inlineCode("`echo hi`" + "y".repeat(60000));

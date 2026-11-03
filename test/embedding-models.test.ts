@@ -6,7 +6,6 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { AddressInfo } from "node:net";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
@@ -25,7 +24,7 @@ import {
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 import { testConfigStore, testConfigTables, testMap } from "./support/test-database.ts";
-import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
+import { afterEach, inTestTenant, test, testTenantHeaders } from "./support/test-tenants.ts";
 
 const definition = {
   kind: "embedding",
@@ -141,7 +140,7 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
   assert.equal(resolveEmbeddingModel("gateway/embed"), undefined);
 });
 
-tenantTest("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
+test("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
   const tables = testConfigTables();
   const first = testConfigStore("test", { tables });
   await first.setEmbeddingModel("gateway/embed");

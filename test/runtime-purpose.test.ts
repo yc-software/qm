@@ -1,4 +1,3 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
@@ -7,6 +6,7 @@ import { turnModelOptions } from "../src/agent/runtime-choice.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { testConfigStore, testConfigTables } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 const ORG = "org:default-org";
 const SCOPE = "personal:alice";

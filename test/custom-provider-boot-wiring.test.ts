@@ -11,7 +11,7 @@ import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { defaultModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -21,7 +21,7 @@ const ADMIN = {
 
 afterEach(() => inTestTenant(() => setCustomProviders([])));
 
-tenantTest("serverDeps wires the custom-provider store and resolves a custom boot default lazily", async () => {
+test("serverDeps wires the custom-provider store and resolves a custom boot default lazily", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "custom-provider-boot-")),
     modelId: "custom/acme-gateway/acme-large",

@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -6,6 +6,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { it } from "./support/test-tenants.ts";
 
 const toChannel: Destination = { type: "slack", target: "C1:169.7", audienceScopeId: scopeId("channel", "C1") };
 

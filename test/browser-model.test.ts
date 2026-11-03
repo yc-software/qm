@@ -1,7 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as httpServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -16,7 +15,7 @@ import {
 } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const model = "claude-opus-5";
 const key = "company-gateway-secret";
@@ -65,7 +64,7 @@ test("browser inference uses the company gateway with scoped model authorization
     origin: "conversation" as const,
     exp: Date.now() + 60_000,
   };
-  const token = await mintCapabilityToken(claims, TEST_CAPABILITY_SECRET);
+  const token = await inTestTenant(() => mintCapabilityToken(claims, TEST_CAPABILITY_SECRET));
   const post = (body: unknown, credential = token) =>
     fetch(endpoint, {
       method: "POST",
@@ -96,11 +95,17 @@ test("browser inference uses the company gateway with scoped model authorization
   ])
     assert.equal((await post(invalid)).status, 400);
   assert.equal(
-    (await post(body, await mintCapabilityToken({ ...claims, aud: CONTROL_PLANE_AUD }, TEST_CAPABILITY_SECRET))).status,
+    (
+      await post(
+        body,
+        await inTestTenant(() => mintCapabilityToken({ ...claims, aud: CONTROL_PLANE_AUD }, TEST_CAPABILITY_SECRET)),
+      )
+    ).status,
     403,
   );
   assert.equal(
-    (await post(body, await mintCapabilityToken({ ...claims, exp: 1 }, TEST_CAPABILITY_SECRET))).status,
+    (await post(body, await inTestTenant(() => mintCapabilityToken({ ...claims, exp: 1 }, TEST_CAPABILITY_SECRET))))
+      .status,
     401,
   );
   assert.equal(calls.length, 1);
@@ -132,7 +137,9 @@ test("browser inference uses the company gateway with scoped model authorization
     expiresAt: Date.now() + 3600_000,
   });
   await built.config.setPersonalModelAuth("U1", true, "anthropic");
-  const claudeToken = await mintCapabilityToken({ ...claims, browserAccount: "anthropic" }, TEST_CAPABILITY_SECRET);
+  const claudeToken = await inTestTenant(() =>
+    mintCapabilityToken({ ...claims, browserAccount: "anthropic" }, TEST_CAPABILITY_SECRET),
+  );
   const unsupported = await post(body, claudeToken);
   assert.equal(unsupported.status, 422);
   assert.match(await unsupported.text(), /Claude subscription/);

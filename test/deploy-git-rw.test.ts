@@ -6,24 +6,22 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
 import { createServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { mintDeployGitAccess, verifyDeployGitAccess } from "../src/deploy/access-token.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings, testIdentity } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 function tenantBound<T extends object>(store: T): T {
   return new Proxy(store, {
@@ -46,7 +44,7 @@ const GIT_ENV = {
   GIT_COMMITTER_EMAIL: "t@t",
 };
 
-function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
+async function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
   const deployStore = createDeployStore(
     testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "git-rw-repo-")) } }),
   );
@@ -63,7 +61,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
     acl,
     deployDir: mkdtempSync(join(tmpdir(), "git-rw-deploy-")),
   });
-  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const identity = await testIdentity();
   const app = createApp({
     deploy,
     acl,
@@ -136,7 +134,7 @@ const capFor = (actorId: string, scope?: string) =>
   );
 
 test("a read token can clone but cannot push (403 on receive-pack)", async () => {
-  const f = fixture();
+  const f = await fixture();
   try {
     const d = await f.app.deploy({
       ownerScopeId: scopeId("personal", "U1"),
@@ -167,7 +165,7 @@ test("a read token can clone but cannot push (403 on receive-pack)", async () =>
 });
 
 test("a git request whose body the backend stops reading completes and leaves the endpoint working", async () => {
-  const f = fixture();
+  const f = await fixture();
   try {
     const d = await f.app.deploy({
       ownerScopeId: scopeId("personal", "U1"),
@@ -185,7 +183,7 @@ test("a git request whose body the backend stops reading completes and leaves th
 });
 
 test("a write token can push, and the push registers a new immutable version", async () => {
-  const f = fixture();
+  const f = await fixture();
   try {
     const d = await f.app.deploy({
       ownerScopeId: scopeId("personal", "U1"),
@@ -216,7 +214,7 @@ test("a write token can push, and the push registers a new immutable version", a
 });
 
 test("a write token minted before principal deactivation is revoked at push time", async () => {
-  const f = fixture();
+  const f = await fixture();
   try {
     const d = await f.app.deploy({
       ownerScopeId: scopeId("personal", "U1"),
@@ -233,7 +231,7 @@ test("a write token minted before principal deactivation is revoked at push time
 });
 
 test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no access", async () => {
-  const f = fixture();
+  const f = await fixture();
   try {
     const d = await f.app.deploy({
       ownerScopeId: scopeId("personal", "U1"),
@@ -308,7 +306,7 @@ test("git-url endpoint returns a clonable API URL when web and API origins diffe
   });
   ingress.listen(0);
   const apiBaseUrl = `http://127.0.0.1:${(ingress.address() as AddressInfo).port}`;
-  const f = fixture({ apiBaseUrl, publicUrl: "https://web.example" });
+  const f = await fixture({ apiBaseUrl, publicUrl: "https://web.example" });
   coreBase = f.base;
   try {
     const deployment = await f.app.deploy({
@@ -332,7 +330,7 @@ test("git-url endpoint returns a clonable API URL when web and API origins diffe
 });
 
 test("git-url endpoint: an org-owned deployment is read for a plain member, write only with a write grant", async () => {
-  const f = fixture();
+  const f = await fixture();
   try {
     const d = await f.app.deploy({
       ownerScopeId: scopeId("org", "default-org"),
@@ -364,7 +362,7 @@ test("git-url endpoint: an org-owned deployment is read for a plain member, writ
 });
 
 test("a garbage push body that git rejects early fails the request without crashing core", async () => {
-  const f = fixture();
+  const f = await fixture();
   const uncaught: unknown[] = [];
   const onUncaught = (error: unknown) => uncaught.push(error);
   process.on("uncaughtException", onUncaught);

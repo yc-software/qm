@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 function start(): { base: string; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobapi-")) }));
@@ -27,7 +28,7 @@ test("POST /v1/blobs stages bytes and GET /v1/blobs/:id streams them back", asyn
     const body = Buffer.from("the quick brown fox".repeat(1000));
     const up = await fetch(`${s.base}/v1/blobs`, {
       method: "POST",
-      headers: { "content-type": "application/octet-stream", "x-content-sha256": sha(body) },
+      headers: { ...testTenantHeaders(), "content-type": "application/octet-stream", "x-content-sha256": sha(body) },
       body,
     });
     assert.equal(up.status, 200);
@@ -35,7 +36,7 @@ test("POST /v1/blobs stages bytes and GET /v1/blobs/:id streams them back", asyn
     assert.equal(sizeBytes, body.length);
     assert.ok(blobId);
 
-    const down = await fetch(`${s.base}/v1/blobs/${blobId}`);
+    const down = await fetch(`${s.base}/v1/blobs/${blobId}`, { headers: testTenantHeaders() });
     assert.equal(down.status, 200);
     assert.equal(down.headers.get("content-length"), String(body.length));
     const got = Buffer.from(await down.arrayBuffer());
@@ -51,7 +52,11 @@ test("POST /v1/blobs rejects a body that doesn't match x-content-sha256 (400)", 
     const body = Buffer.from("payload");
     const res = await fetch(`${s.base}/v1/blobs`, {
       method: "POST",
-      headers: { "content-type": "application/octet-stream", "x-content-sha256": "0".repeat(64) },
+      headers: {
+        ...testTenantHeaders(),
+        "content-type": "application/octet-stream",
+        "x-content-sha256": "0".repeat(64),
+      },
       body,
     });
     assert.equal(res.status, 400);
@@ -63,14 +68,18 @@ test("POST /v1/blobs rejects a body that doesn't match x-content-sha256 (400)", 
 test("GET /v1/blobs/:id is 404 for an unknown id", async () => {
   const s = start();
   try {
-    assert.equal((await fetch(`${s.base}/v1/blobs/ffffffffffffffffffffffffffffffff`)).status, 404);
+    assert.equal(
+      (await fetch(`${s.base}/v1/blobs/ffffffffffffffffffffffffffffffff`, { headers: testTenantHeaders() })).status,
+      404,
+    );
   } finally {
     await s.close();
   }
 });
 
-function startWithDeadline(deadlineMs: number): { base: string; close: () => Promise<void> } {
+async function startWithDeadline(deadlineMs: number): Promise<{ base: string; close: () => Promise<void> }> {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobapi-")) }));
+  await inTestTenant(() => undefined);
   const server = createInsecureTestServer(built.app, {
     blobTransfer: built.blobTransfer,
     requestBodyDeadlineMs: deadlineMs,
@@ -92,13 +101,13 @@ function slowBody(chunks: Buffer[], gapMs: number): ReadableStream<Uint8Array> {
 }
 
 test("POST /v1/blobs from a signed surface (web attachment proxy) outlives the default body deadline", async () => {
-  const s = startWithDeadline(100);
+  const s = await startWithDeadline(100);
   try {
     const chunks = Array.from({ length: 6 }, (_, n) => Buffer.alloc(64 * 1024, n));
     const whole = Buffer.concat(chunks);
     const up = await fetch(`${s.base}/v1/blobs`, {
       method: "POST",
-      headers: { "content-type": "application/octet-stream", "x-content-sha256": sha(whole) },
+      headers: { ...testTenantHeaders(), "content-type": "application/octet-stream", "x-content-sha256": sha(whole) },
       body: slowBody(chunks, 60),
       duplex: "half",
     } as RequestInit & { duplex: "half" });
@@ -115,12 +124,12 @@ test("POST /v1/blobs from a signed surface (web attachment proxy) outlives the d
 });
 
 test("other routes still enforce the default body deadline", async () => {
-  const s = startWithDeadline(100);
+  const s = await startWithDeadline(100);
   try {
     const chunks = Array.from({ length: 6 }, () => Buffer.from('{"x":1}'.padEnd(64, " ")));
     const res = await fetch(`${s.base}/v1/sessions/search`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), "content-type": "application/json" },
       body: slowBody(chunks, 60),
       duplex: "half",
     } as RequestInit & { duplex: "half" }).catch((e: unknown) => e);

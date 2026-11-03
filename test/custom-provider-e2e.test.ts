@@ -19,7 +19,7 @@ import { createCustomProviderStore } from "../src/model/model-credential-store.t
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
 import { testMap } from "./support/test-database.ts";
-import { tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -27,7 +27,7 @@ const ADMIN = {
   ...testTenantHeaders(),
 };
 
-tenantTest("QA: full custom-provider lifecycle against a live fake upstream", async () => {
+test("QA: full custom-provider lifecycle against a live fake upstream", async () => {
   // --- fake OpenAI-compatible upstream ---
   const seen: Array<{ path: string; auth: string | undefined; model?: string }> = [];
   const upstream = createServer((req, res) => {
@@ -199,7 +199,7 @@ tenantTest("QA: full custom-provider lifecycle against a live fake upstream", as
   }
 });
 
-tenantTest("QA: openai-responses custom provider serves a real turn through the generated Pi registry", async () => {
+test("QA: openai-responses custom provider serves a real turn through the generated Pi registry", async () => {
   const upstream = await verificationUpstream();
   const upstreamUrl = `${upstream.url}/v1`;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qa-responses-")) }));
@@ -270,7 +270,7 @@ tenantTest("QA: openai-responses custom provider serves a real turn through the 
   }
 });
 
-tenantTest("QA: anthropic-protocol custom provider serves a real turn (correct wire shape + headers)", async () => {
+test("QA: anthropic-protocol custom provider serves a real turn (correct wire shape + headers)", async () => {
   const seen: Array<{ path: string; apiKeyHeader?: string; version?: string; model?: string }> = [];
   const upstream = createServer((req, res) => {
     let body = "";
@@ -353,7 +353,7 @@ tenantTest("QA: anthropic-protocol custom provider serves a real turn (correct w
   }
 });
 
-tenantTest("QA: registrations survive a restart (shared durable backing + same secret)", async () => {
+test("QA: registrations survive a restart (shared durable backing + same secret)", async () => {
   // In production the backing map is the Postgres artifact store (same as
   // model credentials); a restart is a new store instance over the same
   // rows with the same CONNECTOR_SECRET_KEY. Simulate exactly that.
@@ -382,7 +382,7 @@ tenantTest("QA: registrations survive a restart (shared durable backing + same s
   setCustomProviders([]);
 });
 
-tenantTest("QA: a corrupt stored key degrades that provider only — admin surface stays intact", async () => {
+test("QA: a corrupt stored key degrades that provider only — admin surface stays intact", async () => {
   const backing = testMap<never>() as Parameters<typeof createCustomProviderStore>[0]["backing"];
   const writer = createCustomProviderStore({ backing, keyMaterial: "first-secret-first-secret-first-secret-1" });
   await writer.upsert(
@@ -406,7 +406,7 @@ tenantTest("QA: a corrupt stored key degrades that provider only — admin surfa
   assert.equal(enabled[0]?.id, "corrupted", "spec listing unaffected — only the key is lost");
 });
 
-tenantTest("QA: a custom model named like a built-in registers and sends its own model id upstream", async () => {
+test("QA: a custom model named like a built-in registers and sends its own model id upstream", async () => {
   const seen: Array<{ model?: string; auth?: string }> = [];
   const upstream = createServer((req, res) => {
     let body = "";

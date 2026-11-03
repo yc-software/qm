@@ -1,10 +1,10 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createKeychain, type KeychainCredential, type OAuthRefresh } from "../src/credentials/keychain.ts";
 import type { DurableMap } from "../src/persistence/durable-map.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { decryptSecret, deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
+import { test } from "./support/test-tenants.ts";
 
 const KEY = deriveConnectorKey("keychain-refresh-test-key");
 const HOST = "gmail.googleapis.com";

@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -7,6 +7,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createCurrentScopeMembers } from "../src/resolution/scope-membership.ts";
 import { scopeId, type ScopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { it } from "./support/test-tenants.ts";
 
 const OWNER = "pat@example.com";
 const CHAN = "C0PRIVATE";

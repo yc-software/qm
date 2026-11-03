@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +11,7 @@ import { baseModelProviders, configuredModel, providerKeysPresent } from "../src
 import { defaultModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
-import { testTenantHeaders } from "./support/test-tenants.ts";
+import { test, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -38,7 +37,9 @@ function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: 
 }
 
 async function effectiveModel(base: string): Promise<string> {
-  const res = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+  const res = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`, {
+    headers: testTenantHeaders(),
+  });
   assert.equal(res.status, 200);
   return ((await res.json()) as { effective: { modelId: string } }).effective.modelId;
 }
@@ -122,7 +123,9 @@ test("the declaration outranks a stray key from another vendor", async () => {
 test("company ChatGPT-only deployments offer their plain GPT default through managed availability", async () => {
   const srv = start({ codexAuthCredential: "company-chatgpt" });
   try {
-    const res = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+    const res = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`, {
+      headers: testTenantHeaders(),
+    });
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
       effective: { modelId: string };

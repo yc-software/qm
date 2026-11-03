@@ -6,7 +6,6 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresVectorStore, type MemoryVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { factHash, type MemoryFact } from "../src/memory/facts.ts";
-import { withoutTenant } from "../src/tenants/context.ts";
 import { inTestTenant, tenantBoundUrl } from "./support/test-tenants.ts";
 
 const url = process.env.DATABASE_URL;
@@ -78,7 +77,7 @@ test(
       assert.deepEqual(await search(), []);
       assert.deepEqual(await index.search({ scope, model: "test-v1", vector: [1, 0], ids: ids(revised) }), []);
       assert.deepEqual(await memory.recall(scope, { query: "verify" }), []);
-      assert.ok(!(await withoutTenant(() => index.missing("test-v1", 256))).some((row) => row.factId === facts[0]!.id));
+      assert.ok(!(await index.missing("test-v1", 256)).some((row) => row.factId === facts[0]!.id));
     }),
 );
 
@@ -123,14 +122,12 @@ test("model and dimension drift fall back until reindexed", { skip: !url }, asyn
     assert.ok(await unindexedScore("wide-model", [1, 0]));
     assert.ok(await unindexedScore("new-model", wide));
     assert.ok(
-      (
-        await withoutTenant(() => index.missing("wide-model", 256, 2, undefined, String(BigInt(facts[0]!.id) - 1n)))
-      ).some((row) => row.factId === facts[0]!.id),
-    );
-    assert.ok(
-      !(await withoutTenant(() => index.missing("wide-model", 256, 2, undefined, facts[0]!.id))).some(
+      (await index.missing("wide-model", 256, 2, undefined, String(BigInt(facts[0]!.id) - 1n))).some(
         (row) => row.factId === facts[0]!.id,
       ),
+    );
+    assert.ok(
+      !(await index.missing("wide-model", 256, 2, undefined, facts[0]!.id)).some((row) => row.factId === facts[0]!.id),
     );
     await write(index, scope, facts, "wide-model", () => [1, 0]);
     assert.equal((await index.search({ scope, model: "wide-model", vector: [1, 0], ids: ids(facts) }))[0]!.score, 1);
@@ -190,7 +187,7 @@ test("put waits on in-flight edits and never writes stale or deleted fact vector
       (await storedVectors(client, scope, model)).find((row) => row.fact_id === beta!.id)!.embedding,
       "[1,0]",
     );
-    while (await withoutTenant(() => index.prune(model, 256, 2)));
+    while (await index.prune(model, 256, 2));
     assert.deepEqual(
       (await storedVectors(client, scope, model)).map((row) => row.fact_id),
       [alpha!.id],
@@ -217,10 +214,10 @@ test("prune deletes stale model, hash, deleted, and dimension rows in bounded ba
     await write(index, scope, [keep!], `${model}-old`);
     await base.edit!(scope, [{ id: edit!.id, text: "prune edit revised" }]);
     await base.delete!(scope, [gone!.id]);
-    assert.equal(await withoutTenant(() => index.prune(model, 1, 2)), 1);
+    assert.equal(await index.prune(model, 1, 2), 1);
     let removed = 1;
     for (let deleted = -1; deleted; removed += deleted) {
-      deleted = await withoutTenant(() => index.prune(model, 2, 2));
+      deleted = await index.prune(model, 2, 2);
       assert.ok(deleted <= 2);
     }
     assert.ok(removed >= 4);
@@ -230,7 +227,7 @@ test("prune deletes stale model, hash, deleted, and dimension rows in bounded ba
     );
     assert.deepEqual(await storedVectors(client, scope, `${model}-old`), []);
     await write(index, scope, [wide!], model, () => [1, 0, 0]);
-    while (await withoutTenant(() => index.prune(model, 256)));
+    while (await index.prune(model, 256));
     assert.deepEqual(
       (await storedVectors(client, scope, model)).map((row) => row.fact_id),
       [keep!.id, wide!.id, unknown!.id],
@@ -274,7 +271,7 @@ test(
       assert.deepEqual(subset.map((row) => row.factId).sort(), [edited[0]!.id, edited[1]!.id].sort());
       assert.deepEqual(await search([]), []);
       assert.deepEqual(
-        (await withoutTenant(() => index.missing("hash-model", 256))).filter((row) => row.scope === scope),
+        (await index.missing("hash-model", 256)).filter((row) => row.scope === scope),
         [],
       );
     }),

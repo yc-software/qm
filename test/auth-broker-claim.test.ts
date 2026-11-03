@@ -2,7 +2,6 @@ import type { BrokerSessionStore } from "../src/auth/broker-sessions.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,7 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import type { ReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+import { test, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SECRET = "auth-broker-claim-test-secret".repeat(2);
 const CLAIM_PATH = "/v1/auth/broker/claim";
@@ -67,8 +66,9 @@ async function claim(
   const ts = Math.floor(Date.now() / 1000);
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (sign) {
+    Object.assign(headers, testTenantHeaders());
     headers["x-timestamp"] = String(ts);
-    headers["x-signature"] = signRequest(SECRET, ts, `POST\n${path}\n${raw}`);
+    headers["x-signature"] = signRequest(SECRET, ts, `POST\n${path}\n${testTenants()[0]}\n${raw}`);
   }
   const res = await fetch(`${base}${path}`, { method: "POST", headers, body: raw });
   return { status: res.status, json: (await res.json()) as { claimed?: unknown; error?: unknown } };
@@ -163,16 +163,19 @@ test("broker sessions cross the production identity gate, but revocation require
       body,
       headers: {
         "content-type": "application/json",
-        ...testTenantHeaders(),
         ...(signed
           ? {
+              ...testTenantHeaders(),
               "x-timestamp": String(ts),
               "x-signature": signRequest(SECRET, ts, `POST\n${path}\n${testTenants()[0]}\n${body}`),
             }
           : {}),
         ...(actor
           ? {
-              "x-portal-identity": await mintPortalIdentity({ p: actor, exp: Date.now() + 60000 }, SECRET + "identity"),
+              "x-portal-identity": await mintPortalIdentity(
+                { t: testTenants()[0], p: actor, exp: Date.now() + 60000 },
+                SECRET + "identity",
+              ),
             }
           : {}),
       },

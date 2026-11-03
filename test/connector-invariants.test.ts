@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +16,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
@@ -153,7 +152,9 @@ test("status/selector parity — a personal-only connection reports connected (m
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const st = (await (await fetch(`${base}/v1/connectors/oauth/status?principalId=U1`)).json()) as {
+    const st = (await (
+      await fetch(`${base}/v1/connectors/oauth/status?principalId=U1`, { headers: testTenantHeaders() })
+    ).json()) as {
       providers: Record<string, { connected: boolean }>;
     };
     assert.equal(

@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { createWebhookReceiver, type DeliverResult } from "../src/webhooks/webhook-receiver.ts";
@@ -8,6 +7,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 const SECRET = "topsecret";
 let inFlight = 0;

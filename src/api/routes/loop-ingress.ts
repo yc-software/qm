@@ -139,5 +139,5 @@ export const loopIngressRoutes: ReadonlyArray<Route<ApiCtx>> = [
 ];
 
 export const loopIngressRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "POST", path: "/v1/loop-ingress/:id", auth: "public", handle: receive },
+  { method: "POST", path: "/v1/loop-ingress/:id", auth: "public", tenant: "row", handle: receive },
 ];

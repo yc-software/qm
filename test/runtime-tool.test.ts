@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import { recoveredRuntime } from "../src/agent/runtime-recovery.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { testConfigStore } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
 const claims: CapabilityClaims = {
@@ -34,7 +34,10 @@ test("runtime exposes actual dispatch separately from saved defaults and resolve
   assert.deepEqual(state.active, running);
   assert.equal((state.effective as RuntimeChoice).modelId, active.modelId);
   const result = await service(claims, running, { action: "set", model: "Astra" });
-  assert.deepEqual(result, { ok: true, handoff: { lifetime: "task", choice: { ...running, modelId: "gpt-6-astra" } } });
+  assert.deepEqual(result, {
+    ok: true,
+    handoff: { lifetime: "task", choice: { ...running, modelId: "gpt-6-astra" } },
+  });
   assert.equal(await config.getRuntimeSelectionDurable(claims.scopeId), null);
 });
 

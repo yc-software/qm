@@ -2,41 +2,41 @@ import assert from "node:assert/strict";
 import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
 import type { ExternalMember } from "../src/identity/external-members.ts";
 import { testMap } from "./support/test-database.ts";
-import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const id = createIdentityService(testMap(), { externalMembers: testMap() });
 await inTestTenant(() => id.refresh());
 
-tenantTest("classifies a same-org member as internal", () => {
+test("classifies a same-org member as internal", () => {
   const p = id.classify("U1");
   assert.equal(p.type, "internal");
   assert.equal(id.isInternal(p), true);
 });
 
-tenantTest("classifies a flagged Slack Connect user as guest", () => {
+test("classifies a flagged Slack Connect user as guest", () => {
   const p = id.classify("U2", true);
   assert.equal(p.type, "guest");
   assert.equal(id.isInternal(p), false);
 });
 
-tenantTest("resolves bot assertions as internal automation callers", () => {
+test("resolves bot assertions as internal automation callers", () => {
   const p = id.resolve({ externalId: "B1", isBot: true });
   assert.equal(p.type, "internal");
   assert.equal(id.isInternal(p), true);
 });
 
-tenantTest("audienceIsAllInternal is false if any member is non-internal (G1)", () => {
+test("audienceIsAllInternal is false if any member is non-internal (G1)", () => {
   const internal = id.classify("U1");
   const guest = id.classify("U2", true);
   assert.equal(id.audienceIsAllInternal([internal]), true);
   assert.equal(id.audienceIsAllInternal([internal, guest]), false);
 });
 
-tenantTest("audienceIsAllInternal is false for an empty audience (unknown ≠ all-internal)", () => {
+test("audienceIsAllInternal is false for an empty audience (unknown ≠ all-internal)", () => {
   assert.equal(id.audienceIsAllInternal([]), false);
 });
 
-tenantTest("a deactivated principal classifies as non-internal (fail-closed source, §3)", async () => {
+test("a deactivated principal classifies as non-internal (fail-closed source, §3)", async () => {
   const svc = createIdentityService(testMap(), { externalMembers: testMap() });
   await svc.refresh();
   assert.equal(svc.classify("U-leaver").type, "internal");
@@ -48,7 +48,7 @@ tenantTest("a deactivated principal classifies as non-internal (fail-closed sour
   assert.equal(svc.classify("U-leaver").type, "internal");
 });
 
-tenantTest("deactivation folds email case: a leaver stays out under any casing of their address", async () => {
+test("deactivation folds email case: a leaver stays out under any casing of their address", async () => {
   const svc = createIdentityService(testMap(), { externalMembers: testMap() });
   await svc.refresh();
   await svc.deactivate("Alice@Corp.com");
@@ -58,7 +58,7 @@ tenantTest("deactivation folds email case: a leaver stays out under any casing o
   assert.equal(svc.classify("Alice@Corp.com").type, "internal");
 });
 
-tenantTest("case fold does not merge distinct emails or touch non-email ids", async () => {
+test("case fold does not merge distinct emails or touch non-email ids", async () => {
   const svc = createIdentityService(testMap(), { externalMembers: testMap() });
   await svc.refresh();
   await svc.deactivate("bob@corp.com");
@@ -67,7 +67,7 @@ tenantTest("case fold does not merge distinct emails or touch non-email ids", as
   assert.equal(svc.classify("u-case").type, "internal");
 });
 
-tenantTest("durable rehydration folds a cased stored deactivation", async () => {
+test("durable rehydration folds a cased stored deactivation", async () => {
   const backing = testMap<DeactivationRecord>();
   const first = createIdentityService(backing, { externalMembers: testMap() });
   await first.deactivate("Carol@Corp.com");
@@ -76,7 +76,7 @@ tenantTest("durable rehydration folds a cased stored deactivation", async () => 
   assert.equal(second.classify("carol@corp.com").type, "guest");
 });
 
-tenantTest("deactivation is durable: a fresh service over the same backing rehydrates it", async () => {
+test("deactivation is durable: a fresh service over the same backing rehydrates it", async () => {
   const backing = testMap<DeactivationRecord>();
   const first = createIdentityService(backing, { externalMembers: testMap() });
   await first.deactivate("U-leaver");
@@ -87,7 +87,7 @@ tenantTest("deactivation is durable: a fresh service over the same backing rehyd
   assert.equal(second.classify("U-leaver").type, "guest");
 });
 
-tenantTest("a running instance refreshes deactivations written by another instance", async () => {
+test("a running instance refreshes deactivations written by another instance", async () => {
   const backing = testMap<DeactivationRecord>();
   const writer = createIdentityService(backing, { externalMembers: testMap() });
   const reader = createIdentityService(backing, { externalMembers: testMap() });
@@ -98,7 +98,7 @@ tenantTest("a running instance refreshes deactivations written by another instan
   assert.equal(reader.classify("U-leaver").type, "guest");
 });
 
-tenantTest("external members written by one instance reach another over the same backing", async () => {
+test("external members written by one instance reach another over the same backing", async () => {
   const externalMembers = testMap<ExternalMember>();
   const writer = createIdentityService(testMap(), { externalMembers });
   const reader = createIdentityService(testMap(), { externalMembers });
@@ -128,7 +128,7 @@ tenantTest("external members written by one instance reach another over the same
   assert.equal(late.classify("pat@partner.example").type, "guest");
 });
 
-tenantTest("a manual deactivation issued alongside a directory sync is not undone by it", async () => {
+test("a manual deactivation issued alongside a directory sync is not undone by it", async () => {
   const svc = createIdentityService(testMap(), { externalMembers: testMap() });
   await svc.refresh();
   await svc.deactivate("alice", "directory-sync");
@@ -137,7 +137,7 @@ tenantTest("a manual deactivation issued alongside a directory sync is not undon
   assert.equal(svc.classify("alice").type, "guest");
 });
 
-tenantTest("a deactivation written during a refresh survives that refresh", async () => {
+test("a deactivation written during a refresh survives that refresh", async () => {
   const entered = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();
   const backing = testMap<DeactivationRecord>();
@@ -162,7 +162,7 @@ tenantTest("a deactivation written during a refresh survives that refresh", asyn
   assert.equal(svc.classify("U-leaver").type, "guest");
 });
 
-tenantTest("a directory sync deactivates dropped members and self-heals when they reappear", async () => {
+test("a directory sync deactivates dropped members and self-heals when they reappear", async () => {
   const svc = createIdentityService(testMap(), { externalMembers: testMap() });
   await svc.refresh();
   const out = await svc.recordDirectorySync(["U-gone"], ["U-here"]);
@@ -174,7 +174,7 @@ tenantTest("a directory sync deactivates dropped members and self-heals when the
   assert.equal(svc.classify("U-gone").type, "internal");
 });
 
-tenantTest("a manual deactivation survives roster churn — only reactivate() clears it", async () => {
+test("a manual deactivation survives roster churn — only reactivate() clears it", async () => {
   const svc = createIdentityService(testMap(), { externalMembers: testMap() });
   await svc.refresh();
   await svc.deactivate("U-fired");

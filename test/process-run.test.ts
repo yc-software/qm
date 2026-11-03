@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { processRun, LEASE_LOST_CONSECUTIVE } from "../src/runs/worker.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
@@ -7,7 +6,7 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import type { Principal, TurnResult } from "../src/types.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 import { withoutTenant } from "../src/tenants/context.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };

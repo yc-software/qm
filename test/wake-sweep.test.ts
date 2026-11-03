@@ -60,8 +60,8 @@ test("the engaged registry: engage adds, settle removes, list reflects current (
 
 test("engaged sessions remember their tenant and each is swept under it", async () => {
   const reg = createEngagedRegistry();
-  withTenant(A, () => reg.engage("ch:C1:1"));
-  withTenant(B, () => reg.engage("ch:C1:1"));
+  await withTenant(A, () => reg.engage("ch:C1:1"));
+  await withTenant(B, () => reg.engage("ch:C1:1"));
   assert.deepEqual(
     reg.list().map((s) => s.tenantId),
     [A, B],

@@ -1,4 +1,4 @@
-import { test, afterEach } from "node:test";
+import { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   MODEL_REQUEST_CONTEXT_HEADERS,
@@ -10,6 +10,7 @@ import {
 } from "../src/model/provider-endpoints.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { loadConfig } from "../src/config.ts";
+import { test } from "./support/test-tenants.ts";
 
 const BASE_ENV = {} as NodeJS.ProcessEnv;
 

@@ -11,6 +11,7 @@ import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src
 import { testConfig } from "./support/test-config.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
@@ -39,9 +40,10 @@ async function fixture(secret: string | undefined = controlSecret) {
     return fetch(url, {
       method,
       headers: {
+        ...testTenantHeaders(),
         "content-type": "application/json",
         "x-timestamp": String(ts),
-        "x-signature": signRequest(sourceSecret, ts, `${method}\n${path}\n${raw}`),
+        "x-signature": signRequest(sourceSecret, ts, `${method}\n${path}\n${testTenants()[0]}\n${raw}`),
         authorization: `Bearer ${controlSecret}`,
         ...overrides,
       },
@@ -71,9 +73,11 @@ test("ownership controls require both source and distinct deployment credentials
     for (const credentials of invalidCredentials) {
       assert.equal((await srv.request("POST", handover(), credentials)).status, 401);
     }
-    const capability = await mintCapabilityToken(
-      { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
-      "capability-only-secret".repeat(3),
+    const capability = await inTestTenant(() =>
+      mintCapabilityToken(
+        { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
+        "capability-only-secret".repeat(3),
+      ),
     );
     for (const method of ["GET", "POST"]) {
       const response = await srv.request(method, method === "POST" ? handover() : undefined, {

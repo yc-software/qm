@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { serverDeps } from "../src/wiring.ts";
@@ -9,7 +8,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { testConfig } from "./support/test-config.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../src/model/model-catalog.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org" };
 

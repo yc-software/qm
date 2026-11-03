@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +15,7 @@ import { createAgentTools } from "../src/agent/agent-tools.ts";
 import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/surfaces/surface-tools.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "control-tool-ctx";
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
@@ -121,7 +120,10 @@ test("the cron tool lets a live org-admin owner attach unattended admin-read gra
 test("webhook registration through the tool requires a live person and leaves refused calls without effects", () =>
   inTestTenant(async () => {
     const { built, control } = build();
-    const request = { action: "handle the event", verification: { scheme: "hmac-sha256" as const, secret: "secret" } };
+    const request = {
+      action: "handle the event",
+      verification: { scheme: "hmac-sha256" as const, secret: "secret" },
+    };
     const auditBefore = await built.auditLog.events();
     for (const scope of ["personal:U1", "channel:C1"] as const) {
       for (const extra of [

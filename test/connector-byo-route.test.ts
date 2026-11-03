@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +15,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -277,9 +276,11 @@ test("an agent capability token can read the connector catalog; an unauthenticat
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const token = await mintCapabilityToken(
-      { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
-      secret,
+    const token = await inTestTenant(() =>
+      mintCapabilityToken(
+        { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
+        secret,
+      ),
     );
     const res = await fetch(`${base}/v1/connectors/catalog`, {
       headers: { "x-agent-capability": token, ...testTenantHeaders() },

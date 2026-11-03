@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { test, type TestContext } from "node:test";
+import { type TestContext } from "node:test";
 import { createCodexDeviceLogin } from "../src/model/codex-device-login.ts";
+import { test } from "./support/test-tenants.ts";
 
 function accessToken(accountId: string): string {
   const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
