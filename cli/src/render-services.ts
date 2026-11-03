@@ -1,5 +1,6 @@
 import { securityScreenEnv, type QmConfig, type RenderConfig } from "./config.ts";
 import { CliError } from "./log.ts";
+import { sandboxBaseRef } from "./manifest.ts";
 import { discoverPlugins, type ResolvedPlugin } from "./plugins.ts";
 import type { ServiceType } from "./render-api.ts";
 import { computedSecrets, runtimeSecretNames } from "./secrets.ts";
@@ -50,7 +51,7 @@ export type RenderWorkload = RenderBuild & {
   diskSizeGB?: number;
 };
 
-export function renderManagedCoreEnv(render: RenderConfig): Record<string, string> {
+export function renderManagedCoreEnv(render: RenderConfig, baseImage?: string): Record<string, string> {
   return {
     DATA_DIR: "/data",
     WORKSPACE_STORE: "postgres",
@@ -61,6 +62,7 @@ export function renderManagedCoreEnv(render: RenderConfig): Record<string, strin
     RENDER_WORKSPACE_ID: render.workspaceId,
     RENDER_REGION: render.region,
     RENDER_APP_REGION: render.appRegion ?? render.region,
+    RENDER_SANDBOX_IMAGE: baseImage ?? sandboxBaseRef(),
   };
 }
 
@@ -98,7 +100,7 @@ export function renderServiceEnv(
     ...hostedServiceEnv(config.services, config.env, service),
     ...(service === "core" ? virtualServiceEnv(config.services, config.env) : {}),
     ...plugin?.env,
-    ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+    ...orgEnv(service, config.orgId, config.publicUrl, brandEnvOf(config)),
     PORT: "8080",
     ...(coreAccess ? { CORE_API_URL: connections.coreUrl } : {}),
   };
@@ -130,7 +132,7 @@ export function renderServiceEnv(
   if (service === "core")
     Object.assign(out, {
       ...securityScreenEnv(config),
-      ...renderManagedCoreEnv(render),
+      ...renderManagedCoreEnv(render, config.sandbox?.baseImage),
       ...managedValues,
       ...(connections.projectId ? { RENDER_PROJECT_ID: connections.projectId } : {}),
       ...(connections.minioServiceId ? { RENDER_MINIO_SERVICE_ID: connections.minioServiceId } : {}),
@@ -152,10 +154,7 @@ export function renderServiceEnv(
     Object.assign(out, renderStorageEnv(connections.storage));
   }
   if (service === "portal") {
-    Object.assign(out, {
-      ...(connections.webUiUrl ? { WEB_UI_UPSTREAM: connections.webUiUrl } : {}),
-      ADMIN_UPSTREAM: connections.webUiUrl && config.services.includes("admin") ? `${connections.webUiUrl}/admin` : "",
-    });
+    if (connections.webUiUrl) out.WEB_UI_UPSTREAM = connections.webUiUrl;
     if (config.services.includes("auth")) {
       for (const key of ["AUTH_ALLOWED_EMAIL_DOMAIN", "OIDC_ALLOWED_EMAIL_DOMAIN"])
         out[key] = config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN ?? "";

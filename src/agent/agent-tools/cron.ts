@@ -103,7 +103,7 @@ export function cronTools(kit: ToolKit) {
       'list: 25 per page. get: one in full. runs: the fire log (a fire shows as "running" from the moment it starts). ' +
       "patch: edit in place; it keeps its destination (after →), so retarget it or create one to post here instead. `task` is the standing instructions; durable run-state goes in this conversation's Files with the file ID left in the note (recurring non-loop crons only), never only in `task` or on sandbox disk; small progress state can live in the note itself. " +
       "delete: remove for good. run: fire once now (refused while a fire is running). disable: pause.\n" +
-      `note (inside a fire): a one- or two-sentence shift-change note (max ${CRON_FIRE_NOTE_MAX_CHARS} chars) the next fire reads first; overwrites the previous one; never credentials.`,
+      `note (inside a fire): a one- or two-sentence shift-change note (max ${CRON_FIRE_NOTE_MAX_CHARS} chars) the next fire reads first; overwrites the previous one; never secret values (credential handles are fine).`,
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("create"),

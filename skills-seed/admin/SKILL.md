@@ -79,9 +79,9 @@ still have a key they are not granted. To check the org, read
 means Composio is configured.
 
 **Own OAuth apps.** `GET $AGENT_API_URL/v1/connectors/catalog` (header `x-agent-capability: $AGENT_API_TOKEN`) marks each provider
-configured with client credentials, from Admin → Connectors or deployment secrets, with
+configured with client credentials, from Settings → Connectors or deployment secrets, with
 `configured: true`. No such entry means none are.
-`GET /v1/admin/scopes/<org scope>?view=connectors` shows only apps added in Admin →
+`GET /v1/admin/scopes/<org scope>?view=connectors` shows only apps added in Settings →
 Connectors, not ones set by deployment secrets, so it cannot prove absence.
 
 Composio is absent only when the toolkits read fails and the org check finds no such
@@ -89,17 +89,17 @@ credential. If either source exists, skip silently. If a read
 fails, treat it as unknown, not absent, and do not offer setup. Only when both are
 confirmed absent, send one short message:
 
-- Composio (recommended): one project key covers most apps. Add it in Admin → Credentials
+- Composio (recommended): one project key covers most apps. Add it in Settings → Credentials
   as an org service credential with env key `COMPOSIO_API_KEY`, and set up callback
   verification as described in QM's `docs/composio.md`. If they would rather paste the
   key now, mint a one-time link with the `secret-drop` skill (service `composio`, envKey
   `COMPOSIO_API_KEY`) and share its `url`.
   A dropped key enables Composio only for them; teammates need the org credential.
-- Own OAuth apps: add each provider in Admin → Connectors. Each one needs the callback URL
+- Own OAuth apps: add each provider in Settings → Connectors. Each one needs the callback URL
   `<web origin>/v1/connectors/oauth/<provider>/callback`, which the Connectors page also
   shows.
 
-Name the pages (Admin → Credentials, Admin → Connectors) without links and offer the drop
+Name the pages (Settings → Credentials, Settings → Connectors) without links and offer the drop
 link. Never invent URLs or ask for keys or client secrets in chat. Never
 ask regular users to configure a source.
 
@@ -193,7 +193,6 @@ on the memory self-API is the lighter path; see the memory skill.)
 GET /v1/admin/sessions?scope=&limit=&cursor=  → conversation listing (turns, last activity); pass nextCursor for older rows
 GET /v1/admin/sessions/<id>?scope=            → a transcript
 GET /v1/admin/sessions/<id>/llm?scope=        → captured provider requests — what the model actually saw (debugging "why did it do X")
-GET /v1/admin/runs?scope=                     → queued/in-flight/recent runs
 GET /v1/admin/files?scope=                    → document store; read?id= / download?id= for content
 GET /v1/admin/volumes?scope=                  → a scope's computer/backup contents (sizes only)
 GET /v1/admin/crons|deployments|skills?scope= → artifacts by owner
@@ -230,6 +229,31 @@ grant change — don't offer it.
 Not available through you: who governs the org changes only in the admin dashboard,
 where the admin acts directly. If asked, point them there — don't try the API
 (`POST/DELETE /v1/admin/grants` refuses agent tokens).
+
+## Offboarding a user
+
+When someone leaves, `offboard_user` (`POST /v1/admin/users/<principal>/offboard`) stops what runs as them in
+one call. Run it from a DM with the admin; it reads private inventory.
+
+1. Preview: call without `apply`. `changes` lists every step it would take, first to last: deactivate
+   sign-in, disable and archive crons they own anywhere, pause their loops, disable their webhooks,
+   revoke their active keychain grants, archive apps and skills in their personal scope, retire their
+   personal computers (clearing the default first). An empty list for a misspelled id is your hint to
+   check the spelling.
+2. Show the admin the preview in plain words and get a yes. Retiring a computer destroys its disk; back up
+   its workspace first if they want it.
+3. Apply with `value: {"apply": true}`. Each change comes back `done` or `failed` with the error and is
+   audited as the admin. Re-running is safe: finished items drop out, so a retry does only what's left.
+4. Look for what it deliberately leaves, and ask the admin about each:
+   - apps, skills and computers they created in shared scopes (`deployments`, `skills`, `sandboxes`
+     filtered by creator) — others may rely on them;
+   - their stored credentials (`keychain`) — they stay encrypted and unused once grants are revoked;
+   - an admin grant — portal-only, revoked under Admins in the dashboard;
+   - computers whose provider can't retire them.
+
+Conversations, memory and files stay as the record. `reactivate_user` turns sign-in back on (even after a
+directory-sync removal) and restores nothing else; owners or admins restore crons, loops, apps and skills
+through their usual controls.
 
 ## Scheduling admin-reading work
 

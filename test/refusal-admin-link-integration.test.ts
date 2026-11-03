@@ -23,7 +23,6 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
@@ -77,7 +76,6 @@ function buildOrchestrator(sessions: SessionStore) {
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
     agent: createMockAgent(),
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
@@ -86,9 +84,10 @@ function buildOrchestrator(sessions: SessionStore) {
 }
 
 test("a failed turn surfaces a refusal whose admin link points at the real session UUID", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
   const orchestrator = buildOrchestrator(sessions);
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(url);
   const leaseTtlMs = 60_000;
 
   const threadRef = "ch:C_UUID_FIXTURE:100.1";
@@ -116,11 +115,11 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
   const got = await app.getRun(run.id);
   assert.equal(got?.result?.sessionId, session!.id, "getRun resolved threadRef → real UUID");
   assert.notEqual(got?.result?.sessionId, threadRef);
-  assert.equal(got?.result?.adminUrl, `${ADMIN}/admin/history/s/${session!.id}`);
+  assert.equal(got?.result?.adminUrl, `${ADMIN}/settings/history/s/${session!.id}`);
 
   const note = refusalNote(got!.result!, "channel");
   console.log("\n  Slack would post:\n  " + note + "\n");
-  assert.equal(note.split("Full error: ")[1], `${ADMIN}/admin/history/s/${session!.id} Try again, or DM me.`);
+  assert.equal(note.split("Full error: ")[1], `${ADMIN}/settings/history/s/${session!.id} Try again, or DM me.`);
   assert.doesNotMatch(note, /ch:C_UUID_FIXTURE/, "the link must not contain the threadRef");
   assert.doesNotMatch(note, /fully-internal/, "a turn failure is not a boundary refusal");
 });

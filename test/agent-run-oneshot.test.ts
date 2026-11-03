@@ -124,7 +124,6 @@ test("agentConfigOptions maps every Config knob the agent consumes, field by fie
       },
       captureLlmRequests: false,
 
-      reachExecEnabled: true,
       signingSecret: "sek",
       apiBaseUrl: "https://core.test",
       turnWallClockMs: 111_000,
@@ -148,7 +147,6 @@ test("agentConfigOptions maps every Config knob the agent consumes, field by fie
     },
     captureRequests: false,
     sandboxResources: true,
-    reachExec: true,
     controlTools: true,
     turnWallClockMs: 111_000,
     execTimeoutMs: 22_000,

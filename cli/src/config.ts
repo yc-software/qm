@@ -26,6 +26,8 @@ import {
 import { githubRepoUrl, isGitBranchName } from "./render-source.ts";
 import { envNum, isEnvVarName, isMissingOrPlaceholder } from "./util.ts";
 
+export const FARGATE_MAX_STOP_TIMEOUT_S = 120;
+
 export const CONFIG_FILENAME = "qm.config.jsonc";
 
 export const CONTRACT_VERSION = 1 as const;
@@ -626,9 +628,6 @@ function validate(raw: unknown, path: string): QmConfig {
     );
   }
 
-  if (services.includes("admin") && !services.includes("portal") && target === "aws") {
-    throw new CliError(`${path}: admin requires the authenticated portal`);
-  }
   const plugins = validatePlugins(o["plugins"], path);
   const skills = validateStringArray(o["skills"], path, "skills");
   const env = validateServiceMap(o["env"], path, "env", (v, k) => validateStringMap(v, path, `env.${k}`));
@@ -696,15 +695,6 @@ function validate(raw: unknown, path: string): QmConfig {
         `${path}: "secretEnv.${service}.${portEnv}" is managed by the deployment target and cannot be overridden`,
       );
     }
-  }
-  const portalMountsAdmin = services.includes("portal") && services.includes("admin");
-  if (portalMountsAdmin && env.admin?.ADMIN_BASE_PATH !== undefined && env.admin.ADMIN_BASE_PATH !== "/admin") {
-    throw new CliError(`${path}: env.admin.ADMIN_BASE_PATH must be "/admin" when portal and admin are enabled`);
-  }
-  if (portalMountsAdmin && secretEnv.admin?.ADMIN_BASE_PATH !== undefined) {
-    throw new CliError(
-      `${path}: secretEnv.admin.ADMIN_BASE_PATH is managed by the deployment target and cannot be overridden`,
-    );
   }
   for (const [i, plugin] of plugins.entries()) {
     if (plugin.env?.PORT !== undefined) {
@@ -1010,9 +1000,6 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
     throw new CliError(
       `${path}: AWS web-ui requires the authenticated portal; a portal-free ALB must never expose the Web UI`,
     );
-  }
-  if (config.services.includes("admin") && !hasPortal) {
-    throw new CliError(`${path}: AWS admin requires the authenticated portal`);
   }
   if (hasPortal && !hasWebUi) {
     throw new CliError(`${path}: AWS portal requires web-ui`);
@@ -1407,9 +1394,14 @@ function validateAws(
     }
     if (value["stopTimeout"] !== undefined) {
       const stopTimeout = value["stopTimeout"];
-      if (typeof stopTimeout !== "number" || !Number.isInteger(stopTimeout) || stopTimeout < 2 || stopTimeout > 120) {
+      if (
+        typeof stopTimeout !== "number" ||
+        !Number.isInteger(stopTimeout) ||
+        stopTimeout < 2 ||
+        stopTimeout > FARGATE_MAX_STOP_TIMEOUT_S
+      ) {
         throw new CliError(
-          `${path}: "aws.services.${name}.stopTimeout" must be an integer between 2 and 120 seconds (the Fargate limit)`,
+          `${path}: "aws.services.${name}.stopTimeout" must be an integer between 2 and ${FARGATE_MAX_STOP_TIMEOUT_S} seconds (the Fargate limit)`,
         );
       }
       service.stopTimeout = stopTimeout;
@@ -1674,7 +1666,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
       );
     }
   }
-  if (out.backend === "agent37" || out.backend === "superserve" || out.backend === "e2b" || out.backend === "render") {
+  if (out.backend === "agent37" || out.backend === "superserve" || out.backend === "e2b") {
     const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(

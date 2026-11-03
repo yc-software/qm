@@ -1,6 +1,7 @@
 import type { Delivery, ScopeId, SessionEntry } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
 import { type NewEntry, type SessionStore } from "../sessions/session-store.ts";
+import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
@@ -9,7 +10,7 @@ const WRITE_GIVEUP_MS = 10 * 60_000;
 
 type WebTranscriptSessions = Pick<
   SessionStore,
-  "appendMany" | "hasDeliveryEntry" | "get" | "getByThread" | "acquireLease" | "releaseLease" | "getEntries"
+  "appendMany" | "hasDeliveryEntry" | "get" | "getByThread" | "getEntries"
 >;
 
 export function turnRecordedFailure(
@@ -43,7 +44,11 @@ function classify(d: Delivery): Disposition {
 
 const transcribed = (type: string): boolean => type === "web" || type === "webhook";
 
-export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebTranscriptSessions): DeliveryStore {
+export function withWebTranscriptDeliveries(
+  store: DeliveryStore,
+  sessions: WebTranscriptSessions,
+  runs: Pick<RunStore, "inFlightForThread">,
+): DeliveryStore {
   const recorded = new Set<string>();
   const remember = (key: string): void => {
     if (recorded.size >= RECORDED_CACHE_CAP) recorded.clear();
@@ -52,54 +57,50 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
   const overdue = (d: Delivery): boolean =>
     d.destination.webTranscript?.kind !== "slack_reply" && Date.now() - d.createdAt > WRITE_GIVEUP_MS;
 
-  const appendTranscriptEntry = async (d: Delivery, session: { id: string; scopeId: ScopeId }): Promise<boolean> => {
-    const { lease } = await sessions.acquireLease(session.id, "backfill");
-    if (!lease) return false;
-    try {
-      const note = d.destination.webTranscript;
-      const reply = note?.kind === "slack_reply" ? note : undefined;
-      if (await sessions.hasDeliveryEntry(session.id, d.idempotencyKey, reply?.ts)) return true;
-      const failure = note?.kind === "turn_failure" ? note : undefined;
-      if (failure && turnRecordedFailure(await sessions.getEntries(session.id, { limit: DEDUPE_SCAN_LIMIT }), failure))
-        return true;
-      const turnId = failure?.runId ?? d.id;
-      if (
-        !failure &&
-        (await sessions.getEntries(session.id, { turnId })).some(
-          (entry) => entry.type === (reply ? "user" : "assistant"),
-        )
-      )
-        return true;
-      const scopeLabel = session.scopeId;
-      const ownReply = d.provenance?.sourceThreadRef === d.destination.target;
-      const via = d.provenance?.trigger && !ownReply ? d.provenance.trigger : undefined;
-      let entry: NewEntry;
-      if (reply) {
-        entry = {
-          type: "user",
-          payload: {
-            text: d.text,
-            name: reply.name,
-            ts: reply.ts,
-            slackReplyReceipt: true,
-            deliveryKey: d.idempotencyKey,
-          },
-          scopeLabel,
-        };
-      } else if (failure) {
-        entry = {
-          type: "system",
-          payload: { kind: "turn_failure", message: d.text, ...(failure.runId ? { runId: failure.runId } : {}) },
-          scopeLabel,
-        };
-      } else {
-        entry = { type: "assistant", payload: { text: d.text, ...(via ? { via } : {}) }, scopeLabel };
-      }
-      await sessions.appendMany({ ...lease, turnId }, [entry]);
+  const appendTranscriptEntry = async (
+    d: Delivery,
+    session: { id: string; scopeId: ScopeId; threadRef: string },
+  ): Promise<boolean> => {
+    if (await hasRunningRun(runs, session.threadRef)) return false;
+    const note = d.destination.webTranscript;
+    const reply = note?.kind === "slack_reply" ? note : undefined;
+    if (await sessions.hasDeliveryEntry(session.id, d.idempotencyKey, reply?.ts)) return true;
+    const failure = note?.kind === "turn_failure" ? note : undefined;
+    if (failure && turnRecordedFailure(await sessions.getEntries(session.id, { limit: DEDUPE_SCAN_LIMIT }), failure))
       return true;
-    } finally {
-      await sessions.releaseLease(lease);
+    const turnId = failure?.runId ?? d.id;
+    if (
+      !failure &&
+      (await sessions.getEntries(session.id, { turnId })).some((entry) => entry.type === (reply ? "user" : "assistant"))
+    )
+      return true;
+    const scopeLabel = session.scopeId;
+    const ownReply = d.provenance?.sourceThreadRef === d.destination.target;
+    const via = d.provenance?.trigger && !ownReply ? d.provenance.trigger : undefined;
+    let entry: NewEntry;
+    if (reply) {
+      entry = {
+        type: "user",
+        payload: {
+          text: d.text,
+          name: reply.name,
+          ts: reply.ts,
+          slackReplyReceipt: true,
+          deliveryKey: d.idempotencyKey,
+        },
+        scopeLabel,
+      };
+    } else if (failure) {
+      entry = {
+        type: "system",
+        payload: { kind: "turn_failure", message: d.text, ...(failure.runId ? { runId: failure.runId } : {}) },
+        scopeLabel,
+      };
+    } else {
+      entry = { type: "assistant", payload: { text: d.text, ...(via ? { via } : {}) }, scopeLabel };
     }
+    await sessions.appendMany({ sessionId: session.id, turnId }, [entry]);
+    return true;
   };
 
   const recordedForDelivery = async (d: Delivery): Promise<boolean> => {

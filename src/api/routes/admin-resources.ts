@@ -37,59 +37,11 @@ import { PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
 import { reportFailure, swallowAs } from "../../util/errors.ts";
-import {
-  DEFAULT_SECURITY_SCREEN_RUBRIC,
-  parseSecurityPosture,
-  SECURITY_POSTURES,
-  type SecurityPosture,
-} from "../../security/security-posture.ts";
+import { parseSecurityPosture, SECURITY_POSTURES, type SecurityPosture } from "../../security/security-posture.ts";
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
-
-export interface AutoFlaggerDraft {
-  modelId: string;
-  rubric: string;
-}
-
-const AUTO_FLAGGER_MAX_RUBRIC_CHARS = 20_000;
-
-/** The flagger a deployment falls back to when nothing is configured. */
-export function defaultAutoFlaggerConfig(deps: Pick<ServerDeps, "baseModelDefault">): AutoFlaggerDraft {
-  return {
-    modelId: defaultModel(deps.baseModelDefault),
-    rubric: DEFAULT_SECURITY_SCREEN_RUBRIC,
-  };
-}
-
-/**
- * Validate an Auto flagger configuration — shared by the governance save and the test run, so a
- * rubric that tests cleanly is exactly the one that can be applied.
- */
-export async function parseAutoFlaggerDraft(
-  deps: Pick<ServerDeps, "providerKeys" | "modelCredentials">,
-  body: { modelId?: unknown; rubric?: unknown },
-): Promise<{ value: AutoFlaggerDraft } | { error: string }> {
-  if (typeof body.modelId !== "string" || !body.modelId.trim()) {
-    return { error: "auto-flagger requires a modelId" };
-  }
-  const modelId = body.modelId.trim();
-  if (!modelSupported(modelId)) {
-    return { error: `model ${modelId} is not supported` };
-  }
-  if (typeof body.rubric !== "string" || !body.rubric.trim() || body.rubric.length > AUTO_FLAGGER_MAX_RUBRIC_CHARS) {
-    return {
-      error: `auto-flagger requires a non-empty rubric of at most ${AUTO_FLAGGER_MAX_RUBRIC_CHARS} characters`,
-    };
-  }
-  const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
-  if (!modelServiceable(modelId, managedKeys)) {
-    return { error: `model ${modelId} isn't serviceable on this deployment` };
-  }
-  return { value: { modelId, rubric: body.rubric.trim() } };
-}
 
 type Actor = { id: string };
 
@@ -179,30 +131,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       (deps, scope, posture) =>
         posture === null ? deps.config!.clearSharingPosture(scope) : deps.config!.setSharingPosture(scope, posture),
     ),
-  },
-  {
-    id: "auto-flagger",
-    refreshesModels: true,
-    kind: "custom",
-    target: "org",
-    clearable: true,
-    label:
-      "The model and classification rubric used to screen external content when the deployment enables model screening.",
-    readKey: "autoFlagger",
-    get: (deps) => deps.config!.getAutoFlaggerConfig(),
-    apply: async (ctx, _actor, scope) => {
-      const bad = orgOnly(scope, "the Auto flagger is org-wide");
-      if (bad) return bad;
-      const body = ctx.body as { reset?: unknown };
-      if (body.reset === true) {
-        await ctx.deps.config!.setAutoFlaggerConfig(null);
-        return { ok: true };
-      }
-      const parsed = await parseAutoFlaggerDraft(ctx.deps, ctx.body as Record<string, unknown>);
-      if ("error" in parsed) return parsed;
-      await ctx.deps.config!.setAutoFlaggerConfig(parsed.value);
-      return { ok: true };
-    },
   },
   decisionsResource,
   {

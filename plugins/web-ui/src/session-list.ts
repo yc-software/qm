@@ -333,6 +333,6 @@ function nextFireIn(at: number): string {
   const mins = Math.round((at - Date.now()) / 60_000);
   if (mins <= 0) return "due now";
   if (mins < 60) return `in ${mins}m`;
-  if (mins < 1440) return `in ${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
+  if (mins < 1440) return `in ${Math.floor(mins / 60)}h ${mins % 60}m`;
   return `in ${Math.floor(mins / 1440)}d`;
 }

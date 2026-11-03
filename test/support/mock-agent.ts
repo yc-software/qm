@@ -24,7 +24,6 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!run ",
   "!execute ",
   "!scratch ",
-  "!reach ",
   "!paused-approval ",
   "!collect-approval ",
   "!collect-exec ",
@@ -459,25 +458,6 @@ export function createMockAgent(): Agent {
         }
         turn.onProgress?.({ toolCalls: 1 });
         usedTool = true;
-      } else if (command0.startsWith("!reach ")) {
-        const rest = command0.slice("!reach ".length);
-        const sp = rest.indexOf(" ");
-        const room = sp === -1 ? rest : rest.slice(0, sp);
-        const command = sp === -1 ? "" : rest.slice(sp + 1);
-        await turn.emit({
-          type: "tool_call",
-          payload: { tool: "execute", command, scope: room },
-          scopeLabel: turn.scopeLabel,
-        });
-        try {
-          const result = await turn.tools.execute(command, { reachTarget: room });
-          await turn.emit({ type: "tool_result", payload: { ...result }, scopeLabel: turn.scopeLabel });
-          reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
-        } catch (e) {
-          reply = `[reach error] ${e instanceof Error ? e.message : String(e)}`;
-        }
-        turn.onProgress?.({ toolCalls: 1 });
-        usedTool = true;
       } else if (command0.startsWith("!paused-approval ")) {
         const command = command0.slice("!paused-approval ".length);
         await turn.emit({
@@ -579,18 +559,18 @@ export function createMockAgent(): Agent {
         reply = content ?? `(no file: ${path})`;
       } else if (command0.startsWith("!memorysearch ")) {
         const query = command0.slice("!memorysearch ".length).trim();
-        const hits = await turn.tools.memorySearch(query);
+        const found = await turn.tools.memorySearch(query);
         usedTool = true;
-        reply = hits?.join("\n") ?? "(memory unavailable)";
+        reply = found?.hits.join("\n") ?? "(memory unavailable)";
       } else if (command0.startsWith("!memoryread ")) {
         const scope = command0.slice("!memoryread ".length).trim();
         reply = (await turn.tools.memoryRead(scope)) ?? "(memory unavailable)";
         usedTool = true;
       } else if (command0.startsWith("!memoryremember ")) {
         const fact = command0.slice("!memoryremember ".length).trim();
-        const added = await turn.tools.memoryAdd([fact]);
+        const written = await turn.tools.memoryAdd([fact]);
         usedTool = true;
-        reply = added === null ? "(memory unavailable)" : `remembered ${added}`;
+        reply = written === null ? "(memory unavailable)" : `remembered ${written.added}`;
       } else if (command0.startsWith("!skill-run ")) {
         const rest = command0.slice(11).trim();
         const sp = rest.indexOf(" ");
@@ -994,15 +974,9 @@ export function createMockAgent(): Agent {
       return Promise.resolve(JSON.stringify({ act: false }));
     },
 
-    async screenSecurity({
-      payload,
-      modelId,
-      systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT,
-      signal,
-      recordModelCall,
-      recordLlmRequest,
-    }) {
-      const model = modelId ?? "mock-security";
+    async screenSecurity({ payload, signal, recordModelCall, recordLlmRequest }) {
+      const systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT;
+      const model = "mock-security";
       recordModelCall({
         model,
         inputTokens: countTokens(systemPrompt) + countTokens(payload),

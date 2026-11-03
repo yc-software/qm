@@ -47,7 +47,7 @@ test("init → uncomment the scaffold's botName/orgName → check accepts → sl
 test("outputs refuses a manifest that predates a botName change until slack render", () => {
   const dep = tmp("identity-outputs");
   const org = `qm-e2e-id-${process.pid}`;
-  const services: QmConfig["services"] = ["core", "web-ui", "admin", "portal", "slack"];
+  const services: QmConfig["services"] = ["core", "web-ui", "portal", "slack"];
   try {
     writeConfig(dep, { orgId: org, target: "docker", services });
     assert.equal(runCli(["slack", "render"], { cwd: dep }).code, 0);

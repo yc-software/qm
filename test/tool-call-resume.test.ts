@@ -25,7 +25,6 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
@@ -263,7 +262,6 @@ function buildScenario() {
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy: createDeployService({
@@ -293,14 +291,10 @@ async function seedDeadAttempt(
   callPayload: Record<string, unknown>,
 ): Promise<{ sessionId: string; userSeq: number }> {
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", personal);
-  const { lease } = await sessions.acquireLease(session.id);
-  try {
-    const user = await sessions.append(lease!, { type: "user", payload: { text: ASK }, scopeLabel: personal });
-    await sessions.append(lease!, { type: "tool_call", payload: callPayload, scopeLabel: personal });
-    return { sessionId: session.id, userSeq: user.seq };
-  } finally {
-    await sessions.releaseLease(lease!);
-  }
+  const writer = { sessionId: session.id };
+  const user = await sessions.append(writer, { type: "user", payload: { text: ASK }, scopeLabel: personal });
+  await sessions.append(writer, { type: "tool_call", payload: callPayload, scopeLabel: personal });
+  return { sessionId: session.id, userSeq: user.seq };
 }
 
 test("a retry whose dangling call was marked retry-safe re-runs it silently instead of warning about an unknown outcome", async () => {

@@ -20,7 +20,6 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
@@ -107,7 +106,6 @@ function buildScenario(interruptAfterToolResult = false) {
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox,
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy: createDeployService({
@@ -185,19 +183,18 @@ test("a retry does not claim a later message's answer as its own", async () => {
   const { orchestrator, sessions, runs, turns, input, asks } = buildScenario();
   const mine = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
-  const { lease } = await sessions.acquireLease(session.id);
-  const boundary = await sessions.append(lease!, {
+  const writer = { sessionId: session.id };
+  const boundary = await sessions.append(writer, {
     type: "user",
     payload: { text: ASK },
     scopeLabel: session.scopeId,
   });
-  await sessions.append(lease!, { type: "user", payload: { text: "a later ask" }, scopeLabel: session.scopeId });
-  await sessions.append(lease!, {
+  await sessions.append(writer, { type: "user", payload: { text: "a later ask" }, scopeLabel: session.scopeId });
+  await sessions.append(writer, {
     type: "assistant",
     payload: { text: "answering the later ask" },
     scopeLabel: session.scopeId,
   });
-  await sessions.releaseLease(lease!);
   await runs.noteTurnUserSeq(mine.id, boundary.seq);
 
   const retry = await orchestrator.handleTurn(input(ASK, { runId: mine.id, attempt: 2 }));
@@ -207,38 +204,16 @@ test("a retry does not claim a later message's answer as its own", async () => {
   assert.equal((await asks()).length, 1, "resuming does not append the ask again");
 });
 
-test("the replay does not need the session lease, so a busy session cannot requeue it again", async () => {
-  const { orchestrator, sessions, runs, turns, input } = buildScenario();
-  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
-  await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 }));
-
-  const session = (await sessions.getByThread(conversation.threadRef))!;
-  const { lease } = await sessions.acquireLease(session.id);
-  assert.ok(lease, "something else now holds the session");
-  try {
-    const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
-    assert.equal(retry.status, "ok", "the replay is not refused as session_busy");
-    assert.equal(retry.reply, "it runs on this conversation's computer");
-    assert.equal(turns.length, 1);
-  } finally {
-    await sessions.releaseLease(lease!);
-  }
-});
-
 async function seedTurn(
   sessions: ReturnType<typeof buildScenario>["sessions"],
   entries: Array<{ type: "user" | "assistant" | "tool_call" | "tool_result"; payload: Record<string, unknown> }>,
 ): Promise<number> {
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
-  const { lease } = await sessions.acquireLease(session.id);
+  const writer = { sessionId: session.id };
   let first = -1;
-  try {
-    for (const e of entries) {
-      const appended = await sessions.append(lease!, { type: e.type, payload: e.payload, scopeLabel: session.scopeId });
-      if (first < 0) first = appended.seq;
-    }
-  } finally {
-    await sessions.releaseLease(lease!);
+  for (const e of entries) {
+    const appended = await sessions.append(writer, { type: e.type, payload: e.payload, scopeLabel: session.scopeId });
+    if (first < 0) first = appended.seq;
   }
   return first;
 }

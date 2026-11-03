@@ -22,7 +22,6 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
@@ -78,7 +77,6 @@ function buildOrchestrator(
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deliveries,
@@ -101,15 +99,13 @@ test("a resumed turn whose dead attempt already posted does not post its closing
   };
   const threadRef = "ch:C1:100.1";
   const session = await sessions.getOrCreateByThread(threadRef, "channel", "channel:C1");
-  const { lease } = await sessions.acquireLease(session.id);
-  assert.ok(lease);
+  const writer = { sessionId: session.id };
   for (const [type, payload] of [
     ["user", { text: "run it and tell me the output", runId: "run-1" }],
     ["tool_call", { tool: "slack", action: "post", callId: "p1", text: "Output: ok" }],
     ["tool_result", { tool: "slack", action: "post", callId: "p1", ok: true, result: "[sent]" }],
   ] as const)
-    await sessions.append(lease, { type, payload, scopeLabel: "channel:C1" });
-  await sessions.releaseLease(lease);
+    await sessions.append(writer, { type, payload, scopeLabel: "channel:C1" });
   const orch = buildOrchestrator(agent, sessions, deliveries);
   const result = await orch.handleTurn({
     surface: "slack",

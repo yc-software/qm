@@ -131,6 +131,7 @@ export const sessionsState = {
   webOnly: false,
   hasArchived: false,
   collapsedProjectScopes: new Set<string>(),
+  expandedProjectScopes: new Set<string>(),
 };
 
 let selection: SessionSelection = emptySelection();
@@ -217,6 +218,9 @@ export function resetSessionsState(): void {
   sessionPatchEpoch++;
   sessionPatchTails.clear();
   sessionPatchVersions.clear();
+  for (const t of treeRefreshes.values()) if (t.timer) clearTimeout(t.timer);
+  treeRefreshes.clear();
+  unseenThreadParents.clear();
   sessionsState.list = [];
   sessionsState.loaded = false;
   listCurrent = false;
@@ -229,6 +233,7 @@ export function resetSessionsState(): void {
   sessionsState.openingKey = null;
   clearTranscriptCache();
   sessionsState.collapsedProjectScopes.clear();
+  sessionsState.expandedProjectScopes.clear();
   renameDraft = "";
   refreshingTitleIds.clear();
   showArchived = false;
@@ -451,9 +456,13 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
   if (item.kind === "session") return sessionRow(item.session);
   const collapsed = sessionsState.collapsedProjectScopes.has(item.scopeId);
   let glyph: IconNode | null = Folder;
+  let glyphSize = 14;
   if (item.groupKind === "personal") glyph = null;
   else if (item.groupKind === "channel") glyph = Hash;
-  else if (item.groupKind === "group") glyph = Users;
+  else if (item.groupKind === "group") {
+    glyph = Users;
+    glyphSize = 12;
+  }
   let fallbackName = "Project";
   if (item.groupKind === "channel") fallbackName = "Channel";
   else if (item.groupKind === "group") fallbackName = "Group DM";
@@ -475,7 +484,7 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                 @click=${() => toggleRecentProject(item.scopeId)}
               >
                 <span class="recent-project-glyph">
-                  ${glyph && !collapsed ? html`<span class="glyph">${icon(glyph, 14)}</span>` : nothing}
+                  ${glyph && !collapsed ? html`<span class="glyph">${icon(glyph, glyphSize)}</span>` : nothing}
                   <span class="chev">${icon(collapsed ? ChevronRight : ChevronDown, 13)}</span>
                 </span>
                 <span class="recent-project-name" dir="auto">${name.replace(/^#/, "")}</span>
@@ -507,18 +516,51 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
             </div>`
       }
       <div class="recent-project-children" id=${childrenId} ?hidden=${collapsed}>
-        ${
-          collapsed
-            ? nothing
-            : repeat(
-                item.sessions.filter((session) => shownThreads.has(session.threadRef)),
-                (session) => session.threadRef,
-                (session) => sessionRow(session, true),
-              )
-        }
+        ${collapsed ? nothing : projectChildren(item, shownThreads)}
       </div>
     </section>
   `;
+}
+
+const PROJECT_PREVIEW_ROWS = 5;
+
+function projectChildren(
+  item: Extract<RecentItem, { kind: "project" }>,
+  shownThreads: ReadonlySet<string>,
+): TemplateResult {
+  const children = item.sessions.filter((session) => shownThreads.has(session.threadRef));
+  const capped = item.groupKind !== "personal" && children.length > PROJECT_PREVIEW_ROWS;
+  const expanded = sessionsState.expandedProjectScopes.has(item.scopeId);
+  const rows =
+    capped && !expanded ? children.filter((session, i) => i < PROJECT_PREVIEW_ROWS || keepVisible(session)) : children;
+  return html`${repeat(
+    rows,
+    (session) => session.threadRef,
+    (session) => sessionRow(session, true),
+  )}${
+    capped
+      ? html`<button
+          class="archived-toggle recent-project-more"
+          type="button"
+          aria-expanded=${expanded ? "true" : "false"}
+          @click=${() => toggleProjectExpanded(item.scopeId)}
+        >
+          ${expanded ? "Show less" : "Show more"}
+        </button>`
+      : nothing
+  }`;
+}
+
+function keepVisible(s: CoreSession): boolean {
+  return (
+    isActiveRow(s) || selection.ids.has(s.id) || sessionsState.openMenuId === s.id || sessionsState.renamingId === s.id
+  );
+}
+
+function toggleProjectExpanded(scopeId: string): void {
+  if (sessionsState.expandedProjectScopes.has(scopeId)) sessionsState.expandedProjectScopes.delete(scopeId);
+  else sessionsState.expandedProjectScopes.add(scopeId);
+  renderList();
 }
 
 function toggleRecentProject(scopeId: string): void {
@@ -1142,6 +1184,12 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
 
 let draggingChildId: string | null = null;
 
+function liftForDragSnapshot(target: EventTarget | null): void {
+  if (!(target instanceof HTMLElement)) return;
+  target.classList.add("drag-snapshot");
+  requestAnimationFrame(() => target.classList.remove("drag-snapshot"));
+}
+
 export function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   if (!s.id) {
     e.preventDefault();
@@ -1149,6 +1197,7 @@ export function onSessionDragStart(e: DragEvent, s: CoreSession): void {
   }
   e.dataTransfer?.setData("application/x-webui-session", s.id);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  liftForDragSnapshot(e.currentTarget);
   draggingChildId = s.parentSessionId ? s.id : null;
   appState.listEl?.classList.toggle("detach-drop-target", Boolean(draggingChildId));
   if (!draggingChildId) beginSessionDrag(s);
@@ -1815,15 +1864,11 @@ async function runSessionsRefresh(
   listRequestedAt = Date.now();
   try {
     const surface = sessionsState.webOnly ? "web" : undefined;
-    const roots = [...new Set(openConversationIds())];
-    const nested = roots.filter((id) => sessionsState.list.some((row) => row.id === id && row.parentSessionId));
-    const [page, children, nestedRows] = await Promise.all([
+    const nested = [...new Set(openConversationIds())].filter((id) =>
+      sessionsState.list.some((row) => row.id === id && row.parentSessionId),
+    );
+    const [page, nestedRows] = await Promise.all([
       fetchSessionPage({ limit: SESSION_BATCH_SIZE, ...(surface ? { surface } : {}) }),
-      Promise.all(
-        roots.map(
-          async (id) => [id, await fetchSessionChildren(id).catch(swallowAs("web-ui: load subagents", null))] as const,
-        ),
-      ),
       Promise.all(nested.map((id) => fetchSessionRow({ id }).catch(swallowAs("web-ui: refresh subagent", null)))),
     ]);
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
@@ -1832,7 +1877,7 @@ async function runSessionsRefresh(
       return false;
     }
     const last = page.sessions[page.sessions.length - 1];
-    let list = mergeFirstPage(
+    const list = mergeFirstPage(
       sessionsState.list,
       page,
       {
@@ -1842,12 +1887,10 @@ async function runSessionsRefresh(
       },
       openConversationIds(),
     );
-    for (const [id, rows] of children) if (rows) list = mergeChildren(list, id, rows);
-    list = upsertSessions(
+    sessionsState.list = upsertSessions(
       list,
       nestedRows.filter((row) => row !== null),
     );
-    sessionsState.list = list;
     sessionsState.hasArchived = Boolean(page.hasArchived);
     if (!activePaged) activeCursor = page.nextCursor;
     sessionsState.loaded = true;
@@ -1870,6 +1913,103 @@ async function runSessionsRefresh(
   }
 }
 
+const TREE_REFRESH_MS = 2_000;
+const UNSEEN_THREAD_RETRY_MS = 30_000;
+type TreeRefresh = {
+  at: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  running: boolean;
+  again: boolean;
+  fetches: number;
+  applied: number;
+};
+const treeRefreshes = new Map<string, TreeRefresh>();
+const unseenThreadParents = new Map<string, Promise<string | null>>();
+
+export function refreshTreesFor(threadRef: string): void {
+  const row = sessionsState.list.find((s) => s.threadRef === threadRef);
+  if (row) return refreshTreesFrom(row.id);
+  if (!openConversationIds().length) return;
+  let parent = unseenThreadParents.get(threadRef);
+  if (!parent) {
+    const lookup = fetchSessionRow({ threadRef }).then(
+      (found) => {
+        if (!found) forgetUnseenThread(threadRef, lookup);
+        return found?.parentSessionId ?? null;
+      },
+      (e: unknown) => {
+        forgetUnseenThread(threadRef, lookup);
+        swallow("web-ui: look up subagent parent", e);
+        return null;
+      },
+    );
+    parent = lookup;
+    unseenThreadParents.set(threadRef, parent);
+  }
+  void parent.then((id) => id && refreshTreesFrom(id));
+}
+
+function forgetUnseenThread(threadRef: string, lookup: Promise<string | null>): void {
+  setTimeout(() => {
+    if (unseenThreadParents.get(threadRef) === lookup) unseenThreadParents.delete(threadRef);
+  }, UNSEEN_THREAD_RETRY_MS);
+}
+
+export function refreshOpenTrees(): void {
+  for (const id of new Set(openConversationIds())) refreshTree(id);
+}
+
+function refreshTreesFrom(id: string): void {
+  const open = new Set(openConversationIds());
+  const seen = new Set<string>();
+  for (
+    let at: string | undefined = id;
+    at && !seen.has(at);
+    at = sessionsState.list.find((s) => s.id === at)?.parentSessionId
+  ) {
+    seen.add(at);
+    if (open.has(at)) refreshTree(at);
+  }
+}
+
+function treeRefresh(rootId: string): TreeRefresh {
+  let t = treeRefreshes.get(rootId);
+  if (!t) treeRefreshes.set(rootId, (t = { at: 0, timer: null, running: false, again: false, fetches: 0, applied: 0 }));
+  return t;
+}
+
+export function refreshTree(rootId: string): void {
+  const t = treeRefresh(rootId);
+  if (t.running) t.again = true;
+  else if (!t.timer)
+    t.timer = setTimeout(() => void runTreeRefresh(rootId, t), Math.max(0, t.at + TREE_REFRESH_MS - Date.now()));
+}
+
+async function runTreeRefresh(rootId: string, t: TreeRefresh): Promise<void> {
+  t.timer = null;
+  if (!openConversationIds().includes(rootId)) return;
+  t.running = true;
+  t.at = Date.now();
+  const epoch = sessionPatchEpoch;
+  const request = ++t.fetches;
+  try {
+    const children = await fetchSessionChildren(rootId).catch(swallowAs("web-ui: load subagents", null));
+    if (epoch !== sessionPatchEpoch) t.again = true;
+    if (!children || request < t.applied || epoch !== sessionPatchEpoch || !openConversationIds().includes(rootId))
+      return;
+    t.applied = request;
+    sessionsState.list = mergeChildren(sessionsState.list, rootId, children);
+    renderList();
+    for (const conversation of allConversations()) conversation.redraw();
+  } finally {
+    t.running = false;
+    if (t.again) {
+      t.again = false;
+      refreshTree(rootId);
+    }
+  }
+}
+
 export async function loadScopeSessions(scopeId: string): Promise<void> {
   const page = await fetchSessionPage({ limit: SESSION_BATCH_SIZE, scope: scopeId });
   sessionsState.list = upsertSessions(sessionsState.list, page.sessions);
@@ -1878,6 +2018,8 @@ export async function loadScopeSessions(scopeId: string): Promise<void> {
 async function loadSessionNeighbors(s: CoreSession): Promise<void> {
   const parentId = s.parentSessionId;
   const needsParent = Boolean(parentId) && !sessionsState.list.some((row) => row.id === parentId);
+  const tree = treeRefresh(s.id);
+  const request = ++tree.fetches;
   const [children, parent] = await Promise.all([
     fetchSessionChildren(s.id).catch(swallowAs("web-ui: load subagents", null)),
     needsParent && parentId
@@ -1887,7 +2029,10 @@ async function loadSessionNeighbors(s: CoreSession): Promise<void> {
   let list = sessionsState.list.some((row) => row.id === s.id)
     ? sessionsState.list
     : upsertSessions(sessionsState.list, [s]);
-  if (children) list = mergeChildren(list, s.id, children);
+  if (children && request > tree.applied) {
+    tree.applied = request;
+    list = mergeChildren(list, s.id, children);
+  }
   if (parent) list = upsertSessions(list, [parent]);
   if (list === sessionsState.list) return;
   sessionsState.list = list;

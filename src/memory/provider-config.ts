@@ -34,6 +34,7 @@ interface McpMemoryProviderConfig {
   read: McpMemoryOperationConfig;
   write?: McpMemoryOperationConfig;
   timeoutMs: number;
+  attestActor: boolean;
 }
 
 type AnyMemoryProviderConfig = McpMemoryProviderConfig | MemorableMemoryProviderConfig;
@@ -66,23 +67,27 @@ function string(value: unknown, at: string): string {
   return value;
 }
 
+const PRIVATE_HOSTS = ["localhost", "127.0.0.1"];
+const PRIVATE_SUFFIXES = [".internal", ".flycast", ".local"];
+const ACCEPTED_HOSTS = [...PRIVATE_HOSTS, ...PRIVATE_SUFFIXES.map((suffix) => `*${suffix}`)];
+const URL_HELP = `Accepted: https://<host>, or http:// on ${ACCEPTED_HOSTS.slice(0, -1).join(", ")} or ${ACCEPTED_HOSTS.at(-1)}; see docs/memory-providers.md#troubleshooting.`;
+
 function privateMcpUrl(value: unknown, at: string): string {
   const raw = string(value, at);
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    throw new Error(`${at} must be a valid URL`);
+    throw new Error(`${at} is not a valid URL (value not shown). ${URL_HELP}`);
   }
+  const shown = `${url.protocol}//${url.hostname}`;
   const privateHttp =
     url.protocol === "http:" &&
-    (url.hostname === "localhost" ||
-      url.hostname === "127.0.0.1" ||
-      url.hostname.endsWith(".internal") ||
-      url.hostname.endsWith(".flycast") ||
-      url.hostname.endsWith(".local"));
-  if ((url.protocol !== "https:" && !privateHttp) || url.username || url.password || url.hash)
-    throw new Error(`${at} must use HTTPS or a recognized private HTTP host`);
+    (PRIVATE_HOSTS.includes(url.hostname) || PRIVATE_SUFFIXES.some((suffix) => url.hostname.endsWith(suffix)));
+  if (url.username || url.password || url.hash)
+    throw new Error(`${at} (${shown}) must not carry credentials or a #fragment. ${URL_HELP}`);
+  if (url.protocol !== "https:" && !privateHttp)
+    throw new Error(`${at} (${shown}) must use HTTPS or a recognized private HTTP host. ${URL_HELP}`);
   return raw.replace(/\/+$/, "");
 }
 
@@ -143,14 +148,17 @@ export function parseMemoryProviderConfig(
     const raw = object(value, `MEMORY_PROVIDER_CONFIG.providers[${i}]`);
     const id = string(raw.id, `MEMORY_PROVIDER_CONFIG.providers[${i}].id`);
     if (!ID.test(id) || id === "default") throw new Error(`invalid memory provider id: ${id}`);
+    if (raw.attestActor !== undefined && (raw.type !== "mcp" || typeof raw.attestActor !== "boolean"))
+      throw new Error(`memory provider ${id}.attestActor must be true or false on an mcp provider`);
     if (raw.type === "memorable") return parseMemorableProvider(raw, id, env);
-    if (raw.type !== "mcp") throw new Error(`memory provider ${id} has unsupported type`);
+    if (raw.type !== "mcp") throw new Error(`memory provider ${id} has unsupported type; use "mcp" or "memorable"`);
     const timeoutMs = timeout(raw.timeoutMs, `memory provider ${id}.timeoutMs`, 3_000, 30_000);
     return {
       id,
       type: "mcp" as const,
       url: privateMcpUrl(raw.url, `memory provider ${id}.url`),
       timeoutMs,
+      attestActor: raw.attestActor === true,
       read: operation(raw.read, `memory provider ${id}.read`, env),
       ...(raw.write ? { write: operation(raw.write, `memory provider ${id}.write`, env) } : {}),
     } satisfies McpMemoryProviderConfig;

@@ -3,10 +3,8 @@ import type { ScopeId, SpawnMeta } from "../../src/types.ts";
 import type { SessionStore } from "../../src/sessions/session-store.ts";
 
 async function appendUser(store: SessionStore, sessionId: string, scope: ScopeId, text: string): Promise<void> {
-  const { lease } = await store.acquireLease(sessionId);
-  assert.ok(lease);
-  await store.append(lease, { type: "user", payload: { text }, scopeLabel: scope });
-  await store.releaseLease(lease);
+  const writer = { sessionId: sessionId };
+  await store.append(writer, { type: "user", payload: { text }, scopeLabel: scope });
 }
 
 export async function assertLateJoinerScopes(store: SessionStore, prefix: string): Promise<void> {

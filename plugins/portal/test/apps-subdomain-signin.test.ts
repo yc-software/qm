@@ -16,7 +16,6 @@ process.env.PORTAL_PUBLIC_URL = "http://localhost:18198";
 process.env.PORTAL_SESSION_SECRET = "apps-subdomain-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "apps-subdomain-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
-process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 process.env.PORTAL_COOKIE_DOMAIN = "qm.example.com";
 process.env.PORTAL_APPS_DOMAIN = "apps.qm.example.com";
@@ -91,7 +90,7 @@ test.after(() => {
 const APP_URL = "https://contracts.apps.qm.example.com/?dpl_signin=1";
 
 test("the session cookie is scoped to the parent domain so app subdomains receive it", async () => {
-  const login = await fetch(`${base}/auth/login?returnTo=/admin/`, { redirect: "manual" });
+  const login = await fetch(`${base}/auth/login?returnTo=/settings/`, { redirect: "manual" });
   assert.equal(login.status, 302);
   const cookies = login.headers.getSetCookie();
   const session = cookies.find((c) => c.startsWith("portal_session=") && !/portal_session=;/.test(c));

@@ -164,7 +164,7 @@ export function compactTranscript(history: SessionEntry[]): string {
     else if (!ov) {
       const payload =
         entry.payload && typeof entry.payload === "object"
-          ? { ...withoutWire(entry.payload), memoryRecall: undefined }
+          ? { ...withoutWire(entry.payload), memoryRecall: undefined, memoryRecallOutcomes: undefined }
           : entry.payload;
       push(`${label}:${op?.isError === true ? " [isError]" : ""} ${JSON.stringify(payload ?? {})}`);
     }
