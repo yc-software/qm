@@ -1861,10 +1861,7 @@ export function buildApp(
   };
   const loopItems = createLoopItemLedger(loopItemsMap, publishLoopEvent, {
     lock: advisoryLock,
-    accepts: async (id) => {
-      const loop = await loopStore.get(id);
-      return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
-    },
+    accepts: async (id) => Boolean(await loopStore.get(id)),
   });
   const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs", ["itemId"]), (output) =>
     publishLoopEvent({ loopId: output.loopId, itemId: output.itemId, op: "ready", at: Date.now() }),
