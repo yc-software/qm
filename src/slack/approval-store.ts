@@ -4,6 +4,7 @@ import type { PendingApprovalRecord } from "../types.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
+import { claimAcrossTenants, crossTenantLoop, inTenantOf, rowTenant, type Claimed } from "../tenants/claim.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { principalDestination } from "../reach/reach.ts";
 
@@ -18,7 +19,7 @@ export interface ApprovalStore {
 }
 
 type ApprovalRows = Omit<ApprovalStore, "deliverPending"> & {
-  slackPending(): Promise<Array<[string, PendingApprovalRecord]>>;
+  slackPending(): Promise<Array<Claimed<{ id: string; record: PendingApprovalRecord }>>>;
 };
 
 const APPROVALS_MIGRATION = typedTableMigration({
@@ -99,9 +100,10 @@ function withDelivery(rows: ApprovalRows, deliveries: Pick<DeliveryStore, "enque
       await rows.put(id, record);
       await deliver(id, record).catch(swallowAs("approvals: enqueue delivery", undefined));
     },
-    async deliverPending() {
-      for (const [id, record] of await slackPending()) await deliver(id, record);
-    },
+    deliverPending: crossTenantLoop(async () => {
+      for (const { id, record, tenantId } of await slackPending())
+        await inTenantOf(tenantId, () => deliver(id, record));
+    }),
   };
 }
 
@@ -206,11 +208,11 @@ export function createPostgresApprovalStore(
         return rows.map((row) => String(row.session_id));
       },
       async slackPending() {
-        return entries(
-          await q(
-            `SELECT ${COLUMNS} FROM approvals WHERE tenant_id = ${TENANT} AND request->>'surface' = 'slack' ORDER BY id`,
-          ),
+        const { rows } = await claimAcrossTenants(
+          connectionString,
+          `SELECT tenant_id, ${COLUMNS} FROM approvals WHERE request->>'surface' = 'slack' ORDER BY tenant_id, id`,
         );
+        return rows.map((row) => ({ id: String(row.id), record: fromRow(row), ...rowTenant(row) }));
       },
     },
     deliveries,
