@@ -1168,6 +1168,11 @@ test("the skills tool saves a skill into the turn's scope and edits it through t
     assert.equal((await srv.skills.get(sk.id))!.manifest.body, "# investor-update v2");
     const version = (await srv.skills.get(sk.id))!.version;
     assert.equal(await jordan({ action: "edit", id: sk.id }), "[error] description or body required");
+    assert.equal(
+      await jordan({ action: "edit", id: sk.id, description: " ", body: "# investor-update v3" }),
+      "[error] description and body can't be blank",
+    );
+    assert.equal(await jordan({ action: "edit", id: ".." }), "[error] Invalid API path: /v1/skills/..");
     assert.equal((await srv.skills.get(sk.id))!.version, version);
 
     assert.match(

@@ -162,7 +162,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       list: discoverSkills(false),
       search: discoverSkills(true),
       read: skill,
-      ...(controlTools && (ref.current === null || ref.current.selfApi) ? { save: saveSkill, edit: editSkill } : {}),
+      ...(controlTools && ref.current?.selfApi ? { save: saveSkill, edit: editSkill } : {}),
       ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
     }),
     {

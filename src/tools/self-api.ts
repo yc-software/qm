@@ -17,6 +17,10 @@ export type SelfApiCall = (
 export function createSelfApiCall(baseUrl: string, capability: string): SelfApiCall {
   while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
   return async (method, path, body, signal) => {
+    const [pathname = ""] = path.split("?");
+    if (pathname.split("/").some((segment) => segment === "." || segment === "..")) {
+      throw new Error(`Invalid API path: ${path}`);
+    }
     const response = await fetch(`${baseUrl}${path}`, {
       method,
       headers: { [CAPABILITY_HEADER]: capability, "content-type": "application/json" },

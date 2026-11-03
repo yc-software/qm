@@ -269,7 +269,7 @@ export function createAdminCall(baseUrl: string, capability: string): AdminCall 
       if (key === "value") continue;
       if (path.includes(`:${key}`)) {
         const segment = String(value);
-        if (!segment || segment === "." || segment === "..") throw new Error("Invalid admin resource identifier");
+        if (!segment) throw new Error("Invalid admin resource identifier");
         path = path.replace(`:${key}`, encodeURIComponent(segment));
       } else query.set(key === "auditAction" ? "action" : key, String(value));
     }

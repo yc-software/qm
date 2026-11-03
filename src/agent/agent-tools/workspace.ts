@@ -123,19 +123,12 @@ export function workspaceTools(kit: ToolKit) {
     request: { method: "POST" | "PUT"; path: string; body: Record<string, string> },
     summary: Record<string, unknown>,
   ) {
-    const tc = ref.current;
-    if (!tc) return text("[error] no active tool context");
+    const selfApi = ref.current?.selfApi;
+    if (!selfApi) return text("[error] no active tool context");
     await recordCall(callId, { tool: "skills", action, ...summary });
-    if (!tc.selfApi)
-      return recordResult(
-        callId,
-        { tool: "skills", action, error: "unavailable" },
-        text("[error] skills can't be saved or edited on this turn"),
-        true,
-      );
     let response;
     try {
-      response = await tc.selfApi(request.method, request.path, request.body, ref.abortSignal);
+      response = await selfApi(request.method, request.path, request.body, ref.abortSignal);
     } catch (error) {
       return recordResult(
         callId,
@@ -172,7 +165,11 @@ export function workspaceTools(kit: ToolKit) {
     description:
       "Save a repeatable procedure as a new skill in this conversation's scope: yours alone in a 1:1 DM, shared with everyone in a channel, group DM or project. A name already taken here fails; edit that skill instead.",
     parameters: Type.Object({
-      name: Type.String({ minLength: 1, description: "Short kebab-case name; it can't be changed later." }),
+      name: Type.String({
+        minLength: 1,
+        description:
+          "Skill name from the skills index, list, or search; to save, a new short kebab-case name that can't be changed later.",
+      }),
       description: Type.String({ minLength: 1, description: "One line saying when to use the skill." }),
       body: Type.String({ minLength: 1, description: "The SKILL.md instructions, as plain steps." }),
     }),
@@ -193,7 +190,7 @@ export function workspaceTools(kit: ToolKit) {
     description: "Change the description or instructions of a skill you manage, by id from list or search.",
     parameters: Type.Object({
       id: Type.String({ minLength: 1, description: "Skill id from list or search." }),
-      description: Type.Optional(Type.String({ minLength: 1 })),
+      description: Type.Optional(Type.String({ minLength: 1, description: "One line saying when to use the skill." })),
       body: Type.Optional(Type.String({ minLength: 1, description: "The full new SKILL.md instructions." })),
     }),
     async execute(callId, params) {
