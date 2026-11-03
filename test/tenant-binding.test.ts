@@ -145,16 +145,14 @@ describe("core ingress binds the verified tenant", () => {
     assert.match(capability.body.message ?? "", /another tenant/);
   });
 
-  it("binds the host's tenant for operator routes only with the deployment-control bearer", async () => {
-    const signed = () => withoutTenant(() => signedRequestHeaders(SOURCE, "GET", "/v1/deployment-layer"));
-    const operator = () => ({ ...signed(), authorization: `Bearer ${CONTROL}` });
-    assert.equal((await call("a.example", "/v1/deployment-layer", operator())).status, 404);
-    for (const [host, headers] of [
-      ["a.example", signed()],
-      ["a.example", { ...signed(), authorization: `Bearer ${SOURCE}` }],
-      ["unknown.example", operator()],
-    ] as const) {
-      const refused = await call(host, "/v1/deployment-layer", headers);
+  it("binds the deployment layer only from the signed tenant header, never from the host", async () => {
+    const path = "/v1/deployment-layer";
+    const bearer = { authorization: `Bearer ${CONTROL}` };
+    const named = signedRequestHeaders(SOURCE, "GET", path, "", { [TENANT_HEADER]: TEST_TENANT });
+    assert.equal((await call("a.example", path, { ...named, ...bearer })).status, 404);
+    const unnamed = withoutTenant(() => signedRequestHeaders(SOURCE, "GET", path));
+    for (const host of ["a.example", "unknown.example"]) {
+      const refused = await call(host, path, { ...unnamed, ...bearer });
       assert.equal(refused.status, 401);
       assert.match(refused.body.message ?? "", /no verifiable tenant/);
     }

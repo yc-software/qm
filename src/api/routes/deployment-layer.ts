@@ -79,7 +79,7 @@ async function putDeploymentLayer(ctx: ApiCtx): Promise<void> {
   }
 }
 
-const operator = { auth: "source", tenantFromHost: true } as const;
+const operator = { auth: "source" } as const;
 
 export const deploymentLayerRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/deployment-layer", ...operator, handle: getDeploymentLayer },
