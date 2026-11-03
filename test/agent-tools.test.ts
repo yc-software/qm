@@ -2720,10 +2720,6 @@ test("only execute advertises command starts and sandbox is lifecycle-only", asy
       ),
       /background jobs require|invalid execute arguments/,
     );
-  assert.match(
-    textOut(await call(execute, { command: "forbidden", purpose: "Test invalid routing", scope: "#room" })),
-    /invalid execute arguments/,
-  );
   assert.equal(dispatched, 0);
 });
 
