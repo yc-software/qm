@@ -1,6 +1,7 @@
 import { promisify } from "node:util";
 import { deflateRaw, inflateRaw } from "node:zlib";
 import { orgId as configOrgId } from "../config.ts";
+import { isTenantId, tenantClaim } from "../tenants/context.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import type { SessionOrigin } from "../sessions/session-store.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
@@ -38,7 +39,9 @@ interface BlobGrant {
   id?: string;
 }
 
-type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
+export type VerifiedCapability = CapabilityClaims & { tenant?: string };
+
+type BlobTransferClaims = VerifiedCapability & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
 export interface CapabilityClaims {
   externalSlack?: true;
@@ -86,7 +89,7 @@ export async function mintCapabilityToken(
   secret: string,
   compressionEnabled = false,
 ): Promise<string> {
-  const value = { orgId: configOrgId(), ...claims };
+  const value = { orgId: configOrgId(), ...claims, ...tenantClaim() };
   const bytes = Buffer.from(JSON.stringify(value));
   if (bytes.length > MAX_CLAIMS_BYTES) throw new Error("Capability claims exceed size limit");
   return mintSignedPayload(
@@ -97,14 +100,14 @@ export async function mintCapabilityToken(
   );
 }
 
-async function readCapabilityClaims(token: string, secret: string | string[]): Promise<CapabilityClaims | null> {
+async function readCapabilityClaims(token: string, secret: string | string[]): Promise<VerifiedCapability | null> {
   const value = await verifySignedPayload(token, secret);
   if (!value || typeof value !== "object") return null;
-  if (!("encoding" in value)) return value as CapabilityClaims;
+  if (!("encoding" in value)) return value as VerifiedCapability;
   if (value.encoding !== "deflate-raw" || !("claims" in value) || typeof value.claims !== "string") return null;
   try {
     const bytes = await decompress(Buffer.from(value.claims, "base64url"), { maxOutputLength: MAX_CLAIMS_BYTES });
-    return JSON.parse(bytes.toString("utf8")) as CapabilityClaims;
+    return JSON.parse(bytes.toString("utf8")) as VerifiedCapability;
   } catch {
     return null;
   }
@@ -125,10 +128,11 @@ export async function verifyCapabilityToken(
   token: string,
   secret: string | string[],
   now: number = Date.now(),
-): Promise<CapabilityClaims | null> {
+): Promise<VerifiedCapability | null> {
   const claims = await readCapabilityClaims(token, secret);
   if (
     !claims ||
+    (claims.tenant !== undefined && !isTenantId(claims.tenant)) ||
     typeof claims.actorId !== "string" ||
     typeof claims.scopeId !== "string" ||
     typeof claims.exp !== "number"

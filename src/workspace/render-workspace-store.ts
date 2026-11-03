@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { createPgPool, withPgTransaction, type PoolClient } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import type { ScopeId } from "../types.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { createLocalWorkspaceStore, safeJoin, type WorkspaceStore } from "./workspace-store.ts";
@@ -20,6 +21,7 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
   const queue = createKeyedQueue<string>();
   const synced = new Map<string, number>();
   const db = createPgPool(connectionString, [
+    TENANCY_BASE,
     {
       id: "render/workspace/v1",
       statements: [
@@ -52,6 +54,30 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
           FOR EACH ROW EXECUTE FUNCTION render_workspace_bump()`,
       ],
     },
+    tenantTables(
+      "render/workspace/v2-tenants",
+      [
+        { table: "render_workspace_files", primaryKey: "scope_id, path" },
+        { table: "render_workspace_scopes", primaryKey: "scope_id" },
+      ],
+      {
+        after: [
+          `CREATE OR REPLACE FUNCTION render_workspace_bump() RETURNS trigger LANGUAGE plpgsql AS $fn$
+        BEGIN
+          IF TG_OP <> 'INSERT' THEN
+            INSERT INTO render_workspace_scopes(tenant_id, scope_id, revision) VALUES (OLD.tenant_id, OLD.scope_id, 1)
+            ON CONFLICT (tenant_id, scope_id) DO UPDATE SET revision = render_workspace_scopes.revision + 1;
+          END IF;
+          IF TG_OP = 'INSERT' OR (TG_OP = 'UPDATE' AND NEW.scope_id IS DISTINCT FROM OLD.scope_id) THEN
+            INSERT INTO render_workspace_scopes(tenant_id, scope_id, revision) VALUES (NEW.tenant_id, NEW.scope_id, 1)
+            ON CONFLICT (tenant_id, scope_id) DO UPDATE SET revision = render_workspace_scopes.revision + 1;
+          END IF;
+          RETURN NULL;
+        END
+        $fn$`,
+        ],
+      },
+    ),
   ]);
   const pathFor = (scope: ScopeId, input: string): string => {
     const base = local.scopeDir(scope);
@@ -196,7 +222,7 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
           if (conflict.rowCount) throw new Error(`workspace file conflicts with a directory: ${path}`);
           const written = await client.query(
             `INSERT INTO render_workspace_files(scope_id, path, data) VALUES($1, $2, $3)
-             ON CONFLICT (scope_id, path) DO UPDATE SET data=EXCLUDED.data
+             ON CONFLICT (tenant_id, scope_id, path) DO UPDATE SET data=EXCLUDED.data
              WHERE render_workspace_files.data IS DISTINCT FROM EXCLUDED.data`,
             [scope, path, Buffer.from(data)],
           );

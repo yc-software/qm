@@ -7,7 +7,7 @@ import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction }
 import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
-import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
 
@@ -119,35 +119,39 @@ test("an open transaction refuses work for a different tenant until it has ended
   await withoutTenant(() =>
     withPgTransaction(app, async () => assert.throws(() => withTenant(a, () => 0), /already open/)),
   );
-  const outcomes: string[] = [];
-  let settled = false;
-  let spawned: Promise<string[]> | undefined;
-  const watch = (resolve: (seen: string[]) => void) => {
-    try {
-      withTenant(b, () => outcomes.push("bound"));
-    } catch {
-      outcomes.push("refused");
-    }
-    if (settled) resolve(outcomes);
-    else setImmediate(watch, resolve);
-  };
-  await assert.rejects(
-    withTenant(a, () =>
+  for (const fails of [false, true]) {
+    const outcomes: string[] = [];
+    let settled = false;
+    let spawned: Promise<string[]> | undefined;
+    const watch = (resolve: (seen: string[]) => void) => {
+      try {
+        withTenant(b, () => outcomes.push("bound"));
+      } catch {
+        outcomes.push("refused");
+      }
+      if (settled) resolve(outcomes);
+      else setImmediate(watch, resolve);
+    };
+    const transaction = withTenant(a, () =>
       withPgTransaction(app, async () => {
         spawned = new Promise(watch);
-        throw new Error("body failed");
+        if (fails) throw new Error("body failed");
       }),
-    ),
-    /body failed/,
-  );
-  settled = true;
-  const seen = await spawned!;
-  assert.equal(seen.pop(), "bound");
-  assert.deepEqual(new Set(seen), new Set(["refused"]));
+    );
+    try {
+      if (fails) await assert.rejects(transaction, /body failed/);
+      else await transaction;
+    } finally {
+      settled = true;
+    }
+    const seen = await spawned!;
+    assert.equal(seen.pop(), "bound");
+    assert.deepEqual(new Set(seen), new Set(["refused"]));
+  }
 });
 
 test("upgrading copies the existing tenant into tenants", { skip }, async () => {
-  const pool = new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
+  const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
   try {
     const previous = SESSION_MIGRATIONS.filter((m) => m !== TENANCY_BASE && m !== TENANT_BACKFILL);
     await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...previous].map(definePgMigration));

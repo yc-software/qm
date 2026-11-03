@@ -1,5 +1,6 @@
 import { createPostgresEventSink, type EventColumn } from "./scoped-event-sink.ts";
 import type { ErrorEvent, ErrorLog } from "./error-log.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 const COLUMNS: readonly EventColumn<keyof ErrorEvent & string>[] = [
   ["ts", "ts", "BIGINT", "number", true],
@@ -16,7 +17,13 @@ export function createPostgresErrorLog(connectionString: string): ErrorLog {
     table: "error_events",
     columns: COLUMNS,
 
-    schema: { expectedChecksum: "d5bab01c9f83042aace325e98636b614bcb8a6d77fedaed373f02efde282f5b8" },
+    schema: {
+      expectedChecksum: "d5bab01c9f83042aace325e98636b614bcb8a6d77fedaed373f02efde282f5b8",
+      followUps: [
+        TENANCY_BASE,
+        tenantTables("admin/scoped-events/error_events/0002-tenants", [{ table: "error_events", primaryKey: "id" }]),
+      ],
+    },
     extraSchemaStatements: [
       "CREATE INDEX IF NOT EXISTS error_events_by_ts ON error_events(ts DESC)",
       "CREATE INDEX IF NOT EXISTS error_events_by_scope_ts ON error_events(scope_label, ts DESC)",

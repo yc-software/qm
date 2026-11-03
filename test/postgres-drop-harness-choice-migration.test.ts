@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import pg from "pg";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the harness choice migration test";
@@ -11,7 +11,7 @@ const exec = promisify(execFile);
 const JSON_TABLES = ["base_model_configs", "approved_harness_configs", "auto_flagger_configs", "crons", "swarms"];
 
 async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
-  const url = testDatabaseUrl();
+  const url = testBareDatabaseUrl();
   const admin = new pg.Pool({ connectionString: url });
   try {
     await run(url, admin);

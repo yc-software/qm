@@ -1,6 +1,8 @@
 import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { reportFailure } from "../util/errors.ts";
+import { inTenantOf } from "../tenants/claim.ts";
+import { withoutTenant } from "../tenants/context.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 
 export function createMemoryVectorIndexer(opts: {
@@ -50,6 +52,7 @@ export function createMemoryVectorIndexer(opts: {
           );
           if (vectors.length !== facts.length) throw new Error("Invalid memory index embedding count");
           const rows = facts.map((fact, i) => ({
+            tenantId: fact.tenantId,
             scope: fact.scope,
             factId: fact.factId,
             hash: fact.hash,
@@ -63,7 +66,13 @@ export function createMemoryVectorIndexer(opts: {
             throw new Error("Memory embedding dimensions changed during indexing");
           }
           signal.throwIfAborted();
-          await store.put(rows, signal);
+          for (const [tenantId, tenantRows] of Map.groupBy(rows, (row) => row.tenantId))
+            await inTenantOf(tenantId, () =>
+              store.put(
+                tenantRows.map(({ tenantId: _, ...row }) => row),
+                signal,
+              ),
+            );
           if (facts.length < 64) break;
         } while ((opts.now ?? Date.now)() - now < 20_000);
       } finally {
@@ -77,7 +86,7 @@ export function createMemoryVectorIndexer(opts: {
       return pending ?? Promise.resolve();
     },
     tick(): Promise<void> {
-      pending ??= run()
+      pending ??= withoutTenant(run)
         .catch(onError)
         .finally(() => {
           pending = undefined;

@@ -16,5 +16,114 @@ BEGIN
   END IF;
   RETURN bound::uuid;
 END $qm_bound_tenant$`,
+    `DO $adopt_tenant$
+BEGIN
+  IF to_regclass('qm_tenant') IS NOT NULL THEN
+    INSERT INTO tenants(id) SELECT id FROM qm_tenant ON CONFLICT (id) DO NOTHING;
+  END IF;
+END $adopt_tenant$`,
   ],
 };
+
+function tenantPolicies(table: string): string[] {
+  return [
+    `ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()`,
+    `ALTER TABLE ${table} ADD CONSTRAINT ${table}_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)`,
+    `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
+    `CREATE POLICY tenant_isolation ON ${table}
+       USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())`,
+  ];
+}
+
+export const TENANT = "qm_bound_tenant()";
+
+const tenantColumn = (table: string): string => `DO $tenant_column$
+DECLARE
+  tenant uuid;
+  tenant_count bigint;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM ${table}) THEN
+    ALTER TABLE ${table} ADD COLUMN tenant_id UUID NOT NULL;
+    RETURN;
+  END IF;
+  SELECT count(*), min(id::text)::uuid INTO tenant_count, tenant FROM tenants;
+  IF tenant_count <> 1 THEN
+    RAISE EXCEPTION 'Rows in ${table} need a tenant, but this database has % tenants', tenant_count;
+  END IF;
+  EXECUTE format('ALTER TABLE ${table} ADD COLUMN tenant_id UUID NOT NULL DEFAULT %L', tenant);
+END $tenant_column$`;
+
+interface TenantIndex {
+  name: string;
+  columns: string;
+  where?: string;
+}
+
+interface TenantTable {
+  table: string;
+  primaryKey?: string;
+  unique?: readonly (TenantIndex & { constraint?: boolean })[];
+  replacesOrgId?: readonly TenantIndex[];
+}
+
+interface TenantForeignKey {
+  table: string;
+  name: string;
+  columns: string;
+  references: string;
+  onDelete?: "CASCADE";
+}
+
+const indexOn = (table: string, { name, columns, where }: TenantIndex, unique = false): string =>
+  `CREATE ${unique ? "UNIQUE " : ""}INDEX ${name} ON ${table}(tenant_id, ${columns})${where ? ` WHERE ${where}` : ""}`;
+
+function typedTableStatements({ table, primaryKey, unique = [], replacesOrgId }: TenantTable): string[] {
+  return [
+    tenantColumn(table),
+    ...(replacesOrgId
+      ? [
+          `DELETE FROM ${table} WHERE org_id IS DISTINCT FROM
+             (SELECT org_id FROM ${table} GROUP BY org_id ORDER BY count(*) DESC, org_id LIMIT 1)`,
+          `ALTER TABLE ${table} DROP COLUMN org_id`,
+        ]
+      : []),
+    ...(primaryKey === undefined
+      ? []
+      : [
+          `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${table}_pkey, ADD PRIMARY KEY (${["tenant_id", primaryKey].filter(Boolean).join(", ")})`,
+        ]),
+    ...unique.flatMap((index) => [
+      index.constraint
+        ? `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${index.name}`
+        : `DROP INDEX IF EXISTS ${index.name}`,
+      indexOn(table, index, true),
+    ]),
+    ...(replacesOrgId ?? []).map((index) => indexOn(table, index)),
+    ...tenantPolicies(table),
+  ];
+}
+
+export function tenantTables(
+  id: string,
+  tables: readonly TenantTable[],
+  {
+    foreignKeys = [],
+    before = [],
+    after = [],
+  }: { foreignKeys?: readonly TenantForeignKey[]; before?: readonly string[]; after?: readonly string[] } = {},
+): PgMigrationDefinition {
+  return {
+    id,
+    statements: [
+      `SET LOCAL lock_timeout = '5s'`,
+      ...before,
+      ...foreignKeys.map(({ table, name }) => `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${name}`),
+      ...tables.flatMap(typedTableStatements),
+      ...foreignKeys.map(
+        ({ table, name, columns, references, onDelete }) =>
+          `ALTER TABLE ${table} ADD CONSTRAINT ${name} FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${onDelete ? ` ON DELETE ${onDelete}` : ""}`,
+      ),
+      ...after,
+    ],
+  };
+}

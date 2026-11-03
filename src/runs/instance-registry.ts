@@ -15,30 +15,20 @@ export function createPostgresInstanceRegistry(
   opts: { instanceId: string; buildSha: string; startedAt: number; livenessMs?: number },
 ): InstanceRegistry {
   const livenessMs = opts.livenessMs ?? INSTANCE_LIVENESS_MS;
-  let readyP: Promise<void> | null = null;
-  function ready(): Promise<void> {
-    if (!readyP) {
-      readyP = pg
-        .query(
-          `CREATE TABLE IF NOT EXISTS instance_heartbeats(
-             instance_id TEXT PRIMARY KEY,
-             build_sha TEXT NOT NULL,
-             started_at BIGINT NOT NULL,
-             beat_at TIMESTAMPTZ NOT NULL
-           )`,
-        )
-        .then(() => undefined)
-        .catch((e) => {
-          readyP = null;
-          throw e;
-        });
-    }
-    return readyP;
-  }
+  pg.registerMigration({
+    id: "runs/instance-heartbeats/0001",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS instance_heartbeats(
+         instance_id TEXT PRIMARY KEY,
+         build_sha TEXT NOT NULL,
+         started_at BIGINT NOT NULL,
+         beat_at TIMESTAMPTZ NOT NULL
+       )`,
+    ],
+  });
 
   return {
     async beat(): Promise<boolean> {
-      await ready();
       await pg.query(
         `INSERT INTO instance_heartbeats(instance_id, build_sha, started_at, beat_at)
            VALUES ($1, $2, $3, now())

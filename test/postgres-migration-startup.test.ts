@@ -4,14 +4,14 @@ import { promisify } from "node:util";
 import test from "node:test";
 import pg from "pg";
 import { createPgPool, migrateRegisteredPgSchemas, PG_MIGRATIONS_TABLE } from "../src/persistence/pg-pool.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = !databaseUrl;
 const exec = promisify(execFile);
 
 async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
-  const url = testDatabaseUrl();
+  const url = testBareDatabaseUrl();
   const admin = new pg.Pool({ connectionString: url });
   try {
     await run(url, admin);

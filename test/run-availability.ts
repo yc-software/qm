@@ -8,6 +8,8 @@ import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { seedTestTenants } from "./support/tenant-seed.ts";
+import { tenantBoundUrl } from "./support/test-tenants.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 
 const sessions = createPostgresSessionStore(testDatabaseUrl());
@@ -34,6 +36,7 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
   const url = new URL(process.env.DATABASE_URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
   url.searchParams.set("application_name", schema);
+  await seedTestTenants(url.toString());
   return {
     url: url.toString(),
     admin,
@@ -272,7 +275,7 @@ test(
     const { url, cleanup } = await isolatedPostgres();
     const writer = createPostgresRunStore(url);
     const reader = createPostgresRunStore(url);
-    const direct = new pg.Pool({ connectionString: url });
+    const direct = new pg.Pool({ connectionString: tenantBoundUrl(url) });
     const observed: Array<{ id: string; at: number }> = [];
     const workers = Array.from({ length: 16 }, () =>
       createWorker({

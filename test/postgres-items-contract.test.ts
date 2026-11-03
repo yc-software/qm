@@ -15,6 +15,7 @@ import {
   parkedOutputKey,
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
+import { seedTestTenants } from "./support/tenant-seed.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items contract test";
@@ -33,6 +34,7 @@ async function withSchema(
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
+  await seedTestTenants(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
     await fn({ raw, url: url.toString(), store: createPostgresSessionStore(url.toString()) });
@@ -118,7 +120,7 @@ test("pg items keep turn, author and time in typed columns", { skip }, async () 
     assert.equal((await store.getEntries(session.id))[0]!.createdAt, user.createdAt);
     await assert.rejects(
       raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES (qm_tenant_id(), $1, 9, 'AgentMessage', 'x', '{}', now())",
+        "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES ((SELECT tenant_id FROM sessions WHERE id = $1), $1, 9, 'AgentMessage', 'x', '{}', now())",
         [session.id],
       ),
       /items_author_kind/,

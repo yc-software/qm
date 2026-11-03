@@ -26,6 +26,7 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
+import { tenantClaim, withTenant } from "../../tenants/context.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
@@ -131,8 +132,7 @@ async function connectorProviderStatus(
 }
 
 async function oauthCallback(ctx: BaseCtx): Promise<void> {
-  const { res, deps, secret, url, pathname } = ctx;
-  const oauthRoute = parseOAuthRoute(pathname)!;
+  const { res, deps, secret, url } = ctx;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
   const code = url.searchParams.get("code") ?? "";
@@ -140,9 +140,26 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
   const providerError = url.searchParams.get("error");
   if (providerError) return sendJson(res, 400, { error: "oauth_denied", message: providerError });
   if (!code || !stateParam) return sendJson(res, 400, { error: "bad_request", message: "code and state required" });
-  let state;
+  const connectorTokens = deps.connectorTokens;
+  let state: OAuthState;
   try {
     state = await resumeOAuthFlow(deps, secret, stateParam);
+  } catch (e) {
+    return sendJson(res, 400, { error: "oauth_callback_failed", message: errMessage(e) });
+  }
+  const complete = () => completeOAuthCallback(ctx, connectorTokens, code, state);
+  return state.tenant ? withTenant(state.tenant, complete) : complete();
+}
+
+async function completeOAuthCallback(
+  ctx: BaseCtx,
+  connectorTokens: ConnectorTokenStore,
+  code: string,
+  state: OAuthState,
+): Promise<void> {
+  const { res, deps, pathname } = ctx;
+  const oauthRoute = parseOAuthRoute(pathname)!;
+  try {
     if (state.provider !== oauthRoute.provider) throw new Error("OAuth provider mismatch");
     if (state.orgId !== undefined && state.orgId !== configOrgId()) {
       throw new Error("OAuth state is for a different org");
@@ -163,8 +180,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
     });
     if (!token.accessToken) throw new Error("oauth exchange returned an empty access token");
     const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: configOrgId() };
-    for (const host of hosts)
-      await deps.connectorTokens.setConnectorToken(host, state.principalId, stamped, accountType);
+    for (const host of hosts) await connectorTokens.setConnectorToken(host, state.principalId, stamped, accountType);
     audit(deps, {
       principalId: state.principalId,
       action: "connector.oauth.connected",
@@ -243,6 +259,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       principalId: rec.principalId,
       redirectUri: rec.redirectUri,
       orgId: configOrgId(),
+      ...tenantClaim(),
       ...(rec.accountType !== "default" ? { accountType: rec.accountType } : {}),
       clientRef: client.clientRef,
       ...(returnTo ? { returnTo } : {}),
@@ -374,6 +391,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
       principalId,
       redirectUri,
       orgId: configOrgId(),
+      ...tenantClaim(),
       ...(accountType !== "default" ? { accountType } : {}),
       clientRef: client.clientRef,
       ...(safeReturnTo(url.searchParams.get("returnTo"))

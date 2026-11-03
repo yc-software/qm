@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createPostgresCredentialUsageSink } from "../src/admin/postgres-credential-usage-sink.ts";
 import { scopeId } from "../src/types.ts";
 import { settle } from "./support/settle.ts";
+import { tenantBoundUrl } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres credential-usage tests";
@@ -10,7 +11,7 @@ const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres cr
 before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS credential_usage CASCADE");
   await p.query("DROP TABLE IF EXISTS credential_daily_calls CASCADE");
@@ -72,7 +73,7 @@ test("pg credential-usage sink: survives a fresh sink over the same table (durab
 
 test("pg credential-usage sink: sparse and absent credentials use an ordered index", { skip }, async () => {
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   try {
     await p.query(`INSERT INTO credential_usage(ts, slug, host, status, scope_label, principal_id)
       SELECT n, 'unrelated-' || n, 'example.com', 'ok', 'personal:other', 'other'
@@ -120,7 +121,7 @@ test("pg credential summaries aggregate a bounded window without transferring ra
   const { CREDENTIAL_USAGE_WINDOW } = await import("../src/admin/credential-usage-sink.ts");
   const sink = createPostgresCredentialUsageSink(URL!);
   const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: URL });
+  const pool = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   t.after(() => pool.end());
   await pool.query(
     `INSERT INTO credential_usage(ts, slug, host, status, scope_label, principal_id)
@@ -154,7 +155,7 @@ test("pg credential summaries aggregate a bounded window without transferring ra
 
 test("pg credential summaries do not wait for pending telemetry writes", { skip }, async (t) => {
   const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: URL });
+  const pool = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   const locker = await pool.connect();
   const sink = createPostgresCredentialUsageSink(URL!);
   await sink.summary(["summary-blocked"]);

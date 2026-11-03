@@ -16,7 +16,7 @@ import { deploymentView, type App, type DeployInput, type RedeployInput } from "
 import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
-import { sendJson, verifyOrReject } from "../http.ts";
+import { sendJson, tenantHeader, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
@@ -71,7 +71,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, principal),
+      canonicalPayload(method, pathname + url.search, principal, tenantHeader(req)),
       false,
       ctx.allowUnsignedSourceAuth,
     ))
@@ -140,7 +140,7 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, actorHeader),
+      canonicalPayload(method, pathname + url.search, actorHeader, tenantHeader(req)),
       false,
       ctx.allowUnsignedSourceAuth,
     ))

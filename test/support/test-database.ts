@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { afterEach, beforeEach } from "node:test";
 import { MessageChannel, receiveMessageOnPort, Worker, type MessagePort } from "node:worker_threads";
 import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-grant-store.ts";
 import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "../../src/admin/admin-grant-store.ts";
@@ -17,7 +18,7 @@ function baseDatabaseUrl(): URL {
 
 let databaseWorker: { worker: Worker; signal: Int32Array; port: MessagePort } | undefined;
 
-function createDatabaseSync(request: { template?: string }): string {
+function startDatabaseWorker(): NonNullable<typeof databaseWorker> {
   if (!databaseWorker) {
     const signal = new Int32Array(new SharedArrayBuffer(4));
     const { port1, port2 } = new MessageChannel();
@@ -29,7 +30,20 @@ function createDatabaseSync(request: { template?: string }): string {
     worker.unref();
     databaseWorker = { worker, signal, port: port1 };
   }
-  const { worker, signal, port } = databaseWorker;
+  return databaseWorker;
+}
+
+let createdInTest: string[] | undefined;
+beforeEach(() => {
+  createdInTest = [];
+});
+afterEach(() => {
+  if (createdInTest?.length) startDatabaseWorker().worker.postMessage({ release: createdInTest });
+  createdInTest = undefined;
+});
+
+function createDatabaseSync(request: { template?: string }, scope: "test" | "file" = "test"): string {
+  const { worker, signal, port } = startDatabaseWorker();
   Atomics.store(signal, 0, 0);
   worker.postMessage(request);
   const deadline = Date.now() + 120_000;
@@ -39,6 +53,7 @@ function createDatabaseSync(request: { template?: string }): string {
   }
   const reply = receiveMessageOnPort(port)?.message as { ok: boolean; name?: string; message?: string } | undefined;
   if (!reply?.ok || !reply.name) throw new Error(`Could not create a test database: ${reply?.message ?? "no reply"}`);
+  if (scope === "test") createdInTest?.push(reply.name);
   return reply.name;
 }
 
@@ -52,6 +67,10 @@ export function testDatabaseUrl(): string {
   return databaseUrl(createDatabaseSync({}));
 }
 
+export function testBareDatabaseUrl(): string {
+  return databaseUrl(createDatabaseSync({ template: "" }));
+}
+
 export function testMigratedDatabaseUrl(): string {
   const template = process.env.QM_TEST_TEMPLATE_DATABASE;
   if (!template) throw new Error("QM_TEST_TEMPLATE_DATABASE is unset: run tests through scripts/run-pg-tests.mjs");
@@ -62,7 +81,7 @@ let shared: { url: string; maps: ReturnType<typeof createPostgresMapFactory> } |
 
 function sharedDatabase(): NonNullable<typeof shared> {
   if (!shared) {
-    const url = testDatabaseUrl();
+    const url = databaseUrl(createDatabaseSync({}, "file"));
     shared = { url, maps: createPostgresMapFactory(url) };
   }
   return shared;
