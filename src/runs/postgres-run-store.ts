@@ -511,7 +511,7 @@ END $base_schema$`,
          ), moved AS (
            DELETE FROM runs WHERE id=$1 AND id<>$2 AND status='pending'
            AND COALESCE(request::jsonb->>'displayText',request::jsonb->>'text') = $5::jsonb->'request'->>'text'
-           AND EXISTS (SELECT 1 FROM target) RETURNING id
+           AND EXISTS (SELECT 1 FROM target) RETURNING id, ${NOTIFY_SESSION_AVAILABLE}
          ), sent AS (
            INSERT INTO run_signals(run_id,kind,text,payload,created_at,dedupe_key)
            SELECT $2,$3,$4,$5,$6,$7 FROM moved RETURNING id
