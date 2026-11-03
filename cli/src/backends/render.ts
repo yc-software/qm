@@ -606,8 +606,7 @@ export function renderConfigErrors(
       "This qm build pins no published sandbox base image; set sandbox.baseImage to <repository>:<commit>@sha256:<digest>",
     );
   const sandbox = config.sandbox ?? {};
-  const ignored = (["app", "env", "secretEnv"] as const).filter((key) => sandbox[key] !== undefined);
-  if (ignored.length) add(`Render sandboxes ignore ${ignored.map((key) => `sandbox.${key}`).join(", ")}; remove them`);
+  if (sandbox.app !== undefined) add("Render sandboxes ignore sandbox.app; remove it");
   const base = sandbox.baseImage;
   if (base) {
     const source = base.slice(0, base.lastIndexOf("@"));
