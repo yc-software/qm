@@ -48,10 +48,12 @@ export function createPartnerChatDeliveries(deps: {
   app: Pick<App, "setRunDeliveryState" | "ingestSurfaceEvents">;
   runs: Pick<RunStore, "get">;
   surfaceCache: Pick<SurfaceCache, "readMessages">;
+  serialize?: <T>(fn: () => Promise<T>) => Promise<T>;
   fetch?: typeof fetch;
   now?: () => number;
 }) {
   const base = deps.url.replace(/\/+$/, "");
+  const serialize = deps.serialize ?? (<T>(fn: () => Promise<T>) => fn());
   const send = deps.fetch ?? fetch;
   const now = deps.now ?? Date.now;
 
@@ -212,7 +214,7 @@ export function createPartnerChatDeliveries(deps: {
     draining = (async () => {
       do {
         again = false;
-        await drainOnce();
+        await serialize(drainOnce);
       } while (again);
     })().finally(() => {
       draining = null;

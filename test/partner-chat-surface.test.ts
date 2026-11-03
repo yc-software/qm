@@ -403,6 +403,7 @@ test("a direct reply holds one placeholder that the reply replaces, or that sett
   const id = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
   const target = `${CONTAINER}:1002`;
   const partnerChat = await fakePartnerChat(200, ["77"]);
+  let serialized = 0;
   const deliveries = createDeliveryStore();
   const fake = fakeRuns({
     [id(2)]: { target },
@@ -419,6 +420,10 @@ test("a direct reply holds one placeholder that the reply replaces, or that sett
     app: { setRunDeliveryState: fake.setRunDeliveryState, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
     runs: fake.runs,
     surfaceCache: { readMessages: async () => [] },
+    serialize: async (fn) => {
+      serialized += 1;
+      return fn();
+    },
   });
   const send = (key: string, text: string, editRef?: string) =>
     deliveries.enqueue({
@@ -451,6 +456,7 @@ test("a direct reply holds one placeholder that the reply replaces, or that sett
       [id(5), { editRef: "" }],
       [id(7), { editRef: "" }],
     ]);
+    assert.ok(serialized > 0);
     assert.equal((await deliveries.pending("partner-chat")).length, 0);
   } finally {
     await partnerChat.close();
@@ -576,21 +582,23 @@ test("partner-chat config requires the url and secret together and validates pro
   );
 });
 
-test("a followed turn queues its placeholder after the delay, and a finished run settles only an open slot", async () => {
+test("a followed turn queues its placeholder after the delay, and a finished direct run queues a settle unless its slot closed", async () => {
   const deliveries = createDeliveryStore();
   const live = createPartnerChatLiveReply({ deliveries, delayMs: 10 });
   const destination = { type: "partner-chat", target: `${CONTAINER}:1002` };
   live.follow(R1, destination);
   await settle(async () => (await deliveries.pending("partner-chat")).length === 1);
-  const run = (editRef?: string) =>
+  const run = (editRef?: string, kind = "human") =>
     ({
       id: R1,
-      request: { surface: "partner-chat", deliveryTarget: destination.target },
+      request: { surface: "partner-chat", deliveryTarget: destination.target, origin: { kind } },
       deliveryState: editRef === undefined ? null : { editRef },
     }) as unknown as Run;
   live.settle(run(""));
+  live.settle(run("42", "ambient"));
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal((await deliveries.pending("partner-chat")).length, 1);
   live.settle(run());
-  live.settle(run("42"));
   await settle(async () => (await deliveries.pending("partner-chat")).length === 2);
   assert.deepEqual(
     (await deliveries.pending("partner-chat")).map((d) => [d.idempotencyKey, d.destination.target, d.text]),

@@ -2475,6 +2475,7 @@ export function buildApp(
         app,
         runs,
         surfaceCache,
+        serialize: (fn) => advisoryLock.withLock("partner-chat-deliveries", fn),
       })
     : null;
   if (partnerChatOutbound)
@@ -2482,7 +2483,7 @@ export function buildApp(
       if (type === "partner-chat") void partnerChatOutbound.drain();
     });
   const partnerChatDeliverySweeper = partnerChatOutbound
-    ? createSweeper(() => advisoryLock.tryWithLock("partner-chat-deliveries", partnerChatOutbound.drain), 15_000, {
+    ? createSweeper(() => partnerChatOutbound.drain(), 15_000, {
         label: "partner-chat-deliveries",
         immediate: true,
       })
