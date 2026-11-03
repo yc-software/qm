@@ -128,12 +128,12 @@ for (const variant of ["text", "images", "documents", "finished during preparati
           await new Promise((resolve) => setTimeout(resolve, 150));
         } else {
           setTimeout(() => {
+            releaseFirstStep();
             assert.equal(
               sink.entries.filter((entry) => entry.type === "user").length,
               1,
               "enqueue is not model intake",
             );
-            releaseFirstStep();
           });
         }
         if (!withImages) return { text };
