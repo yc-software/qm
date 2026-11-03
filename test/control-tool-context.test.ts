@@ -58,16 +58,17 @@ function ctxFor(extra: Partial<ToolContextDeps>) {
   });
 }
 
-test("createToolContext.cronCreate creates a real cron through the shared service", async () => {
-  const { built, control } = build();
-  const ctx = ctxFor({ control, controlClaims: claims("U1") });
-  const r = await ctx.cronCreate({ title: "digest", schedule: { everyMs: 3_600_000 }, action: "check gmail" });
-  assert.ok(r.ok, JSON.stringify(r));
-  const stored = await built.app.getCron(r.cron.id);
-  assert.ok(stored);
-  assert.equal(stored.owner, "U1");
-  assert.equal(stored.title, "digest");
-});
+test("createToolContext.cronCreate creates a real cron through the shared service", () =>
+  inTestTenant(async () => {
+    const { built, control } = build();
+    const ctx = ctxFor({ control, controlClaims: claims("U1") });
+    const r = await ctx.cronCreate({ title: "digest", schedule: { everyMs: 3_600_000 }, action: "check gmail" });
+    assert.ok(r.ok, JSON.stringify(r));
+    const stored = await built.app.getCron(r.cron.id);
+    assert.ok(stored);
+    assert.equal(stored.owner, "U1");
+    assert.equal(stored.title, "digest");
+  }));
 
 test("the cron tool lets a live org-admin owner attach unattended admin-read grants and shows them back", () =>
   inTestTenant(async () => {
@@ -157,15 +158,16 @@ test("webhook registration through the tool requires a live person and leaves re
     assert.deepEqual(await built.auditLog.events(), auditAfter);
   }));
 
-test("createToolContext.soulWrite then soulRead reflect the new SOUL", async () => {
-  const { control } = build();
-  const ctx = ctxFor({ control, controlClaims: claims("U1") });
-  const w = await ctx.soulWrite("Be brief.");
-  assert.ok("ok" in w && w.ok);
-  const r = ctx.soulRead();
-  assert.ok(!("code" in r) || r.code !== "control_unavailable");
-  assert.equal((r as { soul: string | null }).soul, "Be brief.");
-});
+test("createToolContext.soulWrite then soulRead reflect the new SOUL", () =>
+  inTestTenant(async () => {
+    const { control } = build();
+    const ctx = ctxFor({ control, controlClaims: claims("U1") });
+    const w = await ctx.soulWrite("Be brief.");
+    assert.ok("ok" in w && w.ok);
+    const r = ctx.soulRead();
+    assert.ok(!("code" in r) || r.code !== "control_unavailable");
+    assert.equal((r as { soul: string | null }).soul, "Be brief.");
+  }));
 
 for (const scope of ["conversation", "channel"] as const) {
   test(`concurrent guidance edits at ${scope} scope reject a stale replacement without losing the winner`, () =>

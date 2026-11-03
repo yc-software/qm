@@ -238,7 +238,7 @@ test("a company ChatGPT login feeds pi's subscription provider while personal Ch
       tokens: { access_token: companyToken, refresh_token: "r" },
     }),
   );
-  assert.deepEqual(await piOptions?.resolveProviderKeys?.(), { "openai-codex": companyToken });
+  assert.deepEqual(await inTestTenant(() => piOptions?.resolveProviderKeys?.()), { "openai-codex": companyToken });
   assert.equal(piOptions?.companyModelId?.("gpt-5.6-sol"), "codex/gpt-5.6-sol");
   assert.equal(piOptions?.companyModelId?.("gpt-6-astra-ultrafast"), "gpt-6-astra-ultrafast");
   assert.equal(piOptions?.companyModelId?.("claude-opus-5"), "claude-opus-5");

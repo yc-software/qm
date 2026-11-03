@@ -11,6 +11,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 function event(over: Partial<OwnedLedgerEvent> = {}): OwnedLedgerEvent {
   return { loopId: "loop-1", itemId: "item-1", op: "ingest", at: 111, owner: "josh", ...over };
@@ -69,15 +70,20 @@ test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped wit
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") ?? "", /text\/event-stream/);
 
-    const { loop } = await built.loops.store.create({
-      owner: "josh",
-      createdBy: "josh",
-      ownerScopeId: "personal:josh",
-      name: "Sentry triage",
-      playbook: "triage",
-      successCondition: "fixed",
+    const loop = await inTestTenant(async () => {
+      const { loop } = await built.loops.store.create({
+        owner: "josh",
+        createdBy: "josh",
+        ownerScopeId: "personal:josh",
+        name: "Sentry triage",
+        playbook: "triage",
+        successCondition: "fixed",
+      });
+      await built.loops.items.ingest([
+        { loopId: loop.id, dedupeKey: "SENTRY-1", sourcePayload: { issue: "SENTRY-1" } },
+      ]);
+      return loop;
     });
-    await built.loops.items.ingest([{ loopId: loop.id, dedupeKey: "SENTRY-1", sourcePayload: { issue: "SENTRY-1" } }]);
 
     const reader = res.body!.getReader();
     let buf = "";

@@ -42,7 +42,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
         emailAuthPrincipals: ["allowed@example.com"],
       }),
     );
-    await built.identity.refresh();
+    await inTestTenant(() => built.identity.refresh());
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -59,11 +59,11 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
 
   it("a roster swap that drops a member deactivates them; reappearing reactivates", async () => {
     await inTestTenant(() => built.app.upsertDirectory([member("U-stay"), member("U-leave")]));
-    assert.equal(built.identity.classify("U-leave").type, "internal");
+    assert.equal(inTestTenant(() => built.identity.classify("U-leave")).type, "internal");
 
     await inTestTenant(() => built.app.upsertDirectory([member("U-stay")]));
-    assert.equal(built.identity.classify("U-leave").type, "guest");
-    assert.equal(built.identity.classify("U-stay").type, "internal");
+    assert.equal(inTestTenant(() => built.identity.classify("U-leave")).type, "guest");
+    assert.equal(inTestTenant(() => built.identity.classify("U-stay")).type, "internal");
     assert.ok(
       (await inTestTenant(() => built.auditLog.events())).some(
         (e) => e.action === "principal.deactivate" && e.principalId === "U-leave",
@@ -71,7 +71,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     );
 
     await inTestTenant(() => built.app.upsertDirectory([member("U-stay"), member("U-leave")]));
-    assert.equal(built.identity.classify("U-leave").type, "internal");
+    assert.equal(inTestTenant(() => built.identity.classify("U-leave")).type, "internal");
     assert.ok(
       (await inTestTenant(() => built.auditLog.events())).some(
         (e) => e.action === "principal.reactivate" && e.principalId === "U-leave",
@@ -83,7 +83,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     await inTestTenant(() => built.app.upsertDirectory([member("U-stay"), member("allowed@example.com")]));
     await inTestTenant(() => built.app.upsertDirectory([member("U-stay")]));
 
-    assert.equal(built.identity.classify("allowed@example.com").type, "internal");
+    assert.equal(inTestTenant(() => built.identity.classify("allowed@example.com")).type, "internal");
     const resolved = await inTestTenant(() => built.app.resolveRecipient("allowed@example.com"));
     assert.equal(resolved.kind, "one");
     if (resolved.kind === "one") {
@@ -101,15 +101,15 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     const off = await signedPost("/v1/principals/U-manual/deactivate");
     assert.equal(off.status, 200);
     assert.deepEqual(await off.json(), { ok: true, principalId: "U-manual", active: false });
-    assert.equal(built.identity.classify("U-manual").type, "guest");
+    assert.equal(inTestTenant(() => built.identity.classify("U-manual")).type, "guest");
 
     await inTestTenant(() => built.app.upsertDirectory([member("U-manual")]));
-    assert.equal(built.identity.classify("U-manual").type, "guest");
+    assert.equal(inTestTenant(() => built.identity.classify("U-manual")).type, "guest");
 
     const on = await signedPost("/v1/principals/U-manual/reactivate");
     assert.equal(on.status, 200);
     assert.deepEqual(await on.json(), { ok: true, principalId: "U-manual", active: true });
-    assert.equal(built.identity.classify("U-manual").type, "internal");
+    assert.equal(inTestTenant(() => built.identity.classify("U-manual")).type, "internal");
     assert.ok(
       (await inTestTenant(() => built.auditLog.events())).some(
         (e) => e.action === "principal.reactivate" && e.principalId === "U-manual",
@@ -118,9 +118,11 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
   });
 
   it("an agent capability token cannot reach the principals routes (source-auth only)", async () => {
-    const cap = await mintCapabilityToken(
-      { actorId: "U-stay", scopeId: scopeId("personal", "U-stay"), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
+    const cap = await inTestTenant(() =>
+      mintCapabilityToken(
+        { actorId: "U-stay", scopeId: scopeId("personal", "U-stay"), exp: Date.now() + CAPABILITY_TTL_MS },
+        SECRET,
+      ),
     );
     const res = await fetch(`${base}/v1/principals/U-stay/deactivate`, {
       method: "POST",

@@ -35,14 +35,14 @@ import { inTestTenant } from "./support/test-tenants.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
-function kc(now?: () => number): Keychain {
+function kc(opts: Partial<Parameters<typeof createKeychain>[0]> = {}): Keychain {
   return createKeychain({
     lock: testAdvisoryLock(),
     creds: testMap(),
     grants: testMap(),
     asks: testMap(),
     key: KEY,
-    ...(now ? { now } : {}),
+    ...opts,
   });
 }
 
@@ -104,12 +104,8 @@ test("listing and per-owner reads use the store's projected select and never a f
       return backing.select(query);
     },
   };
-  const k = createKeychain({
-    lock: testAdvisoryLock(),
+  const k = kc({
     creds,
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
   });
   const org = scopeId("org", "default-org");
   await k.save({ ...GH, ownerId: "Alice@X.com" });
@@ -226,12 +222,8 @@ test("concurrent materialization consumes a once grant exactly once", async () =
 
 test("legacy retry grants remain consumed and invalidate prepared uses", async () => {
   const grants = testMap<KeychainGrant>();
-  const k = createKeychain({
-    lock: testAdvisoryLock(),
-    creds: testMap(),
+  const k = kc({
     grants,
-    asks: testMap(),
-    key: KEY,
   });
   const credential = await k.save(GH);
   const grant = await k.createGrant({
@@ -294,7 +286,7 @@ test("materializeOwnById: the owner's own credential needs no grant — scope, o
 test("a grant row pointing at a broker credential cannot materialize (defense in depth)", async () => {
   const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
   const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
-  const k = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
+  const k = kc({ creds, grants });
   const ORG = scopeId("org", "default-org");
   await k.setServiceCredential(ORG, { slug: "serp", name: "SERP", secret: "s3", host: "api.serper.dev" });
   const broker = (await creds.all()).find((c) => c.kind === "broker")!;
@@ -322,14 +314,8 @@ test("a grant row pointing at a broker credential cannot materialize (defense in
 describe("connectors are grantable like any keychain record", () => {
   const GMAIL = "gmail.googleapis.com";
   const G1 = scopeId("group", "G1");
-  type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
   function kcWithRefresh(freshToken: string): Keychain {
-    return createKeychain({
-      lock: testAdvisoryLock(),
-      creds: testMap<Rec>(),
-      grants: testMap(),
-      asks: testMap(),
-      key: KEY,
+    return kc({
       refreshConnector: async () => ({ accessToken: freshToken, expiresAt: Date.now() + 3_600_000 }),
     });
   }
@@ -688,21 +674,14 @@ test("materializeOwn round-trips the owner's env creds; expired creds are skippe
 test("materializeOwn skips a row that doesn't decrypt under the current key instead of throwing", async () => {
   const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
   const OTHER = deriveConnectorKey("a-different-master-key");
-  const writer = createKeychain({
-    lock: testAdvisoryLock(),
+  const writer = kc({
     creds,
-    grants: testMap(),
-    asks: testMap(),
     key: OTHER,
   });
   await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
-  const reader = createKeychain({
-    lock: testAdvisoryLock(),
+  const reader = kc({
     creds,
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
   });
   await reader.save(GH);
 
@@ -718,16 +697,14 @@ test("single-grant materialize surfaces a 422 (not a raw crypto 500) when the ro
   const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
   const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
   const OTHER = deriveConnectorKey("a-different-master-key");
-  const writer = createKeychain({
-    lock: testAdvisoryLock(),
+  const writer = kc({
     creds,
     grants,
-    asks: testMap(),
     key: OTHER,
   });
   const cred = await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
-  const reader = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
+  const reader = kc({ creds, grants });
   const grant = await reader.createGrant({
     credentialId: cred.id,
     ownerId: "U1",
@@ -837,12 +814,8 @@ test("multi-input login: re-save upserts the same slot, and unique/non-empty fie
 
 test("back-compat: a legacy record carrying a plaintext username still materializes the paired env var", async () => {
   const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
-  const k = createKeychain({
-    lock: testAdvisoryLock(),
+  const k = kc({
     creds,
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
   });
   const meta = await k.save({
     ownerId: "U1",
@@ -1131,20 +1104,21 @@ describe("/v1/keychain routes (capability-authed)", () => {
     await assert.rejects(prepared.commit(), (e: KeychainError) => e.status === 410);
   });
 
-  it("a participant's granted connector is materialized under the host env var", async () => {
-    const GROUP = scopeId("group", "G_CONN");
-    await built.keychain!.setConnectorToken("gmail.googleapis.com", "alex@conn", {
-      accessToken: "ya29.alex",
-      expiresAt: Date.now() + 3_600_000,
-    });
-    const cid = (await built.keychain!.listConnectorsByOwners(["alex@conn"])).get("alex@conn")![0]!.credentialId;
+  it("a participant's granted connector is materialized under the host env var", () =>
+    inTestTenant(async () => {
+      const GROUP = scopeId("group", "G_CONN");
+      await built.keychain!.setConnectorToken("gmail.googleapis.com", "alex@conn", {
+        accessToken: "ya29.alex",
+        expiresAt: Date.now() + 3_600_000,
+      });
+      const cid = (await built.keychain!.listConnectorsByOwners(["alex@conn"])).get("alex@conn")![0]!.credentialId;
 
-    const grant = await grantHere(cid, "alex@conn", GROUP, "once", "check my signature emails");
-    assert.equal((await built.keychain!.getGrant(grant.id))?.status, "active");
-    const prepared = await built.keychain!.prepareMaterialize(grant.id, GROUP, "carol@conn");
-    assert.equal(prepared.materialized.kind, "env");
-    if (prepared.materialized.kind === "env") assert.equal(prepared.materialized.env[0]?.value, "ya29.alex");
-  });
+      const grant = await grantHere(cid, "alex@conn", GROUP, "once", "check my signature emails");
+      assert.equal((await built.keychain!.getGrant(grant.id))?.status, "active");
+      const prepared = await built.keychain!.prepareMaterialize(grant.id, GROUP, "carol@conn");
+      assert.equal(prepared.materialized.kind, "env");
+      if (prepared.materialized.kind === "env") assert.equal(prepared.materialized.env[0]?.value, "ya29.alex");
+    }));
 
   it("normalizes keychain credential expiry seconds to milliseconds before storing", async () => {
     const expiresAt = Math.floor((Date.now() + 3_600_000) / 1000);
@@ -1202,25 +1176,26 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.notEqual(res.status, 200);
   });
 
-  it("one-time grants materialize only in their scope, once", async () => {
-    const credential = await built.keychain!.save({
-      ownerId: "OWNER",
-      service: "github",
-      secret: "ghp_grant",
-      envKey: "GH_GRANT",
-    });
-    const grant = await grantHere(credential.id, "OWNER", "channel:C7", "once", "clone the repo");
-    await assert.rejects(
-      built.keychain!.prepareMaterialize(grant.id, "channel:OTHER", "U3"),
-      (e: KeychainError) => e.status === 403,
-    );
-    const prepared = await built.keychain!.prepareMaterialize(grant.id, "channel:C7", "U3");
-    await prepared.commit();
-    await assert.rejects(
-      built.keychain!.prepareMaterialize(grant.id, "channel:C7", "U3"),
-      (e: KeychainError) => e.status === 410,
-    );
-  });
+  it("one-time grants materialize only in their scope, once", () =>
+    inTestTenant(async () => {
+      const credential = await built.keychain!.save({
+        ownerId: "OWNER",
+        service: "github",
+        secret: "ghp_grant",
+        envKey: "GH_GRANT",
+      });
+      const grant = await grantHere(credential.id, "OWNER", "channel:C7", "once", "clone the repo");
+      await assert.rejects(
+        built.keychain!.prepareMaterialize(grant.id, "channel:OTHER", "U3"),
+        (e: KeychainError) => e.status === 403,
+      );
+      const prepared = await built.keychain!.prepareMaterialize(grant.id, "channel:C7", "U3");
+      await prepared.commit();
+      await assert.rejects(
+        built.keychain!.prepareMaterialize(grant.id, "channel:C7", "U3"),
+        (e: KeychainError) => e.status === 410,
+      );
+    }));
 
   it("overview returns metadata and grants without querying usage history or exposing secrets", async (t) => {
     const owner = "OVERVIEW_OWNER";
@@ -1266,26 +1241,27 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.equal(body.scopeNames["channel:C_MYSTERY"], undefined);
   });
 
-  it("overview includes safe connector metadata so its grants remain visible and revocable", async () => {
-    const owner = "CONNECTOR_OVERVIEW_OWNER";
-    await built.keychain!.setConnectorToken("gmail.googleapis.com", owner, {
-      accessToken: "never-return-this-connector",
-    });
-    const connector = (await built.keychain!.listConnectorsByOwners([owner])).get(owner)![0]!;
-    const grant = await built.keychain!.grantConnectorToScope({
-      host: connector.host,
-      principalId: owner,
-      audienceScopeId: "channel:C_CONNECTOR_OVERVIEW",
-      purpose: "read mail here",
-    });
+  it("overview includes safe connector metadata so its grants remain visible and revocable", () =>
+    inTestTenant(async () => {
+      const owner = "CONNECTOR_OVERVIEW_OWNER";
+      await built.keychain!.setConnectorToken("gmail.googleapis.com", owner, {
+        accessToken: "never-return-this-connector",
+      });
+      const connector = (await built.keychain!.listConnectorsByOwners([owner])).get(owner)![0]!;
+      const grant = await built.keychain!.grantConnectorToScope({
+        host: connector.host,
+        principalId: owner,
+        audienceScopeId: "channel:C_CONNECTOR_OVERVIEW",
+        purpose: "read mail here",
+      });
 
-    const overview = await get("/v1/keychain/overview", await capFor(owner));
-    assert.equal(overview.status, 200);
-    const body = (await overview.json()) as any;
-    assert.equal(body.connectorCredentials[0].credentialId, connector.credentialId);
-    assert.equal(body.grants.find((entry: any) => entry.id === grant!.id)?.status, "active");
-    assert.ok(!JSON.stringify(body).includes("never-return-this-connector"));
-  });
+      const overview = await get("/v1/keychain/overview", await capFor(owner));
+      assert.equal(overview.status, 200);
+      const body = (await overview.json()) as any;
+      assert.equal(body.connectorCredentials[0].credentialId, connector.credentialId);
+      assert.equal(body.grants.find((entry: any) => entry.id === grant!.id)?.status, "active");
+      assert.ok(!JSON.stringify(body).includes("never-return-this-connector"));
+    }));
 });
 
 function channelTurn(
@@ -1329,13 +1305,15 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
     resolved.push(args[1]);
     return materializeOwnById(...args);
   };
-  const cred = await built.keychain!.save({
-    ownerId: "U_OWNER",
-    service: "github",
-    secret: "ghp_e2e",
-    envKey: "GITHUB_TOKEN",
-    accountLabel: "AliceBell",
-  });
+  const cred = await inTestTenant(() =>
+    built.keychain!.save({
+      ownerId: "U_OWNER",
+      service: "github",
+      secret: "ghp_e2e",
+      envKey: "GITHUB_TOKEN",
+      accountLabel: "AliceBell",
+    }),
+  );
 
   const audience = [{ externalId: "U_ASKER" }, { externalId: "U_OWNER", displayName: "Alice" }];
   const sys = await inTestTenant(() => built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience)));
@@ -1349,13 +1327,15 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   assert.equal((await inTestTenant(() => built.app.turn(channelTurn("!run true", "U_ASKER", audience)))).status, "ok");
   assert.ok(!execScriptsMention("ghp_e2e", mark), "no grant → no secret in the channel sandbox");
 
-  await built.keychain!.createGrant({
-    credentialId: cred.id,
-    ownerId: "U_OWNER",
-    audienceScopeId: "channel:C1",
-    mode: "standing",
-    purpose: "use my gh here for repo work",
-  });
+  await inTestTenant(() =>
+    built.keychain!.createGrant({
+      credentialId: cred.id,
+      ownerId: "U_OWNER",
+      audienceScopeId: "channel:C1",
+      mode: "standing",
+      purpose: "use my gh here for repo work",
+    }),
+  );
   const sys2 = await inTestTenant(() => built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience)));
   assert.match(sys2.reply ?? "", new RegExp(`\`github:${cred.id}\` — github \\(AliceBell\\); env \`GITHUB_TOKEN\``));
   assert.doesNotMatch(sys2.reply ?? "", /use my gh here for repo work|Not granted here/);
@@ -1389,365 +1369,363 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   assert.deepEqual(resolved, [cred.id]);
 });
 
-test("prepared grants reject credential rotation without consuming a single use", async () => {
-  const k = kc();
-  const credential = await k.save(GH);
-  const grant = await k.createGrant({
-    credentialId: credential.id,
-    ownerId: GH.ownerId,
-    audienceScopeId: "channel:C1",
-    mode: "once",
-    purpose: "rotation regression",
-  });
-  const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
-  await k.save({ ...GH, secret: "rotated-execution-token" });
-  await assert.rejects(prepared.commit(), /credential changed/);
-  assert.equal((await k.getGrant(grant.id))?.status, "active");
-  const fresh = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
-  assert.equal(fresh.materialized.kind, "env");
-  if (fresh.materialized.kind === "env") assert.equal(fresh.materialized.env[0]?.value, "rotated-execution-token");
-  await fresh.commit();
-  const committed = (await k.getGrant(grant.id))!;
-  assert.equal(committed.status, "used");
-  assert.equal(committed.usedBy, "U2", "only the committed materialization claims the once grant");
-});
-
-test("connector refresh during preparation binds the refreshed version and later rotation invalidates it", async () => {
-  let refreshes = 0;
-  const k = createKeychain({
-    lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
-    refreshConnector: async () => {
-      refreshes++;
-      return { accessToken: "refreshed-token", expiresAt: Date.now() + 3600000 };
-    },
-  });
-  await k.setConnectorToken("gmail.googleapis.com", "U1", {
-    accessToken: "expired-token",
-    refreshToken: "refresh",
-    expiresAt: Date.now() - 1000,
-  });
-  const connector = (await k.listConnectorsByOwners(["U1"])).get("U1")![0]!;
-  const grant = await k.createGrant({
-    credentialId: connector.credentialId,
-    ownerId: "U1",
-    audienceScopeId: "channel:C1",
-    mode: "standing",
-    purpose: "refresh regression",
-  });
-  const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
-  assert.equal(refreshes, 1);
-  await prepared.commit();
-  await k.setConnectorToken("gmail.googleapis.com", "U1", {
-    accessToken: "replacement-token",
-    expiresAt: Date.now() + 3600000,
-  });
-  await assert.rejects(prepared.commit(), /credential changed/);
-  await (await k.prepareMaterialize(grant.id, "channel:C1", "U2")).commit();
-});
-
-test("Composio keys remain backend-only across all materialization paths including multi-field records", async () => {
-  for (const input of [
-    { secret: "project-key", envKey: "COMPOSIO_API_KEY" },
-    {
-      fields: [
-        { envKey: "COMPOSIO_API_KEY", value: "project-key" },
-        { envKey: "OTHER", value: "other" },
-      ],
-    },
-  ]) {
+test("prepared grants reject credential rotation without consuming a single use", () =>
+  inTestTenant(async () => {
     const k = kc();
-    const c = await k.save({ ownerId: "U1", service: "composio", ...input });
-    assert.equal(c.credentialHandle, undefined);
-    assert.equal((await k.getCredential(c.id))?.credentialHandle, undefined);
+    const credential = await k.save(GH);
     const grant = await k.createGrant({
-      credentialId: c.id,
+      credentialId: credential.id,
+      ownerId: GH.ownerId,
+      audienceScopeId: "channel:C1",
+      mode: "once",
+      purpose: "rotation regression",
+    });
+    const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+    await k.save({ ...GH, secret: "rotated-execution-token" });
+    await assert.rejects(prepared.commit(), /credential changed/);
+    assert.equal((await k.getGrant(grant.id))?.status, "active");
+    const fresh = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+    assert.equal(fresh.materialized.kind, "env");
+    if (fresh.materialized.kind === "env") assert.equal(fresh.materialized.env[0]?.value, "rotated-execution-token");
+    await fresh.commit();
+    const committed = (await k.getGrant(grant.id))!;
+    assert.equal(committed.status, "used");
+    assert.equal(committed.usedBy, "U2", "only the committed materialization claims the once grant");
+  }));
+
+test("connector refresh during preparation binds the refreshed version and later rotation invalidates it", () =>
+  inTestTenant(async () => {
+    let refreshes = 0;
+    const k = kc({
+      refreshConnector: async () => {
+        refreshes++;
+        return { accessToken: "refreshed-token", expiresAt: Date.now() + 3600000 };
+      },
+    });
+    await k.setConnectorToken("gmail.googleapis.com", "U1", {
+      accessToken: "expired-token",
+      refreshToken: "refresh",
+      expiresAt: Date.now() - 1000,
+    });
+    const connector = (await k.listConnectorsByOwners(["U1"])).get("U1")![0]!;
+    const grant = await k.createGrant({
+      credentialId: connector.credentialId,
       ownerId: "U1",
       audienceScopeId: "channel:C1",
       mode: "standing",
-      purpose: "apps",
+      purpose: "refresh regression",
     });
-    assert.deepEqual(await k.materializeOwn("U1"), []);
-    assert.deepEqual(await k.materializeStanding("channel:C1"), []);
-    await assert.rejects(k.materializeOwnById("U1", c.id, "personal:U1"), /keys stay in the backend/);
-    await assert.rejects(materializeGrant(k, grant.id, "channel:C1", "U1"), /keys stay in the backend/);
-    assert.equal(await k.composioKey("U1", c.id), "project-key");
-    assert.equal(await k.composioKey("U2", c.id), null);
-  }
-});
+    const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+    assert.equal(refreshes, 1);
+    await prepared.commit();
+    await k.setConnectorToken("gmail.googleapis.com", "U1", {
+      accessToken: "replacement-token",
+      expiresAt: Date.now() + 3600000,
+    });
+    await assert.rejects(prepared.commit(), /credential changed/);
+    await (await k.prepareMaterialize(grant.id, "channel:C1", "U2")).commit();
+  }));
 
-test("manifest timestamps stay stable until credentials and pending asks actually expire", async () => {
-  let now = Date.parse("2030-01-01T00:00:00Z");
-  const k = createKeychain({
-    lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks: testMap(),
-    key: KEY,
-    now: () => now,
-  });
-  const expiresAt = now + 50 * 3_600_000;
-  const credential = await k.save({ ...GH, expiresAt });
-  const { ask } = await k.createAsk({
-    credentialId: credential.id,
-    requesterId: "U2",
-    requesterScopeId: "channel:C1",
-    purpose: "test access",
-  });
-  const manifest = async () =>
-    renderKeychainManifest(
+test("Composio keys remain backend-only across all materialization paths including multi-field records", () =>
+  inTestTenant(async () => {
+    for (const input of [
+      { secret: "project-key", envKey: "COMPOSIO_API_KEY" },
       {
-        scopeId: "personal:U1",
-        conversationKind: "dm",
-        actorId: "U1",
-        members: [{ id: "U1" }],
-        entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
-        scopeGrants: [],
-        execution: [
-          { credentialId: credential.id, ownerId: "U1", handle: credentialHandle(credential), description: "" },
+        fields: [
+          { envKey: "COMPOSIO_API_KEY", value: "project-key" },
+          { envKey: "OTHER", value: "other" },
         ],
       },
-      now,
-    );
-  const events = async (since: number) =>
-    askResolutionEvents(await k.listAsks({ requesterScopeId: "channel:C1" }), since, () => "U1", k.getCredential);
-  const first = await manifest();
-  for (const advance of [61_000, 3 * 3_600_000]) {
-    now += advance;
-    assert.equal(await manifest(), first);
-    assert.equal(await events(ask.createdAt), "");
-  }
-  assert.doesNotMatch(first, /expires at|\d{4}-\d{2}-\d{2}T|approval card/);
-  now = ask.expiresAt;
-  assert.equal(await events(ask.createdAt), "");
-  now++;
-  assert.equal(await events(ask.createdAt), "Access request to U1 for `github` was expired.");
-  assert.equal(await events(now), "");
-  await assert.rejects(
-    k.approveAsk({ askId: ask.id, ownerId: "U1", mode: "once", purpose: "test access" }),
-    (e: KeychainError) => e.status === 410,
-  );
-  now = expiresAt;
-  assert.doesNotMatch(await manifest(), /; expired/);
-  await k.materializeOwnById("U1", credential.id, "personal:U1");
-  now++;
-  assert.match(await manifest(), /; expired/);
-  await assert.rejects(
-    k.materializeOwnById("U1", credential.id, "personal:U1"),
-    (e: KeychainError) => e.status === 410,
-  );
-});
+    ]) {
+      const k = kc();
+      const c = await k.save({ ownerId: "U1", service: "composio", ...input });
+      assert.equal(c.credentialHandle, undefined);
+      assert.equal((await k.getCredential(c.id))?.credentialHandle, undefined);
+      const grant = await k.createGrant({
+        credentialId: c.id,
+        ownerId: "U1",
+        audienceScopeId: "channel:C1",
+        mode: "standing",
+        purpose: "apps",
+      });
+      assert.deepEqual(await k.materializeOwn("U1"), []);
+      assert.deepEqual(await k.materializeStanding("channel:C1"), []);
+      await assert.rejects(k.materializeOwnById("U1", c.id, "personal:U1"), /keys stay in the backend/);
+      await assert.rejects(materializeGrant(k, grant.id, "channel:C1", "U1"), /keys stay in the backend/);
+      assert.equal(await k.composioKey("U1", c.id), "project-key");
+      assert.equal(await k.composioKey("U2", c.id), null);
+    }
+  }));
 
-test("manifest inventories are canonical across discovery order without mutating inputs", async () => {
-  const k = kc();
-  for (const ownerId of ["U2", "U1"]) {
-    await k.save({ ...GH, ownerId });
-    await k.save({
-      ownerId,
-      service: "files",
-      files: [
-        { path: ".config/z", contentBase64: "eg==" },
-        { path: ".config/a", contentBase64: "YQ==" },
-      ],
+test("manifest timestamps stay stable until credentials and pending asks actually expire", () =>
+  inTestTenant(async () => {
+    let now = Date.parse("2030-01-01T00:00:00Z");
+    const k = kc({
+      now: () => now,
     });
-    await k.save({
-      ownerId,
-      service: "custom",
-      fields: [
-        { envKey: "Z_KEY", value: "z" },
-        { envKey: "A_KEY", value: "a" },
-      ],
-    });
-    await k.setConnectorToken("github.com", ownerId, { accessToken: "token" });
-    await k.setConnectorToken("gmail.googleapis.com", ownerId, { accessToken: "token" });
-  }
-  for (const credential of await k.listByOwner("U1")) {
-    await k.createAsk({
+    const expiresAt = now + 50 * 3_600_000;
+    const credential = await k.save({ ...GH, expiresAt });
+    const { ask } = await k.createAsk({
       credentialId: credential.id,
       requesterId: "U2",
       requesterScopeId: "channel:C1",
-      purpose: "access",
+      purpose: "test access",
     });
-  }
-  const input: Parameters<typeof renderKeychainManifest>[0] = {
-    scopeId: "personal:U1",
-    conversationKind: "dm",
-    actorId: "U1",
-    members: [{ id: "U2" }, { id: "U1" }],
-    entriesByOwner: await k.listByOwners(["U2", "U1"]),
-    connectorsByOwner: await k.listConnectorsByOwners(["U2", "U1"]),
-    scopeGrants: [],
-    execution: ["z", "a"].map((id) => ({
-      credentialId: id,
-      ownerId: "U1",
-      handle: `${id}:${id}`,
-      description: id,
-      scope: "scoped",
-    })),
-    detectedByOwner: new Map([
-      ["U1", ["zsh", "aws"]],
-      ["U2", ["gcloud", "aws"]],
-    ]),
-  };
-  const before = structuredClone(input);
-  const first = renderKeychainManifest(input, 1000);
-  const reversed = structuredClone(input);
-  reversed.members.reverse();
-  reversed.execution!.reverse();
-  for (const entries of reversed.entriesByOwner.values()) {
-    entries.reverse();
-    for (const entry of entries) {
-      entry.fields?.reverse();
-      entry.targets?.reverse();
+    const manifest = async () =>
+      renderKeychainManifest(
+        {
+          scopeId: "personal:U1",
+          conversationKind: "dm",
+          actorId: "U1",
+          members: [{ id: "U1" }],
+          entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
+          scopeGrants: [],
+          execution: [
+            { credentialId: credential.id, ownerId: "U1", handle: credentialHandle(credential), description: "" },
+          ],
+        },
+        now,
+      );
+    const events = async (since: number) =>
+      askResolutionEvents(await k.listAsks({ requesterScopeId: "channel:C1" }), since, () => "U1", k.getCredential);
+    const first = await manifest();
+    for (const advance of [61_000, 3 * 3_600_000]) {
+      now += advance;
+      assert.equal(await manifest(), first);
+      assert.equal(await events(ask.createdAt), "");
     }
-  }
-  for (const entries of reversed.connectorsByOwner!.values()) entries.reverse();
-  for (const entries of reversed.detectedByOwner!.values()) entries.reverse();
-  assert.equal(renderKeychainManifest(reversed, 1000), first);
-  assert.deepEqual(input, before);
-  reversed.connectorsByOwner!.get("U1")![0]!.needsReconnect = true;
-  assert.notEqual(renderKeychainManifest(reversed, 1000), first);
-});
+    assert.doesNotMatch(first, /expires at|\d{4}-\d{2}-\d{2}T|approval card/);
+    now = ask.expiresAt;
+    assert.equal(await events(ask.createdAt), "");
+    now++;
+    assert.equal(await events(ask.createdAt), "Access request to U1 for `github` was expired.");
+    assert.equal(await events(now), "");
+    await assert.rejects(
+      k.approveAsk({ askId: ask.id, ownerId: "U1", mode: "once", purpose: "test access" }),
+      (e: KeychainError) => e.status === 410,
+    );
+    now = expiresAt;
+    assert.doesNotMatch(await manifest(), /; expired/);
+    await k.materializeOwnById("U1", credential.id, "personal:U1");
+    now++;
+    assert.match(await manifest(), /; expired/);
+    await assert.rejects(
+      k.materializeOwnById("U1", credential.id, "personal:U1"),
+      (e: KeychainError) => e.status === 410,
+    );
+  }));
 
-test("manifest merges credential representations without conflating login identities or execution scopes", async () => {
-  const k = kc();
-  const ownerId = "ALICE@example.com";
-  await k.setConnectorToken("gmail.googleapis.com", ownerId, { accessToken: "private-token", expiresAt: 5000 });
-  const connector = (await k.listConnectorsByOwners([ownerId])).get(ownerId)![0]!;
-  const credential = (await k.getCredential(connector.credentialId))!;
-  const grant = await k.createGrant({
-    ownerId,
-    credentialId: credential.id,
-    audienceScopeId: "channel:C1",
-    mode: "standing",
-    purpose: "mail",
-  });
-  const first = await k.save({
-    ownerId,
-    service: "aws",
-    envKey: "AWS_TOKEN",
-    secret: "first-secret",
-    accountLabel: "work",
-    expiresAt: 900,
-  });
-  const second = await k.save({
-    ownerId,
-    service: "aws",
-    envKey: "OTHER_AWS_TOKEN",
-    secret: "second-secret",
-    accountLabel: "personal",
-    expiresAt: 5000,
-  });
-  const input: Parameters<typeof renderKeychainManifest>[0] = {
-    scopeId: "channel:C1",
-    conversationKind: "channel",
-    openSpeakerKeychain: true,
-    actorId: "alice@example.com",
-    members: [{ id: "alice@example.com", displayName: "Alice" }],
-    entriesByOwner: new Map([["alice@example.com", [first, second]]]),
-    connectorsByOwner: new Map([["alice@example.com", [{ ...connector, needsReconnect: true }]]]),
-    scopeGrants: [{ grant, credential }],
-    execution: [
-      {
-        handle: credentialHandle(credential),
+test("manifest inventories are canonical across discovery order without mutating inputs", () =>
+  inTestTenant(async () => {
+    const k = kc();
+    for (const ownerId of ["U2", "U1"]) {
+      await k.save({ ...GH, ownerId });
+      await k.save({
         ownerId,
+        service: "files",
+        files: [
+          { path: ".config/z", contentBase64: "eg==" },
+          { path: ".config/a", contentBase64: "YQ==" },
+        ],
+      });
+      await k.save({
+        ownerId,
+        service: "custom",
+        fields: [
+          { envKey: "Z_KEY", value: "z" },
+          { envKey: "A_KEY", value: "a" },
+        ],
+      });
+      await k.setConnectorToken("github.com", ownerId, { accessToken: "token" });
+      await k.setConnectorToken("gmail.googleapis.com", ownerId, { accessToken: "token" });
+    }
+    for (const credential of await k.listByOwner("U1")) {
+      await k.createAsk({
         credentialId: credential.id,
-        description: "mail grant",
-      },
-      {
-        handle: "connector:gmail.googleapis.com:default",
-        ownerId,
-        credentialId: credential.id,
-        description: "own mail",
-      },
-      ...[first, second].map((c) => ({
-        handle: credentialHandle(c),
-        ownerId,
-        credentialId: c.id,
-        description: "aws",
+        requesterId: "U2",
+        requesterScopeId: "channel:C1",
+        purpose: "access",
+      });
+    }
+    const input: Parameters<typeof renderKeychainManifest>[0] = {
+      scopeId: "personal:U1",
+      conversationKind: "dm",
+      actorId: "U1",
+      members: [{ id: "U2" }, { id: "U1" }],
+      entriesByOwner: await k.listByOwners(["U2", "U1"]),
+      connectorsByOwner: await k.listConnectorsByOwners(["U2", "U1"]),
+      scopeGrants: [],
+      execution: ["z", "a"].map((id) => ({
+        credentialId: id,
+        ownerId: "U1",
+        handle: `${id}:${id}`,
+        description: id,
+        scope: "scoped",
       })),
-    ],
-  };
-  const rendered = renderKeychainManifest(input, 1000);
-  assert.equal(rendered.split("### ").length - 1, 1);
-  assert.equal(rendered.split("— Google").length - 1, 1);
-  assert.match(rendered, /`connector:gmail\.googleapis\.com:default`, `[^`]+` — Google; expired/);
-  assert.match(rendered, /aws \(work\); expired/);
-  assert.match(rendered, /aws \(personal\); env `OTHER_AWS_TOKEN`/);
-  assert.doesNotMatch(rendered, /expires at|\d{4}-\d{2}-\d{2}T/);
-  assert.notEqual(credentialHandle(first), credentialHandle(second));
-  for (const secret of ["private-token", "first-secret", "second-secret"]) assert.ok(!rendered.includes(secret));
-  input.execution!.reverse();
-  assert.equal(renderKeychainManifest(input, 1000), rendered);
-});
+      detectedByOwner: new Map([
+        ["U1", ["zsh", "aws"]],
+        ["U2", ["gcloud", "aws"]],
+      ]),
+    };
+    const before = structuredClone(input);
+    const first = renderKeychainManifest(input, 1000);
+    const reversed = structuredClone(input);
+    reversed.members.reverse();
+    reversed.execution!.reverse();
+    for (const entries of reversed.entriesByOwner.values()) {
+      entries.reverse();
+      for (const entry of entries) {
+        entry.fields?.reverse();
+        entry.targets?.reverse();
+      }
+    }
+    for (const entries of reversed.connectorsByOwner!.values()) entries.reverse();
+    for (const entries of reversed.detectedByOwner!.values()) entries.reverse();
+    assert.equal(renderKeychainManifest(reversed, 1000), first);
+    assert.deepEqual(input, before);
+    reversed.connectorsByOwner!.get("U1")![0]!.needsReconnect = true;
+    assert.notEqual(renderKeychainManifest(reversed, 1000), first);
+  }));
 
-test("granted connector keeps account and refresh semantics when owner is absent from roster", async () => {
-  const k = kc(() => 1000);
-  await k.setConnectorToken("gmail.googleapis.com", "U_OWNER", {
-    accessToken: "old-token",
-    refreshToken: "refresh-token",
-    expiresAt: 900,
-    accountType: "company",
-  });
-  const connector = (await k.listConnectorsByOwners(["U_OWNER"])).get("U_OWNER")![0]!;
-  const credential = (await k.getCredential(connector.credentialId))!;
-  const grant = await k.createGrant({
-    ownerId: "U_OWNER",
-    credentialId: credential.id,
-    audienceScopeId: "channel:C1",
-    mode: "standing",
-    purpose: "mail",
-  });
-  const rendered = renderKeychainManifest(
-    {
+test("manifest merges credential representations without conflating login identities or execution scopes", () =>
+  inTestTenant(async () => {
+    const k = kc();
+    const ownerId = "ALICE@example.com";
+    await k.setConnectorToken("gmail.googleapis.com", ownerId, { accessToken: "private-token", expiresAt: 5000 });
+    const connector = (await k.listConnectorsByOwners([ownerId])).get(ownerId)![0]!;
+    const credential = (await k.getCredential(connector.credentialId))!;
+    const grant = await k.createGrant({
+      ownerId,
+      credentialId: credential.id,
+      audienceScopeId: "channel:C1",
+      mode: "standing",
+      purpose: "mail",
+    });
+    const first = await k.save({
+      ownerId,
+      service: "aws",
+      envKey: "AWS_TOKEN",
+      secret: "first-secret",
+      accountLabel: "work",
+      expiresAt: 900,
+    });
+    const second = await k.save({
+      ownerId,
+      service: "aws",
+      envKey: "OTHER_AWS_TOKEN",
+      secret: "second-secret",
+      accountLabel: "personal",
+      expiresAt: 5000,
+    });
+    const input: Parameters<typeof renderKeychainManifest>[0] = {
       scopeId: "channel:C1",
       conversationKind: "channel",
-      actorId: "U_ACTOR",
-      members: [{ id: "U_ACTOR" }],
-      entriesByOwner: new Map(),
+      openSpeakerKeychain: true,
+      actorId: "alice@example.com",
+      members: [{ id: "alice@example.com", displayName: "Alice" }],
+      entriesByOwner: new Map([["alice@example.com", [first, second]]]),
+      connectorsByOwner: new Map([["alice@example.com", [{ ...connector, needsReconnect: true }]]]),
       scopeGrants: [{ grant, credential }],
       execution: [
-        { handle: credentialHandle(credential), ownerId: "U_OWNER", credentialId: credential.id, description: "" },
+        {
+          handle: credentialHandle(credential),
+          ownerId,
+          credentialId: credential.id,
+          description: "mail grant",
+        },
+        {
+          handle: "connector:gmail.googleapis.com:default",
+          ownerId,
+          credentialId: credential.id,
+          description: "own mail",
+        },
+        ...[first, second].map((c) => ({
+          handle: credentialHandle(c),
+          ownerId,
+          credentialId: c.id,
+          description: "aws",
+        })),
       ],
-    },
-    1000,
-  );
-  assert.match(rendered, /### U_OWNER\n- `[^`]+` — Google \(company\); env `VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`$/);
-  assert.doesNotMatch(rendered, /expired|Not granted|refresh-token|old-token/);
-});
+    };
+    const rendered = renderKeychainManifest(input, 1000);
+    assert.equal(rendered.split("### ").length - 1, 1);
+    assert.equal(rendered.split("— Google").length - 1, 1);
+    assert.match(rendered, /`connector:gmail\.googleapis\.com:default`, `[^`]+` — Google; expired/);
+    assert.match(rendered, /aws \(work\); expired/);
+    assert.match(rendered, /aws \(personal\); env `OTHER_AWS_TOKEN`/);
+    assert.doesNotMatch(rendered, /expires at|\d{4}-\d{2}-\d{2}T/);
+    assert.notEqual(credentialHandle(first), credentialHandle(second));
+    for (const secret of ["private-token", "first-secret", "second-secret"]) assert.ok(!rendered.includes(secret));
+    input.execution!.reverse();
+    assert.equal(renderKeychainManifest(input, 1000), rendered);
+  }));
 
-test("a connector whose refresh was rejected shows the provider's error, not just expired", () => {
-  const rendered = renderKeychainManifest({
-    scopeId: "personal:U1",
-    conversationKind: "dm",
-    actorId: "U1",
-    members: [{ id: "U1" }],
-    entriesByOwner: new Map(),
-    connectorsByOwner: new Map([
-      [
-        "U1",
-        [
-          {
-            credentialId: "c1",
-            ownerId: "U1",
-            host: "gmail.googleapis.com",
-            connected: true,
-            needsReconnect: true,
-            refreshError: "invalid_grant",
-          },
+test("granted connector keeps account and refresh semantics when owner is absent from roster", () =>
+  inTestTenant(async () => {
+    const k = kc({ now: () => 1000 });
+    await k.setConnectorToken("gmail.googleapis.com", "U_OWNER", {
+      accessToken: "old-token",
+      refreshToken: "refresh-token",
+      expiresAt: 900,
+      accountType: "company",
+    });
+    const connector = (await k.listConnectorsByOwners(["U_OWNER"])).get("U_OWNER")![0]!;
+    const credential = (await k.getCredential(connector.credentialId))!;
+    const grant = await k.createGrant({
+      ownerId: "U_OWNER",
+      credentialId: credential.id,
+      audienceScopeId: "channel:C1",
+      mode: "standing",
+      purpose: "mail",
+    });
+    const rendered = renderKeychainManifest(
+      {
+        scopeId: "channel:C1",
+        conversationKind: "channel",
+        actorId: "U_ACTOR",
+        members: [{ id: "U_ACTOR" }],
+        entriesByOwner: new Map(),
+        scopeGrants: [{ grant, credential }],
+        execution: [
+          { handle: credentialHandle(credential), ownerId: "U_OWNER", credentialId: credential.id, description: "" },
         ],
+      },
+      1000,
+    );
+    assert.match(rendered, /### U_OWNER\n- `[^`]+` — Google \(company\); env `VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`$/);
+    assert.doesNotMatch(rendered, /expired|Not granted|refresh-token|old-token/);
+  }));
+
+test("a connector whose refresh was rejected shows the provider's error, not just expired", () =>
+  inTestTenant(() => {
+    const rendered = renderKeychainManifest({
+      scopeId: "personal:U1",
+      conversationKind: "dm",
+      actorId: "U1",
+      members: [{ id: "U1" }],
+      entriesByOwner: new Map(),
+      connectorsByOwner: new Map([
+        [
+          "U1",
+          [
+            {
+              credentialId: "c1",
+              ownerId: "U1",
+              host: "gmail.googleapis.com",
+              connected: true,
+              needsReconnect: true,
+              refreshError: "invalid_grant",
+            },
+          ],
+        ],
+      ]),
+      scopeGrants: [],
+      execution: [
+        { handle: "connector:gmail.googleapis.com:default", ownerId: "U1", credentialId: "c1", description: "" },
       ],
-    ]),
-    scopeGrants: [],
-    execution: [
-      { handle: "connector:gmail.googleapis.com:default", ownerId: "U1", credentialId: "c1", description: "" },
-    ],
-  });
-  assert.match(
-    rendered,
-    /`connector:gmail\.googleapis\.com:default` — .*; expired \(refresh failed: invalid_grant\)$/m,
-  );
-});
+    });
+    assert.match(
+      rendered,
+      /`connector:gmail\.googleapis\.com:default` — .*; expired \(refresh failed: invalid_grant\)$/m,
+    );
+  }));
