@@ -226,7 +226,7 @@ export function withRuntimeBarrier(
       if (mutation) {
         ref.runtimeMutationPending = true;
         try {
-          await Promise.allSettled(ref.runtimeInFlight ?? []);
+          await withAbort(() => Promise.allSettled(ref.runtimeInFlight ?? []), ref.abortSignal).catch(() => undefined);
           if (ref.abortSignal?.aborted || ref.pausedOnApproval || ref.silentRequested)
             return {
               content: [{ type: "text" as const, text: "Runtime change cancelled before execution." }],

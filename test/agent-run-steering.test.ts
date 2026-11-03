@@ -605,7 +605,7 @@ for (const abort of ["shutdown", "stop"] as const) {
         ),
       );
       toolFinished.resolve();
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 200));
       const results = entries.filter((entry) => entry.type === "tool_result");
       assert.equal(results.length, 1, "the late tool outcome does not add a second result");
       assert.deepEqual(

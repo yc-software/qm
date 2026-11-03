@@ -70,7 +70,8 @@ export function createRecorder(ref: ToolContextRef) {
   };
 
   const retryMarks = new Map<string, RetryMark>();
-  const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> => {
+  const recordCall = async (callId: string, payload: Record<string, unknown>): Promise<void> => {
+    if (ref.stoppedCalls?.has(callId)) return;
     const mark = retryMarks.get(callId);
     return log("tool_call", {
       ...payload,
@@ -125,7 +126,8 @@ export function createRecorder(ref: ToolContextRef) {
     screenAs?: { provenance: ToolResultProvenance; source?: string },
   ): Promise<T> =>
     resultQueue("result", async () => {
-      if (ref.stoppedCalls?.has(callId)) return ret;
+      const stopped = () => !!ref.stoppedCalls?.has(callId);
+      if (stopped()) return ret;
       const originalTool = String(summary.tool ?? "");
       const t = ret.content
         .filter((c) => c.type === "text")
@@ -211,7 +213,6 @@ export function createRecorder(ref: ToolContextRef) {
           };
         }
       }
-      if (ref.stoppedCalls?.has(callId)) return ret;
       const mail = await deliverMessages(ret);
       result += mail.text;
       const goal = ref.goal;
@@ -221,7 +222,9 @@ export function createRecorder(ref: ToolContextRef) {
       const held = !!goalInbox && (await goalInboxHeld(goalInbox));
       const arrived =
         goal && goalInbox && !held
-          ? await takeGoalMessages(goalInbox, goal, ref.goalMeter).catch(swallowAs("goal: read the inbox", undefined))
+          ? await takeGoalMessages(goalInbox, goal, ref.goalMeter, () => !stopped()).catch(
+              swallowAs("goal: read the inbox", undefined),
+            )
           : undefined;
       if (held) {
         ref.swarmHeld = true;
@@ -232,6 +235,7 @@ export function createRecorder(ref: ToolContextRef) {
         ret.content.push({ type: "text", text: arrived });
         result += `\n\n${arrived}`;
       }
+      if (stopped()) return ret;
       await log("tool_result", {
         ...(capPayloadStrings(persistedSummary) as Record<string, unknown>),
         callId,
