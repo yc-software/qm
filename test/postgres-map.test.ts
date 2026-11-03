@@ -185,6 +185,42 @@ test("pg map: writes made outside the map reach a warm reader on its next read",
   }
 });
 
+test("pg map: a warm reader recovers when the table's version counter is reset", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const writer = factory.map<Widget>("map_widgets");
+  const reader = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
+  try {
+    for (let i = 0; i < 3; i++) await writer.put(`reset${i}`, { name: `reset${i}`, tags: [], nested: { n: i } });
+    await reader.all();
+    await factory.pool.q("DELETE FROM durable_map_versions WHERE tbl = 'map_widgets'");
+    await writer.merge("reset1", { name: "reset1x" });
+    assert.ok((await reader.all()).some((w) => w.name === "reset1x"));
+  } finally {
+    await factory.pool.q(`DELETE FROM map_widgets WHERE id LIKE 'reset%'`);
+    await factory.pool.close();
+  }
+});
+
+test("pg map: map writes and plain multi-row updates on the same rows do not deadlock", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const m = factory.map<Widget>("map_widgets");
+  try {
+    for (let i = 0; i < 5; i++) await m.put(`lock${i}`, { name: `lock${i}`, tags: [], nested: { n: 0 } });
+    const until = Date.now() + 2000;
+    const mapWrites = async (id: string) => {
+      while (Date.now() < until) await m.update(id, (w) => ({ ...w, nested: { n: w.nested.n + 1 } }));
+    };
+    const plainWrites = async () => {
+      while (Date.now() < until)
+        await factory.pool.q(`UPDATE map_widgets SET json = jsonb_set(json, '{tags}', '["x"]') WHERE id LIKE 'lock%'`);
+    };
+    await Promise.all([mapWrites("lock0"), mapWrites("lock3"), mapWrites("lock4"), plainWrites()]);
+  } finally {
+    await factory.pool.q(`DELETE FROM map_widgets WHERE id LIKE 'lock%'`);
+    await factory.pool.close();
+  }
+});
+
 test("pg map: a warm reader refreshes after an update without rereading unchanged rows", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const writer = factory.map<Widget>("map_delta_widgets");

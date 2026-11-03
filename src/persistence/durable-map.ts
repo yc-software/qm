@@ -43,36 +43,43 @@ export function createPostgresMap<T>(
       `CREATE TABLE IF NOT EXISTS ${VERSIONS_TABLE} (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`,
     ],
   };
+  const versionFunction = {
+    id: "durable-map/0000-version-function",
+    statements: [
+      `CREATE OR REPLACE FUNCTION durable_map_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+      DECLARE
+        bumped BIGINT;
+      BEGIN
+        IF TG_LEVEL = 'ROW' THEN
+          NEW.rv := current_setting('durable_map.v_' || TG_TABLE_NAME)::bigint;
+          RETURN NEW;
+        END IF;
+        INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES (TG_TABLE_NAME, 1)
+        ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1
+        RETURNING v INTO bumped;
+        PERFORM set_config('durable_map.v_' || TG_TABLE_NAME, bumped::text, true);
+        RETURN NULL;
+      END
+      $fn$`,
+    ],
+  };
   const rowVersion = {
     id: `durable-map/${table}/0002-row-version`,
     statements: [
       `SET LOCAL lock_timeout = '3s'`,
       `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS rv BIGINT NOT NULL DEFAULT 0`,
       `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 0) ON CONFLICT (tbl) DO NOTHING`,
-      `CREATE OR REPLACE FUNCTION durable_map_bump() RETURNS trigger LANGUAGE plpgsql AS $fn$
-      DECLARE
-        bumped BIGINT;
-      BEGIN
-        INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES (TG_TABLE_NAME, 1)
-        ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1
-        RETURNING v INTO bumped;
-        IF TG_LEVEL = 'ROW' THEN
-          NEW.rv := bumped;
-          RETURN NEW;
-        END IF;
-        RETURN NULL;
-      END
-      $fn$`,
+      `DROP TRIGGER IF EXISTS ${table}_version ON ${table}`,
+      `CREATE TRIGGER ${table}_version BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON ${table}
+      FOR EACH STATEMENT EXECUTE FUNCTION durable_map_version()`,
       `DROP TRIGGER IF EXISTS ${table}_row_version ON ${table}`,
       `CREATE TRIGGER ${table}_row_version BEFORE INSERT OR UPDATE ON ${table}
-      FOR EACH ROW EXECUTE FUNCTION durable_map_bump()`,
-      `DROP TRIGGER IF EXISTS ${table}_removal_version ON ${table}`,
-      `CREATE TRIGGER ${table}_removal_version AFTER DELETE OR TRUNCATE ON ${table}
-      FOR EACH STATEMENT EXECUTE FUNCTION durable_map_bump()`,
+      FOR EACH ROW EXECUTE FUNCTION durable_map_version()`,
     ],
   };
   const migrations = [
     migration,
+    versionFunction,
     rowVersion,
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
@@ -150,7 +157,7 @@ export function createPostgresMap<T>(
     await ready();
     const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
     const v = vRows.length ? String(vRows[0]!.v) : "";
-    if (cache && cache.v !== v) cache = cache.v && v ? await applyChanges(cache) : null;
+    if (cache && cache.v !== v) cache = cache.v && v && BigInt(v) > BigInt(cache.v) ? await applyChanges(cache) : null;
     if (!cache) {
       const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
       cache = { v, entries: rows.map((row) => [row.id as string, row.json as T]) };
