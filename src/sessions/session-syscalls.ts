@@ -9,7 +9,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
@@ -420,22 +420,14 @@ export async function sessionTreeWorking(
 }
 
 export async function workingSessionThreadRefs(
-  sessions: Pick<SessionStore, "get" | "getByThread">,
+  sessions: Pick<SessionStore, "sameScopeAncestorsOfThreads">,
   runs: Pick<RunStore, "activeSessionIds">,
   awaitingSessionIds: ReadonlySet<string>,
 ): Promise<Set<string>> {
   const active = await runs.activeSessionIds();
   const working = new Set(active);
-  await Promise.all(
-    active
-      .map(async (threadRef) => {
-        const session = await sessions.getByThread(threadRef);
-        if (!session?.parentSessionId) return;
-        for (const ancestor of await stoppableAncestors(sessions, session))
-          if (!awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
-      })
-      .map((lookup) => lookup.catch(swallowAs("session list: working ancestors", undefined))),
-  );
+  for (const ancestor of await sessions.sameScopeAncestorsOfThreads(active))
+    if (!awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
   return working;
 }
 

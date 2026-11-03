@@ -536,6 +536,7 @@ export interface SessionStore {
   descendantsOf(rootIds: readonly string[]): Promise<SessionDescendant[]>;
   listDescendantsForParticipant(rootId: string, principalId: string, limit: number): Promise<Session[]>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
+  sameScopeAncestorsOfThreads(threadRefs: readonly string[]): Promise<Array<{ id: string; threadRef: string }>>;
 
   deleteSession(sessionId: string): Promise<void>;
   deleteSessionIfEmpty(sessionId: string): Promise<boolean>;
