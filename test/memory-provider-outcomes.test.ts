@@ -127,7 +127,7 @@ test("an actor QM cannot attest makes no provider call and is recorded as denied
 
 test("an attested provider is called only for the person whose private conversation it is", async (t) => {
   installPrincipalLinks({
-    canonical: (key) => ({ "system:digest": "U1", U3: "system:svc" })[key],
+    canonical: (key) => (key === "system:digest" ? "U1" : undefined),
     aliases: () => [],
   });
   t.after(() => installPrincipalLinks(null));
@@ -139,7 +139,6 @@ test("an attested provider is called only for the person whose private conversat
     assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
     assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
   }
-  assert.equal(recallText(await memory.recall("personal:U3", { query: "launch", actorId: "U3" })), "notebook fact");
   assert.equal(mcp.requests.length, 0);
   await memory.recall("personal:U1", { query: "launch", actorId: "U1" });
   assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U1"]));

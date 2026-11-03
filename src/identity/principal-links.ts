@@ -2,6 +2,7 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
+import { isSystemActor } from "../types.ts";
 
 export interface PrincipalLink {
   principalId: string;
@@ -49,6 +50,7 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
     byAlias.clear();
     byCanonical.clear();
     for (const row of rows) {
+      if (isSystemActor(row.principalId) || isSystemActor(row.canonicalId)) continue;
       byAlias.set(foldPrincipalId(row.principalId), row);
       const key = foldPrincipalId(row.canonicalId);
       const list = byCanonical.get(key) ?? [];
@@ -80,6 +82,8 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
             400,
             `principalId and canonicalId must be non-empty ids of at most ${MAX_ID_LENGTH} characters`,
           );
+        if (isSystemActor(input.principalId.trim()) || isSystemActor(input.canonicalId.trim()))
+          throw new PrincipalLinkError(400, "a system actor is QM itself, not a person, so it cannot be linked to one");
         const evidence = typeof input.evidence === "string" ? input.evidence.trim() : "";
         if (!evidence || evidence.length > MAX_EVIDENCE_LENGTH)
           throw new PrincipalLinkError(400, `evidence must say how the two identities were verified as one person`);

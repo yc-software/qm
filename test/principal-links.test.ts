@@ -70,6 +70,11 @@ describe("principal link service: one person, several sign-ins", () => {
     );
     await reject({ principalId: OIDC, canonicalId: EMAIL, evidence: "", linkedBy: "a" }, 400, /evidence/);
     await reject({ principalId: "", canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "a" }, 400, /non-empty/);
+    for (const [principalId, canonicalId] of [
+      ["system:digest", EMAIL],
+      [SLACK, "system:digest"],
+    ])
+      await reject({ principalId, canonicalId, evidence: EVIDENCE, linkedBy: "a" }, 400, /system actor/);
     await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "a" });
     const again = await links.link({
       principalId: OIDC,
@@ -93,6 +98,19 @@ describe("principal link service: one person, several sign-ins", () => {
       400,
       /canonical/,
     );
+  });
+
+  it("never folds a system actor into a person, even from a stored link", async () => {
+    const backing = testMap<PrincipalLink>();
+    for (const [principalId, canonicalId] of [
+      ["system:digest", EMAIL],
+      [SLACK, "system:svc"],
+    ] as const)
+      await backing.put(principalId, { principalId, canonicalId, evidence: EVIDENCE, linkedBy: "a", createdAt: 1 });
+    const links = createPrincipalLinkService(backing, testAdvisoryLock());
+    await links.refresh(true);
+    assert.equal(links.canonical("system:digest"), undefined);
+    assert.equal(links.canonical(SLACK), undefined);
   });
 
   it("reads links written by another process on refresh", async () => {

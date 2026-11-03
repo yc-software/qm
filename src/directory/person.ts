@@ -43,12 +43,7 @@ export function attestableActor(id: unknown): string | undefined {
 
 export function attestableAudience(actorId: string | undefined, scope: string | undefined): boolean {
   const { kind, ref } = parseScopeId(scope ?? "");
-  return (
-    kind === "personal" &&
-    !isSystemActor(actorId) &&
-    !isSystemActor(actorId && canonicalPerson(actorId)) &&
-    samePerson(actorId, ref)
-  );
+  return kind === "personal" && !isSystemActor(actorId) && samePerson(actorId, ref);
 }
 
 export function attestedPerson(id: string | undefined, callee: string): string {
