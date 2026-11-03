@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
 import type { SurfacePromptHints } from "./surfaces/contract.ts";
 import {
@@ -359,7 +360,15 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
-const PROMPT_HINT_KEYS = ["mentionSyntax", "linkSyntax", "autonomousStyle", "conversationStyle"] as const;
+const promptHintsSchema = z
+  .object({
+    mentionSyntax: z.string(),
+    linkSyntax: z.string(),
+    autonomousStyle: z.string(),
+    conversationStyle: z.string(),
+  })
+  .partial()
+  .strict();
 
 function partnerChatPromptHints(raw: string): Partial<SurfacePromptHints> {
   let parsed: unknown;
@@ -368,18 +377,12 @@ function partnerChatPromptHints(raw: string): Partial<SurfacePromptHints> {
   } catch {
     parsed = null;
   }
-  if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    Array.isArray(parsed) ||
-    Object.entries(parsed).some(
-      ([k, v]) => !(PROMPT_HINT_KEYS as readonly string[]).includes(k) || typeof v !== "string",
-    )
-  )
+  const hints = promptHintsSchema.safeParse(parsed);
+  if (!hints.success)
     throw new Error(
-      `PARTNER_CHAT_PROMPT_HINTS must be a JSON object of strings keyed by ${PROMPT_HINT_KEYS.join(", ")}`,
+      `PARTNER_CHAT_PROMPT_HINTS must be a JSON object of strings keyed by ${Object.keys(promptHintsSchema.shape).join(", ")}`,
     );
-  return parsed as Partial<SurfacePromptHints>;
+  return hints.data;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {

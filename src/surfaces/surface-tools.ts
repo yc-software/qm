@@ -99,11 +99,12 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
   const deliveries = deps.deliveries;
   const currentDestination = defaultDestination;
-  const destinationSurface = deps.surfaces.get(currentDestination.type)?.capabilities;
+  const homeSurface = deps.surfaces.get(currentDestination.type);
+  const mirroredHome = homeSurface?.capabilities.mirrored ? homeSurface : undefined;
   const rateLimitRecipient =
     input.origin?.kind === "human" &&
     !isSessionTurn(input) &&
-    destinationSurface?.nativeActor &&
+    homeSurface?.capabilities.nativeActor &&
     currentDestination.target
       ? { rateLimitRecipient: { target: currentDestination.target, user: actor.id } }
       : {};
@@ -195,10 +196,11 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     coverageChecked = true;
     const container = currentDestination.target ?? conversation.channelRef ?? conversation.threadRef;
     if (!deps.surfaceCache || !container) return coverageSince;
-    const cacheContainer = destinationSurface?.mirrored ? container.split(":")[0]! : container;
-    const st = await deps.surfaceCache
-      .containerState(cacheContainer)
-      .catch(swallowAs("surface cache: container coverage", null));
+    const st = await (
+      mirroredHome
+        ? deps.surfaceCache.containerState(mirroredHome.containerOf(container), { surface: mirroredHome.kind })
+        : deps.surfaceCache.containerState(container)
+    ).catch(swallowAs("surface cache: container coverage", null));
     coverageSince = st?.oldestTs ? isoFromTs(st.oldestTs) || undefined : undefined;
     return coverageSince;
   };
@@ -299,8 +301,12 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
-      if (d.destination.type !== "slack" && d.destination.type !== "group")
-        return { ok: false, message: "I can only edit a Slack message in a channel, group DM, or this conversation." };
+      if (d.destination.type !== "group" && !deps.surfaces.get(d.destination.type)?.capabilities.edits)
+        return {
+          ok: false,
+          message:
+            "I can only edit a message in a channel, group DM, or this conversation on a surface that supports edits.",
+        };
       return enqueue(withEdit(d.destination, input.ref), input.text, seq);
     },
     delete: async (input: SurfaceDeleteInput) => {
@@ -419,9 +425,12 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         });
       }
       const container = dest.target ?? conversation.channelRef ?? conversation.threadRef;
-      if (deps.surfaceCache && destinationSurface?.mirrored && container) {
-        const channel = container.split(":")[0]!;
-        const hits = await deps.surfaceCache.search(q, { container: channel, limit });
+      if (deps.surfaceCache && mirroredHome && container) {
+        const hits = await deps.surfaceCache.search(q, {
+          surface: mirroredHome.kind,
+          container: mirroredHome.containerOf(container),
+          limit,
+        });
         return withCoverage({
           ok: true,
           hits: hits.map((hit) => ({
@@ -431,7 +440,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
             snippet: hit.text.slice(0, 200),
           })),
           source: "cache",
-          message: "Search covers stored Slack events only; older or missed messages may be absent.",
+          message: `Search covers stored ${mirroredHome.label} events only; older or missed messages may be absent.`,
         });
       }
       if (opts?.source === "mirror") {

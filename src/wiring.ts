@@ -2189,7 +2189,7 @@ export function buildApp(
     ? (sessionId: string): string | undefined =>
         uuidSchema.safeParse(sessionId).success ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
-  const runResultRecovery = wireRunResultDeliveries(runs, deliveries, recoveryAdminUrlFor, sessions);
+  const runResultRecovery = wireRunResultDeliveries(runs, deliveries, surfaces, recoveryAdminUrlFor, sessions);
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const skillFetcher = createGitFetcher(
     keychain
@@ -2365,6 +2365,7 @@ export function buildApp(
     : undefined;
   const slackCore = createSlackCoreClient({
     identity,
+    surfaces,
     memory,
     ...(keychainApprovals ? { keychainApprovals } : {}),
     surfaceCache,
@@ -2465,15 +2466,16 @@ export function buildApp(
   };
   const partnerChatLiveReply = config.partnerChat ? createPartnerChatLiveReply({ deliveries }) : null;
   if (partnerChatLiveReply) runs.onTerminal((run) => partnerChatLiveReply.settle(run));
-  const partnerChatInbound = config.partnerChat
-    ? createPartnerChatInbound({
-        secret: config.partnerChat.secret,
-        app,
-        surfaceCache,
-        isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
-        ...(partnerChatLiveReply ? { followReply: partnerChatLiveReply.follow } : {}),
-      })
-    : null;
+  const partnerChatInbound =
+    config.partnerChat && partnerChatLiveReply
+      ? createPartnerChatInbound({
+          secret: config.partnerChat.secret,
+          app,
+          surfaceCache,
+          isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
+          followReply: partnerChatLiveReply.follow,
+        })
+      : null;
   const partnerChatOutbound = config.partnerChat
     ? createPartnerChatDeliveries({
         url: config.partnerChat.url,

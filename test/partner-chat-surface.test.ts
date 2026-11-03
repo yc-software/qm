@@ -326,6 +326,7 @@ test("partner-chat deliveries are signed, idempotent by key, and an acknowledged
       setRunDeliveryState: fake.setRunDeliveryState,
       ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }),
     },
+    serialize: (fn) => fn(),
     runs: fake.runs,
     surfaceCache: {
       readMessages: async () =>
@@ -477,6 +478,7 @@ test("partner-chat rejections fail the delivery while server errors leave it for
       app: { setRunDeliveryState: async () => true, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
       runs: { get: async () => null },
       surfaceCache: { readMessages: async () => [] },
+      serialize: (fn) => fn(),
     });
     try {
       const d = await deliveries.enqueue({
@@ -596,6 +598,7 @@ test("a followed turn queues its placeholder after the delay, and a finished dir
     }) as unknown as Run;
   live.settle(run(""));
   live.settle(run("42", "ambient"));
+  live.settle({ ...run("42"), result: { status: "refused", refusalKind: "model_budget", reason: "spent" } } as Run);
   await new Promise((r) => setTimeout(r, 50));
   assert.equal((await deliveries.pending("partner-chat")).length, 1);
   live.settle(run());
@@ -607,4 +610,189 @@ test("a followed turn queues its placeholder after the delay, and a finished dir
       [`settle:${R1}`, destination.target, "✓"],
     ],
   );
+});
+
+async function agentSaid(built: Awaited<ReturnType<typeof partnerChatApp>>["built"], thread: string, pattern: RegExp) {
+  let said: string | undefined;
+  await settle(async () => {
+    const session = await built.sessions.getByThread(thread);
+    const items = session ? await built.sessions.getItems(session.id) : [];
+    said = items
+      .map((i) => (i.kind === "AgentMessage" ? (i as { text?: string }).text : undefined))
+      .find((t) => t && pattern.test(t));
+    return said !== undefined;
+  });
+  return said!;
+}
+
+test("the agent edits its own chat message in place and never reposts it", async () => {
+  const { built, partnerChat, deliver } = await partnerChatApp();
+  try {
+    await deliver(event({ body: "!post draft answer", mentions: true, eventId: "ev-e1", messageId: "1060" }));
+    await settle(async () => partnerChat.shown().some((m) => m.body === "draft answer"));
+    const posted = partnerChat.shown().find((m) => m.body === "draft answer")!;
+    let ts: string | undefined;
+    await settle(async () => {
+      const own = await built.surfaceCache.readMessages(CONTAINER, {
+        surface: "partner-chat",
+        self: true,
+        noFallback: true,
+      });
+      ts = own.find((m) => m.text === "draft answer")?.ts;
+      return ts !== undefined;
+    });
+    await deliver(
+      event({ body: `!edit ${ts} final answer`, mentions: true, eventId: "ev-e2", messageId: "1061", thread: "1060" }),
+    );
+    await settle(async () => partnerChat.shown().some((m) => m.body === "final answer"));
+    assert.ok(partnerChat.received.some((r) => r.path === `/qm_surface/messages/${posted.id}/update`));
+    assert.deepEqual(
+      partnerChat
+        .shown()
+        .filter((m) => m.body === "final answer")
+        .map((m) => m.id),
+      [posted.id],
+    );
+  } finally {
+    await partnerChat.close();
+  }
+});
+
+test("an explicit edit the chat refuses fails its delivery instead of posting a new message", async () => {
+  const partnerChat = await fakePartnerChat(200, ["77"]);
+  const deliveries = createDeliveryStore();
+  const fake = fakeRuns({ [R1]: { target: `${CONTAINER}:1002` } });
+  const outbound = createPartnerChatDeliveries({
+    url: partnerChat.url,
+    secret: SECRET,
+    deliveries,
+    app: { setRunDeliveryState: fake.setRunDeliveryState, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
+    runs: fake.runs,
+    surfaceCache: { readMessages: async () => [] },
+    serialize: (fn) => fn(),
+  });
+  try {
+    const d = await deliveries.enqueue({
+      destination: {
+        type: "partner-chat",
+        target: `${CONTAINER}:1002`,
+        edit: { messageTs: "1793649600.00000000000000000077" },
+      },
+      text: "corrected",
+      idempotencyKey: `post:${R1}:partner-chat:${CONTAINER}:1002:1`,
+    });
+    await outbound.drain();
+    assert.deepEqual(
+      partnerChat.received.map((r) => r.path),
+      ["/qm_surface/messages/77/update"],
+    );
+    assert.ok((await deliveries.get(d.id))?.failedReason);
+  } finally {
+    await partnerChat.close();
+  }
+});
+
+test("search inside a partner chat finds the chat's mirrored messages", async () => {
+  const { built, partnerChat, deliver } = await partnerChatApp();
+  try {
+    await deliver(event({ body: "the launch moved to friday", eventId: "ev-s1", messageId: "1070" }));
+    await deliver(event({ body: "!search launch", mentions: true, eventId: "ev-s2", messageId: "1071" }));
+    const said = await agentSaid(built, `${CONTAINER}:1071`, /^search\(/);
+    assert.match(said, /^search\(cache\) 2 hit\(s\) first=Ada Lovelace:.* coverage=2026-11-02T20:00:00\.000Z$/);
+  } finally {
+    await partnerChat.close();
+  }
+});
+
+test("reading a thread starts with the message the thread hangs off", async () => {
+  const { built, partnerChat, deliver } = await partnerChatApp();
+  try {
+    await deliver(event({ body: "root question", eventId: "r1", messageId: "1080" }));
+    await deliver(event({ body: "elsewhere", eventId: "r2", messageId: "1081" }));
+    await deliver(event({ body: "first reply", eventId: "r3", messageId: "1082", thread: "1080" }));
+    const request = await built.app.createContextRequest("partner-chat", {
+      conversationTarget: `${CONTAINER}:1080`,
+      count: 10,
+    });
+    let result: { messages: Array<{ text: string }> } | undefined;
+    await settle(async () => {
+      const r = await built.app.getContextRequest(request.id);
+      result = r?.result as typeof result;
+      return r?.status === "done";
+    });
+    assert.deepEqual(
+      result!.messages.map((m) => m.text),
+      ["root question", "first reply"],
+    );
+  } finally {
+    await partnerChat.close();
+  }
+});
+
+test("another bot's message is mirrored as a bot's, not the agent's, and does not engage its thread", async () => {
+  const { built, partnerChat, deliver } = await partnerChatApp();
+  try {
+    assert.deepEqual(await deliver(event({ body: "bot says hi", eventId: "b1", messageId: "1090", bot: true })), {
+      status: 200,
+      body: { ok: true },
+    });
+    const rows = await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true });
+    assert.deepEqual(
+      rows.map((m) => [m.text, Boolean(m.self), Boolean(m.bot)]),
+      [["bot says hi", false, true]],
+    );
+    await deliver(event({ body: "!post answering the bot", eventId: "b2", messageId: "1091", thread: "1090" }));
+    await new Promise((r) => setTimeout(r, 3_000));
+    assert.equal(partnerChat.received.length, 0);
+    const unlisted = event({ body: "who am i", eventId: "b3", messageId: "1092", bot: true });
+    unlisted.message.user = { id: "10", name: "Stranger", bot: true };
+    assert.equal((await deliver(unlisted)).body.ignored, "unvouched_participants");
+  } finally {
+    await partnerChat.close();
+  }
+});
+
+test("a direct chat is only trusted when its author is its one listed person", async () => {
+  const { built, partnerChat, deliver } = await partnerChatApp();
+  try {
+    const shared = event({ body: "!post private hello", eventId: "d1", messageId: "1100" });
+    shared.chat.kind = "dm";
+    assert.equal((await deliver(shared)).body.ignored, "not_one_to_one");
+    await new Promise((r) => setTimeout(r, 1_500));
+    assert.equal(partnerChat.received.length, 0);
+    assert.deepEqual(
+      await built.surfaceCache.readMessages("partner-chat:7001:dm:88", { surface: "partner-chat", noFallback: true }),
+      [],
+    );
+    const direct = event({ body: "!surfacename", eventId: "d2", messageId: "1101" });
+    direct.chat.kind = "dm";
+    direct.chat.members = direct.chat.members.filter((m) => m.id !== "6");
+    assert.deepEqual(await deliver(direct), { status: 200, body: { ok: true } });
+    await settle(async () => partnerChat.shown().some((m) => m.body === "surface:partner-chat"));
+  } finally {
+    await partnerChat.close();
+  }
+});
+
+test("a thread under one of the agent's older posts is still recognised as engaged", async () => {
+  const { built, partnerChat, deliver } = await partnerChatApp();
+  try {
+    await built.surfaceCache.ingest(
+      Array.from({ length: 600 }, (_, i) => ({
+        surface: "partner-chat",
+        container: CONTAINER,
+        ts: `1793649600.${String(2000 + i).padStart(20, "0")}`,
+        authorId: "self",
+        text: `earlier post ${i}`,
+        self: true,
+        bot: true,
+        handled: true,
+      })),
+    );
+    await deliver(event({ body: "!post back to this", eventId: "o1", messageId: "2700", thread: "2000" }));
+    await settle(async () => partnerChat.shown().some((m) => m.body === "back to this"));
+    assert.ok(await built.sessions.getByThread(`${CONTAINER}:2000`));
+  } finally {
+    await partnerChat.close();
+  }
 });

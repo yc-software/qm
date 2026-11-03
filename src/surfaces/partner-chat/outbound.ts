@@ -5,7 +5,7 @@ import { errMessage, reportFailureAs } from "../../util/errors.ts";
 import { isTerminal, type RunStore } from "../../runs/run-store.ts";
 import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
 import {
-  findOwnMessage,
+  findMessage,
   partnerChatMessageId,
   partnerChatRef,
   partnerChatTs,
@@ -48,12 +48,11 @@ export function createPartnerChatDeliveries(deps: {
   app: Pick<App, "setRunDeliveryState" | "ingestSurfaceEvents">;
   runs: Pick<RunStore, "get">;
   surfaceCache: Pick<SurfaceCache, "readMessages">;
-  serialize?: <T>(fn: () => Promise<T>) => Promise<T>;
+  serialize: <T>(fn: () => Promise<T>) => Promise<T>;
   fetch?: typeof fetch;
   now?: () => number;
 }) {
   const base = deps.url.replace(/\/+$/, "");
-  const serialize = deps.serialize ?? (<T>(fn: () => Promise<T>) => fn());
   const send = deps.fetch ?? fetch;
   const now = deps.now ?? Date.now;
 
@@ -85,7 +84,7 @@ export function createPartnerChatDeliveries(deps: {
   async function recordOwn(ref: PartnerChatRef, messageId: string, body: string, edited: boolean): Promise<void> {
     const container = partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat });
     const at = now();
-    const prior = edited ? await findOwnMessage(deps.surfaceCache, container, messageId) : undefined;
+    const prior = edited ? await findMessage(deps.surfaceCache, container, messageId, { self: true }) : undefined;
     if (edited && !prior) return;
     await deps.app.ingestSurfaceEvents(
       [
@@ -161,6 +160,7 @@ export function createPartnerChatDeliveries(deps: {
       if (!slot) return;
       await edit(ref, slot, body).catch((e: unknown) => {
         if (!permanent(e)) throw e;
+        console.log(`[partner-chat] delivery ${d.id} could not settle ${slot}: ${errMessage(e)}`);
       });
       await setSlot(key.runId, "");
       return;
@@ -185,6 +185,7 @@ export function createPartnerChatDeliveries(deps: {
     if (!ref) throw new PartnerChatHttpError(400, `unroutable target ${d.destination.target}`);
     if (d.destination.react || d.destination.delete || d.destination.pin || d.attachments?.length || !body)
       throw new PartnerChatHttpError(400, "only non-empty text posts and edits are supported");
+    if (d.destination.edit) return edit(ref, d.destination.edit.messageTs, body);
     const key = runKey(d.idempotencyKey);
     if (key) return deliverForRun(d, ref, body, key);
     if (d.destination.editRef) await edit(ref, d.destination.editRef, body);
@@ -214,7 +215,7 @@ export function createPartnerChatDeliveries(deps: {
     draining = (async () => {
       do {
         again = false;
-        await serialize(drainOnce);
+        await deps.serialize(drainOnce);
       } while (again);
     })().finally(() => {
       draining = null;

@@ -25,7 +25,7 @@ export function createPartnerChatLiveReply(deps: { deliveries: DeliveryStore; de
     settle(run: Run): void {
       const target = run.request.deliveryTarget;
       if (run.request.surface !== "partner-chat" || run.request.origin.kind !== "human" || !target) return;
-      if (run.deliveryState?.editRef === "") return;
+      if (run.deliveryState?.editRef === "" || run.result?.status === "refused") return;
       void enqueue({ type: "partner-chat", target }, SETTLED, `settle:${run.id}`);
     },
   };

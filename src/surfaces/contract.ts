@@ -48,6 +48,7 @@ interface SurfaceCapabilities {
   liveReplies: boolean;
   nativeActor: boolean;
   externalParticipants: boolean;
+  edits: boolean;
 }
 
 export interface SurfacePromptHints {
@@ -64,6 +65,7 @@ export interface Surface<Native = unknown> {
   readonly promptHints: SurfacePromptHints;
   post(ref: SurfaceRef, message: OutboundMessage, idempotencyKey: string): Promise<void>;
   threadTarget?(target: string, threadTs: string): Promise<string>;
+  containerOf(target: string): string;
   principalFor(user: SurfaceUser): ActorAssertion;
   mention(user: SurfaceUser): string;
   readableText(text: string, mentions: Readonly<Record<string, string>> | undefined): string;

@@ -6,7 +6,7 @@ import { reportFailureAs } from "../../util/errors.ts";
 import { buildContextWindow } from "../../slack/conversation.ts";
 import { partnerChatPrincipal } from "./adapter.ts";
 import {
-  findOwnMessage,
+  findMessage,
   partnerChatRef,
   partnerChatTs,
   parsePartnerChatEvent,
@@ -25,7 +25,7 @@ export function createPartnerChatInbound(deps: {
   app: InboundApp;
   surfaceCache: Pick<SurfaceCache, "readMessages">;
   isInternalEmail: (email: string) => Promise<boolean>;
-  followReply?: (runId: string, destination: Destination) => void;
+  followReply: (runId: string, destination: Destination) => void;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
@@ -39,7 +39,7 @@ export function createPartnerChatInbound(deps: {
       limit: 1,
       noFallback: true,
     });
-    return mine.length > 0 || (await findOwnMessage(cache, container, thread)) !== undefined;
+    return mine.length > 0 || (await findMessage(cache, container, thread, { self: true })) !== undefined;
   }
 
   async function handle(timestamp: string | undefined, signature: string | undefined, rawBody: string) {
@@ -60,27 +60,33 @@ export function createPartnerChatInbound(deps: {
     const event = result.data;
     const { message, chat } = event;
     const members = chat.members.filter((m) => !m.bot);
+    if (chat.kind === "dm" && (members.length !== 1 || members[0]!.id !== message.user.id)) {
+      console.log(
+        `[partner-chat] ignoring dm ${chat.id}: it lists ${members.length} non-bot member(s), and a dm must list only its author`,
+      );
+      return { status: 200, body: { ok: true, ignored: "not_one_to_one" } };
+    }
     const humans = await Promise.all(
       members.map(async (m) =>
         partnerChatPrincipal(m, await deps.isInternalEmail(m.email?.trim().toLowerCase() ?? "")),
       ),
     );
-    const self = message.user.bot === true;
-    const authorAt = members.findIndex((m) => m.id === message.user.id);
+    const listed = chat.members.find((m) => m.id === message.user.id);
     const guests = humans.filter((p) => p.isExternalGuest).length;
-    if (guests || (!self && authorAt < 0)) {
+    if (guests || !listed) {
       console.log(
-        `[partner-chat] ignoring chat ${chat.id}: ${guests} member(s) not vouched for as internal, author listed: ${self || authorAt >= 0}`,
+        `[partner-chat] ignoring chat ${chat.id}: ${guests} member(s) not vouched for as internal, author listed: ${Boolean(listed)}`,
       );
       return { status: 200, body: { ok: true, ignored: "unvouched_participants" } };
     }
-    const author = self ? partnerChatPrincipal(message.user, false) : humans[authorAt]!;
+    const bot = listed.bot === true;
+    const author = bot ? partnerChatPrincipal(listed, false) : humans[members.indexOf(listed)]!;
     const thread = event.thread_id ?? undefined;
     const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
     const ts = partnerChatTs(message.created_at, message.id);
     const addressed =
       event.type === "message.created" &&
-      !self &&
+      !bot &&
       (chat.kind === "dm" ||
         message.mentions_agent ||
         (thread !== undefined && (await threadEngaged(container, thread))));
@@ -94,7 +100,7 @@ export function createPartnerChatInbound(deps: {
           authorId: author.externalId,
           ...(author.displayName ? { authorName: author.displayName } : {}),
           text: message.body,
-          ...(self ? { self: true, bot: true } : {}),
+          ...(bot ? { bot: true } : {}),
           ...(message.mentions_agent ? { mentionsSelf: true } : {}),
           ...(addressed ? { handled: true } : {}),
           ...(event.type === "message.updated" ? { editedAt: now() } : {}),
@@ -138,7 +144,7 @@ export function createPartnerChatInbound(deps: {
       redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:${message.id}`,
     });
     if (queued.runId && !queued.steered)
-      deps.followReply?.(queued.runId, {
+      deps.followReply(queued.runId, {
         type: SURFACE,
         target: replyTarget,
         account: { id: event.account, workspace: event.account },
@@ -150,13 +156,19 @@ export function createPartnerChatInbound(deps: {
     const ref = query.conversationTarget ? parsePartnerChatRef(query.conversationTarget) : null;
     if (!ref) return { messages: [], note: "this conversation can't be read" };
     const container = partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat });
-    const scan = await cache.readMessages(container, {
+    const replies = await cache.readMessages(container, {
       surface: SURFACE,
       ...(ref.thread ? { sub: ref.thread } : {}),
       ...(query.before ? { before: query.before } : {}),
       limit: CONTEXT_SCAN,
       noFallback: true,
     });
+    const before = replies[0]?.ts ?? query.before;
+    const root =
+      ref.thread && replies.length < CONTEXT_SCAN
+        ? await findMessage(cache, container, ref.thread, before ? { before } : {})
+        : undefined;
+    const scan = root ? [root, ...replies] : replies;
     return buildContextWindow(
       scan.map((m) => ({
         ts: m.ts,
@@ -168,7 +180,7 @@ export function createPartnerChatInbound(deps: {
       {
         count: query.count ?? CONTEXT_DEFAULT_COUNT,
         ...(query.match ? { match: query.match } : {}),
-        scanHasMore: scan.length === CONTEXT_SCAN,
+        scanHasMore: replies.length === CONTEXT_SCAN,
       },
     );
   }

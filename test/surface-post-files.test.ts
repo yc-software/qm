@@ -18,6 +18,10 @@ import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-p
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testSurfaces } from "./support/single-process.ts";
+import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createSurfaceRegistry } from "../src/surfaces/registry.ts";
+import { createSlackSurface } from "../src/surfaces/slack/adapter.ts";
+import { createPartnerChatSurface } from "../src/surfaces/partner-chat/adapter.ts";
 
 function fakeSandbox(files: Record<string, Uint8Array>): Sandbox {
   return {
@@ -382,7 +386,14 @@ test("replacing a path preserves its artifact when staged again by ID", async ()
   assert.ok(await store.open(id), "the staged file ID remains readable");
 });
 
-test("surface edit rewrites a Slack message in place and refuses outside Slack instead of posting", async () => {
+test("surface edit rewrites a message in place on surfaces that edit, and refuses elsewhere instead of posting", async () => {
+  const deliveries = createDeliveryStore();
+  const surfaces = createSurfaceRegistry({
+    surfaces: [
+      createSlackSurface({ deliveries }),
+      createPartnerChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } }),
+    ],
+  });
   const edit = async (destination: Record<string, unknown>) => {
     const queued: Array<{ destination: Record<string, unknown>; text: string }> = [];
     const tools = createSurfaceToolDeps({
@@ -393,6 +404,7 @@ test("surface edit rewrites a Slack message in place and refuses outside Slack i
             return { id: `D${queued.length}` };
           },
         },
+        surfaces,
       },
       input: { surfaceTools: true },
       defaultDestination: destination,
@@ -407,6 +419,9 @@ test("surface edit rewrites a Slack message in place and refuses outside Slack i
   assert.equal(slack.result.ok, true);
   assert.deepEqual(slack.queued[0]?.destination.edit, { messageTs: "1723497600.123456" });
   assert.equal(slack.queued[0]?.text, "fixed");
+  const partnerChat = await edit({ type: "partner-chat", target: "partner-chat:7001:group:88:1002" });
+  assert.equal(partnerChat.result.ok, true);
+  assert.deepEqual(partnerChat.queued[0]?.destination.edit, { messageTs: "1723497600.123456" });
   const web = await edit({ type: "web", target: "web:U1:S1" });
   assert.equal(web.result.ok, false);
   assert.deepEqual(web.queued, []);

@@ -68,6 +68,11 @@ export function parsePartnerChatRef(ref: string): PartnerChatRef | null {
   return { account, kind, chat, ...(thread ? { thread } : {}) };
 }
 
+export function partnerChatContainer(target: string): string {
+  const ref = parsePartnerChatRef(target);
+  return ref ? partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat }) : target;
+}
+
 export function partnerChatTs(createdAt: string, messageId: string): string {
   return `${Math.floor(Date.parse(createdAt) / 1000)}.${messageId.padStart(MESSAGE_ID_WIDTH, "0")}`;
 }
@@ -77,18 +82,25 @@ export function partnerChatMessageId(ref: string): string {
   return dot < 0 ? ref : ref.slice(dot + 1).replace(/^0+(?=.)/, "");
 }
 
-const OWN_MESSAGE_SCAN = 50;
+const MESSAGE_SCAN_PAGE = 500;
 
-export async function findOwnMessage(
+export async function findMessage(
   cache: Pick<SurfaceCache, "readMessages">,
   container: string,
   messageId: string,
+  opts: { self?: true; before?: string } = {},
 ): Promise<CachedMessage | undefined> {
-  const mine = await cache.readMessages(container, {
-    surface: "partner-chat",
-    self: true,
-    limit: OWN_MESSAGE_SCAN,
-    noFallback: true,
-  });
-  return mine.find((m) => partnerChatMessageId(m.ts) === messageId);
+  let before = opts.before;
+  for (;;) {
+    const page = await cache.readMessages(container, {
+      surface: "partner-chat",
+      ...(opts.self ? { self: true } : {}),
+      ...(before ? { before } : {}),
+      limit: MESSAGE_SCAN_PAGE,
+      noFallback: true,
+    });
+    const hit = page.find((m) => partnerChatMessageId(m.ts) === messageId);
+    if (hit || page.length < MESSAGE_SCAN_PAGE) return hit;
+    before = page[0]!.ts;
+  }
 }

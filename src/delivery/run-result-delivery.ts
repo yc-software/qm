@@ -9,6 +9,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import type { SurfaceRegistry } from "../surfaces/registry.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -28,7 +29,11 @@ function webTranscriptNote(run: Run, surface: string, failed: boolean): Destinat
 
 export type AdminUrlFor = (sessionId: string) => string | undefined;
 
-export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
+export function runResultDelivery(
+  run: Run,
+  surfaces: SurfaceRegistry,
+  adminUrlFor?: AdminUrlFor,
+): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
@@ -67,7 +72,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       : {}),
   });
   if (
-    surface === "slack" &&
+    surfaces.get(surface)?.capabilities.liveReplies === true &&
     run.result?.status === "refused" &&
     (run.result.refusalKind === "security_quarantine" || run.result.refusalKind === "model_budget") &&
     run.request.addressed
@@ -134,6 +139,7 @@ export interface RunResultRecovery {
 export function wireRunResultDeliveries(
   runs: Pick<RunStore, "onTerminal" | "terminalFinished" | "inFlightForThread">,
   deliveries: Pick<DeliveryStore, "enqueue" | "existingKeys">,
+  surfaces: SurfaceRegistry,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
 ): RunResultRecovery {
@@ -143,7 +149,7 @@ export function wireRunResultDeliveries(
         reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
       );
     }
-    const delivery = runResultDelivery(run, adminUrlFor);
+    const delivery = runResultDelivery(run, surfaces, adminUrlFor);
     if (!delivery) return false;
     await deliveries.enqueue(delivery);
     return true;

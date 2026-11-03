@@ -3,7 +3,13 @@ import { reachEnqueue } from "../../reach/reach.ts";
 import type { ActorAssertion } from "../../types.ts";
 import type { Surface, SurfacePromptHints } from "../contract.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
-import { partnerChatMessageId, partnerChatRef, parsePartnerChatRef, type PartnerChatUser } from "./protocol.ts";
+import {
+  partnerChatContainer,
+  partnerChatMessageId,
+  partnerChatRef,
+  parsePartnerChatRef,
+  type PartnerChatUser,
+} from "./protocol.ts";
 
 const DEFAULT_LABEL = "Partner chat";
 
@@ -37,7 +43,7 @@ export function createPartnerChatSurface(deps: {
   return {
     kind: "partner-chat",
     label: deps.label ?? DEFAULT_LABEL,
-    capabilities: { mirrored: true, liveReplies: true, nativeActor: true, externalParticipants: false },
+    capabilities: { mirrored: true, liveReplies: true, nativeActor: true, externalParticipants: false, edits: true },
     promptHints: { ...DEFAULT_PROMPT_HINTS, ...deps.promptHints },
     async post(ref, message, idempotencyKey) {
       if (idempotencyKey.startsWith("run:"))
@@ -63,8 +69,7 @@ export function createPartnerChatSurface(deps: {
       const ref = parsePartnerChatRef(target);
       const id = partnerChatMessageId(threadTs);
       if (!ref || !/^\d+$/.test(id)) throw new Error(`can't reply under ${threadTs} in ${target}`);
-      const container = partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat });
-      const [parent] = await deps.surfaceCache.readMessages(container, {
+      const [parent] = await deps.surfaceCache.readMessages(partnerChatContainer(target), {
         surface: "partner-chat",
         timestamps: [threadTs],
         limit: 1,
@@ -72,6 +77,7 @@ export function createPartnerChatSurface(deps: {
       });
       return partnerChatRef({ ...ref, thread: parent?.sub ?? id });
     },
+    containerOf: partnerChatContainer,
     principalFor: (user) => user.principal,
     mention: (user) => `@${user.principal.displayName ?? user.id}`,
     readableText: (text) => text,

@@ -5,6 +5,7 @@ import { swallowAs } from "../util/errors.ts";
 import { isTerminal, type RunStore } from "../runs/run-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { runResultDelivery } from "../delivery/run-result-delivery.ts";
+import type { SurfaceRegistry } from "../surfaces/registry.ts";
 
 export interface TaskAckState {
   channel: string;
@@ -25,7 +26,7 @@ interface ReactionClient {
 export function createTaskAcknowledgements(
   store: DurableMap<TaskAckState>,
   lease: LeaderLease,
-  recovery?: { runs: Pick<RunStore, "get">; deliveries: Pick<DeliveryStore, "pending"> },
+  recovery?: { runs: Pick<RunStore, "get">; deliveries: Pick<DeliveryStore, "pending">; surfaces: SurfaceRegistry },
 ) {
   const update = store.update.bind(store);
   const queue = createKeyedQueue<string>();
@@ -130,7 +131,7 @@ export function createTaskAcknowledgements(
       for (const [runId, state] of await store.entries()) {
         if (!state.finished && recovery) {
           const run = await recovery.runs.get(runId);
-          if (run && isTerminal(run.status) && !runResultDelivery(run)) {
+          if (run && isTerminal(run.status) && !runResultDelivery(run, recovery.surfaces)) {
             const pending = await recovery.deliveries.pending("slack");
             if (
               !pending.some(

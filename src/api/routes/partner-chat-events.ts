@@ -1,7 +1,5 @@
-import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
+import { headerValue, PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
 import type { BaseCtx, Route } from "./route.ts";
-
-const header = (value: string | string[] | undefined): string | undefined => (Array.isArray(value) ? value[0] : value);
 
 async function partnerChatEvents(ctx: BaseCtx): Promise<void> {
   const { req, res, deps } = ctx;
@@ -17,8 +15,8 @@ async function partnerChatEvents(ctx: BaseCtx): Promise<void> {
     throw e;
   }
   const out = await deps.partnerChatEvents(
-    header(req.headers["x-qm-timestamp"]),
-    header(req.headers["x-qm-signature"]),
+    headerValue(req, "x-qm-timestamp"),
+    headerValue(req, "x-qm-signature"),
     rawBody,
   );
   return sendJson(res, out.status, out.body);
