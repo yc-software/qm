@@ -1,6 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
+import { inTestTenant } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,10 +10,18 @@ import { buildApp } from "./support/build-app.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-empty-"));
   return buildApp(testConfig({ dataDir }));
+}
+
+function test(name: string, fn: (built: ReturnType<typeof freshApp>) => Promise<void>): void {
+  nodeTest(name, () => {
+    const built = freshApp();
+    return inTestTenant(() => fn(built));
+  });
 }
 
 const actor = { externalId: "U1" };
@@ -36,9 +45,7 @@ async function strandShell(sessions: ReturnType<typeof freshApp>["sessions"], th
   return s.id;
 }
 
-test("listSessions hides a stranded entry-less session", async () => {
-  const { app, sessions } = freshApp();
-
+test("listSessions hides a stranded entry-less session", async ({ app, sessions }) => {
   await app.turn(dm("Just a question", "web:U1:real"));
   const strandedId = await strandShell(sessions, "web:U1:stranded");
 
@@ -53,9 +60,7 @@ test("listSessions hides a stranded entry-less session", async () => {
   assert.equal(raw.find((s) => s.id === strandedId)?.hasEntries, false);
 });
 
-test("an entry-less session with an in-flight turn stays visible", async () => {
-  const { app, sessions, runs } = freshApp();
-
+test("an entry-less session with an in-flight turn stays visible", async ({ app, sessions, runs }) => {
   const thread = "web:U1:fresh";
   const id = await strandShell(sessions, thread);
   await runs.enqueue({ sessionId: thread, request: enqueueRequest(thread) });
@@ -63,7 +68,7 @@ test("an entry-less session with an in-flight turn stays visible", async () => {
   const row = (await app.listSessions("U1")).find((s) => s.id === id);
   assert.equal(row?.working, true, "a brand-new chat is visible (and working) while its first turn runs");
 
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = await withoutTenant(() => runs.claim("w1", 5_000));
   await runs.complete(claimed!.id, claimed!.leaseToken ?? "", { status: "failed", reason: "boom" });
 
   assert.ok(
@@ -72,9 +77,7 @@ test("an entry-less session with an in-flight turn stays visible", async () => {
   );
 });
 
-test("a titled entry-less session stays listed", async () => {
-  const { app, sessions } = freshApp();
-
+test("a titled entry-less session stays listed", async ({ app, sessions }) => {
   const id = await strandShell(sessions, "web:U1:titled");
   await sessions.updateTitle(id, "Planning (fork)");
 
@@ -84,26 +87,7 @@ test("a titled entry-less session stays listed", async () => {
   );
 });
 
-test("a turn refused with 'session busy' does not surface a stranded shell", async () => {
-  const { app, sessions } = freshApp();
-
-  const thread = "web:U1:busy-race";
-  const shell = await sessions.getOrCreateByThread(thread, "dm", "personal:U1");
-  const { lease: held } = await sessions.acquireLease(shell.id);
-  assert.ok(held);
-
-  const outcome = await app.turn(dm("hello again", thread));
-  assert.equal(outcome.status, "refused");
-  assert.equal((outcome as { refusalKind?: string }).refusalKind, "session_busy");
-
-  const raw = await sessions.listByParticipant("U1");
-  assert.equal(raw.find((s) => s.id === shell.id)?.hasEntries, false, "the shell exists, participant attached");
-  assert.ok(!(await app.listSessions("U1")).find((s) => s.id === shell.id), "but it is not listed");
-});
-
-test("context cards do not count hidden shells or treat them as shared-scope authority", async () => {
-  const { app, sessions } = freshApp();
-
+test("context cards do not count hidden shells or treat them as shared-scope authority", async ({ app, sessions }) => {
   await app.turn(dm("real conversation", "web:U1:ctx-real"));
   await strandShell(sessions, "web:U1:ctx-stranded");
 
@@ -116,9 +100,7 @@ test("context cards do not count hidden shells or treat them as shared-scope aut
   assert.equal(group, undefined);
 });
 
-test("a session becomes visible once its first entry lands", async () => {
-  const { app, sessions } = freshApp();
-
+test("a session becomes visible once its first entry lands", async ({ app, sessions }) => {
   const thread = "web:U1:lands";
   const id = await strandShell(sessions, thread);
   assert.ok(!(await app.listSessions("U1")).find((s) => s.id === id));

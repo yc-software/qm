@@ -3,7 +3,8 @@ import type { RuntimeChoice } from "../agent/agent.ts";
 import { unrecordedToolResult } from "../agent/context-compaction.ts";
 import type { RunStop } from "../runs/run-store.ts";
 import type { SessionEntry } from "../types.ts";
-import { isOverheardEntry, type NewEntry } from "../sessions/session-store.ts";
+import { isOverheardEntry } from "../sessions/session-store.ts";
+import type { NewItem } from "../sessions/items.ts";
 
 const entryTurnId = (entry: SessionEntry): unknown => (entry.payload as { runId?: unknown } | null)?.runId;
 const differentTurn = (entry: SessionEntry, turn: SessionEntry): boolean =>
@@ -145,21 +146,17 @@ export function resumeStrategy(entries: readonly SessionEntry[], partial: Partia
   };
 }
 
-export function unrecordedResultEntries(
+export function unrecordedResultItems(
   strategy: Extract<ResumeStrategy, { kind: "settle" }>,
   stop: RunStop | undefined,
-  scopeLabel: NewEntry["scopeLabel"],
-): NewEntry[] {
+): NewItem<"ToolResult">[] {
   return strategy.calls.map((call) => ({
-    type: "tool_result",
-    payload: {
-      tool: call.tool,
-      callId: call.callId,
-      interrupted: true,
-      isError: true,
-      result: unrecordedToolResult(stop),
-    },
-    scopeLabel,
+    kind: "ToolResult",
+    tool: call.tool,
+    callId: call.callId,
+    isError: true,
+    text: unrecordedToolResult(stop),
+    body: { interrupted: true },
   }));
 }
 

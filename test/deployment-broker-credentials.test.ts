@@ -25,9 +25,14 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "deployment-broker-secret".repeat(3);
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 const ORG = "org:default-org";
 const KEY = "deployment-supplied-key";
 
@@ -257,15 +262,17 @@ test("the broker serves a deployment credential with its pins, injection, usage 
     return { status: 200, contentType: "application/json", text: async () => '{"ok":true}' };
   });
   try {
-    const token = await mintCapabilityToken(
-      {
-        actorId: "U1",
-        scopeId: "personal:U1",
-        aud: CREDENTIAL_BROKER_AUD,
-        credentials: ["search"],
-        exp: Date.now() + CAPABILITY_TTL_MS,
-      },
-      SECRET,
+    const token = await inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId: "U1",
+          scopeId: "personal:U1",
+          aud: CREDENTIAL_BROKER_AUD,
+          credentials: ["search"],
+          exp: Date.now() + CAPABILITY_TTL_MS,
+        },
+        SECRET,
+      ),
     );
     const call = async (method: string, url: string) => {
       const res = await fetch(`${srv.base}/v1/credentials/broker`, {
@@ -286,7 +293,7 @@ test("the broker serves a deployment credential with its pins, injection, usage 
     assert.equal(calls.length, 2);
     assert.equal(calls[0]!.headers["X-API-KEY"], KEY);
     assert.equal(calls[0]!.headers["x-api-version"], undefined);
-    const usage = await srv.built.credentialUsage.list({ slug: "search" });
+    const usage = await inTestTenant(() => srv.built.credentialUsage.list({ slug: "search" }));
     assert.equal(usage.filter((u) => u.status === "ok").length, 2);
     assert.equal(usage.filter((u) => u.status === "denied").length, 4);
   } finally {
@@ -317,10 +324,12 @@ test("org members' agents get a deployment credential by broker only, as if gran
     if (command === "echo hi") executed = handle.env;
     return realRun(handle, command, opts);
   };
-  await selectDefaultSandbox(built, "U1", "personal:U1");
-  const prompt = await built.app.turn(dm("!sysprompt"));
+  await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
+  const prompt = await inTestTenant(() => built.app.turn(dm("!sysprompt")));
   assert.match(prompt.reply ?? "", /`search` — Web search; proxy api\.search\.example/);
-  const res = await built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["search"] })}`));
+  const res = await inTestTenant(() =>
+    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["search"] })}`)),
+  );
   assert.equal(res.status, "ok", res.reason);
   assert.ok(executed?.AGENT_CREDENTIAL_TOKEN, "expected a broker token");
   assert.doesNotMatch(JSON.stringify(executed), new RegExp(KEY));
@@ -369,15 +378,17 @@ test("the broker adds a deployment credential's fixed headers, which callers can
     deploymentBrokerCredentialsFromEnv(envWith([pinned])),
   );
   try {
-    const token = await mintCapabilityToken(
-      {
-        actorId: "U1",
-        scopeId: "personal:U1",
-        aud: CREDENTIAL_BROKER_AUD,
-        credentials: ["versioned"],
-        exp: Date.now() + CAPABILITY_TTL_MS,
-      },
-      SECRET,
+    const token = await inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId: "U1",
+          scopeId: "personal:U1",
+          aud: CREDENTIAL_BROKER_AUD,
+          credentials: ["versioned"],
+          exp: Date.now() + CAPABILITY_TTL_MS,
+        },
+        SECRET,
+      ),
     );
     const res = await fetch(`${srv.base}/v1/credentials/broker`, {
       method: "POST",

@@ -16,6 +16,7 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "reach-files-secret".repeat(3);
 
@@ -29,9 +30,11 @@ describe("POST /v1/reach with files", () => {
   let built: BuiltApp;
 
   const capDm = async (actorId: string) =>
-    await mintCapabilityToken(
-      { actorId, scopeId: scopeId("personal", actorId), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
+    await inTestTenant(() =>
+      mintCapabilityToken(
+        { actorId, scopeId: scopeId("personal", actorId), exp: Date.now() + CAPABILITY_TTL_MS },
+        SECRET,
+      ),
     );
 
   const post = (b: string, path: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -42,21 +45,23 @@ describe("POST /v1/reach with files", () => {
     });
 
   const seedFile = async (actorId: string, relPath: string, data: string) => {
-    const handle = await built.sandbox.provision([
-      { scopeId: scopeId("personal", actorId), mountPath: "", mode: "rw" },
-    ]);
-    await built.sandbox.writeFile(handle, relPath, data);
-    await built.sandbox.teardown(handle, { keepWarm: true });
+    const handle = await inTestTenant(() =>
+      built.sandbox.provision([{ scopeId: scopeId("personal", actorId), mountPath: "", mode: "rw" }]),
+    );
+    await inTestTenant(() => built.sandbox.writeFile(handle, relPath, data));
+    await inTestTenant(() => built.sandbox.teardown(handle, { keepWarm: true }));
   };
 
   before(async () => {
     void fakeSprites;
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    await built.app.upsertDirectory([
-      { principalId: "U-carol", displayName: "Carol", type: "internal" },
-      { principalId: "U-alice", displayName: "Alice", type: "internal" },
-    ]);
-    await selectDefaultSandbox(built, "U-carol", scopeId("personal", "U-carol"));
+    await inTestTenant(() =>
+      built.app.upsertDirectory([
+        { principalId: "U-carol", displayName: "Carol", type: "internal" },
+        { principalId: "U-alice", displayName: "Alice", type: "internal" },
+      ]),
+    );
+    await inTestTenant(() => selectDefaultSandbox(built, "U-carol", scopeId("personal", "U-carol")));
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -94,27 +99,29 @@ describe("POST /v1/reach with files", () => {
 
   const storeFile = async (owner: string, name: string, data: string) => {
     const id = `file-${owner}-${name}-${Math.random().toString(36).slice(2)}`;
-    await built.files.put({
-      id,
-      ownerScopeId: scopeId("personal", owner),
-      createdBy: owner,
-      name,
-      path: `artifacts/${id}/${name}`,
-      mimetype: "text/plain",
-      data: Buffer.from(data),
-      direction: "out",
-    });
+    await inTestTenant(() =>
+      built.files.put({
+        id,
+        ownerScopeId: scopeId("personal", owner),
+        createdBy: owner,
+        name,
+        path: `artifacts/${id}/${name}`,
+        mimetype: "text/plain",
+        data: Buffer.from(data),
+        direction: "out",
+      }),
+    );
     return id;
   };
 
   const secondSandbox = async (actorId: string) => {
     const scope = scopeId("personal", actorId);
     const resources = built.sandboxResources.forTurn({ actorId, scopeId: scope, isCurrent: async () => true });
-    return resources.create(actorId, scope, resources.defaultBackend());
+    return inTestTenant(() => resources.create(actorId, scope, resources.defaultBackend()));
   };
 
   const readDelivered = async (deliveryId: string) => {
-    const d = (await built.app.pendingDeliveries("principal")).find((x) => x.id === deliveryId);
+    const d = (await inTestTenant(() => built.app.pendingDeliveries("principal"))).find((x) => x.id === deliveryId);
     assert.ok(d?.attachments?.length);
     const out: string[] = [];
     for (const a of d!.attachments!) {
@@ -174,7 +181,8 @@ describe("POST /v1/reach with files", () => {
   it("rolls back a staged stored file when a later workspace path in the batch is missing", async () => {
     const id = await storeFile("U-carol", "staged.txt", "staged\n");
     await built.blobTransfer.sweep(0);
-    const before = (await built.files.listOwnedByScopes([scopeId("personal", "U-carol")])).files.length;
+    const before = (await inTestTenant(() => built.files.listOwnedByScopes([scopeId("personal", "U-carol")]))).files
+      .length;
     const res = await post(
       base,
       "/v1/reach",
@@ -185,7 +193,7 @@ describe("POST /v1/reach with files", () => {
     assert.match(((await res.json()) as any).message, /reports\/absent\.md \(not found\)/);
     assert.equal(await built.blobTransfer.sweep(0), 0, "no orphaned transfer blob");
     assert.equal(
-      (await built.files.listOwnedByScopes([scopeId("personal", "U-carol")])).files.length,
+      (await inTestTenant(() => built.files.listOwnedByScopes([scopeId("personal", "U-carol")]))).files.length,
       before,
       "no orphaned outbound artifact",
     );
@@ -193,12 +201,13 @@ describe("POST /v1/reach with files", () => {
 
   it("reads workspace paths from an explicitly named sandbox_id instead of the default", async () => {
     const extra = await secondSandbox("U-carol");
-    const handle = await built.sandbox.provision(
-      [{ scopeId: scopeId("personal", "U-carol"), mountPath: "", mode: "rw" }],
-      { sandboxId: extra.id },
+    const handle = await inTestTenant(() =>
+      built.sandbox.provision([{ scopeId: scopeId("personal", "U-carol"), mountPath: "", mode: "rw" }], {
+        sandboxId: extra.id,
+      }),
     );
-    await built.sandbox.writeFile(handle, "only-here.md", "second box\n");
-    await built.sandbox.teardown(handle, { keepWarm: true });
+    await inTestTenant(() => built.sandbox.writeFile(handle, "only-here.md", "second box\n"));
+    await inTestTenant(() => built.sandbox.teardown(handle, { keepWarm: true }));
     const viaDefault = await post(
       base,
       "/v1/reach",
@@ -220,7 +229,7 @@ describe("POST /v1/reach with files", () => {
     await seedFile("U-carol", "reports/fallback.md", "default box\n");
     const alices = await secondSandbox("U-alice");
     const retired = await secondSandbox("U-carol");
-    await built.sandboxResources.retire("U-carol", retired.id);
+    await inTestTenant(() => built.sandboxResources.retire("U-carol", retired.id));
     for (const sandbox_id of [alices.id, "no-such-sandbox", retired.id]) {
       const res = await post(
         base,
@@ -265,7 +274,9 @@ describe("POST /v1/reach with files", () => {
     );
     assert.equal(res.status, 200);
     const body = (await res.json()) as any;
-    const d = (await built.app.pendingDeliveries("principal")).find((x) => x.id === body.deliveryId);
+    const d = (await inTestTenant(() => built.app.pendingDeliveries("principal"))).find(
+      (x) => x.id === body.deliveryId,
+    );
     assert.ok(d, "delivery is in the principal queue");
     assert.equal(d!.attachments?.length, 1, "the named file rides the delivery as an attachment");
     const a = d!.attachments![0]!;
@@ -281,7 +292,7 @@ describe("POST /v1/reach with files", () => {
   });
 
   it("is all-or-nothing: a missing path refuses the WHOLE call and enqueues nothing", async () => {
-    const beforeCount = (await built.app.pendingDeliveries("principal")).length;
+    const beforeCount = (await inTestTenant(() => built.app.pendingDeliveries("principal"))).length;
     const res = await post(
       base,
       "/v1/reach",
@@ -294,7 +305,7 @@ describe("POST /v1/reach with files", () => {
     assert.match(body.message, /reports\/nope\.md \(not found\)/);
     assert.match(body.message, /nothing was sent/);
     assert.equal(
-      (await built.app.pendingDeliveries("principal")).length,
+      (await inTestTenant(() => built.app.pendingDeliveries("principal"))).length,
       beforeCount,
       "no text-only delivery leaked out",
     );
@@ -314,7 +325,7 @@ describe("POST /v1/reach with files", () => {
     assert.equal(body.error, "attach_failed");
     assert.match(body.message, /reports\/gone\.md \(not found\)/);
     assert.equal(await built.blobTransfer.sweep(0), 0, "no orphaned transfer blob for the good file");
-    const owned = await built.files.listOwnedByScopes([scopeId("personal", "U-carol")]);
+    const owned = await inTestTenant(() => built.files.listOwnedByScopes([scopeId("personal", "U-carol")]));
     assert.ok(!owned.files.some((f) => f.name === "kept.md"), "no orphaned artifact for the good file");
     await seedFile("U-carol", "reports/kept2.md", "also good\n");
     const res2 = await post(
@@ -325,7 +336,7 @@ describe("POST /v1/reach with files", () => {
     );
     assert.equal(res2.status, 400);
     assert.equal(await built.blobTransfer.sweep(0), 0, "no orphaned transfer blob when the bad path comes first");
-    const owned2 = await built.files.listOwnedByScopes([scopeId("personal", "U-carol")]);
+    const owned2 = await inTestTenant(() => built.files.listOwnedByScopes([scopeId("personal", "U-carol")]));
     assert.ok(!owned2.files.some((f) => f.name === "kept2.md"), "no orphaned artifact when the bad path comes first");
   });
 
@@ -339,7 +350,7 @@ describe("POST /v1/reach with files", () => {
     );
     assert.equal(res.status, 404);
     assert.equal(((await res.json()) as any).error, "recipient_not_found");
-    const owned = await built.files.listOwnedByScopes([scopeId("personal", "U-carol")]);
+    const owned = await inTestTenant(() => built.files.listOwnedByScopes([scopeId("personal", "U-carol")]));
     assert.ok(
       !owned.files.some((f) => f.name === "orphan.md"),
       "no artifact registered for a failed target resolution",
@@ -413,7 +424,9 @@ describe("POST /v1/reach with files", () => {
     );
     assert.equal(res.status, 200);
     const body = (await res.json()) as any;
-    const d = (await built.app.pendingDeliveries("principal")).find((x) => x.id === body.deliveryId);
+    const d = (await inTestTenant(() => built.app.pendingDeliveries("principal"))).find(
+      (x) => x.id === body.deliveryId,
+    );
     assert.ok(d);
     assert.equal(d!.attachments, undefined);
   });

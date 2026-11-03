@@ -3,9 +3,11 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
+import { emitEntry } from "../src/agent/turn-support.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 let executions = 0;
 let observedRelease = "";
@@ -23,12 +25,12 @@ mock.module("./support/mock-agent.ts", {
           );
           observedRelease = String((held?.payload as { text?: string } | undefined)?.text ?? "Missing released output");
           const reply = "Released fixture output.";
-          await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-          await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+          await turn.emit({ kind: "UserMessage", text: turn.input });
+          await turn.emit({ kind: "AgentMessage", text: reply });
           return { reply };
         }
         if (!turn.input.startsWith("run fixture")) return run(turn);
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "UserMessage", text: turn.input });
         const ref: ToolContextRef = {
           current: {
             ...turn.tools,
@@ -40,7 +42,7 @@ mock.module("./support/mock-agent.ts", {
               return { stdout: "SCREENING_FIXTURE_BLOCK", stderr: "", code: 0, timedOut: false };
             },
           },
-          emit: turn.emit,
+          emit: (entry) => emitEntry(turn, entry),
           scopeLabel: turn.scopeLabel,
           orgScopeId: turn.orgScopeId,
           toolApprovalGate: turn.toolApprovalGate,
@@ -60,7 +62,7 @@ mock.module("./support/mock-agent.ts", {
             : { command: "printf SCREENING_FIXTURE_BLOCK", purpose: "Check output screening" },
         );
         const reply = result.content.map((part) => part.text ?? "").join("\n");
-        await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "AgentMessage", text: reply });
         return { reply, pendingApprovals: ref.pendingApprovals, pausedOnApproval: ref.pausedOnApproval };
       };
       return agent;
@@ -86,36 +88,39 @@ for (const securityPosture of ["auto", "strict"] as const) {
       },
     });
     const req = request();
-    let blocked = await built.app.turn(req);
+    let blocked = await inTestTenant(() => built.app.turn(req));
     if (securityPosture === "strict") {
       assert.equal(executions, 0);
       assert.equal(blocked.pendingApprovals?.[0]?.approvalKey, "tool:execute");
-      blocked = await built.app.turn({
-        ...req,
-        approval: { requestId: blocked.pendingApprovals![0]!.requestId, approved: true },
-      });
+      const requestId = blocked.pendingApprovals![0]!.requestId;
+      blocked = await inTestTenant(() => built.app.turn({ ...req, approval: { requestId, approved: true } }));
     }
     assert.equal(executions, 1);
     assert.equal(blocked.pendingApprovals?.length, 1);
     const release = blocked.pendingApprovals![0]!;
     assert.equal(release.approvalKey, "security-screen-release:execute");
     assert.deepEqual(release.grantModes, { session: false, always: false });
-    const results = (await built.sessions.getEntries(blocked.sessionId!)).filter(
-      (entry) => entry.type === "tool_result",
+    const sessionId = blocked.sessionId!;
+    const results = (await inTestTenant(() => built.sessions.getItems(sessionId))).filter(
+      (item) => item.kind === "ToolResult",
     );
-    assert.ok(results.some((entry) => (entry.payload as { quarantined?: boolean }).quarantined));
+    assert.ok(results.some((item) => item.body.quarantined));
     assert.doesNotMatch(JSON.stringify(results), /SCREENING_FIXTURE_BLOCK/);
     for (const scope of ["session", "always"] as const) {
-      const broad = await built.app.turn({ ...req, approval: { requestId: release.requestId, approved: true, scope } });
+      const broad = await inTestTenant(() =>
+        built.app.turn({ ...req, approval: { requestId: release.requestId, approved: true, scope } }),
+      );
       assert.equal(broad.status, "pending_approval");
       assert.match(broad.reason ?? "", /only be released once/);
       assert.equal(executions, 1);
     }
-    const approved = await built.app.turn({ ...req, approval: { requestId: release.requestId, approved: true } });
+    const approved = await inTestTenant(() =>
+      built.app.turn({ ...req, approval: { requestId: release.requestId, approved: true } }),
+    );
     assert.equal(approved.status, "ok");
     assert.match(observedRelease, /SCREENING_FIXTURE_BLOCK/);
     assert.equal(executions, 1, "release never executes the side effect again");
-    const fresh = await built.app.turn(request("second-fixture-thread"));
+    const fresh = await inTestTenant(() => built.app.turn(request("second-fixture-thread")));
     assert.equal(fresh.pendingApprovals?.length, 1);
     assert.equal(
       fresh.pendingApprovals?.[0]?.approvalKey,
@@ -135,11 +140,11 @@ for (const failure of ["error", "timeout"] as const) {
         },
       },
     });
-    const result = await built.app.turn(request());
+    const result = await inTestTenant(() => built.app.turn(request()));
     assert.equal(result.status, "ok");
     assert.match(result.reply ?? "", /NOT security-screened/);
     assert.match(result.reply ?? "", /SCREENING_FIXTURE_BLOCK/);
-    const events = await built.auditLog.events();
+    const events = await inTestTenant(() => built.auditLog.events());
     assert.ok(events.some((event) => event.action === "security_screen.classify" && event.status === "error"));
     assert.ok(events.some((event) => event.action === "security_posture.tool_result_failed_open"));
   });

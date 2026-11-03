@@ -9,6 +9,8 @@ import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 async function withDefaultComputer(built: ReturnType<typeof buildApp>) {
   const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
@@ -21,6 +23,13 @@ function freshApp() {
     dataDir: mkdtempSync(join(tmpdir(), "ap-skill-")),
   });
   return buildApp(config);
+}
+
+function appTest(name: string, fn: (built: ReturnType<typeof buildApp>) => Promise<void>, make = freshApp): void {
+  test(name, async () => {
+    const built = make();
+    await inTestTenant(() => fn(built));
+  });
 }
 
 const actor = { externalId: "U1" };
@@ -41,8 +50,7 @@ async function publishPersonalSkill(skills: ReturnType<typeof buildApp>["skills"
   return sk;
 }
 
-test("a published personal skill is advertised and loads in the owner's DM", async () => {
-  const { app, skills } = freshApp();
+appTest("a published personal skill is advertised and loads in the owner's DM", async ({ app, skills }) => {
   await publishPersonalSkill(skills);
 
   const sys = await app.turn({
@@ -63,8 +71,7 @@ test("a published personal skill is advertised and loads in the owner's DM", asy
   assert.match(read.reply ?? "", /Step 1: gather/);
 });
 
-test("a channel session does NOT see a personal skill (scope boundary)", async () => {
-  const { app, skills } = freshApp();
+appTest("a channel session does NOT see a personal skill (scope boundary)", async ({ app, skills }) => {
   await publishPersonalSkill(skills);
   const sys = await app.turn({
     surface: "test",
@@ -75,8 +82,8 @@ test("a channel session does NOT see a personal skill (scope boundary)", async (
   assert.doesNotMatch(sys.reply ?? "", /make-digest/);
 });
 
-test("ordinary sandbox work never touches the skills tree", async () => {
-  const { app, skills, sandbox } = await withDefaultComputer(freshApp());
+appTest("ordinary sandbox work never touches the skills tree", async (built) => {
+  const { app, skills, sandbox } = await withDefaultComputer(built);
   await publishPersonalSkill(skills);
   const touched: string[] = [];
   const read = sandbox.readFile.bind(sandbox);
@@ -120,8 +127,8 @@ async function publishFileSkill(skills: ReturnType<typeof buildApp>["skills"], n
   return sk;
 }
 
-test("skill files stay on the computer across turns", async () => {
-  const { app, skills } = await withDefaultComputer(freshApp());
+appTest("skill files stay on the computer across turns", async (built) => {
+  const { app, skills } = await withDefaultComputer(built);
   const first = await publishFileSkill(skills, "helper");
   const request = {
     surface: "test",
@@ -136,8 +143,7 @@ test("skill files stay on the computer across turns", async () => {
   assert.match((await app.turn({ ...request, text: "!skill helper" } as TurnRequest)).reply ?? "", /no skill file/);
 });
 
-test("skills index order ignores skill use, so the system prompt stays byte-stable", async () => {
-  const built = freshApp();
+appTest("skills index order ignores skill use, so the system prompt stays byte-stable", async (built) => {
   for (let i = 0; i < 20; i++) {
     const skill = await built.skills.create({
       scopeId: "personal:U1",
@@ -161,14 +167,13 @@ test("skills index order ignores skill use, so the system prompt stays byte-stab
   const first = await built.app.turn(request);
   assert.ok((first.reply ?? "").indexOf("- helper-00 — ") < (first.reply ?? "").indexOf("- helper-19 — "));
   const sessionId = first.sessionId!;
-  const { lease } = await built.sessions.acquireLease(sessionId, "turn");
-  assert.ok(lease);
-  await built.sessions.append(lease, {
-    type: "tool_call",
-    payload: { tool: "skills", callId: "skills-1", action: "read", name: "helper-19" },
-    scopeLabel: "personal:U1",
+  const writer = { sessionId: sessionId };
+  await built.sessions.append(writer, {
+    kind: "ToolCall",
+    tool: "skills",
+    callId: "skills-1",
+    body: { action: "read", name: "helper-19" },
   });
-  await built.sessions.releaseLease(lease);
   await built.app.turn(request);
   const recorded = (await built.sessions.listLlmRequests(sessionId)).filter((r) => r.model === "mock");
   const systems = recorded.map((r) => (r.promptEnvelope as { system: string }).system);
@@ -176,39 +181,45 @@ test("skills index order ignores skill use, so the system prompt stays byte-stab
   assert.equal(systems[0], systems[1]);
 });
 
-test("Open sharing keeps private skill metadata out of the persisted channel shortlist", async () => {
-  const built = buildApp(testConfig({ securityScreen: "off" }));
-  await built.config.setSharingPosture("org:default-org", "open");
-  await publishPersonalSkill(built.skills);
-  const result = await built.app.turn({
-    surface: "test",
-    origin: { kind: "human" },
-    actor,
-    conversation: {
-      kind: "channel",
-      channelRef: "C1",
-      threadRef: "shortlist-open",
-      audience: [actor],
-      publishMembers: [actor],
-    },
-    text: "!sysprompt",
-  });
-  assert.equal(result.status, "ok");
-  assert.doesNotMatch(result.reply ?? "", /assemble a morning digest|^- make-digest — /m);
-  const read = await built.app.turn({
-    surface: "test",
-    origin: { kind: "human" },
-    actor,
-    conversation: {
-      kind: "channel",
-      channelRef: "C1",
-      threadRef: "shortlist-open",
-      audience: [actor],
-      publishMembers: [actor],
-    },
-    text: "!skill make-digest",
-  });
-  assert.match(read.reply ?? "", /Step 1: gather/);
-  const entries = await built.sessions.getEntries(result.sessionId!);
-  assert.doesNotMatch(JSON.stringify(entries.filter((e) => e.type === "user")), /assemble a morning digest/);
-});
+appTest(
+  "Open sharing keeps private skill metadata out of the persisted channel shortlist",
+  async (built) => {
+    await built.config.setSharingPosture("org:default-org", "open");
+    await publishPersonalSkill(built.skills);
+    const result = await built.app.turn({
+      surface: "test",
+      origin: { kind: "human" },
+      actor,
+      conversation: {
+        kind: "channel",
+        channelRef: "C1",
+        threadRef: "shortlist-open",
+        audience: [actor],
+        publishMembers: [actor],
+      },
+      text: "!sysprompt",
+    });
+    assert.equal(result.status, "ok");
+    assert.doesNotMatch(result.reply ?? "", /assemble a morning digest|^- make-digest — /m);
+    const read = await built.app.turn({
+      surface: "test",
+      origin: { kind: "human" },
+      actor,
+      conversation: {
+        kind: "channel",
+        channelRef: "C1",
+        threadRef: "shortlist-open",
+        audience: [actor],
+        publishMembers: [actor],
+      },
+      text: "!skill make-digest",
+    });
+    assert.match(read.reply ?? "", /Step 1: gather/);
+    const items = await built.sessions.getItems(result.sessionId!);
+    assert.doesNotMatch(
+      JSON.stringify(items.filter((item) => USER_ITEM_KINDS.includes(item.kind))),
+      /assemble a morning digest/,
+    );
+  },
+  () => buildApp(testConfig({ securityScreen: "off" })),
+);

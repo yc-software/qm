@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-mirror-")) }));
@@ -24,63 +25,65 @@ function start() {
 
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
-  (await fetch(base + path, { headers })).json();
+  (await fetch(base + path, { headers: { ...testTenantHeaders(), ...headers } })).json();
 
 async function seed(built: ReturnType<typeof start>["built"]) {
-  await built.app.ingestSurfaceEvents([
-    {
-      container: "C1",
-      ts: "100.000100",
-      authorId: "U1",
-      authorName: "Carol",
-      text: "kickoff message",
-      members: ["U1", "U2"],
-      containerName: "eng",
-      createdAt: 1000,
-    },
-    {
-      container: "C1",
-      ts: "101.000100",
-      authorId: "UBOT",
-      authorName: "qm",
-      text: "on it — here is the plan",
-      self: true,
-      createdAt: 2000,
-    },
-    {
-      container: "C1",
-      ts: "102.000100",
-      sub: "100.000100",
-      authorId: "U2",
-      authorName: "Alice",
-      text: "thread reply about deploys",
-      createdAt: 3000,
-    },
-    {
-      container: "C1",
-      ts: "103.000100",
-      authorId: "U2",
-      authorName: "Alice",
-      text: "message later deleted",
-      deleted: true,
-      createdAt: 4000,
-    },
-    {
-      container: "C2",
-      ts: "200.000100",
-      authorId: "U3",
-      authorName: "Ada",
-      text: "different channel entirely",
-      containerName: "ops",
-      createdAt: 5000,
-    },
-  ]);
+  await inTestTenant(() =>
+    built.app.ingestSurfaceEvents([
+      {
+        container: "C1",
+        ts: "100.000100",
+        authorId: "U1",
+        authorName: "Carol",
+        text: "kickoff message",
+        members: ["U1", "U2"],
+        containerName: "eng",
+        createdAt: 1000,
+      },
+      {
+        container: "C1",
+        ts: "101.000100",
+        authorId: "UBOT",
+        authorName: "qm",
+        text: "on it — here is the plan",
+        self: true,
+        createdAt: 2000,
+      },
+      {
+        container: "C1",
+        ts: "102.000100",
+        sub: "100.000100",
+        authorId: "U2",
+        authorName: "Alice",
+        text: "thread reply about deploys",
+        createdAt: 3000,
+      },
+      {
+        container: "C1",
+        ts: "103.000100",
+        authorId: "U2",
+        authorName: "Alice",
+        text: "message later deleted",
+        deleted: true,
+        createdAt: 4000,
+      },
+      {
+        container: "C2",
+        ts: "200.000100",
+        authorId: "U3",
+        authorName: "Ada",
+        text: "different channel entirely",
+        containerName: "ops",
+        createdAt: 5000,
+      },
+    ]),
+  );
 }
 
 test("the mirror index lists containers with name, members, watermark, and message count", async () => {
   const s = start();
   try {
-    await seed(s.built);
+    await inTestTenant(() => seed(s.built));
     const d = await getJson(s.base, "/v1/admin/slack-mirror");
     assert.equal(d.containers.length, 2);
     const c1 = d.containers.find((c: any) => c.container === "C1");
@@ -91,7 +94,7 @@ test("the mirror index lists containers with name, members, watermark, and messa
     assert.equal(c1.messageCount, 3, "deleted tombstones don't count as mirrored");
     assert.equal(d.hasMore, false);
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "slack_mirror.read"),
+      (await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "slack_mirror.read"),
       "read is audited",
     );
   } finally {
@@ -102,7 +105,7 @@ test("the mirror index lists containers with name, members, watermark, and messa
 test("the timeline pages a container's messages oldest→newest and keeps deleted tombstones", async () => {
   const s = start();
   try {
-    await seed(s.built);
+    await inTestTenant(() => seed(s.built));
     const d = await getJson(s.base, "/v1/admin/slack-mirror/messages?container=C1");
     assert.equal(d.mode, "timeline");
     assert.deepEqual(
@@ -132,7 +135,9 @@ test("the timeline pages a container's messages oldest→newest and keeps delete
     assert.equal(older.hasMore, false);
 
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "slack_mirror.messages.read" && e.resource === "C1"),
+      (await inTestTenant(() => s.built.auditLog.events())).some(
+        (e) => e.action === "slack_mirror.messages.read" && e.resource === "C1",
+      ),
       "message read is audited per container",
     );
   } finally {
@@ -143,7 +148,7 @@ test("the timeline pages a container's messages oldest→newest and keeps delete
 test("q= searches mirrored bodies, org-wide or narrowed to a container", async () => {
   const s = start();
   try {
-    await seed(s.built);
+    await inTestTenant(() => seed(s.built));
     const all = await getJson(s.base, "/v1/admin/slack-mirror/messages?q=" + encodeURIComponent("channel"));
     assert.equal(all.mode, "search");
     assert.ok(all.messages.some((m: any) => m.container === "C2"));
@@ -161,14 +166,16 @@ test("q= searches mirrored bodies, org-wide or narrowed to a container", async (
 test("search reports hasMore and the applied limit when matches exceed the page", async () => {
   const s = start();
   try {
-    await s.built.app.ingestSurfaceEvents(
-      [1, 2, 3].map((n) => ({
-        container: "C1",
-        ts: `10${n}.000100`,
-        authorId: "U1",
-        text: `needle number ${n}`,
-        createdAt: n * 1000,
-      })),
+    await inTestTenant(() =>
+      s.built.app.ingestSurfaceEvents(
+        [1, 2, 3].map((n) => ({
+          container: "C1",
+          ts: `10${n}.000100`,
+          authorId: "U1",
+          text: `needle number ${n}`,
+          createdAt: n * 1000,
+        })),
+      ),
     );
     const capped = await getJson(s.base, "/v1/admin/slack-mirror/messages?q=needle&limit=2");
     assert.equal(capped.mode, "search");
@@ -191,14 +198,16 @@ test("search reports hasMore and the applied limit when matches exceed the page"
 test("search hasMore survives the store's read clamp at the route's maximum page size", async () => {
   const s = start();
   try {
-    await s.built.app.ingestSurfaceEvents(
-      Array.from({ length: 401 }, (_, i) => ({
-        container: "C1",
-        ts: `${1000 + i}.000100`,
-        authorId: "U1",
-        text: `needle number ${i}`,
-        createdAt: 1000 + i,
-      })),
+    await inTestTenant(() =>
+      s.built.app.ingestSurfaceEvents(
+        Array.from({ length: 401 }, (_, i) => ({
+          container: "C1",
+          ts: `${1000 + i}.000100`,
+          authorId: "U1",
+          text: `needle number ${i}`,
+          createdAt: 1000 + i,
+        })),
+      ),
     );
     const d = await getJson(s.base, "/v1/admin/slack-mirror/messages?q=needle&limit=400");
     assert.equal(d.messages.length, 400);
@@ -223,11 +232,13 @@ const seedContainers = (built: ReturnType<typeof start>["built"], count: number)
 test("the mirror index reports hasMore when more containers exist than the page cap", async () => {
   const s = start();
   try {
-    await seedContainers(s.built, 401);
+    await inTestTenant(() => seedContainers(s.built, 401));
     await new Promise((r) => setTimeout(r, 5));
-    await s.built.app.ingestSurfaceEvents([
-      { container: "FRESH", ts: "999.000100", authorId: "U1", text: "hello", createdAt: 9000 },
-    ]);
+    await inTestTenant(() =>
+      s.built.app.ingestSurfaceEvents([
+        { container: "FRESH", ts: "999.000100", authorId: "U1", text: "hello", createdAt: 9000 },
+      ]),
+    );
     const d = await getJson(s.base, "/v1/admin/slack-mirror");
     assert.equal(d.containers.length, 400);
     assert.equal(d.hasMore, true);
@@ -241,7 +252,7 @@ test("the mirror index reports hasMore when more containers exist than the page 
 test("the mirror index reports hasMore false at exactly the page cap", async () => {
   const s = start();
   try {
-    await seedContainers(s.built, 400);
+    await inTestTenant(() => seedContainers(s.built, 400));
     const d = await getJson(s.base, "/v1/admin/slack-mirror");
     assert.equal(d.containers.length, 400);
     assert.equal(d.hasMore, false);
@@ -253,20 +264,24 @@ test("the mirror index reports hasMore false at exactly the page cap", async () 
 test("ambient rows with no stored name resolve U…/C… ids from the directory at read time", async () => {
   const s = start();
   try {
-    await s.built.app.ingestSurfaceEvents([
-      {
-        container: "C9",
-        ts: "900.000100",
-        authorId: "U9",
-        text: "overheard <@U8> and <@U9|already> and <@UX>",
-        createdAt: 9000,
-      },
-    ]);
-    await s.built.directory.replace([
-      { principalId: "U9", displayName: "Taylor", type: "internal", slackId: "U9" },
-      { principalId: "U8", displayName: "Ada", type: "internal", slackId: "U8" },
-    ]);
-    await s.built.directory.replaceChannels([{ channelId: "C9", name: "watercooler" }]);
+    await inTestTenant(() =>
+      s.built.app.ingestSurfaceEvents([
+        {
+          container: "C9",
+          ts: "900.000100",
+          authorId: "U9",
+          text: "overheard <@U8> and <@U9|already> and <@UX>",
+          createdAt: 9000,
+        },
+      ]),
+    );
+    await inTestTenant(() =>
+      s.built.directory.replace([
+        { principalId: "U9", displayName: "Taylor", type: "internal", slackId: "U9" },
+        { principalId: "U8", displayName: "Ada", type: "internal", slackId: "U8" },
+      ]),
+    );
+    await inTestTenant(() => s.built.directory.replaceChannels([{ channelId: "C9", name: "watercooler" }]));
 
     const idx = await getJson(s.base, "/v1/admin/slack-mirror");
     const c9 = idx.containers.find((c: any) => c.container === "C9");
@@ -284,12 +299,16 @@ test("ambient rows with no stored name resolve U…/C… ids from the directory 
 test("the mirror is org-admin only and requires a container or query", async () => {
   const s = start();
   try {
-    await seed(s.built);
+    await inTestTenant(() => seed(s.built));
     for (const path of ["/v1/admin/slack-mirror", "/v1/admin/slack-mirror/messages?container=C1"]) {
-      const r = await fetch(s.base + path, { headers: { "x-admin-actor": "stranger@default-org" } });
+      const r = await fetch(s.base + path, {
+        headers: { ...testTenantHeaders(), "x-admin-actor": "stranger@default-org" },
+      });
       assert.equal(r.status, 403, path);
     }
-    const bad = await fetch(s.base + "/v1/admin/slack-mirror/messages", { headers: ALICE });
+    const bad = await fetch(s.base + "/v1/admin/slack-mirror/messages", {
+      headers: { ...testTenantHeaders(), ...ALICE },
+    });
     assert.equal(bad.status, 400);
   } finally {
     await s.close();

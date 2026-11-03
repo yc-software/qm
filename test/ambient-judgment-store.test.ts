@@ -1,22 +1,14 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createPostgresAmbientJudgmentStore,
   type AmbientJudgmentStore,
 } from "../src/surface-cache/ambient-judgment-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const pgSkip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres ambient-judgment tests";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS ambient_judgments CASCADE");
-  await p.end();
-});
 
 async function contract(store: AmbientJudgmentStore): Promise<void> {
   await store.record({
@@ -88,24 +80,28 @@ async function contract(store: AmbientJudgmentStore): Promise<void> {
   assert.notEqual(tieNext[0]!.id, tieHead[0]!.id, "and it's a distinct row");
 }
 
-test("memory ambient-judgment store: record + list contract", async () => {
-  const store = createPostgresAmbientJudgmentStore(testDatabaseUrl());
-  await contract(store);
-  await store.close();
-});
+test("memory ambient-judgment store: record + list contract", () =>
+  inTestTenant(async () => {
+    const store = createPostgresAmbientJudgmentStore(testDatabaseUrl());
+    await contract(store);
+    await store.close();
+  }));
 
-test("memory ambient-judgment store: bounded at 5000 rows", async () => {
-  const store = createPostgresAmbientJudgmentStore(testDatabaseUrl());
-  for (let i = 0; i < 5010; i++)
-    await store.record({ surface: "slack", container: "C1", decision: "ignore", createdAt: i });
-  const all = await store.list({ limit: 1000 });
-  assert.equal(all.length, 1000, "list caps at 1000");
-  assert.equal(all[0]!.createdAt, 5009, "the most recent survived the bound");
-  assert.equal(all.at(-1)!.createdAt, 4010, "older rows past the 5000-row bound were dropped");
-});
+test("memory ambient-judgment store: bounded at 5000 rows", () =>
+  inTestTenant(async () => {
+    const store = createPostgresAmbientJudgmentStore(testDatabaseUrl());
+    for (let i = 0; i < 5010; i++)
+      await store.record({ surface: "slack", container: "C1", decision: "ignore", createdAt: i });
+    const all = await store.list({ limit: 1000 });
+    assert.equal(all.length, 1000, "list caps at 1000");
+    assert.equal(all[0]!.createdAt, 5009, "the most recent survived the bound");
+    assert.equal(all.at(-1)!.createdAt, 4010, "older rows past the 5000-row bound were dropped");
+  }));
 
-test("pg ambient-judgment store: record + list contract", { skip: pgSkip }, async () => {
-  const store = createPostgresAmbientJudgmentStore(URL!);
-  await contract(store);
-  await store.close();
-});
+test("pg ambient-judgment store: record + list contract", { skip: pgSkip }, () =>
+  inTestTenant(async () => {
+    const store = createPostgresAmbientJudgmentStore(URL!);
+    await contract(store);
+    await store.close();
+  }),
+);

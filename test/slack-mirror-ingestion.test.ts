@@ -12,6 +12,7 @@ import { createDeferredEnvelopeAck } from "../src/slack/deferred-ack.ts";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const ids: BotIdentity = {
   botUserId: "UBOT",
@@ -460,10 +461,12 @@ test("thread broadcast snapshots retain broadcast membership through metadata up
 
 test("real message handler checks prior stake in the mirror before ingesting the current reply", async () => {
   const cache = createPostgresSurfaceCache(testDatabaseUrl());
-  await cache.ingest([
-    { container: "C1", ts: "1.000001", text: "root", authorId: "U1" },
-    { container: "C1", ts: "2.000001", sub: "1.000001", text: "prior reply", authorId: "UBOT", self: true },
-  ]);
+  await inTestTenant(() =>
+    cache.ingest([
+      { container: "C1", ts: "1.000001", text: "root", authorId: "U1" },
+      { container: "C1", ts: "2.000001", sub: "1.000001", text: "prior reply", authorId: "UBOT", self: true },
+    ]),
+  );
   const currentTs = "3.000001";
   const currentStoredAtRead: boolean[] = [];
   const client = {
@@ -539,12 +542,14 @@ test("reaction turns preserve the reacted message in the mirror", async () => {
     },
   });
   const client = { reactions: { get: async () => ({ message: { text: "Original bot answer", user: "UBOT" } }) } };
-  await f.mirror.mirrorMessageEvent(
-    { channel: "D1", channel_type: "im", ts: "100.001", text: "Original bot answer", user: "UBOT" },
-    client,
-    { kind: "dm" },
-  );
-  const before = await cache.readMessages("D1", { limit: 10 });
+  const before = await inTestTenant(async () => {
+    await f.mirror.mirrorMessageEvent(
+      { channel: "D1", channel_type: "im", ts: "100.001", text: "Original bot answer", user: "UBOT" },
+      client,
+      { kind: "dm" },
+    );
+    return cache.readMessages("D1", { limit: 10 });
+  });
   const turns: any[] = [];
   const handler = createTurnHandler({
     core: {},
@@ -571,7 +576,7 @@ test("reaction turns preserve the reacted message in the mirror", async () => {
   assert.equal(turns.length, 2);
   assert.match(turns[0].text, /\[Slack reaction\].*reacted/);
   assert.match(turns[1].text, /\[Slack reaction\].*removed/);
-  assert.deepEqual(await cache.readMessages("D1", { limit: 10 }), before);
+  assert.deepEqual(await inTestTenant(() => cache.readMessages("D1", { limit: 10 })), before);
 });
 
 test("synthetic reaction turns preserve the canonical message snapshot", async () => {
@@ -590,20 +595,22 @@ test("synthetic reaction turns preserve the canonical message snapshot", async (
     directory: directory as any,
     externalParticipantsEnabled: async () => false,
   });
-  await mirror.mirrorMessageEvent(
-    {
-      channel: "D1",
-      channel_type: "im",
-      ts: "2",
-      thread_ts: "1",
-      user: "UAUTHOR",
-      text: "original message",
-      files: [{ id: "F1", name: "report.txt" }],
-    },
-    {},
-    { kind: "dm" },
-  );
-  const before = await cache.readMessages("D1", { at: "2" });
+  const before = await inTestTenant(async () => {
+    await mirror.mirrorMessageEvent(
+      {
+        channel: "D1",
+        channel_type: "im",
+        ts: "2",
+        thread_ts: "1",
+        user: "UAUTHOR",
+        text: "original message",
+        files: [{ id: "F1", name: "report.txt" }],
+      },
+      {},
+      { kind: "dm" },
+    );
+    return cache.readMessages("D1", { at: "2" });
+  });
   assert.equal(before[0]?.files?.length, 1);
   const stop = new Error("serialization boundary reached");
   const handler = createTurnHandler({
@@ -637,7 +644,7 @@ test("synthetic reaction turns preserve the canonical message snapshot", async (
     ),
     (error: unknown) => error === stop,
   );
-  assert.deepEqual(await cache.readMessages("D1", { at: "2" }), before);
+  assert.deepEqual(await inTestTenant(() => cache.readMessages("D1", { at: "2" })), before);
 });
 
 test("broadcast metadata survives reduced remirroring and partial edits across HTTP ingestion", async () => {
@@ -657,10 +664,12 @@ test("broadcast metadata survives reduced remirroring and partial edits across H
     thread_ts: "1",
     text: "reply",
   });
-  await f.mirror.mirrorMessageEvent(
-    { channel: "C1", channel_type: "channel", user: "UBOT", ts: "2", thread_ts: "1", text: "reply" },
-    {},
-    { partial: true, handled: true },
+  await inTestTenant(() =>
+    f.mirror.mirrorMessageEvent(
+      { channel: "C1", channel_type: "channel", user: "UBOT", ts: "2", thread_ts: "1", text: "reply" },
+      {},
+      { partial: true, handled: true },
+    ),
   );
   await f.fire({
     type: "message",
@@ -671,7 +680,7 @@ test("broadcast metadata survives reduced remirroring and partial edits across H
     message: { user: "UBOT", ts: "2", text: "edited" },
     previous_message: { text: "reply" },
   });
-  const rows = await cache.readMessages("C1", { channelHistory: true });
+  const rows = await inTestTenant(() => cache.readMessages("C1", { channelHistory: true }));
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.sub, "1");
   assert.equal(rows[0]?.subtype, "thread_broadcast");
@@ -701,7 +710,7 @@ test("untyped attachment-only updates and deletions resolve room kind without di
         await cache.ingest(events.map((e) => toEvent(e)!));
       },
     });
-    await cache.ingest([{ container: "C1", ts: "1", text: "link", self: true, editedAt: 1000 }]);
+    await inTestTenant(() => cache.ingest([{ container: "C1", ts: "1", text: "link", self: true, editedAt: 1000 }]));
     await f.fire({
       type: "message",
       subtype: "message_changed",
@@ -723,7 +732,7 @@ test("untyped attachment-only updates and deletions resolve room kind without di
       },
       previous_message: { user: "UBOT", text: "link" },
     });
-    const rows = await cache.readMessages("C1");
+    const rows = await inTestTenant(() => cache.readMessages("C1"));
     assert.match(rows[0]!.text, /forwarded body/);
     assert.equal(rows[0]!.editedAt, 1000);
     assert.deepEqual(
@@ -740,7 +749,7 @@ test("untyped attachment-only updates and deletions resolve room kind without di
       deleted_ts: "1",
       previous_message: { user: "UBOT" },
     });
-    assert.equal((await cache.readMessages("C1")).length, 0);
+    assert.equal((await inTestTenant(() => cache.readMessages("C1"))).length, 0);
   }
 });
 

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -36,15 +37,15 @@ function monitorFire(text: string, channel: string, root: string, fireKey: strin
 }
 
 async function slackDeliveries(deliveries: { pending(type: string): Promise<unknown[]> }): Promise<any[]> {
-  return (await deliveries.pending("slack")) as any[];
+  return (await inTestTenant(() => deliveries.pending("slack"))) as any[];
 }
 
 test("poll fire: narration before a tool call is NOT auto-posted as an ack when the turn ends silently", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
-    const res = await built.app.turn(
-      monitorFire("!preamble-then-quiet Still queued — silent.", "C-watch", "800.1", "monitor:m1:f1"),
+    const res = await inTestTenant(() =>
+      built.app.turn(monitorFire("!preamble-then-quiet Still queued — silent.", "C-watch", "800.1", "monitor:m1:f1")),
     );
     assert.equal(res.status, "silent", "the model finished silently — the turn is silent");
     await sleep(300);
@@ -62,7 +63,9 @@ test("poll fire: a closing reply ending in a bracketed token is delivered, since
   const built = freshApp();
   built.runtime.start();
   try {
-    const res = await built.app.turn(monitorFire("Still queued.\n\n[no-update]", "C-watch2", "801.1", "monitor:m1:f2"));
+    const res = await inTestTenant(() =>
+      built.app.turn(monitorFire("Still queued.\n\n[no-update]", "C-watch2", "801.1", "monitor:m1:f2")),
+    );
     assert.equal(res.status, "silent", "surfaceTools turn: delivery happens via the surface, result is silent");
     await sleep(300);
     const texts = (await slackDeliveries(built.deliveries)).map((d) => d.text);
@@ -77,8 +80,8 @@ test("poll fire: a genuine report is still delivered exactly once, buffered to t
   const built = freshApp();
   built.runtime.start();
   try {
-    const res = await built.app.turn(
-      monitorFire("!preamble Deploy finished — all green.", "C-watch3", "802.1", "monitor:m1:f3"),
+    const res = await inTestTenant(() =>
+      built.app.turn(monitorFire("!preamble Deploy finished — all green.", "C-watch3", "802.1", "monitor:m1:f3")),
     );
     assert.equal(res.status, "silent", "surfaceTools turn: delivery happens via the surface, result is silent");
     await sleep(300);
@@ -95,20 +98,22 @@ test("interactive mention: the first-block ack still posts immediately (unchange
   const built = freshApp();
   built.runtime.start();
   try {
-    await built.app.turn({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: {
-        kind: "channel",
-        threadRef: "ch:C-live:900.1",
-        channelRef: "C-live",
-        audience: [{ externalId: "U1" }],
-      },
-      deliveryTarget: "slack:C-live:900.1",
-      text: "!preamble On it — checking.",
-      liveActor: true,
-      async: true,
-    });
+    await inTestTenant(() =>
+      built.app.turn({
+        surface: "slack",
+        actor: { externalId: "U1" },
+        conversation: {
+          kind: "channel",
+          threadRef: "ch:C-live:900.1",
+          channelRef: "C-live",
+          audience: [{ externalId: "U1" }],
+        },
+        deliveryTarget: "slack:C-live:900.1",
+        text: "!preamble On it — checking.",
+        liveActor: true,
+        async: true,
+      }),
+    );
     const deadline = Date.now() + 5_000;
     let ack: any;
     while (Date.now() < deadline && !ack) {

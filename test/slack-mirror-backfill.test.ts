@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "../src/api/slack-core-client.ts";
@@ -8,6 +8,11 @@ import { registerSlackEvents } from "../src/slack/events.ts";
 import { createDeduper } from "../src/slack/lib.ts";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => void | Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 
@@ -150,7 +155,7 @@ test("the history gap note lands in the conversation's own scope memory", async 
   assert.deepEqual(captured, ["channel:C1=gap", "group:G1=gap"]);
 });
 
-test("the bot joining a channel backfills it once, and a failed pull never blocks the join", async () => {
+nodeTest("the bot joining a channel backfills it once, and a failed pull never blocks the join", async () => {
   const events = new Map<string, (args: any) => Promise<void>>();
   const pulled: string[] = [];
   let synced = 0;
