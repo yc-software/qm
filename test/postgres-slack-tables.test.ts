@@ -12,7 +12,7 @@ import { adoptEnvironmentSlack } from "../src/slack/environment-install.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { currentTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
-import type { SlackPluginConfig } from "../src/slack/config.ts";
+import { slackPluginConfigFromEnv, type SlackPluginConfig } from "../src/slack/config.ts";
 import type { SlackAccountRuntime } from "../src/slack/index.ts";
 import { createSlackTenants } from "../src/slack/tenant-runtimes.ts";
 import { skipWithoutPg, withSlackDb } from "./support/slack-db.ts";
@@ -347,7 +347,10 @@ test(
           asked.push(token);
           return { teamId: "TENV", teamName: "Env" };
         };
-        const adopt = () => withoutTenant(() => adoptEnvironmentSlack({ env, installation: installs, workspaceOf }));
+        const adopt = () =>
+          withoutTenant(() =>
+            adoptEnvironmentSlack({ environment: slackPluginConfigFromEnv(env), installation: installs, workspaceOf }),
+          );
         assert.equal(await adopt(), INSTANCE);
         assert.equal(await slackTeamTenant()("TENV"), INSTANCE);
         const stored = await withTenant(INSTANCE, () => installs.get());

@@ -2,15 +2,15 @@ import { WebClient } from "@slack/web-api";
 import type { SlackInstallationStore } from "../surfaces/slack-installation.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
 import { withTenant } from "../tenants/context.ts";
-import { NO_RETRY, normalizeSlackApiUrl, slackPluginConfigFromEnv } from "./config.ts";
+import { NO_RETRY, normalizeSlackApiUrl, type SlackPluginConfig } from "./config.ts";
 
 export type SlackWorkspaceOf = (botToken: string) => Promise<{ teamId?: string; teamName?: string }>;
 
-export function slackWorkspaceOf(env: Record<string, string | undefined>): SlackWorkspaceOf {
+export function slackWorkspaceOf(apiUrl: string | undefined): SlackWorkspaceOf {
   return async (botToken) => {
     const auth = await new WebClient(botToken, {
       ...NO_RETRY,
-      ...(env.SLACK_API_URL ? { slackApiUrl: normalizeSlackApiUrl(env.SLACK_API_URL) } : {}),
+      ...(apiUrl ? { slackApiUrl: normalizeSlackApiUrl(apiUrl) } : {}),
     }).auth.test();
     return {
       ...(auth.team_id ? { teamId: auth.team_id } : {}),
@@ -20,11 +20,11 @@ export function slackWorkspaceOf(env: Record<string, string | undefined>): Slack
 }
 
 export async function adoptEnvironmentSlack(opts: {
-  env: Record<string, string | undefined>;
+  environment: SlackPluginConfig | null | undefined;
   installation: SlackInstallationStore;
   workspaceOf: SlackWorkspaceOf;
 }): Promise<string | null> {
-  const environment = slackPluginConfigFromEnv(opts.env);
+  const { environment } = opts;
   if (!environment) return null;
   const [presence] = (await claimAcrossTenants("SELECT to_regclass('qm_tenant') IS NOT NULL AS present")).rows;
   if (!presence?.present) return null;

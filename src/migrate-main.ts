@@ -11,9 +11,9 @@ try {
   await migrateRegisteredPgSchemas(config.databaseUrl);
   console.log("[qm:migrate] database migrations applied");
   const adopted = await adoptEnvironmentSlack({
-    env: process.env,
+    environment: config.slack,
     installation: slackInstallation,
-    workspaceOf: slackWorkspaceOf(process.env),
+    workspaceOf: slackWorkspaceOf(config.slack?.apiUrl),
   });
   if (adopted) console.log(`[qm:migrate] stored the environment's Slack installation for tenant ${adopted}`);
 } finally {
