@@ -1,9 +1,24 @@
 import CryptoKit
 import XCTest
+import os
 
 @testable import QM
 
 final class SignInProtocol: URLProtocol, @unchecked Sendable {
+  private struct Redemptions: Sendable {
+    var arrived: Set<String> = []
+    var held: [String: @Sendable () -> Void] = [:]
+  }
+  private static let redemptions = OSAllocatedUnfairLock(initialState: Redemptions())
+
+  static func arrived(_ host: String) -> Bool {
+    redemptions.withLock { $0.arrived.contains(host) }
+  }
+
+  static func release(_ host: String) {
+    redemptions.withLock { $0.held.removeValue(forKey: host) }?()
+  }
+
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
@@ -43,10 +58,19 @@ final class SignInProtocol: URLProtocol, @unchecked Sendable {
           "Set-Cookie":
             "portal_session=test-session; Path=/; Secure; HttpOnly, portal_user=alice; Path=/; Secure, portal_impersonate=; Path=/; Max-Age=0"
         ])!
-    DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { [self] in
+    let respond: @Sendable () -> Void = { [self] in
       client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
       client?.urlProtocol(self, didLoad: Data((malformed ? "{}" : "{\"ok\":\(valid)}").utf8))
       client?.urlProtocolDidFinishLoading(self)
+    }
+    let host = request.url!.host!
+    if host.hasPrefix("held") {
+      Self.redemptions.withLock {
+        $0.arrived.insert(host)
+        $0.held[host] = respond
+      }
+    } else {
+      DispatchQueue.global().async(execute: respond)
     }
   }
   override func stopLoading() {}
@@ -60,6 +84,16 @@ final class SignInTests: XCTestCase {
     return APIClient(
       baseURL: URL(string: "https://\(prefix)-\(UUID().uuidString).example.test")!,
       configuration: configuration)
+  }
+
+  private func redemption(
+    _ client: APIClient, file: StaticString = #filePath, line: UInt = #line
+  ) async throws {
+    for _ in 0..<500 {
+      if SignInProtocol.arrived(client.baseURL.host!) { return }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTFail("The redemption request never arrived", file: file, line: line)
   }
 
   private func signIn(
@@ -135,11 +169,12 @@ final class SignInTests: XCTestCase {
   }
 
   func testCancelDuringRedemptionCannotPersistSession() async throws {
-    let client = client()
+    let client = client("held")
     let signIn = signIn()
     let task = Task { try await signIn.authenticate(client: client) }
-    try await Task.sleep(for: .milliseconds(40))
+    try await redemption(client)
     signIn.cancel()
+    SignInProtocol.release(client.baseURL.host!)
     do {
       try await task.value
       XCTFail("Cancelled exchange succeeded")
@@ -149,11 +184,12 @@ final class SignInTests: XCTestCase {
   }
 
   func testSignOutDuringRedemptionCannotPersistSession() async throws {
-    let client = client()
+    let client = client("held")
     let signIn = signIn()
     let task = Task { try await signIn.authenticate(client: client) }
-    try await Task.sleep(for: .milliseconds(40))
+    try await redemption(client)
     client.signOut()
+    SignInProtocol.release(client.baseURL.host!)
     do {
       try await task.value
       XCTFail("Signed-out exchange succeeded")

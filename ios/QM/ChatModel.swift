@@ -74,12 +74,17 @@ final class ChatModel {
   private var generation = UUID()
   private var transcriptRevision = 0
   private var completedRunIDs = Set<String>()
+  private let publishTick: @MainActor () async throws -> Void
 
   init(
     conversation: Conversation, client: APIClient, user: String, knownSession: Bool,
-    transcript: Transcript? = nil
+    transcript: Transcript? = nil,
+    publishTick: @escaping @MainActor () async throws -> Void = {
+      try await Task.sleep(for: .milliseconds(50))
+    }
   ) {
     self.user = user
+    self.publishTick = publishTick
     self.conversation = conversation
     self.client = client
     self.knownSession = knownSession
@@ -572,8 +577,8 @@ final class ChatModel {
           var textChanged = false
           let publisher = Task { @MainActor in
             while !Task.isCancelled {
-              do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
-              guard current == generation else { return }
+              do { try await publishTick() } catch { return }
+              guard current == generation, !Task.isCancelled else { return }
               if textChanged {
                 partial = text.text
                 textChanged = false

@@ -5,6 +5,9 @@ import os
 
 final class ForegroundSyncProtocol: URLProtocol, @unchecked Sendable {
   static let counts = OSAllocatedUnfairLock(initialState: [String: Int]())
+  static let held = OSAllocatedUnfairLock(initialState: [String: Int]())
+  static let stopped = OSAllocatedUnfairLock(initialState: [String: Int]())
+  private let holding = OSAllocatedUnfairLock(initialState: false)
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
@@ -12,6 +15,10 @@ final class ForegroundSyncProtocol: URLProtocol, @unchecked Sendable {
     let count = Self.counts.withLock { values in
       values[key, default: 0] += 1
       return values[key]!
+    }
+    if Self.held.withLock({ $0[key] == count }) {
+      holding.withLock { $0 = true }
+      return
     }
     let body: String
     switch request.url!.path {
@@ -36,7 +43,11 @@ final class ForegroundSyncProtocol: URLProtocol, @unchecked Sendable {
     client?.urlProtocol(self, didLoad: Data(body.utf8))
     client?.urlProtocolDidFinishLoading(self)
   }
-  override func stopLoading() {}
+  override func stopLoading() {
+    guard holding.withLock({ $0 }) else { return }
+    let key = request.url!.absoluteString
+    Self.stopped.withLock { $0[key, default: 0] += 1 }
+  }
 }
 
 @MainActor
@@ -45,6 +56,16 @@ final class ForegroundSyncTests: XCTestCase {
     let result = URLSessionConfiguration.ephemeral
     result.protocolClasses = [ForegroundSyncProtocol.self]
     return result
+  }
+
+  private func eventually(
+    _ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line
+  ) async throws {
+    for _ in 0..<500 {
+      if condition() { return }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTFail("The expected state was never reached", file: file, line: line)
   }
 
   func testVisibleHistoryReceivesNewConversationsAndApprovalStateAndStopsWhenCancelled()
@@ -59,22 +80,20 @@ final class ForegroundSyncTests: XCTestCase {
     let client = try XCTUnwrap(model.client)
     try client.saveSession("test")
     defer { model.signOut() }
+    let key = client.url("api/sessions").absoluteString
+    ForegroundSyncProtocol.held.withLock { $0[key] = 3 }
     let watch = Task { await model.watchConversations(interval: .milliseconds(20)) }
-    for _ in 0..<100 {
-      if model.conversations.count == 2 { break }
-      try await Task.sleep(for: .milliseconds(10))
-    }
+    try await eventually { model.conversations.count == 2 }
     XCTAssertEqual(model.conversations.count, 2)
     XCTAssertEqual(model.conversations.first { $0.id == "one" }?.working, false)
     XCTAssertEqual(model.conversations.first { $0.id == "one" }?.awaitingInput, true)
     let identityKey = client.url("me").absoluteString
     XCTAssertEqual(ForegroundSyncProtocol.counts.withLock { $0[identityKey] }, 1)
+    try await eventually { ForegroundSyncProtocol.counts.withLock { $0[key] } == 3 }
     watch.cancel()
+    try await eventually { ForegroundSyncProtocol.stopped.withLock { $0[key] } == 1 }
     await watch.value
-    let key = client.url("api/sessions").absoluteString
-    let count = ForegroundSyncProtocol.counts.withLock { $0[key] }
-    try await Task.sleep(for: .milliseconds(80))
-    XCTAssertEqual(ForegroundSyncProtocol.counts.withLock { $0[key] }, count)
+    XCTAssertEqual(model.conversations.count, 2)
   }
 
   func testReadOnlyTranscriptReceivesNewMessagesUntilPaused() async throws {
@@ -86,21 +105,16 @@ final class ForegroundSyncTests: XCTestCase {
       conversation: Conversation(
         id: "slack", scopeId: "personal:test", threadRef: "slack:channel:thread"),
       client: client, user: "test", knownSession: true)
-    await chat.resume(refreshInterval: .milliseconds(20))
-    for _ in 0..<100 {
-      if (chat.entries.last?.seq ?? 0) >= 2 { break }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    XCTAssertGreaterThanOrEqual(chat.entries.last?.seq ?? 0, 2)
-    chat.pause()
-    let last = chat.entries.last?.seq
-    try await Task.sleep(for: .milliseconds(80))
-    XCTAssertEqual(chat.entries.last?.seq, last)
     let key = client.url("api/sessions/slack", query: [.init(name: "tailTurns", value: "25")])
       .absoluteString
-    let count = ForegroundSyncProtocol.counts.withLock { $0[key] }
-    try await Task.sleep(for: .milliseconds(80))
-    XCTAssertEqual(ForegroundSyncProtocol.counts.withLock { $0[key] }, count)
+    ForegroundSyncProtocol.held.withLock { $0[key] = 3 }
+    await chat.resume(refreshInterval: .milliseconds(20))
+    try await eventually { (chat.entries.last?.seq ?? 0) >= 2 }
+    XCTAssertEqual(chat.entries.last?.seq, 2)
+    try await eventually { ForegroundSyncProtocol.counts.withLock { $0[key] } == 3 }
+    chat.pause()
+    try await eventually { ForegroundSyncProtocol.stopped.withLock { $0[key] } == 1 }
+    XCTAssertEqual(chat.entries.last?.seq, 2)
   }
   func testSeededDestinationDoesNotDownloadHistoryOrSessionListAgain() async throws {
     let client = APIClient(

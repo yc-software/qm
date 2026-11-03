@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 import os
 
@@ -7,6 +8,7 @@ struct ChatStubLog: Sendable {
   var received: [String: Int] = [:]
   var loaded: [String: Int] = [:]
   var stopped: [String: Int] = [:]
+  var parkedTicks: [String: Int] = [:]
 }
 
 final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
@@ -19,6 +21,13 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
     var held: [String: @Sendable () -> Void] = [:]
     var released: Set<String> = []
     var waiters: [UUID: Waiter] = [:]
+    var holdingTicks: Set<String> = []
+    var parkedTicks: [String: CheckedContinuation<Bool, Error>] = [:]
+  }
+  private enum TickStep: Sendable {
+    case cancelled
+    case free
+    case parked
   }
   private static let registry = OSAllocatedUnfairLock(initialState: Registry())
   private let isStopped = OSAllocatedUnfairLock(initialState: false)
@@ -43,6 +52,38 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
     let id = UUID()
     record { $0.waiters[id] = Waiter(condition: condition, then: then) }
     return id
+  }
+
+  static func holdTicks(_ clock: String) {
+    record { $0.holdingTicks.insert(clock) }
+  }
+
+  static func advanceTick(_ clock: String) {
+    record { $0.parkedTicks.removeValue(forKey: clock) }?.resume(returning: true)
+  }
+
+  @MainActor static func publishTick(_ clock: String) async throws -> Bool {
+    let parked = try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation {
+        (continuation: CheckedContinuation<Bool, Error>) in
+        let step = record { registry -> TickStep in
+          if Task.isCancelled { return .cancelled }
+          guard registry.holdingTicks.contains(clock) else { return .free }
+          registry.parkedTicks[clock] = continuation
+          registry.log.parkedTicks[clock, default: 0] += 1
+          return .parked
+        }
+        switch step {
+        case .cancelled: continuation.resume(throwing: CancellationError())
+        case .free: continuation.resume(returning: false)
+        case .parked: break
+        }
+      }
+    } onCancel: {
+      record { $0.parkedTicks.removeValue(forKey: clock) }?.resume(throwing: CancellationError())
+    }
+    if !parked { try await Task.sleep(for: .milliseconds(1)) }
+    return parked
   }
 
   static func stopWaiting(_ id: UUID) {
@@ -270,20 +311,53 @@ private final class Sighting {
   var seen = false
 }
 
+@MainActor @Observable
+private final class PublishProbe {
+  var chat: ChatModel?
+  var armed = false
+  var checked = false
+  var wroteAfterTick = false
+
+  func heldTickReturned() {
+    guard let chat else { return }
+    withObservationTracking {
+      _ = chat.partial
+    } onChange: {
+      MainActor.assumeIsolated {
+        if self.armed { self.wroteAfterTick = true }
+      }
+    }
+    armed = true
+    Task { @MainActor in
+      armed = false
+      checked = true
+    }
+  }
+}
+
 @MainActor
 final class ChatReconciliationTests: XCTestCase {
-  private func chat(_ prefix: String) throws -> ChatModel {
+  private func chat(_ prefix: String, probe: PublishProbe? = nil) throws -> ChatModel {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [ChatReconciliationProtocol.self]
     let client = APIClient(
       baseURL: URL(string: "https://\(prefix)-\(UUID().uuidString).example.test")!,
       configuration: configuration)
     try client.saveSession("test")
-    return ChatModel(
-      conversation: .init(
-        id: "chat", scopeId: "personal:test", threadRef: "web:test:chat", surface: "web",
-        canContinue: true),
-      client: client, user: "test", knownSession: true)
+    let conversation = Conversation(
+      id: "chat", scopeId: "personal:test", threadRef: "web:test:chat", surface: "web",
+      canContinue: true)
+    guard let probe else {
+      return ChatModel(conversation: conversation, client: client, user: "test", knownSession: true)
+    }
+    let clock = client.baseURL.host!
+    let chat = ChatModel(
+      conversation: conversation, client: client, user: "test", knownSession: true,
+      publishTick: {
+        if try await ChatReconciliationProtocol.publishTick(clock) { probe.heldTickReturned() }
+      })
+    probe.chat = chat
+    return chat
   }
 
   private func key(_ chat: ChatModel, _ path: String) -> String {
@@ -325,16 +399,27 @@ final class ChatReconciliationTests: XCTestCase {
   }
 
   func testBurstPublishesAllTextAndTerminalCannotBeOverwrittenByDelayedPartial() async throws {
-    let chat = try chat("stream-burst")
+    let probe = PublishProbe()
+    let chat = try chat("stream-burst", probe: probe)
     defer {
       chat.pause()
       chat.client.signOut()
     }
+    let clock = chat.client.baseURL.host!
     await chat.resume()
     await until { chat.partial.count == 200 }
     XCTAssertEqual(chat.partial, String(repeating: "x", count: 200))
-    let approvals = key(chat, "/api/sessions/chat/approvals")
+    ChatReconciliationProtocol.holdTicks(clock)
+    await stub { $0.parkedTicks[clock] == 1 }
+    withObservationTracking {
+      _ = chat.activeRunID
+    } onChange: {
+      ChatReconciliationProtocol.advanceTick(clock)
+    }
     release(chat, "/api/runs/run/events", 1)
+    await until { probe.checked }
+    XCTAssertFalse(probe.wroteAfterTick)
+    let approvals = key(chat, "/api/sessions/chat/approvals")
     await stub { $0.received[approvals] == 2 }
     XCTAssertTrue(chat.partial.isEmpty)
     XCTAssertNil(chat.activeRunID)

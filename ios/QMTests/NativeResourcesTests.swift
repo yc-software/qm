@@ -103,11 +103,10 @@ final class NativeResourcesTests: XCTestCase {
     XCTAssertEqual(NativeResourcesProtocol.state.withLock { $0.requests.count }, 4)
   }
 
-  func testFileFilterWaitsForInitialLoad() async throws {
+  func testFileFilterWaitsForInitialLoad() async {
     let model = WorkspaceFilesModel(client: client(), scope: nil)
     model.loading = true
     let filtering = Task { await model.loadAll() }
-    try await Task.sleep(for: .milliseconds(80))
     await model.load(reset: true)
     await filtering.value
     XCTAssertEqual(model.files.map(\.id), ["first", "second"])
