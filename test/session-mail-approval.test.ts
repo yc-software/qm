@@ -36,6 +36,7 @@ import {
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 function fakeSandbox(): Sandbox {
   const unreached = () => {
@@ -148,23 +149,24 @@ async function scenario() {
 }
 
 for (const approved of [true, false]) {
-  test(`quarantined agent message ${approved ? "approval delivers" : "denial consumes"} without another prompt`, async () => {
-    const r = await scenario();
-    const blocked = await r.orchestrator.handleTurn(r.input);
-    const approval = blocked.pendingApprovals?.find(
-      (item) => item.approvalKey === "security-screen-release:session_message_mail-one",
-    );
-    assert.ok(approval);
-    assert.equal((await r.mailbox.pending(r.parent.id)).length, 1);
-    assert.doesNotMatch(blocked.reply ?? "", /QUARANTINED_FINDING/);
-    const resolved = await r.orchestrator.handleTurn({
-      ...r.input,
-      approval: { requestId: approval.requestId, approved },
-    });
-    if (approved) assert.match(resolved.reply ?? "", /QUARANTINED_FINDING/);
-    else assert.equal(resolved.status, "refused");
-    assert.equal((await r.mailbox.pending(r.parent.id)).length, 0);
-    const next = await r.orchestrator.handleTurn(r.input);
-    assert.equal(next.pendingApprovals?.length ?? 0, 0);
-  });
+  test(`quarantined agent message ${approved ? "approval delivers" : "denial consumes"} without another prompt`, () =>
+    inTestTenant(async () => {
+      const r = await scenario();
+      const blocked = await r.orchestrator.handleTurn(r.input);
+      const approval = blocked.pendingApprovals?.find(
+        (item) => item.approvalKey === "security-screen-release:session_message_mail-one",
+      );
+      assert.ok(approval);
+      assert.equal((await r.mailbox.pending(r.parent.id)).length, 1);
+      assert.doesNotMatch(blocked.reply ?? "", /QUARANTINED_FINDING/);
+      const resolved = await r.orchestrator.handleTurn({
+        ...r.input,
+        approval: { requestId: approval.requestId, approved },
+      });
+      if (approved) assert.match(resolved.reply ?? "", /QUARANTINED_FINDING/);
+      else assert.equal(resolved.status, "refused");
+      assert.equal((await r.mailbox.pending(r.parent.id)).length, 0);
+      const next = await r.orchestrator.handleTurn(r.input);
+      assert.equal(next.pendingApprovals?.length ?? 0, 0);
+    }));
 }

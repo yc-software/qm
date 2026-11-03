@@ -6,6 +6,7 @@ import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { settle } from "./support/settle.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 let exercise: (turn: AgentTurnInput) => Promise<void>;
 mock.module("./support/mock-agent.ts", {
@@ -49,26 +50,28 @@ for (const scenario of [
     };
     built.runtime.start();
     try {
-      const request: TurnRequest = {
-        surface: "slack",
-        liveActor: true,
-        actor: { externalId: "U1" },
-        ...scenario,
-        conversation: {
-          kind: "dm",
-          threadRef: `early-${scenario.name}`,
-          ...("conversation" in scenario ? scenario.conversation : {}),
-        },
-        text: "Build a website",
-        async: true,
-      };
-      const queued = await built.app.turn(request);
-      await ready;
-      const run = await built.app.getRun(queued.runId!);
-      if (scenario.enabled) assert.equal(run?.firstBlock, "Building the website now.");
-      assert.equal(run?.firstBlockClosed === true, scenario.enabled);
-      release();
-      await built.runs.waitFor(queued.runId!, 5000);
+      await inTestTenant(async () => {
+        const request: TurnRequest = {
+          surface: "slack",
+          liveActor: true,
+          actor: { externalId: "U1" },
+          ...scenario,
+          conversation: {
+            kind: "dm",
+            threadRef: `early-${scenario.name}`,
+            ...("conversation" in scenario ? scenario.conversation : {}),
+          },
+          text: "Build a website",
+          async: true,
+        };
+        const queued = await built.app.turn(request);
+        await ready;
+        const run = await built.app.getRun(queued.runId!);
+        if (scenario.enabled) assert.equal(run?.firstBlock, "Building the website now.");
+        assert.equal(run?.firstBlockClosed === true, scenario.enabled);
+        release();
+        await built.runs.waitFor(queued.runId!, 5000);
+      });
     } finally {
       release();
       await built.runtime.stop();
@@ -102,28 +105,32 @@ for (const action of ["read", "react", "post", "delegated-read"] as const) {
     };
     built.runtime.start();
     try {
-      const queued = await built.app.turn({
-        surface: "slack",
-        liveActor: true,
-        actor: { externalId: "U1" },
-        conversation: { kind: "dm", threadRef: `surface-${action}` },
-        text: "Build a website",
-        ...(action === "delegated-read" ? { spawned: true, sessionSenderId: "child", delegatingRunId: "parent" } : {}),
-        surfaceTools: true,
-        addressed: true,
-        deliveryTarget: "D1",
-        async: true,
+      await inTestTenant(async () => {
+        const queued = await built.app.turn({
+          surface: "slack",
+          liveActor: true,
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef: `surface-${action}` },
+          text: "Build a website",
+          ...(action === "delegated-read"
+            ? { spawned: true, sessionSenderId: "child", delegatingRunId: "parent" }
+            : {}),
+          surfaceTools: true,
+          addressed: true,
+          deliveryTarget: "D1",
+          async: true,
+        });
+        await ready;
+        const expected = action === "post" || action === "delegated-read" ? [] : ["Building the website now."];
+        await settle(async () => (await built.deliveries.pending("slack")).length >= expected.length);
+        const deliveries = await built.deliveries.pending("slack");
+        assert.deepEqual(
+          deliveries.map((delivery) => delivery.text),
+          expected,
+        );
+        release();
+        await built.runs.waitFor(queued.runId!, 5000);
       });
-      await ready;
-      const expected = action === "post" || action === "delegated-read" ? [] : ["Building the website now."];
-      await settle(async () => (await built.deliveries.pending("slack")).length >= expected.length);
-      const deliveries = await built.deliveries.pending("slack");
-      assert.deepEqual(
-        deliveries.map((delivery) => delivery.text),
-        expected,
-      );
-      release();
-      await built.runs.waitFor(queued.runId!, 5000);
     } finally {
       release();
       await built.runtime.stop();
