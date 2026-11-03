@@ -197,12 +197,15 @@ test(
       const beforeBoot = await snapshot(admin);
       await migrate(url);
       assert.deepEqual(await snapshot(admin), beforeBoot);
+      await admin.query("UPDATE surface_origin_settled_collected SET collected_at = $1", [now - 72 * 3_600_000]);
+      await run("settled-after-boot", "s7", "done", 4, request({ slackSource: internalSource }), now - 48 * 3_600_000);
       await rewrite(url);
 
       const { runs, close } = createPostgresRunStore(url);
       try {
         const read = async (id: string) =>
           (await runs.get(id))!.request as unknown as Record<string, unknown> & { origin: Record<string, unknown> };
+        assert.deepEqual((await read("settled-after-boot")).surfaceOrigin, internalOrigin);
         const pending = await read("pending");
         assert.deepEqual(pending.surfaceOrigin, internalOrigin);
         assert.equal("slackSource" in pending, false);

@@ -134,9 +134,14 @@ const LIVE_ORIGIN_REWRITES = [
 ];
 
 const SETTLED_CANDIDATES = "surface_origin_settled_candidates";
+const SETTLED_COLLECTED = "surface_origin_settled_collected";
 
 export const SETTLED_CANDIDATES_MIGRATION = migration("surfaces/0003-settled-run-candidates", [
   `CREATE TABLE IF NOT EXISTS ${SETTLED_CANDIDATES} (id TEXT PRIMARY KEY)`,
+  `CREATE TABLE IF NOT EXISTS ${SETTLED_COLLECTED} (collected_at BIGINT NOT NULL)`,
+  `INSERT INTO ${SETTLED_COLLECTED} (collected_at)
+     SELECT (extract(epoch FROM clock_timestamp()) * 1000)::bigint
+     WHERE NOT EXISTS (SELECT 1 FROM ${SETTLED_COLLECTED})`,
   ifTable(
     "runs",
     `INSERT INTO ${SETTLED_CANDIDATES} (id) SELECT r.id FROM runs r
@@ -151,15 +156,24 @@ export const SETTLED_CANDIDATES_MIGRATION = migration("surfaces/0003-settled-run
 
 export const SETTLED_ORIGIN_MIGRATION = {
   ...migration("surfaces/0004-settled-runs-rewrite", [
+    `SET LOCAL enable_seqscan = off`,
+    ifTable(
+      SETTLED_COLLECTED,
+      `INSERT INTO ${SETTLED_CANDIDATES} (id) SELECT r.id FROM runs r
+         WHERE r.status IN ('done', 'failed')
+           AND r.finished_at >= (SELECT min(collected_at) FROM ${SETTLED_COLLECTED})
+           AND ${oldKeysIn("r.request")}
+         ON CONFLICT DO NOTHING`,
+    ),
     ifTable(
       SETTLED_CANDIDATES,
       `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
-         FROM ${SETTLED_CANDIDATES} c
-         WHERE r.id = c.id AND ${oldKeysIn("r.request")}`,
+         WHERE r.id = ANY (ARRAY(SELECT id FROM ${SETTLED_CANDIDATES})) AND ${oldKeysIn("r.request")}`,
     ),
     `DROP TABLE IF EXISTS ${SETTLED_CANDIDATES}`,
+    `DROP TABLE IF EXISTS ${SETTLED_COLLECTED}`,
   ]),
-  expectedChecksum: "a018b3bc62b6d8afcc262a776d436248ae9770c5db3caee54c0663d29bdff7e3",
+  expectedChecksum: "869952729700ecff8669586f8144812079290f6f0609397b5a3d1ad7674d56d0",
 };
 
 export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
