@@ -293,6 +293,7 @@ import { createUserModelCredentialStore, type UserModelCredentialStore } from ".
 import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
+import { backfillSessionFacts } from "./sessions/session-facts-backfill.ts";
 import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
@@ -2496,10 +2497,9 @@ export function buildApp(
   orchestratorDeps.surfaceCache = surfaceCache;
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
   const runTriggered = async (req: TurnRequest): Promise<TurnResult> => {
-    const slackSource =
-      !req.slackSource && (await sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
-        ? (await runs.latestForThread(req.conversation.threadRef))?.request.slackSource
-        : undefined;
+    const slackSource = req.slackSource
+      ? undefined
+      : (await sessions.getByThread(req.conversation.threadRef))?.slackBinding;
     return app.turn(slackSource ? { ...req, slackSource } : req);
   };
   const askResolution = keychain
@@ -2752,7 +2752,9 @@ export function buildApp(
   const llmCaptureSweeper = sessions.purgeLlmCaptures
     ? retentionSweeper("llm-capture:retention", LLM_CAPTURE_RETENTION_MS, sessions.purgeLlmCaptures)
     : null;
-  const runRetentionSweeper = retentionSweeper("runs:retention", RUN_RETENTION_MS, runs.pruneFinished);
+  const runRetentionSweeper = retentionSweeper("runs:retention", RUN_RETENTION_MS, async (cutoff, opts) =>
+    (await backfillSessionFacts({ sessions, runs }, opts)) ? runs.pruneFinished(cutoff, opts) : 0,
+  );
   const monitorRetentionSweeper = createSweeper(
     () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
     MONITOR_RETENTION_SWEEP_MS,

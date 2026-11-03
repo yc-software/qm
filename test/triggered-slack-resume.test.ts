@@ -74,6 +74,8 @@ test("approving an ask from a Slack group thread resumes it when external Slack 
     text: "resume",
   } as TurnRequest);
   assert.equal(direct.status, "refused");
+  await b.runs.pruneFinished(Date.now() + 1, { deadline: Date.now() + 60_000, stop: () => false });
+  assert.deepEqual(await b.runs.list({ threadRef }), []);
   const ask = await askFrom(b, "group:G1", threadRef, {
     type: "slack",
     target: "G1:1700000000.000100",

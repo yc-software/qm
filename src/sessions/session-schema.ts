@@ -312,10 +312,19 @@ export const TENANT_BACKFILL: PgMigrationDefinition = {
   ],
 };
 
+const SESSION_FACTS: PgMigrationDefinition = {
+  id: "sessions/store/0051-session-facts",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS slack_binding JSONB, ADD COLUMN IF NOT EXISTS runtime JSONB`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,
   TENANT_BACKFILL,
+  SESSION_FACTS,
 ];

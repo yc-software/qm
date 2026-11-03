@@ -324,15 +324,11 @@ export function createSessionMethods(
     const idleChildren = sessions.filter(
       (s) => s.parentSessionId && !workingThreadRefs.has(s.threadRef) && !waiting.has(s.id),
     );
-    const [latestRuns, sessionGoals] = await Promise.all([
-      deps.runs.latestForThreads([...working, ...idleChildren].map((s) => s.threadRef)),
+    const [failedChildren, sessionGoals, currentRuns] = await Promise.all([
+      deps.sessions.endedInFailure(idleChildren.map((s) => s.id)),
       deps.sessions.goals(working.map((s) => s.id)),
+      deps.runs.inFlightForThreads(working.map((s) => s.threadRef)),
     ]);
-    const failedChildren = new Set<string>();
-    for (const s of idleChildren) {
-      const run = latestRuns.get(s.threadRef);
-      if (run?.status === "failed" || run?.result?.status === "failed") failedChildren.add(s.id);
-    }
     const goals = new Map<
       string,
       { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> }
@@ -340,7 +336,7 @@ export function createSessionMethods(
     for (const s of working) {
       const goal = openGoal(sessionGoals.get(s.id));
       if (!goal) continue;
-      const runningSince = latestRuns.get(s.threadRef)?.startedAt ?? undefined;
+      const runningSince = currentRuns.get(s.threadRef)?.startedAt ?? undefined;
       if (goal.status === "active")
         goals.set(s.id, {
           objective: goal.objective,
@@ -350,7 +346,7 @@ export function createSessionMethods(
         });
     }
     const childRuns = working.flatMap((s) => {
-      const run = s.parentSessionId ? latestRuns.get(s.threadRef) : undefined;
+      const run = s.parentSessionId ? currentRuns.get(s.threadRef) : undefined;
       return run ? [{ id: s.id, run }] : [];
     });
     const purposes = childRuns.length
@@ -447,7 +443,7 @@ export function createSessionMethods(
       if (!found) return null;
       const session = { ...found, canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
-      const [initialRead, pinRecords, goals, latestRuns] = await Promise.all([
+      const [initialRead, pinRecords, goals] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
           limit,
           beforeSeq: window?.beforeSeq,
@@ -455,10 +451,9 @@ export function createSessionMethods(
         }),
         deps.sessions.listPins(sessionId),
         deps.sessions.goals([sessionId]),
-        window?.beforeSeq === undefined ? deps.runs.latestForThreads([found.threadRef]) : undefined,
       ]);
       const goal = openGoal(goals.get(sessionId));
-      const runtime = latestRuns?.get(found.threadRef)?.result?.runtime;
+      const runtime = window?.beforeSeq === undefined ? found.runtime : undefined;
       let read = initialRead;
       let visible = read.entries;
       while (limit !== undefined && read.earlier > 0 && !coversTailWindow(visible, window!.tailTurns!)) {

@@ -179,7 +179,7 @@ for (const backend of ["memory", "postgres"] as const) {
         const batch = await runs.latestForThreads([...ids, "missing", ids[0]!], { excludePrivateMessages });
         assert.equal(batch.size, 2);
         for (const id of ids)
-          assert.deepEqual(batch.get(id), await runs.latestForThread(id, { excludePrivateMessages }));
+          assert.equal(batch.get(id)?.request.privateSessionMessage, excludePrivateMessages ? undefined : true);
       }
       assert.deepEqual(await runs.latestForThreads([]), new Map());
     } finally {

@@ -374,12 +374,22 @@ END $base_schema$`,
         }),
       );
     },
-    async latestForThread(threadRef, opts) {
+    async inFlightForThreads(threadRefs) {
+      if (!threadRefs.length) return new Map();
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true') ORDER BY created_at DESC, seq DESC LIMIT 1",
-        [threadRef, Boolean(opts?.excludePrivateMessages)],
+        `SELECT current.* FROM unnest($1::text[]) AS threads(id)
+         CROSS JOIN LATERAL (
+           SELECT * FROM runs WHERE session_id = threads.id AND status IN ('pending', 'running')
+           ORDER BY status = 'running' DESC, created_at DESC, seq DESC LIMIT 1
+         ) current`,
+        [[...new Set(threadRefs)]],
       );
-      return rows[0] ? rowToRun(rows[0]) : null;
+      return new Map(
+        rows.map((row) => {
+          const run = rowToRun(row);
+          return [run.sessionId, run];
+        }),
+      );
     },
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await q(

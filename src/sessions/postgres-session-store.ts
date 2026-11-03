@@ -27,6 +27,7 @@ import type {
   SessionOriginFilter,
   SessionPage,
   SessionRef,
+  SessionFactsCursor,
   SessionStore,
   SessionSummary,
   SpendRow,
@@ -101,6 +102,8 @@ export function rowToSession(r: Record<string, unknown>): Session {
     ...(r.parent_session_id != null ? { parentSessionId: r.parent_session_id as string } : {}),
     ...(r.origin != null ? { origin: r.origin as SessionOrigin } : {}),
     ...(r.spawn_meta != null ? { spawnMeta: JSON.parse(r.spawn_meta as string) as Session["spawnMeta"] } : {}),
+    ...(r.slack_binding != null ? { slackBinding: r.slack_binding as Session["slackBinding"] } : {}),
+    ...(r.runtime != null ? { runtime: r.runtime as Session["runtime"] } : {}),
   };
 }
 
@@ -164,6 +167,7 @@ function rowToEntry(r: Record<string, unknown>): SessionEntry {
 const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ts.scope_id AS scope_label, ${msOf("i.created_at")} AS created_at`;
 const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
 const TENANT = "qm_tenant_id()";
+const SESSION_FACTS_CURSOR = "session_facts_backfill";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
@@ -504,7 +508,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   };
 
   return {
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools): Promise<Session> {
+    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools, facts): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
         const s = rowToSession(row);
         if (channelName && s.channelName !== channelName) {
@@ -514,6 +518,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         if (surface && !s.surface) {
           await q("UPDATE sessions SET surface = $2 WHERE id = $1", [s.id, surface]);
           s.surface = surface;
+        }
+        if (facts?.slackBinding && !s.slackBinding) {
+          await q("UPDATE sessions SET slack_binding = $2::jsonb WHERE id = $1 AND slack_binding IS NULL", [
+            s.id,
+            JSON.stringify(facts.slackBinding),
+          ]);
+          s.slackBinding = facts.slackBinding;
+        }
+        if (facts?.context && JSON.stringify(s.spawnMeta) !== JSON.stringify(facts.context)) {
+          await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [s.id, JSON.stringify(facts.context)]);
+          s.spawnMeta = facts.context;
         }
         return s;
       };
@@ -598,6 +613,58 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async setSpawnMeta(sessionId, meta): Promise<void> {
       await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [sessionId, JSON.stringify(meta)]);
+    },
+
+    async setRuntime(sessionId, runtime): Promise<void> {
+      await q("UPDATE sessions SET runtime = $2::jsonb WHERE id = $1", [sessionId, JSON.stringify(runtime)]);
+    },
+
+    async endedInFailure(sessionIds): Promise<Set<string>> {
+      if (!sessionIds.length) return new Set();
+      const rows = await q(
+        `SELECT ids.id FROM unnest($1::text[]) AS ids(id)
+         CROSS JOIN LATERAL (
+           SELECT kind FROM items WHERE tenant_id = ${TENANT} AND session_id = ids.id ORDER BY seq DESC LIMIT 1
+         ) last
+         WHERE last.kind = 'Error'`,
+        [[...new Set(sessionIds)]],
+      );
+      return new Set(rows.map((row) => row.id as string));
+    },
+
+    async sessionFactsCursor() {
+      const rows = await q("SELECT value FROM qm_settings WHERE key = $1", [SESSION_FACTS_CURSOR]);
+      return rows[0] ? (rows[0].value as SessionFactsCursor) : null;
+    },
+
+    async saveSessionFactsCursor(cursor): Promise<void> {
+      await q(
+        `INSERT INTO qm_settings(key, value, updated_at) VALUES ($1, $2::jsonb, now())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+        [SESSION_FACTS_CURSOR, JSON.stringify(cursor)],
+      );
+    },
+
+    async sessionsAfter(cursor, limit): Promise<Session[]> {
+      const rows = await q(
+        `SELECT * FROM sessions WHERE (created_at, id) > ($1, $2) ORDER BY created_at, id LIMIT $3`,
+        [cursor?.createdAt ?? -1, cursor?.id ?? "", limit],
+      );
+      return rows.map(rowToSession);
+    },
+
+    async fillFacts(sessionId, facts): Promise<void> {
+      await q(
+        `UPDATE sessions SET slack_binding = COALESCE(slack_binding, $2::jsonb), runtime = COALESCE(runtime, $3::jsonb),
+           spawn_meta = COALESCE(spawn_meta, $4)
+         WHERE id = $1`,
+        [
+          sessionId,
+          facts.slackBinding ? JSON.stringify(facts.slackBinding) : null,
+          facts.runtime ? JSON.stringify(facts.runtime) : null,
+          facts.spawnMeta ? JSON.stringify(facts.spawnMeta) : null,
+        ],
+      );
     },
 
     async childrenOf(parentSessionId): Promise<Session[]> {

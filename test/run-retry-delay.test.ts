@@ -172,8 +172,11 @@ test(
         await runtime.runs.enqueue({ sessionId, request: { ...request, privateSessionMessage: true } })
       ).run;
       await pool.query("UPDATE runs SET created_at = 1 WHERE session_id = $1", [sessionId]);
-      assert.equal((await runtime.runs.latestForThread(sessionId))?.id, privateRun.id);
-      assert.equal((await runtime.runs.latestForThread(sessionId, { excludePrivateMessages: true }))?.id, publicRun.id);
+      assert.equal((await (await runtime.runs.latestForThreads([sessionId])).get(sessionId))?.id, privateRun.id);
+      assert.equal(
+        (await (await runtime.runs.latestForThreads([sessionId], { excludePrivateMessages: true })).get(sessionId))?.id,
+        publicRun.id,
+      );
       const client = await pool.connect();
       try {
         await client.query("SET enable_seqscan = off");

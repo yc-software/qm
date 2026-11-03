@@ -430,6 +430,18 @@ interface AddParticipantOptions {
   includeHistory?: boolean;
 }
 
+export interface SessionFacts {
+  slackBinding?: Session["slackBinding"];
+  context?: SpawnMeta;
+}
+
+export interface SessionFactsFill extends Pick<SessionFacts, "slackBinding"> {
+  runtime?: Session["runtime"];
+  spawnMeta?: SpawnMeta;
+}
+
+export type SessionFactsCursor = { createdAt: number; id: string } | "done";
+
 export interface SessionStore {
   getOrCreateByThread(
     threadRef: string,
@@ -438,6 +450,7 @@ export interface SessionStore {
     channelName?: string,
     surface?: string,
     clientTools?: Session["clientTools"],
+    facts?: SessionFacts,
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
   get(sessionId: string): Promise<Session | null>;
@@ -445,6 +458,12 @@ export interface SessionStore {
   updateTitle(sessionId: string, title: string): Promise<void>;
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
+  setRuntime(sessionId: string, runtime: NonNullable<Session["runtime"]>): Promise<void>;
+  endedInFailure(sessionIds: readonly string[]): Promise<Set<string>>;
+  sessionFactsCursor(): Promise<SessionFactsCursor | null>;
+  saveSessionFactsCursor(cursor: SessionFactsCursor): Promise<void>;
+  sessionsAfter(cursor: Exclude<SessionFactsCursor, "done"> | null, limit: number): Promise<Session[]>;
+  fillFacts(sessionId: string, facts: SessionFactsFill): Promise<void>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
   sideChatsOf(sessionId: string): Promise<Session[]>;
   expandSideChat(sessionId: string): Promise<void>;

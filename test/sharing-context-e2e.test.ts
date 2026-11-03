@@ -139,7 +139,7 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "test-ingress-secret" });
   await b.file("personal:U1", "notes.txt", "DELEGATED_PERSONAL_FILE");
   await b.turn("inspect my personal notes", true);
-  const parent = await b.runs.latestForThread("C1:shared-test");
+  const parent = await (await b.runs.latestForThreads(["C1:shared-test"])).get("C1:shared-test");
   assert.ok(parent);
   const parentSession = await b.sessions.getByThread(parent.sessionId);
   assert.ok(parentSession);

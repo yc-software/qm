@@ -1640,8 +1640,11 @@ test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both stee
     const privateRun = (
       await runs.enqueue({ sessionId: thread, request: { ...turn(unsafe), privateSessionMessage: true } })
     ).run;
-    assert.equal((await runs.latestForThread(thread))?.id, privateRun.id);
-    assert.equal((await runs.latestForThread(thread, { excludePrivateMessages: true }))?.id, first.id);
+    assert.equal((await (await runs.latestForThreads([thread])).get(thread))?.id, privateRun.id);
+    assert.equal(
+      (await (await runs.latestForThreads([thread], { excludePrivateMessages: true })).get(thread))?.id,
+      first.id,
+    );
     assert.equal(await runs.editPendingText(first.id, `edit ${unsafe}`, unsafe), true);
     assert.equal(await runs.editPendingText(first.id, "stale", unsafe), false);
     assert.equal((await runs.get(first.id))?.request.displayText, `edit ${safe}`);

@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
-import type { ScopeId, Session, SessionEntry, SpawnMeta } from "../types.ts";
+import type { ScopeId, Session, SessionEntry, SpawnMeta, TurnOrigin } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
@@ -76,33 +76,80 @@ export async function delegatedAuthorizationOrigin(
       source.sessionId === sender.threadRef;
     if (!delegated && !continued && !started) return;
     const parent = source.request;
-    const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
-    if (
-      parent.actor.id !== request.actor.id ||
-      parent.actor.type !== "internal" ||
-      parent.readOnly ||
-      parent.privateSessionMessage ||
-      parent.swarm ||
-      sender.scopeId !== child.scopeId ||
-      child.scopeId !== conversationScope(parent.conversation, parent.actor.id) ||
-      child.scopeId !== conversationScope(current.conversation, current.actor.id) ||
-      current.conversation.audience.some((person) => !audience.has(person.id))
-    )
-      return;
-    const internal =
-      parent.conversation.audience.every((person) => person.type === "internal") &&
-      (parent.conversation.kind === "dm" ||
-        (!!parent.conversation.publishMembers?.length &&
-          parent.conversation.publishMembers.every((person) => person.type === "internal")));
-    if (
-      !isSessionTurn(parent) &&
-      internal &&
-      (parent.origin.kind === "human" ||
-        (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
-    )
-      return parent.origin;
+    if (!authorityReaches(parent, request, current, sender, child)) return;
+    if (!isSessionTurn(parent)) return humanAuthored(parent) ? parent.origin : undefined;
+    let subagent: Session | undefined;
+    if (delegated) subagent = child;
+    else if (continued) subagent = sender;
+    const stamped = subagent?.spawnMeta;
+    if (stamped?.authority) {
+      const stamp = { actor: stamped.actor, conversation: stamped.conversation, origin: stamped.authority };
+      return authorityReaches(stamp, request, current, sender, child) && humanAuthored(stamp)
+        ? stamp.origin
+        : undefined;
+    }
     current = parent;
   }
+}
+
+function authorityReaches(
+  parent: Pick<OrchestratorInput, "actor" | "conversation" | "readOnly" | "privateSessionMessage" | "swarm">,
+  request: OrchestratorInput,
+  current: OrchestratorInput,
+  sender: Session,
+  child: Session,
+): boolean {
+  const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
+  return !(
+    parent.actor.id !== request.actor.id ||
+    parent.actor.type !== "internal" ||
+    parent.readOnly ||
+    parent.privateSessionMessage ||
+    parent.swarm ||
+    sender.scopeId !== child.scopeId ||
+    child.scopeId !== conversationScope(parent.conversation, parent.actor.id) ||
+    child.scopeId !== conversationScope(current.conversation, current.actor.id) ||
+    current.conversation.audience.some((person) => !audience.has(person.id))
+  );
+}
+
+function humanAuthored(parent: Pick<OrchestratorInput, "conversation" | "origin">): boolean {
+  const internal =
+    parent.conversation.audience.every((person) => person.type === "internal") &&
+    (parent.conversation.kind === "dm" ||
+      (!!parent.conversation.publishMembers?.length &&
+        parent.conversation.publishMembers.every((person) => person.type === "internal")));
+  return (
+    internal &&
+    (parent.origin.kind === "human" ||
+      (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
+  );
+}
+
+export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
+  const origin: TurnOrigin =
+    input.origin.kind === "automation"
+      ? { kind: "automation", ...(input.origin.destination ? { destination: input.origin.destination } : {}) }
+      : sessionTurnOrigin(input.origin, "");
+  return {
+    origin,
+    ...(input.surfaceTools ? { surfaceTools: true } : {}),
+    ...(input.deliveryCandidates ? { deliveryCandidates: input.deliveryCandidates } : {}),
+    ...(input.unattendedGrants ? { unattendedGrants: [...input.unattendedGrants] } : {}),
+    ...(input.slackSource ? { slackSource: input.slackSource } : {}),
+    ...(input.externalSlack ? { externalSlack: input.externalSlack } : {}),
+    ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
+    ...(input.sessionParticipantIds ? { sessionParticipantIds: input.sessionParticipantIds } : {}),
+    surface: input.surface ?? "web",
+    conversation: input.conversation,
+    actor: input.actor,
+    ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
+    ...(input.timezone ? { timezone: input.timezone } : {}),
+    ...(input.readOnly ? { readOnly: true } : {}),
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+    ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
+  };
 }
 
 export const SUBAGENT_TREE_RUN_CAP = 50;
@@ -190,6 +237,7 @@ interface SessionSyscallBinding {
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
   liveTurn?: boolean;
+  authority?: TurnOrigin;
   request: Pick<
     OrchestratorInput,
     | "cancel"
@@ -247,7 +295,7 @@ export interface SessionSyscallDeps {
     | "visibleEntries"
     | "getForParticipant"
   >;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey" | "get" | "withdraw">;
+  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw">;
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
   treeRunCap?: number;
@@ -700,6 +748,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 ...(input.model ? { model: input.model } : {}),
                 ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
                 ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
+                ...(binding.authority ? { authority: binding.authority } : {}),
               };
               if (!existing?.spawnMeta) {
                 await deps.sessions.setParentSession(child.id, binding.session.id);
@@ -756,8 +805,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 return { ok: false, message: "you are not a participant in that session." };
               if (deps.authorize && !(await deps.authorize(target, caller.actor.id)))
                 return { ok: false, message: "you no longer have access to the target session" };
-              const previous = await deps.runs.latestForThread(target.threadRef, { excludePrivateMessages: true });
-              const meta = previous?.request ?? target.spawnMeta;
+              const meta = target.spawnMeta;
               if (!meta) return { ok: false, message: "the target has no verified runtime context yet" };
               const privateChild = isSubagentThreadRef(target.threadRef);
               const privateMessage = binding.request.privateSessionMessage === true || !privateChild;
@@ -1037,8 +1085,7 @@ export interface SubagentMailDeps {
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
   sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> &
-    Partial<Pick<RunStore, "latestForThread" | "get">>;
+  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }
@@ -1055,12 +1102,11 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const parent = await deps.sessions.get(child.parentSessionId);
   if (!parent) return true;
   if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
-  const latestParent = await deps.runs.latestForThread?.(parent.threadRef, { excludePrivateMessages: true });
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
   const initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
   if (run.request.delegatingRunId && !initiatingRun) throw new Error("the delegation's originating run is unavailable");
   const initiatingContext = initiatingRun?.request ?? child.spawnMeta;
-  const currentContext = latestParent?.request ?? parent.spawnMeta;
+  const currentContext = parent.spawnMeta;
   const originalParent = parent.threadRef === initiatingContext.conversation.threadRef;
   if (!originalParent && !currentContext) throw new Error("the current parent has no verified runtime context yet");
   const meta = originalParent

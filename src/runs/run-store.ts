@@ -130,7 +130,7 @@ export interface RunStore {
     threadRefs: readonly string[],
     opts?: { excludePrivateMessages?: boolean },
   ): Promise<Map<string, Run>>;
-  latestForThread(threadRef: string, opts?: { excludePrivateMessages?: boolean }): Promise<Run | null>;
+  inFlightForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
   pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
   terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;

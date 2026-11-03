@@ -15,7 +15,12 @@ import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
-import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
+import {
+  requiresDelegation,
+  delegatedAuthorizationOrigin,
+  isSubagentThreadRef,
+  sessionContextOf,
+} from "../sessions/session-syscalls.ts";
 import {
   documentText,
   type DocumentInput,
@@ -1199,6 +1204,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         conversation.channelName,
         input.surface,
         desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
+        {
+          ...(input.slackSource ? { slackBinding: input.slackSource } : {}),
+          ...(sessionTurn || input.privateSessionMessage || input.swarm || isSubagentThreadRef(conversation.threadRef)
+            ? {}
+            : { context: sessionContextOf(input) }),
+        },
       );
       screenSession.id = session.id;
       const origin = await originOf(session);
@@ -2599,6 +2610,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   scopeId: scopeId as ScopeId,
                   orgScopeId: resolution.orgScopeId,
                   liveTurn,
+                  ...(liveAuthorTurn ? { authority: delegatedOrigin ?? input.origin } : {}),
                   request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
                 }),
               }
@@ -3758,6 +3770,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
+        if (turnRuntime && JSON.stringify(turnRuntime) !== JSON.stringify(session.runtime))
+          await deps.sessions.setRuntime(session.id, turnRuntime);
         await fallbackTitleWrite;
 
         tailOwnsCleanup = true;
