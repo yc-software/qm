@@ -114,7 +114,6 @@ export interface PgPool {
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
   query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
   registerMigration(migration: PgMigrationDefinition): void;
-  migrate(migration: PgMigrationDefinition): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -275,14 +274,6 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
   try {
     const pending = await pendingPgMigrations(client, migrations);
     if (!pending.length) return;
-    const creator = await client.query<{ login: string; creates: boolean }>(
-      "SELECT current_user AS login, has_schema_privilege(current_schema(), 'CREATE') AS creates",
-    );
-    if (!creator.rows[0]?.creates) {
-      throw new Error(
-        `pg-pool: ${creator.rows[0]?.login} cannot apply pending migrations ${pending.map((migration) => migration.id).join(", ")}; run migrations as the database owner first`,
-      );
-    }
     await lockSchema(client, "qm:schema-migrations");
     locked = true;
     await client.query(
@@ -452,37 +443,19 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
 export function createPgPool(connectionString: string, definitions: readonly PgMigrationDefinition[] = []): PgPool {
   const migrations = definitions.map(definePgMigration);
   for (const migration of migrations) registerPgMigration(connectionString, migration);
-  let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
   let closed = false;
   const queryUrl = pooledDatabaseUrl(connectionString);
-  async function withMigrationPool<T>(fn: (pool: Pool) => Promise<T>): Promise<T> {
-    return migrationQueue(connectionString, async () => {
-      const instance = await retainPool(connectionString, "migration");
-      try {
-        return await fn(instance);
-      } finally {
-        await releasePool(connectionString, instance, "migration");
-      }
-    });
-  }
-  async function ready(): Promise<void> {
-    if (closed) throw new Error("Postgres store is closed");
-    await (readyP ??= withMigrationPool((instance) => applyPgMigrations(instance, migrations)).catch((error) => {
-      readyP = null;
-      throw error;
-    }));
+  function ready(): void {
     if (closed) throw new Error("Postgres store is closed");
   }
   async function pool(): Promise<Pool> {
-    await ready();
-    if (closed) throw new Error("Postgres store is closed");
+    ready();
     return (queryPoolP ??= retainPool(queryUrl, "query"));
   }
   async function sessionPool(): Promise<Pool> {
-    await ready();
-    if (closed) throw new Error("Postgres store is closed");
+    ready();
     return (sessionPoolP ??= retainPool(connectionString, "session"));
   }
   async function query(
@@ -526,21 +499,13 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
   async function close(): Promise<void> {
     if (closed) return;
     closed = true;
-    await readyP?.catch(() => {});
     await Promise.all([
       queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
       sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),
     ]);
   }
-  async function migrate(definition: PgMigrationDefinition): Promise<void> {
-    const migration = definePgMigration(definition);
-    registerPgMigration(connectionString, migration);
-    if (closed) throw new Error("Postgres store is closed");
-    await ready();
-    await withMigrationPool((instance) => applyPgMigrations(instance, [migration]));
-  }
   function registerMigration(definition: PgMigrationDefinition): void {
     registerPgMigration(connectionString, definePgMigration(definition));
   }
-  return { pool, sessionPool, q, query, registerMigration, migrate, close };
+  return { pool, sessionPool, q, query, registerMigration, close };
 }

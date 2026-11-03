@@ -5,7 +5,8 @@ import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-gr
 import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "../../src/admin/admin-grant-store.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
-import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
+import pg from "pg";
+import { applyPgMigrations, createPgPool, registeredPgMigrations, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
@@ -63,6 +64,21 @@ function databaseUrl(name: string, variable: "DATABASE_URL" | "DATABASE_OWNER_UR
   return url.toString();
 }
 
+export function ownerUrlOf(databaseUrl: string): string {
+  const owner = baseDatabaseUrl("DATABASE_OWNER_URL");
+  owner.pathname = new URL(databaseUrl).pathname;
+  return owner.toString();
+}
+
+export async function migrateTestDatabase(databaseUrl = baseDatabaseUrl().toString()): Promise<void> {
+  const owner = new pg.Pool({ connectionString: ownerUrlOf(databaseUrl), max: 1 });
+  try {
+    await applyPgMigrations(owner, registeredPgMigrations(databaseUrl));
+  } finally {
+    await owner.end();
+  }
+}
+
 export function testDatabaseUrl(): string {
   return databaseUrl(createDatabaseSync({}));
 }
@@ -88,7 +104,20 @@ function sharedDatabase(): NonNullable<typeof shared> {
 }
 
 export function testMap<T>(indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> {
-  return sharedDatabase().maps.map<T>(`t_${randomBytes(8).toString("hex")}`, indexedFields);
+  const { url, maps } = sharedDatabase();
+  const map = maps.map<T>(`t_${randomBytes(8).toString("hex")}`, indexedFields);
+  const migrated = migrateTestDatabase(url);
+  migrated.catch(() => {});
+  return new Proxy(map, {
+    get(target, key) {
+      const value: unknown = Reflect.get(target, key);
+      if (typeof value !== "function") return value;
+      return async (...args: unknown[]) => {
+        await migrated;
+        return Reflect.apply(value, target, args);
+      };
+    },
+  });
 }
 
 export function testPgPool(): PgPool {
