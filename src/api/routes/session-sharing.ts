@@ -1,3 +1,4 @@
+import { withRowTenant } from "../tenant-ingress.ts";
 import { collectBytes } from "../../util/bytes.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -111,7 +112,13 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { share: { token: share.token, audience, createdAt: share.createdAt } });
 }
 
-async function readShare(ctx: ApiCtx): Promise<void> {
+function readShare(ctx: ApiCtx): Promise<void> {
+  return withRowTenant(ctx.req, ctx.res, ctx.deps.tenancy, { table: "session_shares", id: ctx.params.token! }, () =>
+    serveShare(ctx),
+  );
+}
+
+async function serveShare(ctx: ApiCtx): Promise<void> {
   const { deps, app, res, params, url } = ctx;
   res.setHeader("Cache-Control", "no-store");
   const share = await deps.sessionShares?.get(params.token!);
@@ -152,8 +159,15 @@ export const sessionSharingRoutes: ReadonlyArray<Route> = [
   ...(["shared-sessions", "public-shares"] as const).flatMap((prefix): Route[] => {
     const actor = prefix === "shared-sessions" ? ("query.viewer" as const) : undefined;
     return [
-      { method: "GET", path: `/v1/${prefix}/:token`, actor, auth: "source", handle: readShare },
-      { method: "GET", path: `/v1/${prefix}/:token/files/:fileId`, actor, auth: "source", handle: readShare },
+      { method: "GET", path: `/v1/${prefix}/:token`, actor, auth: "source", tenant: "row", handle: readShare },
+      {
+        method: "GET",
+        path: `/v1/${prefix}/:token/files/:fileId`,
+        actor,
+        auth: "source",
+        tenant: "row",
+        handle: readShare,
+      },
     ];
   }),
 ];

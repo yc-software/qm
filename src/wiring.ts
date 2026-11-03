@@ -156,6 +156,8 @@ import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environ
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
+import { createTenancy, type Tenancy } from "./tenants/tenancy.ts";
+import { configureTenantSettings } from "./tenants/settings.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
@@ -461,6 +463,7 @@ export interface BuiltApp {
   resolveClient: OAuthClientResolver;
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
+  tenancy: Tenancy;
   secretDrops: SecretDropStore;
   modelGatewayTransport?: ModelGatewayTransportConfig;
   resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
@@ -1292,6 +1295,8 @@ export function buildApp(
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
   const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
+  const tenancy = createTenancy(pgArtifactMap.pool);
+  configureTenantSettings(tenancy.settings);
   const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
 
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
@@ -2975,6 +2980,7 @@ export function buildApp(
     resolveClient,
     consentLinks,
     oauthFlows,
+    tenancy,
     secretDrops,
     modelGatewayTransport: gatewayTransport,
     budget,
@@ -3107,6 +3113,7 @@ export function serverDeps(
     resolveClient: built.resolveClient,
     consentLinks: built.consentLinks,
     oauthFlows: built.oauthFlows,
+    tenancy: built.tenancy,
     secretDrops: built.secretDrops,
     ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
