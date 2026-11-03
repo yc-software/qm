@@ -94,6 +94,20 @@
 .seat-meta {
   margin-bottom: 6px;
 }
+.seat-step-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.seat-left {
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.seat-left.soon {
+  color: var(--destructive);
+}
 .seat-fold {
   border-left: 2px solid var(--border);
   padding-left: 10px;

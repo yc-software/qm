@@ -1427,6 +1427,11 @@ export function buildApp(
     );
   const seat = createSeat(databaseUrl, {
     enabled: (actorId) => featureFlags.enabled("agent_seat", scopeId("personal", actorId)),
+    signals: runSignals,
+    runLive: async (runId) => {
+      const run = await runStore.runs.get(runId);
+      return Boolean(run && !isTerminal(run.status));
+    },
     ask: seatAsk({
       modelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
       providerKeys: resolveCompanyProviderKeys,

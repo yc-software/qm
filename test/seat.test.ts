@@ -5,7 +5,7 @@ import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { createSeat, SEAT_OFF, SEAT_PERSONAL_ONLY, type Seat, type SeatOptions } from "../src/seat/seat.ts";
 import { seatModel } from "../src/model/seat-model.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../src/model/request-context.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const context: Context = {
@@ -16,19 +16,25 @@ const context: Context = {
   ],
 };
 
+const ended = new Set<string>();
+
 function seats(url: string, opts: Partial<SeatOptions> = {}): Seat {
   return createSeat(url, {
     enabled: async (actorId) => actorId !== "off",
     ask: async () => ({ model: "m", content: [{ type: "text" as const, text: "draft" }], stopReason: "stop" }),
-    pollMs: 20,
+    signals: createPostgresRunSignalStore(url),
+    runLive: async (runId) => !ended.has(runId),
     ...opts,
   });
 }
 
-function play(seat: Seat, actorId: string, opts: { scopeId?: string; signal?: AbortSignal } = {}) {
+function play(seat: Seat, actorId: string, opts: { scopeId?: string; signal?: AbortSignal; runId?: string } = {}) {
   return withModelRequestContext(
     { actorId, scopeId: opts.scopeId ?? `personal:${actorId}`, sessionId: `session-${actorId}` },
-    () => seat.streamSimple(seatModel(), context, opts.signal ? { signal: opts.signal } : {}).result(),
+    () =>
+      seat
+        .streamSimple(seatModel(), context, opts.signal ? { signal: opts.signal } : {}, opts.runId ?? `run-${actorId}`)
+        .result(),
   );
 }
 
@@ -108,6 +114,7 @@ test("moves must be text or tool calls with object input", async () => {
     [],
     [{ type: "text", text: "  " }],
     [{ type: "tool_use", name: "execute", input: "ls" }],
+    [{ type: "tool_use", name: "execute", input: ["ls"] }],
     "hi",
   ])
     await assert.rejects(seat.move("alice", id, content), { code: "bad_request" });
@@ -138,17 +145,6 @@ test("cancelling the turn withdraws the step", async () => {
   await assert.rejects(seat.move("alice", id, [{ type: "text", text: "late" }]), { code: "step_closed" });
 });
 
-test("turning the feature off ends a waiting model call instead of leaving the turn stuck", async () => {
-  let on = true;
-  const seat = seats(testDatabaseUrl(), { enabled: async () => on, leaseMs: 300 });
-  const reply = play(seat, "alice");
-  await waitForStep(seat, "alice");
-  on = false;
-  const message = await reply;
-  assert.equal(message.stopReason, "error");
-  assert.equal(message.errorMessage, SEAT_OFF);
-});
-
 test("an unanswered step times out with an error the turn can show", async () => {
   const seat = seats(testDatabaseUrl(), { timeoutMs: 200 });
   const message = await play(seat, "alice");
@@ -157,21 +153,29 @@ test("an unanswered step times out with an error the turn can show", async () =>
   assert.deepEqual(await seat.pending("alice"), []);
 });
 
-test("a step whose holder stopped renewing is no longer offered or answerable", async () => {
+test("a step whose run ended is no longer offered or answerable, and a retried call replaces it", async () => {
   const url = testDatabaseUrl();
-  const seat = seats(url);
-  const controller = new AbortController();
-  const reply = play(seat, "alice", { signal: controller.signal });
-  const id = await waitForStep(seat, "alice");
-  const db = createPgPool(url);
+  const crashed = seats(url);
+  const first = new AbortController();
+  const stale = play(crashed, "alice", { signal: first.signal, runId: "run-retried" });
+  const staleId = await waitForStep(crashed, "alice");
+  const retry = seats(url);
+  const second = new AbortController();
+  const fresh = play(retry, "alice", { signal: second.signal, runId: "run-retried" });
+  let freshId = staleId;
+  while (freshId === staleId) freshId = (await retry.pending("alice"))[0]?.id ?? staleId;
+  assert.deepEqual(
+    (await retry.pending("alice")).map((step) => step.id),
+    [freshId],
+  );
+  ended.add("run-retried");
   try {
-    await db.query("UPDATE seat_steps SET held_until = now() - interval '1 second' WHERE id = $1", [id]);
-    assert.deepEqual(await seat.pending("alice"), []);
-    await assert.rejects(seat.move("alice", id, [{ type: "text", text: "late" }]), { code: "step_closed" });
+    assert.deepEqual(await retry.pending("alice"), []);
+    await assert.rejects(retry.move("alice", freshId, [{ type: "text", text: "late" }]), { code: "step_closed" });
   } finally {
-    await db.close();
-    controller.abort();
-    await reply;
+    first.abort();
+    second.abort();
+    await Promise.all([stale, fresh]);
   }
 });
 

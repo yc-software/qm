@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { setTimeout as delay } from "node:timers/promises";
 import type {
   AnthropicOptions,
   Api,
@@ -22,6 +21,8 @@ import {
 } from "../model/request-context.ts";
 import { SEAT_MODEL_ID } from "../model/seat-model.ts";
 import { scopeId } from "../types.ts";
+import { isObj } from "../util/objects.ts";
+import { waitForClientResult, type RunSignalStore } from "../runs/run-signal-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 
 type SeatBlock = { type: "text"; text: string } | { type: "tool_use"; name: string; input: Record<string, unknown> };
@@ -30,6 +31,7 @@ interface SeatStepSummary {
   id: string;
   sessionId: string;
   createdAt: number;
+  expiresAt: number;
 }
 
 interface SeatStep extends SeatStepSummary {
@@ -54,7 +56,12 @@ export class SeatError extends Error {
 
 export interface Seat {
   enabled(actorId: string): Promise<boolean>;
-  streamSimple(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream;
+  streamSimple(
+    model: Model<Api>,
+    context: Context,
+    options: SimpleStreamOptions | undefined,
+    runId: string | undefined,
+  ): AssistantMessageEventStream;
   pending(ownerId: string): Promise<SeatStepSummary[]>;
   step(ownerId: string, id: string): Promise<SeatStep | null>;
   move(ownerId: string, id: string, content: unknown): Promise<void>;
@@ -64,9 +71,9 @@ export interface Seat {
 export interface SeatOptions {
   enabled(actorId: string): Promise<boolean>;
   ask(request: Record<string, unknown>, signal: AbortSignal): Promise<SeatDraft>;
+  signals: RunSignalStore;
+  runLive(runId: string): Promise<boolean>;
   timeoutMs?: number;
-  pollMs?: number;
-  leaseMs?: number;
 }
 
 export const SEAT_OFF =
@@ -74,45 +81,35 @@ export const SEAT_OFF =
 export const SEAT_PERSONAL_ONLY = "You (Agent Seat) only plays in your own personal conversations.";
 const SEAT_CLOSED = "This step is no longer waiting for a move. It was answered, cancelled, or timed out.";
 const TIMEOUT_MS = 30 * 60_000;
-const POLL_MS = 1_000;
-const LEASE_MS = 60_000;
-const MAX_BLOCKS = 64;
-const ASK_MAX_TOKENS = 16_000;
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS seat_steps(
     id         TEXT        PRIMARY KEY,
     owner_id   TEXT        NOT NULL,
     session_id TEXT        NOT NULL,
+    run_id     TEXT        NOT NULL,
     request    TEXT        NOT NULL,
-    move       TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    held_until TIMESTAMPTZ NOT NULL
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )`,
   `CREATE INDEX IF NOT EXISTS seat_steps_owner ON seat_steps (owner_id, created_at)`,
-  `CREATE INDEX IF NOT EXISTS seat_steps_held_until ON seat_steps (held_until)`,
+  `CREATE INDEX IF NOT EXISTS seat_steps_run ON seat_steps (run_id)`,
 ];
 
-const OPEN = "move IS NULL AND held_until > now()";
-const LEASED = "now() + $2 * interval '1 millisecond'";
 const CREATED_MS = "(extract(epoch FROM created_at) * 1000)::bigint AS created_at";
 
-function plainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function parseSeatMove(content: unknown): SeatBlock[] {
-  if (!Array.isArray(content) || content.length === 0 || content.length > MAX_BLOCKS)
-    throw new SeatError("bad_request", `content must be a list of 1 to ${MAX_BLOCKS} blocks`);
+  if (!Array.isArray(content) || content.length === 0)
+    throw new SeatError("bad_request", "content must be a non-empty list of blocks");
   return content.map((block): SeatBlock => {
-    if (plainObject(block) && block.type === "text" && typeof block.text === "string" && block.text.trim())
+    if (isObj(block) && block.type === "text" && typeof block.text === "string" && block.text.trim())
       return { type: "text", text: block.text };
     if (
-      plainObject(block) &&
+      isObj(block) &&
       block.type === "tool_use" &&
       typeof block.name === "string" &&
       block.name.trim() &&
-      plainObject(block.input)
+      isObj(block.input) &&
+      !Array.isArray(block.input)
     )
       return { type: "tool_use", name: block.name.trim(), input: block.input };
     throw new SeatError(
@@ -178,12 +175,16 @@ function seatDraftContent(message: Pick<AssistantMessage, "content">): SeatBlock
   });
 }
 
-export function seatRuntime(runtime: ModelRuntime, seat: Pick<Seat, "streamSimple"> | undefined): ModelRuntime {
+export function seatRuntime(
+  runtime: ModelRuntime,
+  seat: Pick<Seat, "streamSimple"> | undefined,
+  runId: string | undefined,
+): ModelRuntime {
   if (!seat) return runtime;
   const streamSimple = runtime.streamSimple.bind(runtime);
   runtime.streamSimple = ((model: Model<Api>, context: Context, options?: SimpleStreamOptions) =>
     model.provider === SEAT_MODEL_ID
-      ? seat.streamSimple(model, context, options)
+      ? seat.streamSimple(model, context, options, runId)
       : streamSimple(model, context, options)) as typeof runtime.streamSimple;
   const hasConfiguredAuth = runtime.hasConfiguredAuth.bind(runtime);
   runtime.hasConfiguredAuth = (provider) => provider === SEAT_MODEL_ID || hasConfiguredAuth(provider);
@@ -215,9 +216,8 @@ export function seatAsk(deps: {
           { messages: [] },
           {
             signal,
-            maxTokens: ASK_MAX_TOKENS,
             maxRetries: 0,
-            onPayload: () => ({ ...body, model: model.id, max_tokens: ASK_MAX_TOKENS }),
+            onPayload: () => ({ ...body, model: model.id, max_tokens: model.maxTokens }),
           },
         ),
       )
@@ -233,66 +233,58 @@ export function seatAsk(deps: {
 export function createSeat(connectionString: string, opts: SeatOptions): Seat {
   const { q, query } = createPgPool(connectionString, [{ id: "seat/0001", statements: SCHEMA }]);
   const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
-  const pollMs = opts.pollMs ?? POLL_MS;
-  const leaseMs = opts.leaseMs ?? LEASE_MS;
 
-  const purge = () => query("DELETE FROM seat_steps WHERE held_until < now()");
-
-  async function hold(context: ModelRequestContext, request: unknown, signal: AbortSignal | undefined) {
+  async function hold(
+    context: ModelRequestContext,
+    runId: string | undefined,
+    request: unknown,
+    signal: AbortSignal | undefined,
+  ) {
     const { actorId, sessionId } = context;
-    if (!actorId || !sessionId || context.scopeId !== scopeId("personal", actorId)) throw new Error(SEAT_PERSONAL_ONLY);
+    if (!runId || !actorId || !sessionId || context.scopeId !== scopeId("personal", actorId))
+      throw new Error(SEAT_PERSONAL_ONLY);
     if (!(await opts.enabled(actorId))) throw new Error(SEAT_OFF);
     signal?.throwIfAborted();
     const id = randomUUID();
-    await purge();
-    await query(
-      `INSERT INTO seat_steps (id, owner_id, session_id, request, held_until)
-       VALUES ($1, $3, $4, $5, ${LEASED})`,
-      [id, leaseMs, actorId, sessionId, JSON.stringify(request)],
-    );
-    const deadline = Date.now() + timeoutMs;
-    let renewAt = Date.now() + leaseMs / 3;
-    let open = true;
-    const take = (move: unknown) => seatResponse(JSON.parse(move as string) as SeatBlock[]);
+    await query("DELETE FROM seat_steps WHERE run_id = $1", [runId]);
+    await query("INSERT INTO seat_steps (id, owner_id, session_id, run_id, request) VALUES ($1, $2, $3, $4, $5)", [
+      id,
+      actorId,
+      sessionId,
+      runId,
+      JSON.stringify(request),
+    ]);
     try {
-      for (;;) {
-        await delay(pollMs, undefined, signal ? { signal } : undefined);
-        const now = Date.now();
-        if (now >= deadline) {
-          open = false;
-          const [row] = await q("DELETE FROM seat_steps WHERE id = $1 RETURNING move", [id]);
-          if (typeof row?.move === "string") return take(row.move);
-          throw new Error(`No move was made at the Agent Seat within ${Math.round(timeoutMs / 60_000)} minutes.`);
-        }
-        const renew = now >= renewAt;
-        if (renew) {
-          renewAt = now + leaseMs / 3;
-          if (!(await opts.enabled(actorId))) throw new Error(SEAT_OFF);
-        }
-        const [row] = renew
-          ? await q(`UPDATE seat_steps SET held_until = ${LEASED} WHERE id = $1 RETURNING move`, [id, leaseMs])
-          : await q("SELECT move FROM seat_steps WHERE id = $1", [id]);
-        if (!row) {
-          open = false;
-          throw new Error("This Agent Seat step was removed before a move was made.");
-        }
-        if (typeof row.move === "string") return take(row.move);
-      }
+      const outcome = await waitForClientResult(opts.signals, runId, id, { timeoutMs, ...(signal ? { signal } : {}) });
+      if (outcome === "cancelled") throw new DOMException("The turn was cancelled", "AbortError");
+      if (outcome === "timeout")
+        throw new Error(`No move was made at the Agent Seat within ${Math.round(timeoutMs / 60_000)} minutes.`);
+      return seatResponse(outcome.structured as SeatBlock[]);
     } finally {
-      if (open) await query("DELETE FROM seat_steps WHERE id = $1", [id]).catch((e) => swallow("seat: close step", e));
+      await query("DELETE FROM seat_steps WHERE id = $1", [id]).catch((e) => swallow("seat: close step", e));
     }
   }
 
+  async function live(rows: Array<Record<string, unknown>>) {
+    const alive = await Promise.all(rows.map((row) => opts.runLive(row.run_id as string)));
+    const dead = rows.filter((_, index) => !alive[index]).map((row) => row.id);
+    if (dead.length) await query("DELETE FROM seat_steps WHERE id = ANY($1)", [dead]);
+    return rows.filter((_, index) => alive[index]);
+  }
+
   async function step(ownerId: string, id: string): Promise<SeatStep | null> {
-    const [row] = await q(
-      `SELECT id, session_id, request, ${CREATED_MS} FROM seat_steps WHERE id = $1 AND owner_id = $2 AND ${OPEN}`,
-      [id, ownerId],
+    const [row] = await live(
+      await q(`SELECT id, session_id, run_id, request, ${CREATED_MS} FROM seat_steps WHERE id = $1 AND owner_id = $2`, [
+        id,
+        ownerId,
+      ]),
     );
     if (!row) return null;
     return {
       id: row.id as string,
       sessionId: row.session_id as string,
       createdAt: Number(row.created_at),
+      expiresAt: Number(row.created_at) + timeoutMs,
       request: JSON.parse(row.request as string) as Record<string, unknown>,
     };
   }
@@ -304,12 +296,12 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
   return {
     enabled: opts.enabled,
 
-    streamSimple(model, context, options) {
+    streamSimple(model, context, options, runId) {
       const requestContext = { ...currentModelRequestContext() };
       const client = {
         messages: {
           create: (params: unknown, request?: { signal?: AbortSignal }) => ({
-            asResponse: () => hold(requestContext, params, request?.signal),
+            asResponse: () => hold(requestContext, runId, params, request?.signal),
           }),
         },
       };
@@ -323,15 +315,17 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
 
     async pending(ownerId) {
       await guard(ownerId);
-      await purge();
-      const rows = await q(
-        `SELECT id, session_id, ${CREATED_MS} FROM seat_steps WHERE owner_id = $1 AND ${OPEN} ORDER BY created_at, id`,
-        [ownerId],
+      const rows = await live(
+        await q(
+          `SELECT id, session_id, run_id, ${CREATED_MS} FROM seat_steps WHERE owner_id = $1 ORDER BY created_at, id`,
+          [ownerId],
+        ),
       );
       return rows.map((row) => ({
         id: row.id as string,
         sessionId: row.session_id as string,
         createdAt: Number(row.created_at),
+        expiresAt: Number(row.created_at) + timeoutMs,
       }));
     },
 
@@ -343,12 +337,13 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
     async move(ownerId, id, content) {
       await guard(ownerId);
       const blocks = parseSeatMove(content);
-      const result = await query(`UPDATE seat_steps SET move = $3 WHERE id = $1 AND owner_id = $2 AND ${OPEN}`, [
-        id,
-        ownerId,
-        JSON.stringify(blocks),
-      ]);
-      if (result.rowCount !== 1) throw new SeatError("step_closed", SEAT_CLOSED);
+      const [row] = await q("DELETE FROM seat_steps WHERE id = $1 AND owner_id = $2 RETURNING run_id", [id, ownerId]);
+      if (!row || !(await opts.runLive(row.run_id as string))) throw new SeatError("step_closed", SEAT_CLOSED);
+      await opts.signals.send(row.run_id as string, {
+        kind: "client_result",
+        callId: id,
+        result: { content: "seat move", structured: blocks },
+      });
     },
 
     async ask(ownerId, id, signal) {

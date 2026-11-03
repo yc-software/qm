@@ -25,6 +25,7 @@ export interface SeatStepSummary {
   sessionId: string;
   sessionTitle?: string;
   createdAt: number;
+  expiresAt: number;
 }
 
 export interface SeatStep extends SeatStepSummary {
@@ -211,4 +212,11 @@ export function ageLabel(createdAt: number, now: number): string {
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   return `${Math.floor(s / 3600)}h`;
+}
+
+export function leftLabel(expiresAt: number, now: number): string {
+  const s = Math.max(0, Math.floor((expiresAt - now) / 1000));
+  if (s < 60) return `${s}s left`;
+  if (s < 3600) return `${Math.floor(s / 60)}m left`;
+  return `${Math.floor(s / 3600)}h left`;
 }

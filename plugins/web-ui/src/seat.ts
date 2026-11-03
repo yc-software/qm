@@ -3,12 +3,14 @@ import { guard } from "lit/directives/guard.js";
 import { keyed } from "lit/directives/keyed.js";
 import { live } from "lit/directives/live.js";
 import "./seat.css";
+import { errMessage } from "../../chassis/src/errors";
 import { api, ApiError } from "./core-bridge";
 import {
   ageLabel,
   argsTemplate,
   buildMove,
   draftFromBlocks,
+  leftLabel,
   messageViews,
   preview,
   systemTexts,
@@ -53,8 +55,6 @@ interface SeatView {
 let current: SeatView | null = null;
 
 const emptyDraft = (): MoveDraft => ({ text: "", calls: [] });
-
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export function mountSeat(host: HTMLElement): void {
   if (current?.timer) clearTimeout(current.timer);
@@ -102,7 +102,7 @@ async function refreshSteps(v: SeatView): Promise<void> {
   } catch (error) {
     if (!isLive(v)) return;
     if (error instanceof ApiError && error.status === 403) v.off = error.message;
-    else v.listError = errorText(error);
+    else v.listError = errMessage(error);
     v.steps ??= [];
   }
   ensureSelection(v);
@@ -140,7 +140,7 @@ async function select(v: SeatView, id: string): Promise<void> {
     if (error instanceof ApiError && (error.status === 404 || error.status === 409)) {
       v.steps = (v.steps ?? []).filter((s) => s.id !== id);
       ensureSelection(v);
-    } else v.error = errorText(error);
+    } else v.error = errMessage(error);
     draw(v);
   }
 }
@@ -168,7 +168,7 @@ async function makeMove(v: SeatView): Promise<void> {
     if (v.selected?.id === step.id) clearSelection(v);
   } catch (error) {
     if (!isLive(v)) return;
-    v.error = errorText(error);
+    v.error = errMessage(error);
   }
   v.busy = null;
   ensureSelection(v);
@@ -191,7 +191,7 @@ async function askModel(v: SeatView): Promise<void> {
     v.draftModel = answer.model;
   } catch (error) {
     if (!isLive(v)) return;
-    v.error = errorText(error);
+    v.error = errMessage(error);
   }
   v.busy = null;
   drawAtEnd(v);
@@ -249,7 +249,9 @@ function body(v: SeatView, steps: SeatStepSummary[]): TemplateResult {
                 @click=${() => void select(v, s.id)}
               >
                 <span class="seat-step-title">${s.sessionTitle?.trim() || "Untitled conversation"}</span>
-                <span class="seat-step-age">${fresh ? "new · " : ""}${ageLabel(s.createdAt, now)}</span>
+                <span class="seat-step-age"
+                  >${fresh ? "new · " : ""}${ageLabel(s.createdAt, now)} · ${leftLabel(s.expiresAt, now)}</span
+                >
               </button>
             </li>
           `;
@@ -343,7 +345,14 @@ function requestView(v: SeatView, step: SeatStep, d: StepDerived): TemplateResul
 
 function stepView(v: SeatView, step: SeatStep): TemplateResult {
   const d = derive(v, step);
-  return html` ${guard([step.id, d.raw], () => requestView(v, step, d))} ${composer(v, step.request.tools ?? [])} `;
+  const now = Date.now();
+  return html`
+    <div class="seat-step-head">
+      <span class="seat-step-name">${step.sessionTitle?.trim() || "Untitled conversation"}</span>
+      <span class="seat-left ${step.expiresAt - now < 60_000 ? "soon" : ""}">${leftLabel(step.expiresAt, now)}</span>
+    </div>
+    ${guard([step.id, d.raw], () => requestView(v, step, d))} ${composer(v, step.request.tools ?? [])}
+  `;
 }
 
 function toolView(t: SeatTool): TemplateResult {

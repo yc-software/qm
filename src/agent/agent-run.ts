@@ -919,6 +919,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     ref: TurnSession["ref"],
     tools: ToolDefinition[],
     loadImage: ReplayImageLoader | undefined,
+    runId: string | undefined,
   ): Promise<{ entry: TurnSession }> {
     const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
 
@@ -930,6 +931,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         "long",
       ),
       opts?.seat,
+      runId,
     );
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
@@ -1067,6 +1069,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         ref,
         tools,
         turn.loadImage,
+        turn.runId,
       );
       try {
         const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
