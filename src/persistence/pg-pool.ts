@@ -149,9 +149,8 @@ async function pipelinedTransaction(
     client.query({ text, values }),
     client.query("COMMIT"),
   ]);
-  if ((client as PoolClient & { getTransactionStatus(): string | null }).getTransactionStatus() !== "I") {
-    throw new Error("pg-pool: pipelined query left its connection inside a transaction");
-  }
+  const status = (client as PoolClient & { getTransactionStatus(): string | null }).getTransactionStatus();
+  if (status !== "I") throw new Error(`pg-pool: pipelined query left its connection in transaction status ${status}`);
   return result;
 }
 
