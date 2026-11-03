@@ -262,6 +262,12 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
   assert.equal(read.status, 200);
   assert.doesNotMatch(read.text, /never-shown-secret/);
   assert.deepEqual(JSON.parse(read.text).auth, { clientId: "qm-personal", hasClientSecret: true });
+  await built.memoryRegistry.update((record) => ({
+    ...record,
+    brains: record.brains.map((entry) => ({ ...entry, auth: { ...entry.auth, clientSecret: "older-row-plaintext" } })),
+  }));
+  const older = await api.call("GET", "/v1/admin/memory-registry", "admin-alice@default-org");
+  assert.doesNotMatch(older.text, /older-row-plaintext/);
   const overlayWrite = await api.call(
     "PUT",
     "/v1/admin/memory-registry/brains/gbrain",
