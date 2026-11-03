@@ -14,6 +14,7 @@ import { CAPABILITY_HEADER } from "../src/api/contract.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "blob-auth-secret".repeat(3);
 
@@ -30,15 +31,17 @@ function start(): { base: string; close: () => Promise<void> } {
 }
 
 const tok = (blob: { dir: "read" | "write"; id?: string }) =>
-  mintCapabilityToken(
-    {
-      actorId: "fly-sandbox",
-      scopeId: scopeId("personal", "fly-sandbox"),
-      aud: BLOB_TRANSFER_AUD,
-      blob,
-      exp: Date.now() + 60_000,
-    },
-    SECRET,
+  inTestTenant(() =>
+    mintCapabilityToken(
+      {
+        actorId: "fly-sandbox",
+        scopeId: scopeId("personal", "fly-sandbox"),
+        aud: BLOB_TRANSFER_AUD,
+        blob,
+        exp: Date.now() + 60_000,
+      },
+      SECRET,
+    ),
   );
 
 async function stageBlob(base: string): Promise<string> {

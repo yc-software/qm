@@ -44,7 +44,7 @@ for (const threadRef of ["dm:D1", "agent:main:subagent:child"]) {
       assert.equal(delivery?.destination.commandApprovalId, "A1");
       assert.equal(delivery?.destination.target, "U1");
       assert.deepEqual((await approvals.get("A1"))?.grantModes, { session: false, always: false });
-      await approvals.deliverPending();
+      await withoutTenant(() => approvals.deliverPending());
       assert.equal((await deliveries.pending("principal")).length, 1);
       await deliveries.ack(delivery!.id, Date.now());
       await approvals.delete("A1");
@@ -63,8 +63,8 @@ test("persisted approvals recover after enqueue failure and restart without fail
       const deliveries = createDeliveryStore();
       const restarted = createPostgresApprovalStore(url, deliveries);
       try {
-        await restarted.deliverPending();
-        await restarted.deliverPending();
+        await withoutTenant(() => restarted.deliverPending());
+        await withoutTenant(() => restarted.deliverPending());
         assert.equal((await deliveries.pending("principal")).length, 1);
       } finally {
         await restarted.close?.();
@@ -83,7 +83,7 @@ test("web approvals remain on their native surface", { skip }, async () => {
     const approval = record("web:U1");
     approval.request!.surface = "web";
     await approvals.put("A1", approval);
-    await approvals.deliverPending();
+    await withoutTenant(() => approvals.deliverPending());
     assert.equal((await deliveries.pending("principal")).length, 0);
   });
 });
@@ -107,9 +107,9 @@ test("system approvals stay pending without enqueuing or reviving an impossible 
 
         await approvals.put("A1", approval);
         await approvals.put("A2", approval);
-        await approvals.deliverPending();
+        await withoutTenant(() => approvals.deliverPending());
         const restarted = createPostgresApprovalStore(url, deliveries);
-        await restarted.deliverPending();
+        await withoutTenant(() => restarted.deliverPending());
         await restarted.close?.();
 
         assert.deepEqual(await approvals.get("A1"), approval, "the protected action still requires approval");

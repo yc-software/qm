@@ -1,9 +1,14 @@
 import type { MemoryEmbedder } from "../model/embeddings.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
+import { registerPgMigrations } from "../persistence/pg-pool.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { createSweeper } from "../util/sweeper.ts";
 import type { MemoryService } from "./memory-service.ts";
-import { createPostgresVectorStore, type MemoryVectorStore } from "./postgres-vector-store.ts";
+import {
+  createPostgresVectorStore,
+  MEMORY_VECTOR_MIGRATIONS,
+  type MemoryVectorStore,
+} from "./postgres-vector-store.ts";
 import { createSemanticMemoryService } from "./semantic-recall.ts";
 import { createMemoryVectorIndexer } from "./vector-indexer.ts";
 
@@ -16,13 +21,13 @@ export function createSemanticMemory(opts: {
   createSweeper: typeof createSweeper;
 }) {
   const { databaseUrl } = opts;
+  registerPgMigrations(databaseUrl, MEMORY_VECTOR_MIGRATIONS);
   let store: MemoryVectorStore | undefined;
+  const vectors = () => (store ??= createPostgresVectorStore(databaseUrl));
   const resolve = async () => {
     const id = await opts.embeddingModel();
     if (!id) return undefined;
-    const embedder = await opts.resolveEmbedder(id);
-    store ??= createPostgresVectorStore(databaseUrl);
-    return { embedder, store };
+    return { embedder: await opts.resolveEmbedder(id), store: vectors() };
   };
   const memory = createSemanticMemoryService(
     opts.notebook,
@@ -30,7 +35,11 @@ export function createSemanticMemory(opts: {
     { search: (input) => store!.search(input) },
     { onError: (error) => reportFailure("memory semantic recall; using recent facts", error) },
   );
-  const indexer = createMemoryVectorIndexer({ resolve, leaderLease: opts.leaderLease });
+  const indexer = createMemoryVectorIndexer({
+    pendingTenants: (signal) => vectors().pendingTenants(signal),
+    resolve,
+    leaderLease: opts.leaderLease,
+  });
   const sweeper = opts.createSweeper(() => indexer.tick(), 30_000, { label: "memory-vector-index", immediate: true });
   return {
     memory,

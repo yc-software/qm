@@ -11,7 +11,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 function event(over: Partial<OwnedLedgerEvent> = {}): OwnedLedgerEvent {
   return { loopId: "loop-1", itemId: "item-1", op: "ingest", at: 111, owner: "josh", ...over };
@@ -66,7 +66,10 @@ test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped wit
   core.listen(0);
   const base = `http://localhost:${(core.address() as AddressInfo).port}`;
   try {
-    const res = await fetch(`${base}/v1/loop-items/events`, { signal: AbortSignal.timeout(15_000) });
+    const res = await fetch(`${base}/v1/loop-items/events`, {
+      headers: testTenantHeaders(),
+      signal: AbortSignal.timeout(15_000),
+    });
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") ?? "", /text\/event-stream/);
 

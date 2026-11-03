@@ -7,6 +7,7 @@ import {
 } from "../src/processes/process-registry.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 function backends(): Array<{ name: string; make: () => ProcessRegistry }> {
   return [{ name: "memory", make: () => createPostgresProcessRegistry(testDatabaseUrl()) }];
@@ -46,14 +47,14 @@ for (const b of backends()) {
       });
       assert.equal((await reg.liveByScope("s")).length, 0, "an expired session is not live");
 
-      const expired = await reg.listExpired();
+      const expired = await withoutTenant(() => reg.listExpired());
       assert.equal(expired.length, 1);
       assert.equal(expired[0]!.processId, id(2));
       assert.equal((await reg.get(id(2)))!.status, "running", "marking dead happens only after a confirmed kill");
 
       await reg.markStatus(id(2), "reaped");
       assert.equal((await reg.get(id(2)))!.status, "reaped");
-      assert.equal((await reg.listExpired()).length, 0);
+      assert.equal((await withoutTenant(() => reg.listExpired())).length, 0);
     }));
 
   test(`[${b.name}] markStatus and delete`, () =>
@@ -156,7 +157,7 @@ test("[postgres] honors the registry contract (durable across a restart)", { ski
         ttlMs: -1,
       });
       assert.equal(
-        (await reg2.listExpired()).some((r) => r.processId === id(2)),
+        (await withoutTenant(() => reg2.listExpired())).some((r) => r.processId === id(2)),
         true,
       );
       await reg2.delete(id(1));

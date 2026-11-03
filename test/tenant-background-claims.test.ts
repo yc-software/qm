@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { glob, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import pg from "pg";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -12,10 +13,15 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { createProcessReaper } from "../src/processes/process-reaper.ts";
+import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createSemanticMemory } from "../src/memory/semantic-memory.ts";
 import { claimAcrossTenants, crossTenantLoop, inTenantOf, useOwnerDatabase, rowTenant } from "../src/tenants/claim.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { boundTenant, withTenant } from "../src/tenants/context.ts";
+import { boundTenant, currentTenant, withTenant } from "../src/tenants/context.ts";
 import { scopeId, type Principal } from "../src/types.ts";
 import { createSweeper } from "../src/util/sweeper.ts";
 import { createAskExpirySweep } from "../src/triggers/keychain-ask.ts";
@@ -169,6 +175,29 @@ test("one worker claims across tenants and runs each turn under its run's tenant
     await close();
   }
 });
+
+test(
+  "a running run in one tenant does not hold back another tenant's run for the same session id",
+  { skip },
+  async () => {
+    const { runs, close } = createPostgresRunStore(testDatabaseUrl());
+    try {
+      const a = (await withTenant(A, () => runs.enqueue({ sessionId: "shared", request: turn("a"), maxAttempts: 1 })))
+        .run;
+      assert.equal((await runs.claim("w1", 60_000))?.id, a.id);
+      const b = (await withTenant(B, () => runs.enqueue({ sessionId: "shared", request: turn("b"), maxAttempts: 1 })))
+        .run;
+      const subscribe = runs.subscribeAvailable;
+      assert.ok(subscribe);
+      const available = new Promise<boolean>((resolve) => subscribe(() => resolve(true), { pollMs: 5 }));
+      assert.equal(await Promise.race([available, delay(2_000, false)]), true);
+      const claimed = await runs.claim("w2", 60_000);
+      assert.deepEqual([claimed?.id, claimed?.tenantId], [b.id, B]);
+    } finally {
+      await close();
+    }
+  },
+);
 
 test("the orphan sweep reports each run with its tenant", { skip }, async () => {
   const url = testDatabaseUrl();
@@ -338,3 +367,130 @@ test("pruning ended cron fires keeps the newest per cron within each tenant", { 
     await raw.end();
   }
 });
+
+test("pruning consumed run signals deletes old consumed rows in every tenant", { skip }, async () => {
+  const url = testDatabaseUrl();
+  const signals = createPostgresRunSignalStore(url);
+  const raw = new pg.Pool({ connectionString: ownerUrlOf(url), max: 1 });
+  try {
+    for (const tenant of [A, B])
+      await withTenant(tenant, async () => {
+        await signals.send(`consumed-${tenant}`, { kind: "abort" });
+        await signals.send(`pending-${tenant}`, { kind: "abort" });
+        await signals.takePending(`consumed-${tenant}`);
+      });
+    await signals.prune(-1);
+    const kept = await raw.query("SELECT tenant_id, run_id FROM run_signals");
+    assert.deepEqual(
+      kept.rows.map((row) => [row.tenant_id, row.run_id]).sort(),
+      [
+        [A, `pending-${A}`],
+        [B, `pending-${B}`],
+      ].sort(),
+    );
+  } finally {
+    await signals.close?.();
+    await raw.end();
+  }
+});
+
+test(
+  "the process reaper claims expired sessions across tenants and reaps each under its own tenant",
+  { skip },
+  async () => {
+    const url = testDatabaseUrl();
+    const registry = createPostgresProcessRegistry(url);
+    const raw = new pg.Pool({ connectionString: ownerUrlOf(url), max: 1 });
+    const ids = new Map([
+      [A, randomUUID()],
+      [B, randomUUID()],
+    ]);
+    try {
+      for (const [tenant, processId] of ids)
+        await withTenant(tenant, () =>
+          registry.register({ processId, scopeId: "s", sandboxId: "vm", kind: "build", command: "x", ttlMs: -1 }),
+        );
+      const killed: Array<[string, string | undefined]> = [];
+      const notified: Array<[string, string | undefined]> = [];
+      const reaper = createProcessReaper(registry, {
+        intervalMs: 60_000,
+        leaderLease: createNoopLeaderLease(),
+        kill: async (rec) => void killed.push([rec.processId, boundTenant()]),
+        onReaped: async (rec) => void notified.push([rec.processId, boundTenant()]),
+      });
+      assert.equal((await reaper.sweep()).reaped, 2);
+      const expected = [...ids].map(([tenant, processId]) => [processId, tenant]).sort();
+      assert.deepEqual(killed.sort(), expected);
+      assert.deepEqual(notified.sort(), expected);
+      const rows = await raw.query("SELECT process_id, tenant_id, status FROM process_sessions");
+      assert.deepEqual(
+        rows.rows.map((row) => [row.process_id, row.tenant_id, row.status]).sort(),
+        expected.map(([processId, tenant]) => [processId, tenant, "reaped"]),
+      );
+    } finally {
+      registry.close?.();
+      await raw.end();
+    }
+  },
+);
+
+test(
+  "one vector index tick claims both tenants' pending facts and embeds each with its own tenant's model",
+  { skip },
+  async () => {
+    const url = testDatabaseUrl();
+    const models = new Map([
+      [A, "embed-a"],
+      [B, "embed-b"],
+    ]);
+    const notebook = createPostgresMemoryService(url);
+    const raw = new pg.Pool({ connectionString: ownerUrlOf(url), max: 1 });
+    const embedded: Array<[string, string | undefined]> = [];
+    let tick!: () => unknown;
+    const semantic = createSemanticMemory({
+      notebook,
+      databaseUrl: url,
+      embeddingModel: async () => models.get(currentTenant()),
+      resolveEmbedder: async (id) => ({
+        id,
+        async embed(texts) {
+          embedded.push([id, boundTenant()]);
+          return texts.map(() => (id === "embed-a" ? [1, 0] : [0, 1, 0]));
+        },
+      }),
+      leaderLease: createNoopLeaderLease(),
+      createSweeper: (fn, ...rest) => {
+        tick = fn;
+        return createSweeper(fn, ...rest);
+      },
+    });
+    try {
+      for (const [tenant, fact] of [
+        [A, "fact for a"],
+        [B, "fact for b"],
+      ] as const)
+        await withTenant(tenant, () => notebook.capture(scopeId("personal", "shared"), [fact], 1000));
+      await tick();
+      const { rows } = await raw.query(
+        `SELECT v.tenant_id, v.model, v.dimensions, f.text FROM memory_fact_vectors v
+         JOIN memory_facts f ON f.tenant_id = v.tenant_id AND f.scope_id = v.scope_id AND f.id = v.fact_id
+         ORDER BY f.text`,
+      );
+      assert.deepEqual(
+        rows.map((row) => [row.tenant_id, row.model, row.dimensions, row.text]),
+        [
+          [A, "embed-a", 2, "fact for a"],
+          [B, "embed-b", 3, "fact for b"],
+        ],
+      );
+      assert.deepEqual(
+        [...new Set(embedded.map(([model, tenant]) => `${model}:${tenant}`))].sort(),
+        [`embed-a:${A}`, `embed-b:${B}`].sort(),
+      );
+    } finally {
+      await semantic.stop();
+      await semantic.close();
+      await raw.end();
+    }
+  },
+);

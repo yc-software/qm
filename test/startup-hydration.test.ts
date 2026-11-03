@@ -41,14 +41,17 @@ mock.module("../src/resolution/config-store.ts", {
   },
 });
 
-const { buildApp } = await import("./support/build-app.ts");
+const { buildApp } = await import("../src/wiring.ts");
 
-test("eager hydration failures are contained while explicit startup hydration remains fail-closed", async (t) => {
+test("startup hydration failures are contained while explicit hydration remains fail-closed", async (t) => {
   const errors = t.mock.method(console, "error", () => {});
-  const built = buildApp(testConfig());
+  const built = buildApp({ anthropicApiKey: "test-anthropic-key", ...testConfig() });
   try {
     const logged = (context: string) =>
       errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes(context));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(logged("startup: hydrate"), false);
+    await built.startup();
     await settle(async () => logged("startup: hydrate configuration"));
     assert.ok(logged("startup: hydrate configuration"));
     for (let attempt = 0; attempt < 2; attempt++) {

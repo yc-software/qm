@@ -53,7 +53,7 @@ test("external Slack strips private and org preloads before the prompt, but keep
   );
   await b.config.hydrate?.();
   await inTestTenant(() => b.identity.refresh());
-  await b.deploymentLayerReady;
+  await b.startup();
   t.after(async () => {
     b.scheduler.stop();
     b.deploymentLayerRefresh.stop();

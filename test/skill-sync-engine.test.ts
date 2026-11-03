@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { type NewSkillPack } from "../src/skills/skill-pack-store.ts";
 import { createSkillSyncEngine } from "../src/skills/skill-sync-engine.ts";
 import type { SkillPackFetcher } from "../src/skills/pack-fetcher.ts";
-import { boundTenant } from "../src/tenants/context.ts";
+import { boundTenant, withoutTenant } from "../src/tenants/context.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testSkillPackStore } from "./support/typed-stores.ts";
@@ -50,7 +50,7 @@ test("tracked pack: fast-path skips reconcile when HEAD == last good commit", ()
       fetcher: fakeFetcher({ [s.id]: "c1" }),
       reconcile: async (id) => void calls.push(id),
     });
-    await engine.tick();
+    await withoutTenant(() => engine.tick());
     assert.deepEqual(calls, [], "an unchanged tracked pack is not reconciled (no full clone)");
   }));
 
@@ -66,7 +66,7 @@ test("tracked pack: reconciles when HEAD has advanced", () =>
       fetcher: fakeFetcher({ [s.id]: "c2" }),
       reconcile: async (id) => void calls.push(id),
     });
-    await engine.tick();
+    await withoutTenant(() => engine.tick());
     assert.deepEqual(calls, [s.id], "an advanced tracked pack is reconciled");
   }));
 
@@ -82,7 +82,7 @@ test("pinned pack: sets updateAvailable when the line advanced past the pinned c
       fetcher: fakeFetcher({ [s.id]: "c2" }),
       reconcile: async (id) => void calls.push(id),
     });
-    await engine.tick();
+    await withoutTenant(() => engine.tick());
     assert.equal((await packs.get(s.id))?.updateAvailable, true, "pinned + advanced ⇒ update available");
     assert.deepEqual(calls, [], "a pinned pack is never auto-reconciled");
   }));
@@ -99,7 +99,7 @@ test("pinned pack: clears a stale updateAvailable when HEAD == pinned commit", (
       fetcher: fakeFetcher({ [s.id]: "c1" }),
       reconcile: async () => {},
     });
-    await engine.tick();
+    await withoutTenant(() => engine.tick());
     assert.equal((await packs.get(s.id))?.updateAvailable, false, "no advance ⇒ flag cleared");
   }));
 
@@ -117,7 +117,7 @@ test("one failing pack never aborts the tick", () =>
       fetcher: fakeFetcher({ [good.id]: "c2" }),
       reconcile: async (id) => void calls.push(id),
     });
-    await engine.tick();
+    await withoutTenant(() => engine.tick());
     assert.deepEqual(calls, [good.id], "the healthy pack is still reconciled despite the failing one");
   }));
 
@@ -137,6 +137,6 @@ test("one tick syncs every tenant's packs, each under its own tenant", async () 
     fetcher: fakeFetcher(Object.fromEntries([...ids.keys()].map((id) => [id, "c2"]))),
     reconcile: async (id) => void reconciled.set(id, boundTenant()),
   });
-  await engine.tick();
+  await withoutTenant(() => engine.tick());
   assert.deepEqual(reconciled, ids);
 });
