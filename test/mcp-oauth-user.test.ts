@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMcpToolService, mcpPublicOAuthClients } from "../src/mcp/mcp-tool-service.ts";
@@ -12,6 +11,7 @@ import {
 } from "../src/connectors/oauth.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { testMap } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 const HOST = "mcp.example.com";
 

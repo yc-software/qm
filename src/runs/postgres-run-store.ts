@@ -10,7 +10,7 @@ import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import type { RunPriority } from "./run-store.ts";
 import { countedClaims, isTerminal, runPriority, stopErrorCode, withTraceCarrier } from "./run-store.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { errMessage, reportFailureAs, swallow } from "../util/errors.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import { claimAcrossTenants, crossTenantLoop, inTenantOf, rowTenant } from "../tenants/claim.ts";
 
@@ -168,7 +168,8 @@ END $base_schema$`,
   function settle(run: Run | null): void {
     if (!run || !isTerminal(run.status)) return;
     events.emit(run.id, run);
-    for (const listener of terminalListeners) inTenantOf(run.tenantId, () => listener(run));
+    for (const listener of terminalListeners)
+      inTenantOf(run.tenantId, () => listener(run)).catch(reportFailureAs("runs: terminal listener", undefined));
   }
   async function retire(
     run: Run,

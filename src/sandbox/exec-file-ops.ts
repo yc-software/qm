@@ -164,7 +164,7 @@ export interface ExecExportDeps {
   exec: ExecFileOpsDeps["exec"];
   readAbsBytes(id: string, absPath: string): Promise<Uint8Array | null>;
   defaultHomeDir: string;
-  ephemeralCredentialPrefixes: readonly string[];
+  ephemeralCredentialPrefixes: () => readonly string[];
 }
 
 export interface ExecExport {
@@ -185,7 +185,7 @@ export function createExecExport({
     async exportFiles(handle, exportOpts = {}): Promise<AgentComputerExportEntry[]> {
       const include = exportOpts.include ?? ["workspace", "home"];
       const exclude =
-        exportOpts.exclude ?? ((entry) => defaultExcludeAgentComputerExport(entry, ephemeralCredentialPrefixes));
+        exportOpts.exclude ?? ((entry) => defaultExcludeAgentComputerExport(entry, ephemeralCredentialPrefixes()));
       const entries: AgentComputerExportEntry[] = [];
       for (const area of include) {
         const root = rootForArea(handle, area);

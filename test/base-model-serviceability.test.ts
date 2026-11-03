@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +11,7 @@ import { baseModelProviders, configuredModel, providerKeysPresent } from "../src
 import { defaultModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
-import { testTenantHeaders } from "./support/test-tenants.ts";
+import { test, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",

@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,7 +12,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "discovery-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");

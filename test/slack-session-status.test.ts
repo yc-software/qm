@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { createSlackSessionStatus, type SlackSessionStatusState } from "../src/slack/session-status.ts";
@@ -10,6 +9,7 @@ import type { Session } from "../src/types.ts";
 import type { Monitor } from "../src/triggers/types.ts";
 import { isTerminal, type Run } from "../src/runs/run-store.ts";
 import { testMap } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 function deferred() {
   let resolve!: () => void;

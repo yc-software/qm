@@ -1,7 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,7 +24,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "deployment-broker-secret".repeat(3);
 const ADMIN = {

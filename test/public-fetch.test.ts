@@ -1,4 +1,4 @@
-import { test, type TestContext } from "node:test";
+import { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -8,6 +8,7 @@ import { createMcpClient } from "../src/mcp/mcp-client.ts";
 import { discoverOAuth } from "../src/mcp/oauth-discovery.ts";
 import { exchangeCode, setPublicOAuthClients } from "../src/connectors/oauth.ts";
 import { errMessage } from "../src/util/errors.ts";
+import { test } from "./support/test-tenants.ts";
 
 async function listen(
   t: TestContext,

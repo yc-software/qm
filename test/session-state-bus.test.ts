@@ -1,9 +1,9 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { type SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "../src/runs/postgres-session-state-bus.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 test("events cross bus instances (pg_notify)", async () => {
   const url = testDatabaseUrl();

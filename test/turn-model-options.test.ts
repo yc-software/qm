@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   NON_INTERACTIVE_FAST_MODE,
@@ -6,6 +5,7 @@ import {
   turnModelOptions,
 } from "../src/agent/runtime-choice.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
+import { test } from "./support/test-tenants.ts";
 
 test("triggered turns default to extra-high thinking and non-fast mode", () => {
   assert.deepEqual(turnModelOptions({ triggered: true }), {

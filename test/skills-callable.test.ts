@@ -13,6 +13,7 @@ import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 async function withDefaultComputer(built: ReturnType<typeof buildApp>) {
+  await inTestTenant(() => built.identity.ready());
   const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
   await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
   return built;

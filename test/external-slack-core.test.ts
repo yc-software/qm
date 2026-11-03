@@ -1,6 +1,5 @@
 import { externalSlackNamespace } from "../src/slack/external-access.ts";
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
 import { Readable } from "node:stream";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
@@ -14,7 +13,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["safe"] };
 const externalSlackPolicies = { batch: policy };
@@ -51,12 +50,12 @@ test("external Slack strips private and org preloads before the prompt, but keep
       apiBaseUrl: "https://core.example.test",
     }),
   );
+  await inTestTenant(() => b.identity.ready());
   await b.config.hydrate?.();
   await b.identity.refresh();
-  await b.startup();
+  await b.deploymentLayerStore.hydrate();
   t.after(async () => {
     b.scheduler.stop();
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   await inTestTenant(async () => {
@@ -279,10 +278,10 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
   const { serverDeps } = await import("../src/wiring.ts");
   const config = testConfig({ signingSecret: "synthetic-signing-key-for-http-test", externalSlackPolicies });
   const b = buildApp(config);
+  await inTestTenant(() => b.identity.ready());
   await b.identity.refresh();
   t.after(async () => {
     b.scheduler.stop();
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   const run = await inTestTenant(async () => {

@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   authorizeUrl,
@@ -18,6 +17,7 @@ import {
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { createOAuthFlowStore } from "../src/connectors/oauth-flow-store.ts";
 import { testMap } from "./support/test-database.ts";
+import { test, testTenants } from "./support/test-tenants.ts";
 
 const env = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",
@@ -375,6 +375,7 @@ test("OAuth state is sealed, scoped (org/accountType/clientRef), and expires", a
     clientRef: "env:google",
     issuedAt: 1_000,
     nonce: "n1",
+    tenant: testTenants()[0],
   });
   await assert.rejects(() => openOAuthState(`${state}x`, { secret: "state-secret" }), /invalid OAuth state/);
   await assert.rejects(

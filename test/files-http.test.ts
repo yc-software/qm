@@ -1,25 +1,23 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { fileArtifactId, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { testDatabaseUrl, testIdentity } from "./support/test-database.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = "default-org";
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
 const channel = scopeId("channel", "C1");
 
-function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore>) {
+async function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore>) {
   return createApp({
     acl,
     files,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: await testIdentity(),
   } as unknown as AppDeps);
 }
 
@@ -67,7 +65,7 @@ async function drain(stream: NodeJS.ReadableStream): Promise<Buffer> {
 test("owner sees their own file in owned[] and can open its bytes", () =>
   inTestTenant(async () => {
     const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-    const app = makeApp(
+    const app = await makeApp(
       files,
       createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
     );
@@ -100,7 +98,7 @@ test("a grantee sees a shared file in shared[] and can open it; the owner doesn'
     const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
       resolveFiles: (refs) => files.resolveByIds(refs),
     });
-    const app = makeApp(files, acl);
+    const app = await makeApp(files, acl);
     const owner = scopeId("personal", "U1");
     const id = fileArtifactId("share", "out", 0);
     await files.put({
@@ -135,7 +133,7 @@ test("a grantee sees a shared file in shared[] and can open it; the owner doesn'
 test("a stranger sees nothing and cannot open the file (404 = null)", () =>
   inTestTenant(async () => {
     const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-    const app = makeApp(
+    const app = await makeApp(
       files,
       createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
     );
@@ -163,7 +161,7 @@ test("an org grant surfaces the file to any org member", () =>
     const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
       resolveFiles: (refs) => files.resolveByIds(refs),
     });
-    const app = makeApp(files, acl);
+    const app = await makeApp(files, acl);
     const owner = scopeId("personal", "U1");
     const id = fileArtifactId("orgshare", "out", 0);
     await files.put({
@@ -212,7 +210,7 @@ test("openFileForViewer returns null when the bytes are gone (a backfilled histo
     get: async () => row,
     open: async () => null,
   } as unknown as FileArtifactStore;
-  const app = makeApp(
+  const app = await makeApp(
     files,
     createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
   );

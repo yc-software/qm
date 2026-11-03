@@ -6,7 +6,6 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { AddressInfo } from "node:net";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
@@ -14,7 +13,6 @@ import { withModelRequestContext } from "../src/model/request-context.ts";
 import { createModelVerifier } from "../src/model/model-verification.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import {
   resolveModel,
   resolveEmbeddingModel,
@@ -25,8 +23,8 @@ import {
 } from "../src/model/pi-models.ts";
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { testConfigStore, testConfigTables, testMap } from "./support/test-database.ts";
+import { afterEach, inTestTenant, test, testTenantHeaders } from "./support/test-tenants.ts";
 
 const definition = {
   kind: "embedding",
@@ -143,12 +141,12 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
 });
 
 test("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
-  const baseModels = testMap<PersistedBaseModel>();
-  const first = testConfigStore("test", { baseModels });
+  const tables = testConfigTables();
+  const first = testConfigStore("test", { tables });
   await first.setEmbeddingModel("gateway/embed");
   await first.setRuntimeSelection("org:test", { modelId: "gpt-5.5" });
   await first.setRuntimeSelection("org:test", null);
-  const restarted = testConfigStore("test", { baseModels });
+  const restarted = testConfigStore("test", { tables });
   assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
   await restarted.setEmbeddingModel(null);
   assert.equal(await first.getEmbeddingModelDurable(), null);

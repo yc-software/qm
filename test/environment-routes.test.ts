@@ -47,6 +47,7 @@ describe("environment verbs (list / create / attach, owner-gated)", async () => 
       ),
     );
     server = createServer(built.app, {
+      identity: built.identity,
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       scheduler: built.scheduler,

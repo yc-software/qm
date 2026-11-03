@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,7 +7,7 @@ import { join } from "node:path";
 import { createTurnStream, goalView } from "../src/runs/turn-stream.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 

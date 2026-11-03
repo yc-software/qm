@@ -1,5 +1,5 @@
 import "./support/auto-fake-sprites.ts";
-import { test, mock, type TestContext } from "node:test";
+import { mock, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { randomUUID } from "node:crypto";
@@ -11,7 +11,7 @@ import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 mock.module("./support/mock-agent.ts", {
   namedExports: {
@@ -51,9 +51,10 @@ const members = ["alice", "bob"].map((id) => ({ id, type: "internal" as const })
 
 async function fixture(t: TestContext) {
   const b = buildApp(testConfig({ signingSecret: SECRET, memoryCapture: "off" }));
+  await inTestTenant(() => b.identity.ready());
   await b.config.hydrate?.();
   await b.identity.refresh();
-  await b.startup();
+  await b.deploymentLayerStore.hydrate();
   await inTestTenant(() =>
     b.app.upsertDirectory(
       ["alice", "bob", "stranger"].map((principalId) => ({
@@ -88,7 +89,6 @@ async function fixture(t: TestContext) {
   t.after(async () => {
     await new Promise<void>((r) => server.close(() => r()));
     inTestTenant(() => b.scheduler.stop());
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   const cap = (actorId: string, scopeId: CapabilityClaims["scopeId"] = "channel:public-room") =>
@@ -151,7 +151,7 @@ async function fixture(t: TestContext) {
     const response = await fetch(base + "/v1/turns", {
       method: "POST",
       headers: {
-        ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+        ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
         "content-type": "application/json",
       },
       body,
@@ -230,8 +230,11 @@ test("HTTP Open continuity: only the owner or a write grantee edits; grantee edi
     JSON.stringify(log),
   );
   assert.equal(
-    (await b.request("PATCH", `/v1/crons/${id}`, await b.cap("alice", "personal:alice"), { title: "Back in personal" }))
-      .status,
+    (
+      await b.request("PATCH", `/v1/crons/${id}`, await b.cap("alice", "personal:alice"), {
+        title: "Back in personal",
+      })
+    ).status,
     200,
   );
   assert.equal(

@@ -10,6 +10,7 @@ import {
 } from "../src/connectors/connector-client-store.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { testConfigStore } from "./support/test-database.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 const orgScope = (o: string) => scopeId("org", o);
 const envWithSlack = {
@@ -53,7 +54,7 @@ test("new ciphertexts are v2 (HKDF) and legacy sha256-key ciphertexts still decr
   assert.throws(() => decryptSecret("just-one-part", key), /malformed/);
 });
 
-test("BYO record wins over env; the secret is encrypted at rest and never echoed", async () => {
+tenantTest("BYO record wins over env; the secret is encrypted at rest and never echoed", async () => {
   const store = testConfigStore("default-org", { connectorSecretKey: "persistent-key" });
   await store.setConnectorClient(orgScope("default-org"), "google", {
     clientId: "org-cid",
@@ -85,7 +86,7 @@ test("BYO record wins over env; the secret is encrypted at rest and never echoed
   assert.equal(c.clientRef, "org:default-org:google");
 });
 
-test("a provider with no org record falls back to env", async () => {
+tenantTest("a provider with no org record falls back to env", async () => {
   const store = testConfigStore("default-org", { connectorSecretKey: "k" });
   const resolve = createConnectorClientResolver({
     reader: store,
@@ -98,7 +99,7 @@ test("a provider with no org record falls back to env", async () => {
   await assert.rejects(resolve("google", {}), /GOOGLE_OAUTH_CLIENT_ID/);
 });
 
-test("a disabled org connector is refused (grays out the app grid)", async () => {
+tenantTest("a disabled org connector is refused (grays out the app grid)", async () => {
   const store = testConfigStore("default-org", { connectorSecretKey: "k" });
   await store.setConnectorClient(orgScope("default-org"), "google", {
     clientId: "c",
@@ -109,7 +110,7 @@ test("a disabled org connector is refused (grays out the app grid)", async () =>
   await assert.rejects(resolve("google", {}), /disabled/);
 });
 
-test("deleting a connector record falls back to env / unconfigured", async () => {
+tenantTest("deleting a connector record falls back to env / unconfigured", async () => {
   const store = testConfigStore("default-org", { connectorSecretKey: "k" });
   await store.setConnectorClient(orgScope("default-org"), "google", { clientId: "c", clientSecret: "s" });
   assert.equal((await store.listConnectorClients(orgScope("default-org"))).length, 1);

@@ -5,7 +5,7 @@ import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import type { CandidateDestination, GatewayContext, GrantedHandle, SessionEntry } from "../../types.ts";
 import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
-import type { PersistedSoulRevision } from "../../resolution/config-store.ts";
+import type { SoulRevision } from "../../resolution/config-tables.ts";
 
 const memberLabel = (m: { principalId: string; displayName: string; slackId?: string }): string =>
   `${m.displayName} (${[m.principalId, m.slackId].filter(Boolean).join(", ")})`;
@@ -70,7 +70,7 @@ interface GuidanceSnapshot {
 }
 
 export function guidanceUpdateEvent(
-  guidance: { version: number; personal: boolean; revisions: readonly PersistedSoulRevision[] },
+  guidance: { version: number; personal: boolean; revisions: readonly SoulRevision[] },
   history: readonly SessionEntry[],
   sessionId: string,
 ): { text: string; record: GuidanceSnapshot } {

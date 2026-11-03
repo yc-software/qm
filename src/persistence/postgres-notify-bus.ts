@@ -1,5 +1,5 @@
 import { createPgPool } from "./pg-pool.ts";
-import { swallowAs } from "../util/errors.ts";
+import { reportFailureAs, swallowAs } from "../util/errors.ts";
 import { createMemoryEventBus, type EventBus } from "../util/event-bus.ts";
 
 import { subscribePostgresChannel } from "./postgres-listener.ts";
@@ -59,7 +59,9 @@ export function createPostgresNotifyBus<T>(
       (payload) => {
         const split = payload.indexOf("\n");
         const event = JSON.parse(payload.slice(split + 1)) as T;
-        inTenantOf(split > 0 ? payload.slice(0, split) : undefined, () => local.emit(event));
+        inTenantOf(split > 0 ? payload.slice(0, split) : undefined, () => local.emit(event)).catch(
+          reportFailureAs(`notify-bus: deliver ${channel}`, undefined),
+        );
       },
       () => local.resync(),
     );

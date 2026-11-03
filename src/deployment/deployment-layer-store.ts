@@ -19,10 +19,12 @@ import {
 } from "../skills/skill-collision.ts";
 import type { SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
-import { errMessage } from "../util/errors.ts";
+import { currentTenant, perTenant } from "../tenants/context.ts";
+import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "./deployment-layer.ts";
 import {
   declaredInstallFiles,
+  emptyDeploymentLayer,
   replaceDeploymentLayer,
   resolvedDeploymentLayer,
   type DeploymentLayerRuntime,
@@ -60,6 +62,7 @@ interface DeploymentLayerAuditRevision {
 
 export interface DeploymentLayerStore {
   hydrate(): Promise<StoredDeploymentLayer | null>;
+  runtime(): DeploymentLayerRuntime;
   get(): Promise<StoredDeploymentLayer | null>;
   put(bundle: DeploymentLayerBundle, updatedBy: string): Promise<StoredDeploymentLayer>;
   isApplied(contentHash: string): Promise<boolean>;
@@ -82,6 +85,7 @@ export class DeploymentLayerPersistedError extends Error {
 class DeploymentLayerMutationError extends Error {}
 
 const CURRENT = "current";
+const REFRESH_MS = 30_000;
 export const LAYER_CREATED_BY = "system:deployment-layer";
 export const LAYER_REVIEWER = "system:deployment-layer-reviewer";
 const pathOrder = (a: DeploymentLayerFile, b: DeploymentLayerFile): number => {
@@ -248,7 +252,7 @@ function validateBundle(
 
 export function createDeploymentLayerStore(opts: {
   backing: DurableMap<StoredDeploymentLayer>;
-  runtime: DeploymentLayerRuntime;
+  fallback: DeploymentLayerRuntime;
   skills: SkillStore;
   skillBundles?: SkillBundleStore;
   scopeId: ScopeId;
@@ -260,9 +264,18 @@ export function createDeploymentLayerStore(opts: {
 }): DeploymentLayerStore {
   const now = opts.now ?? Date.now;
   const retryDelaysMs = opts.retryDelaysMs ?? [250, 1000, 4000];
-  let appliedHash: string | null = null;
-  let failedHash: string | null = null;
-  let seeded = false;
+  const tenant = perTenant<{
+    runtime: DeploymentLayerRuntime;
+    appliedHash?: string;
+    failedHash?: string;
+    seeded?: true;
+    checkedAt?: number;
+    checking?: Promise<unknown>;
+  }>(() => {
+    const runtime = emptyDeploymentLayer();
+    replaceDeploymentLayer(runtime, opts.fallback);
+    return { runtime };
+  });
   const queue = createKeyedQueue<string>();
   const advisoryLock = opts.advisoryLock;
   const withFleetLock = <T>(fn: () => Promise<T>): Promise<T> => advisoryLock.withLock(SKILL_MATERIALIZATION_LOCK, fn);
@@ -280,8 +293,9 @@ export function createDeploymentLayerStore(opts: {
   };
 
   const reportApplyFailure = (record: StoredDeploymentLayer, error: unknown): void => {
-    if (failedHash === record.contentHash) return;
-    failedHash = record.contentHash;
+    const state = tenant();
+    if (state.failedHash === record.contentHash) return;
+    state.failedHash = record.contentHash;
     console.error(
       `[deployment-layer] stored layer ${record.contentHash} failed to apply — keeping the current runtime layer until a valid layer is PUT: ${errMessage(error)}`,
     );
@@ -325,9 +339,10 @@ export function createDeploymentLayerStore(opts: {
     record: StoredDeploymentLayer,
     validated?: ReturnType<typeof validateBundle>,
   ): Promise<boolean> => {
-    if (opts.runtime.dir !== `durable:${record.contentHash}`) return false;
+    const { runtime } = tenant();
+    if (runtime.dir !== `durable:${record.contentHash}`) return false;
     const next = validated ?? validateBundle(record.bundle, `durable:${record.contentHash}`);
-    if (JSON.stringify(publicResolved(opts.runtime)) !== JSON.stringify(publicResolved(next.runtime))) return false;
+    if (JSON.stringify(publicResolved(runtime)) !== JSON.stringify(publicResolved(next.runtime))) return false;
     const current = layerSkills(await opts.skills.list());
     const wanted = new Set(next.manifests.map((manifest) => manifest.name));
     if (current.some((skill) => skill.status !== "archived" && !wanted.has(skill.manifest.name))) return false;
@@ -347,12 +362,13 @@ export function createDeploymentLayerStore(opts: {
 
   const apply = async (record: StoredDeploymentLayer): Promise<void> => {
     const { manifests, runtime: nextRuntime } = validateBundle(record.bundle, `durable:${record.contentHash}`);
+    const state = tenant();
     if (
-      appliedHash === record.contentHash &&
+      state.appliedHash === record.contentHash &&
       (await projectionMatches(record, { bundle: record.bundle, manifests, runtime: nextRuntime }))
     )
       return;
-    appliedHash = null;
+    state.appliedHash = undefined;
     const all = await opts.skills.list();
     const snapshot = layerSkills(all).map((skill) => structuredClone(skill));
     const wanted = new Set<string>();
@@ -398,7 +414,7 @@ export function createDeploymentLayerStore(opts: {
           await opts.skills.archive(skill.id);
         }
       }
-      replaceDeploymentLayer(opts.runtime, nextRuntime);
+      replaceDeploymentLayer(state.runtime, nextRuntime);
     } catch (error) {
       try {
         await retrying(() => restoreProjection(snapshot));
@@ -410,8 +426,8 @@ export function createDeploymentLayerStore(opts: {
       }
       throw new DeploymentLayerMutationError(errMessage(error), { cause: error });
     }
-    appliedHash = record.contentHash;
-    failedHash = null;
+    state.appliedHash = record.contentHash;
+    state.failedHash = undefined;
   };
 
   const auditPersisted = async (record: StoredDeploymentLayer, strict: boolean): Promise<void> => {
@@ -442,17 +458,46 @@ export function createDeploymentLayerStore(opts: {
       await apply(record);
     } catch (error) {
       reportApplyFailure(record, error);
-      if (!(error instanceof DeploymentLayerMutationError) && opts.seedFallback && !seeded) {
+      const state = tenant();
+      if (!(error instanceof DeploymentLayerMutationError) && opts.seedFallback && !state.seeded) {
         await opts.seedFallback();
-        seeded = true;
+        state.seeded = true;
       }
     }
     return record;
   };
 
+  const hydrate = (): Promise<StoredDeploymentLayer | null> => {
+    tenant().checkedAt = Date.now();
+    return queue(currentTenant(), () =>
+      withFleetLock(async () => {
+        const record = await retrying(() => opts.backing.get(CURRENT));
+        if (record) {
+          await auditPersisted(record, false);
+          return applyForHydrate(record);
+        }
+        const state = tenant();
+        if (opts.seedFallback && !state.seeded) {
+          await opts.seedFallback();
+          state.seeded = true;
+          let appeared: StoredDeploymentLayer | null = null;
+          try {
+            appeared = await retrying(() => opts.backing.get(CURRENT));
+          } catch (error) {
+            console.error(
+              `[deployment-layer] could not recheck the durable layer after seeding — serving the filesystem fallback until refresh: ${errMessage(error)}`,
+            );
+          }
+          if (appeared) return applyForHydrate(appeared);
+        }
+        return null;
+      }),
+    );
+  };
+
   return {
     isApplied: async (hash) => {
-      if (appliedHash !== hash) return false;
+      if (tenant().appliedHash !== hash) return false;
       try {
         const record = await opts.backing.get(CURRENT);
         return record?.contentHash === hash && projectionMatches(record);
@@ -461,45 +506,35 @@ export function createDeploymentLayerStore(opts: {
       }
     },
     live: () => {
-      if (!opts.runtime.dir) return { source: "none", contentHash: null, resolved: null };
-      const durable = opts.runtime.dir.startsWith("durable:");
+      const { runtime } = tenant();
+      if (!runtime.dir) return { source: "none", contentHash: null, resolved: null };
+      const durable = runtime.dir.startsWith("durable:");
       return {
         source: durable ? "durable" : "filesystem",
-        contentHash: durable ? opts.runtime.dir.slice("durable:".length) : null,
-        resolved: publicResolved(opts.runtime),
+        contentHash: durable ? runtime.dir.slice("durable:".length) : null,
+        resolved: publicResolved(runtime),
       };
     },
-    hydrate: () =>
-      queue(CURRENT, () =>
-        withFleetLock(async () => {
-          const record = await retrying(() => opts.backing.get(CURRENT));
-          if (record) {
-            await auditPersisted(record, false);
-            return applyForHydrate(record);
-          }
-          if (opts.seedFallback && !seeded) {
-            await opts.seedFallback();
-            seeded = true;
-            let appeared: StoredDeploymentLayer | null = null;
-            try {
-              appeared = await retrying(() => opts.backing.get(CURRENT));
-            } catch (error) {
-              console.error(
-                `[deployment-layer] could not recheck the durable layer after seeding — serving the filesystem fallback until refresh: ${errMessage(error)}`,
-              );
-            }
-            if (appeared) return applyForHydrate(appeared);
-          }
-          return null;
-        }),
-      ),
+    hydrate,
+    runtime: () => {
+      const state = tenant();
+      if (!state.checking && Date.now() - (state.checkedAt ?? -Infinity) > REFRESH_MS) {
+        state.checking = hydrate()
+          .catch(reportFailureAs("deployment-layer: refresh", null))
+          .finally(() => {
+            state.checking = undefined;
+          });
+      }
+      return state.runtime;
+    },
     get: () =>
-      queue(CURRENT, () =>
+      queue(currentTenant(), () =>
         withFleetLock(async () => {
+          tenant().checkedAt = Date.now();
           const record = await opts.backing.get(CURRENT);
           if (!record) return null;
           await auditPersisted(record, false);
-          if (failedHash !== record.contentHash) {
+          if (tenant().failedHash !== record.contentHash) {
             try {
               await apply(record);
             } catch (error) {
@@ -510,7 +545,8 @@ export function createDeploymentLayerStore(opts: {
         }),
       ),
     put: (input, updatedBy) =>
-      queue(CURRENT, async () => {
+      queue(currentTenant(), async () => {
+        tenant().checkedAt = Date.now();
         let bundle: DeploymentLayerBundle;
         let manifests: SkillManifest[];
         let runtime: DeploymentLayerRuntime;

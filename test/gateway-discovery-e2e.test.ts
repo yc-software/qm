@@ -2,14 +2,13 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { test } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { oneShot } from "../src/agent/agent-run.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { scopeId } from "../src/types.ts";
@@ -229,7 +228,7 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
         }),
       ),
     );
-    await built.startup();
+    await inTestTenant(() => undefined);
     await built.refreshModels();
     const runtime = await runtimeConfigBody(
       {

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mock, test } from "node:test";
+import { mock } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
+import { test } from "./support/test-tenants.ts";
 
 type Handler = (args: any) => Promise<void>;
 

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../src/agent/document-inputs.ts";
@@ -16,6 +15,7 @@ import { mimeFromName } from "../src/core/attachments.ts";
 import type { AttachmentMeta, SessionEntry } from "../src/types.ts";
 import type { FileArtifact, FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/agent/provider-payload.ts";
+import { test } from "./support/test-tenants.ts";
 
 const openai = { api: "openai-responses", provider: "openai", input: ["text", "image"] };
 const anthropic = { api: "anthropic-messages", provider: "anthropic", input: ["text", "image"] };

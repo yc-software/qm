@@ -1,6 +1,6 @@
 import "./support/auto-fake-sprites.ts";
-import { test, type TestContext } from "node:test";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { type TestContext } from "node:test";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -8,16 +8,17 @@ import type { TurnRequest } from "../src/types.ts";
 
 async function fixture(t: TestContext) {
   const built = buildApp(testConfig());
-  await built.startup();
+  await built.deploymentLayerStore.hydrate();
   await inTestTenant(async () => {
     for (const actor of ["U1", "U2"]) {
       const computer = await built.sandboxResources.create(actor, `personal:${actor}`, "sprites", "default");
       await built.sandboxResources.setDefault(actor, `personal:${actor}`, computer.id);
     }
   });
+
+  await inTestTenant(() => built.identity.ready());
   t.after(async () => {
     built.scheduler.stop();
-    built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
   let provisions = 0;

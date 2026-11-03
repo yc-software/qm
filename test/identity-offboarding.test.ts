@@ -1,4 +1,4 @@
-import { describe, it, before, after } from "node:test";
+import { describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
@@ -14,7 +14,7 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { it, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "offboarding-secret".repeat(3);
 
@@ -42,7 +42,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
         emailAuthPrincipals: ["allowed@example.com"],
       }),
     );
-    await built.identity.refresh();
+    await inTestTenant(() => built.identity.refresh());
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,

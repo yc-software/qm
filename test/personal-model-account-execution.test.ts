@@ -1,13 +1,13 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { mock, test } from "node:test";
+import { mock } from "node:test";
 import * as agentRun from "../src/agent/agent-run.ts";
 import * as mockAgent from "./support/mock-agent.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const turns: AgentTurnInput[] = [];
 let piOptions: Parameters<typeof agentRun.createAgent>[0];

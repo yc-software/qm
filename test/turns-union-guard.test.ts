@@ -50,7 +50,7 @@ test("POST /v1/turns strips ownerKeychainUnion from the external body but keeps 
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
     headers: {
-      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
       "content-type": "application/json",
     },
     body,
@@ -85,7 +85,7 @@ test("POST /v1/turns strips unattendedGrants from the external body", async () =
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
     headers: {
-      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
       "content-type": "application/json",
     },
     body,
@@ -117,7 +117,7 @@ test("POST /v1/turns strips nested owner-keychain union from typed automation or
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
     headers: {
-      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
       "content-type": "application/json",
     },
     body,
@@ -142,7 +142,7 @@ test("POST /v1/turns does not let a typed origin override legacy automation prov
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
     headers: {
-      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
       "content-type": "application/json",
     },
     body,
@@ -166,7 +166,7 @@ test("POST /v1/turns does not let legacy liveness override typed automation prov
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
     headers: {
-      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
       "content-type": "application/json",
     },
     body,
@@ -191,7 +191,7 @@ test("POST /v1/turns preserves legacy screen data omitted from a matching typed 
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
     headers: {
-      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
       "content-type": "application/json",
     },
     body,
@@ -216,7 +216,7 @@ test("POST /v1/turns rejects conflicting typed and legacy automation screen data
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
     headers: {
-      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
       "content-type": "application/json",
     },
     body,
@@ -245,7 +245,7 @@ test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn 
     const r = await fetch(`${base}/v1/turns`, {
       method: "POST",
       headers: {
-        ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+        ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
         "content-type": "application/json",
       },
       body,
@@ -272,7 +272,7 @@ test("POST /v1/turns strips redeliveryKey: an external body cannot borrow Slack'
     const r = await fetch(`${base}/v1/turns`, {
       method: "POST",
       headers: {
-        ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+        ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
         "content-type": "application/json",
       },
       body,
@@ -302,7 +302,7 @@ test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: name
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
     headers: {
-      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
       "content-type": "application/json",
     },
     body,

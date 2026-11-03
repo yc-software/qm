@@ -10,6 +10,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
@@ -54,7 +55,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   return { crons, cron, deliveries, idempotency, ask, deps };
 }
 
-test("cron credential resolution resumes in the original conversation exactly once", async () => {
+tenantTest("cron credential resolution resumes in the original conversation exactly once", async () => {
   const requests: TurnRequest[] = [];
   const f = await fixture(async (request) => {
     requests.push(request);

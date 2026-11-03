@@ -1,7 +1,6 @@
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSandboxResources, type SandboxResource, type SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
@@ -16,7 +15,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 import { withoutTenant } from "../src/tenants/context.ts";
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {

@@ -55,6 +55,7 @@ test("ProjectStore atomically maintains a managed-group roster", () =>
 test("session lists check each project once per request and observe membership changes", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-list-membership-")) }));
   await inTestTenant(async () => {
+    await built.identity.ready();
     try {
       const project = await built.projects.create({ name: "Shared history", ownerId: "owner" });
       await built.projects.addMember(project.id, "owner", "member");
@@ -88,6 +89,8 @@ test("session lists check each project once per request and observe membership c
       assert.equal(memberships, 2);
     } finally {
       await built.runtime.stop();
+
+      await built.identity.ready();
     }
   });
 });
@@ -263,6 +266,7 @@ test("capability scope checks follow current shared rosters", async () => {
     );
     await built.directory.replaceGroups([{ groupId: "G1", principalId: "member" }], 1);
 
+    await built.identity.ready();
     assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-private" }), true);
     assert.equal(await built.app.authorizesCapabilityScope({ actorId: "B1", scopeId: "channel:C-private" }), true);
     assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "group:G1" }), true);
@@ -298,6 +302,7 @@ test("capability scope checks honor a linked identity's room membership", async 
     await built.directory.replaceGroups([{ groupId: "G1", principalId: "slack-person@example.com" }], 1);
     const check = (actorId: string, scopeId: string) => built.app.authorizesCapabilityScope({ actorId, scopeId });
 
+    await built.identity.ready();
     assert.equal(await check("web-person", "channel:C-private"), false);
     await built.principalLinks.link({
       principalId: "slack-person@example.com",
@@ -325,6 +330,8 @@ test("channel capabilities bridge legacy public rosters but still honor deactiva
     await built.identity.deactivate("member");
     assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), false);
   });
+
+  await inTestTenant(() => built.identity.ready());
 });
 
 async function listen(server: Server): Promise<string> {
@@ -336,6 +343,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
   const deployAcl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
+  await inTestTenant(() => built.identity.ready());
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -732,6 +740,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
     const project = await built.app.createProject("owner", "Roster race");
     assert.ok(project);
 
+    await built.identity.ready();
     const originalRecord = built.sessions.recordLlmRequest.bind(built.sessions);
     let resumeTurn!: () => void;
     const turnMayResume = new Promise<void>((resolve) => {
@@ -799,6 +808,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
 test("Project turns rebuild the full thread for a member who joined later", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-tenure-")) }));
   await inTestTenant(async () => {
+    await built.identity.ready();
     await built.app.upsertDirectory([
       { principalId: "owner", displayName: "Owner", type: "internal" },
       { principalId: "late-member", displayName: "Late Member", type: "internal" },
@@ -836,6 +846,7 @@ test("Project turns rebuild the full thread for a member who joined later", asyn
 test("Auto quarantine honors the current Project roster epoch", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-auto-race-")) }));
   await inTestTenant(async () => {
+    await built.identity.ready();
     await built.app.upsertDirectory([
       { principalId: "owner", displayName: "Owner", type: "internal" },
       { principalId: "member", displayName: "Member", type: "internal" },
@@ -945,6 +956,7 @@ test("a member added to a Project inherits the chats that predate them", async (
     assert.ok(session);
     await built.sessions.updateTitle(session.id, "Pre-join chat");
 
+    await built.identity.ready();
     assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
 
     const listed = await built.app.listSessions("member");
@@ -1034,11 +1046,14 @@ test("linking a just-created channel refreshes the surface directory and retries
     } finally {
       unlisten();
     }
+
+    await built.identity.ready();
   });
 });
 
 test("Project slack-channel routes gate on visibility and workspace use, and sync the channel roster", async (t) => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-slack-")) }));
+  await inTestTenant(() => built.identity.ready());
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -1179,6 +1194,7 @@ test("a project can add a signed-in principal on a deployment whose directory is
     const session = await built.sessions.getOrCreateByThread("web:rex", "dm", "personal:rex@acme.com");
     await built.sessions.addParticipant(session.id, "rex@acme.com");
 
+    await built.identity.ready();
     const project = (await built.app.createProject("dana@acme.com", "demo"))!;
     const added = await built.app.addProjectMember(project.id, "dana@acme.com", "rex@acme.com");
 
@@ -1207,6 +1223,7 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
     assert.equal(linked.status, "ok");
     assert.equal(await built.projects.membership(groupRef, "chan-pal"), true);
 
+    await built.identity.ready();
     const turn = (actor: string, threadRef: string, text = "hello linked project") =>
       built.app.turn({
         surface: "web",

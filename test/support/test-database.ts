@@ -7,10 +7,14 @@ import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persist
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import pg from "pg";
 import { applyPgMigrations, createPgPool, registeredPgMigrations, type PgPool } from "../../src/persistence/pg-pool.ts";
-import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
+import { createConfigStore } from "../../src/resolution/config-store.ts";
+import type { ConfigTables } from "../../src/resolution/config-tables.ts";
+import { createPostgresConfigTables } from "../../src/resolution/config-tables-pg.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
+import { createIdentityService, type IdentityService } from "../../src/identity/identity-service.ts";
 import { useOwnerDatabase } from "../../src/tenants/claim.ts";
+import { inTestTenant } from "./test-tenants.ts";
 
 function baseDatabaseUrl(variable: "DATABASE_URL" | "DATABASE_OWNER_URL" = "DATABASE_URL"): URL {
   const base = process.env[variable];
@@ -168,8 +172,12 @@ export function testAdvisoryLock(): AdvisoryLock {
   return createPostgresAdvisoryLock(createPgPool(databaseUrl(createDatabaseSync({}))));
 }
 
+export function testConfigTables(databaseUrl: string = testMigratedDatabaseUrl()): ConfigTables {
+  return { ...createPostgresConfigTables(databaseUrl), fresh: true };
+}
+
 export function testConfigStore(orgId: string, opts: Partial<Parameters<typeof createConfigStore>[1]> = {}) {
-  return createConfigStore(orgId, { ...configStoreMaps(() => testMap<never>()), ...opts });
+  return createConfigStore(orgId, { tables: testConfigTables(), ...opts });
 }
 
 export const TEST_ADMIN_GRANTS = "admin-alice:org_admin,admin-bob:org_admin";
@@ -193,4 +201,10 @@ export function testDeployBackings(
     pg: maps.pool,
     ...backings,
   };
+}
+
+export async function testIdentity(): Promise<IdentityService> {
+  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  await inTestTenant(() => identity.ready());
+  return identity;
 }

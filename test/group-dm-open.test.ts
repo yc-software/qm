@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe } from "node:test";
 import assert from "node:assert/strict";
 
 import { openGroupViaSurface, resolveReachTarget, type ReachDirectory } from "../src/reach/reach.ts";
@@ -7,7 +7,7 @@ import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../src/reach/reach.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { it, inTestTenant } from "./support/test-tenants.ts";
 
 const MEMBERS = [
   { principalId: "alice@acme.dev", displayName: "alice", type: "internal" as const },

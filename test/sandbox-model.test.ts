@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { createServer as httpServer, type IncomingHttpHeaders } from "node:http";
@@ -16,7 +15,7 @@ import {
 } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const key = "company-gateway-secret";
 const endUser = createHmac("sha256", TEST_CAPABILITY_SECRET).update("U1").digest("hex").slice(0, 32);
@@ -53,6 +52,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
   const built = buildApp(config);
+  await inTestTenant(() => built.identity.ready());
   let overBudget = false;
   const server = createServer(built.app, {
     ...serverDeps(config, built),
@@ -177,6 +177,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
 test("a sandbox-model token is refused on every other route", async (t) => {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
   const built = buildApp(config);
+  await inTestTenant(() => built.identity.ready());
   const server = createServer(built.app, serverDeps(config, built));
   const base = await listen(server as unknown as ReturnType<typeof httpServer>);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -213,6 +214,8 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
   });
   const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
   await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
+
+  await inTestTenant(() => built.identity.ready());
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (layers, opts) => {
@@ -246,6 +249,8 @@ test("deployments without a gateway leave the sandbox gateway variables unset", 
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3), apiBaseUrl: "https://core.example.test" });
   const built = buildApp(config);
   await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
+
+  await inTestTenant(() => built.identity.ready());
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (layers, opts) => {

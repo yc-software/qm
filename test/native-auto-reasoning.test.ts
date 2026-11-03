@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { applyReasoningMode, createAgent } from "../src/agent/agent-run.ts";
 import { getRequiredModel, thinkingLevelsFor, safeModelMetadata } from "../src/model/pi-models.ts";
 import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { testConfigStore } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 const adaptiveId = "claude-sonnet-4-6";
 

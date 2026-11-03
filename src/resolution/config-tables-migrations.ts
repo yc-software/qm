@@ -1,0 +1,235 @@
+import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { tenantTables } from "../tenants/migrations.ts";
+
+const texts = (json: string) =>
+  `CASE WHEN jsonb_typeof(${json}) = 'array' THEN ARRAY(SELECT jsonb_array_elements_text(${json})) END`;
+const flag = (text = "json->>'on'") => `(${text})::boolean`;
+const at = (text: string) => `to_timestamp(COALESCE((${text})::double precision, 0) / 1000)`;
+
+const SCOPE_SOURCES: Array<[string, Record<string, string>]> = [
+  ["command_policies", { command_mode: "json->'policy'->>'mode'", command_rules: "json->'policy'->'rules'" }],
+  ["security_postures", { security_posture: "json->>'posture'" }],
+  ["sharing_postures", { sharing_posture: "json->>'posture'" }],
+  [
+    "approval_grant_modes",
+    { approval_session: flag("json->'modes'->>'session'"), approval_always: flag("json->'modes'->>'always'") },
+  ],
+  [
+    "egress_policies",
+    {
+      egress_allowed_hosts: `COALESCE(${texts("json->'policy'->'allowedHosts'")}, '{}')`,
+      egress_denied_hosts: texts("json->'policy'->'deniedHosts'"),
+      egress_deny_private_networks: flag("json->'policy'->>'denyPrivateNetworks'"),
+      egress_private_network_allowed_hosts: texts("json->'policy'->'privateNetworkAllowedHosts'"),
+    },
+  ],
+  ["unfulfilled_insights_flag", { unfulfilled_insights: flag() }],
+  ["external_slack_participants_flag", { external_slack_participants: flag() }],
+  ["channel_header_pin_flag", { channel_header_pin: flag() }],
+  ["webui_model_configs", { webui_models: texts("json->'ids'") }],
+  ["ack_emoji", { ack_emoji: texts("json->'names'") }],
+  [
+    "branding_configs",
+    {
+      brand_accent: "json->'branding'->>'accent'",
+      brand_mark: "json->'branding'->>'mark'",
+      brand_mark_url: "json->'branding'->>'markUrl'",
+      brand_self_label: "json->'branding'->>'selfLabel'",
+      brand_org_name: "json->'branding'->>'orgName'",
+    },
+  ],
+  ["browse_max_steps_configs", { browse_max_steps: "(json->>'steps')::integer" }],
+  [
+    "spend_limit_configs",
+    {
+      spend_daily_usd: "(json->'limit'->>'dailyUsd')::double precision",
+      spend_monthly_usd: "(json->'limit'->>'monthlyUsd')::double precision",
+    },
+  ],
+  ["browse_model_configs", { browse_model: "json->>'modelId'" }],
+  ["org_ambient_flag", { org_ambient: flag() }],
+  ["interactive_fast_mode_flag", { interactive_fast_mode: flag() }],
+  [
+    "individual_model_auth_flag",
+    {
+      individual_model_auth: `CASE WHEN id LIKE 'org:%' THEN ${flag()} END`,
+      model_account: `CASE WHEN id NOT LIKE 'org:%' AND ${flag()} THEN COALESCE(json->>'provider', 'personal') END`,
+    },
+  ],
+  [
+    "base_model_configs",
+    {
+      model_id: "json->>'modelId'",
+      effort_level: "json->>'effortLevel'",
+      fast_mode: flag("json->>'fastMode'"),
+      runtime_revision: "(json->>'revision')::integer",
+      org_revision: "(json->>'orgRevision')::integer",
+      embedding_model_id: "json->>'embeddingModelId'",
+    },
+  ],
+];
+
+const OTHER_SOURCES = ["soul_configs", "soul_history"];
+
+const scopeBackfill = ([table, columns]: [string, Record<string, string>]) => {
+  const names = Object.keys(columns);
+  return `INSERT INTO scope_settings(scope_id, ${names.join(", ")})
+    SELECT id, ${Object.values(columns).join(", ")} FROM ${table}
+    ON CONFLICT (scope_id) DO UPDATE SET ${names.map((n) => `${n} = EXCLUDED.${n}`).join(", ")}`;
+};
+
+const soulRevisionsFrom = (source: string, scope: string, revision: string, where: string) =>
+  `INSERT INTO soul_revisions(scope_id, version, content, updated_at, updated_by, session_id)
+    SELECT ${scope}, (${revision}->>'version')::integer, ${revision}->>'content',
+      ${at(`${revision}->>'updatedAt'`)}, ${revision}->>'updatedBy', ${revision}->>'sessionId'
+    ${source} WHERE ${where} ON CONFLICT DO NOTHING`;
+
+const CREATE_TABLES = [
+  `CREATE TABLE scope_settings(
+     scope_id TEXT PRIMARY KEY,
+     command_mode TEXT,
+     command_rules JSONB,
+     security_posture TEXT,
+     sharing_posture TEXT,
+     approval_session BOOLEAN,
+     approval_always BOOLEAN,
+     egress_allowed_hosts TEXT[],
+     egress_denied_hosts TEXT[],
+     egress_deny_private_networks BOOLEAN,
+     egress_private_network_allowed_hosts TEXT[],
+     unfulfilled_insights BOOLEAN,
+     external_slack_participants BOOLEAN,
+     channel_header_pin BOOLEAN,
+     webui_models TEXT[],
+     ack_emoji TEXT[],
+     brand_accent TEXT,
+     brand_mark TEXT,
+     brand_mark_url TEXT,
+     brand_self_label TEXT,
+     brand_org_name TEXT,
+     browse_max_steps INTEGER,
+     spend_daily_usd DOUBLE PRECISION,
+     spend_monthly_usd DOUBLE PRECISION,
+     browse_model TEXT,
+     model_account TEXT CHECK (model_account IN ('personal', 'anthropic', 'openai')),
+     model_id TEXT,
+     effort_level TEXT,
+     fast_mode BOOLEAN,
+     embedding_model_id TEXT,
+     runtime_revision INTEGER,
+     org_revision INTEGER,
+     org_ambient BOOLEAN,
+     interactive_fast_mode BOOLEAN,
+     individual_model_auth BOOLEAN
+   )`,
+  `CREATE TABLE soul_revisions(
+     scope_id TEXT NOT NULL,
+     version INTEGER NOT NULL,
+     content TEXT NOT NULL,
+     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     updated_by TEXT,
+     session_id TEXT,
+     PRIMARY KEY (scope_id, version)
+   )`,
+  `CREATE TABLE purpose_runtimes(
+     purpose TEXT PRIMARY KEY CHECK (purpose IN ('cron', 'subagent', 'fallback')),
+     model_id TEXT NOT NULL,
+     effort_level TEXT,
+     fast_mode BOOLEAN
+   )`,
+];
+
+const BACKFILL = [
+  ...SCOPE_SOURCES.map(scopeBackfill),
+  `INSERT INTO purpose_runtimes(purpose, model_id, effort_level, fast_mode)
+    SELECT p.purpose, p.r->>'modelId', p.r->>'effortLevel', ${flag("p.r->>'fastMode'")}
+    FROM base_model_configs b
+    CROSS JOIN LATERAL (VALUES ('cron', b.json->'cronRuntime'), ('subagent', b.json->'subagentRuntime'),
+      ('fallback', b.json->'fallbackRuntime')) AS p(purpose, r)
+    WHERE b.id LIKE 'org:%' AND p.r->>'modelId' IS NOT NULL`,
+  soulRevisionsFrom("FROM soul_configs s", "s.id", "s.json", "s.json->>'version' IS NOT NULL"),
+  soulRevisionsFrom(
+    `FROM soul_configs s CROSS JOIN LATERAL jsonb_array_elements(
+       CASE WHEN jsonb_typeof(s.json->'history') = 'array' THEN s.json->'history' ELSE '[]' END) AS h(json)`,
+    "s.id",
+    "h.json",
+    "(h.json->>'version')::integer < (s.json->>'version')::integer",
+  ),
+  soulRevisionsFrom(
+    "FROM soul_history h JOIN soul_configs s ON s.id = h.json->>'scopeId'",
+    "s.id",
+    "h.json",
+    "(h.json->>'version')::integer < (s.json->>'version')::integer",
+  ),
+];
+
+const SOURCES = [...SCOPE_SOURCES.map(([table]) => table), ...OTHER_SOURCES];
+
+export const CONFIG_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
+  tenantTables(
+    "tenancy/config-store/0001-typed",
+    [
+      { table: "scope_settings", primaryKey: "scope_id" },
+      { table: "soul_revisions", primaryKey: "scope_id, version" },
+      { table: "purpose_runtimes", primaryKey: "purpose" },
+    ],
+    {
+      before: [
+        ...SOURCES.map((table) => `CREATE TABLE IF NOT EXISTS ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`),
+        ...CREATE_TABLES,
+        ...BACKFILL,
+        ...SOURCES.map((table) => `DROP TABLE ${table}`),
+        `DO $drop_versions$ BEGIN
+           IF to_regclass('durable_map_versions') IS NOT NULL THEN
+             DELETE FROM durable_map_versions WHERE tbl IN (${SOURCES.map((table) => `'${table}'`).join(", ")});
+           END IF;
+         END $drop_versions$`,
+      ],
+    },
+  ),
+  typedTableMigration({
+    table: "connector_clients",
+    columns: [
+      "scope_id TEXT NOT NULL",
+      "provider TEXT NOT NULL",
+      "client_id TEXT NOT NULL",
+      "secret_enc TEXT NOT NULL",
+      "scopes TEXT[]",
+      "redirect_allowlist TEXT[]",
+      "consent_mode TEXT",
+      "hosted_domain TEXT",
+      "enabled BOOLEAN NOT NULL",
+      "updated_by TEXT",
+      "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+    ],
+    primaryKey: ["scope_id", "provider"],
+    backfill: {
+      scope_id: "json->>'scopeId'",
+      provider: "json->>'provider'",
+      client_id: "json->>'clientId'",
+      secret_enc: "json->>'secretEnc'",
+      scopes: texts("json->'scopes'"),
+      redirect_allowlist: texts("json->'redirectAllowlist'"),
+      consent_mode: "json->>'consentMode'",
+      hosted_domain: "json->>'hostedDomain'",
+      enabled: `COALESCE(${flag("json->>'enabled'")}, TRUE)`,
+      updated_by: "json->>'updatedBy'",
+      updated_at: at("json->>'updatedAt'"),
+    },
+    where: "json ?& ARRAY['scopeId', 'provider', 'clientId', 'secretEnc']",
+  }),
+  typedTableMigration({
+    table: "deployment_identity",
+    columns: ["singleton BOOLEAN NOT NULL DEFAULT TRUE CHECK (singleton)", "org_id TEXT NOT NULL"],
+    primaryKey: ["singleton"],
+    backfill: { org_id: "json->>'orgId'" },
+    where: "json ? 'orgId'",
+  }),
+  typedTableMigration({
+    table: "slack_emoji_catalog",
+    columns: ["scope_id TEXT NOT NULL", "emoji JSONB NOT NULL", "updated_at TIMESTAMPTZ NOT NULL DEFAULT now()"],
+    primaryKey: ["scope_id"],
+    backfill: { scope_id: "id", emoji: "COALESCE(json->'emoji', '{}')", updated_at: at("json->>'updatedAt'") },
+  }),
+];

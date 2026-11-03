@@ -22,6 +22,8 @@ for (const surface of ["web", "slack", "swarm"]) {
       },
     });
     await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
+
+    await inTestTenant(() => built.identity.ready());
     const server = createInsecureTestServer(built.app);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

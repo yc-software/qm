@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -10,6 +9,7 @@ import type { Destination, TurnRequest } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 const recipient: Destination = {
   type: "principal",

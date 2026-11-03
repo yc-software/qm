@@ -87,8 +87,8 @@ export interface E2bSandboxOptions extends BlobStagingOptions {
   snapshotIntervalMs?: number;
   nativeSnapshotIntervalMs?: number;
   egressProxyUrl?: string;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
   store: DurableMap<StoredE2bSandbox>;
   snapshots?: HomeSnapshotStore;
@@ -128,9 +128,9 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         label: "e2b",
         homeDir: HOME_DIR,
         homeTarPath: HOME_TAR,
-        prunePaths: [
+        prunePaths: () => [
           ...SNAPSHOT_PRUNE,
-          ...ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => `./${rel}`),
+          ...ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => `./${rel}`),
         ],
         store: opts.snapshots,
         io: {
@@ -306,10 +306,10 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       os: "Linux — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
       runtimes: ["Node", "Python 3"],
       get tools() {
-        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
+        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools?.() ?? [])]);
       },
       get notInstalled() {
-        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools?.() ?? []);
       },
       get cpus() {
         return observed.cpus;
@@ -350,7 +350,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: HOME_DIR,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => rel),
   });
 
   const blobStaging = createBackendBlobStaging("e2b", (id, script, t) => execRaw(id, script, t), opts);
@@ -438,7 +438,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       };
 
       try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
+        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths?.() ?? [])}`;
         const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
           throw new Error(`e2b provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);

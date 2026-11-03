@@ -61,6 +61,7 @@ test.after(() => fake.cleanup());
 for (const kind of ["command", "security-screen"] as const) {
   test(`workers require their own approval instead of inheriting root-session ${kind} grants`, async () => {
     const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+    await inTestTenant(() => built.identity.ready());
     const request: TurnRequest = {
       surface: "swarm",
       actor: { externalId: "U1" },
@@ -138,6 +139,7 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
       modalSandbox: { tokenId: "test-id", tokenSecret: "test-secret" },
     }),
   );
+  await inTestTenant(() => built.identity.ready());
   try {
     const rootTurn = await inTestTenant(() =>
       built.app.turn({
@@ -451,6 +453,7 @@ test("HTTP root spawns three peers and receives their replies using real orchest
 
 test("unbound request fields cannot claim verified swarm provenance", async () => {
   const built = buildApp(testConfig());
+  await inTestTenant(() => built.identity.ready());
   const before = screenedPayloads.length;
   try {
     const request: TurnRequest & { verifiedSwarm: boolean } = {
@@ -480,6 +483,8 @@ test("a resolved command approval informs the model without changing its request
   const built = buildApp(testConfig());
   const sandbox = await inTestTenant(() => built.sandboxResources.create("U1", "personal:U1", "sprites"));
   await inTestTenant(() => built.sandboxResources.setDefault("U1", "personal:U1", sandbox.id));
+
+  await inTestTenant(() => built.identity.ready());
   const request: TurnRequest = {
     surface: "web",
     actor: { externalId: "U1" },
@@ -533,6 +538,7 @@ test("a resolved command approval informs the model without changing its request
 
 test("disabled swarms park queued notifications once without running the model or writing failures", async () => {
   const built = buildApp(testConfig({ swarmsEnabled: false }));
+  await inTestTenant(() => built.identity.ready());
   try {
     const rootTurn = await inTestTenant(() =>
       built.app.turn({
@@ -617,6 +623,7 @@ test("swarms stay off for a person until the swarms flag names their personal sc
 
 test("a goal assigned at spawn becomes the worker's session goal and its turn has no swarm deadline", async () => {
   const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  await inTestTenant(() => built.identity.ready());
   try {
     const rootComputer = await inTestTenant(() =>
       built.sandboxResources.create("U1", "personal:U1", "sprites", "Root"),
@@ -666,6 +673,7 @@ test("a goal assigned at spawn becomes the worker's session goal and its turn ha
 
 test("a worker with an open goal answers messages as a goal turn without the swarm turnMs deadline", async () => {
   const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  await inTestTenant(() => built.identity.ready());
   try {
     const rootComputer = await inTestTenant(() =>
       built.sandboxResources.create("U1", "personal:U1", "sprites", "Root"),
@@ -722,6 +730,7 @@ test("a worker with an open goal answers messages as a goal turn without the swa
 
 test("a worker's wake:false reply waits in the root's mailbox and reaches the root's next human turn once", async () => {
   const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  await inTestTenant(() => built.identity.ready());
   try {
     const rootComputer = await inTestTenant(() =>
       built.sandboxResources.create("U1", "personal:U1", "sprites", "Root"),
