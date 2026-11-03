@@ -48,7 +48,7 @@ async function twoTenants(): Promise<{ url: string; admin: pg.Pool }> {
 async function restrictedLogin(admin: pg.Pool, url: string): Promise<{ url: string; drop(): Promise<void> }> {
   const role = `qmt_app_${randomBytes(6).toString("hex")}`;
   await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD '${role}' NOBYPASSRLS`);
-  await admin.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
+  await admin.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${role}`);
   await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
   await admin.query(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
   const appUrl = new URL(url);
