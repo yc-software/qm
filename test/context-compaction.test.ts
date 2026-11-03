@@ -42,6 +42,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const ORG = "default-org";
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);
@@ -204,207 +205,215 @@ async function waitForLeaseRelease(sessions: SessionStore, sessionId: string, de
   }
 }
 
-test("overflow over the injected token budget summarizes: compactHistory runs over the oldest entries, a summary is appended, the session resets, the rebuilt context is bounded", async () => {
-  const { agent, compactCalls, resetCalls } = spyAgent();
-  const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
+test("overflow over the injected token budget summarizes: compactHistory runs over the oldest entries, a summary is appended, the session resets, the rebuilt context is bounded", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls, resetCalls } = spyAgent();
+    const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
 
-  const sid = await seed(
-    sessions,
-    msgTexts(6).map((text) => ({ payload: { text } })),
-  );
+    const sid = await seed(
+      sessions,
+      msgTexts(6).map((text) => ({ payload: { text } })),
+    );
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
 
-  assert.ok(compactCalls.length >= 1, "compactHistory should be called on overflow");
-  const summarized = compactCalls[0]!.history;
-  assert.deepEqual(
-    summarized.map((e) => e.seq),
-    [0, 1, 2, 3, 4],
-    "should summarize the oldest entries past the keep-recent budget",
-  );
+    assert.ok(compactCalls.length >= 1, "compactHistory should be called on overflow");
+    const summarized = compactCalls[0]!.history;
+    assert.deepEqual(
+      summarized.map((e) => e.seq),
+      [0, 1, 2, 3, 4],
+      "should summarize the oldest entries past the keep-recent budget",
+    );
 
-  const summaries = await summaryEntries(sessions, sid);
-  assert.equal(contextSummaryPayload(summaries[0]!)!.throughSeq, 4, "summary throughSeq must advance to seq 4");
+    const summaries = await summaryEntries(sessions, sid);
+    assert.equal(contextSummaryPayload(summaries[0]!)!.throughSeq, 4, "summary throughSeq must advance to seq 4");
 
-  assert.equal(resetCalls[0], sid, "resetSession must be called with the session id");
+    assert.equal(resetCalls[0], sid, "resetSession must be called with the session id");
 
-  assert.equal(res.reply, "history:2", "rebuilt context is [summary, keep-recent…]");
-});
+    assert.equal(res.reply, "history:2", "rebuilt context is [summary, keep-recent…]");
+  }));
 
-test("the background pass labels the lease it takes, so a turn it locks out can name what beat it", async () => {
-  const { agent } = spyAgent();
-  const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
-  const holders: Array<string | undefined> = [];
-  const acquire = sessions.acquireLease.bind(sessions);
-  sessions.acquireLease = async (sessionId, holder) => {
-    holders.push(holder);
-    return acquire(sessionId, holder);
-  };
+test("the background pass labels the lease it takes, so a turn it locks out can name what beat it", () =>
+  inTestTenant(async () => {
+    const { agent } = spyAgent();
+    const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
+    const holders: Array<string | undefined> = [];
+    const acquire = sessions.acquireLease.bind(sessions);
+    sessions.acquireLease = async (sessionId, holder) => {
+      holders.push(holder);
+      return acquire(sessionId, holder);
+    };
 
-  const sid = await seed(
-    sessions,
-    msgTexts(6).map((text) => ({ payload: { text } })),
-  );
-  assert.equal((await orch.handleTurn(turn("!histcount"))).status, "ok");
+    const sid = await seed(
+      sessions,
+      msgTexts(6).map((text) => ({ payload: { text } })),
+    );
+    assert.equal((await orch.handleTurn(turn("!histcount"))).status, "ok");
 
-  const deadline = Date.now() + 3_000;
-  while (!holders.includes("compaction") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
-  assert.ok(
-    holders.includes("compaction"),
-    "the post-turn background pass takes the lock as compaction, not as a turn",
-  );
-  assert.ok(holders.includes("turn"), "…and the turn itself takes it as a turn");
-  await waitForLeaseRelease(sessions, sid);
-});
+    const deadline = Date.now() + 3_000;
+    while (!holders.includes("compaction") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(
+      holders.includes("compaction"),
+      "the post-turn background pass takes the lock as compaction, not as a turn",
+    );
+    assert.ok(holders.includes("turn"), "…and the turn itself takes it as a turn");
+    await waitForLeaseRelease(sessions, sid);
+  }));
 
-test("token overflow triggers compaction with only a few huge entries", async () => {
-  const { agent, compactCalls, resetCalls } = spyAgent();
-  const { orch, sessions } = buildOrchestrator(agent, 50);
+test("token overflow triggers compaction with only a few huge entries", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls, resetCalls } = spyAgent();
+    const { orch, sessions } = buildOrchestrator(agent, 50);
 
-  const big = "many different tokens here ".repeat(25);
-  const sid = await seed(
-    sessions,
-    Array.from({ length: 4 }, (_, i) => ({ payload: { text: `${big} ${i}` } })),
-  );
+    const big = "many different tokens here ".repeat(25);
+    const sid = await seed(
+      sessions,
+      Array.from({ length: 4 }, (_, i) => ({ payload: { text: `${big} ${i}` } })),
+    );
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
 
-  assert.ok(compactCalls.length >= 1, "token overflow must trigger compaction despite the low entry count");
-  assert.equal(resetCalls[0], sid, "compaction resets the agent session");
-  const summaries = await summaryEntries(sessions, sid);
-  assert.ok(summaries.length >= 1, "a summary entry is written");
-  assert.ok(
-    compactCalls[0]!.history.length >= 1 && compactCalls[0]!.history.length < 4,
-    "the oldest entries (not all, not none) are summarized; the newest turn stays verbatim",
-  );
-});
+    assert.ok(compactCalls.length >= 1, "token overflow must trigger compaction despite the low entry count");
+    assert.equal(resetCalls[0], sid, "compaction resets the agent session");
+    const summaries = await summaryEntries(sessions, sid);
+    assert.ok(summaries.length >= 1, "a summary entry is written");
+    assert.ok(
+      compactCalls[0]!.history.length >= 1 && compactCalls[0]!.history.length < 4,
+      "the oldest entries (not all, not none) are summarized; the newest turn stays verbatim",
+    );
+  }));
 
-test("a prior summary that still fits is reused, not regenerated", async () => {
-  const { agent, compactCalls } = spyAgent();
-  const { orch, sessions } = buildOrchestrator(agent, 1_000_000);
+test("a prior summary that still fits is reused, not regenerated", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls } = spyAgent();
+    const { orch, sessions } = buildOrchestrator(agent, 1_000_000);
 
-  const sid = await seed(sessions, [
-    { payload: { text: "old 0" } },
-    { payload: { text: "old 1" } },
-    { payload: { text: "old 2" } },
-    { payload: { text: "old 3" } },
-    { type: "system", payload: createContextSummaryPayload(3, "prior summary"), scopeLabel: PERSONAL },
-    { payload: { text: "new 5" } },
-  ]);
+    const sid = await seed(sessions, [
+      { payload: { text: "old 0" } },
+      { payload: { text: "old 1" } },
+      { payload: { text: "old 2" } },
+      { payload: { text: "old 3" } },
+      { type: "system", payload: createContextSummaryPayload(3, "prior summary"), scopeLabel: PERSONAL },
+      { payload: { text: "new 5" } },
+    ]);
 
-  const before = await summaryEntries(sessions, sid);
-  assert.equal(before.length, 1, "fixture seeds exactly one summary");
+    const before = await summaryEntries(sessions, sid);
+    assert.equal(before.length, 1, "fixture seeds exactly one summary");
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
 
-  assert.ok(
-    compactCalls.every((c) => c.history.some((e) => e.seq >= 6)),
-    "an already-fitting summary must be reused on the hot path, not regenerated",
-  );
+    assert.ok(
+      compactCalls.every((c) => c.history.some((e) => e.seq >= 6)),
+      "an already-fitting summary must be reused on the hot path, not regenerated",
+    );
 
-  assert.equal(res.reply, "history:2", "reuse returns [summary, recent raw…]");
-});
+    assert.equal(res.reply, "history:2", "reuse returns [summary, recent raw…]");
+  }));
 
-test("with no agent summarizer, overflow falls back to a plain slice — no summary entry written", async () => {
-  const { agent, compactCalls, resetCalls } = spyAgent({ withSummarizer: false });
-  assert.equal(agent.compactHistory, undefined, "fixture: summarizer is absent");
-  const { orch, sessions } = buildOrchestrator(agent, tokensOf("msg 2", "msg 3", "msg 4", "msg 5"));
+test("with no agent summarizer, overflow falls back to a plain slice — no summary entry written", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls, resetCalls } = spyAgent({ withSummarizer: false });
+    assert.equal(agent.compactHistory, undefined, "fixture: summarizer is absent");
+    const { orch, sessions } = buildOrchestrator(agent, tokensOf("msg 2", "msg 3", "msg 4", "msg 5"));
 
-  const sid = await seed(
-    sessions,
-    msgTexts(6).map((text) => ({ payload: { text } })),
-  );
+    const sid = await seed(
+      sessions,
+      msgTexts(6).map((text) => ({ payload: { text } })),
+    );
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
 
-  assert.equal(compactCalls.length, 0, "no summarizer → compactHistory never called");
-  assert.deepEqual(resetCalls, [], "no summarizer → no session reset");
-  const summaries = await summaryEntries(sessions, sid);
-  assert.equal(summaries.length, 0, "fallback must NOT write a summary entry");
-  assert.equal(res.reply, "history:4", "fallback returns the newest entries that fit the token budget");
-});
+    assert.equal(compactCalls.length, 0, "no summarizer → compactHistory never called");
+    assert.deepEqual(resetCalls, [], "no summarizer → no session reset");
+    const summaries = await summaryEntries(sessions, sid);
+    assert.equal(summaries.length, 0, "fallback must NOT write a summary entry");
+    assert.equal(res.reply, "history:4", "fallback returns the newest entries that fit the token budget");
+  }));
 
-test("a tool_call at the summarize/keep boundary whose result is KEPT is not summarized as interrupted", async () => {
-  const { agent, compactCalls } = spyAgent();
-  const callPayload = { tool: "execute", command: "bash refresh.sh", callId: "c1" };
-  const resultPayload = { tool: "execute", callId: "c1", result: "wrote inv=89", isError: false };
-  const { orch, sessions } = buildOrchestrator(
-    agent,
-    budgetKeepingOnlyNewest(JSON.stringify(callPayload), JSON.stringify(resultPayload)),
-  );
+test("a tool_call at the summarize/keep boundary whose result is KEPT is not summarized as interrupted", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls } = spyAgent();
+    const callPayload = { tool: "execute", command: "bash refresh.sh", callId: "c1" };
+    const resultPayload = { tool: "execute", callId: "c1", result: "wrote inv=89", isError: false };
+    const { orch, sessions } = buildOrchestrator(
+      agent,
+      budgetKeepingOnlyNewest(JSON.stringify(callPayload), JSON.stringify(resultPayload)),
+    );
 
-  const sid = await seed(sessions, [
-    { payload: { text: "msg 0" } },
-    { payload: { text: "msg 1" } },
-    { payload: { text: "msg 2" } },
-    { payload: { text: "msg 3" } },
-    { type: "tool_call", payload: callPayload },
-    { type: "tool_result", payload: resultPayload },
-  ]);
+    const sid = await seed(sessions, [
+      { payload: { text: "msg 0" } },
+      { payload: { text: "msg 1" } },
+      { payload: { text: "msg 2" } },
+      { payload: { text: "msg 3" } },
+      { type: "tool_call", payload: callPayload },
+      { type: "tool_result", payload: resultPayload },
+    ]);
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
 
-  assert.ok(compactCalls.length >= 1, "overflow should still trigger the inline compaction");
-  assert.deepEqual(
-    compactCalls[0]!.history.map((e) => e.seq),
-    [0, 1, 2, 3],
-    "the boundary tool_call (seq 4) must be held back with its kept result, not summarized",
-  );
-  const summaries = await summaryEntries(sessions, sid);
-  assert.doesNotMatch(contextSummaryPayload(summaries[0]!)!.text, /interrupted/, "no false interrupted marker");
-});
+    assert.ok(compactCalls.length >= 1, "overflow should still trigger the inline compaction");
+    assert.deepEqual(
+      compactCalls[0]!.history.map((e) => e.seq),
+      [0, 1, 2, 3],
+      "the boundary tool_call (seq 4) must be held back with its kept result, not summarized",
+    );
+    const summaries = await summaryEntries(sessions, sid);
+    assert.doesNotMatch(contextSummaryPayload(summaries[0]!)!.text, /interrupted/, "no false interrupted marker");
+  }));
 
-test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupted in the summary", async () => {
-  const { agent } = spyAgent();
-  const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
+test("a genuinely interrupted tool_call (no result anywhere) IS marked interrupted in the summary", () =>
+  inTestTenant(async () => {
+    const { agent } = spyAgent();
+    const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
 
-  const sid = await seed(sessions, [
-    { type: "tool_call", payload: { tool: "execute", command: "bash refresh.sh", callId: "c1" } },
-    { payload: { text: "(system note: the platform restarted mid-turn...)" } },
-    { payload: { text: "msg 2" } },
-    { payload: { text: "msg 3" } },
-    { payload: { text: "msg 4" } },
-    { payload: { text: "msg 5" } },
-  ]);
+    const sid = await seed(sessions, [
+      { type: "tool_call", payload: { tool: "execute", command: "bash refresh.sh", callId: "c1" } },
+      { payload: { text: "(system note: the platform restarted mid-turn...)" } },
+      { payload: { text: "msg 2" } },
+      { payload: { text: "msg 3" } },
+      { payload: { text: "msg 4" } },
+      { payload: { text: "msg 5" } },
+    ]);
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
 
-  const summaries = await summaryEntries(sessions, sid);
-  assert.ok(summaries.length >= 1);
-  assert.match(
-    contextSummaryPayload(summaries[0]!)!.text,
-    /interrupted/,
-    "interrupted call must be flagged, not invented",
-  );
-});
+    const summaries = await summaryEntries(sessions, sid);
+    assert.ok(summaries.length >= 1);
+    assert.match(
+      contextSummaryPayload(summaries[0]!)!.text,
+      /interrupted/,
+      "interrupted call must be flagged, not invented",
+    );
+  }));
 
-test("a summary uses the session scope regardless of the source entry scopes", async () => {
-  const { agent, compactCalls } = spyAgent();
-  const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("team 4", "recent 5"));
+test("a summary uses the session scope regardless of the source entry scopes", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls } = spyAgent();
+    const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("team 4", "recent 5"));
 
-  const sid = await seed(sessions, [
-    { payload: { text: "team 0" }, scopeLabel: TEAM },
-    { payload: { text: "team 1" }, scopeLabel: TEAM },
-    { payload: { text: "team 2" }, scopeLabel: TEAM },
-    { payload: { text: "team 3" }, scopeLabel: TEAM },
-    { payload: { text: "team 4" }, scopeLabel: TEAM },
-    { payload: { text: "recent 5" } },
-  ]);
+    const sid = await seed(sessions, [
+      { payload: { text: "team 0" }, scopeLabel: TEAM },
+      { payload: { text: "team 1" }, scopeLabel: TEAM },
+      { payload: { text: "team 2" }, scopeLabel: TEAM },
+      { payload: { text: "team 3" }, scopeLabel: TEAM },
+      { payload: { text: "team 4" }, scopeLabel: TEAM },
+      { payload: { text: "recent 5" } },
+    ]);
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
-  assert.ok(compactCalls.length >= 1, "the team-data overflow is still summarized");
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
+    assert.ok(compactCalls.length >= 1, "the team-data overflow is still summarized");
 
-  const summaries = await summaryEntries(sessions, sid);
-  assert.ok(summaries.length >= 1);
-  assert.equal(summaries[0]!.scopeLabel, PERSONAL, "compaction does not inherit source entry scopes");
-});
+    const summaries = await summaryEntries(sessions, sid);
+    assert.ok(summaries.length >= 1);
+    assert.equal(summaries[0]!.scopeLabel, PERSONAL, "compaction does not inherit source entry scopes");
+  }));
 
 const mkEntry = (over: Partial<SessionEntry> & { seq: number }): SessionEntry => ({
   sessionId: "s",
@@ -534,107 +543,112 @@ for (const [kind, mkTurn] of [
   ["spine", spineTurn],
   ["DM", turn],
 ] as const) {
-  test(`a ${kind} turn between soft and hard does NOT block on compaction; the background pass sheds it`, async () => {
+  test(`a ${kind} turn between soft and hard does NOT block on compaction; the background pass sheds it`, () =>
+    inTestTenant(async () => {
+      const { agent, compactCalls } = spyAgent();
+      const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+      const sid = await seed(
+        sessions,
+        msgTexts(8).map((text) => ({ payload: { text } })),
+      );
+
+      const res = await orch.handleTurn(mkTurn("!histcount"));
+      assert.equal(res.status, "ok");
+      assert.equal(res.reply, "history:8", "under the hard limit the turn runs on raw history, unblocked");
+
+      const summaries = await waitForSummary(sessions, sid);
+      assert.equal(summaries.length, 1, "the background pass compacts off the hot path");
+      assert.equal(compactCalls.length, 1, "exactly one (background) compaction, none inline");
+    }));
+}
+
+test("a model-overridden session's background pass sizes against the override's budget, not the scope default", () =>
+  inTestTenant(async () => {
     const { agent, compactCalls } = spyAgent();
-    const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+    const OVERRIDE = "tiny-context-model";
+    const overrideBudget = budgetBetweenSoftAndHard(tokensOf(...msgTexts(8)));
+    agent.contextTokenBudget = (_scopeLabel?: string, model?: string) =>
+      model === OVERRIDE ? overrideBudget : 1_000_000;
+    const { orch, sessions } = buildOrchestrator(agent);
     const sid = await seed(
       sessions,
       msgTexts(8).map((text) => ({ payload: { text } })),
     );
 
-    const res = await orch.handleTurn(mkTurn("!histcount"));
+    const res = await orch.handleTurn({ ...turn("!histcount"), model: OVERRIDE });
     assert.equal(res.status, "ok");
-    assert.equal(res.reply, "history:8", "under the hard limit the turn runs on raw history, unblocked");
+    assert.equal(res.reply, "history:8", "between soft and hard for the override ⇒ the turn itself is unblocked");
 
     const summaries = await waitForSummary(sessions, sid);
-    assert.equal(summaries.length, 1, "the background pass compacts off the hot path");
-    assert.equal(compactCalls.length, 1, "exactly one (background) compaction, none inline");
-  });
-}
+    assert.equal(
+      summaries.length,
+      1,
+      "the background pass judges fullness by the override model's budget — under the scope default it would never fire",
+    );
+    assert.equal(compactCalls.length, 1, "exactly one background compaction against the override's budget");
+  }));
 
-test("a model-overridden session's background pass sizes against the override's budget, not the scope default", async () => {
-  const { agent, compactCalls } = spyAgent();
-  const OVERRIDE = "tiny-context-model";
-  const overrideBudget = budgetBetweenSoftAndHard(tokensOf(...msgTexts(8)));
-  agent.contextTokenBudget = (_scopeLabel?: string, model?: string) =>
-    model === OVERRIDE ? overrideBudget : 1_000_000;
-  const { orch, sessions } = buildOrchestrator(agent);
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
+test("a rapid follow-up that outran the background pass AND is over the HARD limit blocks and compacts inline", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls } = spyAgent();
+    const { orch, sessions } = buildOrchestrator(agent, Math.floor(tokensOf(...msgTexts(8)) * COMPACT_HARD_FRACTION));
+    await seed(
+      sessions,
+      msgTexts(8).map((text) => ({ payload: { text } })),
+    );
 
-  const res = await orch.handleTurn({ ...turn("!histcount"), model: OVERRIDE });
-  assert.equal(res.status, "ok");
-  assert.equal(res.reply, "history:8", "between soft and hard for the override ⇒ the turn itself is unblocked");
+    const res = await orch.handleTurn(spineTurn("!histcount"));
+    assert.equal(res.status, "ok");
+    assert.ok(compactCalls.length >= 1, "over the hard limit ⇒ inline (blocking) compaction ran");
+    assert.notEqual(res.reply, "history:8", "the turn did NOT see the full raw history — it was compacted first");
+  }));
 
-  const summaries = await waitForSummary(sessions, sid);
-  assert.equal(
-    summaries.length,
-    1,
-    "the background pass judges fullness by the override model's budget — under the scope default it would never fire",
-  );
-  assert.equal(compactCalls.length, 1, "exactly one background compaction against the override's budget");
-});
+test("a session UNDER the soft threshold triggers no compaction at all (background pass is a no-op)", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls } = spyAgent();
+    const { orch, sessions } = buildOrchestrator(agent, 1_000_000);
+    await seed(
+      sessions,
+      Array.from({ length: 3 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
+    );
 
-test("a rapid follow-up that outran the background pass AND is over the HARD limit blocks and compacts inline", async () => {
-  const { agent, compactCalls } = spyAgent();
-  const { orch, sessions } = buildOrchestrator(agent, Math.floor(tokensOf(...msgTexts(8)) * COMPACT_HARD_FRACTION));
-  await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
+    const res = await orch.handleTurn(spineTurn("!histcount"));
+    assert.equal(res.reply, "history:3", "under soft ⇒ the turn runs on raw history, no inline compaction");
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(compactCalls.length, 0, "nothing over soft ⇒ no compaction, foreground or background");
+  }));
 
-  const res = await orch.handleTurn(spineTurn("!histcount"));
-  assert.equal(res.status, "ok");
-  assert.ok(compactCalls.length >= 1, "over the hard limit ⇒ inline (blocking) compaction ran");
-  assert.notEqual(res.reply, "history:8", "the turn did NOT see the full raw history — it was compacted first");
-});
+test("a DM follow-up after the background pass reuses the summary — no blocking summarizer call on its hot path", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls } = spyAgent();
+    agent.compactHistory = async (input: CompactInput) => {
+      compactCalls.push(input);
+      return "tiny recap";
+    };
+    const messages = msgTexts(8).map((text) => `${text} ${"history ".repeat(1000)}`);
+    const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...messages)));
+    const sid = await seed(
+      sessions,
+      messages.map((text) => ({ payload: { text } })),
+    );
 
-test("a session UNDER the soft threshold triggers no compaction at all (background pass is a no-op)", async () => {
-  const { agent, compactCalls } = spyAgent();
-  const { orch, sessions } = buildOrchestrator(agent, 1_000_000);
-  await seed(
-    sessions,
-    Array.from({ length: 3 }, (_, i) => ({ payload: { text: `msg ${i}` } })),
-  );
+    await orch.handleTurn(turn("!histcount"));
+    assert.equal((await waitForSummary(sessions, sid)).length, 1, "the background pass ran after the first DM turn");
+    assert.equal(compactCalls.length, 1);
+    await waitForLeaseRelease(sessions, sid);
 
-  const res = await orch.handleTurn(spineTurn("!histcount"));
-  assert.equal(res.reply, "history:3", "under soft ⇒ the turn runs on raw history, no inline compaction");
-  await new Promise((r) => setTimeout(r, 200));
-  assert.equal(compactCalls.length, 0, "nothing over soft ⇒ no compaction, foreground or background");
-});
-
-test("a DM follow-up after the background pass reuses the summary — no blocking summarizer call on its hot path", async () => {
-  const { agent, compactCalls } = spyAgent();
-  agent.compactHistory = async (input: CompactInput) => {
-    compactCalls.push(input);
-    return "tiny recap";
-  };
-  const messages = msgTexts(8).map((text) => `${text} ${"history ".repeat(1000)}`);
-  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...messages)));
-  const sid = await seed(
-    sessions,
-    messages.map((text) => ({ payload: { text } })),
-  );
-
-  await orch.handleTurn(turn("!histcount"));
-  assert.equal((await waitForSummary(sessions, sid)).length, 1, "the background pass ran after the first DM turn");
-  assert.equal(compactCalls.length, 1);
-  await waitForLeaseRelease(sessions, sid);
-
-  const expectedHistory = forModelContext(await sessions.getEntries(sid));
-  assert.ok(expectedHistory.some((entry) => contextSummaryPayload(entry)));
-  assert.ok(expectedHistory.some((entry) => entry.type === "user"));
-  delete agent.compactHistory;
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
-  assert.equal(
-    res.reply,
-    `history:${expectedHistory.length}`,
-    "the follow-up starts on [summary, recent…] with no summarizer call",
-  );
-});
+    const expectedHistory = forModelContext(await sessions.getEntries(sid));
+    assert.ok(expectedHistory.some((entry) => contextSummaryPayload(entry)));
+    assert.ok(expectedHistory.some((entry) => entry.type === "user"));
+    delete agent.compactHistory;
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
+    assert.equal(
+      res.reply,
+      `history:${expectedHistory.length}`,
+      "the follow-up starts on [summary, recent…] with no summarizer call",
+    );
+  }));
 
 test("forModelContext strips thinking/text (never laundered into a durable summary)", () => {
   const entries: SessionEntry[] = [
@@ -649,45 +663,47 @@ test("forModelContext strips thinking/text (never laundered into a durable summa
   );
 });
 
-test("background compaction excludes thinking entries from the summary batch (Bugbot: history filter)", async () => {
-  const { agent, compactCalls } = spyAgent();
-  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
-  const sid = await seed(sessions, [
-    ...msgTexts(8).map((text) => ({ payload: { text } })),
-    { type: "thinking" as const, payload: { thinking: "signature-less reasoning" } },
-  ]);
+test("background compaction excludes thinking entries from the summary batch (Bugbot: history filter)", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls } = spyAgent();
+    const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+    const sid = await seed(sessions, [
+      ...msgTexts(8).map((text) => ({ payload: { text } })),
+      { type: "thinking" as const, payload: { thinking: "signature-less reasoning" } },
+    ]);
 
-  const res = await orch.handleTurn(spineTurn("!histcount"));
-  assert.equal(res.status, "ok");
-  const summaries = await waitForSummary(sessions, sid);
-  assert.equal(summaries.length, 1, "a background compaction ran");
-  assert.equal(compactCalls.length, 1);
-  assert.ok(
-    compactCalls[0]!.history.every((e) => e.type !== "thinking"),
-    "the summarizer batch must not include the durable thinking entry",
-  );
-});
+    const res = await orch.handleTurn(spineTurn("!histcount"));
+    assert.equal(res.status, "ok");
+    const summaries = await waitForSummary(sessions, sid);
+    assert.equal(summaries.length, 1, "a background compaction ran");
+    assert.equal(compactCalls.length, 1);
+    assert.ok(
+      compactCalls[0]!.history.every((e) => e.type !== "thinking"),
+      "the summarizer batch must not include the durable thinking entry",
+    );
+  }));
 
-test("a session parked over soft with a too-large prior summary re-summarizes (Bugbot: reuse-parked)", async () => {
-  const { agent, compactCalls } = spyAgent();
-  const { orch, sessions } = buildOrchestrator(
-    agent,
-    budgetBetweenSoftAndHard(tokensOf("prior recap", ...msgTexts(8))),
-  );
-  await seed(sessions, [
-    { type: "system" as const, payload: createContextSummaryPayload(-1, "prior recap"), scopeLabel: PERSONAL },
-    ...msgTexts(8).map((text) => ({ payload: { text } })),
-  ]);
+test("a session parked over soft with a too-large prior summary re-summarizes (Bugbot: reuse-parked)", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls } = spyAgent();
+    const { orch, sessions } = buildOrchestrator(
+      agent,
+      budgetBetweenSoftAndHard(tokensOf("prior recap", ...msgTexts(8))),
+    );
+    await seed(sessions, [
+      { type: "system" as const, payload: createContextSummaryPayload(-1, "prior recap"), scopeLabel: PERSONAL },
+      ...msgTexts(8).map((text) => ({ payload: { text } })),
+    ]);
 
-  const res = await orch.handleTurn(spineTurn("!histcount"));
-  assert.equal(res.status, "ok");
-  for (let i = 0; i < 300 && compactCalls.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
-  assert.equal(compactCalls.length, 1, "over soft with an unfitting prior summary ⇒ re-summarize, not park");
-  assert.ok(
-    compactCalls[0]!.history.some((e) => contextSummaryPayload(e)),
-    "the prior summary is chained into the new batch",
-  );
-});
+    const res = await orch.handleTurn(spineTurn("!histcount"));
+    assert.equal(res.status, "ok");
+    for (let i = 0; i < 300 && compactCalls.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(compactCalls.length, 1, "over soft with an unfitting prior summary ⇒ re-summarize, not park");
+    assert.ok(
+      compactCalls[0]!.history.some((e) => contextSummaryPayload(e)),
+      "the prior summary is chained into the new batch",
+    );
+  }));
 
 test("validateCompactSummary accepts a trimmed summary and rejects missing or oversized output", () => {
   assert.equal(validateCompactSummary("  a tidy summary  "), "a tidy summary");
@@ -706,25 +722,26 @@ test("the deterministic fallback keeps the newest entries — a late stated cons
   assert.ok(out.length <= MAX_COMPACT_SUMMARY_CHARS);
 });
 
-test("a runaway summarizer output does not commit a compaction checkpoint", async () => {
-  const { agent } = spyAgent();
-  agent.compactHistory = async () => "I'll scan for new signed replies… ".repeat(2_000);
-  const { orch, sessions, errors } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(12))));
-  const sid = await seed(
-    sessions,
-    msgTexts(12).map((text) => ({ payload: { text } })),
-  );
+test("a runaway summarizer output does not commit a compaction checkpoint", () =>
+  inTestTenant(async () => {
+    const { agent } = spyAgent();
+    agent.compactHistory = async () => "I'll scan for new signed replies… ".repeat(2_000);
+    const { orch, sessions, errors } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(12))));
+    const sid = await seed(
+      sessions,
+      msgTexts(12).map((text) => ({ payload: { text } })),
+    );
 
-  const res = await orch.handleTurn(spineTurn("!histcount"));
-  assert.equal(res.status, "ok");
+    const res = await orch.handleTurn(spineTurn("!histcount"));
+    assert.equal(res.status, "ok");
 
-  const deadline = Date.now() + 3_000;
-  while (!(await errors.list({ sessionId: sid })).some((error) => error.code === "background_compaction_failed")) {
-    assert.ok(Date.now() < deadline, "background compaction never reported failure");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.equal((await summaryEntries(sessions, sid)).length, 0);
-});
+    const deadline = Date.now() + 3_000;
+    while (!(await errors.list({ sessionId: sid })).some((error) => error.code === "background_compaction_failed")) {
+      assert.ok(Date.now() < deadline, "background compaction never reported failure");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal((await summaryEntries(sessions, sid)).length, 0);
+  }));
 
 function assertSummaryBoundary(history: SessionEntry[], label: string): void {
   const summaries = history.filter((e) => contextSummaryPayload(e));
@@ -776,49 +793,52 @@ test("forModelContext applies the latest-summary boundary: one summary, nothing 
   );
 });
 
-test("under-HARD turn: the agent sees the boundary-filtered context, not stacked summaries over raw history", async () => {
-  const base = spyAgent();
-  const { wrapped, seen } = captureAgent(base.agent);
-  const { orch, sessions } = buildOrchestrator(wrapped, 1_000_000);
-  await seed(sessions, stackedLog());
+test("under-HARD turn: the agent sees the boundary-filtered context, not stacked summaries over raw history", () =>
+  inTestTenant(async () => {
+    const base = spyAgent();
+    const { wrapped, seen } = captureAgent(base.agent);
+    const { orch, sessions } = buildOrchestrator(wrapped, 1_000_000);
+    await seed(sessions, stackedLog());
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
-  assert.equal(seen.length, 1);
-  assertSummaryBoundary(seen[0]!, "under-hard");
-  assert.equal(res.reply, "history:3", "summary B + the 2 uncovered entries only");
-});
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
+    assert.equal(seen.length, 1);
+    assertSummaryBoundary(seen[0]!, "under-hard");
+    assert.equal(res.reply, "history:3", "summary B + the 2 uncovered entries only");
+  }));
 
-test("over-HARD turn with a summarizer: the rebuilt context honors the boundary", async () => {
-  const base = spyAgent();
-  const { wrapped, seen } = captureAgent(base.agent);
-  const { orch, sessions } = buildOrchestrator(
-    wrapped,
-    Math.floor(tokensOf("recap B", "new 0", "new 1") * COMPACT_HARD_FRACTION),
-  );
-  await seed(sessions, stackedLog());
+test("over-HARD turn with a summarizer: the rebuilt context honors the boundary", () =>
+  inTestTenant(async () => {
+    const base = spyAgent();
+    const { wrapped, seen } = captureAgent(base.agent);
+    const { orch, sessions } = buildOrchestrator(
+      wrapped,
+      Math.floor(tokensOf("recap B", "new 0", "new 1") * COMPACT_HARD_FRACTION),
+    );
+    await seed(sessions, stackedLog());
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
-  assert.equal(seen.length, 1);
-  assertSummaryBoundary(seen[0]!, "over-hard");
-});
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
+    assert.equal(seen.length, 1);
+    assertSummaryBoundary(seen[0]!, "over-hard");
+  }));
 
-test("over-HARD turn with NO summarizer (boundRecent fallback): the boundary still holds and the summary survives the slice", async () => {
-  const base = spyAgent({ withSummarizer: false });
-  const { wrapped, seen } = captureAgent(base.agent);
-  const { orch, sessions } = buildOrchestrator(wrapped, budgetKeepingOnlyNewest("recap B", "new 1"));
-  await seed(sessions, stackedLog());
+test("over-HARD turn with NO summarizer (boundRecent fallback): the boundary still holds and the summary survives the slice", () =>
+  inTestTenant(async () => {
+    const base = spyAgent({ withSummarizer: false });
+    const { wrapped, seen } = captureAgent(base.agent);
+    const { orch, sessions } = buildOrchestrator(wrapped, budgetKeepingOnlyNewest("recap B", "new 1"));
+    await seed(sessions, stackedLog());
 
-  const res = await orch.handleTurn(turn("!histcount"));
-  assert.equal(res.status, "ok");
-  assert.equal(seen.length, 1);
-  assertSummaryBoundary(seen[0]!, "boundRecent fallback");
-  assert.ok(
-    seen[0]!.some((e) => contextSummaryPayload(e)),
-    "the bounding slice must keep the latest summary",
-  );
-});
+    const res = await orch.handleTurn(turn("!histcount"));
+    assert.equal(res.status, "ok");
+    assert.equal(seen.length, 1);
+    assertSummaryBoundary(seen[0]!, "boundRecent fallback");
+    assert.ok(
+      seen[0]!.some((e) => contextSummaryPayload(e)),
+      "the bounding slice must keep the latest summary",
+    );
+  }));
 
 test("the context window start never regresses as the log grows", () => {
   const entries: SessionEntry[] = [];
@@ -871,150 +891,155 @@ async function untilTrue(what: string, predicate: () => boolean, deadlineMs = 3_
   }
 }
 
-test("the background pass leaves the session writable while it summarizes — a follow-up turn is never locked out", async () => {
-  const { agent, compactCalls, open } = gatedAgent();
-  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
-
-  assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
-  await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
-
-  const { lease } = await sessions.acquireLease(sid, "turn");
-  assert.ok(lease, "background compaction must not hold the write-lock across its model call");
-  await sessions.releaseLease(lease!);
-
-  open();
-  assert.equal((await waitForSummary(sessions, sid)).length, 1, "and the summary still lands afterwards");
-});
-
-test("the background pass summarizes first and requests its lease only after the summarizer returns", async () => {
-  const { agent, compactCalls, open } = gatedAgent();
-  const events: string[] = [];
-  const gated = agent.compactHistory!;
-  agent.compactHistory = async (input: CompactInput) => {
-    events.push("summarize:start");
-    const text = await gated(input);
-    events.push("summarize:end");
-    return text;
-  };
-  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
-  const acquire = sessions.acquireLease.bind(sessions);
-  sessions.acquireLease = async (sessionId, holder) => {
-    if (holder === "compaction") events.push("acquire:compaction");
-    return acquire(sessionId, holder);
-  };
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
-
-  assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
-  await untilTrue("the background summarizer to be in flight", () => events.includes("summarize:start"));
-
-  assert.ok(
-    !events.includes("acquire:compaction"),
-    `the pass must not request the session lease before the summarizer has returned (saw ${events.join(" → ")})`,
-  );
-  const { lease: probe } = await sessions.acquireLease(sid, "turn");
-  assert.ok(probe, "the session lease stays free for the whole summarization call");
-  await sessions.releaseLease(probe!);
-
-  open();
-  assert.equal((await waitForSummary(sessions, sid)).length, 1, "the summary lands once the lease is taken");
-  assert.ok(
-    events.indexOf("acquire:compaction") > events.indexOf("summarize:end"),
-    `the compaction lease must be requested strictly after the summarizer returns (saw ${events.join(" → ")})`,
-  );
-  assert.equal(compactCalls.length, 1, "and the model was called exactly once");
-});
-
-test("the background pass waits out a turn that holds the lock rather than throwing its summary away", async () => {
-  const { agent, compactCalls, resetCalls, open } = gatedAgent();
-  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
-
-  assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
-  await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
-
-  const { lease: held } = await sessions.acquireLease(sid, "turn");
-  assert.ok(held);
-  open();
-  await new Promise((r) => setTimeout(r, 300));
-  assert.equal((await summaryEntries(sessions, sid)).length, 0, "the pass wrote nothing behind the turn's back");
-  assert.equal(resetCalls.length, 0);
-
-  await sessions.releaseLease(held!);
-  assert.equal((await waitForSummary(sessions, sid)).length, 1, "the summary lands once the turn is done");
-  assert.equal(compactCalls.length, 1, "and the model was called exactly once for it");
-});
-
-test("a turn landing mid-summarization does not disturb the fold: it covers a prefix, the turn's entries stay", async () => {
-  const { agent, compactCalls, open } = gatedAgent();
-  const paddedTexts = Array.from({ length: 15 }, (_, i) => `msg ${i} ${"padding ".repeat(1000)}`);
-  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...paddedTexts)));
-  const sid = await seed(
-    sessions,
-    paddedTexts.map((text) => ({ payload: { text } })),
-  );
-
-  assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:15");
-  await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
-  const beforeTurn = ((await sessions.getEntries(sid)).at(-1)?.seq ?? -1) + 1;
-
-  assert.equal((await orch.handleTurn(turn("!histcount"))).status, "ok");
-  const appended = (await sessions.getEntries(sid)).filter((e) => e.seq >= beforeTurn);
-  assert.ok(appended.length > 0, "the turn really did write while the summarizer was parked");
-
-  open();
-  const summaries = await waitForSummary(sessions, sid);
-  assert.ok(summaries.length >= 1);
-  const throughSeq = contextSummaryPayload(summaries[0]!)!.throughSeq;
-  assert.ok(
-    throughSeq < appended[0]!.seq,
-    `the fold covers only the prefix it summarized (through ${throughSeq}, turn started at ${appended[0]!.seq})`,
-  );
-  const survivors = await sessions.getEntries(sid);
-  for (const entry of appended) {
-    assert.ok(
-      survivors.some((e) => e.seq === entry.seq),
-      `the turn's entry ${entry.seq} survived the fold`,
+test("the background pass leaves the session writable while it summarizes — a follow-up turn is never locked out", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls, open } = gatedAgent();
+    const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+    const sid = await seed(
+      sessions,
+      msgTexts(8).map((text) => ({ payload: { text } })),
     );
-  }
-});
 
-test("a summary that landed while the pass was summarizing makes it drop its own — never two overlapping folds", async () => {
-  const { agent, compactCalls, resetCalls, open } = gatedAgent();
-  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
+    assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
+    await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
 
-  assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
-  await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
+    const { lease } = await sessions.acquireLease(sid, "turn");
+    assert.ok(lease, "background compaction must not hold the write-lock across its model call");
+    await sessions.releaseLease(lease!);
 
-  const { lease: rival } = await sessions.acquireLease(sid, "compaction");
-  assert.ok(rival);
-  await sessions.append(rival!, {
-    type: "system",
-    payload: createContextSummaryPayload(6, "a rival fold"),
-    scopeLabel: PERSONAL,
-  });
-  await sessions.releaseLease(rival!);
+    open();
+    assert.equal((await waitForSummary(sessions, sid)).length, 1, "and the summary still lands afterwards");
+  }));
 
-  open();
-  await new Promise((r) => setTimeout(r, 300));
-  const summaries = await summaryEntries(sessions, sid);
-  assert.equal(summaries.length, 1, "only the rival fold — the stale one was dropped");
-  assert.equal(contextSummaryPayload(summaries[0]!)?.text, "a rival fold");
-  assert.equal(resetCalls.length, 0, "the dropped pass never reached its write");
-});
+test("the background pass summarizes first and requests its lease only after the summarizer returns", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls, open } = gatedAgent();
+    const events: string[] = [];
+    const gated = agent.compactHistory!;
+    agent.compactHistory = async (input: CompactInput) => {
+      events.push("summarize:start");
+      const text = await gated(input);
+      events.push("summarize:end");
+      return text;
+    };
+    const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+    const acquire = sessions.acquireLease.bind(sessions);
+    sessions.acquireLease = async (sessionId, holder) => {
+      if (holder === "compaction") events.push("acquire:compaction");
+      return acquire(sessionId, holder);
+    };
+    const sid = await seed(
+      sessions,
+      msgTexts(8).map((text) => ({ payload: { text } })),
+    );
+
+    assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
+    await untilTrue("the background summarizer to be in flight", () => events.includes("summarize:start"));
+
+    assert.ok(
+      !events.includes("acquire:compaction"),
+      `the pass must not request the session lease before the summarizer has returned (saw ${events.join(" → ")})`,
+    );
+    const { lease: probe } = await sessions.acquireLease(sid, "turn");
+    assert.ok(probe, "the session lease stays free for the whole summarization call");
+    await sessions.releaseLease(probe!);
+
+    open();
+    assert.equal((await waitForSummary(sessions, sid)).length, 1, "the summary lands once the lease is taken");
+    assert.ok(
+      events.indexOf("acquire:compaction") > events.indexOf("summarize:end"),
+      `the compaction lease must be requested strictly after the summarizer returns (saw ${events.join(" → ")})`,
+    );
+    assert.equal(compactCalls.length, 1, "and the model was called exactly once");
+  }));
+
+test("the background pass waits out a turn that holds the lock rather than throwing its summary away", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls, resetCalls, open } = gatedAgent();
+    const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+    const sid = await seed(
+      sessions,
+      msgTexts(8).map((text) => ({ payload: { text } })),
+    );
+
+    assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
+    await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
+
+    const { lease: held } = await sessions.acquireLease(sid, "turn");
+    assert.ok(held);
+    open();
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal((await summaryEntries(sessions, sid)).length, 0, "the pass wrote nothing behind the turn's back");
+    assert.equal(resetCalls.length, 0);
+
+    await sessions.releaseLease(held!);
+    assert.equal((await waitForSummary(sessions, sid)).length, 1, "the summary lands once the turn is done");
+    assert.equal(compactCalls.length, 1, "and the model was called exactly once for it");
+  }));
+
+test("a turn landing mid-summarization does not disturb the fold: it covers a prefix, the turn's entries stay", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls, open } = gatedAgent();
+    const paddedTexts = Array.from({ length: 15 }, (_, i) => `msg ${i} ${"padding ".repeat(1000)}`);
+    const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...paddedTexts)));
+    const sid = await seed(
+      sessions,
+      paddedTexts.map((text) => ({ payload: { text } })),
+    );
+
+    assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:15");
+    await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
+    const beforeTurn = ((await sessions.getEntries(sid)).at(-1)?.seq ?? -1) + 1;
+
+    assert.equal((await orch.handleTurn(turn("!histcount"))).status, "ok");
+    const appended = (await sessions.getEntries(sid)).filter((e) => e.seq >= beforeTurn);
+    assert.ok(appended.length > 0, "the turn really did write while the summarizer was parked");
+
+    open();
+    const summaries = await waitForSummary(sessions, sid);
+    assert.ok(summaries.length >= 1);
+    const throughSeq = contextSummaryPayload(summaries[0]!)!.throughSeq;
+    assert.ok(
+      throughSeq < appended[0]!.seq,
+      `the fold covers only the prefix it summarized (through ${throughSeq}, turn started at ${appended[0]!.seq})`,
+    );
+    const survivors = await sessions.getEntries(sid);
+    for (const entry of appended) {
+      assert.ok(
+        survivors.some((e) => e.seq === entry.seq),
+        `the turn's entry ${entry.seq} survived the fold`,
+      );
+    }
+  }));
+
+test("a summary that landed while the pass was summarizing makes it drop its own — never two overlapping folds", () =>
+  inTestTenant(async () => {
+    const { agent, compactCalls, resetCalls, open } = gatedAgent();
+    const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+    const sid = await seed(
+      sessions,
+      msgTexts(8).map((text) => ({ payload: { text } })),
+    );
+
+    assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
+    await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
+
+    const { lease: rival } = await sessions.acquireLease(sid, "compaction");
+    assert.ok(rival);
+    await sessions.append(rival!, {
+      type: "system",
+      payload: createContextSummaryPayload(6, "a rival fold"),
+      scopeLabel: PERSONAL,
+    });
+    await sessions.releaseLease(rival!);
+
+    open();
+    await new Promise((r) => setTimeout(r, 300));
+    const summaries = await summaryEntries(sessions, sid);
+    assert.equal(summaries.length, 1, "only the rival fold — the stale one was dropped");
+    assert.equal(contextSummaryPayload(summaries[0]!)?.text, "a rival fold");
+    assert.equal(resetCalls.length, 0, "the dropped pass never reached its write");
+  }));
 
 test("the token estimate counts the environment note persisted on a user entry", () => {
   const environment = `<environment>\n${"## What you remember\nlikes terse replies. ".repeat(40)}\n</environment>`;
@@ -1032,281 +1057,189 @@ test("the token estimate counts the environment note persisted on a user entry",
   assert.ok(delta >= countTokens(environment) * 0.9, `environment tokens must be counted (delta ${delta})`);
 });
 
-test("runtime handoff continues once with saved results under the original run and remaining deadline", async () => {
-  const base = createMockAgent();
-  const seen: import("../src/agent/agent.ts").AgentTurnInput[] = [];
-  let resets = 0;
-  const choice = { modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
-  const agent: Agent = {
-    ...base,
-    resetSession: async () => {
-      resets++;
-    },
-    runTurn: async (input) => {
-      seen.push(input);
-      if (seen.length === 1) {
-        await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
-        await input.emit({
-          type: "tool_result",
-          payload: {
-            tool: "runtime",
-            callId: `runtime-${input.runId}`,
-            runId: input.runId,
-            actorId: actor.id,
-            runtimeHandoff: { choice, lifetime: "task" },
-          },
-          scopeLabel: input.scopeLabel,
-        });
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        return { reply: "must not be delivered", runtimeHandoff: { choice, lifetime: "task" }, modelCalls: 1 };
-      }
-      assert.deepEqual(input.runtime, choice);
-      assert.equal(input.runId, "runtime-run");
-      assert.ok(input.history.some((e) => e.type === "tool_result"));
-      assert.ok(input.turnWallClockMs! < seen[0]!.turnWallClockMs!);
-      await input.emit({ type: "assistant", payload: { text: "continued" }, scopeLabel: input.scopeLabel });
-      return { reply: "continued", modelCalls: 1 };
-    },
-  };
-  const { orch, sessions } = buildOrchestrator(agent, undefined, 60000);
-  await orch.handleTurn({ ...turn("switch then finish"), runId: "runtime-run", surfaceTools: false });
-  assert.equal(seen.length, 2);
-  assert.equal(resets, 1);
-  const session = await sessions.getByThread(conv.threadRef);
-  const entries = await sessions.getEntries(session!.id);
-  assert.deepEqual(
-    entries.filter((e) => e.type === "assistant").map((e) => (e.payload as { text: string }).text),
-    ["continued"],
-  );
-});
-
-test("runtime handoff cannot restart a stopped task", async () => {
-  const base = createMockAgent();
-  let calls = 0;
-  const agent: Agent = {
-    ...base,
-    runTurn: async () => {
-      calls++;
-      return {
-        reply: "",
-        stopped: true,
-        runtimeHandoff: { choice: { modelId: "gpt-6-astra" }, lifetime: "task" },
-      };
-    },
-  };
-  const { orch } = buildOrchestrator(agent);
-  await orch.handleTurn({ ...turn("switch"), surfaceTools: false });
-  assert.equal(calls, 1);
-});
-
-test("a retry restores a committed runtime decision after reset crashes, without replaying the selection", async () => {
-  const base = createMockAgent();
-  const choice = { modelId: "gpt-6-astra" };
-  let calls = 0;
-  const agent: Agent = {
-    ...base,
-    resetSession: async () => {
-      throw new Error("worker died during reset");
-    },
-    runTurn: async (input) => {
-      calls++;
-      if (calls === 1) {
-        await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
-        await input.emit({
-          type: "tool_result",
-          payload: {
-            tool: "runtime",
-            callId: `runtime-${input.runId}`,
-            runId: input.runId,
-            actorId: actor.id,
-            runtimeHandoff: { choice, lifetime: "task" },
-          },
-          scopeLabel: input.scopeLabel,
-        });
-        return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
-      }
-      assert.deepEqual(input.runtime, choice);
-      return { reply: "resumed" };
-    },
-  };
-  const { orch } = buildOrchestrator(agent);
-  const input = { ...turn("switch and finish"), runId: "retry-runtime", surfaceTools: false };
-  await assert.rejects(() => orch.handleTurn(input), /worker died/);
-  await orch.handleTurn({ ...input, attempt: 2 });
-  assert.equal(calls, 2);
-});
-
-test("only a cron automation receives task-runtime authority and each fire starts fresh", async () => {
-  const base = createMockAgent();
-  const active = { modelId: "claude-sonnet-5", effortLevel: "high", fastMode: false };
-  const outcomes: { surface: string; ok: boolean }[] = [];
-  let resumed = 0;
-  const agent: Agent = {
-    ...base,
-    runTurn: async (input) => {
-      if (input.runtime?.modelId === "gpt-6-astra") {
-        resumed++;
-        return { reply: "handled" };
-      }
-      const result = await input.runtimeControl!(active, { action: "set", model: "Astra" });
-      outcomes.push({ surface: input.input, ok: result.ok });
-      if (result.ok && result.handoff) {
-        await input.emit({
-          type: "tool_result",
-          scopeLabel: input.scopeLabel,
-          payload: {
-            tool: "runtime",
-            callId: `runtime-${input.runId}`,
-            runId: input.runId,
-            actorId: actor.id,
-            runtimeHandoff: result.handoff,
-          },
-        });
-        return { reply: "", runtimeHandoff: result.handoff };
-      }
-      return { reply: "denied" };
-    },
-  };
-  const { orch } = buildOrchestrator(agent);
-  for (const surface of ["cron", "webhook"]) {
-    await orch.handleTurn({
-      ...turn(surface),
-      surface,
-      origin: { kind: "automation" },
-      runId: surface + "-run",
-      surfaceTools: false,
-    });
-  }
-  await orch.handleTurn({
-    ...turn("ambient"),
-    surface: "cron",
-    origin: { kind: "ambient" },
-    runId: "ambient-run",
-    surfaceTools: false,
-  });
-  await orch.handleTurn({
-    ...turn("next fire"),
-    surface: "cron",
-    origin: { kind: "automation" },
-    runId: "next-cron-run",
-    surfaceTools: false,
-  });
-  assert.deepEqual(
-    outcomes.map((x) => x.ok),
-    [true, false, true],
-  );
-  assert.equal(resumed, 2);
-});
-
-test("cron and loop dispatch use purpose defaults while task handoffs and later fires stay isolated", async () => {
-  const base = createMockAgent();
-  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
-  const handoff = { ...category, modelId: "gpt-6-sol", fastMode: false };
-  const seen: import("../src/agent/agent.ts").RuntimeChoice[] = [];
-  const adapter: Agent = {
-    ...base,
-    runTurn: async (input) => {
-      seen.push(input.runtime as typeof category);
-      const state = await input.runtimeControl!(input.runtime as typeof category, { action: "get" });
-      assert.ok(state.ok);
-      assert.deepEqual(state.effective, category);
-      if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
-      return { reply: "done" };
-    },
-  };
-  const router = withResolvedRuntime(adapter, (input) =>
-    resolveRuntimeChoice(
-      built.config,
-      "org:default-org",
-      input.scopeLabel,
-      category,
-      input.runtime,
-      undefined,
-      input.runtimePurpose,
-    ),
-  );
-  const built = buildOrchestrator(router);
-  await built.config.setRuntimeSelection(PERSONAL, {
-    modelId: "claude-sonnet-5",
-    effortLevel: "high",
-  });
-  await built.config.setPurposeRuntime("cron", category);
-  for (const surface of ["cron", "loop"]) {
-    const result = await built.orch.handleTurn({
-      ...turn(surface),
-      surface,
-      origin: { kind: "automation" },
-      runId: surface,
-      surfaceTools: false,
-    });
-    assert.equal(result.status, "ok");
-  }
-  assert.deepEqual(seen, [category, handoff, category]);
-});
-
-test("human child continuations respect non-fast category defaults", async () => {
-  const base = createMockAgent();
-  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
-  const seen: unknown[] = [];
-  const adapter: Agent = {
-    ...base,
-    runTurn: async (input) => {
-      seen.push(input.runtime);
-      return { reply: "done" };
-    },
-  };
-  const router = withResolvedRuntime(adapter, (input) =>
-    resolveRuntimeChoice(
-      built.config,
-      "org:default-org",
-      input.scopeLabel,
-      category,
-      input.runtime,
-      undefined,
-      input.runtimePurpose,
-    ),
-  );
-  const built = buildOrchestrator(router);
-  await built.config.setInteractiveFastMode(true);
-  await built.config.setPurposeRuntime("subagent", category);
-  const parent = await built.sessions.getOrCreateByThread("parent", "dm", PERSONAL);
-  const child = await built.sessions.getOrCreateByThread("subagent:review", "dm", PERSONAL);
-  await built.sessions.setParentSession(child.id, parent.id);
-  await built.orch.handleTurn({
-    surface: "web",
-    actor,
-    conversation: { ...conv, threadRef: child.threadRef },
-    origin: { kind: "human" },
-    text: "continue",
-    surfaceTools: false,
-  });
-  assert.deepEqual(seen, [category]);
-});
-
-test("verified swarm workers resolve their own defaults instead of copying the root runtime, keeping handoffs", async () => {
-  const inherited = { modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
-  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
-  const handoff = { ...category, modelId: "gpt-6-sol" };
-  for (const configured of [false, true]) {
-    const f = await swarmFixture({
-      runtime: {
-        model: inherited.modelId,
-        thinkingLevel: inherited.effortLevel,
-        fastMode: inherited.fastMode,
-      },
-    });
-    const [peer] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
-    await f.service.sweep();
-    const worker = await f.workerCaller(peer!.id);
-    assert.equal(worker.kind, "agent");
-    if (worker.kind !== "agent") throw new Error("expected worker");
-    const run = (await f.runs.get(worker.claims.runId!))!;
+test("runtime handoff continues once with saved results under the original run and remaining deadline", () =>
+  inTestTenant(async () => {
     const base = createMockAgent();
-    const seen: unknown[] = [];
+    const seen: import("../src/agent/agent.ts").AgentTurnInput[] = [];
+    let resets = 0;
+    const choice = { modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
+    const agent: Agent = {
+      ...base,
+      resetSession: async () => {
+        resets++;
+      },
+      runTurn: async (input) => {
+        seen.push(input);
+        if (seen.length === 1) {
+          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+          await input.emit({
+            type: "tool_result",
+            payload: {
+              tool: "runtime",
+              callId: `runtime-${input.runId}`,
+              runId: input.runId,
+              actorId: actor.id,
+              runtimeHandoff: { choice, lifetime: "task" },
+            },
+            scopeLabel: input.scopeLabel,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return { reply: "must not be delivered", runtimeHandoff: { choice, lifetime: "task" }, modelCalls: 1 };
+        }
+        assert.deepEqual(input.runtime, choice);
+        assert.equal(input.runId, "runtime-run");
+        assert.ok(input.history.some((e) => e.type === "tool_result"));
+        assert.ok(input.turnWallClockMs! < seen[0]!.turnWallClockMs!);
+        await input.emit({ type: "assistant", payload: { text: "continued" }, scopeLabel: input.scopeLabel });
+        return { reply: "continued", modelCalls: 1 };
+      },
+    };
+    const { orch, sessions } = buildOrchestrator(agent, undefined, 60000);
+    await orch.handleTurn({ ...turn("switch then finish"), runId: "runtime-run", surfaceTools: false });
+    assert.equal(seen.length, 2);
+    assert.equal(resets, 1);
+    const session = await sessions.getByThread(conv.threadRef);
+    const entries = await sessions.getEntries(session!.id);
+    assert.deepEqual(
+      entries.filter((e) => e.type === "assistant").map((e) => (e.payload as { text: string }).text),
+      ["continued"],
+    );
+  }));
+
+test("runtime handoff cannot restart a stopped task", () =>
+  inTestTenant(async () => {
+    const base = createMockAgent();
+    let calls = 0;
+    const agent: Agent = {
+      ...base,
+      runTurn: async () => {
+        calls++;
+        return {
+          reply: "",
+          stopped: true,
+          runtimeHandoff: { choice: { modelId: "gpt-6-astra" }, lifetime: "task" },
+        };
+      },
+    };
+    const { orch } = buildOrchestrator(agent);
+    await orch.handleTurn({ ...turn("switch"), surfaceTools: false });
+    assert.equal(calls, 1);
+  }));
+
+test("a retry restores a committed runtime decision after reset crashes, without replaying the selection", () =>
+  inTestTenant(async () => {
+    const base = createMockAgent();
+    const choice = { modelId: "gpt-6-astra" };
+    let calls = 0;
+    const agent: Agent = {
+      ...base,
+      resetSession: async () => {
+        throw new Error("worker died during reset");
+      },
+      runTurn: async (input) => {
+        calls++;
+        if (calls === 1) {
+          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+          await input.emit({
+            type: "tool_result",
+            payload: {
+              tool: "runtime",
+              callId: `runtime-${input.runId}`,
+              runId: input.runId,
+              actorId: actor.id,
+              runtimeHandoff: { choice, lifetime: "task" },
+            },
+            scopeLabel: input.scopeLabel,
+          });
+          return { reply: "", runtimeHandoff: { choice, lifetime: "task" } };
+        }
+        assert.deepEqual(input.runtime, choice);
+        return { reply: "resumed" };
+      },
+    };
+    const { orch } = buildOrchestrator(agent);
+    const input = { ...turn("switch and finish"), runId: "retry-runtime", surfaceTools: false };
+    await assert.rejects(() => orch.handleTurn(input), /worker died/);
+    await orch.handleTurn({ ...input, attempt: 2 });
+    assert.equal(calls, 2);
+  }));
+
+test("only a cron automation receives task-runtime authority and each fire starts fresh", () =>
+  inTestTenant(async () => {
+    const base = createMockAgent();
+    const active = { modelId: "claude-sonnet-5", effortLevel: "high", fastMode: false };
+    const outcomes: { surface: string; ok: boolean }[] = [];
+    let resumed = 0;
+    const agent: Agent = {
+      ...base,
+      runTurn: async (input) => {
+        if (input.runtime?.modelId === "gpt-6-astra") {
+          resumed++;
+          return { reply: "handled" };
+        }
+        const result = await input.runtimeControl!(active, { action: "set", model: "Astra" });
+        outcomes.push({ surface: input.input, ok: result.ok });
+        if (result.ok && result.handoff) {
+          await input.emit({
+            type: "tool_result",
+            scopeLabel: input.scopeLabel,
+            payload: {
+              tool: "runtime",
+              callId: `runtime-${input.runId}`,
+              runId: input.runId,
+              actorId: actor.id,
+              runtimeHandoff: result.handoff,
+            },
+          });
+          return { reply: "", runtimeHandoff: result.handoff };
+        }
+        return { reply: "denied" };
+      },
+    };
+    const { orch } = buildOrchestrator(agent);
+    for (const surface of ["cron", "webhook"]) {
+      await orch.handleTurn({
+        ...turn(surface),
+        surface,
+        origin: { kind: "automation" },
+        runId: surface + "-run",
+        surfaceTools: false,
+      });
+    }
+    await orch.handleTurn({
+      ...turn("ambient"),
+      surface: "cron",
+      origin: { kind: "ambient" },
+      runId: "ambient-run",
+      surfaceTools: false,
+    });
+    await orch.handleTurn({
+      ...turn("next fire"),
+      surface: "cron",
+      origin: { kind: "automation" },
+      runId: "next-cron-run",
+      surfaceTools: false,
+    });
+    assert.deepEqual(
+      outcomes.map((x) => x.ok),
+      [true, false, true],
+    );
+    assert.equal(resumed, 2);
+  }));
+
+test("cron and loop dispatch use purpose defaults while task handoffs and later fires stay isolated", () =>
+  inTestTenant(async () => {
+    const base = createMockAgent();
+    const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
+    const handoff = { ...category, modelId: "gpt-6-sol", fastMode: false };
+    const seen: import("../src/agent/agent.ts").RuntimeChoice[] = [];
     const adapter: Agent = {
       ...base,
       runTurn: async (input) => {
-        seen.push(input.runtime);
+        seen.push(input.runtime as typeof category);
+        const state = await input.runtimeControl!(input.runtime as typeof category, { action: "get" });
+        assert.ok(state.ok);
+        assert.deepEqual(state.effective, category);
         if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
         return { reply: "done" };
       },
@@ -1316,80 +1249,97 @@ test("verified swarm workers resolve their own defaults instead of copying the r
         built.config,
         "org:default-org",
         input.scopeLabel,
-        inherited,
+        category,
         input.runtime,
         undefined,
         input.runtimePurpose,
       ),
     );
-    const built = buildOrchestrator(router, undefined, undefined, f);
-    if (configured) await built.config.setPurposeRuntime("subagent", category);
-    const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
-    assert.equal(result.status, "ok");
-    assert.deepEqual(seen, [configured ? category : { modelId: inherited.modelId }, handoff]);
-    assert.equal(run.request.model, undefined, "workers do not copy the root runtime");
-  }
-});
+    const built = buildOrchestrator(router);
+    await built.config.setRuntimeSelection(PERSONAL, {
+      modelId: "claude-sonnet-5",
+      effortLevel: "high",
+    });
+    await built.config.setPurposeRuntime("cron", category);
+    for (const surface of ["cron", "loop"]) {
+      const result = await built.orch.handleTurn({
+        ...turn(surface),
+        surface,
+        origin: { kind: "automation" },
+        runId: surface,
+        surfaceTools: false,
+      });
+      assert.equal(result.status, "ok");
+    }
+    assert.deepEqual(seen, [category, handoff, category]);
+  }));
 
-test("a teamed owner's swarm worker can start its default computer mid-turn", async () => {
-  const f = await swarmFixture();
-  const [peer] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
-  await f.service.sweep();
-  const worker = await f.workerCaller(peer!.id);
-  if (worker.kind !== "agent") throw new Error("expected worker");
-  const run = (await f.runs.get(worker.claims.runId!))!;
-  const team = { id: "eng", name: "Eng", isolatedInOpen: false, configured: false, present: new Set(["alice"]) };
-  const teams: TeamStore = {
-    list: async () => [],
-    forTurn: async () => [team],
-    isMember: async (id) => id === "alice",
-    apply: async () => {},
-  };
-  const base = createMockAgent();
-  const agent: Agent = {
-    ...base,
-    runTurn: async (turn) => {
-      const result = await turn.tools.execute("true");
-      return { reply: `exit ${result.code}` };
-    },
-  };
-  const built = buildOrchestrator(agent, undefined, undefined, f, teams);
-  const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
-  assert.equal(result.status, "ok", JSON.stringify(result));
-  assert.equal(result.reply, "exit 0");
-  assert.equal(f.provisioned.at(-1), `sandbox-${peer!.sandboxId}`);
-});
-
-test("swarm workers keep the runtime chosen at spawn over the category and scope defaults", async () => {
-  const inherited = { modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
-  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
-  for (const configured of [false, true]) {
-    const f = await swarmFixture({
-      runtime: {
-        model: inherited.modelId,
-        thinkingLevel: inherited.effortLevel,
-        fastMode: inherited.fastMode,
+test("human child continuations respect non-fast category defaults", () =>
+  inTestTenant(async () => {
+    const base = createMockAgent();
+    const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+    const seen: unknown[] = [];
+    const adapter: Agent = {
+      ...base,
+      runTurn: async (input) => {
+        seen.push(input.runtime);
+        return { reply: "done" };
       },
+    };
+    const router = withResolvedRuntime(adapter, (input) =>
+      resolveRuntimeChoice(
+        built.config,
+        "org:default-org",
+        input.scopeLabel,
+        category,
+        input.runtime,
+        undefined,
+        input.runtimePurpose,
+      ),
+    );
+    const built = buildOrchestrator(router);
+    await built.config.setInteractiveFastMode(true);
+    await built.config.setPurposeRuntime("subagent", category);
+    const parent = await built.sessions.getOrCreateByThread("parent", "dm", PERSONAL);
+    const child = await built.sessions.getOrCreateByThread("subagent:review", "dm", PERSONAL);
+    await built.sessions.setParentSession(child.id, parent.id);
+    await built.orch.handleTurn({
+      surface: "web",
+      actor,
+      conversation: { ...conv, threadRef: child.threadRef },
+      origin: { kind: "human" },
+      text: "continue",
+      surfaceTools: false,
     });
-    const [full] = await f.service.spawn(f.caller, {
-      requestId: "full",
-      text: "work",
-      model: "gpt-6-sol",
-      effort: "medium",
-      fastMode: false,
-    });
-    const [partial] = await f.service.spawn(f.caller, { requestId: "partial", text: "work", effort: "medium" });
-    await f.service.sweep();
-    const seen = new Map<string, unknown>();
-    for (const peer of [full!, partial!]) {
-      const worker = await f.workerCaller(peer.id);
+    assert.deepEqual(seen, [category]);
+  }));
+
+test("verified swarm workers resolve their own defaults instead of copying the root runtime, keeping handoffs", () =>
+  inTestTenant(async () => {
+    const inherited = { modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
+    const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+    const handoff = { ...category, modelId: "gpt-6-sol" };
+    for (const configured of [false, true]) {
+      const f = await swarmFixture({
+        runtime: {
+          model: inherited.modelId,
+          thinkingLevel: inherited.effortLevel,
+          fastMode: inherited.fastMode,
+        },
+      });
+      const [peer] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
+      await f.service.sweep();
+      const worker = await f.workerCaller(peer!.id);
+      assert.equal(worker.kind, "agent");
       if (worker.kind !== "agent") throw new Error("expected worker");
       const run = (await f.runs.get(worker.claims.runId!))!;
       const base = createMockAgent();
+      const seen: unknown[] = [];
       const adapter: Agent = {
         ...base,
         runTurn: async (input) => {
-          seen.set(peer.id, input.runtime);
+          seen.push(input.runtime);
+          if (seen.length === 1) return { reply: "", runtimeHandoff: { choice: handoff, lifetime: "task" } };
           return { reply: "done" };
         },
       };
@@ -1406,116 +1356,202 @@ test("swarm workers keep the runtime chosen at spawn over the category and scope
       );
       const built = buildOrchestrator(router, undefined, undefined, f);
       if (configured) await built.config.setPurposeRuntime("subagent", category);
-      assert.equal((await built.orch.handleTurn({ ...run.request, runId: run.id })).status, "ok");
+      const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
+      assert.equal(result.status, "ok");
+      assert.deepEqual(seen, [configured ? category : { modelId: inherited.modelId }, handoff]);
+      assert.equal(run.request.model, undefined, "workers do not copy the root runtime");
     }
-    assert.deepEqual(seen.get(full!.id), {
-      modelId: "gpt-6-sol",
-      effortLevel: "medium",
-      fastMode: false,
-    });
-    assert.deepEqual(
-      seen.get(partial!.id),
-      configured ? { ...category, effortLevel: "medium" } : { modelId: inherited.modelId, effortLevel: "medium" },
-    );
-  }
-});
+  }));
+
+test("a teamed owner's swarm worker can start its default computer mid-turn", () =>
+  inTestTenant(async () => {
+    const f = await swarmFixture();
+    const [peer] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
+    await f.service.sweep();
+    const worker = await f.workerCaller(peer!.id);
+    if (worker.kind !== "agent") throw new Error("expected worker");
+    const run = (await f.runs.get(worker.claims.runId!))!;
+    const team = { id: "eng", name: "Eng", isolatedInOpen: false, configured: false, present: new Set(["alice"]) };
+    const teams: TeamStore = {
+      list: async () => [],
+      forTurn: async () => [team],
+      isMember: async (id) => id === "alice",
+      apply: async () => {},
+    };
+    const base = createMockAgent();
+    const agent: Agent = {
+      ...base,
+      runTurn: async (turn) => {
+        const result = await turn.tools.execute("true");
+        return { reply: `exit ${result.code}` };
+      },
+    };
+    const built = buildOrchestrator(agent, undefined, undefined, f, teams);
+    const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
+    assert.equal(result.status, "ok", JSON.stringify(result));
+    assert.equal(result.reply, "exit 0");
+    assert.equal(f.provisioned.at(-1), `sandbox-${peer!.sandboxId}`);
+  }));
+
+test("swarm workers keep the runtime chosen at spawn over the category and scope defaults", () =>
+  inTestTenant(async () => {
+    const inherited = { modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
+    const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+    for (const configured of [false, true]) {
+      const f = await swarmFixture({
+        runtime: {
+          model: inherited.modelId,
+          thinkingLevel: inherited.effortLevel,
+          fastMode: inherited.fastMode,
+        },
+      });
+      const [full] = await f.service.spawn(f.caller, {
+        requestId: "full",
+        text: "work",
+        model: "gpt-6-sol",
+        effort: "medium",
+        fastMode: false,
+      });
+      const [partial] = await f.service.spawn(f.caller, { requestId: "partial", text: "work", effort: "medium" });
+      await f.service.sweep();
+      const seen = new Map<string, unknown>();
+      for (const peer of [full!, partial!]) {
+        const worker = await f.workerCaller(peer.id);
+        if (worker.kind !== "agent") throw new Error("expected worker");
+        const run = (await f.runs.get(worker.claims.runId!))!;
+        const base = createMockAgent();
+        const adapter: Agent = {
+          ...base,
+          runTurn: async (input) => {
+            seen.set(peer.id, input.runtime);
+            return { reply: "done" };
+          },
+        };
+        const router = withResolvedRuntime(adapter, (input) =>
+          resolveRuntimeChoice(
+            built.config,
+            "org:default-org",
+            input.scopeLabel,
+            inherited,
+            input.runtime,
+            undefined,
+            input.runtimePurpose,
+          ),
+        );
+        const built = buildOrchestrator(router, undefined, undefined, f);
+        if (configured) await built.config.setPurposeRuntime("subagent", category);
+        assert.equal((await built.orch.handleTurn({ ...run.request, runId: run.id })).status, "ok");
+      }
+      assert.deepEqual(seen.get(full!.id), {
+        modelId: "gpt-6-sol",
+        effortLevel: "medium",
+        fastMode: false,
+      });
+      assert.deepEqual(
+        seen.get(partial!.id),
+        configured ? { ...category, effortLevel: "medium" } : { modelId: inherited.modelId, effortLevel: "medium" },
+      );
+    }
+  }));
 
 for (const explicit of [false, true]) {
-  test(`${explicit ? "explicit" : "automatic"} recent recovery continues the request once and stays reduced next turn`, async () => {
+  test(`${explicit ? "explicit" : "automatic"} recent recovery continues the request once and stays reduced next turn`, () =>
+    inTestTenant(async () => {
+      const base = createMockAgent();
+      const seen: Parameters<Agent["runTurn"]>[0][] = [];
+      let summaries = 0;
+      let effects = 0;
+      const agent: Agent = {
+        ...base,
+        compactHistory: async () => {
+          summaries++;
+          throw new Error("summary refused");
+        },
+        runTurn: async (input) => {
+          seen.push(input);
+          if (explicit && seen.length === 1) {
+            await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
+            await input.emit({
+              type: "tool_call",
+              payload: { tool: "files", callId: "effect", action: "write" },
+              scopeLabel: input.scopeLabel,
+            });
+            effects++;
+            await input.emit({
+              type: "tool_result",
+              payload: { tool: "files", callId: "effect", result: "stored" },
+              scopeLabel: input.scopeLabel,
+            });
+            await input.emit({
+              type: "tool_call",
+              payload: { tool: "context", callId: "reduce", action: "compact", mode: "recent" },
+              scopeLabel: input.scopeLabel,
+            });
+            await input.emit({
+              type: "tool_result",
+              payload: { tool: "context", callId: "reduce", result: "requested" },
+              scopeLabel: input.scopeLabel,
+            });
+            return { reply: "not final", runtimeHandoff: { context: "recent" } };
+          }
+          if (seen.length === (explicit ? 2 : 1)) {
+            assert.ok(estimateHistoryTokens(input.history) <= 600);
+            assert.ok(input.history.some((e) => (e.payload as { mode?: string }).mode === "recent"));
+            assert.ok(
+              input.input.includes("finish the request") ||
+                input.history.some((e) => (e.payload as { text?: string }).text === "finish the request"),
+            );
+            assert.ok(!JSON.stringify(input.history).includes("old excluded sentinel"));
+            if (explicit) assert.ok(input.history.some((e) => (e.payload as { callId?: string }).callId === "effect"));
+          }
+          await input.emit({ type: "assistant", payload: { text: "finished" }, scopeLabel: input.scopeLabel });
+          return { reply: "finished" };
+        },
+      };
+      const { orch, sessions } = buildOrchestrator(agent, 1000);
+      const sid = await seed(
+        sessions,
+        explicit ? [] : Array.from({ length: 10 }, () => ({ payload: { text: "old excluded sentinel ".repeat(300) } })),
+      );
+      const before = await sessions.getEntries(sid);
+      const result = await orch.handleTurn({ ...turn("finish the request"), surfaceTools: false });
+      assert.equal(result.status, "ok");
+      assert.equal(result.reply, "finished");
+      assert.equal(seen.length, explicit ? 2 : 1);
+      assert.equal(summaries, explicit ? 0 : 1);
+      assert.equal(effects, explicit ? 1 : 0);
+      assert.deepEqual((await sessions.getEntries(sid)).slice(0, before.length), before);
+      assert.equal((await orch.handleTurn({ ...turn("what happened?"), surfaceTools: false })).status, "ok");
+      assert.ok(!JSON.stringify(seen.at(-1)!.history).includes("old excluded sentinel"));
+    }));
+}
+
+test("retry recovery supplies an excluded request without rerunning its completed action", () =>
+  inTestTenant(async () => {
     const base = createMockAgent();
-    const seen: Parameters<Agent["runTurn"]>[0][] = [];
-    let summaries = 0;
-    let effects = 0;
+    let mainCalls = 0;
     const agent: Agent = {
       ...base,
       compactHistory: async () => {
-        summaries++;
         throw new Error("summary refused");
       },
       runTurn: async (input) => {
-        seen.push(input);
-        if (explicit && seen.length === 1) {
-          await input.emit({ type: "user", payload: { text: input.input }, scopeLabel: input.scopeLabel });
-          await input.emit({
-            type: "tool_call",
-            payload: { tool: "files", callId: "effect", action: "write" },
-            scopeLabel: input.scopeLabel,
-          });
-          effects++;
-          await input.emit({
-            type: "tool_result",
-            payload: { tool: "files", callId: "effect", result: "stored" },
-            scopeLabel: input.scopeLabel,
-          });
-          await input.emit({
-            type: "tool_call",
-            payload: { tool: "context", callId: "reduce", action: "compact", mode: "recent" },
-            scopeLabel: input.scopeLabel,
-          });
-          await input.emit({
-            type: "tool_result",
-            payload: { tool: "context", callId: "reduce", result: "requested" },
-            scopeLabel: input.scopeLabel,
-          });
-          return { reply: "not final", runtimeHandoff: { context: "recent" } };
-        }
-        if (seen.length === (explicit ? 2 : 1)) {
-          assert.ok(estimateHistoryTokens(input.history) <= 600);
-          assert.ok(input.history.some((e) => (e.payload as { mode?: string }).mode === "recent"));
-          assert.ok(
-            input.input.includes("finish the request") ||
-              input.history.some((e) => (e.payload as { text?: string }).text === "finish the request"),
-          );
-          assert.ok(!JSON.stringify(input.history).includes("old excluded sentinel"));
-          if (explicit) assert.ok(input.history.some((e) => (e.payload as { callId?: string }).callId === "effect"));
-        }
-        await input.emit({ type: "assistant", payload: { text: "finished" }, scopeLabel: input.scopeLabel });
-        return { reply: "finished" };
+        mainCalls++;
+        assert.equal(input.input, "finish the stored request");
+        assert.equal(input.continueTurn, undefined);
+        assert.ok(!input.history.some((e) => e.type === "user"));
+        await input.emit({ type: "assistant", payload: { text: "resumed" }, scopeLabel: input.scopeLabel });
+        return { reply: "resumed" };
       },
     };
-    const { orch, sessions } = buildOrchestrator(agent, 1000);
-    const sid = await seed(
-      sessions,
-      explicit ? [] : Array.from({ length: 10 }, () => ({ payload: { text: "old excluded sentinel ".repeat(300) } })),
-    );
-    const before = await sessions.getEntries(sid);
-    const result = await orch.handleTurn({ ...turn("finish the request"), surfaceTools: false });
+    const { orch, sessions } = buildOrchestrator(agent, 500);
+    await seed(sessions, [
+      { payload: { text: "finish the stored request" } },
+      { type: "tool_call", payload: { tool: "files", action: "write", callId: "done" } },
+      { type: "tool_result", payload: { tool: "files", callId: "done", result: "stored ".repeat(1000) } },
+    ]);
+    const result = await orch.handleTurn({ ...turn("finish the stored request"), attempt: 2, surfaceTools: false });
     assert.equal(result.status, "ok");
-    assert.equal(result.reply, "finished");
-    assert.equal(seen.length, explicit ? 2 : 1);
-    assert.equal(summaries, explicit ? 0 : 1);
-    assert.equal(effects, explicit ? 1 : 0);
-    assert.deepEqual((await sessions.getEntries(sid)).slice(0, before.length), before);
-    assert.equal((await orch.handleTurn({ ...turn("what happened?"), surfaceTools: false })).status, "ok");
-    assert.ok(!JSON.stringify(seen.at(-1)!.history).includes("old excluded sentinel"));
-  });
-}
-
-test("retry recovery supplies an excluded request without rerunning its completed action", async () => {
-  const base = createMockAgent();
-  let mainCalls = 0;
-  const agent: Agent = {
-    ...base,
-    compactHistory: async () => {
-      throw new Error("summary refused");
-    },
-    runTurn: async (input) => {
-      mainCalls++;
-      assert.equal(input.input, "finish the stored request");
-      assert.equal(input.continueTurn, undefined);
-      assert.ok(!input.history.some((e) => e.type === "user"));
-      await input.emit({ type: "assistant", payload: { text: "resumed" }, scopeLabel: input.scopeLabel });
-      return { reply: "resumed" };
-    },
-  };
-  const { orch, sessions } = buildOrchestrator(agent, 500);
-  await seed(sessions, [
-    { payload: { text: "finish the stored request" } },
-    { type: "tool_call", payload: { tool: "files", action: "write", callId: "done" } },
-    { type: "tool_result", payload: { tool: "files", callId: "done", result: "stored ".repeat(1000) } },
-  ]);
-  const result = await orch.handleTurn({ ...turn("finish the stored request"), attempt: 2, surfaceTools: false });
-  assert.equal(result.status, "ok");
-  assert.equal(result.reply, "resumed");
-  assert.equal(mainCalls, 1);
-});
+    assert.equal(result.reply, "resumed");
+    assert.equal(mainCalls, 1);
+  }));
