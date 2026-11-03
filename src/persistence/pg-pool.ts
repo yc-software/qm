@@ -62,7 +62,6 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
   const pool = openPgSql(connectionString, {
     max,
     ca: (pooled ? poolingConfig.caCert : undefined) ?? installedCaTrust.ssl?.ca,
-    prepare: !pooled,
   });
   sharedPools.set(key, { pool, users: 1 });
   return pool;

@@ -49,7 +49,6 @@ export function pgConnectionOptions(connectionString: string, ca?: string): PgCo
 export interface PgSqlOptions {
   max: number;
   ca?: string;
-  prepare?: boolean;
   connectTimeoutS?: number;
   statementTimeoutMs?: number;
   onclose?: (id: number) => void;
@@ -57,12 +56,12 @@ export interface PgSqlOptions {
 
 export function openPgSql(
   connectionString: string,
-  { max, ca, prepare = true, connectTimeoutS = CONNECT_TIMEOUT_S, statementTimeoutMs, onclose }: PgSqlOptions,
+  { max, ca, connectTimeoutS = CONNECT_TIMEOUT_S, statementTimeoutMs, onclose }: PgSqlOptions,
 ): Sql {
   const { url, ssl } = pgConnectionOptions(connectionString, ca);
   const options = {
     max,
-    prepare,
+    prepare: true,
     connect_timeout: connectTimeoutS,
     idle_timeout: IDLE_TIMEOUT_S,
     backoff: () => 0,

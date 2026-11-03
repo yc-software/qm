@@ -23,6 +23,7 @@ listen_addr = 0.0.0.0
 listen_port = 6432
 unix_socket_dir = /tmp
 pool_mode = transaction
+max_prepared_statements = 200
 auth_type = scram-sha-256
 auth_file = /fixture/users.txt
 client_tls_sslmode = require
