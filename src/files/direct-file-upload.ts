@@ -22,7 +22,7 @@ import { FileUploadError, type FileUpload, type FileUploadStore } from "./file-u
 import { safeAttachmentName, mimeFromName } from "../core/attachments.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { durableObjectKey, FILES_AREA } from "./durable-byte-store.ts";
-import { isTenantId, withTenant } from "../tenants/context.ts";
+import { isTenantId } from "../tenants/context.ts";
 import { inTenantOf } from "../tenants/claim.ts";
 
 export const FILE_UPLOAD_PART_SIZE = 64 * 1024 * 1024;
@@ -374,8 +374,7 @@ export function createDirectFileUploads(options: {
             continue;
           const owner = uploadKey(upload.Key);
           if (!owner) continue;
-          const row = await withTenant(owner.tenant, () => store.get(owner.id));
-          if (row?.state === "completing" && row.uploadId === upload.UploadId) continue;
+          if ((await store.completingUploadId(owner.id)) === upload.UploadId) continue;
           await client.send(
             new AbortMultipartUploadCommand({ Bucket: options.bucket, Key: upload.Key, UploadId: upload.UploadId }),
           );

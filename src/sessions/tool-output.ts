@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { currentTenant } from "../tenants/context.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 const TOOL_OUTPUT_SETTING = "tool_result_inline_tokens";
 export const DEFAULT_INLINE_TOKENS = 4096;

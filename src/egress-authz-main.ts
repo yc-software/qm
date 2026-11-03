@@ -191,7 +191,7 @@ export function createRelayAuditSink(
 ): EgressAuditRecorder & { flush(): Promise<void>; start(): void; stop(): void } {
   const url = coreApiUrl.replace(/\/$/, "") + RELAY_PATH;
   const pathWithQuery = new URL(url).pathname;
-  const buffer: Array<{ tenant: string; record: Omit<EgressAuditRecord, "ts" | "source"> }> = [];
+  const buffer: Array<{ tenant: string | undefined; record: Omit<EgressAuditRecord, "ts" | "source"> }> = [];
   let flushing = false;
   let dropped = 0;
   async function flush(): Promise<void> {
@@ -205,7 +205,7 @@ export function createRelayAuditSink(
         method: "POST",
         headers: signedRequestHeaders(signingSecret, "POST", pathWithQuery, body, {
           "content-type": "application/json",
-          [TENANT_HEADER]: tenant,
+          ...(tenant ? { [TENANT_HEADER]: tenant } : {}),
         }),
         body,
         signal: AbortSignal.timeout(10_000),
@@ -228,7 +228,6 @@ export function createRelayAuditSink(
   const sweeper = createSweeper(flush, RELAY_FLUSH_MS, { label: "egress-audit-relay" });
   return {
     record(r, tenant) {
-      if (!tenant) return;
       if (buffer.length >= RELAY_MAX_BUFFER) {
         dropped++;
         return;

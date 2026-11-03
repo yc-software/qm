@@ -7,6 +7,9 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import type { Principal, TurnResult } from "../src/types.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+
+const sessions = createPostgresSessionStore(testDatabaseUrl());
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -36,6 +39,7 @@ test("a superseded worker stops claiming; in-flight turns finish; claiming resum
   } as unknown as Orchestrator;
   const worker = createWorker({
     runs,
+    sessions,
     orchestrator,
     leaseTtlMs: 10_000,
     pollMs: 5,

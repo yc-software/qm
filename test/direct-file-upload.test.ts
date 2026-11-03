@@ -7,7 +7,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
 
 const checksum = (text: string) => createHash("sha256").update(text).digest("base64");
 function fixture() {
@@ -27,6 +27,10 @@ function fixture() {
       row.state = to;
       return true;
     },
+    async completingUploadId(id) {
+      const row = rows.get(id);
+      return row?.state === "completing" ? row.uploadId : null;
+    },
     async touch(id, at) {
       const row = rows.get(id);
       if (row?.state !== "pending") return false;
@@ -44,7 +48,7 @@ function fixture() {
     async expired(now) {
       return [...rows.values()]
         .filter((r) => r.expiresAt <= now && r.state !== "complete" && r.state !== "aborted" && r.state !== "failed")
-        .map((r) => ({ ...r, tenantId: TEST_TENANT }));
+        .map((r) => ({ ...r, tenantId: testTenants()[0] }));
     },
   };
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());

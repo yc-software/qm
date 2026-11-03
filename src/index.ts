@@ -12,11 +12,12 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { backfillProviderNames } from "./sandbox/provider-name-backfill.ts";
+import { useOwnerDatabase } from "./tenants/claim.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { migrateTenantStorageOnce } from "./tenants/storage-migration.ts";
-import { singleTenantResolver } from "./tenants/resolver.ts";
 
 const config = loadConfig();
+useOwnerDatabase(config.databaseOwnerUrl);
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
@@ -43,7 +44,6 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
 const server = createServer(built.app, {
   ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
   managedSlack,
-  tenants: singleTenantResolver(built.tenants),
 });
 
 await built.config.hydrate?.();

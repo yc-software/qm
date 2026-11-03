@@ -71,7 +71,6 @@ import {
   type OutcomeReport,
 } from "../memory/provider-outcome.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
-import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
   ControlService,
   CronCreateRequest,
@@ -172,11 +171,6 @@ export interface SkillResult {
   packDir?: string;
 }
 
-interface ReachedProvenance {
-  scopeId: ScopeId;
-  label: string;
-}
-
 export interface CommandCredential {
   handle: string;
   scratchOnly?: boolean;
@@ -214,11 +208,10 @@ export interface ToolContext extends SurfaceToolDeps {
       timeoutSeconds?: number;
       sandboxId?: string;
       scratch?: boolean;
-      reachTarget?: string;
       signal?: AbortSignal;
       credentials?: string[];
     },
-  ): Promise<ExecResult & { reached?: ReachedProvenance; scratchReroute?: boolean }>;
+  ): Promise<ExecResult & { scratchReroute?: boolean }>;
   sandboxResources?(
     action: "list" | "create" | "default" | "retire",
     input?: { backend?: string; name?: string; sandboxId?: string | null },
@@ -490,10 +483,6 @@ export interface ToolContextDeps {
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
   useSkill?: (name: string, path: string, sandboxId?: string, source?: string) => Promise<SkillResult>;
-  reach?: {
-    resolveChannel(query: string): Promise<ReachResolution>;
-    provisionFor(scopeId: ScopeId): Promise<SandboxHandle>;
-  };
   layers: WorkspaceLayer[];
   commandPolicy: () => CommandPolicy;
   layerCommandRules?: () => readonly CommandRule[];
@@ -823,37 +812,24 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         timeoutSeconds?: number;
         sandboxId?: string;
         scratch?: boolean;
-        reachTarget?: string;
         signal?: AbortSignal;
         credentials?: string[];
       },
-    ): Promise<ExecResult & { reached?: ReachedProvenance; scratchReroute?: boolean }> {
+    ): Promise<ExecResult & { scratchReroute?: boolean }> {
       const scratch = execOpts?.scratch === true;
       const requestedCredentials = execOpts?.credentials ?? [];
-      if (requestedCredentials.length && (execOpts?.reachTarget !== undefined || !writableScopeId)) {
+      if (requestedCredentials.length && !writableScopeId) {
         throw new Error("command credentials are available only on scoped or scratch computers");
       }
       const requested = await selectCredentials(requestedCredentials);
       const scratchOnly = scratchOnlyHandles(requested);
-      const reachTarget = execOpts?.reachTarget;
-      if ([scratch, reachTarget !== undefined, execOpts?.sandboxId !== undefined].filter(Boolean).length > 1) {
-        throw new Error("a command runs on one computer — choose scoped, scratch, or a reached room");
+      if (scratch && execOpts?.sandboxId !== undefined) {
+        throw new Error("a command runs on one computer — choose scratch or a sandbox_id");
       }
       if ((scratch || scratchOnly) && !deps.provisionScratch) {
         throw new Error('scratch execution is not available on this computer — run without scope:"scratch"');
       }
       const scratchReroute = Boolean(scratchOnly) && !scratch;
-      let reached: ReachedProvenance | undefined;
-      if (reachTarget !== undefined) {
-        if (!deps.reach) {
-          throw new Error(
-            "visiting another conversation's computer works from a DM — here, ask in that channel instead",
-          );
-        }
-        const target = await deps.reach.resolveChannel(reachTarget);
-        if (target.kind === "error") throw new Error(target.message);
-        reached = { scopeId: target.scopeId, label: `#${target.channelName}` };
-      }
       const executionPolicy = deps.commandPolicy;
       let handle;
       if (execOpts?.sandboxId !== undefined && !scratchOnly) {
@@ -866,8 +842,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         });
       } else {
         authorizeExecution(command, undefined, executionPolicy());
-        if (reached) handle = await deps.reach!.provisionFor(reached.scopeId);
-        else if (scratch || scratchOnly) handle = await deps.provisionScratch!();
+        if (scratch || scratchOnly) handle = await deps.provisionScratch!();
         else handle = await deps.provision();
       }
       const resolvedMs = execOpts?.timeoutSeconds != null ? execOpts.timeoutSeconds * 1000 : deps.execTimeoutMs;
@@ -882,15 +857,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
               ...(execOpts?.signal ? { signal: execOpts.signal } : {}),
             }
           : undefined;
-      if (reached) {
-        deps.auditLog?.record({
-          at: Date.now(),
-          principalId: deps.createdBy,
-          action: "reach_exec",
-          resource: command,
-          scopeLabel: reached.scopeId,
-        });
-      }
       execOpts?.signal?.throwIfAborted();
       const { commandEnv, secretValues, fileExecution } = await stageCredentials(
         requested,
@@ -919,7 +885,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           await fileExecution?.finish();
         },
       );
-      return { ...r, ...(reached ? { reached } : {}), ...(scratchReroute ? { scratchReroute } : {}) };
+      return { ...r, ...(scratchReroute ? { scratchReroute } : {}) };
     },
 
     async read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult> {

@@ -3,10 +3,12 @@ import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
 import { backfillProviderNames } from "../sandbox/provider-name-backfill.ts";
+import { useOwnerDatabase } from "../tenants/claim.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 import { migrateTenantStorageOnce } from "../tenants/storage-migration.ts";
 
 const config = loadConfig();
+useOwnerDatabase(config.databaseOwnerUrl);
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 await migrateTenantStorageOnce(config);

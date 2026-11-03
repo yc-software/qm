@@ -11,11 +11,10 @@ import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { cacheHitRatio } from "../src/api/routes/admin/spend.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cache-obs-")) }));
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,

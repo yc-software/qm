@@ -10,6 +10,10 @@ import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { testPgPool } from "./support/test-database.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+
+const sessions = createPostgresSessionStore(testDatabaseUrl());
 
 const sharedPool = testPgPool();
 
@@ -1000,7 +1004,7 @@ test("durable worker rejects excessive swarm claims before calling the agent", a
     },
   } as unknown as Orchestrator;
   await assert.rejects(
-    processRun({ runs, orchestrator, leaseTtlMs: 60_000 }, { ...claimed, attempts: 4 }),
+    processRun({ runs, sessions, orchestrator, leaseTtlMs: 60_000 }, { ...claimed, attempts: 4 }),
     /claim budget/,
   );
   assert.equal(called, false);

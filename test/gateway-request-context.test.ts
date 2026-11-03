@@ -12,7 +12,6 @@ import { getRequiredModel } from "../src/model/pi-models.ts";
 import { withModelRequestContext } from "../src/model/request-context.ts";
 import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 import type { Config } from "../src/config.ts";
 import type { Session, SessionEntry } from "../src/types.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
@@ -328,7 +327,7 @@ test("app turns and their helper calls tell the gateway which session they serve
 
 test("API work carries its token's turn, the admin replaying screens, or the memory writer", async (t) => {
   const { config, built, sent } = await gatewayApp(t);
-  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

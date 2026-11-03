@@ -146,7 +146,6 @@ export interface AgentOptions {
   resolveProviderKeys?: () => Promise<ProviderKeys>;
   tempDirPrefix?: string;
   captureRequests?: boolean;
-  reachExec?: boolean;
   controlTools?: boolean;
   sandboxResources?: boolean;
   turnWallClockMs?: number;
@@ -890,7 +889,6 @@ export function createAgent(opts?: AgentOptions): Agent {
   const keyForModel = (keys: ProviderKeys, model: Model<Api>): string | undefined =>
     modelGatewayRequest(modelGateway, model)?.apiKey ?? keys[String(model.provider)];
   const captureRequests = opts?.captureRequests ?? true;
-  const reachExec = opts?.reachExec ?? false;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
@@ -898,7 +896,6 @@ export function createAgent(opts?: AgentOptions): Agent {
     return createAgentTools(ref, {
       sessionTools: Boolean(turn.tools.sessionSyscalls),
       delegateWork: turn.delegateWork === true,
-      reachExec,
       ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
       controlTools,
       ...(turn.surfaceTools ? { surfaceTools: true } : {}),
