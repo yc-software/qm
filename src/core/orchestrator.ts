@@ -207,6 +207,7 @@ import {
   deliveryMenu,
   environmentNote,
   membershipEvent,
+  guidanceUpdateEvent,
   renderConversationRoster,
   renderGatewayContext,
   renderSandboxProviders,
@@ -3210,11 +3211,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             recallOutcomes,
           );
           const snapshot = membershipEvent(rosterMembers, continuation?.history ?? rawEntries, session.id);
+          const guidance =
+            !external && deps.config
+              ? guidanceUpdateEvent(
+                  {
+                    version: deps.config.soulVersion(scopeId),
+                    personal: conversation.kind === "dm",
+                    revisions: deps.config.soulHistory(scopeId),
+                  },
+                  continuation?.history ?? rawEntries,
+                  session.id,
+                )
+              : undefined;
           const turnEnvironment = environmentNote(
             [
               turnEnvironmentContents,
               continuation ? "" : mailbox?.text,
               snapshot.text,
+              guidance?.text,
               recall.text ? `${memoryHeading}${recall.text}` : "",
               inboundIssuesNote(inboundIssues),
             ]
@@ -3222,7 +3236,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               .join("\n\n"),
           );
           const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
-          const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
+          const silentResume = continueTurn && !continuation && !snapshot.text && !guidance?.text && !recall.text;
           let recordedRecall = false;
           const emit: AgentTurnInput["emit"] = async (entry) => {
             turnProgress++;
@@ -3245,6 +3259,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (!recordedRecall && !payload.steered && !payload.overheard) {
                 recordedRecall = true;
                 if (snapshot.record) payload.rosterSnapshot = snapshot.record;
+                if (guidance) payload.guidanceSnapshot = guidance.record;
                 if (environment) payload.environment = environment;
                 if (recall.text) payload.memoryRecall = recall.record;
                 if (!continuation && recallOutcomes.length) payload.memoryRecallOutcomes = recallOutcomes;
