@@ -23,7 +23,7 @@ test("the live label advances between chat renders and stops when disconnected",
   part.setConnected(true);
   assert.equal(host.textContent, "59s");
   t.mock.timers.tick(1000);
-  assert.equal(host.textContent, "1m 00s");
+  assert.equal(host.textContent, "1m 0s");
   render(nothing, host);
   t.mock.timers.tick(100);
   assert.equal(host.textContent, "");
