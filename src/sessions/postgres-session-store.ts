@@ -273,10 +273,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const participantScopes = async (principalId: string): Promise<ParticipantScope[]> => {
     const rows = await q(
       `SELECT s.scope_id, MAX(s.channel_name) AS channel_name,
-              COUNT(*) FILTER (WHERE ${HAS_CONTENT}) AS session_count,
-              MAX(${USER_ACTIVITY}) FILTER (WHERE ${HAS_CONTENT}) AS last_activity
-         FROM sessions s
-         JOIN participants p ON p.session_id = s.id
+              COUNT(*) FILTER (WHERE s.has_content) AS session_count,
+              MAX(s.activity) FILTER (WHERE s.has_content) AS last_activity
+         FROM participants p
+        CROSS JOIN LATERAL (
+          SELECT s.scope_id, s.channel_name, ${USER_ACTIVITY} AS activity, ${HAS_CONTENT} AS has_content
+            FROM sessions s WHERE s.id = p.session_id OFFSET 0
+        ) s
         WHERE p.principal_id = $1
         GROUP BY s.scope_id`,
       [principalId],
@@ -304,7 +307,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     if (query.pinned !== undefined) where.push(`COALESCE(p.pinned, false) = ${param(query.pinned)}`);
     if (query.surface !== undefined) where.push(`s.surface = ${param(query.surface)}`);
     if (query.scopeId !== undefined) where.push(`s.scope_id = ${param(query.scopeId)}`);
-    if (query.sessionIds !== undefined) where.push(`s.id = ANY(${param([...query.sessionIds])}::text[])`);
+    if (query.sessionIds !== undefined) where.push(`p.session_id = ANY(${param([...query.sessionIds])}::text[])`);
     if (query.titleQuery?.trim()) {
       const pattern = param(likeContains(query.titleQuery.trim()));
       where.push(`(COALESCE(p.title, s.title) ILIKE ${pattern} OR s.channel_name ILIKE ${pattern})`);
@@ -314,7 +317,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     const limit = Math.max(1, Math.min(Math.floor(query.limit), 200));
     const page = await q(
       `SELECT s.id, ${USER_ACTIVITY} AS activity
-         FROM participants p JOIN sessions s ON s.id = p.session_id
+         FROM participants p ${
+           query.scopeId === undefined
+             ? "CROSS JOIN LATERAL (SELECT * FROM sessions WHERE id = p.session_id OFFSET 0) s"
+             : "JOIN sessions s ON s.id = p.session_id"
+         }
         WHERE ${where.join(" AND ")}
         ORDER BY ${USER_ACTIVITY} DESC, s.id DESC
         LIMIT ${param(limit + 1)}`,
