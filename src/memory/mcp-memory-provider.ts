@@ -3,7 +3,7 @@ import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp
 import { withTimeout } from "../util/async.ts";
 import { attestedPerson } from "../directory/person.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
-import { DENIED_CODES, reportEnvelope } from "./provider-outcome.ts";
+import { DENIED_CODES, MAX_FACTS_PER_WRITE, reportEnvelope } from "./provider-outcome.ts";
 import type { McpMemoryOperationConfig } from "./provider-config.ts";
 
 const MAX_PROVENANCE_CHARS = 200;
@@ -59,18 +59,23 @@ export function createMcpMemoryProvider(opts: {
       if (!op) throw new Error("memory provider write is not configured");
       const actor = opts.attestActor ? context?.actorId : (context?.actorId ?? author);
       const provenance = (context?.conversationScopeId ?? scopeId).slice(0, MAX_PROVENANCE_CHARS);
-      const args: Record<string, unknown> = op.factsArg
-        ? { [op.factsArg]: facts.map((fact) => ({ fact, provenance })) }
-        : { [op.contentArg ?? "content"]: facts.join("\n") };
-      if (context?.input && op.inputArg) args[op.inputArg] = context.input;
-      if (context?.reply && op.replyArg) args[op.replyArg] = context.reply;
-      if (op.capturedAtArg) args[op.capturedAtArg] = at;
-      if (op.sourceArg) args[op.sourceArg] = context?.mode ?? "explicit";
-      if (context?.idempotencyKey && op.idempotencyArg) args[op.idempotencyArg] = context.idempotencyKey;
-      if (op.scopeArg) args[op.scopeArg] = scopeId;
-      const { code } = mcpEnvelope(await call(op, args, actor));
-      if (code && DENIED_CODES.has(code))
-        throw new McpCallError(`memory provider refused the write (${code})`, { code });
+      const size = op.factsArg ? MAX_FACTS_PER_WRITE : facts.length;
+      for (let start = 0; start < facts.length; start += size) {
+        const batch = facts.slice(start, start + size);
+        const args: Record<string, unknown> = op.factsArg
+          ? { [op.factsArg]: batch.map((fact) => ({ fact, provenance })) }
+          : { [op.contentArg ?? "content"]: batch.join("\n") };
+        if (context?.input && op.inputArg) args[op.inputArg] = context.input;
+        if (context?.reply && op.replyArg) args[op.replyArg] = context.reply;
+        if (op.capturedAtArg) args[op.capturedAtArg] = at;
+        if (op.sourceArg) args[op.sourceArg] = context?.mode ?? "explicit";
+        if (context?.idempotencyKey && op.idempotencyArg)
+          args[op.idempotencyArg] = start ? `${context.idempotencyKey}:${start / size}` : context.idempotencyKey;
+        if (op.scopeArg) args[op.scopeArg] = scopeId;
+        const { code } = mcpEnvelope(await call(op, args, actor));
+        if (code && DENIED_CODES.has(code))
+          throw new McpCallError(`memory provider refused the write (${code})`, { code });
+      }
       return facts.length;
     },
 

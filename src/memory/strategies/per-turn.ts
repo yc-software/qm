@@ -5,7 +5,6 @@ import type { ScopeId } from "../../types.ts";
 import { bullets } from "../notebook.ts";
 import { parseSensitivity, SENSITIVITY_PROMPT } from "../classification.ts";
 import { UNTRACKED_PROVENANCE, type MemoryCaptureMetadata } from "../facts.ts";
-import { MAX_FACTS_PER_WRITE } from "../provider-outcome.ts";
 
 export const DEFAULT_CAPTURE_QUIET_MS = 180_000;
 const DEFAULT_CAPTURE_MAX_TURNS = 10;
@@ -135,7 +134,7 @@ function createBurstBuffer(
   };
 }
 
-function burstCaptureContext(burst: Burst, batch: number): MemoryCaptureContext {
+function burstCaptureContext(burst: Burst): MemoryCaptureContext {
   return {
     mode: "automatic",
     ...(burst.inheritedFacts !== undefined ? { inheritedFacts: burst.inheritedFacts } : {}),
@@ -144,9 +143,7 @@ function burstCaptureContext(burst: Burst, batch: number): MemoryCaptureContext 
     input: burst.turns.map((turn) => turn.input).join("\n\n"),
     reply: burst.turns.map((turn) => turn.reply).join("\n\n"),
     ...(burst.sessionId ? { sessionId: burst.sessionId } : {}),
-    ...(burst.idempotencyKey
-      ? { idempotencyKey: batch ? `${burst.idempotencyKey}:${batch}` : burst.idempotencyKey }
-      : {}),
+    ...(burst.idempotencyKey ? { idempotencyKey: burst.idempotencyKey } : {}),
   };
 }
 
@@ -159,15 +156,9 @@ export function createPerTurnStrategy(deps: {
 }): MemoryStrategy {
   async function flush(burst: Burst): Promise<void> {
     const { facts, sensitivity } = await extractFacts(deps.agent, burst.turns);
+    if (!facts.length) return;
     const at = Date.now();
-    for (let batch = 0; batch * MAX_FACTS_PER_WRITE < facts.length; batch++)
-      await deps.memory.capture(
-        burst.scopeId,
-        facts.slice(batch * MAX_FACTS_PER_WRITE, (batch + 1) * MAX_FACTS_PER_WRITE),
-        at,
-        burst.actorId,
-        { ...burstCaptureContext(burst, batch), sensitivity },
-      );
+    await deps.memory.capture(burst.scopeId, facts, at, burst.actorId, { ...burstCaptureContext(burst), sensitivity });
   }
 
   return {

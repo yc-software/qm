@@ -364,3 +364,29 @@ test("automatic capture of more than 20 facts reaches gbrain as writes within th
   assert.equal(new Set(writes.map(({ key }) => key)).size, writes.length);
   assert.deepEqual(notebookWrites, facts);
 });
+
+test("a strict gbrain route that refuses a later batch still leaves every automatic fact in the notebook", async (t) => {
+  const [notebookRoute, gbrainRoute] = recipe.routes as Array<Record<string, unknown>>;
+  let writes = 0;
+  const { memory, notebookWrites } = await gbrain(
+    t,
+    () => (++writes > 1 ? refusal("invalid_params") : committed(20, "8c1f7a0e-0000-5000-8000-000000000009")),
+    [notebookRoute, { ...gbrainRoute, capture: "automatic", failOpen: false }],
+  );
+  const facts = Array.from({ length: 45 }, (_, i) => `Prefers seat ${i + 1}`);
+  const strategy = createPerTurnStrategy({
+    agent: { oneShot: async () => `SENSITIVITY: ordinary\n${facts.map((fact) => `- ${fact}`).join("\n")}` },
+    memory,
+  });
+  await assert.rejects(
+    strategy.onTurnEnd!({
+      scopeId: JORDAN,
+      actorId: "U0JORDAN",
+      idempotencyKey: "run-5",
+      input: "My seats",
+      reply: "Noted",
+    }),
+    /invalid_params/,
+  );
+  assert.deepEqual(notebookWrites, facts);
+});
