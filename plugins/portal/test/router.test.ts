@@ -237,7 +237,8 @@ test("a signed-in user keeps their last known identity while core cannot answer 
       assert.equal(r.status, 200);
       assert.equal(((await r.json()) as { cookie: string }).cookie, "webuiuser=U1");
     }
-    assert.ok(flakyLookups >= 2, "the portal keeps asking core in the background");
+    const drop = await fetch(`${base}/drop/abc/form`, { headers: { cookie: sessionCookie("U-flaky") } });
+    assert.equal(drop.status, 503, "routes core does not re-verify never act on a stale identity");
   } finally {
     mock.timers.reset();
   }

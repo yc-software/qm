@@ -5,7 +5,7 @@ const STALE_MS = 5 * 60_000;
 
 export function createCanonicalResolver(
   lookup: (sub: string) => Promise<string | null>,
-): (sub: string) => Promise<string | null> {
+): (sub: string) => Promise<{ id: string; stale: boolean } | null> {
   const known = new LRUCache<string, { id: string; at: number }>({ max: 10_000 });
   const inflight = new Map<string, Promise<string | null>>();
   const refresh = (sub: string): Promise<string | null> => {
@@ -24,8 +24,10 @@ export function createCanonicalResolver(
   return async (sub) => {
     const found = known.get(sub);
     const hit = found && Date.now() - found.at < STALE_MS ? found : undefined;
-    if (hit && Date.now() - hit.at < FRESH_MS) return hit.id;
+    if (hit && Date.now() - hit.at < FRESH_MS) return { id: hit.id, stale: false };
     const next = refresh(sub);
-    return hit ? hit.id : next;
+    if (hit) return { id: hit.id, stale: true };
+    const id = await next;
+    return id === null ? null : { id, stale: false };
   };
 }

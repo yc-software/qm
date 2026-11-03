@@ -4,13 +4,19 @@ import { createCanonicalResolver } from "../src/canonical.ts";
 
 function harness(answers: Array<string | null | Error>) {
   const calls: string[] = [];
-  const resolve = createCanonicalResolver(async (sub) => {
+  const settled: Array<Promise<unknown>> = [];
+  const resolve = createCanonicalResolver((sub) => {
     calls.push(sub);
     const next = answers.shift();
-    if (next instanceof Error) throw next;
-    return next ?? null;
+    const answer = next instanceof Error ? Promise.reject(next) : Promise.resolve(next ?? null);
+    settled.push(answer.catch(() => null));
+    return answer;
   });
-  return { resolve, calls };
+  const idle = async () => {
+    await Promise.all(settled);
+    await new Promise((r) => setImmediate(r));
+  };
+  return { resolve, calls, idle };
 }
 
 test.beforeEach(() => mock.timers.enable({ apis: ["Date"], now: 1_000_000 }));
@@ -23,24 +29,30 @@ test("a failed lookup with no earlier answer reports the identity as unavailable
 });
 
 test("a stale answer is served while the refresh runs, then replaced by the refreshed one", async () => {
-  const { resolve, calls } = harness(["U1", new Error("The operation was aborted due to timeout"), "U2"]);
-  assert.equal(await resolve("U-alias"), "U1");
+  const { resolve, calls, idle } = harness(["U1", new Error("The operation was aborted due to timeout"), "U2"]);
+  assert.deepEqual(await resolve("U-alias"), { id: "U1", stale: false });
   mock.timers.tick(30_000);
-  assert.equal(await resolve("U-alias"), "U1");
+  assert.deepEqual(await resolve("U-alias"), { id: "U1", stale: false });
   assert.equal(calls.length, 1);
   mock.timers.tick(31_000);
-  assert.equal(await resolve("U-alias"), "U1");
-  await new Promise((r) => setImmediate(r));
-  assert.equal(await resolve("U-alias"), "U1");
-  await new Promise((r) => setImmediate(r));
-  assert.equal(await resolve("U-alias"), "U2");
+  assert.deepEqual(await resolve("U-alias"), { id: "U1", stale: true });
+  await idle();
+  assert.deepEqual(await resolve("U-alias"), { id: "U1", stale: true });
+  await idle();
+  assert.deepEqual(await resolve("U-alias"), { id: "U2", stale: false });
   assert.equal(calls.length, 3);
 });
 
-test("a last known answer older than five minutes is not reused", async () => {
-  const { resolve } = harness(["U1", null]);
-  assert.equal(await resolve("U-alias"), "U1");
-  mock.timers.tick(5 * 60_000 + 1);
+test("a last known answer stops being reused five minutes after core last confirmed it", async () => {
+  const { resolve, idle } = harness(["U1", null, null, null]);
+  assert.deepEqual(await resolve("U-alias"), { id: "U1", stale: false });
+  mock.timers.tick(2 * 60_000);
+  assert.deepEqual(await resolve("U-alias"), { id: "U1", stale: true });
+  await idle();
+  mock.timers.tick(2 * 60_000);
+  assert.deepEqual(await resolve("U-alias"), { id: "U1", stale: true });
+  await idle();
+  mock.timers.tick(60_000 + 1);
   assert.equal(await resolve("U-alias"), null);
 });
 

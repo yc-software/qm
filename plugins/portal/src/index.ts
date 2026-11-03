@@ -309,6 +309,7 @@ async function isAdmin(sub: string): Promise<boolean> {
 }
 
 const CANONICAL_TIMEOUT_MS = 4_000;
+const CORE_UNVERIFIED_ROUTES = new Set(["auth", "connect", "drop", "d", "deployments"]);
 
 const canonicalPrincipal = createCanonicalResolver(async (sub) => {
   const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
@@ -1077,8 +1078,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const authenticatedPrincipal = session?.sub;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
     const canonical = await canonicalPrincipal(session.sub);
-    if (canonical === null) return identityUnavailable(req, res);
-    session = { ...session, sub: canonical };
+    if (!canonical || (canonical.stale && CORE_UNVERIFIED_ROUTES.has(pathname.split("/")[1] ?? "")))
+      return identityUnavailable(req, res);
+    session = { ...session, sub: canonical.id };
   }
 
   if (pathname === "/auth/impersonate" && method === "POST") {
@@ -1087,7 +1089,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
-    if (target === session.sub || (await canonicalPrincipal(target)) === session.sub)
+    if (target === session.sub || (await canonicalPrincipal(target))?.id === session.sub)
       return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
     const result = await coreImpersonate("start", session.sub, target);
     if (!result.ok) {
