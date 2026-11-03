@@ -1569,11 +1569,12 @@ export function buildApp(
       return advisoryLock.withLock("session-run-admission", enqueue);
     },
   };
+  const swarmRows = createPostgresSwarmRows(databaseUrl);
   const swarms =
     config.swarmsEnabled !== false
       ? createSwarmService({
           defaults: config.swarmDefaults,
-          store: createSwarmStore(createPostgresSwarmRows(databaseUrl)),
+          store: createSwarmStore(swarmRows),
           sessions,
           runs,
           sandboxes: sandboxResources,
