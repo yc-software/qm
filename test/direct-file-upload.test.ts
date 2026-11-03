@@ -2,7 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createDirectFileUploads, multipartChecksum, FILE_UPLOAD_PART_SIZE } from "../src/files/direct-file-upload.ts";
-import { FileUploadError, type FileUpload, type FileUploadStore } from "../src/files/file-upload-store.ts";
+import {
+  FILE_UPLOAD_MIGRATIONS,
+  FileUploadError,
+  type FileUpload,
+  type FileUploadStore,
+} from "../src/files/file-upload-store.ts";
+import { registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { buildApp } from "../src/wiring.ts";
+import { stopAtEnd } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
@@ -339,4 +348,12 @@ test("missing multipart upload and object become terminal instead of retrying fo
   assert.equal(await f.files.get(row.id), null);
   await f.service.abort(row.id);
   await assert.rejects(f.service.complete(row.id), /no longer available/);
+});
+
+test("the app registers the upload table without object storage configured", async () => {
+  const config = testConfig();
+  assert.ok(!(config.snapshotStore === "s3" && config.s3Bucket));
+  stopAtEnd(buildApp(config));
+  const ids = new Set(registeredPgMigrations(config.databaseUrl!).map((migration) => migration.id));
+  for (const migration of FILE_UPLOAD_MIGRATIONS) assert.ok(ids.has(migration.id), migration.id);
 });

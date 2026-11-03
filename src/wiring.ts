@@ -60,7 +60,7 @@ import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
-import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
+import { createPostgresFileUploadStore, FILE_UPLOAD_MIGRATIONS } from "./files/file-upload-store.ts";
 import { createSandboxResources, type SandboxResources } from "./sandbox/sandbox-resources.ts";
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
@@ -554,6 +554,7 @@ export function buildApp(
   if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
   registerPgMigrations(databaseUrl, [
     TENANCY_BASE,
+    ...FILE_UPLOAD_MIGRATIONS,
     FLY_DEPLOY_PORTS,
     ...[
       SPRITES_INITIALIZATION,
