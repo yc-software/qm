@@ -14,7 +14,7 @@ type WebTranscriptSessions = Pick<SessionStore, "appendMany" | "hasDeliveryEntry
 
 export function turnRecordedFailure(tail: readonly Item[], note: { notBefore: number; runId?: string }): boolean {
   return tail.some((item) => {
-    if (item.kind !== "Error" || item.errorCode !== "turn_failure") return false;
+    if (item.kind !== "Error" || item.errorCode === "steer_withheld") return false;
     if (item.turnId !== null) return item.turnId === note.runId;
     return item.createdAt >= note.notBefore;
   });

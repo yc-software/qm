@@ -2299,7 +2299,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         else original.edited = true;
       }
       out.push({ ...revision, timestamp: e.createdAt } as unknown as AgentMessage);
-    } else if (e.kind === "Error" && e.text && e.errorCode !== "turn_failure") {
+    } else if (e.kind === "Error" && e.text && e.errorCode === "steer_withheld") {
       spillHeldPosts();
       flushWork("", e.createdAt);
       out.push({

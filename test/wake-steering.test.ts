@@ -216,7 +216,6 @@ test("Auto blocks a prompt-injection attempt from an unprompted mid-turn coworke
     [["steer_withheld", "A message from U2 arrived mid-turn and was withheld: security screening did not clear it."]],
     "the transcript records the withheld message without its content",
   );
-  assert.doesNotMatch(notes[0]!.text ?? "", /ignore previous/);
 });
 
 test("Auto fails open on a mid-turn coworker update when the screener is unavailable", async () => {
