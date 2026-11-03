@@ -153,6 +153,8 @@ export interface CoreSession {
   parentSessionId?: string;
   surface?: string;
   subagents?: { running: number; waiting: number };
+  workingSince?: number;
+  purpose?: string;
 }
 
 export interface SessionPageQuery {

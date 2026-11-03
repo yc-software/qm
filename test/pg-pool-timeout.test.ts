@@ -13,7 +13,7 @@ async function connectionState(store: ReturnType<typeof createPgPool>) {
     const { rows } = await client.query(
       "SELECT current_setting('statement_timeout') AS timeout, now() = statement_timestamp() AS fresh, pg_backend_pid() AS pid",
     );
-    return { ...rows[0], status: (client as unknown as { getTransactionStatus(): string }).getTransactionStatus() };
+    return { ...rows[0], status: client.getTransactionStatus() };
   } finally {
     client.release();
   }
@@ -84,6 +84,51 @@ test("a backend terminated mid-query rejects and the pool replaces the connectio
     assert.equal((await connectionState(store)).status, "I");
   } finally {
     await observer.end();
+    await store.close();
+  }
+});
+
+test("an aborted write with a timeout rolls back", { skip }, async () => {
+  const store = createPgPool(url!);
+  try {
+    await store.q("DROP TABLE IF EXISTS aborted_rows");
+    await store.q("CREATE TABLE aborted_rows(n int)");
+    const controller = new AbortController();
+    const writing = assert.rejects(
+      store.q("INSERT INTO aborted_rows SELECT 1 FROM pg_sleep(0.5)", [], {
+        signal: controller.signal,
+        timeoutMs: 5000,
+      }),
+    );
+    setTimeout(() => controller.abort(), 100);
+    await writing;
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    assert.equal((await store.q("SELECT count(*)::int AS n FROM aborted_rows"))[0]!.n, 0);
+  } finally {
+    await store.close();
+  }
+});
+
+test("an aborted query closes its socket instead of waiting for the backend", { skip }, async () => {
+  const store = createPgPool(url!);
+  const locker = new pg.Client({ connectionString: url });
+  await locker.connect();
+  const sockets = () => process.getActiveResourcesInfo().filter((name) => name === "TCPSocketWrap").length;
+  try {
+    await store.q("DROP TABLE IF EXISTS locked_rows");
+    await store.q("CREATE TABLE locked_rows(n int)");
+    await locker.query("BEGIN");
+    await locker.query("LOCK TABLE locked_rows IN ACCESS EXCLUSIVE MODE");
+    const controller = new AbortController();
+    const reading = assert.rejects(store.q("SELECT * FROM locked_rows", [], { signal: controller.signal }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const before = sockets();
+    controller.abort();
+    await reading;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(sockets(), before - 1);
+  } finally {
+    await locker.end();
     await store.close();
   }
 });

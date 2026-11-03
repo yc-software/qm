@@ -1916,6 +1916,14 @@ async function runSessionsRefresh(
   }
 }
 
+export async function refreshSubagentRows(rootId: string): Promise<void> {
+  const children = await fetchSessionChildren(rootId).catch(swallowAs("web-ui: refresh subagents", null));
+  if (!children) return;
+  sessionsState.list = mergeChildren(sessionsState.list, rootId, children);
+  renderList();
+  for (const conversation of allConversations()) conversation.redraw();
+}
+
 export async function loadScopeSessions(scopeId: string): Promise<void> {
   const page = await fetchSessionPage({ limit: SESSION_BATCH_SIZE, scope: scopeId });
   sessionsState.list = upsertSessions(sessionsState.list, page.sessions);

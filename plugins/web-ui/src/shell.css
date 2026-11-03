@@ -3699,6 +3699,13 @@ qm-markdown .tok-in {
   text-overflow: ellipsis;
   color: var(--foreground);
 }
+.subagent-row-purpose {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .subagent-row-meta {
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;

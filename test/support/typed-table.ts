@@ -38,11 +38,11 @@ export async function withTypedTableDb<S extends Closable>(
   try {
     await seed?.(admin);
     await applyPgMigrations(admin, [definePgMigration(TENANCY_BASE)]);
-    await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'main', 'Main')`, [tenant]);
+    await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [tenant]);
     const owner = make(url);
     await migrateRegisteredPgSchemas(url);
     await owner.close?.();
-    await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [otherTenant]);
+    await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [otherTenant]);
     login = await createAppLogin(url);
     store = make(login.url);
     await fn({ store, admin, url: login.url, tenant, otherTenant });

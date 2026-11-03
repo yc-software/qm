@@ -348,6 +348,21 @@ export function createSessionMethods(
           ...(goal.floor ? { floor: { ...goal.floor } } : {}),
         });
     }
+    const childRuns = working.flatMap((s) => {
+      const run = s.parentSessionId ? latestRuns.get(s.threadRef) : undefined;
+      return run ? [{ id: s.id, run }] : [];
+    });
+    const purposes = childRuns.length
+      ? await deps.sessions
+          .latestToolPurposes(childRuns.map(({ run }) => run.id))
+          .catch(swallowAs("app sessions: subagent purposes", new Map<string, string>()))
+      : new Map<string, string>();
+    const workingChildren = new Map(
+      childRuns.map(({ id, run }) => {
+        const purpose = purposes.get(run.id.toLowerCase());
+        return [id, { workingSince: run.startedAt ?? run.createdAt, ...(purpose ? { purpose } : {}) }];
+      }),
+    );
     const subagents = new Map<string, { running: number; waiting: number }>();
     for (const d of descendants) {
       const isWaiting = waiting.has(d.id);
@@ -375,6 +390,7 @@ export function createSessionMethods(
       ...(watchCounts.has(s.threadRef) ? { watches: watchCounts.get(s.threadRef)! } : {}),
       ...(cronCounts.has(s.threadRef) ? { crons: cronCounts.get(s.threadRef)! } : {}),
       ...(goals.has(s.id) ? { goal: goals.get(s.id)! } : {}),
+      ...workingChildren.get(s.id),
       ...(subagents.has(s.id) ? { subagents: subagents.get(s.id)! } : {}),
     }));
   }
