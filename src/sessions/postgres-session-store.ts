@@ -687,6 +687,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return Number(rows[0]?.n ?? 0);
     },
 
+    async latestToolPurpose(sessionId, turnId) {
+      const [row] = await q(
+        `SELECT btrim(i.body->>'purpose') AS purpose FROM items i
+          WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.turn_id = $2::uuid AND i.kind = 'ToolCall'
+            AND btrim(i.body->>'purpose') <> ''
+          ORDER BY i.seq DESC LIMIT 1`,
+        [sessionId, turnId],
+      );
+      return (row?.purpose as string | undefined) ?? null;
+    },
+
     async latestEntrySeq(sessionId): Promise<number> {
       const rows = await q(
         `SELECT COALESCE(MAX(seq), -1) AS n FROM items WHERE tenant_id = ${TENANT} AND session_id = $1`,

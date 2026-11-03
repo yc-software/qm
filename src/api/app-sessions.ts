@@ -354,17 +354,11 @@ export function createSessionMethods(
         .filter((s) => s.parentSessionId)
         .map(async (s) => {
           const run = latestRuns.get(s.threadRef);
-          const since = run?.startedAt ?? run?.createdAt;
-          if (!since) return;
-          const recent = await deps.sessions
-            .getEntries(s.id, { limit: 8 })
-            .catch(swallowAs("app sessions: subagent purpose", []));
-          const purpose = recent
-            .filter((e) => e.type === "tool_call" && e.createdAt >= since)
-            .map((e) => (e.payload as { purpose?: unknown } | null)?.purpose)
-            .findLast((p): p is string => typeof p === "string" && p.trim() !== "")
-            ?.trim();
-          workingChildren.set(s.id, { workingSince: since, ...(purpose ? { purpose } : {}) });
+          if (!run) return;
+          const purpose = await deps.sessions
+            .latestToolPurpose(s.id, run.id)
+            .catch(swallowAs("app sessions: subagent purpose", null));
+          workingChildren.set(s.id, { workingSince: run.startedAt ?? run.createdAt, ...(purpose ? { purpose } : {}) });
         }),
     );
     const subagents = new Map<string, { running: number; waiting: number }>();

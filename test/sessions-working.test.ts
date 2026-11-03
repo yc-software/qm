@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { buildApp } from "./support/build-app.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -144,17 +145,16 @@ test("a working subagent reports its current run start and latest purpose from t
   const parent = await app.turn(dm("parent", "web:U1:p"));
   const child = await app.turn(dm("child", "web:U1:c"));
   await sessions.setParentSession(child.sessionId!, parent.sessionId!);
-  const say = async (purpose: string) => {
+  const say = async (purpose: string, runId: string) => {
     const { lease } = await sessions.acquireLease(child.sessionId!);
     await sessions.append(lease!, {
       type: "tool_call",
-      payload: { tool: "execute", callId: purpose, purpose },
+      payload: { tool: "execute", callId: purpose, purpose, runId },
       scopeLabel: "personal:U1",
     });
     await sessions.releaseLease(lease!);
   };
-  await say("Old task");
-  await new Promise((r) => setTimeout(r, 5));
+  await say("Old task", randomUUID());
   await runs.enqueue({ sessionId: "web:U1:c", request: enqueueRequest() });
   const claimed = await runs.claim("w1", 5_000);
 
@@ -162,7 +162,7 @@ test("a working subagent reports its current run start and latest purpose from t
   assert.equal(row?.workingSince, claimed!.startedAt);
   assert.equal(row?.purpose, undefined, "a purpose from an earlier run is not shown");
 
-  await say("Reading the spec");
+  await say("Reading the spec", claimed!.id);
   row = (await app.listSessions("U1")).find((s) => s.id === child.sessionId);
   assert.equal(row?.purpose, "Reading the spec");
   assert.equal((await app.listSessions("U1")).find((s) => s.id === parent.sessionId)?.workingSince, undefined);
