@@ -75,7 +75,7 @@ Rolling back ownership is the same operation in the other direction. Nothing nee
 
 ## Live deployment session check
 
-A deployment that owns background work accepts `POST /v1/deployment/live-session` with the same source signature and distinct deployment bearer credential. The body contains exactly `requestId` (a fresh UUID) and `expectedDeploymentId`. The endpoint rejects unknown fields, a mismatched deployment, a non-owning deployment, and an inactive responder before starting work.
+A deployment that owns background work accepts `POST /v1/deployment/live-session` with the same source signature and distinct deployment bearer credential, plus the deployment's tenant id in the signed `x-qm-tenant` header. The body contains exactly `requestId` (a fresh UUID) and `expectedDeploymentId`. The endpoint rejects unknown fields, a mismatched deployment, a non-owning deployment, and an inactive responder before starting work.
 
 The check runs the same fixed session command used by the standalone deployment smoke: a real model reply, persisted turns, generated title, session error log, session archival, then the configured PostgreSQL catalog checks. The request cannot select a principal, URL, model, prompt, or command. Model HTTP requests have a five-minute limit; other HTTP requests and database operations have 30-second limits.
 

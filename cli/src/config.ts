@@ -1576,6 +1576,14 @@ function validateRender(raw: unknown, path: string): RenderConfig {
   };
 }
 
+export function deploymentTenantId(config: QmConfig): string {
+  if (!config.tenant)
+    throw new CliError(
+      '"tenant" is not set in the deployment config; run `qm up` or `qm settings push` to create this deployment\'s tenant',
+    );
+  return config.tenant;
+}
+
 export function updateConfigFields(raw: string, updates: Record<string, string>): string {
   const root = objectProps(stripJsonComments(raw), 0);
   const edits: ConfigEdit[] = [];

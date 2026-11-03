@@ -1,7 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import type { QmConfig } from "./config.ts";
+import { deploymentTenantId, type QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { deploymentSecretValue, readEnvFile, sleep } from "./util.ts";
 import { parseToolDescriptor } from "./tool-descriptor.ts";
@@ -244,11 +244,7 @@ export async function deploymentLayerRequest(opts: {
   envFile?: string;
   transport: DeploymentLayerTransport;
 }): Promise<{ status: number; body: string }> {
-  const tenant = opts.config.tenant;
-  if (!tenant)
-    throw new CliError(
-      '"tenant" is not set in the deployment config; run `qm up` or `qm settings push` to create this deployment\'s tenant',
-    );
+  const tenant = deploymentTenantId(opts.config);
   const send = (method: "GET" | "PUT", path: string, body: string, bound?: string) =>
     opts.transport({
       config: opts.config,

@@ -33,6 +33,7 @@ import {
   sandboxCoreEnv,
   type AwsConfig,
   type QmConfig,
+  deploymentTenantId,
 } from "../config.ts";
 import { manifestRef } from "../manifest.ts";
 import {
@@ -2976,10 +2977,13 @@ export function taskDefinitionForBackgroundWork(
 
 function awsBackgroundWorkTransport(
   config: QmConfig,
-  path = "/v1/background-work",
-  timeoutMs = 30_000,
-  maxResponseBytes?: number,
-  productionRoute = false,
+  {
+    path = "/v1/background-work",
+    timeoutMs = 30_000,
+    maxResponseBytes,
+    productionRoute = false,
+    tenant = "",
+  }: { path?: string; timeoutMs?: number; maxResponseBytes?: number; productionRoute?: boolean; tenant?: string } = {},
 ): BackgroundWorkTransport {
   const aws = requireAws(config);
   const secret = (name: string): string =>
@@ -3004,7 +3008,7 @@ function awsBackgroundWorkTransport(
   return (method, body = "") => {
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = createHmac("sha256", signing)
-      .update(`v0:${timestamp}:${method}\n${url.pathname}\n\n${body}`)
+      .update(`v0:${timestamp}:${method}\n${url.pathname}\n${tenant}\n${body}`)
       .digest("hex");
     const init: RequestInit = {
       method,
@@ -3012,6 +3016,7 @@ function awsBackgroundWorkTransport(
         "content-type": "application/json",
         "x-timestamp": String(timestamp),
         "x-signature": `v0=${signature}`,
+        ...(tenant ? { "x-qm-tenant": tenant } : {}),
         authorization: `Bearer ${control}`,
       },
       ...(method === "POST" ? { body } : {}),
@@ -3303,7 +3308,7 @@ export async function awsStoppedCoreOwner(
   const state = describedServices(config, ["core"]).get("core");
   if (!state || state.desiredCount !== 0) return undefined;
   stableWorkloadCapacity(config, "core", state, state.taskDefinition ?? "", 0);
-  return readProductionOwner(awsBackgroundWorkTransport(config, undefined, undefined, undefined, true), deploymentId);
+  return readProductionOwner(awsBackgroundWorkTransport(config, { productionRoute: true }), deploymentId);
 }
 
 async function assertNotBackgroundOwner(config: QmConfig, current: DeploymentManifest | undefined): Promise<void> {
@@ -4865,7 +4870,12 @@ async function checkLive(
     try {
       const cohort = aws.backgroundWorkControl ? await awsBackgroundWorkStatus(config, configDir) : undefined;
       if (cohort && cohort.status.ownerDeploymentId === cohort.deploymentId) {
-        const transport = awsBackgroundWorkTransport(config, "/v1/deployment/live-session", 600_000, 65_536);
+        const transport = awsBackgroundWorkTransport(config, {
+          path: "/v1/deployment/live-session",
+          timeoutMs: 600_000,
+          maxResponseBytes: 65_536,
+          tenant: deploymentTenantId(config),
+        });
         await checkControlledLiveSession({
           before: cohort,
           read: () => awsBackgroundWorkStatus(config, configDir),

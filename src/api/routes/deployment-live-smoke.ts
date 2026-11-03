@@ -67,7 +67,6 @@ export const deploymentLiveSmokeRoutes: ReadonlyArray<Route<ApiCtx>> = [
     path: "/v1/deployment/live-session",
     actor: "system",
     auth: "source",
-    tenantFromHost: true,
     handle: deploymentLiveSmoke,
   },
 ];

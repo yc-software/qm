@@ -6040,10 +6040,11 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
         const request = JSON.parse(body);
         const headers = new Headers(init?.headers);
         assert.equal(headers.get("authorization"), "Bearer separate-control-secret-value-0000000000");
+        assert.equal(headers.get("x-qm-tenant"), config.tenant);
         assert.equal(
           headers.get("x-signature"),
           `v0=${createHmac("sha256", TEST_SECRET_VALUE)
-            .update(`v0:${headers.get("x-timestamp")}:POST\n/v1/deployment/live-session\n\n${body}`)
+            .update(`v0:${headers.get("x-timestamp")}:POST\n/v1/deployment/live-session\n${config.tenant}\n${body}`)
             .digest("hex")}`,
         );
         assert.deepEqual(request, {

@@ -1,4 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifyCapabilityToken, type VerifiedCapability } from "../auth/capability-token.ts";
 import { isTenantId, withTenant } from "../tenants/context.ts";
@@ -35,13 +34,6 @@ function requestHost(req: IncomingMessage): string {
   return (req.headers.host ?? "").split(":")[0]!.toLowerCase();
 }
 
-function operatorBearer(req: IncomingMessage, secret: string | undefined): boolean {
-  if (!secret) return false;
-  const expected = Buffer.from(`Bearer ${secret}`);
-  const supplied = Buffer.from(req.headers.authorization ?? "");
-  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
-}
-
 async function claimedTenant(
   req: IncomingMessage,
   auth: Route["auth"] | undefined,
@@ -56,19 +48,16 @@ async function claimedTenant(
 export async function withRequestTenant(
   req: IncomingMessage,
   res: ServerResponse,
-  route: Pick<Route, "auth" | "unbound" | "tenantFromHost"> | undefined,
+  route: Pick<Route, "auth" | "unbound"> | undefined,
   deps: {
     tenants?: TenantResolver;
     capabilitySecret: string | undefined;
-    controlSecret?: string;
     unsignedTenant: string | null;
   },
   next: () => Promise<void> | void,
 ): Promise<void> {
   if (route?.auth === "public") return next();
-  const claimed = (await claimedTenant(req, route?.auth, deps.capabilitySecret)) ?? deps.unsignedTenant;
-  const fromHost = !claimed && route?.tenantFromHost && deps.tenants && operatorBearer(req, deps.controlSecret);
-  const tenant = fromHost ? await deps.tenants!.forHost(requestHost(req)) : claimed;
+  const tenant = (await claimedTenant(req, route?.auth, deps.capabilitySecret)) ?? deps.unsignedTenant;
   if (!tenant && route?.unbound) return next();
   if (!tenant) {
     sendJson(res, 401, { error: "unauthorized", message: "this request carries no verifiable tenant" });
