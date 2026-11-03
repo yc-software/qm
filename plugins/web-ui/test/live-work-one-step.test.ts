@@ -225,7 +225,7 @@ test("text the agent says mid-turn stays visible between work folds while the li
     assert.equal(said.closest("details"), null, "the mid-turn text sits outside every fold");
     const live = folds().at(-1)!;
     assert.equal(live.open, false, "the live fold stays closed");
-    assert.equal(live.querySelector("qm-markdown, .work-message"), null, "the live fold does not repeat the text");
+    assert.equal(live.querySelector("qm-markdown, .work-said"), null, "the live fold does not repeat the text");
     assert.ok(
       said.compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING,
       "the text sits above the step that came after it",

@@ -193,7 +193,7 @@ test("post replies remain visible in new and continuing conversations", async (t
       requests.length = 0;
     }
     const shownReplies = (text: string) => {
-      const matches = [...host.querySelectorAll(".assistant-body > .streaming-text, .work-message")].filter((el) =>
+      const matches = [...host.querySelectorAll(".assistant-body > .streaming-text, .work-said")].filter((el) =>
         el.textContent?.includes(text),
       );
       for (const match of matches)
