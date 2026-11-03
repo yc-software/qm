@@ -6,6 +6,7 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import type { ModelUtilities } from "../src/agent/agent.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SCOPE = "user:U1";
 
@@ -13,26 +14,27 @@ function freshMemory() {
   return { memory: createPostgresMemoryService(testDatabaseUrl()) };
 }
 
-test("per-turn via oneShot sends the extraction prompt + the exact user/reply framing the old extractor sent", async () => {
-  const calls: Array<{ system: string; prompt: string }> = [];
-  const agent: ModelUtilities = {
-    oneShot(system, prompt) {
-      calls.push({ system, prompt });
-      return Promise.resolve("- Prefers terse replies\n* Working on the Q3 launch\nnot a bullet");
-    },
-  };
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ agent, memory });
-  await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
+test("per-turn via oneShot sends the extraction prompt + the exact user/reply framing the old extractor sent", () =>
+  inTestTenant(async () => {
+    const calls: Array<{ system: string; prompt: string }> = [];
+    const agent: ModelUtilities = {
+      oneShot(system, prompt) {
+        calls.push({ system, prompt });
+        return Promise.resolve("- Prefers terse replies\n* Working on the Q3 launch\nnot a bullet");
+      },
+    };
+    const { memory } = freshMemory();
+    const strategy = createPerTurnStrategy({ agent, memory });
+    await strategy.onTurnEnd!({ scopeId: SCOPE, input: "hi", reply: "hello" });
 
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.system, MEMORY_EXTRACTION_PROMPT);
-  assert.equal(calls[0]!.prompt, "User said:\nhi\n\nAssistant replied:\nhello");
-  const body = await memory.read(SCOPE);
-  assert.match(body, /Prefers terse replies/);
-  assert.match(body, /Working on the Q3 launch/);
-  assert.doesNotMatch(body, /not a bullet/);
-});
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.system, MEMORY_EXTRACTION_PROMPT);
+    assert.equal(calls[0]!.prompt, "User said:\nhi\n\nAssistant replied:\nhello");
+    const body = await memory.read(SCOPE);
+    assert.match(body, /Prefers terse replies/);
+    assert.match(body, /Working on the Q3 launch/);
+    assert.doesNotMatch(body, /not a bullet/);
+  }));
 
 test("autonomous and system-actor turns capture nothing; only a human turn extracts", async () => {
   const systems: string[] = [];
@@ -108,37 +110,38 @@ test("debounced: an autonomous turn is skipped and never joins the live actor's 
   assert.deepEqual(calls, ["User said:\nhi\n\nAssistant replied:\nhello"], "one flush, the live turn only");
 });
 
-test("automatic capture carries the full turn and delivery context", async () => {
-  const captures: Array<Parameters<ReturnType<typeof freshMemory>["memory"]["capture"]>> = [];
-  const { memory } = freshMemory();
-  const wrapped = {
-    ...memory,
-    async capture(...args: Parameters<typeof memory.capture>) {
-      captures.push(args);
-      return memory.capture(...args);
-    },
-  };
-  const strategy = createPerTurnStrategy({
-    agent: { oneShot: () => Promise.resolve("- Durable fact") },
-    memory: wrapped,
-  });
-  await strategy.onTurnEnd!({
-    scopeId: SCOPE,
-    conversationScopeId: "channel:C1",
-    actorId: "U1",
-    sessionId: "session-1",
-    idempotencyKey: "run-1",
-    input: "question",
-    reply: "answer",
-  });
-  assert.deepEqual(captures[0]?.[4], {
-    mode: "automatic",
-    sensitivity: "unknown",
-    actorId: "U1",
-    conversationScopeId: "channel:C1",
-    input: "question",
-    reply: "answer",
-    sessionId: "session-1",
-    idempotencyKey: "run-1",
-  });
-});
+test("automatic capture carries the full turn and delivery context", () =>
+  inTestTenant(async () => {
+    const captures: Array<Parameters<ReturnType<typeof freshMemory>["memory"]["capture"]>> = [];
+    const { memory } = freshMemory();
+    const wrapped = {
+      ...memory,
+      async capture(...args: Parameters<typeof memory.capture>) {
+        captures.push(args);
+        return memory.capture(...args);
+      },
+    };
+    const strategy = createPerTurnStrategy({
+      agent: { oneShot: () => Promise.resolve("- Durable fact") },
+      memory: wrapped,
+    });
+    await strategy.onTurnEnd!({
+      scopeId: SCOPE,
+      conversationScopeId: "channel:C1",
+      actorId: "U1",
+      sessionId: "session-1",
+      idempotencyKey: "run-1",
+      input: "question",
+      reply: "answer",
+    });
+    assert.deepEqual(captures[0]?.[4], {
+      mode: "automatic",
+      sensitivity: "unknown",
+      actorId: "U1",
+      conversationScopeId: "channel:C1",
+      input: "question",
+      reply: "answer",
+      sessionId: "session-1",
+      idempotencyKey: "run-1",
+    });
+  }));
