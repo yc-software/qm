@@ -98,6 +98,10 @@ test("the pool binds the current tenant to each query and transaction in one bat
       }),
     );
     assert.equal(inTx, b);
+    const unpipelined = await withTenant(a, () =>
+      withPgTransaction(app, async (client) => (await client.query(setting)).rows[0].t),
+    );
+    assert.equal(unpipelined, a);
     await withoutTenant(async () => {
       for (let i = 0; i < 8; i++) assert.ok([null, ""].includes((await pool.q(setting))[0]!.t as string | null));
       await assert.rejects(pool.q("SELECT n FROM tenant_probe"), { code: "42501" });
