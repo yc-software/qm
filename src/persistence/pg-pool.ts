@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { ClientConfig, Pool, PoolClient } from "pg";
+import type { ClientConfig, Pool, PoolClient, PoolConfig, QueryResult } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
-import { pipelinedQuery, type PgSetting } from "./pg-pipeline.ts";
 
 export type { Pool, PoolClient };
 
@@ -53,7 +52,14 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     connectionString,
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
   );
-  const pool = guardedPool(new pg.Pool({ ...connection, max, connectionTimeoutMillis: 10_000, allowExitOnIdle: true }));
+  const options: PoolConfig & { pipeline: boolean } = {
+    ...connection,
+    max,
+    connectionTimeoutMillis: 10_000,
+    allowExitOnIdle: true,
+    pipeline: kind === "query",
+  };
+  const pool = guardedPool(new pg.Pool(options));
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }
@@ -121,10 +127,32 @@ export interface PgPool {
   close(): Promise<void>;
 }
 
+type PgSetting = readonly [name: string, value: string];
+
 function querySettings(timeoutMs: number | undefined): PgSetting[] {
   if (timeoutMs === undefined) return [];
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error("Query timeout must be a positive finite number");
   return [["statement_timeout", String(Math.round(timeoutMs))]];
+}
+
+async function pipelinedTransaction(
+  client: PoolClient,
+  settings: readonly PgSetting[],
+  text: string,
+  values: unknown[],
+): Promise<QueryResult> {
+  if (!settings.length) return client.query({ text, values });
+  const assignments = settings.map((_, i) => `set_config($${2 * i + 1}, $${2 * i + 2}, true)`);
+  const [, , result] = await Promise.all([
+    client.query("BEGIN"),
+    client.query(`SELECT ${assignments.join(", ")}`, settings.flat()),
+    client.query({ text, values }),
+    client.query("COMMIT"),
+  ]);
+  if ((client as PoolClient & { getTransactionStatus(): string | null }).getTransactionStatus() !== "I") {
+    throw new Error("pg-pool: pipelined query left its connection inside a transaction");
+  }
+  return result;
 }
 
 async function rollbackOrReport(client: PoolClient, context: string): Promise<Error | undefined> {
@@ -464,7 +492,7 @@ export function createPgPool(
     }
     let queryError: Error | undefined;
     try {
-      const res = await withAbort(() => pipelinedQuery(client, settings, text, params), signal);
+      const res = await withAbort(() => pipelinedTransaction(client, settings, text, params), signal);
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     } catch (error) {
       queryError = error instanceof Error ? error : new Error(String(error));
