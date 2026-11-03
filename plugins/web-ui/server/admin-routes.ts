@@ -141,7 +141,7 @@ export function adminRoutes(d: AdminRouteDeps) {
       }
     }
     if (Object.hasOwn(ALLOWED, first) && ALLOWED[first]!.split(" ").includes(method)) {
-      const body = method === "GET" || method === "DELETE" ? "" : await d.readBody(c.req);
+      const body = method === "GET" ? "" : await d.readBody(c.req);
       return relay(c, method as HttpMethod, corePath, body);
     }
     c.req.resume();
