@@ -9,6 +9,8 @@ let ownerPool: PgPool | undefined;
 export function useOwnerDatabase(url: string | undefined): void {
   if (!url)
     throw new Error("Set DATABASE_OWNER_URL to the table owner login so background work can claim across tenants");
+  if (url === ownerUrl) return;
+  void ownerPool?.close();
   ownerUrl = url;
   ownerPool = undefined;
 }
