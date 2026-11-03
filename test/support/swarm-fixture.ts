@@ -15,6 +15,7 @@ import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 
 export async function swarmFixture(
   options: {
+    url?: string;
     store?: SwarmStore;
     sessions?: SessionStore;
     runs?: RunStore;
@@ -23,7 +24,7 @@ export async function swarmFixture(
     runtime?: Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode">;
   } = {},
 ) {
-  const url = testDatabaseUrl();
+  const url = options.url ?? testDatabaseUrl();
   const sessions = options.sessions ?? createPostgresSessionStore(url);
   const runs = options.runs ?? createPostgresRunStore(url).runs;
   const lock = options.lock ?? testAdvisoryLock();
