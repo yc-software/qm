@@ -36,10 +36,11 @@ export function senderLine(
   return senderNote(speaker.name ?? nameOf(speaker.id) ?? speaker.id);
 }
 
-export function wordsToScreen(said: string, speaker: Pick<Speaker, "origin" | "fromSession">): string | undefined {
+export function wordsToScreen(said: string, speaker: Speaker, ownerId: string): string | undefined {
   let words: string | undefined;
-  if (speaker.origin.kind === "automation") words = speaker.origin.screenData;
-  else if (speaker.fromSession || speaker.origin.kind === "ambient") words = said;
+  if (speaker.fromSession) words = said;
+  else if (speaker.origin.kind === "automation") words = speaker.origin.screenData;
+  else if (!samePerson(speaker.id, ownerId)) words = said;
   return words?.trim() ? words : undefined;
 }
 

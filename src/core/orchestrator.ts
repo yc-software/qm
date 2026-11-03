@@ -801,7 +801,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           sessionSender.scopeId === scopeId &&
           (await deps.sessions.getForParticipant(sessionSender.id, actor.id)),
         );
-        const screenedWords = wordsToScreen(input.text, { origin: input.origin, fromSession: sessionTurn });
+        const screenedWords = wordsToScreen(
+          input.text,
+          { id: actor.id, origin: input.origin, fromSession: sessionTurn },
+          actor.id,
+        );
         const screenPayload = screenInbound
           ? securityScreenPayload({
               ...input,
@@ -3223,10 +3227,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     fromSession: false,
                   };
               let said = [text.trim() ? speakerLine(speaker) : "", text].filter(Boolean).join("\n");
-              const words = wordsToScreen(said, speaker);
-              if (words !== undefined) {
+              const screened = [wordsToScreen(said, speaker, actor.id), ...(request?.inboundNotes ?? [])]
+                .filter(Boolean)
+                .join("\n\n");
+              if (screened) {
                 const screen = await orchestrator
-                  .screenSecuritySteer({ payload: words, actor: steerer, conversation, sessionId: session.id })
+                  .screenSecuritySteer({ payload: screened, actor: steerer, conversation, sessionId: session.id })
                   .catch((error: unknown) => {
                     reportFailure("orchestrator: mid-turn message screen", error);
                     return undefined;
