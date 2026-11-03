@@ -51,7 +51,9 @@ test("a fully migrated database skips the base schema and drops only the retired
       ('sessions/store/0046-spend-days-cron-rebuild', 'x'), ('runs/store/0010-drop-turn-metrics', 'x')`);
     await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY)");
     await admin.query("CREATE TABLE runs(id TEXT PRIMARY KEY)");
-    await admin.query(`CREATE TABLE items(seq BIGINT, kind TEXT, target_seq BIGINT,
+    await admin.query("CREATE EXTENSION IF NOT EXISTS btree_gin");
+    await admin.query(`CREATE TABLE items(seq BIGINT, tenant_id TEXT, kind TEXT, variant TEXT, text TEXT,
+      search TSVECTOR, target_seq BIGINT,
       CONSTRAINT items_target_seq_kind CHECK (target_seq IS NULL OR kind = 'Retraction'))`);
     await admin.query("CREATE TABLE tool_calls(run_id TEXT)");
     await admin.query("CREATE FUNCTION safe_json(t text) RETURNS json LANGUAGE sql AS 'SELECT t::json'");
@@ -61,7 +63,7 @@ test("a fully migrated database skips the base schema and drops only the retired
     );
     assert.deepEqual(
       columns.rows.map((row) => row.column_name),
-      ["seq", "kind", "target_seq"],
+      ["seq", "tenant_id", "kind", "variant", "text", "search", "target_seq"],
     );
     assert.equal(await present(admin, "to_regclass('blobs') IS NULL"), true);
     assert.equal(await present(admin, "to_regclass('tool_calls') IS NULL"), true);
