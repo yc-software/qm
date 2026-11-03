@@ -25,7 +25,7 @@ import {
 } from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { hasParentPathSegment, visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import {
   ManagedAgentsCommandLostError,
   ManagedAgentsSandboxGoneError,
@@ -106,7 +106,7 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
   const store = opts.store;
   const provisionQueue = createKeyedQueue<string>();
 
-  const sessionByName = new Map<string, ManagedAgentsSession>();
+  const sessionByName = tenantKeyedMap<ManagedAgentsSession>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();

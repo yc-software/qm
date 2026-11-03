@@ -4,14 +4,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { stopAtEnd } from "./support/build-app.ts";
+import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
 import { scopeId, type Principal } from "../src/types.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 const scope = scopeId("personal", "U1");
 
 async function opener() {
-  const built = stopAtEnd(buildApp(testConfig({ openaiApiKey: "sk-test" })));
+  const built = stopAtEnd(buildApp(testConfig(), { tenantSettings: testTenantSettings() }));
+  await built.modelCredentials.set("openai", "sk-test", "admin");
+  await built.tenantSettings.get();
   await built.featureFlags.setEnabled("persistent_subagents", scope, true, "admin");
   const room = await built.sessions.getOrCreateByThread("web:room", "dm", scope, undefined, "web");
   await built.sessions.addParticipant(room.id, actor.id);

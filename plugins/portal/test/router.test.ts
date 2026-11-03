@@ -12,6 +12,10 @@ let deploymentLayerRequests = 0;
 const VALID_SOURCE_SIGNATURE = "v0=valid-source-signature";
 
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (req.url?.startsWith("/v1/plugin-settings")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ values: { OIDC_CLIENT_ID: "test-client" } }));
+  }
   if (
     req.url?.startsWith("/v1/deployment-layer") ||
     req.url?.startsWith("/v1/background-work") ||

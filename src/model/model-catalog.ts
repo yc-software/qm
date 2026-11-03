@@ -1,4 +1,5 @@
 import { gatewayModelCatalog } from "./gateway-models.ts";
+import { boundTenant } from "../tenants/context.ts";
 import {
   modelSupported,
   registerOpenRouterCatalogModel,
@@ -33,7 +34,7 @@ interface CacheEntry {
   inFlight?: Promise<ModelCatalogEntry[]>;
 }
 
-const cache = new WeakMap<typeof fetch, CacheEntry>();
+const cache = new WeakMap<typeof fetch, Map<string, CacheEntry>>();
 
 export function builtInModelCatalog(): ModelCatalogEntry[] {
   const builtIns = selectableBaseModels().flatMap((model) => {
@@ -140,7 +141,10 @@ async function fetchOpenRouterModels(fetcher: typeof fetch): Promise<ModelCatalo
 
 export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Promise<ModelCatalogEntry[]> {
   const now = Date.now();
-  const existing = cache.get(fetcher);
+  const tenant = boundTenant() ?? "";
+  const tenants = cache.get(fetcher) ?? new Map<string, CacheEntry>();
+  cache.set(fetcher, tenants);
+  const existing = tenants.get(tenant);
   if (
     existing &&
     existing.expiresAt > now &&
@@ -173,7 +177,7 @@ export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Pro
     .finally(() => {
       delete entry.inFlight;
     });
-  cache.set(fetcher, entry);
+  tenants.set(tenant, entry);
   return entry.inFlight;
 }
 
@@ -188,7 +192,7 @@ export function cachedModelCatalog(fetcher: typeof fetch = fetch): {
   void selectableModelCatalog(fetcher);
   const models = builtInModelCatalog();
   const known = new Set(models.map((model) => model.id));
-  const entry = cache.get(fetcher);
+  const entry = cache.get(fetcher)?.get(boundTenant() ?? "");
   return {
     models: [...models, ...(entry?.dynamic ?? []).filter((model) => !known.has(model.id))],
     refreshing: !!entry?.inFlight,

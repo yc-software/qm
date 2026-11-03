@@ -1,6 +1,8 @@
 import "./support/auto-fake-sprites.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
+import { enterTenant } from "../src/tenants/context.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { AddressInfo } from "node:net";
@@ -31,6 +33,7 @@ const definition = {
   name: "Small embeddings",
   provider: "openai",
 };
+enterTenant(TEST_TENANT);
 afterEach(() => {
   setModelOverlays([]);
   setGatewayModels([]);
@@ -40,8 +43,8 @@ test("verified embedding definitions survive registry reload but never become ch
   const credentials = createModelCredentialStore({
     backing: testMap(),
     keyMaterial: "test-key",
-    fallback: { openai: "test-key" },
   });
+  await credentials.set("openai", "test-key", "admin");
   const requests: unknown[] = [];
   const verifier = createModelVerifier({
     credentials,
@@ -141,10 +144,11 @@ test("org embedding selection is durable and survives chat runtime replacement a
 });
 
 test("HTTP embedding selection accepts only known embedding models and survives a new recall", async (t) => {
-  const config = testConfig({ openaiApiKey: "test-key" });
+  const config = testConfig();
   const built = buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [{ index: 0, embedding: [1, 0] }] }),
   });
+  await built.modelCredentials.set("openai", "test-key", "admin");
   await built.modelRegistry.upsert(definition, "admin");
   await built.refreshModels();
   const server = createInsecureTestServer(built.app, serverDeps(config, built));

@@ -331,8 +331,7 @@ async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
 }
 
 async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, unknown>, nonblocking: boolean) {
-  const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
+  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : ALL_PROVIDERS_AVAILABLE;
   const cached =
     deps.modelCredentials && managedKeys.openrouter && nonblocking
       ? cachedModelCatalog(deps.modelCredentialFetch)
@@ -343,7 +342,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
       ? await selectableModelCatalog(deps.modelCredentialFetch)
       : builtInModelCatalog());
   const runtime = values.runtime as { modelId?: unknown } | null | undefined;
-  let currentId = defaultModel(deps.baseModelDefault);
+  let currentId = defaultModel(deps.baseModelDefault?.());
   if (typeof values.baseModel === "string") currentId = values.baseModel;
   if (typeof runtime?.modelId === "string") currentId = runtime.modelId;
   const resolvedCurrent = resolveModel(currentId);
@@ -374,7 +373,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
   );
   return {
     ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
-    baseModelDefault: defaultModel(deps.baseModelDefault),
+    baseModelDefault: defaultModel(deps.baseModelDefault?.()),
     baseModelOptions,
     modelCatalog: modelCatalogFor(baseModelOptions.map((model) => model.id)),
     fastModeModelIds: FAST_MODE_MODEL_IDS,

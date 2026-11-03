@@ -21,9 +21,7 @@ test(
   "pg: a linked identity manages its own cron in a private channel whose roster lists the linked email",
   { skip, timeout: 60_000 },
   async () => {
-    const built = buildApp(
-      testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pg-linked-")), databaseUrl: databaseUrl! }),
-    );
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pg-linked-")) }));
     try {
       const control = createControlService(built.app, built.scheduler, built.admin);
       const email = "person@example.com";

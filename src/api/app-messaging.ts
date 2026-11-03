@@ -130,12 +130,13 @@ export function createMessagingMethods(
   // allow-list, invited external users, and anyone who has signed in. On a Slack-less
   // deployment these are the only members there are.
   const identityMembers = async (): Promise<DirectoryMember[]> => {
-    const [externals, participants] = await Promise.all([
+    const [externals, participants, emailAuth] = await Promise.all([
       deps.identity.listExternalMembers(),
       deps.sessions?.distinctParticipants() ?? [],
+      deps.emailAuthMembers?.() ?? [],
     ]);
     const candidates: DirectoryMember[] = [
-      ...(deps.emailAuthMembers ?? []),
+      ...emailAuth.map((principalId) => ({ principalId, displayName: principalId, type: "internal" as const })),
       ...externals
         .filter((member) => externalMemberActive(member))
         .map((member) => ({ principalId: member.email, displayName: member.email, type: "internal" as const })),

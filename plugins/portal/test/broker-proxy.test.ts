@@ -48,7 +48,8 @@ process.env.ADMIN_UPSTREAM = surfaceUrl;
 process.env.CORE_API_URL = surfaceUrl;
 process.env.AUTH_BROKER_UPSTREAM = brokerUrl;
 
-const { server, brokerRouteFor, clientIpOf, isPrivateNetworkUrl } = await import("../src/index.ts");
+const { server, brokerRouteFor, clientIpOf } = await import("../src/index.ts");
+const { isPrivateNetworkUrl } = await import("../src/tenant-oidc.ts");
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 

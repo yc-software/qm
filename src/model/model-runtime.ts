@@ -1,8 +1,9 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
+import { boundTenant } from "../tenants/context.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, type ModelRuntimeAuthOverrides } from "@earendil-works/pi-coding-agent";
 import {
   calculateCost,
   InMemoryCredentialStore,
@@ -93,10 +94,12 @@ export interface ProviderKeys {
   [provider: string]: string | undefined;
 }
 
-let cachedCustomModels: { version: number; path: string | null } | null = null;
+const cachedCustomModels = new Map<string, { version: number; path: string | null }>();
 function customModelsPath(): string | null {
+  const tenant = boundTenant() ?? "";
   const version = customProvidersVersion() + gatewayModelsVersion();
-  if (cachedCustomModels?.version === version) return cachedCustomModels.path;
+  const cached = cachedCustomModels.get(tenant);
+  if (cached?.version === version) return cached.path;
   const providers = { ...customModelsJson()?.providers, ...gatewayModelsJson() };
   const custom = Object.keys(providers).length ? { providers } : undefined;
   let path: string | null = null;
@@ -104,7 +107,7 @@ function customModelsPath(): string | null {
     path = join(mkdtempSync(join(tmpdir(), "pi-custom-models-")), "models.json");
     writeFileSync(path, JSON.stringify(custom));
   }
-  cachedCustomModels = { version, path };
+  cachedCustomModels.set(tenant, { version, path });
   return path;
 }
 
@@ -126,30 +129,30 @@ export async function buildModelRuntime(
     }));
   const modelsPath = customModelsPath();
   const runtime = await ModelRuntime.create({ credentials, modelsPath });
+  const stored = new Set<string>(subscriptionToken ? [CODEX_SUBSCRIPTION_PROVIDER] : []);
   for (const [provider, apiKey] of Object.entries(apiKeys)) {
-    if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
+    if (!apiKey) continue;
+    stored.add(provider);
+    await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
   }
-  if (modelGateway) {
-    const providers = new Set(
-      Object.keys(modelGateway.models).flatMap((id) => {
-        const model = resolveModel(id);
-        return model ? [model.provider] : [];
-      }),
-    );
-    const hasConfiguredAuth = runtime.hasConfiguredAuth.bind(runtime);
-    runtime.hasConfiguredAuth = (provider) => providers.has(provider) || hasConfiguredAuth(provider);
-    const getAuth = runtime.getAuth.bind(runtime);
-    runtime.getAuth = (async (model, overrides) => {
-      if (typeof model === "string") return getAuth(model, overrides);
-      const request = modelGatewayRequest(modelGateway, model);
-      if (request)
-        return {
-          auth: { apiKey: request.apiKey, headers: { ...model.headers, ...request.headers } },
-          source: "model gateway",
-        };
-      return getAuth(model, overrides);
-    }) as typeof runtime.getAuth;
-  }
+  const gatewayProviders = new Set(
+    Object.keys(modelGateway?.models ?? {}).flatMap((id) => {
+      const model = resolveModel(id);
+      return model ? [model.provider] : [];
+    }),
+  );
+  runtime.hasConfiguredAuth = (provider) => stored.has(provider) || gatewayProviders.has(provider);
+  const getAuth = runtime.getAuth.bind(runtime);
+  runtime.getAuth = (async (model: string | Model<Api>, overrides?: ModelRuntimeAuthOverrides) => {
+    if (typeof model === "string") return stored.has(model) ? getAuth(model, overrides) : undefined;
+    const request = modelGatewayRequest(modelGateway, model);
+    if (request)
+      return {
+        auth: { apiKey: request.apiKey, headers: { ...model.headers, ...request.headers } },
+        source: "model gateway",
+      };
+    return stored.has(model.provider) ? getAuth(model, overrides) : undefined;
+  }) as typeof runtime.getAuth;
   const retained = <T extends object | undefined>(options: T): T =>
     cacheRetention ? ({ ...options, cacheRetention } as T) : options;
   const wireModelId = <T extends Pick<ModelsSimpleStreamOptions, "onPayload"> | undefined>(

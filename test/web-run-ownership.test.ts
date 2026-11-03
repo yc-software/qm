@@ -18,14 +18,15 @@ import { scopeId } from "../src/types.ts";
 const SECRET = "web-run-ownership-secret".repeat(2);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "web-run-owner-")) }));
+await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
 const core = createServer(built.app, {
+  featureFlags: built.featureFlags,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
 });
 core.listen(0);
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
 const web = createHttpServer(handler);
 web.listen(0);

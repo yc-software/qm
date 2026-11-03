@@ -64,7 +64,7 @@ export async function handleVoiceRoute(
   config: { org: string; publicUrl: string },
 ): Promise<void> {
   const { user } = identity;
-  const enabled = voiceEnabled(user) && !identity.impersonator;
+  const enabled = voiceEnabled() && !identity.impersonator;
   res.setHeader("cache-control", "no-store");
   if (req.method === "GET" && path === "/api/dictation")
     return json(res, 200, { enabled, provider: enabled ? "OpenAI" : null });

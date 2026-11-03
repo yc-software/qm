@@ -21,7 +21,7 @@ function spritesHandle(env?: Record<string, string>) {
   const sandbox = createSpritesSandbox(createLocalWorkspaceStore(dir), {
     initializationStore: testMap(),
     advisoryLock: testAdvisoryLock(),
-    token: "test-token",
+    token: async () => "test-token",
     baseUrl: ff.baseUrl,
   });
   const layers = [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" as const }];

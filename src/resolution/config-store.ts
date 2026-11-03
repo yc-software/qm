@@ -108,6 +108,7 @@ export interface ScopedConfigStore {
   getCommandPolicy(id: ScopeId): CommandPolicy | null;
   setCommandPolicy(id: ScopeId, policy: CommandPolicy): Promise<void>;
   getSecurityPostureDurable(id: ScopeId): Promise<SecurityPosture>;
+  getSecurityPostureOwnDurable(id: ScopeId): Promise<SecurityPosture | null>;
   setSecurityPosture(id: ScopeId, posture: SecurityPosture): Promise<void>;
   getSharingPostureDurable(id: ScopeId): Promise<SharingPosture>;
   getSharingPostureOwnDurable(id: ScopeId): Promise<SharingPosture | null>;
@@ -609,6 +610,7 @@ export function createConfigStore(
       return id === org ? orgPosture : composeSharingPostures(orgPosture, [await settings.sharingPostures.durable(id)]);
     },
     getSharingPostureOwnDurable: async (id) => (await settings.sharingPostures.durable(id)) ?? null,
+    getSecurityPostureOwnDurable: async (id) => (await settings.securityPostures.durable(id)) ?? null,
     async resolveSharingPostureDurable(personalId, targetId) {
       const [orgPosture, personalPosture, targetPosture] = await Promise.all(
         [org, personalId, targetId].map((id) => settings.sharingPostures.durable(id)),

@@ -1,13 +1,8 @@
 import { isGatewayModelId } from "./gateway-models.ts";
+import { boundTenant } from "../tenants/context.ts";
 
 export const PROVIDER_IDS = ["anthropic", "openai", "openrouter"] as const;
 type ProviderId = (typeof PROVIDER_IDS)[number];
-
-const PROVIDER_BASE_URL_ENV: Record<ProviderId, string> = {
-  anthropic: "ANTHROPIC_BASE_URL",
-  openai: "OPENAI_BASE_URL",
-  openrouter: "OPENROUTER_BASE_URL",
-};
 
 export type ProviderBaseUrls = Partial<Record<ProviderId, string>>;
 
@@ -40,24 +35,16 @@ export function parseProviderBaseUrl(envName: string, value: string): string {
   return trimmed;
 }
 
-export function providerBaseUrlsFromEnv(env: NodeJS.ProcessEnv): ProviderBaseUrls {
-  const urls: ProviderBaseUrls = {};
-  for (const provider of PROVIDER_IDS) {
-    const envName = PROVIDER_BASE_URL_ENV[provider];
-    const raw = env[envName];
-    if (raw?.trim()) urls[provider] = parseProviderBaseUrl(envName, raw);
-  }
-  return urls;
-}
+const configured = new Map<string, ProviderBaseUrls>();
 
-let configured: ProviderBaseUrls = {};
-
-export function setProviderBaseUrls(urls: ProviderBaseUrls): void {
-  configured = { ...urls };
+export function setProviderBaseUrls(tenant: string, urls: ProviderBaseUrls): void {
+  configured.set(tenant, { ...urls });
 }
 
 export function providerBaseUrl(provider: string): string | undefined {
-  return (PROVIDER_IDS as readonly string[]).includes(provider) ? configured[provider as ProviderId] : undefined;
+  const tenant = boundTenant();
+  if (!tenant || !(PROVIDER_IDS as readonly string[]).includes(provider)) return undefined;
+  return configured.get(tenant)?.[provider as ProviderId];
 }
 
 export class ModelUnavailableError extends Error {

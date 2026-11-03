@@ -51,7 +51,7 @@ export function createSuggestedActivityService(deps: {
   crons: CronStore;
   scheduler: Pick<Scheduler, "notifyChanged" | "runNow">;
   enabled: boolean;
-  context?: string;
+  context?: () => Promise<string | undefined>;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
@@ -59,15 +59,15 @@ export function createSuggestedActivityService(deps: {
     !!cron && cron.owner === principalId && cron.ownerScopeId === scopeId("personal", principalId);
 
   const managedPrefix = `${SUGGESTED_ACTIVITIES_TASK}\n\nDeployment guidance:\n`;
-  const actionFor = (seeds: SuggestedActivity[], dismissed: DismissedActivity[] = []) =>
-    `${managedPrefix}${deps.context ?? "No special deployment context."}\n\nFallback seed activities:\n${JSON.stringify(seeds)}${
+  const actionFor = async (seeds: SuggestedActivity[], dismissed: DismissedActivity[] = []) =>
+    `${managedPrefix}${(await deps.context?.()) ?? "No special deployment context."}\n\nFallback seed activities:\n${JSON.stringify(seeds)}${
       dismissed.length
         ? `\n\nThe owner dismissed these suggestions. Do not suggest them or close variants again:\n${JSON.stringify(dismissed.map((entry) => entry.title))}`
         : ""
     }`;
 
   const syncAction = async (cron: Cron, profile: SuggestedActivityProfile) => {
-    const action = actionFor(profile.seeds ?? [], profile.dismissed);
+    const action = await actionFor(profile.seeds ?? [], profile.dismissed);
     if (action === cron.action) return;
     if (cron.action !== profile.managedAction && !cron.action?.startsWith(managedPrefix)) return;
     await deps.crons.update(cron.id, { action });
@@ -129,7 +129,7 @@ export function createSuggestedActivityService(deps: {
             ownerScopeId: scopeId("personal", principalId),
             title: "Refresh my suggested activities",
             schedule: { cron: nightlyAt(principalId, 2), timezone: profile.timezone },
-            action: actionFor(seeds, profile.dismissed),
+            action: await actionFor(seeds, profile.dismissed),
           },
           (cron) => ({ managedAction: cron.action!, seeds }),
         );

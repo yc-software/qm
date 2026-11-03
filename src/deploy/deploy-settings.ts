@@ -288,9 +288,13 @@ export function deploySettings(env: NodeJS.ProcessEnv, publicUrl: string | undef
       "[config] DEPLOY_PROVIDER=porter without an apps domain — published apps are reachable signed-in at /d/<app>/ only; set DEPLOY_APPS_DOMAIN to a domain you control to serve each app on its own subdomain.",
     );
   }
-  if (env.DEPLOY_PROVIDER === "porter" && !porterLocatorPresent(env)) {
+  const porterLabel =
+    env.DEPLOY_PROVIDER === "porter"
+      ? "DEPLOY_PROVIDER=porter"
+      : env.PORTER_DEPLOY_API_TOKEN && "PORTER_DEPLOY_API_TOKEN";
+  if (porterLabel && !porterLocatorPresent(env)) {
     throw new Error(
-      "DEPLOY_PROVIDER=porter requires PORTER_DEPLOY_PROJECT_ID and PORTER_DEPLOY_CLUSTER_ID (or PORTER_SANDBOX_BASE_URL, or PORTER_CLUSTER_ID) to locate the Porter sandbox API.",
+      `${porterLabel} requires PORTER_DEPLOY_PROJECT_ID and PORTER_DEPLOY_CLUSTER_ID (or PORTER_SANDBOX_BASE_URL, or PORTER_CLUSTER_ID) to locate the Porter sandbox API.`,
     );
   }
   if (env.DEPLOY_PROVIDER === "render" && !env.RENDER_WORKSPACE_ID?.trim())

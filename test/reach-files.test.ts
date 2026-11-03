@@ -110,7 +110,7 @@ describe("POST /v1/reach with files", () => {
   const secondSandbox = async (actorId: string) => {
     const scope = scopeId("personal", actorId);
     const resources = built.sandboxResources.forTurn({ actorId, scopeId: scope, isCurrent: async () => true });
-    return resources.create(actorId, scope, resources.defaultBackend());
+    return resources.create(actorId, scope, await resources.defaultBackend());
   };
 
   const readDelivered = async (deliveryId: string) => {

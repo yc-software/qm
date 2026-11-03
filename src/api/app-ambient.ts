@@ -149,7 +149,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       };
       const prompt = renderAmbientPrompt(judgeBatch);
       const startedAt = Date.now();
-      const judgeModel = deps.judgeModelId?.();
+      const judgeModel = await deps.judgeModelId?.();
       const botTs = new Set(rawDelta.filter((m) => m.bot).map((m) => m.ts));
       decision = await judgeAmbientBatch(
         {

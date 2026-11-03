@@ -151,7 +151,7 @@ test("deployment screening mode is capped only by dangerous posture", async () =
       "default-org",
       config,
       createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-      mode,
+      async () => mode,
     );
     for (const posture of ["dangerous", "auto", "strict"] as const) {
       await config.setSecurityPosture(scopeId("personal", "U1"), posture);

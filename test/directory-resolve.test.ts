@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createServer } from "../src/api/server.ts";
@@ -176,13 +176,10 @@ describe("a deployment without the Slack surface (the directory store is never p
   );
 
   before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "dir-web-only-")),
-        signingSecret: SECRET,
-        emailAuthPrincipals: ["dana@acme.com"],
-      }),
-    );
+    const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "dir-web-only-")), signingSecret: SECRET });
+    built = buildApp(config, {
+      tenantSettings: testTenantSettings({ AUTH_ALLOWED_EMAILS: "dana@acme.com" }, config.databaseUrl),
+    });
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,

@@ -37,7 +37,6 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "body-parsing-test";
-process.env.WEB_UI_PRINCIPALS = "alice";
 process.env.WEB_UI_PUBLIC_URL = "http://localhost:8790";
 
 const { handler } = await import("../server/index.ts");

@@ -177,7 +177,7 @@ test("model utilities resolve provider credentials for every call", async () => 
 });
 
 test("prior-turn bootstrap reaches the model before the first prompt", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const bodies: string[] = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {

@@ -51,12 +51,12 @@ test("Pi reports each model request to the turn before the reply streams, and on
   assert(address && typeof address !== "string");
   const agent = createAgent({
     defaultModelId: modelId,
-    modelGateway: {
+    resolveModelGateway: async () => ({
       url: `http://127.0.0.1:${address.port}`,
       apiKey: "test-key",
       apiKeyHeader: "api-key",
       models: { [modelId]: modelRequestOverrides(modelId)?.model ?? modelId },
-    },
+    }),
   });
   t.after(() => agent.close?.());
   let seq = 0;

@@ -207,7 +207,7 @@ test("gateway provider sends the native typesafe body to the model gateway", asy
   });
   const backend = createDecisionBackend({
     providers: () => PROVIDERS,
-    gateway: { url: "http://gateway:8080/", apiKey: "gk", apiKeyHeader: "api-key" },
+    gateway: async () => ({ url: "http://gateway:8080/", apiKey: "gk", apiKeyHeader: "api-key" }),
     credential: async () => null,
     fetch: fetchImpl,
   });

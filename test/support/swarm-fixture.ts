@@ -65,13 +65,14 @@ export async function swarmFixture(
     records,
     defaults: testMap(),
     backends: { modal: backend },
-    defaultBackend: "modal",
+    defaultBackend: async () => "modal",
     lock,
     canUseScope: async (actorId, scopeId) => scopeId === `personal:${actorId}`,
   });
   const sandbox = createSandboxRouter({
+    usableBackends: async () => ["modal"],
     backends: { modal: backend },
-    defaultBackend: "modal",
+    defaultBackend: async () => "modal",
     resources: sandboxes,
   });
   const actor = { id: "alice", type: "internal" as const };

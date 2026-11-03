@@ -277,11 +277,12 @@ export function oneShotRunner(runPrompt: (turn: AgentTurnInput) => Promise<Agent
 
 export function oneShotModelUtilities(
   single: OneShotRunner,
-  judgeModelId?: string,
+  judgeModelId?: string | (() => string),
 ): Pick<ModelUtilities, "oneShot" | "judge" | "screenSecurity" | "generateTitle" | "summarizeApproval"> {
   return {
     oneShot: (system, prompt) => single(system, prompt),
-    judge: (system, prompt, signal) => single(system, prompt, signal, undefined, judgeModelId),
+    judge: (system, prompt, signal) =>
+      single(system, prompt, signal, undefined, typeof judgeModelId === "function" ? judgeModelId() : judgeModelId),
     screenSecurity: async ({ payload, signal, recordModelCall, recordLlmRequest }) =>
       parseSecurityScreenVerdict(
         await single(SECURITY_SCREEN_SYSTEM_PROMPT, payload, signal, {

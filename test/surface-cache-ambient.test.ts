@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -546,7 +546,9 @@ test("a judged batch records a durable judgment row: prompt, decision, model, ts
 
 test("the ambient judge model is independent of the detect model (PI_JUDGE_MODEL)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
-  const built = buildApp(testConfig({ dataDir, detectModelId: "claude-opus-4-8", judgeModelId: "claude-sonnet-5" }));
+  const built = buildApp(testConfig({ dataDir }), {
+    tenantSettings: testTenantSettings({ PI_DETECT_MODEL: "claude-opus-4-8", PI_JUDGE_MODEL: "claude-sonnet-5" }),
+  });
   built.runtime.start();
   try {
     const container = "C-judgemodel";
@@ -563,7 +565,8 @@ test("the ambient judge model is independent of the detect model (PI_JUDGE_MODEL
 
 test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
-  const built = buildApp(testConfig({ dataDir, modelId: "gpt-5.6-sol", openaiApiKey: "sk-openai-test" }));
+  const built = buildApp(testConfig({ dataDir }), { tenantSettings: testTenantSettings({ PI_MODEL: "gpt-5.6-sol" }) });
+  await built.modelCredentials.set("openai", "sk-openai-test", "test");
   built.runtime.start();
   try {
     const container = "C-openai-judge";
@@ -580,7 +583,8 @@ test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku
 
 test("an admin-set org base model drives the auxiliary, not just the PI_MODEL env", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
-  const built = buildApp(testConfig({ dataDir, openaiApiKey: "sk-openai-test" }));
+  const built = buildApp(testConfig({ dataDir }));
+  await built.modelCredentials.set("openai", "sk-openai-test", "test");
   await built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
   built.runtime.start();
   try {

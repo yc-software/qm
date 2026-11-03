@@ -8,6 +8,10 @@ import type { AddressInfo } from "node:net";
 
 let coreBranding = { accent: "#f0652f", mark: "Y", selfLabel: "QM" };
 const core = createServer((req: IncomingMessage, res) => {
+  if ((req.url ?? "").startsWith("/v1/admin/whoami")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ isAdmin: req.headers["x-admin-actor"] === "U-admin@acme" }));
+  }
   if ((req.url ?? "").startsWith("/v1/surface-config")) {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ branding: coreBranding }));
@@ -30,7 +34,6 @@ await new Promise<void>((r) => core.listen(0, r));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_ORG_ID = "acme";
 process.env.CORE_SIGNING_SECRET = "admin-branding-test-secret";
-process.env.INBOX_USERS = "U-admin";
 
 const { server } = await import("../src/index.ts");
 await new Promise<void>((r) => server.listen(0, r));
@@ -112,7 +115,7 @@ test("design system routes embed the shared component library and retain the scr
   }
 });
 
-test("design system routes use the inbox allowlist", async () => {
+test("design system routes are admin-only", async () => {
   for (const path of ["/design-system", "/design-system/", "/design", "/design/"]) {
     const denied = await fetch(base + path, { headers: { cookie: "admin=U-rando" } });
     assert.equal(denied.status, 404);

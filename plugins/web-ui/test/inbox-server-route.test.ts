@@ -36,8 +36,6 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "inbox-web-route-test";
-process.env.WEB_UI_PRINCIPALS = "alice,mallory";
-process.env.INBOX_USERS = "alice";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
@@ -154,16 +152,11 @@ test("an item id that would escape its loop is encoded, not obeyed", async () =>
   );
 });
 
-test("the ledger opens to inbox users; the rest of the loops surface still needs LOOPS_USERS", async () => {
+test("an inbox_loops user reaches the ledger and the rest of the loops surface", async () => {
   const ledger = await fetch(`${base}/api/loops/l-2/items`, { headers });
   assert.equal(ledger.status, 200);
-  const admin = await fetch(`${base}/api/loops`, { headers });
-  assert.equal(admin.status, 403);
-});
-
-test("a signed-in user who is not an inbox user cannot read the ledger", async () => {
-  const r = await fetch(`${base}/api/loops/l-2/items`, { headers: headersFor("mallory") });
-  assert.equal(r.status, 403);
+  const loops = await fetch(`${base}/api/loops`, { headers });
+  assert.equal(loops.status, 200);
 });
 
 test("inbox routes refuse anonymous callers", async () => {
@@ -171,7 +164,7 @@ test("inbox routes refuse anonymous callers", async () => {
   assert.equal(r.status, 401);
 });
 
-test("feature flag denial blocks Inbox and Loop API access despite the environment allowlist", async () => {
+test("feature flag denial blocks Inbox and Loop API access", async () => {
   previewEnabled = false;
   try {
     for (const path of ["/api/inbox", "/api/inbox/selection", "/api/loops/loop-1/ingestion"]) {

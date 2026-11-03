@@ -244,7 +244,6 @@ export interface PublicServiceCredential {
   enabled: boolean;
   hasSecret: boolean;
   maxRequestsPerDay?: number;
-  source?: "deployment";
   updatedBy?: string;
   updatedAt: number;
 }
@@ -262,7 +261,6 @@ export interface DecryptedServiceCredential {
   deployments: boolean;
   enabled: boolean;
   maxRequestsPerDay?: number;
-  source?: "deployment";
 }
 
 export function isValidCredentialSlug(slug: string): boolean {
@@ -353,7 +351,6 @@ interface ConnectorMeta {
 }
 
 export interface ConnectorTokenStore {
-  operatorFallbackHosts?: readonly string[];
   listConnectorsByOwners?(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   setConnectorToken(host: string, principalId: string, token: OAuthToken, accountType?: string): Promise<void>;
   deleteConnectorToken(host: string, principalId: string, accountType?: string): Promise<void>;

@@ -126,6 +126,7 @@ export function createGatewayCatalog(
   config: ModelGatewayTransportConfig,
   fetcher: typeof fetch = fetch,
   now: () => number = Date.now,
+  publish: typeof setGatewayModels = setGatewayModels,
 ) {
   const root = gatewayRoot(config.url);
   const baseUrl = `${root}/v1`;
@@ -180,7 +181,7 @@ export function createGatewayCatalog(
             .filter(({ id }) => modelOfferedInWebui(id))
             .map(({ id }) => id),
         );
-        setGatewayModels(
+        publish(
           models,
           Object.entries(config.models).flatMap(([id, target]) =>
             !id.startsWith(GATEWAY_MODEL_PREFIX) && offeredAliases.has(id) && next[id]
@@ -197,7 +198,7 @@ export function createGatewayCatalog(
         if (discovered || Object.keys(config.models).length === 0) {
           routes = {};
           expiresAt = 0;
-          setGatewayModels([]);
+          publish([]);
           console.warn("[model] Gateway model discovery unavailable; retrying in 30 seconds");
         }
       }

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { parseScopeId, type ScopeKind } from "../types.ts";
+import { parseScopeId } from "../types.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { AgentComputerSpec } from "./sandbox.ts";
 import type { SandboxDefault, SandboxResource } from "./sandbox-resources.ts";
@@ -16,26 +16,14 @@ export interface LegacySandboxBinding {
   machineId?: string;
 }
 
-export type LegacySandboxScopeDefaults = Partial<Record<ScopeKind, SandboxBackendName>>;
-
 export interface LegacyRoute {
   backend: SandboxBackendName;
-}
-
-export function legacySandboxBackendForScope(
-  scope: string,
-  fallback: SandboxBackendName,
-  defaults?: LegacySandboxScopeDefaults,
-): SandboxBackendName {
-  const kind = parseScopeId(scope).kind;
-  return (kind && defaults?.[kind]) || fallback;
 }
 
 export const legacySandboxId = (scopeId: string, backend: SandboxBackendName): string =>
   `legacy-${createHash("sha256").update(`${backend}:${scopeId}`).digest("hex").slice(0, 24)}`;
 
 export async function upgradeLegacySandboxes(opts: {
-  availableBackends: readonly SandboxBackendName[];
   records: DurableMap<SandboxResource>;
   defaults: DurableMap<SandboxDefault>;
   marker: DurableMap<SandboxResourceUpgradeMarker>;
@@ -43,14 +31,18 @@ export async function upgradeLegacySandboxes(opts: {
   routes?: () => Promise<Array<[string, LegacyRoute]>>;
   legacyScopes?: () => Promise<string[]>;
   legacySandboxes?: () => Promise<LegacySandboxBinding[]>;
-  legacyBackend: (scopeId: string) => SandboxBackendName;
+  backends: () => Promise<{
+    available: readonly SandboxBackendName[];
+    defaultBackend: () => Promise<SandboxBackendName>;
+  }>;
   specFor?: (backend: SandboxBackendName) => AgentComputerSpec | undefined;
 }): Promise<void> {
   const done = async (): Promise<boolean> => (await opts.marker.get("explicit-defaults")) !== null;
   if (await done()) return;
   await opts.lock.withLock("sandbox-resources:activation", async () => {
     if (await done()) return;
-    const [existing, defaults, routes, knownScopes, bindings] = await Promise.all([
+    const [{ available, defaultBackend }, existing, defaults, routes, knownScopes, bindings] = await Promise.all([
+      opts.backends(),
       opts.records.all(),
       opts.defaults.entries(),
       opts.routes?.() ?? [],
@@ -60,7 +52,6 @@ export async function upgradeLegacySandboxes(opts: {
     const managed = new Set(existing.filter((record) => !record.legacy).map((record) => record.backingScopeId));
     const valid = (scope: string): boolean => !!parseScopeId(scope).kind && !managed.has(scope);
     const routed = new Map(routes);
-    const backendFor = (scope: string): SandboxBackendName => routed.get(scope)?.backend ?? opts.legacyBackend(scope);
     const scopes = new Set(
       [
         ...knownScopes,
@@ -69,15 +60,15 @@ export async function upgradeLegacySandboxes(opts: {
         ...existing.map((record) => record.ownerScopeId),
       ].filter(valid),
     );
+    let fallback: SandboxBackendName | undefined;
+    const chosen = new Map<string, SandboxBackendName>();
+    for (const scope of scopes) chosen.set(scope, routed.get(scope)?.backend ?? (fallback ??= await defaultBackend()));
+    const backendFor = (scope: string): SandboxBackendName => chosen.get(scope)!;
     const selected = new Map(defaults);
     const retired = new Set(existing.filter((record) => record.state === "retired").map((record) => record.id));
     for (const scope of scopes) {
       const backend = backendFor(scope);
-      if (
-        !selected.has(scope) &&
-        !retired.has(legacySandboxId(scope, backend)) &&
-        !opts.availableBackends.includes(backend)
-      )
+      if (!selected.has(scope) && !retired.has(legacySandboxId(scope, backend)) && !available.includes(backend))
         throw new Error(
           `cannot import legacy computer for ${scope}: backend ${backend} is not configured; restore that provider before upgrading`,
         );

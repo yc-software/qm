@@ -58,7 +58,7 @@ const AUTO_FLAGGER_MAX_RUBRIC_CHARS = 20_000;
 /** The flagger a deployment falls back to when nothing is configured. */
 export function defaultAutoFlaggerConfig(deps: Pick<ServerDeps, "baseModelDefault">): AutoFlaggerDraft {
   return {
-    modelId: defaultModel(deps.baseModelDefault),
+    modelId: defaultModel(deps.baseModelDefault?.()),
     rubric: DEFAULT_SECURITY_SCREEN_RUBRIC,
   };
 }
@@ -68,7 +68,7 @@ export function defaultAutoFlaggerConfig(deps: Pick<ServerDeps, "baseModelDefaul
  * rubric that tests cleanly is exactly the one that can be applied.
  */
 export async function parseAutoFlaggerDraft(
-  deps: Pick<ServerDeps, "providerKeys" | "modelCredentials">,
+  deps: Pick<ServerDeps, "modelCredentials">,
   body: { modelId?: unknown; rubric?: unknown },
 ): Promise<{ value: AutoFlaggerDraft } | { error: string }> {
   if (typeof body.modelId !== "string" || !body.modelId.trim()) {
@@ -83,8 +83,7 @@ export async function parseAutoFlaggerDraft(
       error: `auto-flagger requires a non-empty rubric of at most ${AUTO_FLAGGER_MAX_RUBRIC_CHARS} characters`,
     };
   }
-  const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
+  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : ALL_PROVIDERS_AVAILABLE;
   if (!modelServiceable(modelId, managedKeys)) {
     return { error: `model ${modelId} isn't serviceable on this deployment` };
   }
@@ -522,8 +521,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { error: "base-model requires { modelId: string } (empty string clears the override)" };
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
+      const managedKeys = ctx.deps.modelCredentials
+        ? await ctx.deps.modelCredentials.availability()
+        : ALL_PROVIDERS_AVAILABLE;
       const runtime = await ctx.deps.config!.getRuntimeSelectionDurable(scope);
       if (!modelId) await ctx.deps.config!.setRuntimeSelection(scope, null);
       else {
@@ -535,7 +535,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         const current =
           runtime ??
           (await resolveRuntimeChoice(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
-            modelId: defaultModel(ctx.deps.baseModelDefault),
+            modelId: defaultModel(ctx.deps.baseModelDefault?.()),
           }));
         await ctx.deps.config!.setRuntimeSelection(scope, {
           modelId,
@@ -581,8 +581,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { error: "runtime requires fastMode (boolean)" };
       if (purpose && fastMode === true && !fastModeModelIds().includes(modelId))
         return { error: `fast mode is not supported by ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
+      const managedKeys = ctx.deps.modelCredentials
+        ? await ctx.deps.modelCredentials.availability()
+        : ALL_PROVIDERS_AVAILABLE;
       if (!modelServiceable(modelId, managedKeys))
         return {
           error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured`,
@@ -707,8 +708,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
+      const managedKeys = ctx.deps.modelCredentials
+        ? await ctx.deps.modelCredentials.availability()
+        : ALL_PROVIDERS_AVAILABLE;
       if (modelId && !modelServiceable(modelId, managedKeys)) {
         return { error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured` };
       }
@@ -813,12 +815,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const ref = encodeRef(serviceCredRef(slug));
       const allCreds = await deps.serviceCreds.listServiceCredentials(scope);
       const existing = allCreds.find((c) => c.slug === slug);
-      if (existing?.source === "deployment")
-        return {
-          error: `"${slug}" is supplied by this deployment's configuration and can't be edited, deleted or reused here.`,
-          code: "deployment_credential",
-          status: 409,
-        };
       const conflict = () => ({
         error: "Credential changed after this editor was loaded. Reload it before continuing.",
         code: "version_conflict",

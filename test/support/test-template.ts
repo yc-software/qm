@@ -8,7 +8,7 @@ if (import.meta.main) {
   const databaseUrl = process.argv[2]!;
   enterTenant(TEST_TENANT);
   await seedTestTenants(databaseUrl);
-  const { runtime } = buildApp({ anthropicApiKey: "test-anthropic-key", ...testConfig({ databaseUrl }) });
+  const { runtime } = buildApp(testConfig({ databaseUrl }));
   await migrateRegisteredPgSchemas(databaseUrl);
   await runtime.stop();
   process.exit(0);

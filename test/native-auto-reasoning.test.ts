@@ -113,14 +113,14 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
           defaultModelId: modelId,
           ...(route === "gateway"
             ? {
-                modelGateway: {
+                resolveModelGateway: async () => ({
                   url: "https://gateway.invalid",
                   apiKey: "test-key",
                   apiKeyHeader: "x-gateway-key",
                   models: { [modelId]: "routed-model" },
-                },
+                }),
               }
-            : { apiKey: "sk-offline-test-key" }),
+            : { resolveProviderKeys: async () => ({ anthropic: "sk-offline-test-key" }) }),
         });
         t.after(() => agent.close?.());
         const mandatoryThinking = getRequiredModel(modelId).thinkingLevelMap?.off === null;

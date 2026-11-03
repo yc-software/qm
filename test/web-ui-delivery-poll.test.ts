@@ -28,7 +28,6 @@ const core = createServer((req, res) => {
 core.listen(0);
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "core-signing-secret".repeat(3);
-process.env.WEB_UI_PRINCIPALS = "";
 const { drainWebDeliveries } = await import("../plugins/web-ui/server/index.ts");
 
 after(() => new Promise<void>((r) => core.close(() => r())));

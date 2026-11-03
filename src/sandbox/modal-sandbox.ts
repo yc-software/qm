@@ -28,7 +28,7 @@ import {
 } from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import { ModalNameConflictError, ModalSandboxGoneError, type ModalClient, type ModalSession } from "./modal-client.ts";
 import {
   createHomeSnapshotOps,
@@ -127,7 +127,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   const provisionQueue = <T>(scope: string, action: () => Promise<T>): Promise<T> =>
     localQueue(scope, () => advisoryLock.withLock(`modal-provision:${scope}`, action));
 
-  const sessionByName = new Map<string, ModalSession>();
+  const sessionByName = tenantKeyedMap<ModalSession>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();

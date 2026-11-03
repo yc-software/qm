@@ -63,7 +63,7 @@ function screenSources(payload: string): string[] {
 
 export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassifier {
   return async function classifySecurityData(payload, actorId, scopeLabel, recordLlmRequest, context) {
-    const screener = deps.securityScreener;
+    const screener = await deps.securityScreener?.();
     const model = deps.agent.screenSecurity;
     const observe = context.mode === "observe";
     if (!screener && !model) return observe ? { decision: "auto" } : undefined;

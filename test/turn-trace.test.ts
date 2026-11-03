@@ -82,7 +82,7 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
   t.after(() => {
     globalThis.fetch = realFetch;
   });
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   t.after(() => agent.close?.());
   let seq = 0;
   const result = await traceQueued(undefined, "run", { "qm.origin": "human" }, () =>
@@ -142,6 +142,7 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
 test("a human web turn persists its entries inside step.persist spans of the run", async () => {
   transactions.length = 0;
   const built = buildApp(testConfig());
+  await built.modelCredentials.set("anthropic", "sk-test", "test");
   const result = await built.app.turn({
     surface: "web",
     actor: { externalId: "U1" },
@@ -162,6 +163,7 @@ test("a human web turn persists its entries inside step.persist spans of the run
 test("a turn whose agent fails still sends its dispatch span", async () => {
   transactions.length = 0;
   const built = buildApp(testConfig());
+  await built.modelCredentials.set("anthropic", "sk-test", "test");
   await assert.rejects(
     built.app.turn({
       surface: "web",

@@ -103,6 +103,7 @@ function buildOrchestrator(
     isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   } = {},
 ) {
+  const { securityScreener, ...rest } = extra;
   const config = testConfigStore(ORG);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
@@ -141,7 +142,8 @@ function buildOrchestrator(
     },
     signingSecret: "test-signing-secret",
     apiBaseUrl: "https://api.test",
-    ...extra,
+    ...rest,
+    ...(securityScreener ? { securityScreener: async () => securityScreener } : {}),
   });
   return { orchestrator, memory, config, workspace, sessions, files, auditLog, acl };
 }
