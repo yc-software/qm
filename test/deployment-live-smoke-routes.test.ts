@@ -11,7 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createBackgroundOwnershipStore, createBackgroundOwnershipRows } from "../src/runs/background-ownership.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
