@@ -155,7 +155,7 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { forEachTenant, inTenantOf } from "./tenants/claim.ts";
+import { forEachTenant, inTenantOf, listTenants, type TenantRow } from "./tenants/claim.ts";
 import { withoutTenant, withTenant } from "./tenants/context.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { ownerPgPool } from "./tenants/owner-pool.ts";
@@ -446,6 +446,7 @@ export interface BuiltApp {
   backgroundOwnership?: BackgroundOwnershipControl;
   rewriteSurfaceOrigins: () => Promise<void>;
   forEachTenant: (fn: () => Promise<unknown>) => Promise<void>;
+  listTenants: () => Promise<TenantRow[]>;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   deploymentLayer: DeploymentLayerRuntime;
@@ -2977,6 +2978,7 @@ export function buildApp(
     deploymentLayerRefresh,
     rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(ownerPgPool(pgArtifactMap.pool)),
     forEachTenant: (fn) => forEachTenant(pgArtifactMap.pool, fn),
+    listTenants: () => listTenants(pgArtifactMap.pool),
     sessions,
     runs,
     signals: runSignals,

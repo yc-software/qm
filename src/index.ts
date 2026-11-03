@@ -10,9 +10,8 @@ import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
-import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
+import { createSlackRuntimeReconciler, createTenantSlackRuntimes } from "./surfaces/slack-runtime.ts";
 import { useOwnerDatabase } from "./tenants/owner-pool.ts";
-import { inTenantOf } from "./tenants/claim.ts";
 import { withoutTenant } from "./tenants/context.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 
@@ -40,7 +39,9 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
       appId: process.env.QM_SLACK_APP_ID ?? "",
       store: built.slackInstallation,
       reconcile:
-        config.backgroundWorkEnabled || config.backgroundDeploymentId ? () => slackRuntime.reconcile() : undefined,
+        config.backgroundWorkEnabled || config.backgroundDeploymentId
+          ? () => withoutTenant(() => slackRuntime.reconcile())
+          : undefined,
     })
   : undefined;
 const server = createServer(built.app, {
@@ -94,35 +95,31 @@ if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
   console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 }
 
-const slackRuntime = createSlackRuntimeReconciler({
+const slackRuntime = createTenantSlackRuntimes({
+  tenants: built.listTenants,
   startPaused: Boolean(config.backgroundDeploymentId),
-  load: async () => {
-    const tenants = await withoutTenant(() => built.slackInstallation.tenantIds());
-    if (tenants.length > 1)
-      throw new Error("Slack is installed for more than one tenant, and one Slack runtime serves a single tenant");
-    const tenantId = tenants[0];
-    return inTenantOf(tenantId, async () => {
-      const status = await built.slackInstallation.status();
-      const stored = await built.slackInstallation.get();
-      if (stored) {
-        if (stored.installId && !managedSlack) return null;
-        const dynamic = slackPluginConfigFromEnv(
-          {
-            ...process.env,
-            SLACK_BOT_TOKEN: stored.botToken,
-            SLACK_APP_TOKEN: stored.appToken,
-            SLACK_EVENTS_MODE: stored.appToken ? "socket" : process.env.SLACK_EVENTS_MODE,
-          },
-          stored.installId && managedSlack ? (staging) => managedSlack.receiver(stored.installId!, staging) : undefined,
-        );
-        if (dynamic && stored.installId) dynamic.installationId = stored.installId;
-        if (dynamic && tenantId) dynamic.tenantId = tenantId;
-        return dynamic ? { version: stored.version, config: dynamic } : null;
-      }
-      if (status.managed) return null;
-      if (slackConfig) return { version: "environment", config: slackConfig };
-      return null;
-    });
+  load: async (tenant) => {
+    const status = await built.slackInstallation.status();
+    const stored = await built.slackInstallation.get();
+    if (stored) {
+      if (stored.installId && !managedSlack) return null;
+      const dynamic = slackPluginConfigFromEnv(
+        {
+          ...process.env,
+          SLACK_BOT_TOKEN: stored.botToken,
+          SLACK_APP_TOKEN: stored.appToken,
+          SLACK_EVENTS_MODE: stored.appToken ? "socket" : process.env.SLACK_EVENTS_MODE,
+        },
+        stored.installId && managedSlack ? (staging) => managedSlack.receiver(stored.installId!, staging) : undefined,
+      );
+      if (dynamic && stored.installId) dynamic.installationId = stored.installId;
+      if (dynamic) dynamic.tenantId = tenant.id;
+      return dynamic ? { version: stored.version, config: dynamic } : null;
+    }
+    if (status.managed) return null;
+    if (slackConfig && tenant.install)
+      return { version: "environment", config: { ...slackConfig, tenantId: tenant.id } };
+    return null;
   },
   startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
   onError: reportFailureAs("slack plugin reconciliation", undefined),
