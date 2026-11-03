@@ -8,7 +8,6 @@ import { buildApp } from "../../src/wiring.ts";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
-import { entryFromItem } from "../../src/sessions/items.ts";
 
 async function main(): Promise<void> {
   assert.ok(
@@ -53,11 +52,11 @@ async function main(): Promise<void> {
     });
     assert.equal(result.status, "ok", result.reason ?? result.reply);
     assert.ok(result.sessionId);
-    const entries = (await built.sessions.getItems(result.sessionId)).map((item) => entryFromItem(item, scopeId));
+    const items = await built.sessions.getItems(result.sessionId);
     try {
-      assertSandboxExecution(entries, sandbox.id, `${left}${right}\n`);
+      assertSandboxExecution(items, sandbox.id, `${left}${right}\n`);
     } catch (error) {
-      console.error(JSON.stringify({ reply: result.reply, entries }));
+      console.error(JSON.stringify({ reply: result.reply, items }));
       throw error;
     }
   } catch (error) {

@@ -14,7 +14,6 @@ import type { SandboxHandle, ProvisionOptions, Sandbox } from "../src/sandbox/sa
 import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { egressClaimAllowingControlPlane } from "../src/core/orchestrator.ts";
 import { TURN_FILES_DIR, turnFileId } from "../src/core/attachments.ts";
-import { contextSummaryPayload } from "../src/sessions/session-store.ts";
 import { egressDecision } from "../src/resolution/egress-policy.ts";
 import { hashId } from "../src/util/crypto.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
@@ -25,7 +24,7 @@ import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
-import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { isAgentReply, isHidden, isUserItem, messageTs, type Item, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
@@ -77,10 +76,10 @@ function spyProvisioning(sandbox: Sandbox) {
   const counts = { provisioned: 0, live: 0 };
   const provision = sandbox.provision.bind(sandbox);
   const teardown = sandbox.teardown.bind(sandbox);
-  sandbox.provision = async (layers, opts) => {
+  sandbox.provision = async (owner, opts) => {
     counts.provisioned++;
     counts.live++;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   sandbox.teardown = async (handle, opts) => {
     await teardown(handle, opts);
@@ -130,8 +129,8 @@ test("internal DM turn runs end-to-end and records the session", async () => {
   assert.match(res.reply ?? "", /You said: hello there/);
 
   const found = await app.getSession(res.sessionId!);
-  const types = found!.entries.map((e) => e.type);
-  assert.deepEqual(types, ["user", "assistant"]);
+  const kinds = found!.items.map((e) => e.kind);
+  assert.deepEqual(kinds, ["UserMessage", "AgentMessage"]);
 });
 
 test("human transcript entries retain authenticated identity across duplicate names and renames", async () => {
@@ -144,12 +143,9 @@ test("human transcript entries retain authenticated identity across duplicate na
     const result = await app.turn(channel("hello", { actor, liveActor: true }));
     assert.equal(result.status, "ok", result.reason);
     const found = await app.getSession(result.sessionId!);
-    const payload = found!.entries.filter((entry) => entry.type === "user").at(-1)!.payload as {
-      speakerId?: string;
-      name?: string;
-    };
-    assert.equal(payload.speakerId, actor.externalId);
-    assert.equal(payload.name, actor.displayName);
+    const body = found!.items.filter(isUserItem).at(-1)!.body;
+    assert.equal(body.speakerId, actor.externalId);
+    assert.equal(body.name, actor.displayName);
   }
 });
 
@@ -159,8 +155,8 @@ test("the persisted assistant entry carries authoritative turn timing for transc
   const res = await app.turn(dm("hello timing"));
   assert.equal(res.status, "ok");
   const found = await app.getSession(res.sessionId!);
-  const assistant = found!.entries.find((e) => e.type === "assistant");
-  const p = assistant!.payload as { workStartedAt?: number; workFinishedAt?: number };
+  const assistant = found!.items.find(isAgentReply);
+  const p = assistant!.body as { workStartedAt?: number; workFinishedAt?: number };
   assert.equal(typeof p.workStartedAt, "number", "turn start is persisted");
   assert.equal(typeof p.workFinishedAt, "number", "turn finish is persisted");
   assert.ok(p.workStartedAt! >= before && p.workFinishedAt! >= p.workStartedAt!);
@@ -225,15 +221,11 @@ test("a proactive-opener turn greets with no user text and records the seeding e
 
   const found = await app.getSession(res.sessionId!);
   assert.deepEqual(
-    found!.entries.map((e) => e.type),
-    ["user", "assistant"],
+    found!.items.map((e) => e.kind),
+    ["UserMessage", "AgentMessage"],
   );
-  const userEntry = found!.entries.find((e) => e.type === "user")!;
-  assert.equal(
-    (userEntry.payload as { hidden?: boolean }).hidden,
-    true,
-    "the opener seed is hidden so no surface renders it",
-  );
+  const userEntry = found!.items.find(isUserItem)!;
+  assert.equal(isHidden(userEntry), true, "the opener seed is hidden so no surface renders it");
 });
 
 test("a proactiveOpener turn that carries real text keeps the user entry visible", async () => {
@@ -241,12 +233,8 @@ test("a proactiveOpener turn that carries real text keeps the user entry visible
   const res = await app.turn(dm("actually, here's my real question", { proactiveOpener: true }));
   assert.equal(res.status, "ok", res.reason);
   const found = await app.getSession(res.sessionId!);
-  const userEntry = found!.entries.find((e) => e.type === "user")!;
-  assert.notEqual(
-    (userEntry.payload as { hidden?: boolean }).hidden,
-    true,
-    "a real typed message stays visible even on an opener-flagged turn",
-  );
+  const userEntry = found!.items.find(isUserItem)!;
+  assert.notEqual(isHidden(userEntry), true, "a real typed message stays visible even on an opener-flagged turn");
 });
 
 test("a triggered turn records its synthetic wake prompt hidden so the chat never shows it as a user message", async () => {
@@ -258,12 +246,8 @@ test("a triggered turn records its synthetic wake prompt hidden so the chat neve
   );
   assert.equal(res.status, "ok", res.reason);
   const found = await app.getSession(res.sessionId!);
-  const userEntry = found!.entries.find((e) => e.type === "user")!;
-  assert.equal(
-    (userEntry.payload as { hidden?: boolean }).hidden,
-    true,
-    "the wake prompt is hidden so no surface renders it as a user message",
-  );
+  const userEntry = found!.items.find(isUserItem)!;
+  assert.equal(isHidden(userEntry), true, "the wake prompt is hidden so no surface renders it as a user message");
 });
 
 test("a 1:1 names the authenticated human in the prompt so the agent never asks who they are", async () => {
@@ -422,8 +406,8 @@ test("a retried run RESUMES the interrupted turn from the durable ledger instead
 
   const found = await app.getSession(res.sessionId!);
   assert.deepEqual(
-    found!.entries.map((e) => e.type),
-    ["user", "tool_call", "tool_result", "assistant"],
+    found!.items.map((e) => e.kind),
+    ["UserMessage", "ToolCall", "ToolResult", "AgentMessage"],
     "the retry continues after the recorded work without a new user entry",
   );
 });
@@ -440,11 +424,11 @@ test("a retry of an attempt that recorded NO work continues from the recorded re
 
   const found = await app.getSession(res.sessionId!);
   assert.deepEqual(
-    found!.entries.map((e) => e.type),
-    ["user", "assistant"],
+    found!.items.map((e) => e.kind),
+    ["UserMessage", "AgentMessage"],
     "the human's request is recorded once and nothing else is added",
   );
-  assert.notEqual((found!.entries[0]!.payload as { hidden?: boolean }).hidden, true, "the original stays visible");
+  assert.notEqual(isHidden(found!.items[0]!), true, "the original stays visible");
 });
 
 test("a guest actor is refused (internal-only, input side)", async () => {
@@ -494,9 +478,9 @@ test("a per-turn egress-proxy token is minted and passed to provision, carrying 
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const res = await app.turn(dm("!run echo go"));
@@ -521,9 +505,9 @@ test("large channel turns apply the compression rollout setting to every sandbox
     );
     let captured: ProvisionOptions | undefined;
     const provision = sandbox.provision.bind(sandbox);
-    sandbox.provision = (layers, opts) => {
+    sandbox.provision = (owner, opts) => {
       captured = opts;
-      return provision(layers, opts);
+      return provision(owner, opts);
     };
     const members = Array.from({ length: 120 }, (_, i) => ({
       externalId: i === 0 ? "U1" : `U${i + 1}-compression-fixture`,
@@ -564,9 +548,9 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
   const actor = { externalId: "B-LEGACY", isBot: true };
   const res = await app.turn(
@@ -604,9 +588,9 @@ test("Composio backend access is announced without delivering the project key", 
   });
   let captured: ProvisionOptions | undefined;
   const provision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
@@ -706,9 +690,9 @@ test("org credentials are delivered only when requested and read live after rota
     return realRun(handle, command, opts);
   };
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     if (opts) captures.push(opts);
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const request = `!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel", "browse-model-key"] })}`;
@@ -765,9 +749,9 @@ test("a disabled or broker-delivery credential never rides provision env", async
   });
   const captures: ProvisionOptions[] = [];
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     if (opts) captures.push(opts);
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:env3" } }));
@@ -805,9 +789,9 @@ test("a credential flipped away from env between the metadata read and the secre
   };
   const captures: ProvisionOptions[] = [];
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     if (opts) captures.push(opts);
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   await assert.rejects(
@@ -840,9 +824,9 @@ test("env-delivery credentials are not offered to an external audience", async (
   await grantCred(acl, org, "browse-steel");
   const captures: ProvisionOptions[] = [];
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     if (opts) captures.push(opts);
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const externalRoom = await app.turn(
@@ -886,9 +870,9 @@ test("a channel cron receives env credentials only when the directory proves an 
     return realRun(handle, command, opts);
   };
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     if (opts) captures.push(opts);
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await directory.replace([
@@ -971,9 +955,9 @@ test("env-delivery credentials are gated by service-cred grants — no grant, no
     return realRun(handle, command, opts);
   };
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     if (opts) captures.push(opts);
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   let res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:gate1" } }));
@@ -1011,9 +995,9 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const res = await app.turn(dm("!run echo steps"));
@@ -1053,9 +1037,9 @@ test("a legacy browse-only model cannot strand managed default-model browsing", 
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   await built.config.setBrowseModel("org:acme", "claude-retired-by-pi-ai");
@@ -1079,9 +1063,9 @@ test("browse follows a live org base model change, not the process-start default
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   let res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:live1" } }));
@@ -1111,9 +1095,9 @@ test("an OpenAI deployment provisions managed browser access without its provide
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:oa1" } }));
@@ -1135,9 +1119,9 @@ test("turn timezone rides the prompt and control-plane capability token", async 
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const res = await app.turn(dm("!run echo tz", { timezone: "America/New_York" }));
@@ -1189,9 +1173,9 @@ for (const hours of [undefined, "72", "0", "none"]) {
     let captured: ProvisionOptions | undefined;
     let executed: Record<string, string> | undefined;
     const provision = sandbox.provision.bind(sandbox);
-    sandbox.provision = (layers, opts) => {
+    sandbox.provision = (owner, opts) => {
       captured = opts;
-      return provision(layers, opts);
+      return provision(owner, opts);
     };
     const run = sandbox.run.bind(sandbox);
     sandbox.run = (handle, command, opts) => {
@@ -1233,9 +1217,9 @@ test("unattended grants enter capability claims only on non-live turns", async (
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   await app.turn(dm("!run echo cron", { triggered: true, unattendedGrants: ["admin.sessions.read"] }));
@@ -1390,9 +1374,9 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const adminTurn = (extra: Partial<TurnRequest> = {}): TurnRequest => ({
@@ -1447,9 +1431,9 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
   const admin = { externalId: "admin-alice" };
 
@@ -1698,11 +1682,9 @@ test("an attached file is recorded in the attach tool result", async () => {
   );
 
   const s1 = await app.getSession(t1.sessionId!);
-  const result = s1!.entries.findLast(
-    (e) => e.type === "tool_result" && (e.payload as { tool?: string } | null)?.tool === "attach",
-  );
-  assert.ok(result, "expected an attach tool_result entry");
-  const files = (result!.payload as { files: Array<{ name: string; artifactId?: string }> }).files;
+  const result = s1!.items.findLast((e) => e.kind === "ToolResult" && e.tool === "attach");
+  assert.ok(result, "expected an attach tool result item");
+  const files = result!.body.files as Array<{ name: string; artifactId?: string }>;
   assert.equal(files[0]!.name, "flag.png");
   assert.equal(files[0]!.artifactId, t1.attachments![0]!.artifactId);
 });
@@ -1745,7 +1727,7 @@ test("a later turn removes same-conversation and expired transfer files", async 
   const built = freshApp();
   const { app, sandbox } = built;
   await selectComputer(built, "U1", scopeId("personal", "U1"));
-  const handle = await sandbox.provision([{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }]);
+  const handle = await sandbox.provision(scopeId("personal", "U1"));
   const sessionDir = `${TURN_FILES_DIR}/${hashId(["dm:U1:t1"], 24)}`;
   await sandbox.writeFile(handle, `${sessionDir}/abandoned/inbox/stale.bin`, "stale");
   const expiredSessionDir = `${TURN_FILES_DIR}/${hashId(["dm:U1:other"], 24)}`;
@@ -1954,7 +1936,7 @@ test("an unprompted thread message the colleague wouldn't answer is silent (no r
   assert.ok(res.sessionId);
   const found = await app.getSession(res.sessionId!);
   assert.deepEqual(
-    found!.entries.map((e) => e.type),
+    found!.items.map((e) => e.kind),
     [],
   );
 });
@@ -2101,7 +2083,7 @@ test("an unprompted acknowledgement gets an emoji reaction, not a reply (no run,
   assert.ok(res.sessionId);
   const found = await app.getSession(res.sessionId!);
   assert.deepEqual(
-    found!.entries.map((e) => e.type),
+    found!.items.map((e) => e.kind),
     [],
   );
 });
@@ -2113,7 +2095,7 @@ test("on a surface without reactions, the same acknowledgement just stays silent
   assert.equal((res.reactions ?? []).length, 0);
   const found = await app.getSession(res.sessionId!);
   assert.deepEqual(
-    found!.entries.map((e) => e.type),
+    found!.items.map((e) => e.kind),
     [],
   );
 });
@@ -2145,8 +2127,8 @@ test("an unprompted thread question gets a reply (turn detection chimes in)", as
   assert.match(res.reply ?? "", /You said: what does everyone think/);
   const found = await app.getSession(res.sessionId!);
   assert.deepEqual(
-    found!.entries.map((e) => e.type),
-    ["user", "assistant"],
+    found!.items.map((e) => e.kind),
+    ["UserMessage", "AgentMessage"],
   );
 });
 
@@ -2176,8 +2158,7 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
     if (items.some((item) => item.body?.overheard)) entryBatches.push(items.length);
     return appendMany(writer, items);
   };
-  const overheardEntries = (entries: { type: string; payload: unknown }[]) =>
-    entries.filter((e) => e.type === "user" && (e.payload as { overheard?: boolean }).overheard === true);
+  const overheardItems = (items: Item[]) => items.filter((e) => isUserItem(e) && e.body.overheard === true);
 
   const r1 = await app.turn(
     channel("!overheard", {
@@ -2194,15 +2175,12 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
   assert.match(r1.reply ?? "", /nice cat/);
 
   const s1 = await app.getSession(r1.sessionId!);
-  const ov1 = overheardEntries(s1!.entries);
-  assert.deepEqual(
-    ov1.map((e) => (e.payload as { ts: string }).ts),
-    ["100.001", "100.002", "100.003"],
-  );
-  assert.equal((ov1[1]!.payload as { sourceRole: string }).sourceRole, "agent");
-  assert.equal((ov1[0]!.payload as { name: string }).name, "Alice");
-  assert.ok(ov1.every((entry) => (entry.payload as { speakerId?: string }).speakerId === undefined));
-  assert.deepEqual((ov1[0]!.payload as { files: string[] }).files, ["cat.jpg"]);
+  const ov1 = overheardItems(s1!.items);
+  assert.deepEqual(ov1.map(messageTs), ["100.001", "100.002", "100.003"]);
+  assert.equal(ov1[1]!.body.sourceRole, "agent");
+  assert.equal(ov1[0]!.body.name, "Alice");
+  assert.ok(ov1.every((item) => item.body.speakerId === undefined));
+  assert.deepEqual(ov1[0]!.body.files, ["cat.jpg"]);
 
   const r2 = await app.turn(
     channel("!overheard", {
@@ -2219,9 +2197,9 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
   assert.doesNotMatch(r2.reply ?? "", /Alice@100\.001/);
 
   const s2 = await app.getSession(r2.sessionId!);
-  const ov2 = overheardEntries(s2!.entries);
+  const ov2 = overheardItems(s2!.items);
   assert.deepEqual(
-    ov2.map((e) => (e.payload as { ts: string }).ts),
+    ov2.map(messageTs),
     ["100.001", "100.002", "100.003", "100.004"],
     "append-only: each message recorded exactly once",
   );
@@ -2230,16 +2208,15 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
 
 test("a message answered on one turn is not re-imported as overheard on the next (full-stack dedupe)", async () => {
   const { app } = freshApp();
-  const overheardEntries = (entries: { type: string; payload: unknown }[]) =>
-    entries.filter((e) => e.type === "user" && (e.payload as { overheard?: boolean }).overheard === true);
+  const overheardItems = (items: Item[]) => items.filter((e) => isUserItem(e) && e.body.overheard === true);
 
   const r1 = await app.turn(channel("run it now on the first 20 emails", { liveActor: true, triggerTs: "200.001" }));
   assert.equal(r1.status, "ok");
   const s1 = await app.getSession(r1.sessionId!);
-  const trigger = s1!.entries.find((e) => e.type === "user" && (e.payload as { ts?: string }).ts === "200.001");
+  const trigger = s1!.items.find((e) => isUserItem(e) && messageTs(e) === "200.001");
   assert.ok(trigger, "the trigger entry carries its surface ts");
   assert.match(
-    String((trigger!.payload as { text?: string }).text ?? ""),
+    trigger!.text ?? "",
     /run it now on the first 20 emails/,
     "the addressed message rides the recorded entry",
   );
@@ -2254,28 +2231,25 @@ test("a message answered on one turn is not re-imported as overheard on the next
   assert.equal(r2.status, "ok");
   const s2 = await app.getSession(r2.sessionId!);
   assert.deepEqual(
-    overheardEntries(s2!.entries).map((e) => (e.payload as { ts: string }).ts),
+    overheardItems(s2!.items).map(messageTs),
     [],
     "the just-answered message is not doubled as overheard",
   );
-  const withText = s2!.entries.filter(
-    (e) =>
-      e.type === "user" &&
-      String((e.payload as { text?: string }).text ?? "").includes("run it now on the first 20 emails"),
+  const withText = s2!.items.filter(
+    (e) => isUserItem(e) && (e.text ?? "").includes("run it now on the first 20 emails"),
   );
   assert.equal(withText.length, 1, "recorded exactly once");
 });
 
 test("an unprompted thread-follow (no triggerTs) is stamped via entryTs and not re-imported as overheard", async () => {
   const { app } = freshApp();
-  const overheardEntries = (entries: { type: string; payload: unknown }[]) =>
-    entries.filter((e) => e.type === "user" && (e.payload as { overheard?: boolean }).overheard === true);
+  const overheardItems = (items: Item[]) => items.filter((e) => isUserItem(e) && e.body.overheard === true);
 
   const followText = "should I actually skip the last one?";
   const r1 = await app.turn(channel(followText, { unprompted: true, entryTs: "300.001" }));
   assert.equal(r1.status, "ok");
   const s1 = await app.getSession(r1.sessionId!);
-  const trigger = s1!.entries.find((e) => e.type === "user" && (e.payload as { ts?: string }).ts === "300.001");
+  const trigger = s1!.items.find((e) => isUserItem(e) && messageTs(e) === "300.001");
   assert.ok(trigger, "the unprompted-follow entry carries its surface ts via entryTs");
 
   const r2 = await app.turn(
@@ -2287,14 +2261,8 @@ test("an unprompted thread-follow (no triggerTs) is stamped via entryTs and not 
   );
   assert.equal(r2.status, "ok");
   const s2 = await app.getSession(r2.sessionId!);
-  assert.deepEqual(
-    overheardEntries(s2!.entries).map((e) => (e.payload as { ts: string }).ts),
-    [],
-    "the unprompted follow is not doubled as overheard",
-  );
-  const withText = s2!.entries.filter(
-    (e) => e.type === "user" && String((e.payload as { text?: string }).text ?? "").includes(followText),
-  );
+  assert.deepEqual(overheardItems(s2!.items).map(messageTs), [], "the unprompted follow is not doubled as overheard");
+  const withText = s2!.items.filter((e) => isUserItem(e) && (e.text ?? "").includes(followText));
   assert.equal(withText.length, 1, "recorded exactly once");
 });
 
@@ -2339,8 +2307,7 @@ test("the situational conversationHeader rides in the <environment> block, not a
   assert.match(res.reply ?? "", /<environment>/);
   assert.match(res.reply ?? "", /You are replying in a thread @U2 started\./);
   const found = await app.getSession(res.sessionId!);
-  const userEntry = found!.entries.find((e) => e.type === "user");
-  const userText = (userEntry!.payload as { text: string }).text;
+  const userText = found!.items.find(isUserItem)!.text ?? "";
   assert.doesNotMatch(userText, /original idea that started this thread/);
   assert.equal(userText, "@agent is this possible?");
   assert.doesNotMatch(userText, /<environment>/);
@@ -2388,11 +2355,9 @@ test("an approval pause persists timing on its boundary entry", async () => {
   assert.equal(first.status, "ok");
   assert.ok(first.pendingApprovals?.length);
   const paused = await app.getSession(first.sessionId!);
-  const boundary = paused!.entries.findLast(
-    (entry) => (entry.payload as { blocked?: string })?.blocked === "needs_approval",
-  );
+  const boundary = paused!.items.findLast((item) => item.body.blocked === "needs_approval");
   assert.ok(boundary);
-  const timing = boundary.payload as { workStartedAt: number; workFinishedAt: number };
+  const timing = boundary.body as { workStartedAt: number; workFinishedAt: number };
   assert.ok(timing.workStartedAt >= before);
   assert.ok(timing.workFinishedAt >= timing.workStartedAt);
   assert.ok(timing.workFinishedAt <= boundary.createdAt);
@@ -2414,16 +2379,12 @@ test("dangerous command pauses for HiLO approval, then proceeds when approved", 
   assert.equal(approved.status, "ok");
 
   const found = await app.getSession(approved.sessionId!);
-  const userEntries = found!.entries.filter((e) => e.type === "user");
+  const userEntries = found!.items.filter(isUserItem);
   assert.equal(userEntries.length, 2, "the approval continuation re-records the turn input");
   const [original, replay] = userEntries as [(typeof userEntries)[0], (typeof userEntries)[0]];
-  assert.notEqual(
-    (original.payload as { hidden?: boolean }).hidden,
-    true,
-    "the human's original message stays visible",
-  );
+  assert.notEqual(isHidden(original), true, "the human's original message stays visible");
   assert.equal(
-    (replay.payload as { hidden?: boolean }).hidden,
+    isHidden(replay),
     true,
     "the continuation's replay is hidden so the chat never shows the human saying it twice",
   );
@@ -2442,7 +2403,7 @@ test("a pending command approval blocks unrelated follow-up input in the same th
 
   const found = await app.getSession(first.sessionId!);
   assert.equal(
-    found!.entries.some((e) => e.type === "user" && JSON.stringify(e.payload).includes("what were we doing")),
+    found!.items.some((e) => isUserItem(e) && (e.text ?? "").includes("what were we doing")),
     false,
     "the blocked follow-up is not appended as a forked user turn",
   );
@@ -2477,7 +2438,7 @@ test("a second click on an already-consumed approval refuses instead of re-runni
   assert.match(again.reason ?? "", /approval request expired/);
 
   const found = await app.getSession(approved.sessionId!);
-  const userEntries = found!.entries.filter((e) => e.type === "user");
+  const userEntries = found!.items.filter(isUserItem);
   assert.equal(userEntries.length, 2, "the duplicate click never replays the gated command");
 
   const refusal = (await auditLog.events()).find(
@@ -3556,9 +3517,15 @@ test("accepted approval decisions are durably recorded in the conversation", asy
       { elicitId: requestId, approved, turnId: replay.id, body: { command, ...(approved ? { scope: "once" } : {}) } },
     );
     const live = await app.getRun(replay.id);
-    const liveDecisions = live?.activity?.filter((entry) => entry.type === "approval_resolved");
+    const liveDecisions = live?.activity?.flatMap((entry) =>
+      "item" in entry && entry.item.kind === "ElicitationResponse" ? [entry.item] : [],
+    );
     assert.equal(liveDecisions?.length, 1);
-    assert.deepEqual(liveDecisions![0]!.payload, entryFromItem(decisions[0]!, "personal:U1").payload);
+    const shown = liveDecisions![0]!;
+    assert.deepEqual(
+      { elicitId: shown.elicitId, approved: shown.approved, turnId: shown.turnId, body: shown.body },
+      { elicitId: requestId, approved, turnId: replay.id, body: { command, ...(approved ? { scope: "once" } : {}) } },
+    );
   }
 });
 
@@ -3692,15 +3659,17 @@ test("thinking always reaches the run activity feed, with the model-bound signat
 
   const on = await app.turn(dm("!think open plan"));
   assert.equal(on.status, "ok");
-  const entries = (await app.getSession(on.sessionId!))!.entries.filter((e) => e.type === "thinking");
-  assert.equal(entries.length, 1, "thinking is recorded durably");
+  const durable = (await app.getSession(on.sessionId!))!.items.filter((e) => e.kind === "Reasoning");
+  assert.equal(durable.length, 1, "thinking is recorded durably");
   const onView = await runViewFor("!think open plan");
-  const published = (onView?.activity ?? []).filter((a) => a.type === "thinking");
+  const published = (onView?.activity ?? []).flatMap((a) =>
+    "item" in a && a.item.kind === "Reasoning" ? [a.item] : [],
+  );
   assert.equal(published.length, 1, "thinking is in the live feed");
-  const step = (entries[0]!.payload as { step: { id: string; index: number } }).step;
+  const message = (durable[0]!.body.wire as { message: { id: string } }).message;
   assert.deepEqual(
-    published[0]!.payload,
-    { thinking: "open plan", step },
+    { text: published[0]!.text, step: published[0]!.step, body: published[0]!.body },
+    { text: "open plan", step: durable[0]!.step, body: { wire: { message: { id: message.id } } } },
     "signature stripped; the step identifies the live block it replaces",
   );
   assert.equal(onView?.reasoning, undefined, "the streamed block is settled once its entry is published");
@@ -3728,9 +3697,9 @@ test("environments: an unattached scope provisions through its own scope (today'
   const { app, sandbox } = built;
   const realProvision = sandbox.provision.bind(sandbox);
   let rwScope: string | undefined;
-  sandbox.provision = (layers, opts) => {
-    rwScope = layers.find((l) => l.mode === "rw")?.scopeId;
-    return realProvision(layers, opts);
+  sandbox.provision = (owner, opts) => {
+    rwScope = owner;
+    return realProvision(owner, opts);
   };
 
   const before = await app.turn(dm("!run echo go"));
@@ -3787,13 +3756,13 @@ test("a failed eager provision clears the slot — the tool call retries instead
   const realProvision = built.sandbox.provision.bind(built.sandbox);
   let failNext = true;
   let attempts = 0;
-  built.sandbox.provision = async (layers, opts) => {
+  built.sandbox.provision = async (owner, opts) => {
     attempts++;
     if (failNext) {
       failNext = false;
       throw new Error("transient provision fault");
     }
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
   const res = await built.app.turn(dm("!run echo hi"));
   assert.equal(res.status, "ok", res.reason);
@@ -3822,8 +3791,7 @@ test("a preamble failure after the machine boots still reclaims it", async () =>
 
 test("Door 2: an envelopeWrapped request on its own skips the overheard seed (replay preserves topic-scope)", async () => {
   const { app } = freshApp();
-  const overheardEntries = (entries: { type: string; payload: unknown }[]) =>
-    entries.filter((e) => e.type === "user" && (e.payload as { overheard?: boolean }).overheard === true);
+  const overheardItems = (items: Item[]) => items.filter((e) => isUserItem(e) && e.body.overheard === true);
 
   const wrapped = await app.turn(
     dm("did that work?", {
@@ -3834,11 +3802,7 @@ test("Door 2: an envelopeWrapped request on its own skips the overheard seed (re
   );
   assert.equal(wrapped.status, "ok");
   const sw = await app.getSession(wrapped.sessionId!);
-  assert.deepEqual(
-    overheardEntries(sw!.entries).map((e) => (e.payload as { ts: string }).ts),
-    [],
-    "envelopeWrapped ⇒ no overheard seed",
-  );
+  assert.deepEqual(overheardItems(sw!.items).map(messageTs), [], "envelopeWrapped ⇒ no overheard seed");
 
   const plain = await app.turn(
     dm("did that work?", {
@@ -3848,17 +3812,11 @@ test("Door 2: an envelopeWrapped request on its own skips the overheard seed (re
   );
   assert.equal(plain.status, "ok");
   const sp = await app.getSession(plain.sessionId!);
-  assert.deepEqual(
-    overheardEntries(sp!.entries).map((e) => (e.payload as { ts: string }).ts),
-    ["901.000"],
-    "no flag ⇒ overheard seeded",
-  );
+  assert.deepEqual(overheardItems(sp!.items).map(messageTs), ["901.000"], "no flag ⇒ overheard seeded");
 });
 
-const turnFailure = (e: { type: string; payload: unknown }): { message: string } | null =>
-  e.type === "system" && (e.payload as { kind?: string })?.kind === "turn_failure"
-    ? (e.payload as { message: string })
-    : null;
+const turnFailure = (e: Item): string | null =>
+  e.kind === "Error" && e.errorCode === "turn_failure" ? (e.text ?? "") : null;
 
 test("a terminal turn failure is recorded durably and never replays to the model", async () => {
   const { app, errors } = freshApp();
@@ -3872,9 +3830,9 @@ test("a terminal turn failure is recorded durably and never replays to the model
   assert.match(recorded!.message, /reduce refusals/, "the provider's own detail is kept for triage");
 
   const found = await app.getSession(t1.sessionId!);
-  const failure = found!.entries.find((e) => turnFailure(e));
+  const failure = found!.items.find((e) => turnFailure(e));
   assert.ok(failure, "the failure is recorded in the durable transcript (it must survive a reload)");
-  assert.match(turnFailure(failure!)!.message, /reduce refusals/);
+  assert.match(turnFailure(failure!)!, /reduce refusals/);
 
   const after = await app.turn(dm("!histcount"));
   assert.equal(after.status, "ok");
@@ -3896,12 +3854,12 @@ test("a failure before the agent records the user message back-fills it — no o
   );
 
   const found = await app.getSession(t1.sessionId!);
-  const failureIdx = found!.entries.findIndex((e) => turnFailure(e));
+  const failureIdx = found!.items.findIndex((e) => turnFailure(e));
   assert.ok(failureIdx > 0, "the failure is recorded durably");
-  const prior = found!.entries[failureIdx - 1]!;
-  assert.equal(prior.type, "user", "the message that failed sits right above its error — not an orphan bubble");
-  assert.equal((prior.payload as { text?: string }).text, "use the fancy model");
-  assert.equal((prior.payload as { speakerId?: string }).speakerId, "U1");
+  const prior = found!.items[failureIdx - 1]!;
+  assert.equal(isUserItem(prior), true, "the message that failed sits right above its error — not an orphan bubble");
+  assert.equal(prior.text, "use the fancy model");
+  assert.equal(prior.body.speakerId, "U1");
 
   const after = await app.turn(dm("!histcount"));
   assert.equal(after.status, "ok");
@@ -3921,9 +3879,9 @@ test("repeated terminal failures keep failing loudly — history is never rewrit
   await assert.rejects(app.turn(dm("!refuse")), /reduce refusals/);
 
   const found = await app.getSession(t1.sessionId!);
-  assert.equal(found!.entries.filter((e) => turnFailure(e)).length, 2, "each failure leaves its own durable trace");
+  assert.equal(found!.items.filter((e) => turnFailure(e)).length, 2, "each failure leaves its own durable trace");
   assert.ok(
-    !found!.entries.some((e) => contextSummaryPayload(e)),
+    !found!.items.some((e) => e.kind === "ContextCompaction"),
     "no summary boundary appears: recovering a wedged session (a fold) is an explicit decision, not a streak heuristic — a transient outage retried twice must not cost the user their history",
   );
 
@@ -3948,9 +3906,9 @@ test("an exhausted model budget refuses the turn with a plain explanation instea
   assert.equal(await runs.activeForThread("dm:U1:t1"), null, "nothing is requeued to hit the same limit again");
 
   const found = await app.getSession(t1.sessionId!);
-  const failures = found!.entries.filter((e) => turnFailure(e));
+  const failures = found!.items.filter((e) => turnFailure(e));
   assert.equal(failures.length, 1, "the explanation survives a reload");
-  assert.equal(turnFailure(failures[0]!)!.message, MODEL_BUDGET_TEXT);
+  assert.equal(turnFailure(failures[0]!)!, MODEL_BUDGET_TEXT);
   const logged = (await errors.list()).find((e) => e.category === "turn" && e.code === "model_budget");
   assert.match(logged!.message, /ExceededBudget: Team=team-a over 1d budget/, "operators keep the gateway's detail");
 });
@@ -3965,7 +3923,7 @@ test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure
   await assert.rejects(app.turn(req), /boom/);
   let found = await app.getSession(t1.sessionId!);
   assert.equal(
-    found!.entries.filter((e) => turnFailure(e)).length,
+    found!.items.filter((e) => turnFailure(e)).length,
     0,
     "attempts with retry budget left write no failure record",
   );
@@ -3976,22 +3934,17 @@ test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure
   assert.equal(await runs.activeForThread("dm:U1:t1"), null, "the run parked: no attempt is left to record it");
   assert.equal((await runs.get(midway!.id))?.status, "failed");
   found = await app.getSession(t1.sessionId!);
-  const failures = found!.entries.filter((e) => turnFailure(e));
+  const failures = found!.items.filter((e) => turnFailure(e));
   assert.equal(failures.length, 1, "written exactly once across the whole retry-to-park cycle, never per attempt");
   assert.doesNotMatch(
-    turnFailure(failures[0]!)!.message,
+    turnFailure(failures[0]!)!,
     /boom: simulated turn fault/,
     "an uncurated throw is internal — a database host, a stack-shaped TypeError, a cloud SDK error — so its text must not be published into the transcript",
   );
-  assert.match(turnFailure(failures[0]!)!.message, /couldn't be completed/);
+  assert.match(turnFailure(failures[0]!)!, /couldn't be completed/);
   const logged = (await errors.list()).find((e) => e.category === "turn" && e.code === "error");
   assert.match(logged!.message, /boom: simulated turn fault/, "operators still get the raw detail on the error rail");
-  const visibleBoom = found!.entries.filter(
-    (e) =>
-      e.type === "user" &&
-      String((e.payload as { text?: string }).text ?? "") === "!boom-always" &&
-      (e.payload as { hidden?: boolean }).hidden !== true,
-  );
+  const visibleBoom = found!.items.filter((e) => isUserItem(e) && e.text === "!boom-always" && !isHidden(e));
   assert.equal(visibleBoom.length, 1, "the failed message renders once above its error, never per attempt");
 });
 
@@ -4122,9 +4075,9 @@ test("default screening does not invoke a model for inbound data or tool results
   const built = freshApp({ securityScreen: loadConfig({}).securityScreen });
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = (layers, options) => {
+  built.sandbox.provision = (owner, options) => {
     captured = options;
-    return provision(layers, options);
+    return provision(owner, options);
   };
   const result = await built.app.turn(
     dm("!run printf screening-default-ok", {
@@ -4145,7 +4098,7 @@ for (const combined of [true, false]) {
     const built = freshApp();
     if (!combined) built.sandbox.removeDirAndList = undefined;
     await selectComputer(built, "U1", scopeId("personal", "U1"));
-    const handle = await built.sandbox.provision([{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }]);
+    const handle = await built.sandbox.provision(scopeId("personal", "U1"));
     const old = `.agent-turn/owner/${(Date.now() - 48 * 3600_000).toString(36)}-nonce/file`;
     const recent = `.agent-turn/owner/${Date.now().toString(36)}-nonce/file`;
     const malformed = ".agent-turn/owner/!invalid/file";
@@ -4199,12 +4152,21 @@ test("narration reaches the live activity feed before its tool call", async () =
   const run = (await runs.list()).find((entry) => entry.request.text === text);
   assert.ok(run);
   const view = await app.getRun(run.id);
+  const activity = view?.activity ?? [];
   assert.deepEqual(
-    view?.activity?.map((entry) => entry.type),
-    ["text", "tool_call", "tool_result", "text_start"],
+    activity.map((entry) => ("item" in entry ? entry.item.kind : entry.marker)),
+    ["AgentMessage", "ToolCall", "ToolResult", "text_start"],
   );
-  assert.deepEqual(view?.activity?.[0]?.payload, { text: "I'll check the first item.", runId: run.id });
-  assert.deepEqual(view?.activity?.at(-1)?.payload, { streamOffset: "I'll check the first item.\n\n".length });
+  const narration = activity[0]!;
+  assert.ok("item" in narration);
+  assert.deepEqual(
+    { variant: narration.item.variant, text: narration.item.text, turnId: narration.item.turnId },
+    { variant: "narration", text: "I'll check the first item.", turnId: run.id },
+  );
+  const textStart = activity.at(-1)!;
+  assert.ok("marker" in textStart);
+  const { seq: _seq, createdAt: _createdAt, ...marker } = textStart;
+  assert.deepEqual(marker, { marker: "text_start", streamOffset: "I'll check the first item.\n\n".length });
 });
 
 test("public text phases reach run activity with exact stream offsets but are not stored in session history", async () => {
@@ -4221,12 +4183,18 @@ test("public text phases reach run activity with exact stream offsets but are no
     { phase: "final_answer", streamOffset: "Checking.\n\n".length },
   ];
   assert.deepEqual(
-    view?.activity?.filter((entry) => entry.type === "text_start").map((entry) => entry.payload),
+    view?.activity?.flatMap((entry) =>
+      "marker" in entry ? [{ phase: entry.phase, streamOffset: entry.streamOffset }] : [],
+    ),
     expected,
   );
   assert.deepEqual(
-    history?.entries.filter((entry) => entry.type === "text_start"),
-    [],
+    history?.items.map((item) => [item.kind, item.variant, item.text]),
+    [
+      ["UserMessage", null, "!phased-reply"],
+      ["AgentMessage", "narration", "Checking."],
+      ["AgentMessage", null, "All clear."],
+    ],
   );
   assert.equal(view?.partial, "Checking.\n\nAll clear.");
 });

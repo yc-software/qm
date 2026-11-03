@@ -7,7 +7,6 @@ import { createGoalRecord } from "../src/agent/goal.ts";
 import type { ScopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { entryFromItem } from "../src/sessions/items.ts";
 
 const scope = "personal:goal@example.com" as ScopeId;
 
@@ -32,13 +31,11 @@ test("compaction leaves the session goal on its row and writes no goal entries",
     const rebuilt = await compaction.compactContextIfNeeded({
       session,
       writer,
-      visibleHistory: forModelContext(
-        (await sessions.getContextWindow(session.id)).items.map((item) => entryFromItem(item, scope)),
-      ),
+      visibleHistory: forModelContext((await sessions.getContextWindow(session.id)).items),
       scopeId: scope,
       actorId: "test",
     });
-    assert.ok(rebuilt.some((entry) => (entry.payload as { kind?: string }).kind === "context_summary"));
+    assert.ok(rebuilt.some((item) => item.kind === "ContextCompaction"));
     await sessions.append(writer, { kind: "UserMessage", text: "more work ".repeat(1000) });
   }
   const goalEntries = (await sessions.getItems(session.id)).filter(

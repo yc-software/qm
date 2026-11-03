@@ -1,13 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
@@ -15,7 +13,7 @@ import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
-import { itemFromEntry, type Item, USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { type Item, type NewItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
@@ -79,14 +77,12 @@ function buildScenario(interruptAfterToolResult = false) {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "retry-replay-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
     runs,
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox,
     auditLog,
@@ -180,15 +176,12 @@ test("a retry does not claim a later message's answer as its own", async () => {
   assert.equal((await asks()).length, 1, "resuming does not append the ask again");
 });
 
-async function seedTurn(
-  sessions: ReturnType<typeof buildScenario>["sessions"],
-  entries: Array<{ type: "user" | "assistant" | "tool_call" | "tool_result"; payload: Record<string, unknown> }>,
-): Promise<number> {
+async function seedTurn(sessions: ReturnType<typeof buildScenario>["sessions"], items: NewItem[]): Promise<number> {
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
   const writer = { sessionId: session.id };
   let first = -1;
-  for (const e of entries) {
-    const appended = await sessions.append(writer, itemFromEntry(e));
+  for (const item of items) {
+    const appended = await sessions.append(writer, item);
     if (first < 0) first = appended.seq;
   }
   return first;
@@ -198,10 +191,10 @@ test("a steer mid-turn does not make an answered turn look unanswered", async ()
   const { orchestrator, sessions, runs, turns, input, asks } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
-    { type: "tool_call", payload: { tool: "execute", callId: "c1", command: "ls" } },
-    { type: "user", payload: { text: "also check the log", ts: "1", steered: true } },
-    { type: "assistant", payload: { text: "checked both" } },
+    { kind: "UserMessage", text: ASK },
+    { kind: "ToolCall", tool: "execute", callId: "c1", body: { command: "ls" } },
+    { kind: "SteeringMessage", text: "also check the log", body: { ts: "1" } },
+    { kind: "AgentMessage", text: "checked both" },
   ]);
   await runs.noteTurnUserSeq(run.id, marker);
 
@@ -216,8 +209,8 @@ test("a turn that recorded no reply replays as silent, not as an empty answer", 
   const { orchestrator, sessions, runs, turns, input } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
-    { type: "assistant", payload: { text: "" } },
+    { kind: "UserMessage", text: ASK },
+    { kind: "AgentMessage", text: "" },
   ]);
   await runs.noteTurnUserSeq(run.id, marker);
 
@@ -247,8 +240,8 @@ test("a resume whose last tool call has no recorded result settles it and contin
   const { orchestrator, sessions, runs, turns, continued, input } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
-    { type: "tool_call", payload: { tool: "execute", callId: "c1", command: "ls" } },
+    { kind: "UserMessage", text: ASK },
+    { kind: "ToolCall", tool: "execute", callId: "c1", body: { command: "ls" } },
   ]);
   await runs.noteTurnUserSeq(run.id, marker);
 

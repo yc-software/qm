@@ -318,7 +318,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       endpoint: null,
       versions: [{ version: 1, createdAt: Date.now(), entrypoint: "node app.js", snapshotDir: "" }],
     };
-    built.app.listDeployments = async () => [deployment];
+    built.app.getDeployment = async (id) => (id === deployment.id ? deployment : null);
     built.app.listDeploymentsForViewer = async () => [];
     built.app.canManageDeployment = async (_id, principalId) => principalId === "U2";
     assert.equal((await fetch(`${base}/v1/deployments?principalId=U2`, { headers: aliceHeaders })).status, 403);

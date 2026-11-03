@@ -5,33 +5,55 @@ import { relTime } from "../ui.ts";
 import { pageHeader } from "./shared.ts";
 import type { AdminPage } from "./sections.ts";
 import { loadScopes, shortName } from "./history.ts";
+import { isUserMessage, type Item, type ItemKind } from "../items.ts";
 
 type Row = Record<string, any>;
 
 const PAGE_SIZE = 500;
 
-function payloadText(payload: unknown): string {
-  if (payload == null) return "";
-  if (typeof payload === "string") return payload;
-  const p = payload as Row;
-  if (typeof p.text === "string") return p.text;
-  if (typeof p.thinking === "string") return p.thinking || (p.redacted ? "[redacted thinking]" : "");
-  return JSON.stringify(payload, null, 2);
+const PROSE_KINDS = new Set<ItemKind>(["UserMessage", "SteeringMessage", "AgentMessage", "ContextCompaction"]);
+const KIND_LABELS: Partial<Record<ItemKind, string>> = {
+  UserMessage: "user",
+  SteeringMessage: "user",
+  Reasoning: "thinking",
+  ToolCall: "tool_call",
+  ToolResult: "tool_result",
+  Elicitation: "approval_request",
+  ElicitationResponse: "approval_resolved",
+};
+
+function kindLabel(item: Item): string {
+  if (item.kind === "AgentMessage") {
+    if (item.variant === "narration") return "text";
+    return item.variant === "files_delivered" ? "delivery" : "assistant";
+  }
+  return KIND_LABELS[item.kind] ?? "system";
+}
+
+function itemText(item: Item): string {
+  if (PROSE_KINDS.has(item.kind) && item.text !== null) return item.text;
+  if (typeof item.body.text === "string") return item.body.text;
+  if (PROSE_KINDS.has(item.kind)) return "";
+  if (item.kind === "Reasoning") return item.text || (item.body.redacted ? "[redacted thinking]" : "");
+  const { sessionId: _s, seq: _q, createdAt: _c, kind: _k, truncated: _t, body, ...columns } = item;
+  return JSON.stringify(
+    { ...Object.fromEntries(Object.entries(columns).filter(([, value]) => value !== null)), ...body },
+    null,
+    2,
+  );
 }
 
 function units(data: Row) {
-  const entries: Row[] = data.entries || [];
-  const results = new Map<string, Row>();
-  for (const e of entries)
-    if (e.type === "tool_result" && e.payload?.callId && !results.has(e.payload.callId))
-      results.set(e.payload.callId, e);
-  const paired = new Set<Row>();
+  const items: Item[] = data.items || [];
+  const results = new Map<string, Item>();
+  for (const e of items) if (e.kind === "ToolResult" && !results.has(e.callId)) results.set(e.callId, e);
+  const paired = new Set<Item>();
   const out: Row[] = [];
-  for (const e of entries) {
+  for (const e of items) {
     if (paired.has(e)) continue;
-    const result = e.type === "tool_call" ? results.get(e.payload?.callId) : undefined;
+    const result = e.kind === "ToolCall" ? results.get(e.callId) : undefined;
     if (result) paired.add(result);
-    out.push({ entry: e, result, at: e.createdAt || 0 });
+    out.push({ item: e, result, at: e.createdAt || 0 });
   }
   for (const event of data.deliveryEvents || []) out.push({ event, at: event.createdAt || 0 });
   return out.sort((a, b) => a.at - b.at);
@@ -59,29 +81,30 @@ function unit(u: Row, session: Row) {
       <pre>${lines.filter(Boolean).join("\n")}</pre>
     </details>`;
   }
-  const e = u.entry;
-  const text = payloadText(e.payload);
-  if (e.type === "user" || e.type === "assistant") {
+  const e: Item = u.item;
+  const type = kindLabel(e);
+  const text = itemText(e);
+  if (type === "user" || type === "assistant") {
     const label =
-      e.type === "assistant"
+      type === "assistant"
         ? "Assistant"
-        : e.payload?.name || (session.origin && e === session.first ? session.origin.label : "User");
-    return html`<div class=${"entry message-entry " + e.type + "-entry"}>
+        : e.body.name || (session.origin && e === session.first ? session.origin.label : "User");
+    return html`<div class=${"entry message-entry " + type + "-entry"}>
       <div class="who">${head(label, e.createdAt, html`<span class="when">#${e.seq}</span>`)}</div>
       <div class="message-body">${markdown(text)}</div>
     </div>`;
   }
   const label =
-    e.type === "tool_call"
-      ? String(e.payload?.tool || e.payload?.name || "tool") +
-        (u.result ? (u.result.payload?.error && " · error") || "" : " · pending result")
-      : String(e.type || "entry").replaceAll("_", " ");
+    type === "tool_call"
+      ? String(e.tool || e.body.name || "tool") +
+        (u.result ? (u.result.body.error && " · error") || "" : " · pending result")
+      : type.replaceAll("_", " ");
   return html`<details
-    class=${"entry " + ({ thinking: "thinking-entry", system: "system-entry" }[e.type as string] ?? "tool-entry")}
+    class=${"entry " + ({ thinking: "thinking-entry", system: "system-entry" }[type] ?? "tool-entry")}
   >
     <summary class="who">${head(label, e.createdAt)}</summary>
     <pre>${text}</pre>
-    ${u.result ? html`<pre>${payloadText(u.result.payload)}</pre>` : nothing}
+    ${u.result ? html`<pre>${itemText(u.result)}</pre>` : nothing}
   </details>`;
 }
 
@@ -109,7 +132,7 @@ export async function mount(page: AdminPage) {
     );
   const data = result.data;
   const session = { ...data.session, origin: data.hasMore ? null : data.origin };
-  session.first = (data.entries || []).find((e: Row) => e.type === "user");
+  session.first = (data.items || []).find(isUserMessage);
   const scope = session.scopeId || page.scope;
   const list = units(data);
   const errorRows: Row[] = errors.ok ? errors.data?.errors || [] : [];

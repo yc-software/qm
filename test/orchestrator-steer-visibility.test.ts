@@ -2,10 +2,11 @@ import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import * as mockAgent from "./support/mock-agent.ts";
-import { emitEntry, recordSteerIntake } from "../src/agent/turn-support.ts";
+import { recordSteerIntake } from "../src/agent/turn-support.ts";
 import type { AgentTurnInput, AgentTurnResult } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { isHidden, isUserItem } from "../src/sessions/items.ts";
 
 let exercise: ((turn: AgentTurnInput) => Promise<AgentTurnResult | void>) | undefined;
 mock.module("./support/mock-agent.ts", {
@@ -54,25 +55,23 @@ for (const mode of ["retry", "handoff"] as const) {
         await turn.emit({ kind: "UserMessage", text: turn.input });
       }
       await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
-      await emitEntry(turn, { type: "user", payload: { text: "private steer", steered: true, hidden: true } });
     };
     try {
       const result = await built.app.turn(request);
       assert.equal(result.status, "ok");
       const session = await built.app.getSession(result.sessionId!);
-      const users = session!.entries.filter((entry) => entry.type === "user");
+      const users = session!.items.filter(isUserItem);
       const steerAt = mode === "retry" ? 1 : 2;
-      if (mode !== "retry") assert.equal((users[1]!.payload as { hidden?: boolean }).hidden, true);
-      assert.equal(users.length, steerAt + 2);
-      assert.equal((users[steerAt]!.payload as { text?: string }).text, "Change of plan");
-      assert.notEqual((users[steerAt]!.payload as { hidden?: boolean }).hidden, true);
-      assert.equal((users[steerAt + 1]!.payload as { hidden?: boolean }).hidden, true);
+      if (mode !== "retry") assert.equal(isHidden(users[1]!), true);
+      assert.equal(users.length, steerAt + 1);
+      assert.equal(users[steerAt]!.text, "Change of plan");
+      assert.notEqual(isHidden(users[steerAt]!), true);
       const activity = (await built.app.getRun(runId!))!.activity ?? [];
-      const liveSteer = activity.find(
-        (entry) => entry.type === "user" && (entry.payload as { text?: string }).text === "Change of plan",
-      );
+      const liveSteer = activity.flatMap((entry) =>
+        "item" in entry && isUserItem(entry.item) && entry.item.text === "Change of plan" ? [entry.item] : [],
+      )[0];
       assert.ok(liveSteer);
-      assert.notEqual((liveSteer.payload as { hidden?: boolean }).hidden, true);
+      assert.notEqual(isHidden(liveSteer), true);
     } finally {
       exercise = undefined;
     }

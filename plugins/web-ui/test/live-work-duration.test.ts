@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
@@ -35,8 +36,10 @@ test("approval waits keep their recorded duration", (t) => {
     status: "working",
     startedAt: 100_000,
     activity: [
-      { seq: 1, parentSeq: null, type: "tool_call", payload: { command: "help" }, createdAt: 101_000 },
-      { seq: 2, parentSeq: 1, type: "tool_result", payload: { blocked: "needs_approval" }, createdAt: 108_120 },
+      { item: item("ToolCall", { seq: 1, callId: "c1", body: { command: "help" }, createdAt: 101_000 }) },
+      {
+        item: item("ToolResult", { seq: 2, callId: "c1", body: { blocked: "needs_approval" }, createdAt: 108_120 }),
+      },
     ],
   };
   const host = document.createElement("div");

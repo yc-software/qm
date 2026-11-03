@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
+import type { ScopeId, Session, SessionType, SpawnMeta } from "../types.ts";
 import type { GoalRecord } from "../agent/goal.ts";
-import type { Item, NewItem } from "./items.ts";
+import { isUserItem, type Item, type NewItem } from "./items.ts";
 
 export const LLM_CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
@@ -17,29 +17,10 @@ export function promptEnvelopeBody(envelope: unknown): { hash: string; body: str
   return { hash: createHash("sha256").update(body).digest("hex"), body };
 }
 
-const CONTEXT_SUMMARY_KIND = "context_summary";
-
-export interface ContextSummaryPayload {
-  kind: typeof CONTEXT_SUMMARY_KIND;
-  throughSeq: number;
-  text: string;
-}
-
-export function contextSummaryPayload(entry: SessionEntry): ContextSummaryPayload | null {
-  const payload = entry.payload as Partial<ContextSummaryPayload> | null;
-  if (
-    entry.type === "system" &&
-    payload?.kind === CONTEXT_SUMMARY_KIND &&
-    typeof payload.throughSeq === "number" &&
-    typeof payload.text === "string"
-  ) {
-    return { kind: CONTEXT_SUMMARY_KIND, throughSeq: payload.throughSeq, text: payload.text };
-  }
-  return null;
-}
-
-export function createContextSummaryPayload(throughSeq: number, text: string): ContextSummaryPayload {
-  return { kind: CONTEXT_SUMMARY_KIND, throughSeq, text };
+export function contextSummary(item: Item): { throughSeq: number; text: string } | null {
+  return item.kind === "ContextCompaction" && item.throughSeq !== null
+    ? { throughSeq: item.throughSeq, text: item.text ?? "" }
+    : null;
 }
 
 interface ContextWindow {
@@ -55,13 +36,6 @@ export interface SessionWriter {
 
 export interface StoreOptions {
   now?: () => number;
-}
-
-export interface NewEntry {
-  type: EntryType;
-  payload: unknown;
-  scopeLabel: ScopeId;
-  author?: string;
 }
 
 interface ParticipantViewPatch {
@@ -184,15 +158,15 @@ export interface ParticipantWindow {
   validToSeq: number | null;
 }
 
-export function entryWithinTenure(
-  entry: Pick<SessionEntry, "seq" | "createdAt">,
+export function itemWithinTenure(
+  item: Pick<Item, "seq" | "createdAt">,
   window: Pick<ParticipantWindow, "validFrom" | "validTo" | "validFromSeq" | "validToSeq">,
 ): boolean {
-  const fromOk = window.validFromSeq !== null ? entry.seq >= window.validFromSeq : entry.createdAt >= window.validFrom;
+  const fromOk = window.validFromSeq !== null ? item.seq >= window.validFromSeq : item.createdAt >= window.validFrom;
   const toOk =
     window.validToSeq !== null
-      ? entry.seq < window.validToSeq
-      : window.validTo === null || entry.createdAt < window.validTo;
+      ? item.seq < window.validToSeq
+      : window.validTo === null || item.createdAt < window.validTo;
   return fromOk && toOk;
 }
 
@@ -275,7 +249,7 @@ export interface ParticipantScope {
 export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
   sessionId: string;
   seq: number;
-  type: EntryType;
+  type: "user" | "text" | "assistant";
   author?: string;
   text: string;
   createdAt: number;
@@ -308,12 +282,19 @@ export function userMessagePreview(text: string, maxLen = 160): string {
 
 export const ENTRY_STRING_BUDGET = 2_000;
 
-export type TranscriptEntry = SessionEntry & { truncated?: true };
+export type TranscriptItem = Item & { truncated?: true };
 
-const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
-const MODEL_ONLY_FIELDS: Partial<Record<EntryType, ReadonlySet<string>>> = {
-  user: new Set(["environment", "environmentSnapshot", "rosterSnapshot", "memoryRecall", "memoryRecallOutcomes"]),
-  thinking: new Set(["thinkingSignature"]),
+const MESSAGE_MODEL_CONTEXT: ReadonlySet<string> = new Set([
+  "environment",
+  "environmentSnapshot",
+  "rosterSnapshot",
+  "memoryRecall",
+  "memoryRecallOutcomes",
+]);
+const MODEL_ONLY_FIELDS: Partial<Record<Item["kind"], ReadonlySet<string>>> = {
+  UserMessage: MESSAGE_MODEL_CONTEXT,
+  SteeringMessage: MESSAGE_MODEL_CONTEXT,
+  Reasoning: new Set(["thinkingSignature"]),
 };
 const WALK_DEPTH = 8;
 
@@ -347,24 +328,27 @@ function shortenStrings(value: unknown, depth: number): { value: unknown; trunca
   return truncated ? { value: next, truncated } : { value, truncated };
 }
 
-function postsToTheConversation(entry: SessionEntry): boolean {
-  const p = entry.payload as { action?: unknown } | null;
-  return entry.type === "tool_call" && p?.action === "post";
+function withoutModelContext(item: Item, fields: ReadonlySet<string>): TranscriptItem {
+  if (!Object.keys(item.body).some((k) => fields.has(k))) return item;
+  return {
+    ...item,
+    body: Object.fromEntries(Object.entries(item.body).filter(([k]) => !fields.has(k))),
+    truncated: true,
+  };
 }
 
-function withoutModelContext(entry: SessionEntry, fields: ReadonlySet<string>): TranscriptEntry {
-  const payload = entry.payload;
-  if (!payload || typeof payload !== "object" || !Object.keys(payload).some((k) => fields.has(k))) return entry;
-  const visible = Object.fromEntries(Object.entries(payload).filter(([k]) => !fields.has(k)));
-  return { ...entry, payload: visible, truncated: true };
-}
-
-function projectEntry(entry: SessionEntry): TranscriptEntry {
-  const modelOnly = MODEL_ONLY_FIELDS[entry.type];
-  if (modelOnly) return withoutModelContext(entry, modelOnly);
-  if (!PROJECTED_TYPES.has(entry.type) || postsToTheConversation(entry)) return entry;
-  const walked = shortenStrings(entry.payload, 0);
-  return walked.truncated ? { ...entry, payload: walked.value, truncated: true } : entry;
+function projectItem(item: Item): TranscriptItem {
+  const modelOnly = MODEL_ONLY_FIELDS[item.kind];
+  if (modelOnly) return withoutModelContext(item, modelOnly);
+  if (
+    (item.kind !== "ToolCall" && item.kind !== "ToolResult") ||
+    (item.kind === "ToolCall" && item.body.action === "post")
+  )
+    return item;
+  const body = shortenStrings(item.body, 0);
+  const text = shortenStrings(item.text, 0);
+  if (!body.truncated && !text.truncated) return item;
+  return { ...item, body: body.value as Record<string, unknown>, text: text.value as string | null, truncated: true };
 }
 
 function payloadBytes(value: unknown, depth: number): number {
@@ -387,32 +371,28 @@ function payloadBytes(value: unknown, depth: number): number {
 }
 
 export function windowedTranscript(
-  entries: SessionEntry[],
+  items: Item[],
   window?: { tailTurns?: number; sinceSeq?: number; beforeSeq?: number },
-): { entries: TranscriptEntry[]; earlier: number } {
+): { items: TranscriptItem[]; earlier: number } {
   if (window?.beforeSeq !== undefined) {
-    const at = entries.findIndex((e) => e.seq >= window.beforeSeq!);
-    entries = entries.slice(0, at < 0 ? entries.length : at);
+    const at = items.findIndex((e) => e.seq >= window.beforeSeq!);
+    items = items.slice(0, at < 0 ? items.length : at);
   }
   let cut = 0;
   if (window?.sinceSeq !== undefined) {
-    const at = entries.findIndex((e) => e.seq >= window.sinceSeq!);
-    cut = at < 0 ? entries.length : at;
+    const at = items.findIndex((e) => e.seq >= window.sinceSeq!);
+    cut = at < 0 ? items.length : at;
   } else if (window?.tailTurns !== undefined && window.tailTurns > 0) {
     let turns = 0;
-    for (let i = entries.length - 1; i >= 0; i--) {
-      if (entries[i]!.type !== "user") continue;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (!isUserItem(items[i]!)) continue;
       if (++turns === window.tailTurns) {
         cut = i;
         break;
       }
     }
   }
-  return { entries: (cut > 0 ? entries.slice(cut) : entries).map(projectEntry), earlier: cut };
-}
-
-export function isOverheardEntry(e: Pick<SessionEntry, "type" | "payload">): boolean {
-  return e.type === "user" && (e.payload as { overheard?: unknown } | null)?.overheard === true;
+  return { items: (cut > 0 ? items.slice(cut) : items).map(projectItem), earlier: cut };
 }
 
 export class DuplicateCallError extends Error {

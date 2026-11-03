@@ -17,7 +17,6 @@ import type {
   Principal,
   ScopeId,
   Session,
-  SessionEntry,
   TurnRequest,
   TurnResult,
   TurnRuntime,
@@ -26,7 +25,8 @@ import type { OutgoingAttachment } from "../types.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
-import type { SessionStore, TranscriptEntry } from "../sessions/session-store.ts";
+import type { SessionStore, TranscriptItem } from "../sessions/session-store.ts";
+import type { Item } from "../sessions/items.ts";
 import { type Sandbox } from "../sandbox/sandbox.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
@@ -306,7 +306,7 @@ export interface App {
     startedAt: number | null;
     finishedAt: number | null;
   } | null>;
-  getRunToolEntries(runId: string, viewer?: string, afterSeq?: number): Promise<SessionEntry[]>;
+  getRunToolItems(runId: string, viewer?: string, afterSeq?: number): Promise<Item[]>;
   stopConversation(threadRef: string, viewer?: string): Promise<boolean>;
   activeRunForThread(
     threadRef: string,
@@ -328,15 +328,15 @@ export interface App {
   getSession(
     sessionId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number; pins?: SessionPinView[] } | null>;
+  ): Promise<{ session: Session; items: TranscriptItem[]; earlierItems?: number; pins?: SessionPinView[] } | null>;
   getSessionForViewer(
     sessionId: string,
     principalId: string,
     window?: TranscriptWindow,
   ): Promise<{
     session: Session;
-    entries: TranscriptEntry[];
-    earlierEntries?: number;
+    items: TranscriptItem[];
+    earlierItems?: number;
     pins?: SessionPinView[];
     goal?: GoalView;
     runtime?: TurnRuntime;
@@ -346,11 +346,7 @@ export interface App {
     principalId: string,
     visibility: { minSeq: number; maxSeq: number; minCreatedAt: number; maxCreatedAt: number },
   ): Promise<boolean>;
-  getSessionEntryForViewer(
-    sessionId: string,
-    principalId: string,
-    seq: number,
-  ): Promise<{ entry: SessionEntry } | null>;
+  getSessionItemForViewer(sessionId: string, principalId: string, seq: number): Promise<{ item: Item } | null>;
   pinConversationItem(
     threadRef: string,
     addedBy: string,
@@ -412,7 +408,7 @@ export interface App {
     sessionId: string,
     principalId: string,
     opts?: { upToSeq?: number; sideChat?: { entrySeq: number; quote: string; occurrence: number } },
-  ): Promise<{ session: Session; entries: SessionEntry[] } | null>;
+  ): Promise<{ session: Session; items: Item[] } | null>;
   listFilesForViewer(principalId: string, opts?: ListOwnedOptions, inScope?: ScopeId): Promise<FileListPage>;
   uploadFileForViewer(
     principalId: string,

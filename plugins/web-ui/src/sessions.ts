@@ -42,7 +42,7 @@ import {
   currentEarlierCount,
   detachSession,
   inheritedTranscript,
-  entriesToMessages,
+  itemsToMessages,
   regenerateTitle,
   sharedContextLabel,
   slackThreadUrl,
@@ -2042,7 +2042,7 @@ async function loadSessionNeighbors(s: CoreSession): Promise<void> {
 
 export async function openSession(
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
   historyMode: "push" | "replace" = "push",
 ): Promise<void> {
@@ -2050,7 +2050,7 @@ export async function openSession(
   if (keptUnreadId !== s.id) keptUnreadId = null;
   const navigation = historyMode === "push" ? beginNavigation() : null;
   try {
-    await showSession(s, entriesPrefetch, approvalsPrefetch);
+    await showSession(s, transcriptPrefetch, approvalsPrefetch);
   } finally {
     if (navigation && endNavigation(navigation)) syncUrlFromState(undefined, "push");
   }
@@ -2058,7 +2058,7 @@ export async function openSession(
 
 async function showSession(
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
 ): Promise<void> {
   if (appState.currentView !== "chats") {
@@ -2073,13 +2073,13 @@ async function showSession(
   const pane = splitInterceptsOpen(s);
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();
-  await openSessionInto(pane ?? mainConversation(), s, entriesPrefetch, approvalsPrefetch, true);
+  await openSessionInto(pane ?? mainConversation(), s, transcriptPrefetch, approvalsPrefetch, true);
 }
 
 export async function openSessionInto(
   conv: Conversation,
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
   tracked = conv === mainConversation(),
 ): Promise<boolean> {
@@ -2092,13 +2092,13 @@ export async function openSessionInto(
     }
     return true;
   }
-  if (s.id === conv.state.sessionId && !entriesPrefetch) return true;
+  if (s.id === conv.state.sessionId && !transcriptPrefetch) return true;
   const started = Date.now();
 
   refreshSessionsOnOpen();
   void loadSessionNeighbors(s);
 
-  const cached = entriesPrefetch ? undefined : cachedTranscript(s.id);
+  const cached = transcriptPrefetch ? undefined : cachedTranscript(s.id);
   if (cached) {
     if (!isLiveConversation(conv)) return false;
     if (tracked) sessionsState.openingKey = null;
@@ -2112,7 +2112,7 @@ export async function openSessionInto(
       prefetched: false,
       cached: true,
       tracked,
-      entries: cached.entries?.length ?? 0,
+      items: cached.items?.length ?? 0,
     });
     void reconcileCachedTranscript(conv, s, cached, approvals, conv.transcriptAnchor()).catch((error: unknown) =>
       reportHandledError("web:transcript_reconcile", error),
@@ -2128,39 +2128,39 @@ export async function openSessionInto(
   if (!isLiveConversation(conv)) return false;
   const isCurrent = conv.mountLoadingPane();
 
-  const fetchEntries = (): Promise<TranscriptPage | null> =>
+  const fetchPage = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(swallowAs("web-ui: load session transcript", null));
   const continuable = s.canContinue === true;
   const approvals = continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : null;
   let prefetched = false;
-  const entriesRes = await (entriesPrefetch
-    ? entriesPrefetch.then((r) => {
+  const transcriptRes = await (transcriptPrefetch
+    ? transcriptPrefetch.then((r) => {
         prefetched = r !== null;
-        return r ?? fetchEntries();
+        return r ?? fetchPage();
       })
-    : fetchEntries());
+    : fetchPage());
   if (!isLiveConversation(conv) || !isCurrent()) return false;
   const fetched = Date.now();
   const reportPainted = () =>
     reportSwitchPainted(started, {
       fetchedMs: fetched,
-      loaded: entriesRes !== null,
+      loaded: transcriptRes !== null,
       prefetched,
       cached: false,
       tracked,
-      entries: entriesRes?.entries?.length ?? 0,
+      items: transcriptRes?.items.length ?? 0,
     });
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return false;
     sessionsState.openingKey = null;
   }
-  if (!entriesPrefetch && conv.state.sessionId === s.id) {
+  if (!transcriptPrefetch && conv.state.sessionId === s.id) {
     renderList();
     return true;
   }
 
-  if (!entriesRes) {
+  if (!transcriptRes) {
     dropTranscript(s.id);
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
@@ -2168,8 +2168,8 @@ export async function openSessionInto(
     return false;
   }
 
-  storeTranscript(s.id, entriesRes);
-  mountTranscript(conv, s, entriesRes, approvals);
+  storeTranscript(s.id, transcriptRes);
+  mountTranscript(conv, s, transcriptRes, approvals);
   renderList();
   reportPainted();
   return true;
@@ -2183,7 +2183,7 @@ function reportSwitchPainted(
     prefetched: boolean;
     cached: boolean;
     tracked: boolean;
-    entries: number;
+    items: number;
   },
 ): void {
   if (document.visibilityState !== "visible") return;
@@ -2197,17 +2197,17 @@ function mountTranscript(
   approvals: Promise<{ approvals: PendingApproval[] } | null> | null,
 ): void {
   if (s.canContinue === true) {
-    const split = inheritedTranscript(s, page.entries ?? []);
+    const split = inheritedTranscript(s, page.items);
     conv.mountContinuable(
       s.threadRef,
       s.id,
       s.scopeId,
-      entriesToMessages(split.current, transcriptModel()),
+      itemsToMessages(split.current, transcriptModel()),
       s.channelName ?? null,
       s,
-      entriesToMessages(split.inherited, transcriptModel()),
+      itemsToMessages(split.inherited, transcriptModel()),
     );
-    const rawEarlier = page.earlierEntries ?? 0;
+    const rawEarlier = page.earlierItems ?? 0;
     conv.setTranscriptWindow(pageAnchor(page), currentEarlierCount(s, rawEarlier), rawEarlier > 0);
     if (approvals) conv.attachApprovalsWhenLoaded(s.id, approvals);
     conv.setPins(page.pins ?? []);

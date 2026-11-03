@@ -16,7 +16,7 @@ import { readContextFile } from "../resolution/context-files.ts";
 import { type TurnContext } from "../resolution/turn-context.ts";
 import { canReadNotebook, readNotebook, searchNotebooks } from "../memory/cross-scope.ts";
 import type { SandboxAccessPlan, SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
-import { join, posix } from "node:path";
+import { posix } from "node:path";
 import { workspacePathOf } from "../sandbox/exec-file-ops.ts";
 import { DROPPED_PROXY_ENV } from "../sandbox/sandbox-env.ts";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
@@ -33,11 +33,9 @@ import type {
   Permission,
   Principal,
   ScopeId,
-  WorkspaceLayer,
 } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { type PublishAudienceKind } from "../resolution/publish-audience.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { BotPolicy } from "../surface-cache/channel-policy-store.ts";
 import type { SessionSyscalls } from "../sessions/session-syscalls.ts";
 import { evaluateCommandWithLayer } from "../policy/command-policy.ts";
@@ -57,7 +55,7 @@ import { publicUrlOf } from "../deploy/deploy-store.ts";
 import { carriesGitMetadata } from "../deploy/deploy-fs.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { TURN_FILES_DIR, type OutboundFile } from "../core/attachments.ts";
+import type { OutboundFile } from "../core/attachments.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
 import { quotedData } from "../util/text.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
@@ -483,7 +481,8 @@ export interface ToolContextDeps {
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
   useSkill?: (name: string, path: string, sandboxId?: string, source?: string) => Promise<SkillResult>;
-  layers: WorkspaceLayer[];
+  writableScopeId: ScopeId;
+  readOnlyScopeIds: ScopeId[];
   commandPolicy: () => CommandPolicy;
   layerCommandRules?: () => readonly CommandRule[];
   authorizeCommand: (command: string, approvalKey?: string, exactApprovalKey?: boolean) => boolean;
@@ -491,7 +490,6 @@ export interface ToolContextDeps {
   context?: TurnContext;
   sandboxResources?: SandboxResources;
   invalidateProvision?: () => void;
-  workspace: WorkspaceStore;
   deploy: DeployService;
   acl: AclStore;
   files?: FileArtifactStore;
@@ -544,23 +542,22 @@ const scratchOnlyHandles = (credentials: readonly CommandCredential[]): string =
     .join(", ");
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
-  const writableScopeId = deps.layers.find((l) => l.mode === "rw")?.scopeId ?? null;
+  const { writableScopeId } = deps;
   const memory =
     deps.context?.memory ??
     (deps.memory
       ? disclosedMemory(deps.memory, {
           actor: { id: deps.createdBy, type: "internal" },
-          targetScope: writableScopeId ?? `personal:${deps.createdBy}`,
+          targetScope: writableScopeId,
           nativeScopes: [
-            ...deps.layers.map((layer) => layer.scopeId),
+            writableScopeId,
+            ...deps.readOnlyScopeIds,
             ...(deps.memoryAccess?.read ?? []).filter((scope) => scope.startsWith("org:")),
           ],
           audience: deps.publishContext?.publishMembers ?? [{ id: deps.createdBy, type: "internal" }],
           open: false,
         })
       : undefined);
-  const fallbackMounts = deps.layers.filter((l) => l.mode === "ro" && l.mountPath);
-  const persistExclude = [...fallbackMounts.map((mount) => mount.mountPath!), TURN_FILES_DIR];
 
   const accessSandbox = async (id: string): Promise<SandboxAccessPlan> => {
     if (!deps.sandboxResources || !deps.accessSandboxResource) throw new Error("sandbox inventory unavailable");
@@ -574,12 +571,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     handle: SandboxHandle;
     resource?: SandboxResource;
     crossScope: boolean;
-    durableRef: (path: string) => string;
   }> => {
     if (id === undefined) {
       const handle = await deps.provision();
       const resource = handle.resourceId ? await deps.sandboxResources?.get(handle.resourceId) : undefined;
-      return { handle, ...(resource ? { resource } : {}), crossScope: false, durableRef: (path) => path };
+      return { handle, ...(resource ? { resource } : {}), crossScope: false };
     }
     let access = await accessSandbox(id);
     if (!deps.provisionResource) throw new Error("sandbox inventory unavailable");
@@ -587,10 +583,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       access = current;
     });
     const resource = access.resource;
-    const fallback = writableScopeId ? await deps.sandboxResources!.resolve(writableScopeId) : null;
-    const durableRef =
-      fallback?.id === resource.id ? (path: string) => path : (path: string) => `sandbox-files/${resource.id}/${path}`;
-    return { handle, resource, crossScope: access.crossScope, durableRef };
+    return { handle, resource, crossScope: access.crossScope };
   };
 
   const authorizeExecution = (command: string, access?: SandboxAccessPlan, policy = deps.commandPolicy()): void => {
@@ -689,7 +682,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         principalId: deps.createdBy,
         action: "keychain.materialize",
         resource: `${credential.handle} (${use})`,
-        scopeLabel: writableScopeId!,
+        scopeLabel: writableScopeId,
       });
     }
     signal?.throwIfAborted();
@@ -730,7 +723,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             action: "list" | "create" | "default" | "retire",
             input?: { backend?: string; name?: string; sandboxId?: string | null },
           ): Promise<unknown> {
-            if (!writableScopeId) throw new Error("sandbox management requires an owning scope");
             const resources = deps.sandboxResources!;
             if (action === "list") {
               const listed = await resources.list(deps.createdBy, writableScopeId);
@@ -790,7 +782,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!deps.sandbox.computerStatus) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "reporting computer status");
       }
-      if (!writableScopeId) throw new Error("this turn has no scoped computer");
       return probe(await deps.sandbox.computerStatus(writableScopeId), deps.provision);
     },
     async restartComputer(sandboxId?: string): Promise<void> {
@@ -803,7 +794,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!deps.sandbox.restartComputer) {
         throw new CapabilityUnsupportedError(deps.sandbox.profile.backend, "restarting the computer");
       }
-      if (!writableScopeId) throw new Error("this turn has no scoped computer to restart");
       await deps.sandbox.restartComputer(writableScopeId);
     },
     async execute(
@@ -818,9 +808,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     ): Promise<ExecResult & { scratchReroute?: boolean }> {
       const scratch = execOpts?.scratch === true;
       const requestedCredentials = execOpts?.credentials ?? [];
-      if (requestedCredentials.length && !writableScopeId) {
-        throw new Error("command credentials are available only on scoped or scratch computers");
-      }
       const requested = await selectCredentials(requestedCredentials);
       const scratchOnly = scratchOnlyHandles(requested);
       if (scratch && execOpts?.sandboxId !== undefined) {
@@ -935,21 +922,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         }
       }
       signal?.throwIfAborted();
-      const { handle, resource, crossScope } = await machine(sandboxId);
-      const mounts = crossScope ? fallbackMounts.filter((mount) => mount.mountPath === "global") : fallbackMounts;
+      const { handle, resource } = await machine(sandboxId);
       const rel = path.startsWith("/") ? workspacePathOf(handle.rootDir, path) : path;
       if (rel === null) return { content: null, sourceScopeId: null, outsideWorkspace: true };
       const direct = await withAbort(() => deps.sandbox.readFile(handle, rel), signal);
       if (direct !== null) return { content: direct, sourceScopeId: resource?.ownerScopeId ?? writableScopeId };
-      for (const mount of mounts) {
-        const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, rel)), signal);
-        if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
-      }
       return { content: null, sourceScopeId: null };
     },
 
     async createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact> {
-      if (!deps.files || !writableScopeId) throw new Error("playgrounds require a writable artifact store");
+      if (!deps.files) throw new Error("playgrounds require a writable artifact store");
       return createPlaygroundArtifact(deps.files!, {
         ...input,
         ownerScopeId: writableScopeId,
@@ -996,21 +978,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           `your durable memory isn't a file — use the \`memory\` tool instead (actions "add", "edit" and "delete")`,
         );
       }
-      const { handle, resource, crossScope, durableRef } = await machine(sandboxId);
+      const { handle, crossScope } = await machine(sandboxId);
       if (crossScope) throw new Error("files write needs a computer owned by this conversation");
-      const ownerScopeId = resource?.ownerScopeId ?? writableScopeId;
       const rel = path.startsWith("/") ? workspacePathOf(handle.rootDir, path) : path;
       if (rel === null)
         throw new Error(
           `${path} is not in the computer's workspace; only workspace files can be written, so name it relative to the workspace`,
         );
       await deps.sandbox.writeFile(handle, rel, data);
-      if (ownerScopeId && !isUnderAnyDir(rel, persistExclude))
-        await deps.workspace.write(ownerScopeId, durableRef(rel), data);
     },
 
     async publish(input: PublishInput): Promise<PublishResult> {
-      if (!writableScopeId) throw new Error("publish needs a writable scope to own the app");
       if (input.share !== undefined || input.public !== undefined)
         throw new Error("publish does not accept sharing options; use apps action share to change access");
       const owner: ScopeId = scopeId("personal", deps.createdBy);
@@ -1121,7 +1099,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...deps.memoryCaptureMetadata?.(),
           mode: "explicit",
           actorId: deps.createdBy,
-          conversationScopeId: writableScopeId ?? write,
+          conversationScopeId: writableScopeId,
         },
         deps.runId,
       );
@@ -1132,7 +1110,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       if (!memory?.edit || !write) return null;
       await memory.edit(write, edits, deps.createdBy, {
         ...deps.memoryCaptureMetadata?.(),
-        conversationScopeId: writableScopeId ?? write,
+        conversationScopeId: writableScopeId,
       });
       return true;
     },
@@ -1180,8 +1158,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     ): Promise<BackgroundStartResult & { jobComputer?: boolean }> {
       if (!deps.backgroundBroker) throw new Error(BACKGROUND_UNAVAILABLE_MESSAGE);
       const requestedCredentials = opts.credentials ?? [];
-      if (requestedCredentials.length && !writableScopeId)
-        throw new Error("command credentials are available only on scoped computers");
       const requested = await selectCredentials(requestedCredentials);
       const scratchOnly = scratchOnlyHandles(requested);
       if (scratchOnly && !deps.provisionJobComputer)

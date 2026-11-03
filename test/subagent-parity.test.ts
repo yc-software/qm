@@ -1,19 +1,18 @@
+import type { NewItem } from "../src/sessions/items.ts";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { RuntimeControl } from "../src/agent/runtime-types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
-import { emitEntry, turnToolOptions } from "../src/agent/turn-support.ts";
+import { turnToolOptions } from "../src/agent/turn-support.ts";
 import { createAgentTools, type AgentToolsOptions } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -97,9 +96,9 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       const ref = {
         current: turn.tools,
         scopeLabel: turn.scopeLabel,
-        emit: async (entry: Parameters<typeof emitEntry>[1]) => {
-          if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
-          return emitEntry(turn, entry);
+        emit: async (item: NewItem) => {
+          if (item.kind === "ToolResult") results.push({ isError: item.isError });
+          return turn.emit(item);
         },
         screenToolResult: turn.screenToolResult,
         pendingApprovals: [],
@@ -135,7 +134,6 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const config = testConfigStore("org");
   await config.setInteractiveFastMode(true);
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     config,
@@ -147,7 +145,6 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     resolution: createResolutionService("org", config, acl),
     sessions,
     runs,
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
     auditLog,

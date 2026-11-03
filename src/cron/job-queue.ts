@@ -9,6 +9,10 @@ export interface CronFireJob {
   notBefore?: number;
 }
 
+export function fireJobStartsAt(job: CronFireJob): number {
+  return Math.max(job.scheduledAt, job.notBefore ?? 0);
+}
+
 interface CronQueueHandlers {
   onFire(job: CronFireJob): Promise<void>;
 }
@@ -90,7 +94,7 @@ export function createPgBossCronQueue(
       if (!started) return;
       await boss
         .send(FIRE_QUEUE, job, {
-          startAfter: new Date(Math.max(job.scheduledAt, job.notBefore ?? 0)),
+          startAfter: new Date(fireJobStartsAt(job)),
           singletonKey: `${job.tenantId === undefined ? "" : `${job.tenantId}:`}${job.cronId}:${job.scheduledAt}`,
           retryLimit: 0,
         })

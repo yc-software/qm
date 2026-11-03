@@ -1,8 +1,6 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import { NotFoundError } from "porter-sandbox";
-import type { WorkspaceLayer } from "../types.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
@@ -21,7 +19,6 @@ import {
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { materializeRoLayers } from "./ro-layers.ts";
 import { createExecExport, createBackendBlobStaging, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
 import {
   ephemeralCredLinkScript,
@@ -43,8 +40,6 @@ import type {
 } from "./sandbox.ts";
 
 const WORKSPACE_BASENAME = "workspace";
-const RO_LAYERS_TAR = ".ro-layers.tar";
-const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const GUEST_PROBE_TIMEOUT_SEC = 10;
 const EGRESS_TAG = "qm-egress";
 const SCOPE_TAG = "qm-scope";
@@ -80,7 +75,7 @@ export const porterScopeSlug = porterSlug;
 
 const bodyName = (slug: string): string => `${slug}-${randomUUID().slice(0, 5)}`;
 
-export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandboxOptions): Sandbox {
+export function createPorterSandbox(opts: PorterSandboxOptions): Sandbox {
   const image = opts.image ?? DEFAULT_PORTER_SANDBOX_IMAGE;
   const prefix = opts.namePrefix ?? "qm";
   const homeDir = opts.homeDir ?? "/root";
@@ -281,10 +276,8 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     ...execFileOps,
     ...blobStaging,
 
-    async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
+    async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       const scratch = provOpts?.scratch;
-      const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
-      const scope = writable?.scopeId ?? "default";
       const forceEgress = !!egressProxyHost && !!provOpts?.egressToken;
       let name: string;
       let coldStart: boolean;
@@ -312,18 +305,6 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
         const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
           throw new Error(`porter provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
-
-        await materializeRoLayers(
-          workspace,
-          layers,
-          handle,
-          {
-            readFile: (h, rel) => sandbox.readFile(h, rel),
-            writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
-            exec: (script, t) => execRaw(name, script, t),
-          },
-          { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "porter" },
-        );
 
         return handle;
       } catch (err) {

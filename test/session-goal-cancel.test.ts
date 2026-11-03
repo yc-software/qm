@@ -8,7 +8,6 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { createGoalRecord, openGoal } from "../src/agent/goal.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
-import { entryFromItem } from "../src/sessions/items.ts";
 import type { Principal } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -79,7 +78,7 @@ for (const status of ["active", "paused"] as const) {
     assert.equal(goal?.completionNote, undefined, "cancelling is not completing");
     assert.equal(openGoal(goal), null, "later turns start with no goal to enforce");
     assert.match(
-      JSON.stringify(reconstructMessagesFromHistory(entries.map((e) => entryFromItem(e, session.scopeId)))),
+      JSON.stringify(reconstructMessagesFromHistory(entries)),
       /The user cancelled this goal/,
       "the model is told the goal was cancelled",
     );
@@ -98,7 +97,7 @@ for (const status of ["active", "paused"] as const) {
     const ref = `web:U1:running-${status}`;
     const session = await sessionWithGoal(built, ref, status);
     await built.runs.enqueue({ sessionId: ref, request: runRequest() });
-    const run = await built.runs.claim("w1", 60_000);
+    const run = (await built.runs.claim("w1", 60_000))[0] ?? null;
     assert.equal(run?.sessionId, ref);
     const writer = { sessionId: session.id };
 
@@ -136,7 +135,7 @@ test("cancelling with no open goal touches nothing", async () => {
   const session = await built.sessions.getOrCreateByThread(ref, "dm", "personal:U1");
   await built.sessions.addParticipant(session.id, "U1");
   await built.runs.enqueue({ sessionId: ref, request: runRequest() });
-  const run = await built.runs.claim("w1", 60_000);
+  const run = (await built.runs.claim("w1", 60_000))[0] ?? null;
   assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), {
     cancelled: false,
     reason: "no_open_goal",

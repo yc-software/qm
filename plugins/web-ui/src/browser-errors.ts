@@ -95,7 +95,7 @@ export function reportSessionSwitch(
     prefetched: boolean;
     cached: boolean;
     tracked: boolean;
-    entries: number;
+    items: number;
   },
 ): void {
   timing("ui.action", "session_switch", startMs, {
@@ -105,7 +105,7 @@ export function reportSessionSwitch(
       prefetched: String(result.prefetched),
       cached: String(result.cached),
       tracked: String(result.tracked),
-      entries: String(result.entries),
+      items: String(result.items),
     },
     measurements: { fetch: result.fetchedMs - startMs, render: result.endMs - result.fetchedMs },
   });

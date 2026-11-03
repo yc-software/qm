@@ -168,7 +168,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       const resource = await deps.sandboxResources?.resolve(memoryScopeId);
       if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
     }
-    const handle = await deps.sandbox.provision(resolution.layers, {
+    const handle = await deps.sandbox.provision(resolution.writableScopeId, {
       ...(swarmSandboxId ? { sandboxId: swarmSandboxId } : {}),
       env: connectorEnv,
       egress: resolution.egress,
@@ -285,7 +285,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ...(pack ? { packDir: pack } : {}),
     };
   };
-  const writableScopeId = resolution.layers.find((layer) => layer.mode === "rw")?.scopeId;
+  const writableScopeId = resolution.writableScopeId;
   const canUseSandboxScope = async (target: ScopeId): Promise<boolean> => {
     if (target === writableScopeId || target === scopeId) return true;
     if (!openResourceAccess || actor.type !== "internal" || !deps.config || !deps.isCurrentSharedScopeMember)
@@ -354,15 +354,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return open(
       key,
       async (slot) => {
-        const layers = crossScope
-          ? resolution.layers
-              .filter((layer) => layer.mode === "rw" || layer.mountPath === "global")
-              .map((layer) => (layer.mode === "rw" ? { ...layer, scopeId: resource.ownerScopeId } : layer))
-          : resolution.layers;
         if (crossScope && egressTokenForTurn && !egressTokenForPolicy)
           throw new Error("target sandbox egress authorization unavailable");
         const egressToken = crossScope ? await egressTokenForPolicy?.(egress) : egressTokenForTurn;
-        const handle = await deps.sandbox.provision(layers, {
+        const handle = await deps.sandbox.provision(crossScope ? resource.ownerScopeId : writableScopeId, {
           sandboxId: resource.id,
           ...(!crossScope ? { env: connectorEnv } : {}),
           ...(access.env ? { env: { ...access.env } } : {}),
@@ -387,16 +382,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       scratchStartedAt = Date.now();
       recordScratchLifecycle("provision_started");
       try {
-        const handle = await deps.sandbox.provision(
-          resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
-          {
-            env: connectorEnv,
-            egress: resolution.egress,
-            ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
-            scratch: { key: scratchKey() },
-            routeScopeId: memoryScopeId,
-          },
-        );
+        const handle = await deps.sandbox.provision(memoryScopeId, {
+          env: connectorEnv,
+          egress: resolution.egress,
+          ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
+          scratch: { key: scratchKey() },
+        });
         slot.handles.push(handle);
         scratchReadyAt = Date.now();
         recordScratchLifecycle("provision_ready", handle);

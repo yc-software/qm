@@ -274,7 +274,7 @@ test(
     const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "reaper-poke-")), workers: 0 }));
     try {
       const stale = (await built.runs.enqueue({ sessionId: "s-stale", request: turn("stale"), maxAttempts: 3 })).run;
-      assert.equal((await built.runs.claim("dead-worker", 10))?.id, stale.id);
+      assert.equal((await built.runs.claim("dead-worker", 10))[0]?.id, stale.id);
       await new Promise((resolve) => setTimeout(resolve, 30));
       await withTenant(A, () =>
         built.app.turn({

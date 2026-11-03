@@ -26,6 +26,7 @@ import { runNowSettled } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { isAgentReply } from "../src/sessions/items.ts";
 
 test("ProjectStore atomically maintains a managed-group roster", async () => {
   let at = 10;
@@ -429,10 +430,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     (await built.sessions.listByParticipant("member")).find((session) => session.id === first.id)?.title,
     (await built.sessions.get(first.id))?.title,
   );
-  assert.match(
-    JSON.stringify((await built.app.getSessionForViewer(first.id, "member"))?.entries),
-    /secret-before-join/,
-  );
+  assert.match(JSON.stringify((await built.app.getSessionForViewer(first.id, "member"))?.items), /secret-before-join/);
   assert.equal(await built.app.managesScope("member", scope), true);
   assert.ok(await built.app.listScopeResources("member", scope));
   assert.deepEqual(await built.app.listSessionApprovals(pendingBeforeJoin.sessionId!, "member"), []);
@@ -529,8 +527,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
   const forked = await built.app.forkSession(first.id, "owner");
   assert.ok(forked);
-  assert.match(JSON.stringify(forked.entries), /secret-before-join/);
-  assert.match(JSON.stringify(forked.entries), /after joining/);
+  assert.match(JSON.stringify(forked.items), /secret-before-join/);
+  assert.match(JSON.stringify(forked.items), /after joining/);
   assert.equal((await built.sessions.get(forked.session.id))?.title ?? null, null);
 
   const appendForFork = built.sessions.appendMany.bind(built.sessions);
@@ -543,13 +541,13 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     forkCopyStarted = resolve;
   });
   let copyingSessionId: string | undefined;
-  built.sessions.appendMany = async (writer, entries) => {
+  built.sessions.appendMany = async (writer, items) => {
     if (!copyingSessionId && writer.sessionId !== first.id && writer.sessionId !== forked.session.id) {
       copyingSessionId = writer.sessionId;
       forkCopyStarted();
       await forkCopyReleased;
     }
-    return appendForFork(writer, entries);
+    return appendForFork(writer, items);
   };
   const racingForkPromise = built.app.forkSession(first.id, "owner");
   await forkCopyStart;
@@ -567,10 +565,10 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(racingFork.session.id, copyingSessionId);
   const ownerForkView = await built.app.getSessionForViewer(racingFork.session.id, "owner");
   const memberForkView = await built.app.getSessionForViewer(racingFork.session.id, "member");
-  assert.match(JSON.stringify(ownerForkView?.entries), /after joining/);
-  assert.match(JSON.stringify(memberForkView?.entries), /after joining/);
+  assert.match(JSON.stringify(ownerForkView?.items), /after joining/);
+  assert.match(JSON.stringify(memberForkView?.items), /after joining/);
   assert.match(
-    JSON.stringify((await built.app.getSessionForViewer(racingFork.session.id, "outsider"))?.entries),
+    JSON.stringify((await built.app.getSessionForViewer(racingFork.session.id, "outsider"))?.items),
     /after joining/,
   );
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "outsider")).status, "ok");
@@ -750,11 +748,8 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
     assert.match(result.reason ?? "", /membership changed/);
     const lateView = await built.app.getSessionForViewer(session.id, "late-member");
     assert.ok(lateView);
-    assert.match(JSON.stringify(lateView.entries), /old-roster-prompt/);
-    assert.equal(
-      lateView.entries.some((entry) => entry.type === "assistant"),
-      false,
-    );
+    assert.match(JSON.stringify(lateView.items), /old-roster-prompt/);
+    assert.equal(lateView.items.some(isAgentReply), false);
     assert.equal(
       (await built.sessions.getItems(session.id)).some((entry) => entry.kind === "AgentMessage"),
       false,
@@ -910,7 +905,7 @@ test("a member added to a Project inherits the chats that predate them", async (
   assert.ok(row, "a chat that predates the member must appear in their conversation list");
   assert.equal(row.title, "Pre-join chat", "the joiner sees the chat's real title, not a blanked one");
   const view = await built.app.getSessionForViewer(session.id, "member");
-  assert.match(JSON.stringify(view?.entries), /BEFORE_JOIN_TOPIC/, "pre-join transcript must be readable");
+  assert.match(JSON.stringify(view?.items), /BEFORE_JOIN_TOPIC/, "pre-join transcript must be readable");
 
   assert.equal(
     (

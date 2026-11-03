@@ -17,7 +17,7 @@ import { createSweeper } from "../util/sweeper.ts";
 import { inTenantOf } from "../tenants/claim.ts";
 import { boundTenant } from "../tenants/context.ts";
 import { recoverNextFireAt } from "./schedule.ts";
-import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
+import { fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
@@ -484,10 +484,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   async function reconcile(): Promise<void> {
     try {
+      const horizon = now() + 2 * REPAIR_INTERVAL_MS;
       for (const cron of await deps.crons.scheduled()) {
         if (stopped) break;
         const job = nextJob(cron, cron.tenantId);
-        if (job) await deps.jobQueue!.enqueueFire(job);
+        if (job && fireJobStartsAt(job) <= horizon) await deps.jobQueue!.enqueueFire(job);
       }
     } catch (e) {
       reportFailure("scheduler: reconcile", e);
