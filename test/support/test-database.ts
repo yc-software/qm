@@ -10,9 +10,9 @@ import { configStoreMaps, createConfigStore } from "../../src/resolution/config-
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
 
-function baseDatabaseUrl(): URL {
-  const base = process.env.DATABASE_URL;
-  if (!base) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
+function baseDatabaseUrl(variable: "DATABASE_URL" | "DATABASE_OWNER_URL" = "DATABASE_URL"): URL {
+  const base = process.env[variable];
+  if (!base) throw new Error(`${variable} is unset: run tests through scripts/run-pg-tests.mjs`);
   return new URL(base);
 }
 
@@ -23,7 +23,7 @@ function startDatabaseWorker(): NonNullable<typeof databaseWorker> {
     const signal = new Int32Array(new SharedArrayBuffer(4));
     const { port1, port2 } = new MessageChannel();
     const worker = new Worker(new URL("./database-worker.ts", import.meta.url), {
-      workerData: { base: baseDatabaseUrl().toString(), signal, port: port2 },
+      workerData: { base: baseDatabaseUrl("DATABASE_OWNER_URL").toString(), signal, port: port2 },
       transferList: [port2],
       execArgv: [],
     });
@@ -57,8 +57,8 @@ function createDatabaseSync(request: { template?: string }, scope: "test" | "fil
   return reply.name;
 }
 
-function databaseUrl(name: string): string {
-  const url = baseDatabaseUrl();
+function databaseUrl(name: string, variable: "DATABASE_URL" | "DATABASE_OWNER_URL" = "DATABASE_URL"): string {
+  const url = baseDatabaseUrl(variable);
   url.pathname = `/${name}`;
   return url.toString();
 }
@@ -68,7 +68,7 @@ export function testDatabaseUrl(): string {
 }
 
 export function testBareDatabaseUrl(): string {
-  return databaseUrl(createDatabaseSync({ template: "" }));
+  return databaseUrl(createDatabaseSync({ template: "" }), "DATABASE_OWNER_URL");
 }
 
 export function testMigratedDatabaseUrl(): string {
@@ -81,7 +81,7 @@ let shared: { url: string; maps: ReturnType<typeof createPostgresMapFactory> } |
 
 function sharedDatabase(): NonNullable<typeof shared> {
   if (!shared) {
-    const url = databaseUrl(createDatabaseSync({}, "file"));
+    const url = databaseUrl(createDatabaseSync({}, "file"), "DATABASE_OWNER_URL");
     shared = { url, maps: createPostgresMapFactory(url) };
   }
   return shared;

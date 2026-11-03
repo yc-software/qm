@@ -29,6 +29,9 @@ const OWNER_DATABASE_HOOK = new URL("../test/support/owner-database.ts", import.
 if (!baseUrl) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
 const runId = `qmt_${process.pid}_${randomBytes(4).toString("hex")}`;
 const tenantEnv = { QM_TEST_TENANT: randomUUID(), QM_TEST_OTHER_TENANT: randomUUID() };
+const ownerBase = process.env.DATABASE_OWNER_URL ?? baseUrl;
+const appLogin = `${runId}_app`;
+const appPassword = randomBytes(16).toString("hex");
 const children = new Set();
 const admin = new pg.Pool({ connectionString: baseUrl, max: jobs });
 let stopping = false;
@@ -54,6 +57,11 @@ async function dropAbandonedRuns() {
     if (runnerAlive(Number(datname.split("_")[1]))) continue;
     await admin.query(`DROP DATABASE IF EXISTS "${datname.replaceAll('"', '""')}" WITH (FORCE)`);
   }
+  const roles = await admin.query("SELECT rolname FROM pg_roles WHERE rolname ~ '^qmt_[0-9]+_[0-9a-f]+_app$'");
+  for (const { rolname } of roles.rows) {
+    if (runnerAlive(Number(rolname.split("_")[1]))) continue;
+    await admin.query(`DROP ROLE IF EXISTS "${rolname}"`);
+  }
 }
 
 function killGroup(child) {
@@ -68,6 +76,13 @@ function killGroup(child) {
 function databaseUrl(name, base = baseUrl) {
   const url = new URL(base);
   url.pathname = `/${name}`;
+  return url.toString();
+}
+
+function appDatabaseUrl(name) {
+  const url = new URL(databaseUrl(name));
+  url.username = appLogin;
+  url.password = appPassword;
   return url.toString();
 }
 
@@ -117,11 +132,11 @@ function runFile(file, env) {
 async function runIsolated(file, index) {
   const name = `${runId}_${index}`;
   try {
-    await admin.query(`CREATE DATABASE ${name} TEMPLATE ${tenantsName}`);
+    await admin.query(`CREATE DATABASE ${name} TEMPLATE ${templateName}`);
     if (stopping) return { file, ok: false, ms: 0, output: "" };
     return await runFile(file, {
-      DATABASE_URL: databaseUrl(name),
-      DATABASE_OWNER_URL: databaseUrl(name, process.env.DATABASE_OWNER_URL ?? baseUrl),
+      DATABASE_URL: appDatabaseUrl(name),
+      DATABASE_OWNER_URL: databaseUrl(name, ownerBase),
       QM_TEST_TEMPLATE_DATABASE: templateName,
       QM_TEST_TENANTS_DATABASE: tenantsName,
     });
@@ -137,7 +152,12 @@ function migrateTemplate(mode, name) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      [new URL("../test/support/test-template.ts", import.meta.url).pathname, mode, databaseUrl(name)],
+      [
+        new URL("../test/support/test-template.ts", import.meta.url).pathname,
+        mode,
+        databaseUrl(name),
+        appDatabaseUrl(name),
+      ],
       { stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, ...tenantEnv } },
     );
     child.on("error", reject);
@@ -146,6 +166,7 @@ function migrateTemplate(mode, name) {
 }
 
 async function prepareTemplates() {
+  await admin.query(`CREATE ROLE "${appLogin}" LOGIN PASSWORD '${appPassword}' NOBYPASSRLS`);
   await admin.query(`CREATE DATABASE ${tenantsName}`);
   await migrateTemplate("tenants", tenantsName);
   await admin.query(`CREATE DATABASE ${templateName} TEMPLATE ${tenantsName}`);
@@ -201,6 +222,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 await work;
 if (stopping) await new Promise(() => {});
 await dropDatabase(runId);
+await admin.query(`DROP ROLE IF EXISTS "${appLogin}"`);
 await endPool();
 
 const failed = results.filter((result) => !result.ok);
