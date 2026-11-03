@@ -43,8 +43,25 @@ export function createPostgresMap<T>(
       `CREATE TABLE IF NOT EXISTS ${VERSIONS_TABLE} (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`,
     ],
   };
+  const versionTrigger = {
+    id: `durable-map/${table}/version-trigger`,
+    statements: [
+      `CREATE OR REPLACE FUNCTION durable_map_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
+      BEGIN
+        INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES (TG_TABLE_NAME, 1)
+        ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1;
+        RETURN NULL;
+      END
+      $fn$`,
+      `SET LOCAL lock_timeout = '3s'`,
+      `DROP TRIGGER IF EXISTS ${table}_bump_version ON ${table}`,
+      `CREATE TRIGGER ${table}_bump_version AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON ${table}
+      FOR EACH STATEMENT EXECUTE FUNCTION durable_map_bump_version()`,
+    ],
+  };
   const migrations = [
     migration,
+    versionTrigger,
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [
@@ -92,24 +109,22 @@ export function createPostgresMap<T>(
     }
     return readyP;
   }
-  const bumpSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
-     ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
-  async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
+  async function write(text: string, params: unknown[]) {
     await ready();
-    return withPgTransaction(await pg.pool(), async (client) => {
-      await client.query(bumpSql);
-      return fn(client);
-    });
+    return pg.query(text, params);
   }
-  const CACHE_MAX_AGE_MS = 15_000;
-  let cache: { v: string; fetchedAt: number; entries: Array<[string, T]> } | null = null;
+  async function inTransaction<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
+    await ready();
+    return withPgTransaction(await pg.pool(), fn);
+  }
+  let cache: { v: string; entries: Array<[string, T]> } | null = null;
   async function snapshot(): Promise<Array<[string, T]>> {
     await ready();
     const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
     const v = vRows.length ? String(vRows[0]!.v) : "";
-    if (!cache || cache.v !== v || Date.now() - cache.fetchedAt > CACHE_MAX_AGE_MS) {
+    if (!cache || cache.v !== v) {
       const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
-      cache = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
+      cache = { v, entries: rows.map((row) => [row.id as string, row.json as T]) };
     }
     return structuredClone(cache.entries);
   }
@@ -168,32 +183,26 @@ export function createPostgresMap<T>(
       return rows.length ? (rows[0]!.json as T) : null;
     },
     async put(id, value) {
-      await withBump((client) =>
-        client.query(
-          `INSERT INTO ${table} (id, json) VALUES ($1, $2)
+      await write(
+        `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO UPDATE SET json = EXCLUDED.json`,
-          [id, jsonbStringify(value)],
-        ),
+        [id, jsonbStringify(value)],
       );
     },
     async putIfAbsent(id, value) {
-      const res = await withBump((client) =>
-        client.query(
-          `INSERT INTO ${table} (id, json) VALUES ($1, $2)
+      const res = await write(
+        `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO UPDATE SET json = ${table}.json
            RETURNING json`,
-          [id, jsonbStringify(value)],
-        ),
+        [id, jsonbStringify(value)],
       );
       return res.rows[0]!.json as T;
     },
     async insertIfAbsent(id, value) {
-      const inserted = await withBump((client) =>
-        client.query(
-          `INSERT INTO ${table} (id, json) VALUES ($1, $2)
+      const inserted = await write(
+        `INSERT INTO ${table} (id, json) VALUES ($1, $2)
            ON CONFLICT (id) DO NOTHING`,
-          [id, jsonbStringify(value)],
-        ),
+        [id, jsonbStringify(value)],
       );
       return (inserted.rowCount ?? 0) > 0;
     },
@@ -201,17 +210,14 @@ export function createPostgresMap<T>(
       const entries = Object.entries(patch);
       const removeKeys = entries.filter(([, v]) => v === undefined).map(([k]) => k);
       const set = Object.fromEntries(entries.filter(([, v]) => v !== undefined));
-      const res = await withBump((client) =>
-        client.query(`UPDATE ${table} SET json = (json - $2::text[]) || $3::jsonb WHERE id = $1 RETURNING json`, [
-          id,
-          removeKeys,
-          jsonbStringify(set),
-        ]),
+      const res = await write(
+        `UPDATE ${table} SET json = (json - $2::text[]) || $3::jsonb WHERE id = $1 RETURNING json`,
+        [id, removeKeys, jsonbStringify(set)],
       );
       return res.rows.length ? (res.rows[0]!.json as T) : null;
     },
     async update(id, fn) {
-      return withBump(async (client) => {
+      return inTransaction(async (client) => {
         const current = await client.query(`SELECT json FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
         if (!current.rows[0]) return null;
         const next = fn(current.rows[0].json as T);
@@ -221,7 +227,8 @@ export function createPostgresMap<T>(
     },
     async mutateMany(updates) {
       if (!updates.length) return [];
-      return withBump(async (client) => {
+      return inTransaction(async (client) => {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`durable-map:${table}`]);
         const rows = await client.query(
           `SELECT id, json FROM ${table} WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE`,
           [updates.map(({ id }) => id)],
@@ -242,7 +249,7 @@ export function createPostgresMap<T>(
       });
     },
     async deleteIf(id, predicate) {
-      return withBump(async (client) => {
+      return inTransaction(async (client) => {
         const current = await client.query(`SELECT json FROM ${table} WHERE id = $1 FOR UPDATE`, [id]);
         if (!current.rows[0] || !predicate(current.rows[0].json as T)) return false;
         await client.query(`DELETE FROM ${table} WHERE id = $1`, [id]);
@@ -250,10 +257,10 @@ export function createPostgresMap<T>(
       });
     },
     async delete(id) {
-      await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1`, [id]));
+      await write(`DELETE FROM ${table} WHERE id = $1`, [id]);
     },
     async take(id) {
-      const res = await withBump((client) => client.query(`DELETE FROM ${table} WHERE id = $1 RETURNING json`, [id]));
+      const res = await write(`DELETE FROM ${table} WHERE id = $1 RETURNING json`, [id]);
       return res.rows.length ? (res.rows[0]!.json as T) : null;
     },
   };

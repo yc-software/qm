@@ -159,6 +159,17 @@ test("pg map: all()/entries() stay coherent across instances despite the read ca
   assert.ok(!(await reader.entries()).some(([id]) => id === "c1"), "take is visible");
 });
 
+test("pg map: a write made outside the map invalidates every instance's read cache", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const reader = factory.map<Widget>("map_widgets");
+  await reader.put("raw", { name: "raw", tags: [], nested: { n: 1 } });
+  assert.equal((await reader.all()).find((w) => w.name === "raw")?.nested.n, 1);
+  await factory.pool.q(`UPDATE map_widgets SET json = jsonb_set(json, '{nested,n}', '2') WHERE id = 'raw'`);
+  assert.equal((await reader.all()).find((w) => w.name === "raw")?.nested.n, 2);
+  await factory.pool.q("DELETE FROM map_widgets WHERE id = 'raw'");
+  assert.ok(!(await reader.entries()).some(([id]) => id === "raw"));
+});
+
 test("pg map: a caller mutating an all() result cannot poison the cache", { skip }, async () => {
   const m = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
   await m.put("mut", { name: "mut", tags: ["a"], nested: { n: 1 } });
