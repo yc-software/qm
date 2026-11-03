@@ -55,6 +55,7 @@ test("ProjectStore atomically maintains a managed-group roster", () =>
 test("session lists check each project once per request and observe membership changes", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-list-membership-")) }));
   await inTestTenant(async () => {
+    await built.identity.ready();
     try {
       const project = await built.projects.create({ name: "Shared history", ownerId: "owner" });
       await built.projects.addMember(project.id, "owner", "member");
