@@ -23,10 +23,6 @@ export async function claimAcrossTenants(
   return ownerPool.query(text, params, options);
 }
 
-export function crossTenantLoop<A extends unknown[], R>(body: (...args: A) => R): (...args: A) => R {
-  return (...args) => withoutTenant(() => body(...args));
-}
-
 export function inTenantOf<T>(tenantId: string | undefined, fn: () => T): T {
   return tenantId === undefined ? withoutTenant(fn) : withTenant(tenantId, fn);
 }

@@ -26,7 +26,8 @@ import {
   withTraceCarrier,
 } from "./run-store.ts";
 import { swallow } from "../util/errors.ts";
-import { claimAcrossTenants, crossTenantLoop, inTenantOf, rowTenant } from "../tenants/claim.ts";
+import { withoutTenant } from "../tenants/context.ts";
+import { claimAcrossTenants, inTenantOf, rowTenant } from "../tenants/claim.ts";
 import { sleep } from "../util/async.ts";
 
 const NOTIFY_SESSION_AVAILABLE =
@@ -143,28 +144,29 @@ END $base_schema$`,
   function watchAvailability(): void {
     if (availabilityClosed || availabilityListeners.size === 0 || availabilityTimer || availabilityProbe) return;
     availabilityTimer = setTimeout(
-      crossTenantLoop(() => {
-        availabilityTimer = undefined;
-        availabilityProbe = claimAcrossTenants(
-          pg,
-          `SELECT EXISTS (
+      () =>
+        withoutTenant(() => {
+          availabilityTimer = undefined;
+          availabilityProbe = claimAcrossTenants(
+            pg,
+            `SELECT EXISTS (
           SELECT 1 FROM runs r WHERE r.status='pending' AND r.retry_after <= $1
           AND NOT EXISTS (
             SELECT 1 FROM runs blocked WHERE blocked.session_id=r.session_id
               AND (blocked.status='running' OR (blocked.status='pending' AND blocked.retry_after > $1))
           )
         ) AS available`,
-          [Date.now()],
-        )
-          .then(({ rows }) => {
-            if (rows[0]?.available) for (const listener of availabilityListeners.keys()) listener();
-          })
-          .catch((error: unknown) => swallow("run availability probe", error))
-          .finally(() => {
-            availabilityProbe = null;
-            watchAvailability();
-          });
-      }),
+            [Date.now()],
+          )
+            .then(({ rows }) => {
+              if (rows[0]?.available) for (const listener of availabilityListeners.keys()) listener();
+            })
+            .catch((error: unknown) => swallow("run availability probe", error))
+            .finally(() => {
+              availabilityProbe = null;
+              watchAvailability();
+            });
+        }),
       Math.min(...availabilityListeners.values()),
     );
     availabilityTimer.unref();

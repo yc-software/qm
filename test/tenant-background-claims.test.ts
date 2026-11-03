@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
-import { glob, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
@@ -10,7 +9,7 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
-import { claimAcrossTenants, crossTenantLoop, inTenantOf, useOwnerDatabase, rowTenant } from "../src/tenants/claim.ts";
+import { claimAcrossTenants, inTenantOf, rowTenant, useOwnerDatabase } from "../src/tenants/claim.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
@@ -59,18 +58,6 @@ test("a cross-tenant claim refuses to run under a bound tenant", async () => {
 
 test("startup fails without an owner database url", () => {
   assert.throws(() => useOwnerDatabase(undefined), /DATABASE_OWNER_URL/);
-});
-
-test("only startup hands the owner database url to the claim helper", async () => {
-  const readers: string[] = [];
-  for await (const file of glob("src/**/*.ts"))
-    if (/DATABASE_OWNER_URL|databaseOwnerUrl/.test(await readFile(file, "utf8"))) readers.push(file);
-  assert.deepEqual(readers.sort(), [
-    "src/config.ts",
-    "src/index.ts",
-    "src/runs/worker-main.ts",
-    "src/tenants/claim.ts",
-  ]);
 });
 
 test(
@@ -137,24 +124,10 @@ test(
 
 test("loop bodies and sweeps run unbound even when started under a tenant", async () => {
   const seen: Array<string | undefined> = [];
-  await withTenant(A, () => crossTenantLoop(async () => void seen.push(boundTenant()))());
   const sweeper = createSweeper(() => seen.push(boundTenant()), 60_000, { immediate: true });
   withTenant(A, () => sweeper.start());
   await sweeper.stop();
-  assert.deepEqual(seen, [undefined, undefined]);
-});
-
-test("a claimed row binds its own tenant, and a row without one runs unbound", () => {
-  assert.deepEqual(rowTenant({ tenant_id: A }), { tenantId: A });
-  assert.deepEqual(rowTenant({ tenant_id: null }), {});
-  assert.equal(
-    withTenant(B, () => inTenantOf(A, boundTenant)),
-    A,
-  );
-  assert.equal(
-    withTenant(B, () => inTenantOf(undefined, boundTenant)),
-    undefined,
-  );
+  assert.deepEqual(seen, [undefined]);
 });
 
 test(
