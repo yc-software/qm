@@ -4,7 +4,7 @@ import type { Cron } from "../../../triggers/types.ts";
 import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
 import { mintCapabilityToken, SPEND_EXPORT_AUD } from "../../../auth/capability-token.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { discoverScopes } from "./common.ts";
 import { type ApiCtx, type BaseCtx } from "../route.ts";
 
@@ -23,7 +23,6 @@ const DAY_MS = 86_400_000;
 const DEFAULT_WINDOW_DAYS = 30;
 const MAX_SPEND_DAYS = 93;
 const CRON_LOOKUP_CONCURRENCY = 8;
-const SPEND_EXPORT_PRINCIPAL = "spend-export";
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const EPOCH_MS = /^\d+$/;
 const CSV_FORMULA_LEAD = /^[=+\-@\t\r]/;
@@ -524,7 +523,7 @@ export async function mintSpendExportToken(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  const requested = (body as { days?: unknown }).days ?? EXPORT_TOKEN_DAYS.default;
+  const requested = isObj(body) && body.days !== undefined ? body.days : EXPORT_TOKEN_DAYS.default;
   if (!Number.isSafeInteger(requested) || Number(requested) < 1 || Number(requested) > EXPORT_TOKEN_DAYS.max)
     return sendJson(res, 400, {
       error: "bad_request",
@@ -535,7 +534,7 @@ export async function mintSpendExportToken(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 503, { error: "not_configured", message: "capability signing is not configured" });
   const expiresAt = Date.now() + Number(requested) * DAY_MS;
   const token = await mintCapabilityToken(
-    { actorId: SPEND_EXPORT_PRINCIPAL, scopeId: scope, aud: SPEND_EXPORT_AUD, exp: expiresAt },
+    { actorId: actor.id, scopeId: scope, aud: SPEND_EXPORT_AUD, exp: expiresAt },
     capSecret,
     deps.capabilityTokenCompression,
   );
@@ -551,6 +550,8 @@ export async function mintSpendExportToken(ctx: ApiCtx): Promise<void> {
 
 export async function spendExport(ctx: BaseCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
+  const exporter = ctx.capability?.actorId;
+  if (!exporter) return sendJson(res, 401, { error: "unauthorized" });
   if (!deps.sessions) return sendJson(res, 503, { error: "spend_unavailable" });
   const days = spendDays(url);
   if (typeof days === "string") return sendJson(res, 400, { error: "bad_request", message: days });
@@ -576,7 +577,7 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
       archived,
     }));
   audit(deps, {
-    principalId: SPEND_EXPORT_PRINCIPAL,
+    principalId: exporter,
     action: "spend.export",
     resource: "spend",
     scopeLabel: scope,

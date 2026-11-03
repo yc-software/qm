@@ -1,3 +1,4 @@
+import { withTenant } from "../../tenants/context.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
@@ -15,8 +16,7 @@ import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
-import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
-import { sendJson, tenantHeader, verifyOrReject } from "../http.ts";
+import { sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
@@ -71,7 +71,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, principal, tenantHeader(req)),
+      { method, path: pathname + url.search, body: principal },
       false,
       ctx.allowUnsignedSourceAuth,
     ))
@@ -140,7 +140,7 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, actorHeader, tenantHeader(req)),
+      { method, path: pathname + url.search, body: actorHeader },
       false,
       ctx.allowUnsignedSourceAuth,
     ))
@@ -1218,6 +1218,12 @@ async function runGitHttpBackend(input: {
 }
 
 async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
+  const token = ctx.secret ? gitTokenFrom(ctx) : null;
+  const tenant = ctx.secret && token ? (await verifyDeployGitAccess(ctx.secret, token))?.tenant : undefined;
+  return tenant ? withTenant(tenant, () => serveGit(ctx)) : serveGit(ctx);
+}
+
+async function serveGit(ctx: BaseCtx): Promise<void> {
   const parts = deploymentGitParts(ctx.pathname);
   if (!parts) return sendJson(ctx.res, 404, { error: "not_found" });
   const service = gitServiceOf(parts.tail, ctx.url);

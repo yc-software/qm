@@ -184,13 +184,13 @@ these, not through them.
   places it in a one-day browser cookie, but copied links remain usable and app ACL
   changes do not revoke individual link holders.
 - **The spend export token is bearer authorization for its tenant's spend.** An org
-  admin mints it in the portal with a lifetime of 1 to 365 days. Anyone holding it can
+  admin mints it as themselves with a lifetime of 1 to 365 days. Anyone holding it can
   read every scope's daily model-call spend in that tenant: per-person totals, channel
   and group names, the model mix, and each billed cron's title, owner, scope, schedule
   and state. It reads no conversation content or cron task and changes nothing, and
   minting and each export are audited, but the token is not bound to a caller and
-  cannot be revoked one at a time; it lapses at its expiry or when the capability
-  signing secret rotates.
+  cannot be revoked one at a time; it lapses at its expiry, when its admin is
+  deactivated, or when the capability signing secret rotates.
 - **Everyone sees the spend of the spaces they can see.** The My spend tab in Settings shows each
   signed-in person their own model-call spend plus the spend of every channel, group DM
   and project their Projects page lists, which for internal users includes every public

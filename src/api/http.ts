@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
 
 import { json as sendJson, sendBuffered } from "../../plugins/chassis/src/http.ts";
-import { TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { canonicalPayload, TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
 
 export { sendJson };
 
@@ -127,7 +127,7 @@ export async function verifyOrReject(
   res: ServerResponse,
   secret: string | undefined,
   auth: SourceAuth | null,
-  payload: string,
+  signed: { method: string; path: string; body: string },
   dedup: boolean,
   allowUnsigned = false,
 ): Promise<boolean> {
@@ -136,6 +136,7 @@ export async function verifyOrReject(
     sendJson(res, 401, { error: "unauthorized", message: "source authentication is not configured" });
     return false;
   }
+  const payload = canonicalPayload(signed.method, signed.path, signed.body, tenantHeader(req));
   const signature = String(req.headers["x-signature"] ?? "");
   const timestamp = Number(req.headers["x-timestamp"] ?? NaN);
   const r =

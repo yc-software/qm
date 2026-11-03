@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { IncomingMessage } from "node:http";
+import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { withRequestTenant } from "../src/api/tenant-ingress.ts";
 import { CAPABILITY_HEADER } from "../src/api/contract.ts";
@@ -26,10 +26,12 @@ function requestWith(headers: Record<string, string>): IncomingMessage {
 
 async function tenantSeenBy(headers: Record<string, string>, auth: "source" | "public" = "source") {
   let seen: string | undefined = "unset";
-  await withRequestTenant(requestWith(headers), { auth }, SECRET, () => {
+  const req = requestWith(headers);
+  const res = new ServerResponse(req);
+  await withRequestTenant(req, res, { auth }, SECRET, () => {
     seen = boundTenant();
   });
-  return seen;
+  return seen === "unset" ? res.statusCode : seen;
 }
 
 describe("tenant claims", () => {
@@ -85,9 +87,11 @@ describe("request ingress", () => {
     assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token, [TENANT_HEADER]: TENANT_A }), TENANT_B);
   });
 
-  it("binds the signed tenant header and ignores malformed ones", async () => {
+  it("binds the signed tenant header and refuses malformed ones", async () => {
     assert.equal(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }), TENANT_A);
-    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: "nope" }), undefined);
+    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: "nope" }), 400);
+    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A.toUpperCase() }), 400);
+    assert.equal(await tenantSeenBy({}), undefined);
   });
 
   it("leaves public routes and unverifiable tokens unbound", async () => {

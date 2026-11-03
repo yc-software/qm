@@ -26,8 +26,7 @@ import { capabilityToken, requestCapability, withRequestTenant } from "./tenant-
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, tenantHeader, verifyOrReject } from "./http.ts";
+import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
 import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
@@ -116,8 +115,12 @@ async function verifyCapability(
     return null;
   }
   const capability = await requestCapability(req, capToken, deps.capabilitySecret ?? secret);
-  if (!capability || capability.tenant !== boundTenant()) {
+  if (!capability) {
     sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
+    return null;
+  }
+  if (capability.tenant !== boundTenant()) {
+    sendJson(res, 401, { error: "unauthorized", message: "capability token belongs to another tenant" });
     return null;
   }
   if (
@@ -223,7 +226,7 @@ async function gate(
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, raw, tenantHeader(req)),
+      { method, path: pathname + url.search, body: raw },
       method !== "GET",
       allowUnsignedSourceAuth,
     ))
@@ -510,7 +513,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     if (raw) {
       if ("path" in raw.route) nameRequest(base.method, raw.route.path);
       const routeAuth = raw.route.auth;
-      return withRequestTenant(req, raw.route, capabilitySecret, async () => {
+      return withRequestTenant(req, res, raw.route, capabilitySecret, async () => {
         if (typeof routeAuth === "object") {
           base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth);
           if (!base.capability) return void req.resume();
@@ -538,7 +541,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     }
     rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
     await ready;
-    await withRequestTenant(req, matched?.route, capabilitySecret, () => routing(req, res));
+    await withRequestTenant(req, res, matched?.route, capabilitySecret, () => routing(req, res));
   }
   return server;
 }
