@@ -9,7 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testConfigStore, testConfigTables, testMap } from "./support/test-database.ts";
+import { testConfigStore, testConfigTables } from "./support/test-database.ts";
 import { TEST_TENANT } from "./support/tenant.ts";
 
 const org = scopeId("org", "default-org");
