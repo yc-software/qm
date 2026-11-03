@@ -64,317 +64,337 @@ const GH = {
   accountLabel: "alice-acme",
 };
 
-test("createAsk: owner derived from the credential, purpose frozen, dedup per (credential, scope, task)", async () => {
-  const k = kcAt(() => 1_000_000);
-  const cred = await k.save(GH);
+test("createAsk: owner derived from the credential, purpose frozen, dedup per (credential, scope, task)", () =>
+  inTestTenant(async () => {
+    const k = kcAt(() => 1_000_000);
+    const cred = await k.save(GH);
 
-  await assert.rejects(
-    k.createAsk({ credentialId: "nope", requesterId: "U_BOB", requesterScopeId: "channel:C1", purpose: "x" }),
-    (e: KeychainError) => e.status === 404,
-  );
-  const self = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_ALICE",
-    requesterScopeId: "personal:U_ALICE",
-    purpose: "scheduled check",
-  });
-  assert.equal(self.ask.status, "pending");
-  await assert.rejects(
-    k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "personal:U_BOB", purpose: "x" }),
-    (e: KeychainError) => e.status === 403,
-  );
+    await assert.rejects(
+      k.createAsk({ credentialId: "nope", requesterId: "U_BOB", requesterScopeId: "channel:C1", purpose: "x" }),
+      (e: KeychainError) => e.status === 404,
+    );
+    const self = await k.createAsk({
+      credentialId: cred.id,
+      requesterId: "U_ALICE",
+      requesterScopeId: "personal:U_ALICE",
+      purpose: "scheduled check",
+    });
+    assert.equal(self.ask.status, "pending");
+    await assert.rejects(
+      k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "personal:U_BOB", purpose: "x" }),
+      (e: KeychainError) => e.status === 403,
+    );
 
-  const { ask, existing } = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C1",
-    purpose: "  clone acme/payments and run the tests  ",
-    requesterThreadRef: "ch:C1-t1",
-  });
-  assert.equal(existing, false);
-  assert.equal(ask.ownerId, "U_ALICE", "owner comes from the credential record, never the caller");
-  assert.equal(ask.purpose, "clone acme/payments and run the tests");
-  assert.equal(ask.status, "pending");
-  assert.equal(ask.expiresAt, 1_000_000 + ASK_TTL_MS);
+    const { ask, existing } = await k.createAsk({
+      credentialId: cred.id,
+      requesterId: "U_BOB",
+      requesterScopeId: "channel:C1",
+      purpose: "  clone acme/payments and run the tests  ",
+      requesterThreadRef: "ch:C1-t1",
+    });
+    assert.equal(existing, false);
+    assert.equal(ask.ownerId, "U_ALICE", "owner comes from the credential record, never the caller");
+    assert.equal(ask.purpose, "clone acme/payments and run the tests");
+    assert.equal(ask.status, "pending");
+    assert.equal(ask.expiresAt, 1_000_000 + ASK_TTL_MS);
 
-  const again = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C1",
-    purpose: "different words",
-    requesterThreadRef: "ch:C1-t1",
-  });
-  assert.equal(again.existing, true);
-  assert.equal(again.ask.id, ask.id, "one pending ask per (credential, scope, task) — re-asks are silent");
-  assert.equal(again.ask.purpose, "clone acme/payments and run the tests", "the original purpose stays frozen");
+    const again = await k.createAsk({
+      credentialId: cred.id,
+      requesterId: "U_BOB",
+      requesterScopeId: "channel:C1",
+      purpose: "different words",
+      requesterThreadRef: "ch:C1-t1",
+    });
+    assert.equal(again.existing, true);
+    assert.equal(again.ask.id, ask.id, "one pending ask per (credential, scope, task) — re-asks are silent");
+    assert.equal(again.ask.purpose, "clone acme/payments and run the tests", "the original purpose stays frozen");
 
-  const elsewhere = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C2",
-    purpose: "other room",
-  });
-  assert.equal(elsewhere.existing, false, "a different scope is a different ask");
-});
+    const elsewhere = await k.createAsk({
+      credentialId: cred.id,
+      requesterId: "U_BOB",
+      requesterScopeId: "channel:C2",
+      purpose: "other room",
+    });
+    assert.equal(elsewhere.existing, false, "a different scope is a different ask");
+  }));
 
-test("personal cron asks deduplicate recurring fires without combining jobs or re-asking after denial", async () => {
-  let now = 1000000;
-  const k = kcAt(() => now++);
-  const cred = await k.save(GH);
-  const base = {
-    credentialId: cred.id,
-    requesterId: "U_ALICE",
-    requesterScopeId: "personal:U_ALICE" as const,
-    purpose: "first task",
-    triggered: true,
-  };
-  const first = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:one" });
-  const second = await k.createAsk({ ...base, requesterThreadRef: "cron:second:fire:one", purpose: "second task" });
-  assert.notEqual(first.ask.id, second.ask.id);
-  const retry = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:two" });
-  assert.equal(retry.ask.id, first.ask.id);
-  assert.equal(retry.ask.requesterThreadRef, "cron:first:fire:one");
-  assert.equal(retry.existing, true);
-  await k.declineAsk({ askId: first.ask.id, ownerId: "U_ALICE", note: "no" });
-  await assert.rejects(
-    k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:three" }),
-    (e: KeychainError) => e.status === 409,
-  );
-  const revived = await k.createAsk({ ...base, triggered: false, requesterThreadRef: "cron:first:fire:four" });
-  const waiting = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:five" });
-  assert.equal(waiting.ask.id, revived.ask.id);
-  await k.approveAsk({ askId: revived.ask.id, ownerId: "U_ALICE", mode: "once", purpose: "yes" });
-  assert.equal((await k.getAsk(second.ask.id))?.status, "pending");
-  now += ASK_TTL_MS + 1;
-  await assert.rejects(
-    k.createAsk({ ...base, requesterThreadRef: "cron:second:fire:two" }),
-    (e: KeychainError) => e.status === 409,
-  );
-});
-
-for (const outcome of ["declined", "expired"] as const) {
-  test(`task ${outcome} decisions survive pruning and a later approval supersedes them`, async () => {
-    let now = 1_000_000;
+test("personal cron asks deduplicate recurring fires without combining jobs or re-asking after denial", () =>
+  inTestTenant(async () => {
+    let now = 1000000;
     const k = kcAt(() => now++);
-    const credential = await k.save(GH);
-    const input = {
-      credentialId: credential.id,
+    const cred = await k.save(GH);
+    const base = {
+      credentialId: cred.id,
       requesterId: "U_ALICE",
       requesterScopeId: "personal:U_ALICE" as const,
-      requesterThreadRef: "cron:retained:fire:first",
-      purpose: "scheduled check",
+      purpose: "first task",
       triggered: true,
     };
-    const { ask } = await k.createAsk(input);
-    if (outcome === "declined") await k.declineAsk({ askId: ask.id, ownerId: "U_ALICE" });
-    else now += ASK_TTL_MS + 1;
-    const sweep = createAskExpirySweep({ keychain: k, fire: async () => undefined });
-    await sweep(now);
-    now += ASK_PRUNE_AFTER_MS + 1;
-    await sweep(now);
-    assert.equal((await k.getAsk(ask.id))?.status, outcome);
+    const first = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:one" });
+    const second = await k.createAsk({ ...base, requesterThreadRef: "cron:second:fire:one", purpose: "second task" });
+    assert.notEqual(first.ask.id, second.ask.id);
+    const retry = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:two" });
+    assert.equal(retry.ask.id, first.ask.id);
+    assert.equal(retry.ask.requesterThreadRef, "cron:first:fire:one");
+    assert.equal(retry.existing, true);
+    await k.declineAsk({ askId: first.ask.id, ownerId: "U_ALICE", note: "no" });
     await assert.rejects(
-      k.createAsk({ ...input, requesterThreadRef: "cron:retained:fire:later" }),
+      k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:three" }),
       (e: KeychainError) => e.status === 409,
     );
-    const revived = await k.createAsk({ ...input, triggered: false });
-    await k.approveAsk({ askId: revived.ask.id, ownerId: "U_ALICE", mode: "once", purpose: "retry it" });
-    await sweep(now);
-    now += ASK_PRUNE_AFTER_MS + 1;
-    await sweep(now);
-    assert.equal(await k.getAsk(ask.id), null);
-    assert.equal((await k.getAsk(revived.ask.id))?.status, "approved");
-    const next = await k.createAsk({ ...input, requesterThreadRef: "cron:retained:fire:next" });
-    assert.equal(next.existing, false);
-    assert.equal(next.ask.status, "pending");
-  });
+    const revived = await k.createAsk({ ...base, triggered: false, requesterThreadRef: "cron:first:fire:four" });
+    const waiting = await k.createAsk({ ...base, requesterThreadRef: "cron:first:fire:five" });
+    assert.equal(waiting.ask.id, revived.ask.id);
+    await k.approveAsk({ askId: revived.ask.id, ownerId: "U_ALICE", mode: "once", purpose: "yes" });
+    assert.equal((await k.getAsk(second.ask.id))?.status, "pending");
+    now += ASK_TTL_MS + 1;
+    await assert.rejects(
+      k.createAsk({ ...base, requesterThreadRef: "cron:second:fire:two" }),
+      (e: KeychainError) => e.status === 409,
+    );
+  }));
+
+for (const outcome of ["declined", "expired"] as const) {
+  test(`task ${outcome} decisions survive pruning and a later approval supersedes them`, () =>
+    inTestTenant(async () => {
+      let now = 1_000_000;
+      const k = kcAt(() => now++);
+      const credential = await k.save(GH);
+      const input = {
+        credentialId: credential.id,
+        requesterId: "U_ALICE",
+        requesterScopeId: "personal:U_ALICE" as const,
+        requesterThreadRef: "cron:retained:fire:first",
+        purpose: "scheduled check",
+        triggered: true,
+      };
+      const { ask } = await k.createAsk(input);
+      if (outcome === "declined") await k.declineAsk({ askId: ask.id, ownerId: "U_ALICE" });
+      else now += ASK_TTL_MS + 1;
+      const sweep = createAskExpirySweep({ keychain: k, fire: async () => undefined });
+      await sweep(now);
+      now += ASK_PRUNE_AFTER_MS + 1;
+      await sweep(now);
+      assert.equal((await k.getAsk(ask.id))?.status, outcome);
+      await assert.rejects(
+        k.createAsk({ ...input, requesterThreadRef: "cron:retained:fire:later" }),
+        (e: KeychainError) => e.status === 409,
+      );
+      const revived = await k.createAsk({ ...input, triggered: false });
+      await k.approveAsk({ askId: revived.ask.id, ownerId: "U_ALICE", mode: "once", purpose: "retry it" });
+      await sweep(now);
+      now += ASK_PRUNE_AFTER_MS + 1;
+      await sweep(now);
+      assert.equal(await k.getAsk(ask.id), null);
+      assert.equal((await k.getAsk(revived.ask.id))?.status, "approved");
+      const next = await k.createAsk({ ...input, requesterThreadRef: "cron:retained:fire:next" });
+      assert.equal(next.existing, false);
+      assert.equal(next.ask.status, "pending");
+    }));
 }
 
-test("approveAsk: same createGrant owner gate, audience from the record, single resolution", async () => {
-  const t = 1_000_000;
-  const k = kcAt(() => t);
-  const cred = await k.save(GH);
-  const { ask } = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C1",
-    purpose: "clone the repo",
-  });
+test("approveAsk: same createGrant owner gate, audience from the record, single resolution", () =>
+  inTestTenant(async () => {
+    const t = 1_000_000;
+    const k = kcAt(() => t);
+    const cred = await k.save(GH);
+    const { ask } = await k.createAsk({
+      credentialId: cred.id,
+      requesterId: "U_BOB",
+      requesterScopeId: "channel:C1",
+      purpose: "clone the repo",
+    });
 
-  await assert.rejects(
-    k.approveAsk({ askId: ask.id, ownerId: "U_BOB", mode: "once", purpose: "alice said fine" }),
-    (e: KeychainError) => e.status === 403,
-  );
-  assert.equal((await k.getAsk(ask.id))?.status, "pending");
-  await assert.rejects(
-    k.approveAsk({ askId: "deadbeef0000", ownerId: "U_ALICE", mode: "once", purpose: "x" }),
-    (e: KeychainError) => e.status === 404,
-  );
+    await assert.rejects(
+      k.approveAsk({ askId: ask.id, ownerId: "U_BOB", mode: "once", purpose: "alice said fine" }),
+      (e: KeychainError) => e.status === 403,
+    );
+    assert.equal((await k.getAsk(ask.id))?.status, "pending");
+    await assert.rejects(
+      k.approveAsk({ askId: "deadbeef0000", ownerId: "U_ALICE", mode: "once", purpose: "x" }),
+      (e: KeychainError) => e.status === 404,
+    );
 
-  const { ask: approved, grant } = await k.approveAsk({
-    askId: ask.id,
-    ownerId: "U_ALICE",
-    mode: "once",
-    purpose: "sure, just this once",
-  });
-  assert.equal(approved.status, "approved");
-  assert.equal(approved.grantId, grant.id);
-  assert.equal(grant.audienceScopeId, "channel:C1", "audience comes from the ask record — the approver named no scope");
-  assert.equal(grant.askId, ask.id);
-  assert.equal(grant.purpose, "sure, just this once", "the grant binds the OWNER's verbatim words");
+    const { ask: approved, grant } = await k.approveAsk({
+      askId: ask.id,
+      ownerId: "U_ALICE",
+      mode: "once",
+      purpose: "sure, just this once",
+    });
+    assert.equal(approved.status, "approved");
+    assert.equal(approved.grantId, grant.id);
+    assert.equal(
+      grant.audienceScopeId,
+      "channel:C1",
+      "audience comes from the ask record — the approver named no scope",
+    );
+    assert.equal(grant.askId, ask.id);
+    assert.equal(grant.purpose, "sure, just this once", "the grant binds the OWNER's verbatim words");
 
-  await assert.rejects(
-    k.approveAsk({ askId: ask.id, ownerId: "U_ALICE", mode: "once", purpose: "again" }),
-    (e: KeychainError) => e.status === 410,
-    "re-approve is a replay",
-  );
+    await assert.rejects(
+      k.approveAsk({ askId: ask.id, ownerId: "U_ALICE", mode: "once", purpose: "again" }),
+      (e: KeychainError) => e.status === 410,
+      "re-approve is a replay",
+    );
 
-  await assert.rejects(materializeGrant(k, grant.id, "channel:OTHER", "U_BOB"), (e: KeychainError) => e.status === 403);
-  const m = await materializeGrant(k, grant.id, "channel:C1", "U_BOB");
-  assert.ok(m.kind === "env" && m.env[0]!.value === "ghp_alice");
-  const used = (await k.getGrant(grant.id))!;
-  assert.equal(used.status, "used");
-  assert.equal(used.usedAt, 1_000_000);
-  await assert.rejects(materializeGrant(k, grant.id, "channel:C1", "U_BOB"), (e: KeychainError) => e.status === 410);
-});
+    await assert.rejects(
+      materializeGrant(k, grant.id, "channel:OTHER", "U_BOB"),
+      (e: KeychainError) => e.status === 403,
+    );
+    const m = await materializeGrant(k, grant.id, "channel:C1", "U_BOB");
+    assert.ok(m.kind === "env" && m.env[0]!.value === "ghp_alice");
+    const used = (await k.getGrant(grant.id))!;
+    assert.equal(used.status, "used");
+    assert.equal(used.usedAt, 1_000_000);
+    await assert.rejects(materializeGrant(k, grant.id, "channel:C1", "U_BOB"), (e: KeychainError) => e.status === 410);
+  }));
 
-test("declineAsk is owner-gated and single-resolution", async () => {
-  const k = kcAt(Date.now);
-  const cred = await k.save(GH);
-  const { ask } = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C1",
-    purpose: "p",
-  });
+test("declineAsk is owner-gated and single-resolution", () =>
+  inTestTenant(async () => {
+    const k = kcAt(Date.now);
+    const cred = await k.save(GH);
+    const { ask } = await k.createAsk({
+      credentialId: cred.id,
+      requesterId: "U_BOB",
+      requesterScopeId: "channel:C1",
+      purpose: "p",
+    });
 
-  await assert.rejects(k.declineAsk({ askId: ask.id, ownerId: "U_BOB" }), (e: KeychainError) => e.status === 403);
-  const declined = await k.declineAsk({ askId: ask.id, ownerId: "U_ALICE", note: "not for prod" });
-  assert.equal(declined.status, "declined");
-  assert.equal(declined.note, "not for prod");
-  await assert.rejects(k.declineAsk({ askId: ask.id, ownerId: "U_ALICE" }), (e: KeychainError) => e.status === 410);
-  await assert.rejects(
-    k.approveAsk({ askId: ask.id, ownerId: "U_ALICE", mode: "once", purpose: "x" }),
-    (e: KeychainError) => e.status === 410,
-  );
-});
+    await assert.rejects(k.declineAsk({ askId: ask.id, ownerId: "U_BOB" }), (e: KeychainError) => e.status === 403);
+    const declined = await k.declineAsk({ askId: ask.id, ownerId: "U_ALICE", note: "not for prod" });
+    assert.equal(declined.status, "declined");
+    assert.equal(declined.note, "not for prod");
+    await assert.rejects(k.declineAsk({ askId: ask.id, ownerId: "U_ALICE" }), (e: KeychainError) => e.status === 410);
+    await assert.rejects(
+      k.approveAsk({ askId: ask.id, ownerId: "U_ALICE", mode: "once", purpose: "x" }),
+      (e: KeychainError) => e.status === 410,
+    );
+  }));
 
-test("expiry: lazy flip on read, sweep returns each expired ask exactly once", async () => {
-  let t = 1_000_000;
-  const k = kcAt(() => t);
-  const cred = await k.save(GH);
-  const { ask } = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C1",
-    purpose: "p",
-  });
+test("expiry: lazy flip on read, sweep returns each expired ask exactly once", () =>
+  inTestTenant(async () => {
+    let t = 1_000_000;
+    const k = kcAt(() => t);
+    const cred = await k.save(GH);
+    const { ask } = await k.createAsk({
+      credentialId: cred.id,
+      requesterId: "U_BOB",
+      requesterScopeId: "channel:C1",
+      purpose: "p",
+    });
 
-  t += ASK_TTL_MS + 1;
-  const listed = await k.listAsks({ requesterScopeId: "channel:C1" });
-  assert.equal(listed[0]?.status, "expired");
-  assert.equal((await k.getAsk(ask.id))?.status, "expired");
-  await assert.rejects(
-    k.approveAsk({ askId: ask.id, ownerId: "U_ALICE", mode: "once", purpose: "x" }),
-    (e: KeychainError) => e.status === 410,
-  );
+    t += ASK_TTL_MS + 1;
+    const listed = await k.listAsks({ requesterScopeId: "channel:C1" });
+    assert.equal(listed[0]?.status, "expired");
+    assert.equal((await k.getAsk(ask.id))?.status, "expired");
+    await assert.rejects(
+      k.approveAsk({ askId: ask.id, ownerId: "U_ALICE", mode: "once", purpose: "x" }),
+      (e: KeychainError) => e.status === 410,
+    );
 
-  assert.deepEqual(
-    (await k.unnotifiedResolvedAsks(t)).map((a) => a.id),
-    [ask.id],
-  );
-  assert.deepEqual(
-    (await k.unnotifiedResolvedAsks(t)).map((a) => a.id),
-    [ask.id],
-    "still returned until the resolution actually fired",
-  );
-  await k.markAskNotified(ask.id, "expired");
-  assert.deepEqual(await k.unnotifiedResolvedAsks(t), []);
-});
+    assert.deepEqual(
+      (await k.unnotifiedResolvedAsks(t)).map((a) => a.id),
+      [ask.id],
+    );
+    assert.deepEqual(
+      (await k.unnotifiedResolvedAsks(t)).map((a) => a.id),
+      [ask.id],
+      "still returned until the resolution actually fired",
+    );
+    await k.markAskNotified(ask.id, "expired");
+    assert.deepEqual(await k.unnotifiedResolvedAsks(t), []);
+  }));
 
-test("expiry sweep fires the resolution once and rides the scheduler tick", async () => {
-  let t = 1_000_000;
-  const k = kcAt(() => t);
-  const cred = await k.save(GH);
-  await k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "channel:C1", purpose: "p" });
-  t += ASK_TTL_MS + 1;
+test("expiry sweep fires the resolution once and rides the scheduler tick", () =>
+  inTestTenant(async () => {
+    let t = 1_000_000;
+    const k = kcAt(() => t);
+    const cred = await k.save(GH);
+    await k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "channel:C1", purpose: "p" });
+    t += ASK_TTL_MS + 1;
 
-  const fired: KeychainAsk[] = [];
-  const sweep = createAskExpirySweep({ keychain: k, fire: async (a) => void fired.push(a) });
-  await sweep(t);
-  await sweep(t);
-  assert.equal(fired.length, 1, "one resolution per expired ask, ever");
-  assert.equal(fired[0]!.status, "expired");
+    const fired: KeychainAsk[] = [];
+    const sweep = createAskExpirySweep({ keychain: k, fire: async (a) => void fired.push(a) });
+    await sweep(t);
+    await sweep(t);
+    assert.equal(fired.length, 1, "one resolution per expired ask, ever");
+    assert.equal(fired[0]!.status, "expired");
 
-  const swept: number[] = [];
-  const idStore = createIdempotencyStore(testMap<IdempotencyRecord>());
-  const scheduler = createScheduler({
-    ...singleProcessDeps(),
-    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
-    deliveries: createDeliveryStore(),
-    idempotency: idStore,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    run: async () => ({ status: "ok" }) as TurnResult,
-    sweepAsks: async (now) => void swept.push(now),
-  });
-  await scheduler.tick(42);
-  assert.deepEqual(swept, [42], "the ask sweep rides the scheduler's leader-leased tick");
-});
+    const swept: number[] = [];
+    const idStore = createIdempotencyStore(testMap<IdempotencyRecord>());
+    const scheduler = createScheduler({
+      ...singleProcessDeps(),
+      crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+      deliveries: createDeliveryStore(),
+      idempotency: idStore,
+      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      run: async () => ({ status: "ok" }) as TurnResult,
+      sweepAsks: async (now) => void swept.push(now),
+    });
+    await scheduler.tick(42);
+    assert.deepEqual(swept, [42], "the ask sweep rides the scheduler's leader-leased tick");
+  }));
 
-test("sweep is the durable retry for approve/decline resolutions that never fired, and prunes old asks", async () => {
-  let t = 1_000_000;
-  const k = kcAt(() => t);
-  const cred = await k.save(GH);
-  const { ask } = await k.createAsk({
-    credentialId: cred.id,
-    requesterId: "U_BOB",
-    requesterScopeId: "channel:C1",
-    purpose: "p",
-  });
-  await k.approveAsk({ askId: ask.id, ownerId: "U_ALICE", mode: "once", purpose: "yes" });
+test("sweep is the durable retry for approve/decline resolutions that never fired, and prunes old asks", () =>
+  inTestTenant(async () => {
+    let t = 1_000_000;
+    const k = kcAt(() => t);
+    const cred = await k.save(GH);
+    const { ask } = await k.createAsk({
+      credentialId: cred.id,
+      requesterId: "U_BOB",
+      requesterScopeId: "channel:C1",
+      purpose: "p",
+    });
+    await k.approveAsk({ askId: ask.id, ownerId: "U_ALICE", mode: "once", purpose: "yes" });
 
-  const fired: KeychainAsk[] = [];
-  const sweep = createAskExpirySweep({ keychain: k, fire: async (a) => void fired.push(a) });
-  await sweep(t);
-  assert.deepEqual(
-    fired.map((a) => [a.id, a.status]),
-    [[ask.id, "approved"]],
-    "the sweep retries non-expiry resolutions too",
-  );
-  await sweep(t);
-  assert.equal(fired.length, 1, "marked notified after firing — no refire");
+    const fired: KeychainAsk[] = [];
+    const sweep = createAskExpirySweep({ keychain: k, fire: async (a) => void fired.push(a) });
+    await sweep(t);
+    assert.deepEqual(
+      fired.map((a) => [a.id, a.status]),
+      [[ask.id, "approved"]],
+      "the sweep retries non-expiry resolutions too",
+    );
+    await sweep(t);
+    assert.equal(fired.length, 1, "marked notified after firing — no refire");
 
-  t += ASK_PRUNE_AFTER_MS + 1;
-  await sweep(t);
-  assert.equal(await k.getAsk(ask.id), null, "resolved+notified asks are pruned after the retention window");
-});
+    t += ASK_PRUNE_AFTER_MS + 1;
+    await sweep(t);
+    assert.equal(await k.getAsk(ask.id), null, "resolved+notified asks are pruned after the retention window");
+  }));
 
-test("sweep isolates per-ask failures — one failed fire doesn't starve the batch", async () => {
-  const t = 1_000_000;
-  const k = kcAt(() => t);
-  const cred = await k.save(GH);
-  const a1 = (
-    await k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "channel:C1", purpose: "p1" })
-  ).ask;
-  const a2 = (
-    await k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "channel:C2", purpose: "p2" })
-  ).ask;
-  await k.approveAsk({ askId: a1.id, ownerId: "U_ALICE", mode: "once", purpose: "y1" });
-  await k.approveAsk({ askId: a2.id, ownerId: "U_ALICE", mode: "once", purpose: "y2" });
+test("sweep isolates per-ask failures — one failed fire doesn't starve the batch", () =>
+  inTestTenant(async () => {
+    const t = 1_000_000;
+    const k = kcAt(() => t);
+    const cred = await k.save(GH);
+    const a1 = (
+      await k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "channel:C1", purpose: "p1" })
+    ).ask;
+    const a2 = (
+      await k.createAsk({ credentialId: cred.id, requesterId: "U_BOB", requesterScopeId: "channel:C2", purpose: "p2" })
+    ).ask;
+    await k.approveAsk({ askId: a1.id, ownerId: "U_ALICE", mode: "once", purpose: "y1" });
+    await k.approveAsk({ askId: a2.id, ownerId: "U_ALICE", mode: "once", purpose: "y2" });
 
-  const fired: string[] = [];
-  const sweep = createAskExpirySweep({
-    keychain: k,
-    fire: async (a) => {
-      if (a.id === a1.id) throw new Error("delivery store down");
-      fired.push(a.id);
-    },
-  });
-  await sweep(t);
-  assert.deepEqual(fired, [a2.id], "the failure didn't starve the rest of the batch");
-  assert.equal((await k.getAsk(a1.id))?.notifiedAt, undefined, "the failed ask stays unnotified and retries next tick");
-  assert.notEqual((await k.getAsk(a2.id))?.notifiedAt, undefined);
-});
+    const fired: string[] = [];
+    const sweep = createAskExpirySweep({
+      keychain: k,
+      fire: async (a) => {
+        if (a.id === a1.id) throw new Error("delivery store down");
+        fired.push(a.id);
+      },
+    });
+    await sweep(t);
+    assert.deepEqual(fired, [a2.id], "the failure didn't starve the rest of the batch");
+    assert.equal(
+      (await k.getAsk(a1.id))?.notifiedAt,
+      undefined,
+      "the failed ask stays unnotified and retries next tick",
+    );
+    assert.notEqual((await k.getAsk(a2.id))?.notifiedAt, undefined);
+  }));
 
 test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate claim)", async () => {
   let seen: TurnRequest | undefined;
@@ -590,7 +610,8 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   };
 
   before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-asks-")), signingSecret: SECRET }));
+    const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-asks-")), signingSecret: SECRET });
+    built = buildApp(config);
     await inTestTenant(() =>
       built.app.upsertDirectory([
         { principalId: "U_ALICE", displayName: "Alice", type: "internal" },
@@ -621,7 +642,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       resume: (ask, grant) => built.fireAskResolution!(ask, grant),
     });
     server = createServer(built.app, {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      replayDedupe: createPostgresReplayDedupe(config.databaseUrl!),
       signingSecret: SECRET,
       keychain: built.keychain,
       keychainApprovals: approvals,

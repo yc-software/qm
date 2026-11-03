@@ -11,6 +11,7 @@ import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testKeychainRows } from "./support/credential-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
@@ -99,42 +100,43 @@ test("failed cron credential resolution notifies only the owner", async () => {
   assert.equal(pending.filter((delivery) => delivery.destination.target === "U_BOB").length, 0);
 });
 
-test("a concurrent sweep cannot mark an in-flight resume notified before it finishes", async () => {
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<TurnResult>();
-  let runs = 0;
-  const f = await fixture(async () => {
-    runs++;
-    entered.resolve();
-    return release.promise;
-  });
-  const rows = testKeychainRows();
-  const asks = rows.asks;
-  await asks.put(f.ask);
-  const keychain = createKeychain({
-    lock: testAdvisoryLock(),
-    creds: rows.creds,
-    grants: rows.grants,
-    asks,
-    key: deriveConnectorKey("concurrent-cron-resume-test"),
-  });
-  const sweep = createAskExpirySweep({ keychain, fire: (ask) => fireAskResolution(f.deps, ask) });
-  const initial = fireAskResolution(f.deps, f.ask);
-  await entered.promise;
+test("a concurrent sweep cannot mark an in-flight resume notified before it finishes", () =>
+  inTestTenant(async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<TurnResult>();
+    let runs = 0;
+    const f = await fixture(async () => {
+      runs++;
+      entered.resolve();
+      return release.promise;
+    });
+    const rows = testKeychainRows();
+    const asks = rows.asks;
+    await asks.put(f.ask);
+    const keychain = createKeychain({
+      lock: testAdvisoryLock(),
+      creds: rows.creds,
+      grants: rows.grants,
+      asks,
+      key: deriveConnectorKey("concurrent-cron-resume-test"),
+    });
+    const sweep = createAskExpirySweep({ keychain, fire: (ask) => fireAskResolution(f.deps, ask) });
+    const initial = fireAskResolution(f.deps, f.ask);
+    await entered.promise;
 
-  await sweep(Date.now());
-  assert.equal((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
-  release.resolve({ status: "ok", reply: "dummy scheduled result" });
-  assert.equal((await initial).status, "ok");
-  assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), true);
+    await sweep(Date.now());
+    assert.equal((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
+    release.resolve({ status: "ok", reply: "dummy scheduled result" });
+    assert.equal((await initial).status, "ok");
+    assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), true);
 
-  await sweep(Date.now());
-  await sweep(Date.now());
+    await sweep(Date.now());
+    await sweep(Date.now());
 
-  assert.equal(runs, 1);
-  assert.notEqual((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
-  assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), true);
-  const pending = await f.deliveries.pending("principal");
-  assert.equal(pending.length, 1);
-  assert.equal(pending[0]!.destination.target, "U_BOB");
-});
+    assert.equal(runs, 1);
+    assert.notEqual((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
+    assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), true);
+    const pending = await f.deliveries.pending("principal");
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.destination.target, "U_BOB");
+  }));

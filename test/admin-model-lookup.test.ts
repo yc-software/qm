@@ -62,51 +62,53 @@ test("exact catalog lookup returns documented values without network or other-mo
   await assert.rejects(lookupModel({ provider: "openai", id: "claude-opus-4-6" }), /different provider/);
 });
 
-test("provider lookup only imports exact bounded metadata, never pricing from a similar model", async () => {
-  setProviderBaseUrls({ anthropic: "http://127.0.0.1:19998" });
-  let calls = 0;
-  const result = await lookupModel(
-    { provider: "anthropic", id: "future-lookup-model" },
-    credentials(),
-    async (url, options) => {
-      calls++;
-      assert.equal(url, "http://127.0.0.1:19998/v1/models/future-lookup-model");
-      assert.equal(new Headers(options?.headers).get("x-api-key"), "test-anthropic-key");
-      assert.equal(options?.redirect, "error");
-      return Response.json({
-        id: "future-lookup-model",
-        display_name: "Future exact",
-        max_input_tokens: 160000,
-        max_tokens: 40000,
-        apiKey: "private",
-        cost: { input: 100 },
-      });
-    },
-  );
-  assert.equal(calls, 1);
-  assert.equal(result.spec.name, "Future exact");
-  assert.equal(result.spec.contextWindow, 160000);
-  assert.equal(result.spec.maxTokens, 40000);
-  assert.equal(result.spec.template, undefined);
-  assert.equal(result.spec.cost, undefined);
-  assert.deepEqual(result.missing, ["template", "input", "output", "cacheRead", "cacheWrite"]);
-  assert.doesNotMatch(JSON.stringify(result), /private|test-anthropic-key/);
-});
+test("provider lookup only imports exact bounded metadata, never pricing from a similar model", () =>
+  inTestTenant(async () => {
+    setProviderBaseUrls({ anthropic: "http://127.0.0.1:19998" });
+    let calls = 0;
+    const result = await lookupModel(
+      { provider: "anthropic", id: "future-lookup-model" },
+      credentials(),
+      async (url, options) => {
+        calls++;
+        assert.equal(url, "http://127.0.0.1:19998/v1/models/future-lookup-model");
+        assert.equal(new Headers(options?.headers).get("x-api-key"), "test-anthropic-key");
+        assert.equal(options?.redirect, "error");
+        return Response.json({
+          id: "future-lookup-model",
+          display_name: "Future exact",
+          max_input_tokens: 160000,
+          max_tokens: 40000,
+          apiKey: "private",
+          cost: { input: 100 },
+        });
+      },
+    );
+    assert.equal(calls, 1);
+    assert.equal(result.spec.name, "Future exact");
+    assert.equal(result.spec.contextWindow, 160000);
+    assert.equal(result.spec.maxTokens, 40000);
+    assert.equal(result.spec.template, undefined);
+    assert.equal(result.spec.cost, undefined);
+    assert.deepEqual(result.missing, ["template", "input", "output", "cacheRead", "cacheWrite"]);
+    assert.doesNotMatch(JSON.stringify(result), /private|test-anthropic-key/);
+  }));
 
-test("OpenAI minimal metadata and missing credentials leave unknown fields visibly missing", async () => {
-  const result = await lookupModel({ provider: "openai", id: "future-openai-model" }, credentials(), async () =>
-    Response.json({ id: "future-openai-model", object: "model" }),
-  );
-  assert.equal(result.spec.name, "future-openai-model");
-  assert.equal(result.spec.template, undefined);
-  assert.ok(result.missing.includes("contextWindow"));
-  const absent = await lookupModel({ provider: "openai", id: "future-openai-model" }, undefined, async () => {
-    throw Error("must not fetch");
-  });
-  assert.equal(absent.source, "Manual entry");
-  assert.ok(absent.missing.includes("name"));
-  assert.match(absent.message, /provider key/);
-});
+test("OpenAI minimal metadata and missing credentials leave unknown fields visibly missing", () =>
+  inTestTenant(async () => {
+    const result = await lookupModel({ provider: "openai", id: "future-openai-model" }, credentials(), async () =>
+      Response.json({ id: "future-openai-model", object: "model" }),
+    );
+    assert.equal(result.spec.name, "future-openai-model");
+    assert.equal(result.spec.template, undefined);
+    assert.ok(result.missing.includes("contextWindow"));
+    const absent = await lookupModel({ provider: "openai", id: "future-openai-model" }, undefined, async () => {
+      throw Error("must not fetch");
+    });
+    assert.equal(absent.source, "Manual entry");
+    assert.ok(absent.missing.includes("name"));
+    assert.match(absent.message, /provider key/);
+  }));
 
 test("bad responses degrade to manual fields with no partial or mismatched metadata", async () => {
   for (const response of [
@@ -227,45 +229,46 @@ import { createServer } from "node:http";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 import { testModelTables } from "./support/credential-stores.ts";
 
-test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
-  let mode = "record";
-  let sinkRequests = 0;
-  const server = createServer((req, res) => {
-    if (req.url === "/sink") {
-      sinkRequests++;
-      res.end("unexpected");
-      return;
+test("real metadata transport authenticates only the configured endpoint and refuses redirects", () =>
+  inTestTenant(async () => {
+    let mode = "record";
+    let sinkRequests = 0;
+    const server = createServer((req, res) => {
+      if (req.url === "/sink") {
+        sinkRequests++;
+        res.end("unexpected");
+        return;
+      }
+      assert.equal(req.headers["x-api-key"], "test-anthropic-key");
+      if (mode === "redirect") {
+        res.writeHead(302, { location: "/sink" });
+        res.end();
+        return;
+      }
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          id: "live-metadata-model",
+          display_name: "Exact network record",
+          max_input_tokens: 200000,
+          max_tokens: 32000,
+        }),
+      );
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    setProviderBaseUrls({ anthropic: `http://127.0.0.1:${(server.address() as AddressInfo).port}` });
+    try {
+      const value = await lookupModel({ provider: "anthropic", id: "live-metadata-model" }, credentials());
+      assert.equal(value.spec.name, "Exact network record");
+      assert.equal(value.spec.contextWindow, 200000);
+      assert.equal(value.spec.maxTokens, 32000);
+      mode = "redirect";
+      const redirect = await lookupModel({ provider: "anthropic", id: "live-metadata-model" }, credentials());
+      assert.equal(sinkRequests, 0);
+      assert.equal(redirect.source, "Manual entry");
+      assert.equal(redirect.spec.name, undefined);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
     }
-    assert.equal(req.headers["x-api-key"], "test-anthropic-key");
-    if (mode === "redirect") {
-      res.writeHead(302, { location: "/sink" });
-      res.end();
-      return;
-    }
-    res.setHeader("content-type", "application/json");
-    res.end(
-      JSON.stringify({
-        id: "live-metadata-model",
-        display_name: "Exact network record",
-        max_input_tokens: 200000,
-        max_tokens: 32000,
-      }),
-    );
-  });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  setProviderBaseUrls({ anthropic: `http://127.0.0.1:${(server.address() as AddressInfo).port}` });
-  try {
-    const value = await lookupModel({ provider: "anthropic", id: "live-metadata-model" }, credentials());
-    assert.equal(value.spec.name, "Exact network record");
-    assert.equal(value.spec.contextWindow, 200000);
-    assert.equal(value.spec.maxTokens, 32000);
-    mode = "redirect";
-    const redirect = await lookupModel({ provider: "anthropic", id: "live-metadata-model" }, credentials());
-    assert.equal(sinkRequests, 0);
-    assert.equal(redirect.source, "Manual entry");
-    assert.equal(redirect.spec.name, undefined);
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-});
+  }));

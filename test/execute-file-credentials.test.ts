@@ -120,151 +120,167 @@ async function fixture(t: TestContext) {
 }
 
 for (const target of ["default", "rerouted", "scratch", "selected"] as const) {
-  test(`${target} execution persists refreshed files and cleans its temporary home`, async (t) => {
-    const f = await fixture(t);
-    const selected = { ...f.handle, id: "selected" };
-    const resource = { id: "selected", ownerScopeId: scope };
-    const ctx = f.context(
-      target === "selected"
-        ? {
-            sandboxResources: {} as never,
-            accessSandboxResource: async () =>
-              ({ resource, crossScope: false, egress: { mode: "allowlist", hosts: [] }, commandPolicy: null }) as never,
-            provisionResource: async (_access, authorize) => {
-              authorize?.({ resource, crossScope: false, egress: {} } as never);
-              return selected;
-            },
-          }
-        : {},
-      target === "rerouted",
-    );
-    const result = await ctx.execute('printf refreshed > "$HOME/.aws/sso/cache/session.json"; printf "%s" "$HOME"', {
-      credentials: ["aws"],
-      ...(target === "scratch" ? { scratch: true } : {}),
-      ...(target === "selected" ? { sandboxId: "selected" } : {}),
-    });
-    assert.equal(result.code, 0, result.stderr);
-    assert.equal(
-      f.commands.find((entry) => entry.command.startsWith("printf refreshed"))?.handle.id,
-      target === "rerouted" ? "scratch" : target,
-    );
-    await assert.rejects(access(result.stdout));
-    const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
-    assert.equal(next.kind, "file");
-    if (next.kind === "file") assert.equal(Buffer.from(next.files[0]!.contentBase64, "base64").toString(), "refreshed");
-    const meta = await f.keychain.getCredential(f.credential.id);
-    assert.equal(meta?.origin, "agent-session:original");
-    assert.equal(meta?.accountLabel, "original owner");
-    const second = await f.context().execute('cat "$HOME/.aws/sso/cache/session.json"', { credentials: ["aws"] });
-    assert.equal(second.stdout, "refreshed");
-  });
+  test(`${target} execution persists refreshed files and cleans its temporary home`, (t) =>
+    inTestTenant(async () => {
+      const f = await fixture(t);
+      const selected = { ...f.handle, id: "selected" };
+      const resource = { id: "selected", ownerScopeId: scope };
+      const ctx = f.context(
+        target === "selected"
+          ? {
+              sandboxResources: {} as never,
+              accessSandboxResource: async () =>
+                ({
+                  resource,
+                  crossScope: false,
+                  egress: { mode: "allowlist", hosts: [] },
+                  commandPolicy: null,
+                }) as never,
+              provisionResource: async (_access, authorize) => {
+                authorize?.({ resource, crossScope: false, egress: {} } as never);
+                return selected;
+              },
+            }
+          : {},
+        target === "rerouted",
+      );
+      const result = await ctx.execute('printf refreshed > "$HOME/.aws/sso/cache/session.json"; printf "%s" "$HOME"', {
+        credentials: ["aws"],
+        ...(target === "scratch" ? { scratch: true } : {}),
+        ...(target === "selected" ? { sandboxId: "selected" } : {}),
+      });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(
+        f.commands.find((entry) => entry.command.startsWith("printf refreshed"))?.handle.id,
+        target === "rerouted" ? "scratch" : target,
+      );
+      await assert.rejects(access(result.stdout));
+      const next = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+      assert.equal(next.kind, "file");
+      if (next.kind === "file")
+        assert.equal(Buffer.from(next.files[0]!.contentBase64, "base64").toString(), "refreshed");
+      const meta = await f.keychain.getCredential(f.credential.id);
+      assert.equal(meta?.origin, "agent-session:original");
+      assert.equal(meta?.accountLabel, "original owner");
+      const second = await f.context().execute('cat "$HOME/.aws/sso/cache/session.json"', { credentials: ["aws"] });
+      assert.equal(second.stdout, "refreshed");
+    }));
 }
 
-test("unrequested credentials are never materialized", async (t) => {
-  const f = await fixture(t);
-  const result = await f.context().execute('test ! -e "$HOME/.aws/sso/cache/session.json"');
-  assert.equal(result.code, 0);
-  assert.equal(f.resolutions(), 0);
-});
+test("unrequested credentials are never materialized", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const result = await f.context().execute('test ! -e "$HOME/.aws/sso/cache/session.json"');
+    assert.equal(result.code, 0);
+    assert.equal(f.resolutions(), 0);
+  }));
 
-test("failed commands still persist refreshes", async (t) => {
-  const f = await fixture(t);
-  const result = await f
-    .context()
-    .execute('printf refreshed > "$HOME/.aws/sso/cache/session.json"; exit 7', { credentials: ["aws"] });
-  assert.equal(result.code, 7);
-  const second = await f.context().execute('cat "$HOME/.aws/sso/cache/session.json"', { credentials: ["aws"] });
-  assert.equal(second.stdout, "refreshed");
-});
-
-test("concurrent file updates cannot overwrite a newer credential or its grants", async (t) => {
-  const f = await fixture(t);
-  const grant = await f.keychain.createGrant({
-    credentialId: f.credential.id,
-    ownerId: owner,
-    audienceScopeId: scopeId("channel", "test"),
-    mode: "standing",
-    purpose: "test",
-  });
-  const a = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
-  const b = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
-  if (a.kind !== "file" || b.kind !== "file") throw new Error("Expected files");
-  await f.keychain.updateFiles({ ...a, writeback: true }, files("newer"));
-  await assert.rejects(f.keychain.updateFiles({ ...b, writeback: true }, files("stale")), /changed during execution/);
-  assert.equal((await f.keychain.getGrant(grant.id))?.status, "active");
-});
-
-test("symlink replacement is rejected and the ephemeral home is removed", async (t) => {
-  const f = await fixture(t);
-  await assert.rejects(
-    f
+test("failed commands still persist refreshes", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const result = await f
       .context()
-      .execute('rm "$HOME/.aws/sso/cache/session.json"; ln -s /etc/passwd "$HOME/.aws/sso/cache/session.json"', {
-        credentials: ["aws"],
-      }),
-    /symlinks/,
-  );
-  const execution = f.commands.find((entry) => entry.command.startsWith('rm "$HOME'))!;
-  await assert.rejects(access(execution.handle.env!.HOME!));
-});
+      .execute('printf refreshed > "$HOME/.aws/sso/cache/session.json"; exit 7', { credentials: ["aws"] });
+    assert.equal(result.code, 7);
+    const second = await f.context().execute('cat "$HOME/.aws/sso/cache/session.json"', { credentials: ["aws"] });
+    assert.equal(second.stdout, "refreshed");
+  }));
 
-test("refreshes made through a use grant never change the owner's saved login", async (t) => {
-  const f = await fixture(t);
-  const grant = await f.keychain.createGrant({
-    credentialId: f.credential.id,
-    ownerId: owner,
-    audienceScopeId: scope,
-    mode: "standing",
-    purpose: "test grant writeback",
-  });
-  const prepared = await f.keychain.prepareMaterialize(grant.id, scope, owner);
-  if (prepared.materialized.kind !== "file") throw new Error("Expected files");
-  await prepared.commit();
-  const before = prepared.materialized.files;
-  await f.keychain.updateFiles(prepared.materialized, [
-    { path: ".aws/config", contentBase64: Buffer.from("credential_process=malicious").toString("base64") },
-  ]);
-  const saved = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
-  if (saved.kind !== "file") throw new Error("Expected files");
-  assert.deepEqual(saved.files, before);
-});
+test("concurrent file updates cannot overwrite a newer credential or its grants", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const grant = await f.keychain.createGrant({
+      credentialId: f.credential.id,
+      ownerId: owner,
+      audienceScopeId: scopeId("channel", "test"),
+      mode: "standing",
+      purpose: "test",
+    });
+    const a = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+    const b = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+    if (a.kind !== "file" || b.kind !== "file") throw new Error("Expected files");
+    await f.keychain.updateFiles({ ...a, writeback: true }, files("newer"));
+    await assert.rejects(f.keychain.updateFiles({ ...b, writeback: true }, files("stale")), /changed during execution/);
+    assert.equal((await f.keychain.getGrant(grant.id))?.status, "active");
+  }));
 
-test("an execution sweeps only stale credential directories", async (t) => {
-  const f = await fixture(t);
-  const stale = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("stale"), save: async () => {} }]);
-  const live = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("live"), save: async () => {} }]);
-  const staleDir = stale.env.HOME!.replace(/\/home$/, "");
-  await f.sandbox.run(f.handle, `touch -d '3 hours ago' ${staleDir}`);
-  await f.context().execute("true", { credentials: ["aws"] });
-  await assert.rejects(access(stale.env.HOME!));
-  await access(`${live.env.HOME}/.aws/sso/cache/session.json`);
-  await live.finish();
-});
+test("symlink replacement is rejected and the ephemeral home is removed", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    await assert.rejects(
+      f
+        .context()
+        .execute('rm "$HOME/.aws/sso/cache/session.json"; ln -s /etc/passwd "$HOME/.aws/sso/cache/session.json"', {
+          credentials: ["aws"],
+        }),
+      /symlinks/,
+    );
+    const execution = f.commands.find((entry) => entry.command.startsWith('rm "$HOME'))!;
+    await assert.rejects(access(execution.handle.env!.HOME!));
+  }));
 
-test("concurrent executions keep their own credential directories", async (t) => {
-  const f = await fixture(t);
-  const entered = Promise.withResolvers<string>();
-  const release = Promise.withResolvers<void>();
-  const sandbox = {
-    ...f.sandbox,
-    async run(handle: SandboxHandle, command: string, opts: Parameters<Sandbox["run"]>[2]) {
-      if (command.startsWith("credential-hold")) {
-        entered.resolve(handle.env!.HOME!);
-        await release.promise;
-      }
-      return f.sandbox.run(handle, command, opts);
-    },
-  };
-  const ctx = f.context({ sandbox });
-  const held = ctx.execute("credential-hold 2>/dev/null; cat ~/.aws/sso/cache/session.json", { credentials: ["aws"] });
-  const home = await entered.promise;
-  assert.equal((await ctx.execute("echo unrelated")).stdout.trim(), "unrelated");
-  await ctx.execute("true", { credentials: ["aws"] });
-  await access(`${home}/.aws/sso/cache/session.json`);
-  release.resolve();
-  assert.equal((await held).stdout, "original");
-  await assert.rejects(access(home));
-});
+test("refreshes made through a use grant never change the owner's saved login", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const grant = await f.keychain.createGrant({
+      credentialId: f.credential.id,
+      ownerId: owner,
+      audienceScopeId: scope,
+      mode: "standing",
+      purpose: "test grant writeback",
+    });
+    const prepared = await f.keychain.prepareMaterialize(grant.id, scope, owner);
+    if (prepared.materialized.kind !== "file") throw new Error("Expected files");
+    await prepared.commit();
+    const before = prepared.materialized.files;
+    await f.keychain.updateFiles(prepared.materialized, [
+      { path: ".aws/config", contentBase64: Buffer.from("credential_process=malicious").toString("base64") },
+    ]);
+    const saved = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
+    if (saved.kind !== "file") throw new Error("Expected files");
+    assert.deepEqual(saved.files, before);
+  }));
+
+test("an execution sweeps only stale credential directories", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const stale = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("stale"), save: async () => {} }]);
+    const live = await prepareExecutionFiles(f.sandbox, f.handle, [{ files: files("live"), save: async () => {} }]);
+    const staleDir = stale.env.HOME!.replace(/\/home$/, "");
+    await f.sandbox.run(f.handle, `touch -d '3 hours ago' ${staleDir}`);
+    await f.context().execute("true", { credentials: ["aws"] });
+    await assert.rejects(access(stale.env.HOME!));
+    await access(`${live.env.HOME}/.aws/sso/cache/session.json`);
+    await live.finish();
+  }));
+
+test("concurrent executions keep their own credential directories", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const entered = Promise.withResolvers<string>();
+    const release = Promise.withResolvers<void>();
+    const sandbox = {
+      ...f.sandbox,
+      async run(handle: SandboxHandle, command: string, opts: Parameters<Sandbox["run"]>[2]) {
+        if (command.startsWith("credential-hold")) {
+          entered.resolve(handle.env!.HOME!);
+          await release.promise;
+        }
+        return f.sandbox.run(handle, command, opts);
+      },
+    };
+    const ctx = f.context({ sandbox });
+    const held = ctx.execute("credential-hold 2>/dev/null; cat ~/.aws/sso/cache/session.json", {
+      credentials: ["aws"],
+    });
+    const home = await entered.promise;
+    assert.equal((await ctx.execute("echo unrelated")).stdout.trim(), "unrelated");
+    await ctx.execute("true", { credentials: ["aws"] });
+    await access(`${home}/.aws/sso/cache/session.json`);
+    release.resolve();
+    assert.equal((await held).stdout, "original");
+    await assert.rejects(access(home));
+  }));
 
 function background(
   f: Awaited<ReturnType<typeof fixture>>,
@@ -413,13 +429,14 @@ test("a background start that fails after launch leaves staging to the exit hook
     await assert.rejects(access(await readFile(join(f.handle.rootDir, "staged-home"), "utf8")));
   }));
 
-test("a background start that fails before launch removes its staging", async (t) => {
-  const f = await fixture(t);
-  const bg = background(f, { startFailure: true });
-  const before = (await run("sh", ["-c", "ls -d /tmp/qm-credentials.* 2>/dev/null | wc -l"])).stdout;
-  await assert.rejects(
-    bg.ctx().backgroundStart(refresh, { purpose: "Refresh a login", credentials: ["aws"] }),
-    /sandbox refused/,
-  );
-  assert.equal((await run("sh", ["-c", "ls -d /tmp/qm-credentials.* 2>/dev/null | wc -l"])).stdout, before);
-});
+test("a background start that fails before launch removes its staging", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const bg = background(f, { startFailure: true });
+    const before = (await run("sh", ["-c", "ls -d /tmp/qm-credentials.* 2>/dev/null | wc -l"])).stdout;
+    await assert.rejects(
+      bg.ctx().backgroundStart(refresh, { purpose: "Refresh a login", credentials: ["aws"] }),
+      /sandbox refused/,
+    );
+    assert.equal((await run("sh", ["-c", "ls -d /tmp/qm-credentials.* 2>/dev/null | wc -l"])).stdout, before);
+  }));

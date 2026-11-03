@@ -36,7 +36,8 @@ function failFirstApproval(asks: KeychainAskRows): void {
 async function fixture() {
   let now = Date.now();
   let member = true;
-  const rows = testKeychainRows();
+  const url = testDatabaseUrl();
+  const rows = testKeychainRows(url);
   const { grants, asks } = rows;
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
@@ -45,7 +46,7 @@ async function fixture() {
     now: () => now,
   });
   const credential = await keychain.save({ ownerId: "alice@example.com", service: "aws", secret: "fixture-secret" });
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(url);
   const session = await sessions.getOrCreateByThread("web:alice:fixture", "dm", "personal:alice@example.com");
   await sessions.addParticipant(session.id, "alice@example.com");
   const { ask } = await keychain.createAsk({

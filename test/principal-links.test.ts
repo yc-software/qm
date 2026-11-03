@@ -195,31 +195,37 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     assert.equal(identity.externalMember("guest@partner.test"), undefined, "removal survives a reload");
   });
 
-  it("the keychain stores new credentials under the canonical owner and lists legacy ones from either id", async () => {
-    await installed();
-    const rows = testKeychainRows();
-    const creds = rows.creds;
-    const keychain = createKeychain({
-      lock: testAdvisoryLock(),
-      creds,
-      grants: rows.grants,
-      asks: rows.asks,
-      key: deriveConnectorKey("principal-links-test-key"),
-    });
-    const saved = await keychain.save({ ownerId: OIDC, service: "github", secret: "ghp_x", envKey: "GITHUB_TOKEN" });
-    assert.equal(saved.ownerId, EMAIL);
-    const rotated = await keychain.save({ ownerId: EMAIL, service: "github", secret: "ghp_y", envKey: "GITHUB_TOKEN" });
-    assert.equal(rotated.id, saved.id, "the same person saving the same service rotates one record");
-    assert.equal(await keychain.readOwnSecret(OIDC, saved.id), "ghp_y");
-    const legacy = await keychain.save({ ownerId: EMAIL, service: "linear", secret: "lin_x", envKey: "LINEAR_KEY" });
-    await creds.update(legacy.id, (current) => ({ ...current, ownerId: OIDC }));
-    const mine = await keychain.listByOwner(EMAIL);
-    assert.deepEqual(mine.map((c) => c.service).sort(), ["github", "linear"]);
-    const viaSignIn = await keychain.listByOwner(OIDC);
-    assert.deepEqual(viaSignIn.map((c) => c.service).sort(), ["github", "linear"]);
-    assert.equal(await keychain.readOwnSecret(OIDC, legacy.id), "lin_x");
-    assert.equal(await keychain.readOwnSecret("casey@acme.test", legacy.id), null);
-  });
+  it("the keychain stores new credentials under the canonical owner and lists legacy ones from either id", () =>
+    inTestTenant(async () => {
+      await installed();
+      const rows = testKeychainRows();
+      const creds = rows.creds;
+      const keychain = createKeychain({
+        lock: testAdvisoryLock(),
+        creds,
+        grants: rows.grants,
+        asks: rows.asks,
+        key: deriveConnectorKey("principal-links-test-key"),
+      });
+      const saved = await keychain.save({ ownerId: OIDC, service: "github", secret: "ghp_x", envKey: "GITHUB_TOKEN" });
+      assert.equal(saved.ownerId, EMAIL);
+      const rotated = await keychain.save({
+        ownerId: EMAIL,
+        service: "github",
+        secret: "ghp_y",
+        envKey: "GITHUB_TOKEN",
+      });
+      assert.equal(rotated.id, saved.id, "the same person saving the same service rotates one record");
+      assert.equal(await keychain.readOwnSecret(OIDC, saved.id), "ghp_y");
+      const legacy = await keychain.save({ ownerId: EMAIL, service: "linear", secret: "lin_x", envKey: "LINEAR_KEY" });
+      await creds.update(legacy.id, (current) => ({ ...current, ownerId: OIDC }));
+      const mine = await keychain.listByOwner(EMAIL);
+      assert.deepEqual(mine.map((c) => c.service).sort(), ["github", "linear"]);
+      const viaSignIn = await keychain.listByOwner(OIDC);
+      assert.deepEqual(viaSignIn.map((c) => c.service).sort(), ["github", "linear"]);
+      assert.equal(await keychain.readOwnSecret(OIDC, legacy.id), "lin_x");
+      assert.equal(await keychain.readOwnSecret("casey@acme.test", legacy.id), null);
+    }));
 
   it("an admin grant held by either id makes the person an admin, and the users list shows one row", async () => {
     await installed();

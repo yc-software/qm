@@ -11,6 +11,7 @@ import {
 } from "../src/connectors/emoji-upload-service.ts";
 import { createBrowserSessionStore, type BrowserSessionStore } from "../src/connectors/browser-session-store.ts";
 import { testLinkTables } from "./support/credential-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const ACTOR = "U_ACTOR";
 const FALLBACK = "U_FALLBACK";
@@ -138,76 +139,81 @@ test("slackCookieHeader keeps every *.slack.com cookie, drops others, requires a
   assert.equal(slackCookieHeader(JSON.stringify({})), null);
 });
 
-test("successful upload: mints a token from the cookie, POSTs emoji.add with mode/name/token/image", async () => {
-  await withFallback(undefined, async () => {
-    const store = await sessionStoreWith(ACTOR);
-    const fake = fakeFetch({ add: { ok: true } });
-    const res = await runEmojiUpload(buildDeps(store, fake.impl), REQ);
-    assert.deepEqual(res, { ok: true, name: "partyparrot", workspace: WORKSPACE });
-    assert.equal(fake.calls[0]!.url, `https://${WORKSPACE}/`);
-    assert.match(fake.calls[0]!.cookie, /^d=d-U_ACTOR; d-s=ds-U_ACTOR$/);
-    const add = fake.calls[1]!;
-    assert.equal(add.url, `https://${WORKSPACE}/api/emoji.add`);
-    assert.deepEqual(
-      fake.calls.map((call) => call.redirect),
-      ["manual", "manual"],
-    );
-    assert.equal(add.body!.get("mode"), "data");
-    assert.equal(add.body!.get("name"), "partyparrot");
-    assert.equal(add.body!.get("token"), TOKEN);
-    const img = add.body!.get("image") as File;
-    assert.equal(img.name, "partyparrot.png");
-    assert.equal(img.type, "image/png");
-  });
-});
-
-test("a GIF image is sent with a .gif filename and image/gif type", async () => {
-  await withFallback(undefined, async () => {
-    const fake = fakeFetch({ add: { ok: true } });
-    const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), {
-      name: "wave",
-      imageBase64: GIF_B64,
+test("successful upload: mints a token from the cookie, POSTs emoji.add with mode/name/token/image", () =>
+  inTestTenant(async () => {
+    await withFallback(undefined, async () => {
+      const store = await sessionStoreWith(ACTOR);
+      const fake = fakeFetch({ add: { ok: true } });
+      const res = await runEmojiUpload(buildDeps(store, fake.impl), REQ);
+      assert.deepEqual(res, { ok: true, name: "partyparrot", workspace: WORKSPACE });
+      assert.equal(fake.calls[0]!.url, `https://${WORKSPACE}/`);
+      assert.match(fake.calls[0]!.cookie, /^d=d-U_ACTOR; d-s=ds-U_ACTOR$/);
+      const add = fake.calls[1]!;
+      assert.equal(add.url, `https://${WORKSPACE}/api/emoji.add`);
+      assert.deepEqual(
+        fake.calls.map((call) => call.redirect),
+        ["manual", "manual"],
+      );
+      assert.equal(add.body!.get("mode"), "data");
+      assert.equal(add.body!.get("name"), "partyparrot");
+      assert.equal(add.body!.get("token"), TOKEN);
+      const img = add.body!.get("image") as File;
+      assert.equal(img.name, "partyparrot.png");
+      assert.equal(img.type, "image/png");
     });
-    assert.equal(res.ok, true);
-    const img = fake.calls[1]!.body!.get("image") as File;
-    assert.equal(img.name, "wave.gif");
-    assert.equal(img.type, "image/gif");
-  });
-});
+  }));
 
-test("an explicit workspace overrides the connector workspace", async () => {
-  await withFallback(undefined, async () => {
-    const fake = fakeFetch({ add: { ok: true } });
-    const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), {
-      ...REQ,
-      workspace: "https://other.slack.com/",
+test("a GIF image is sent with a .gif filename and image/gif type", () =>
+  inTestTenant(async () => {
+    await withFallback(undefined, async () => {
+      const fake = fakeFetch({ add: { ok: true } });
+      const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), {
+        name: "wave",
+        imageBase64: GIF_B64,
+      });
+      assert.equal(res.ok, true);
+      const img = fake.calls[1]!.body!.get("image") as File;
+      assert.equal(img.name, "wave.gif");
+      assert.equal(img.type, "image/gif");
     });
-    assert.deepEqual(res, { ok: true, name: "partyparrot", workspace: "other.slack.com" });
-    assert.equal(fake.calls[0]!.url, "https://other.slack.com/");
-    assert.equal(fake.calls[1]!.url, "https://other.slack.com/api/emoji.add");
-  });
-});
+  }));
 
-test("principal selection (a): actor has a session → uploads under the ACTOR's cookie", async () => {
-  await withFallback(FALLBACK, async () => {
-    const store = await sessionStoreWith(ACTOR, FALLBACK);
-    const fake = fakeFetch({ add: { ok: true } });
-    const res = await runEmojiUpload(buildDeps(store, fake.impl), REQ);
-    assert.equal(res.ok, true);
-    assert.match(fake.calls[0]!.cookie, /d=d-U_ACTOR/);
-    assert.doesNotMatch(fake.calls[0]!.cookie, /FALLBACK/);
-  });
-});
+test("an explicit workspace overrides the connector workspace", () =>
+  inTestTenant(async () => {
+    await withFallback(undefined, async () => {
+      const fake = fakeFetch({ add: { ok: true } });
+      const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), {
+        ...REQ,
+        workspace: "https://other.slack.com/",
+      });
+      assert.deepEqual(res, { ok: true, name: "partyparrot", workspace: "other.slack.com" });
+      assert.equal(fake.calls[0]!.url, "https://other.slack.com/");
+      assert.equal(fake.calls[1]!.url, "https://other.slack.com/api/emoji.add");
+    });
+  }));
 
-test("principal selection (b): actor has no session but fallback seeded → uploads under the FALLBACK", async () => {
-  await withFallback(FALLBACK, async () => {
-    const store = await sessionStoreWith(FALLBACK);
-    const fake = fakeFetch({ add: { ok: true } });
-    const res = await runEmojiUpload(buildDeps(store, fake.impl), REQ);
-    assert.equal(res.ok, true);
-    assert.match(fake.calls[0]!.cookie, /d=d-U_FALLBACK/);
-  });
-});
+test("principal selection (a): actor has a session → uploads under the ACTOR's cookie", () =>
+  inTestTenant(async () => {
+    await withFallback(FALLBACK, async () => {
+      const store = await sessionStoreWith(ACTOR, FALLBACK);
+      const fake = fakeFetch({ add: { ok: true } });
+      const res = await runEmojiUpload(buildDeps(store, fake.impl), REQ);
+      assert.equal(res.ok, true);
+      assert.match(fake.calls[0]!.cookie, /d=d-U_ACTOR/);
+      assert.doesNotMatch(fake.calls[0]!.cookie, /FALLBACK/);
+    });
+  }));
+
+test("principal selection (b): actor has no session but fallback seeded → uploads under the FALLBACK", () =>
+  inTestTenant(async () => {
+    await withFallback(FALLBACK, async () => {
+      const store = await sessionStoreWith(FALLBACK);
+      const fake = fakeFetch({ add: { ok: true } });
+      const res = await runEmojiUpload(buildDeps(store, fake.impl), REQ);
+      assert.equal(res.ok, true);
+      assert.match(fake.calls[0]!.cookie, /d=d-U_FALLBACK/);
+    });
+  }));
 
 test("principal selection (c): neither actor nor fallback → clear unavailable error, no network call", async () => {
   await withFallback(FALLBACK, async () => {
@@ -219,106 +225,116 @@ test("principal selection (c): neither actor nor fallback → clear unavailable 
   });
 });
 
-test("no fallback configured + actor has no session → unavailable (does not borrow anyone)", async () => {
-  await withFallback(undefined, async () => {
-    const fake = fakeFetch({ add: { ok: true } });
-    const res = await runEmojiUpload(buildDeps(await sessionStoreWith(FALLBACK), fake.impl), REQ);
-    assert.equal(res.ok, false);
-    assert.equal(fake.calls.length, 0);
-  });
-});
-
-test("no workspace flag and no connector workspace → clear error, no network call", async () => {
-  await withFallback(undefined, async () => {
-    const fake = fakeFetch({ add: { ok: true } });
-    const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl, null), REQ);
-    assert.equal(res.ok, false);
-    assert.match((res as { error: string }).error, /no connected Slack workspace/i);
-    assert.equal(fake.calls.length, 0);
-  });
-});
-
-test("a stored session that can't mint a token (signed out) → session-expired, no emoji.add", async () => {
-  await withFallback(undefined, async () => {
-    const fake = fakeFetch({ token: null });
-    const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), REQ);
-    assert.equal(res.ok, false);
-    assert.equal((res as { error: string }).error, EMOJI_UPLOAD_SESSION_EXPIRED);
-    assert.equal(fake.calls.length, 1, "minted (and failed) but never called emoji.add");
-  });
-});
-
-test("a stored session with no d cookie → session-expired before any network call", async () => {
-  await withFallback(undefined, async () => {
-    const store = sessionStore();
-    await store.put(ACTOR, JSON.stringify({ cookies: [{ name: "d-s", value: "x", domain: ".slack.com" }] }));
-    const fake = fakeFetch({ add: { ok: true } });
-    const res = await runEmojiUpload(buildDeps(store, fake.impl), REQ);
-    assert.equal(res.ok, false);
-    assert.equal((res as { error: string }).error, EMOJI_UPLOAD_SESSION_EXPIRED);
-    assert.equal(fake.calls.length, 0);
-  });
-});
-
-test("Slack auth error from emoji.add maps to session-expired", async () => {
-  await withFallback(undefined, async () => {
-    const fake = fakeFetch({ add: { ok: false, error: "token_expired" } });
-    const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), REQ);
-    assert.equal(res.ok, false);
-    assert.equal((res as { error: string }).error, EMOJI_UPLOAD_SESSION_EXPIRED);
-  });
-});
-
-test("error_name_taken is treated as success — the emoji already exists and is ready to use", async () => {
-  await withFallback(undefined, async () => {
-    const fake = fakeFetch({ add: { ok: false, error: "error_name_taken" } });
-    const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), REQ);
-    assert.deepEqual(res, { ok: true, name: "partyparrot", workspace: WORKSPACE });
-  });
-});
-
-test("a too-large image error is surfaced with sizing guidance", async () => {
-  await withFallback(undefined, async () => {
-    const fake = fakeFetch({ add: { ok: false, error: "resized_but_still_too_large" } });
-    const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), REQ);
-    assert.equal(res.ok, false);
-    assert.match((res as { error: string }).error, /too large|128/i);
-  });
-});
-
-test("an invalid emoji name is rejected before any session lookup or network call", async () => {
-  await withFallback(FALLBACK, async () => {
-    const fake = fakeFetch({ add: { ok: true } });
-    const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), {
-      name: "Bad Name",
-      imageBase64: PNG_B64,
+test("no fallback configured + actor has no session → unavailable (does not borrow anyone)", () =>
+  inTestTenant(async () => {
+    await withFallback(undefined, async () => {
+      const fake = fakeFetch({ add: { ok: true } });
+      const res = await runEmojiUpload(buildDeps(await sessionStoreWith(FALLBACK), fake.impl), REQ);
+      assert.equal(res.ok, false);
+      assert.equal(fake.calls.length, 0);
     });
-    assert.equal(res.ok, false);
-    assert.match((res as { error: string }).error, /isn't a valid emoji name/);
-    assert.equal(fake.calls.length, 0);
-  });
-});
+  }));
 
-test("an empty / non-base64 image is rejected before any network call", async () => {
-  await withFallback(undefined, async () => {
-    const fake = fakeFetch({ add: { ok: true } });
-    const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), {
-      name: "x",
-      imageBase64: "",
+test("no workspace flag and no connector workspace → clear error, no network call", () =>
+  inTestTenant(async () => {
+    await withFallback(undefined, async () => {
+      const fake = fakeFetch({ add: { ok: true } });
+      const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl, null), REQ);
+      assert.equal(res.ok, false);
+      assert.match((res as { error: string }).error, /no connected Slack workspace/i);
+      assert.equal(fake.calls.length, 0);
     });
-    assert.equal(res.ok, false);
-    assert.match((res as { error: string }).error, /base64/i);
-    assert.equal(fake.calls.length, 0);
-  });
-});
+  }));
 
-test("a network failure while minting the token is surfaced as a real result, not a throw", async () => {
-  await withFallback(undefined, async () => {
-    const impl = (async () => {
-      throw new Error("ECONNREFUSED");
-    }) as unknown as typeof fetch;
-    const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), impl), REQ);
-    assert.equal(res.ok, false);
-    assert.match((res as { error: string }).error, /couldn't reach|ECONNREFUSED/i);
-  });
-});
+test("a stored session that can't mint a token (signed out) → session-expired, no emoji.add", () =>
+  inTestTenant(async () => {
+    await withFallback(undefined, async () => {
+      const fake = fakeFetch({ token: null });
+      const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), REQ);
+      assert.equal(res.ok, false);
+      assert.equal((res as { error: string }).error, EMOJI_UPLOAD_SESSION_EXPIRED);
+      assert.equal(fake.calls.length, 1, "minted (and failed) but never called emoji.add");
+    });
+  }));
+
+test("a stored session with no d cookie → session-expired before any network call", () =>
+  inTestTenant(async () => {
+    await withFallback(undefined, async () => {
+      const store = sessionStore();
+      await store.put(ACTOR, JSON.stringify({ cookies: [{ name: "d-s", value: "x", domain: ".slack.com" }] }));
+      const fake = fakeFetch({ add: { ok: true } });
+      const res = await runEmojiUpload(buildDeps(store, fake.impl), REQ);
+      assert.equal(res.ok, false);
+      assert.equal((res as { error: string }).error, EMOJI_UPLOAD_SESSION_EXPIRED);
+      assert.equal(fake.calls.length, 0);
+    });
+  }));
+
+test("Slack auth error from emoji.add maps to session-expired", () =>
+  inTestTenant(async () => {
+    await withFallback(undefined, async () => {
+      const fake = fakeFetch({ add: { ok: false, error: "token_expired" } });
+      const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), REQ);
+      assert.equal(res.ok, false);
+      assert.equal((res as { error: string }).error, EMOJI_UPLOAD_SESSION_EXPIRED);
+    });
+  }));
+
+test("error_name_taken is treated as success — the emoji already exists and is ready to use", () =>
+  inTestTenant(async () => {
+    await withFallback(undefined, async () => {
+      const fake = fakeFetch({ add: { ok: false, error: "error_name_taken" } });
+      const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), REQ);
+      assert.deepEqual(res, { ok: true, name: "partyparrot", workspace: WORKSPACE });
+    });
+  }));
+
+test("a too-large image error is surfaced with sizing guidance", () =>
+  inTestTenant(async () => {
+    await withFallback(undefined, async () => {
+      const fake = fakeFetch({ add: { ok: false, error: "resized_but_still_too_large" } });
+      const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), REQ);
+      assert.equal(res.ok, false);
+      assert.match((res as { error: string }).error, /too large|128/i);
+    });
+  }));
+
+test("an invalid emoji name is rejected before any session lookup or network call", () =>
+  inTestTenant(async () => {
+    await withFallback(FALLBACK, async () => {
+      const fake = fakeFetch({ add: { ok: true } });
+      const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), {
+        name: "Bad Name",
+        imageBase64: PNG_B64,
+      });
+      assert.equal(res.ok, false);
+      assert.match((res as { error: string }).error, /isn't a valid emoji name/);
+      assert.equal(fake.calls.length, 0);
+    });
+  }));
+
+test("an empty / non-base64 image is rejected before any network call", () =>
+  inTestTenant(async () => {
+    await withFallback(undefined, async () => {
+      const fake = fakeFetch({ add: { ok: true } });
+      const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), fake.impl), {
+        name: "x",
+        imageBase64: "",
+      });
+      assert.equal(res.ok, false);
+      assert.match((res as { error: string }).error, /base64/i);
+      assert.equal(fake.calls.length, 0);
+    });
+  }));
+
+test("a network failure while minting the token is surfaced as a real result, not a throw", () =>
+  inTestTenant(async () => {
+    await withFallback(undefined, async () => {
+      const impl = (async () => {
+        throw new Error("ECONNREFUSED");
+      }) as unknown as typeof fetch;
+      const res = await runEmojiUpload(buildDeps(await sessionStoreWith(ACTOR), impl), REQ);
+      assert.equal(res.ok, false);
+      assert.match((res as { error: string }).error, /couldn't reach|ECONNREFUSED/i);
+    });
+  }));

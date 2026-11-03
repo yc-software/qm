@@ -17,6 +17,7 @@ import {
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { createOAuthFlowStore } from "../src/connectors/oauth-flow-store.ts";
 import { testLinkTables } from "./support/credential-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const env = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",
@@ -548,22 +549,23 @@ test("token failures keep the provider's error detail", async () => {
   );
 });
 
-test("oauth flow store — a short opaque state resolves once, then expires", async () => {
-  const store = createOAuthFlowStore(testLinkTables().oauthFlows, { now: () => 1_000 });
-  const flowId = await store.start({
-    provider: "x",
-    principalId: "person@example.com",
-    redirectUri: "https://example.test/v1/connectors/oauth/x/callback",
-    codeVerifier: "verifier",
-  });
-  assert.equal(flowId.length, 43);
-  assert.equal(await store.finish("nope"), null);
-  const opened = await store.finish(flowId);
-  assert.equal(opened?.codeVerifier, "verifier");
-  assert.equal(opened?.nonce, flowId);
-  assert.equal(await store.finish(flowId), null, "single use");
+test("oauth flow store — a short opaque state resolves once, then expires", () =>
+  inTestTenant(async () => {
+    const store = createOAuthFlowStore(testLinkTables().oauthFlows, { now: () => 1_000 });
+    const flowId = await store.start({
+      provider: "x",
+      principalId: "person@example.com",
+      redirectUri: "https://example.test/v1/connectors/oauth/x/callback",
+      codeVerifier: "verifier",
+    });
+    assert.equal(flowId.length, 43);
+    assert.equal(await store.finish("nope"), null);
+    const opened = await store.finish(flowId);
+    assert.equal(opened?.codeVerifier, "verifier");
+    assert.equal(opened?.nonce, flowId);
+    assert.equal(await store.finish(flowId), null, "single use");
 
-  const stale = createOAuthFlowStore(testLinkTables().oauthFlows, { now: () => 1_000, ttlMs: 10 });
-  const staleId = await stale.start({ provider: "x", principalId: "U1", redirectUri: "https://example.test/cb" }, 0);
-  assert.equal(await stale.finish(staleId), null, "expired");
-});
+    const stale = createOAuthFlowStore(testLinkTables().oauthFlows, { now: () => 1_000, ttlMs: 10 });
+    const staleId = await stale.start({ provider: "x", principalId: "U1", redirectUri: "https://example.test/cb" }, 0);
+    assert.equal(await stale.finish(staleId), null, "expired");
+  }));

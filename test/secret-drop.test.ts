@@ -37,63 +37,66 @@ const SECRET = "secret-drop-test-secret".repeat(3);
 const execFileAsync = promisify(execFile);
 
 describe("SecretDropStore", () => {
-  it("mint → peek (non-consuming) → redeem (single-use)", async () => {
-    const t = 1_000_000;
-    const store = createSecretDropStore(testLinkTables().secretDrops, { now: () => t });
-    const { dropId } = await store.mint({
-      ownerId: "U_A",
-      service: "stripe",
-      purpose: "charge cards",
-      requestedBy: "U_A",
-    });
+  it("mint → peek (non-consuming) → redeem (single-use)", () =>
+    inTestTenant(async () => {
+      const t = 1_000_000;
+      const store = createSecretDropStore(testLinkTables().secretDrops, { now: () => t });
+      const { dropId } = await store.mint({
+        ownerId: "U_A",
+        service: "stripe",
+        purpose: "charge cards",
+        requestedBy: "U_A",
+      });
 
-    const p1 = await store.peek(dropId);
-    assert.ok(p1.ok && p1.rec.service === "stripe");
-    assert.ok((await store.peek(dropId)).ok, "peek does not consume the drop");
+      const p1 = await store.peek(dropId);
+      assert.ok(p1.ok && p1.rec.service === "stripe");
+      assert.ok((await store.peek(dropId)).ok, "peek does not consume the drop");
 
-    const r1 = await store.redeem(dropId);
-    assert.ok(r1.ok && r1.rec.ownerId === "U_A");
-    const r2 = await store.redeem(dropId);
-    assert.ok(!r2.ok && r2.reason === "not_found", "single-use: a second redeem finds nothing");
-    assert.ok(!(await store.peek(dropId)).ok, "the record is gone after redemption");
-  });
+      const r1 = await store.redeem(dropId);
+      assert.ok(r1.ok && r1.rec.ownerId === "U_A");
+      const r2 = await store.redeem(dropId);
+      assert.ok(!r2.ok && r2.reason === "not_found", "single-use: a second redeem finds nothing");
+      assert.ok(!(await store.peek(dropId)).ok, "the record is gone after redemption");
+    }));
 
-  it("expires after the TTL, on both peek and redeem", async () => {
-    let t = 1_000_000;
-    const store = createSecretDropStore(testLinkTables().secretDrops, { now: () => t });
-    const { dropId } = await store.mint({ ownerId: "U_A", service: "x", purpose: "p", requestedBy: "U_A" });
-    t += SECRET_DROP_TTL_MS + 1;
-    assert.deepEqual(await store.peek(dropId), { ok: false, reason: "expired" });
-    assert.deepEqual(await store.redeem(dropId), { ok: false, reason: "expired" });
-  });
+  it("expires after the TTL, on both peek and redeem", () =>
+    inTestTenant(async () => {
+      let t = 1_000_000;
+      const store = createSecretDropStore(testLinkTables().secretDrops, { now: () => t });
+      const { dropId } = await store.mint({ ownerId: "U_A", service: "x", purpose: "p", requestedBy: "U_A" });
+      t += SECRET_DROP_TTL_MS + 1;
+      assert.deepEqual(await store.peek(dropId), { ok: false, reason: "expired" });
+      assert.deepEqual(await store.redeem(dropId), { ok: false, reason: "expired" });
+    }));
 
-  it("siblings: pending drops for the same conversation only — other threads, expired links, and same-service twins excluded", async () => {
-    let t = 1_000_000;
-    const store = createSecretDropStore(testLinkTables().secretDrops, { now: () => t });
-    const base = {
-      ownerId: "U_A",
-      purpose: "p",
-      requestedBy: "U_A",
-      audienceScopeId: scopeId("channel", "C1"),
-      threadRef: "t1",
-    } as const;
-    const { dropId: stale } = await store.mint({ ...base, service: "stale" });
-    t += SECRET_DROP_TTL_MS + 1;
-    const { dropId: a } = await store.mint({ ...base, service: "alphasvc" });
-    await store.mint({ ...base, service: "alphasvc" });
-    await store.mint({ ...base, service: "betasvc" });
-    await store.mint({ ...base, service: "otherthread", threadRef: "t2" });
-    await store.mint({ ...base, service: "otherscope", audienceScopeId: scopeId("channel", "C2") });
+  it("siblings: pending drops for the same conversation only — other threads, expired links, and same-service twins excluded", () =>
+    inTestTenant(async () => {
+      let t = 1_000_000;
+      const store = createSecretDropStore(testLinkTables().secretDrops, { now: () => t });
+      const base = {
+        ownerId: "U_A",
+        purpose: "p",
+        requestedBy: "U_A",
+        audienceScopeId: scopeId("channel", "C1"),
+        threadRef: "t1",
+      } as const;
+      const { dropId: stale } = await store.mint({ ...base, service: "stale" });
+      t += SECRET_DROP_TTL_MS + 1;
+      const { dropId: a } = await store.mint({ ...base, service: "alphasvc" });
+      await store.mint({ ...base, service: "alphasvc" });
+      await store.mint({ ...base, service: "betasvc" });
+      await store.mint({ ...base, service: "otherthread", threadRef: "t2" });
+      await store.mint({ ...base, service: "otherscope", audienceScopeId: scopeId("channel", "C2") });
 
-    const redeemed = await store.redeem(a);
-    assert.ok(redeemed.ok);
-    assert.deepEqual(
-      (await store.siblings(redeemed.rec)).map((r) => r.service).sort(),
-      ["betasvc"],
-      "same scope + thread, unexpired, different service",
-    );
-    assert.ok(!(await store.peek(stale)).ok, "the scan reaps expired links it walks past");
-  });
+      const redeemed = await store.redeem(a);
+      assert.ok(redeemed.ok);
+      assert.deepEqual(
+        (await store.siblings(redeemed.rec)).map((r) => r.service).sort(),
+        ["betasvc"],
+        "same scope + thread, unexpired, different service",
+      );
+      assert.ok(!(await store.peek(stale)).ok, "the scan reaps expired links it walks past");
+    }));
 });
 
 describe("fireDropResolution", () => {
