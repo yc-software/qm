@@ -40,8 +40,8 @@ export function createMcpMemoryProvider(opts: {
     actorId: string | undefined,
     scopeId: string,
   ) => {
-    if (opts.attestActor && !attestableAudience(actorId, scopeId)) throw new OutsideAudience("memory provider");
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
+    if (opts.attestActor && !attestableAudience(actorId, scopeId)) throw new OutsideAudience("memory provider");
     if (person) args[op.actorArg ?? "acting_user"] = person;
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
     const result = await withTimeout(() => op.client.callTool(op.tool, args, headers), op.timeoutMs, "memory provider");

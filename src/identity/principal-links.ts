@@ -81,15 +81,15 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
             400,
             `principalId and canonicalId must be non-empty ids of at most ${MAX_ID_LENGTH} characters`,
           );
-        if (isSystemActor(input.principalId.trim()) || isSystemActor(input.canonicalId.trim()))
-          throw new PrincipalLinkError(400, "a system actor is QM itself, not a person, so it cannot be linked to one");
-        const evidence = typeof input.evidence === "string" ? input.evidence.trim() : "";
-        if (!evidence || evidence.length > MAX_EVIDENCE_LENGTH)
-          throw new PrincipalLinkError(400, `evidence must say how the two identities were verified as one person`);
         const principalId = input.principalId.trim();
         const canonicalId = input.canonicalId.trim();
         const aliasKey = foldPrincipalId(principalId);
         const canonicalKey = foldPrincipalId(canonicalId);
+        if (isSystemActor(aliasKey) || isSystemActor(canonicalKey))
+          throw new PrincipalLinkError(400, "a system actor is QM itself, not a person, so it cannot be linked to one");
+        const evidence = typeof input.evidence === "string" ? input.evidence.trim() : "";
+        if (!evidence || evidence.length > MAX_EVIDENCE_LENGTH)
+          throw new PrincipalLinkError(400, `evidence must say how the two identities were verified as one person`);
         if (aliasKey === canonicalKey) throw new PrincipalLinkError(400, "a principal cannot be linked to itself");
         await refresh(true);
         const existing = byAlias.get(aliasKey);

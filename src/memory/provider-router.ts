@@ -63,6 +63,7 @@ export function createRoutedMemoryService(opts: {
       const failed = failedOutcome(error);
       if (error instanceof OutsideAudience) {
         report(failed);
+        opts.onError?.(error, route.provider, operation);
         return { value: fallback };
       }
       report(operation === "capture" && failed.outcome === "timed_out" ? { ...failed, outcome: "unknown" } : failed);

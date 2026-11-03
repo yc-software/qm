@@ -117,9 +117,10 @@ test("an actor QM cannot attest makes no provider call and is recorded as denied
     for (const actorId of ["jörg@acme.test", "x".repeat(257), "U 1"]) {
       assert.equal(recallText(await memory.recall(`personal:${actorId}`, { actorId, report })), "notebook fact");
     }
+    assert.equal(recallText(await memory.recall("personal:U1", { report })), "notebook fact");
   });
   assert.deepEqual(mcp.requests, []);
-  assert.deepEqual(external(outcomes), Array(3).fill({ outcome: "denied", code: "invalid_actor" }));
+  assert.deepEqual(external(outcomes), Array(4).fill({ outcome: "denied", code: "invalid_actor" }));
   const [problem] = problems;
   assert.equal(problem?.code, "memory_provider_denied");
   assert.match(problem?.fix ?? "", /POST \/v1\/admin\/principal-links/);
@@ -144,7 +145,7 @@ test("an attested provider is called only for the person whose private conversat
   assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U1"]));
 });
 
-test("a write refused for its audience is recorded without failing the route or reporting an error", async () => {
+test("a write refused for its audience is recorded and logged without failing the route", async () => {
   const refusing: MemoryService = {
     ...notebook,
     async capture() {
@@ -167,7 +168,8 @@ test("a write refused for its audience is recorded without failing the route or 
       1,
     );
     assert.deepEqual(external(outcomes), [{ outcome: "denied", code: "private_only" }]);
-    assert.deepEqual(errors, []);
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0] instanceof OutsideAudience);
   }
 });
 
