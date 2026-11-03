@@ -1,4 +1,5 @@
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
 import type { ScopeId } from "../types.ts";
 import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
@@ -6,6 +7,7 @@ type FileUploadState = "pending" | "completing" | "complete" | "aborting" | "abo
 
 export interface FileUpload {
   id: string;
+  tenantId?: string;
   actorId: string;
   scopeId: ScopeId;
   name: string;
@@ -27,6 +29,7 @@ export interface FileUploadStore {
   touch(id: string, at: number): Promise<boolean>;
   active(actorId: string, now: number): Promise<FileUpload[]>;
   expired(now: number): Promise<FileUpload[]>;
+  completingUploadId(id: string): Promise<string | null>;
 }
 
 export class FileUploadError extends Error {
@@ -74,6 +77,7 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
   ]);
   const decode = (row: Record<string, unknown>): FileUpload => ({
     ...(row.data as FileUpload),
+    ...rowTenant(row),
     state: row.state as FileUploadState,
   });
   return {
@@ -126,16 +130,25 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
     },
     async expired(now) {
       return (
-        await db.q(
+        await claimAcrossTenants(
+          db,
           `WITH due AS (
-             SELECT id FROM file_uploads
-             WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
-             ORDER BY next_attempt_at, expires_at, id FOR UPDATE SKIP LOCKED LIMIT 100
-           ) UPDATE file_uploads SET next_attempt_at=$1+60000 FROM due
-             WHERE file_uploads.id=due.id RETURNING file_uploads.data,file_uploads.state`,
+               SELECT id FROM file_uploads
+               WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
+               ORDER BY next_attempt_at, expires_at, id FOR UPDATE SKIP LOCKED LIMIT 100
+             ) UPDATE file_uploads SET next_attempt_at=$1+60000 FROM due
+               WHERE file_uploads.id=due.id RETURNING file_uploads.*`,
           [now],
         )
-      ).map(decode);
+      ).rows.map(decode);
+    },
+    async completingUploadId(id) {
+      const { rows } = await claimAcrossTenants(
+        db,
+        "SELECT data->>'uploadId' AS upload_id FROM file_uploads WHERE id=$1 AND state='completing'",
+        [id],
+      );
+      return rows[0] ? String(rows[0].upload_id) : null;
     },
   };
 }

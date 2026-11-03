@@ -83,7 +83,7 @@ import {
   type Config,
 } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
-import { createTenantLoader, registerTenants, withInstallTenant, type TenantLoader } from "./tenants/context.ts";
+import { createTenantLoader, registerTenants, withInstallTenant } from "./tenants/context.ts";
 import { enabledSandboxBackends } from "./sandbox/sandbox-settings.ts";
 import {
   actorAssertionActive,
@@ -157,6 +157,8 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
+import { inTenantOf } from "./tenants/claim.ts";
+import { withoutTenant, withTenant } from "./tenants/context.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { ownerPgPool } from "./tenants/owner-pool.ts";
 import { createTenancy, type Tenancy } from "./tenants/tenancy.ts";
@@ -453,8 +455,7 @@ export interface BuiltApp {
   deploymentLayerStore: DeploymentLayerStore;
   deploymentLayerReady: Promise<unknown>;
   deploymentLayerRefresh: Sweeper;
-  registerTenants: () => Promise<void>;
-  tenantLoader: TenantLoader;
+  loadTenants: () => Promise<void>;
   sessions: SessionStore;
   runs: RunStore;
   signals: RunSignalStore;
@@ -637,7 +638,6 @@ export function buildApp(
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
-  void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
     ...configStoreMaps(artifactMap),
@@ -645,7 +645,6 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills", ["scopeId"]),
     advisoryLock,
@@ -1438,7 +1437,9 @@ export function buildApp(
   };
   const runtimeOrgScope = () => scopeId("org", orgId());
   const orgBaseModelId = (): string | undefined =>
-    configStore.getRuntimeSelection(runtimeOrgScope())?.modelId ?? configStore.getBaseModel(runtimeOrgScope()) ?? undefined;
+    configStore.getRuntimeSelection(runtimeOrgScope())?.modelId ??
+    configStore.getBaseModel(runtimeOrgScope()) ??
+    undefined;
   const deploymentDefaultModel = () =>
     defaultModel(
       configuredModel(config),
@@ -2221,17 +2222,18 @@ export function buildApp(
   let reapInFlight = false;
   let lastReapAt = 0;
   const REAP_POKE_COOLDOWN_MS = 1_000;
-  const pokeReaper = (): void => {
-    if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
-    reapInFlight = true;
-    void leaderLease
-      .hold(REAPER_LEASE_KEY, () => reaper.sweep())
-      .catch(swallowAs("wake: reaper poke", null))
-      .finally(() => {
-        reapInFlight = false;
-        lastReapAt = Date.now();
-      });
-  };
+  const pokeReaper = (): void =>
+    withoutTenant(() => {
+      if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
+      reapInFlight = true;
+      void leaderLease
+        .hold(REAPER_LEASE_KEY, () => reaper.sweep())
+        .catch(swallowAs("wake: reaper poke", null))
+        .finally(() => {
+          reapInFlight = false;
+          lastReapAt = Date.now();
+        });
+    });
   const liveFallback = async (
     container: string,
     opts?: { limit?: number; surface?: string },
@@ -2457,7 +2459,10 @@ export function buildApp(
     for (;;) {
       const batch = await runs.pendingReturns(100, afterId);
       if (!batch.length) return;
-      for (const run of batch) await returnSessionRun(run).catch(swallowAs("sessions: recover return", undefined));
+      for (const run of batch)
+        await inTenantOf(run.tenantId, () => returnSessionRun(run)).catch(
+          swallowAs("sessions: recover return", undefined),
+        );
       afterId = batch.at(-1)!.id;
     }
   };
@@ -2481,10 +2486,12 @@ export function buildApp(
   );
   const orphanedSignalSweeper = createSweeper(
     async () => {
-      for (const runId of await runSignals.pendingRunIds()) {
-        const run = await runs.get(runId);
-        if (!run || isTerminal(run.status))
-          await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
+      for (const { runId, tenantId } of await runSignals.pendingRuns()) {
+        await inTenantOf(tenantId, async () => {
+          const run = await runs.get(runId);
+          if (!run || isTerminal(run.status))
+            await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
+        });
       }
       if (Date.now() - lastSignalPrune > 60 * 60_000) {
         lastSignalPrune = Date.now();
@@ -2788,8 +2795,8 @@ export function buildApp(
   const composioReturns = artifactMap<ComposioReturn>("composio_returns");
   const composioReturnSweeper = createSweeper(
     async () => {
-      for (const [id, entry] of await composioReturns.entries())
-        if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
+      for (const { tenantId, id, value } of await composioReturns.acrossTenants())
+        if (value.expiresAt <= Date.now()) await withTenant(tenantId, () => composioReturns.delete(id));
     },
     30 * 60_000,
     { label: "Composio consent returns", immediate: true },
@@ -2981,13 +2988,16 @@ export function buildApp(
     brokeredTools,
     deploymentLayerReady,
     deploymentLayerRefresh,
-    registerTenants: async () => {
-      const [row] = await pgArtifactMap.pool.q(
-        "SELECT qm_tenant_id()::text AS install, sole::text AS sole FROM qm_sole_tenant()",
-      );
-      registerTenants(String(row?.install), typeof row?.sole === "string" ? row.sole : undefined);
+    loadTenants: async () => {
+      const owner = ownerPgPool(pgArtifactMap.pool);
+      const [install] = await owner.q("SELECT qm_tenant_id()::text AS id");
+      const tenants = (await owner.q("SELECT id::text AS id FROM tenants ORDER BY id")).map((row) => String(row.id));
+      registerTenants(String(install?.id), tenants.length === 1 ? tenants[0] : undefined);
+      for (const tenant of tenants)
+        await withTenant(tenant, () => tenantLoader.load()).catch(
+          reportFailureAs("startup: load tenant caches", undefined),
+        );
     },
-    tenantLoader,
     rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(pgArtifactMap.pool),
     sessions,
     runs,

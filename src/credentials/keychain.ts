@@ -1,3 +1,5 @@
+import type { Claimed } from "../tenants/claim.ts";
+import { withTenant } from "../tenants/context.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { cacheTenant } from "../tenants/context.ts";
@@ -490,7 +492,7 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   listAsks(filter: AskListFilter): Promise<KeychainAsk[]>;
   approveAsk(input: ApproveAskInput): Promise<{ ask: KeychainAsk; grant: KeychainGrant }>;
   declineAsk(input: { askId: string; ownerId: string; note?: string }): Promise<KeychainAsk>;
-  unnotifiedResolvedAsks(now: number): Promise<KeychainAsk[]>;
+  unnotifiedResolvedAsks(now: number): Promise<Array<Claimed<KeychainAsk>>>;
   markAskNotified(id: string, status: KeychainAsk["status"]): Promise<void>;
 
   composioKey(ownerId: string, credentialId: string): Promise<string | null>;
@@ -685,6 +687,23 @@ export function createKeychain(deps: {
     return (await deps.grants.all()).filter(
       (g) => g.audienceScopeId === scopeId && g.status === "active" && !consumedGrant(g) && !expired(g, t),
     );
+  }
+
+  async function settleAsks(asks: KeychainAsk[], nowAt: number): Promise<KeychainAsk[]> {
+    const out: KeychainAsk[] = [];
+    const taskDecisions = new Set<string>();
+    for (const rec of asks.reverse().sort((a, b) => b.createdAt - a.createdAt)) {
+      const a = await freshAsk(rec, nowAt);
+      const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
+      const task = JSON.stringify([a.credentialId, a.requesterScopeId, origin]);
+      const retainDecision =
+        origin !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
+      taskDecisions.add(task);
+      if (a.status === "pending") continue;
+      if (a.notifiedAt === undefined) out.push(a);
+      else if (!retainDecision && a.notifiedAt < nowAt - ASK_PRUNE_AFTER_MS) await deps.asks.delete(a.id);
+    }
+    return out;
   }
 
   async function freshAsk(rec: KeychainAsk, t: number): Promise<KeychainAsk> {
@@ -1387,19 +1406,13 @@ export function createKeychain(deps: {
     },
 
     async unnotifiedResolvedAsks(nowAt) {
-      const out: KeychainAsk[] = [];
-      const taskDecisions = new Set<string>();
-      for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
-        const a = await freshAsk(rec, nowAt);
-        const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
-        const task = JSON.stringify([a.credentialId, a.requesterScopeId, origin]);
-        const retainDecision =
-          origin !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
-        taskDecisions.add(task);
-        if (a.status === "pending") continue;
-        if (a.notifiedAt === undefined) out.push(a);
-        else if (!retainDecision && a.notifiedAt < nowAt - ASK_PRUNE_AFTER_MS) await deps.asks.delete(a.id);
-      }
+      const byTenant = new Map<string, KeychainAsk[]>();
+      for (const { tenantId, value } of await deps.asks.acrossTenants())
+        byTenant.set(tenantId, [...(byTenant.get(tenantId) ?? []), value]);
+      const out: Array<Claimed<KeychainAsk>> = [];
+      for (const [tenantId, asks] of byTenant)
+        for (const ask of await withTenant(tenantId, () => settleAsks(asks, nowAt)))
+          out.push({ ...ask, tenantId });
       return out;
     },
 

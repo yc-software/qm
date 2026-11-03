@@ -13,13 +13,14 @@ import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin 
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { useOwnerDatabase } from "./tenants/owner-pool.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
-import { unboundTenantAllowed } from "./tenants/context.ts";
 
 const config = loadConfig();
 useOwnerDatabase(config.databaseOwnerUrl);
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+await built.tenancy.refreshSettings();
+built.tenancy.keepSettingsFresh();
 if (!config.backgroundDeploymentId) await built.rewriteSurfaceOrigins();
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
@@ -45,8 +46,7 @@ const server = createServer(built.app, {
   managedSlack,
 });
 
-await built.registerTenants();
-if (unboundTenantAllowed()) await built.tenantLoader.load();
+await built.loadTenants();
 await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();

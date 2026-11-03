@@ -12,7 +12,8 @@ export const tenantSettingsSchema = z
     modelGatewayKey: text,
     oidcClient: z.object({ issuer: z.url(), clientId: text, clientSecret: text }).strict(),
     slackBridgeToken: text,
-    orgId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+    connectorSecretKey: z.string().min(32).max(4096),
+    orgId: z.string().min(1).max(200),
   })
   .partial()
   .strict();
@@ -33,6 +34,11 @@ export async function tenantSettings(): Promise<TenantSettings> {
   const settings = await loader(tenant);
   loaded.set(tenant, settings);
   return settings;
+}
+
+export function replaceLoadedTenantSettings(all: ReadonlyMap<string, TenantSettings>): void {
+  loaded.clear();
+  for (const [tenant, settings] of all) loaded.set(tenant, settings);
 }
 
 export function loadedTenantSettings(): TenantSettings {

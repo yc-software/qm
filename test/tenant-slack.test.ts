@@ -10,17 +10,20 @@ import type { Server } from "node:http";
 import pg from "pg";
 import type { App as BoltApp, ReceiverEvent } from "@slack/bolt";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { createSlackInstallationStore, type SlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
-import { boundTenant } from "../src/tenants/context.ts";
+import { boundTenant, withTenant } from "../src/tenants/context.ts";
+import { decryptSecret, deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testMap, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { hostRequest } from "./support/host-request.ts";
+import { nonOwnerLogin } from "./support/non-owner.ts";
+import { useOwnerDatabase } from "../src/tenants/owner-pool.ts";
 
+const ENV_CONNECTOR_KEY = "connector-secret-key-from-environment-0123";
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
-const a = randomUUID();
-const b = randomUUID();
+const a: string = randomUUID();
+const b: string = randomUUID();
 const install = (tenant: string) => ({
   botToken: "xoxb-test",
   appId: "A123",
@@ -33,40 +36,30 @@ let base = "";
 let owner: pg.Pool;
 const seen: { tenant: string | undefined; type: unknown }[] = [];
 
-function tenantStores(): SlackInstallationStore {
-  const stores = new Map(
-    [a, b].map((tenant) => [
-      tenant,
-      createSlackInstallationStore("company", testMap() as never, "test-encryption-key"),
-    ]),
-  );
-  const current = (): SlackInstallationStore => {
-    const store = stores.get(boundTenant() ?? "");
-    if (!store) throw new Error("No tenant is bound to this work");
-    return store;
-  };
-  return new Proxy({} as SlackInstallationStore, {
-    get:
-      (_target, name: keyof SlackInstallationStore) =>
-      (...args: never[]) =>
-        (current()[name] as (...input: never[]) => unknown)(...args),
-  });
-}
-
 before(async () => {
   if (skip) return;
   const databaseUrl = testMigratedDatabaseUrl();
   owner = new pg.Pool({ connectionString: databaseUrl });
   await owner.query("INSERT INTO tenants(id) VALUES ($1), ($2)", [a, b]);
-  const built = buildApp(testConfig({ databaseUrl, dataDir: mkdtempSync(join(tmpdir(), "tenant-slack-")) }));
+  useOwnerDatabase(databaseUrl);
+  const built = buildApp(
+    testConfig({
+      databaseUrl: await nonOwnerLogin(databaseUrl),
+      dataDir: mkdtempSync(join(tmpdir(), "tenant-slack-")),
+    }),
+  );
   await built.tenancy.mapHost(a, "a.example.test");
   await built.tenancy.mapHost(b, "b.example.test");
-  await built.tenancy.updateSettings(a, { slackBridgeToken: "bridge-token-for-tenant-a-0123456789" });
-  await built.tenancy.updateSettings(b, { slackBridgeToken: "bridge-token-for-tenant-b-0123456789" });
+  for (const tenant of [a, b])
+    await built.tenancy.updateSettings(tenant, {
+      slackBridgeToken: `bridge-token-for-tenant-${tenant === a ? "a" : "b"}-0123456789`,
+      connectorSecretKey: `connector-secret-key-of-tenant-${tenant}`,
+    });
+  await built.tenancy.refreshSettings();
   const managedSlack = createManagedSlack({
     serviceUrl: "https://slack.example.com",
     token: "bridge-token-from-environment-0123456789",
-    store: tenantStores(),
+    store: built.slackInstallation,
   });
   for (const tenant of [a, b]) {
     const receiver = managedSlack.receiver(`install-${tenant}`);
@@ -139,3 +132,23 @@ test("one tenant's Slack bridge token is refused on another tenant's host and on
   assert.equal((await post("stranger.example.test", a, "events", body)).status, 421);
   assert.equal(seen.length, before);
 });
+
+test(
+  "a tenant's Slack bot token is encrypted under that tenant's connector key and readable only under it",
+  { skip },
+  async () => {
+    const { rows } = await owner.query(
+      "SELECT tenant_id::text AS tenant, json ->> 'botTokenEnc' AS enc FROM slack_installation WHERE tenant_id = $1",
+      [a],
+    );
+    const enc = rows[0]?.enc;
+    assert.equal(typeof enc, "string");
+    const key = deriveConnectorKey(ENV_CONNECTOR_KEY, "slack-installation");
+    assert.equal(
+      withTenant(a, () => decryptSecret(enc, key)),
+      "xoxb-test",
+    );
+    assert.throws(() => withTenant(b, () => decryptSecret(enc, key)));
+    assert.throws(() => decryptSecret(enc, key));
+  },
+);

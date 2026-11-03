@@ -1,6 +1,7 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { unitVector } from "../model/embeddings.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
+import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 
 export interface MemoryVector {
@@ -34,7 +35,7 @@ export interface MemoryVectorStore {
     dimensions?: number,
     signal?: AbortSignal,
     afterId?: string,
-  ): Promise<Array<{ scope: string; factId: string; hash: string; text: string }>>;
+  ): Promise<Array<{ tenantId?: string; scope: string; factId: string; hash: string; text: string }>>;
   prune(model: string, limit: number, dimensions?: number, signal?: AbortSignal): Promise<number>;
   close(): Promise<void>;
 }
@@ -130,7 +131,8 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       );
     },
     async missing(model, limit, dimensions, signal, afterId) {
-      const rows = await db.q(
+      const { rows } = await claimAcrossTenants(
+        db,
         `SELECT f.scope_id, f.id, f.text, f.text_hash AS hash
          FROM memory_facts f LEFT JOIN memory_fact_vectors v
            ON v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
@@ -142,6 +144,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
         { signal, timeoutMs: 5000 },
       );
       return rows.map((row) => ({
+        ...rowTenant(row),
         scope: String(row.scope_id),
         factId: String(row.id),
         hash: String(row.hash),
@@ -149,7 +152,8 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       }));
     },
     async prune(model, limit, dimensions, signal) {
-      const { rowCount } = await db.query(
+      const { rowCount } = await claimAcrossTenants(
+        db,
         `DELETE FROM memory_fact_vectors v USING (
           SELECT s.scope_id, s.model, s.fact_id FROM memory_fact_vectors s
           WHERE s.model <> $1 OR ($3::integer IS NOT NULL AND s.dimensions <> $3) OR NOT EXISTS (
