@@ -11,6 +11,7 @@ import { buildApp } from "../src/wiring.ts";
 import type { Principal, Session } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 type Page = { sessions: Session[]; pinned?: Session[]; nextCursor: string | null; hasArchived?: boolean };
 
@@ -26,7 +27,7 @@ async function withServer<T>(
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     return await fn(built, async (path) => {
-      const res = await fetch(base + path);
+      const res = await fetch(base + path, { headers: testTenantHeaders() });
       return { status: res.status, body: await res.json() };
     });
   } finally {
@@ -53,17 +54,20 @@ function enqueueRequest(threadRef: string): OrchestratorInput {
 
 test("the session list pages top-level chats newest first and keeps pinned, archived, children and automation runs out", async () => {
   await withServer(async (built, get) => {
-    const chats = [];
-    for (let i = 0; i < 5; i++) chats.push(await chat(built, `web:U1:c${i}`, `Chat ${i}`));
-    const pinned = await chat(built, "web:U1:pinned", "Pinned");
-    await built.sessions.updateParticipantView(pinned.id, "U1", { pinned: true });
-    const archived = await chat(built, "web:U1:archived", "Archived");
-    await built.sessions.updateParticipantView(archived.id, "U1", { archived: true });
-    const child = await chat(built, "subagent:c0:1", "Child");
-    await built.sessions.setParentSession(child.id, chats[0]!.id);
-    const cron = await built.sessions.getOrCreateByThread("cron:job:1", "dm", "personal:U1", undefined, "cron");
-    await built.sessions.addParticipant(cron.id, "U1", "Cron run");
-    await chat(built, "web:U2:theirs", "Someone else's", "U2");
+    const { chats, pinned, archived } = await inTestTenant(async () => {
+      const chats = [];
+      for (let i = 0; i < 5; i++) chats.push(await chat(built, `web:U1:c${i}`, `Chat ${i}`));
+      const pinned = await chat(built, "web:U1:pinned", "Pinned");
+      await built.sessions.updateParticipantView(pinned.id, "U1", { pinned: true });
+      const archived = await chat(built, "web:U1:archived", "Archived");
+      await built.sessions.updateParticipantView(archived.id, "U1", { archived: true });
+      const child = await chat(built, "subagent:c0:1", "Child");
+      await built.sessions.setParentSession(child.id, chats[0]!.id);
+      const cron = await built.sessions.getOrCreateByThread("cron:job:1", "dm", "personal:U1", undefined, "cron");
+      await built.sessions.addParticipant(cron.id, "U1", "Cron run");
+      await chat(built, "web:U2:theirs", "Someone else's", "U2");
+      return { chats, pinned, archived };
+    });
 
     const seen: Session[] = [];
     let page = (await get("/v1/sessions?principalId=U1&limit=2")).body as Page;
@@ -104,21 +108,25 @@ test("the session list pages top-level chats newest first and keeps pinned, arch
 
 test("a parent row counts its running subagents and its children load on demand", async () => {
   await withServer(async (built, get) => {
-    const parent = await chat(built, "web:U1:parent", "Parent");
-    const child = await chat(built, "subagent:parent:1", "Researcher");
-    await built.sessions.setParentSession(child.id, parent.id);
-    const grandchild = await chat(built, "subagent:child:1", "Helper");
-    await built.sessions.setParentSession(grandchild.id, child.id);
-    await built.runs.enqueue({ sessionId: grandchild.threadRef, request: enqueueRequest(grandchild.threadRef) });
+    const { parent, child, grandchild } = await inTestTenant(async () => {
+      const parent = await chat(built, "web:U1:parent", "Parent");
+      const child = await chat(built, "subagent:parent:1", "Researcher");
+      await built.sessions.setParentSession(child.id, parent.id);
+      const grandchild = await chat(built, "subagent:child:1", "Helper");
+      await built.sessions.setParentSession(grandchild.id, child.id);
+      await built.runs.enqueue({ sessionId: grandchild.threadRef, request: enqueueRequest(grandchild.threadRef) });
+      return { parent, child, grandchild };
+    });
 
     const page = (await get("/v1/sessions?principalId=U1")).body as Page;
     const row = page.sessions.find((s) => s.id === parent.id);
     assert.equal(row?.working, true);
-    assert.deepEqual(row?.subagents, { running: 2, waiting: 0 }, "the child is working on behalf of its child");
+    assert.deepEqual(row?.subagents, { running: 1, waiting: 0 }, "an idle child is not counted while its child runs");
 
     const children = (await get(`/v1/sessions/${parent.id}/children?principalId=U1`)).body as { sessions: Session[] };
     assert.deepEqual(children.sessions.map((s) => s.id).sort(), [child.id, grandchild.id].sort());
     assert.equal(children.sessions.find((s) => s.id === grandchild.id)?.working, true);
+    assert.ok(!children.sessions.find((s) => s.id === child.id)?.working);
     assert.deepEqual(
       children.sessions.find((s) => s.id === child.id)?.subagents,
       { running: 1, waiting: 0 },
@@ -132,7 +140,7 @@ test("a parent row counts its running subagents and its children load on demand"
 
 test("one row can be looked up by id or thread, and only by someone who can see it", async () => {
   await withServer(async (built, get) => {
-    const session = await chat(built, "web:U1:inbox", "Inbox");
+    const session = await inTestTenant(() => chat(built, "web:U1:inbox", "Inbox"));
     const byThread = (await get("/v1/sessions/row?principalId=U1&threadRef=web%3AU1%3Ainbox")).body as {
       session: Session;
     };

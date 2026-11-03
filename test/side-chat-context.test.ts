@@ -1,7 +1,7 @@
 import { countTokens } from "../src/util/tokens.ts";
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,11 @@ import { buildApp } from "./support/build-app.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 function discussions(text: string) {
   const json = text.split("```untrusted-data\n")[1]?.split("\n```")[0];
@@ -23,21 +28,18 @@ test("side-chat context excludes copied history, tools, footers, private message
   const parent = await store.getOrCreateByThread("parent", "dm", "personal:alice");
   await store.addParticipant(parent.id, "alice");
   await store.addParticipant(parent.id, "bob");
-  const { lease: parentLease } = await store.acquireLease(parent.id);
-  assert.ok(parentLease);
-  await store.append(parentLease, { type: "user", scopeLabel: parent.scopeId, payload: { text: "selected passage" } });
-  await store.releaseLease(parentLease);
+  const parentWriter = { sessionId: parent.id };
+  await store.append(parentWriter, { type: "user", scopeLabel: parent.scopeId, payload: { text: "selected passage" } });
   const child = await store.getOrCreateByThread("child", "dm", parent.scopeId);
   await store.addParticipant(child.id, "alice");
-  const { lease } = await store.acquireLease(child.id);
-  assert.ok(lease);
-  await store.append(lease, { type: "user", scopeLabel: parent.scopeId, payload: { text: "copied parent message" } });
+  const writer = { sessionId: child.id };
+  await store.append(writer, { type: "user", scopeLabel: parent.scopeId, payload: { text: "copied parent message" } });
   await store.updateForkProvenance(child.id, {
     forkedFrom: { sessionId: parent.id },
     forkBoundarySeq: 0,
     sideChat: { entrySeq: 0, quote: "selected passage", occurrence: 0, expanded: false },
   });
-  await store.append(lease, {
+  await store.append(writer, {
     type: "user",
     scopeLabel: parent.scopeId,
     payload: {
@@ -48,7 +50,7 @@ test("side-chat context excludes copied history, tools, footers, private message
     },
   });
   await store.addParticipant(child.id, "bob");
-  await store.append(lease, {
+  await store.append(writer, {
     type: "user",
     scopeLabel: parent.scopeId,
     payload: {
@@ -57,13 +59,12 @@ test("side-chat context excludes copied history, tools, footers, private message
       environment: "do not copy footer",
     },
   });
-  await store.append(lease, { type: "assistant", scopeLabel: parent.scopeId, payload: { text: "shared answer" } });
-  await store.append(lease, {
+  await store.append(writer, { type: "assistant", scopeLabel: parent.scopeId, payload: { text: "shared answer" } });
+  await store.append(writer, {
     type: "tool_result",
     scopeLabel: parent.scopeId,
     payload: { callId: "side-context-tool", tool: "read", result: "tool secret" },
   });
-  await store.releaseLease(lease);
   const text = await sideChatContext(store, parent, ["alice", "bob"], 10000);
   const [discussion] = discussions(text);
   assert.equal(discussion.passage, "selected passage");
@@ -82,7 +83,7 @@ test("side-chat context excludes copied history, tools, footers, private message
   assert.equal(await sideChatContext(store, parent, ["alice"], 10000), "");
 });
 
-test("parent reads persisted side-chat exchanges on its next turn without a synthetic parent turn", async () => {
+nodeTest("parent reads persisted side-chat exchanges on its next turn without a synthetic parent turn", async () => {
   const inputs: AgentTurnInput[] = [];
   const mock = createMockAgent();
   const { app } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qm-side-context-")) }), {
@@ -95,16 +96,20 @@ test("parent reads persisted side-chat exchanges on its next turn without a synt
     },
   });
   const turn = (threadRef: string, text: string) =>
-    app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef },
-      text,
-    });
+    inTestTenant(() =>
+      app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef },
+        text,
+      }),
+    );
   const first = await turn("web:U1:context-parent", "Explain queues");
-  const child = await app.forkSession(first.sessionId!, "U1", {
-    sideChat: { entrySeq: 0, quote: "queues", occurrence: 0 },
-  });
+  const child = await inTestTenant(() =>
+    app.forkSession(first.sessionId!, "U1", {
+      sideChat: { entrySeq: 0, quote: "queues", occurrence: 0 },
+    }),
+  );
   assert.ok(child);
   await turn(child.session.threadRef, "The retry decision is five attempts");
   assert.equal(inputs.length, 2);
@@ -120,7 +125,7 @@ test("parent reads persisted side-chat exchanges on its next turn without a synt
     false,
   );
   assert.ok(discussion.messages.every((message: object) => !Object.hasOwn(message, "environment")));
-  await app.expandSideChat("U1", child.session.id);
+  await inTestTenant(() => app.expandSideChat("U1", child.session.id));
   await turn(child.session.threadRef, "Now this is a normal session");
   await turn("web:U1:context-parent", "Any remaining side discussions?");
   assert.deepEqual(discussions(inputs.at(-1)!.systemPrompt), []);
@@ -130,10 +135,8 @@ test("side-chat context pages messages and reports exchanges omitted by the mode
   const store = createPostgresSessionStore(testDatabaseUrl());
   const parent = await store.getOrCreateByThread("budget-parent", "dm", "personal:alice");
   await store.addParticipant(parent.id, "alice");
-  const { lease: parentLease } = await store.acquireLease(parent.id);
-  assert.ok(parentLease);
-  await store.append(parentLease, { type: "user", scopeLabel: parent.scopeId, payload: { text: "queue" } });
-  await store.releaseLease(parentLease);
+  const parentWriter = { sessionId: parent.id };
+  await store.append(parentWriter, { type: "user", scopeLabel: parent.scopeId, payload: { text: "queue" } });
   for (let childIndex = 0; childIndex < 2; childIndex++) {
     const child = await store.getOrCreateByThread(`budget-child-${childIndex}`, "dm", parent.scopeId);
     await store.addParticipant(child.id, "alice");
@@ -142,22 +145,20 @@ test("side-chat context pages messages and reports exchanges omitted by the mode
       forkBoundarySeq: 0,
       sideChat: { entrySeq: 0, quote: "queue", occurrence: 0, expanded: false },
     });
-    const { lease } = await store.acquireLease(child.id);
-    assert.ok(lease);
-    await store.append(lease, { type: "user", scopeLabel: parent.scopeId, payload: { text: "copied" } });
+    const writer = { sessionId: child.id };
+    await store.append(writer, { type: "user", scopeLabel: parent.scopeId, payload: { text: "copied" } });
     for (let index = 0; index < 130; index++) {
-      await store.append(lease, {
+      await store.append(writer, {
         type: "user",
         scopeLabel: parent.scopeId,
         payload: { text: `message ${childIndex}/${index}` },
       });
     }
-    await store.append(lease, {
+    await store.append(writer, {
       type: "tool_result",
       scopeLabel: parent.scopeId,
       payload: { callId: "big-tool", tool: "read", result: "tool data ".repeat(10000) },
     });
-    await store.releaseLease(lease);
   }
   const full = await sideChatContext(store, parent, ["alice"], 20000);
   assert.equal(discussions(full).flatMap((d: { messages: unknown[] }) => d.messages).length, 260);
@@ -168,14 +169,12 @@ test("side-chat context pages messages and reports exchanges omitted by the mode
   const latest = (await store.sideChatsOf(parent.id)).sort(
     (a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id),
   )[0]!;
-  const { lease } = await store.acquireLease(latest.id);
-  assert.ok(lease);
-  await store.append(lease, {
+  const writer = { sessionId: latest.id };
+  await store.append(writer, {
     type: "assistant",
     scopeLabel: parent.scopeId,
     payload: { text: "oversized answer ".repeat(10000) },
   });
-  await store.releaseLease(lease);
   const oversized = await sideChatContext(store, parent, ["alice"], 600);
   assert.ok(countTokens(oversized) <= 600);
   assert.match(oversized, /omitted/);

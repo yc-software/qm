@@ -13,6 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -75,7 +76,7 @@ async function waitForSession(user: string, threadRef: string): Promise<SessionR
 }
 
 test("/me carries the Slack workspace URL once the directory has one", async () => {
-  await built.app.setDirectoryWorkspaceUrl("https://acme.slack.com");
+  await inTestTenant(() => built.app.setDirectoryWorkspaceUrl("https://acme.slack.com"));
   const me = (await (await fetch(`${webBase}/me`, asUser("alice"))).json()) as {
     user: string;
     slackWorkspaceUrl?: string | null;
@@ -85,12 +86,14 @@ test("/me carries the Slack workspace URL once the directory has one", async () 
 });
 
 test("a channel member can continue a teammate's shared web thread; outsiders and personal claims can't", async () => {
-  await built.app.upsertChannels(
-    [{ channelId: "C2", name: "sekrit", isPrivate: true }],
-    [
-      { channelId: "C2", principalId: "alice" },
-      { channelId: "C2", principalId: "bob" },
-    ],
+  await inTestTenant(() =>
+    built.app.upsertChannels(
+      [{ channelId: "C2", name: "sekrit", isPrivate: true }],
+      [
+        { channelId: "C2", principalId: "alice" },
+        { channelId: "C2", principalId: "bob" },
+      ],
+    ),
   );
 
   const aliceTurn = await fetch(
@@ -149,10 +152,14 @@ test("a channel member can continue a teammate's shared web thread; outsiders an
 });
 
 test("a person's own chats stay writable whichever login started them; Slack threads and other people stay out", async () => {
-  const old = await built.sessions.getOrCreateByThread("web:oidc:test:42:p1", "dm", "personal:carol@example.com");
-  await built.sessions.addParticipant(old.id, "carol@example.com", "Started on my other login");
-  const slack = await built.sessions.getOrCreateByThread("dm:D9", "dm", "personal:carol@example.com");
-  await built.sessions.addParticipant(slack.id, "carol@example.com", "Slack DM");
+  const old = await inTestTenant(() =>
+    built.sessions.getOrCreateByThread("web:oidc:test:42:p1", "dm", "personal:carol@example.com"),
+  );
+  await inTestTenant(() => built.sessions.addParticipant(old.id, "carol@example.com", "Started on my other login"));
+  const slack = await inTestTenant(() =>
+    built.sessions.getOrCreateByThread("dm:D9", "dm", "personal:carol@example.com"),
+  );
+  await inTestTenant(() => built.sessions.addParticipant(slack.id, "carol@example.com", "Slack DM"));
 
   const mine = await waitForSession("carol@example.com", "web:oidc:test:42:p1");
   assert.equal(mine.canContinue, true);
@@ -182,9 +189,11 @@ test("a person's own chats stay writable whichever login started them; Slack thr
 });
 
 test("someone who can start a chat in a public channel can keep going in it", async () => {
-  await built.app.upsertChannels(
-    [{ channelId: "C4", name: "town-square", isPrivate: false }],
-    [{ channelId: "C4", principalId: "alice" }],
+  await inTestTenant(() =>
+    built.app.upsertChannels(
+      [{ channelId: "C4", name: "town-square", isPrivate: false }],
+      [{ channelId: "C4", principalId: "alice" }],
+    ),
   );
   const first = await fetch(
     `${webBase}/api/turn`,

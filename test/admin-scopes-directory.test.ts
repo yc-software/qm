@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-scopes-")) }));
@@ -45,7 +46,7 @@ test("the scope directory starts independent resource reads together", async () 
   app.listDeployments = hold("deployments", app.listDeployments.bind(app));
   app.listSkills = hold("skills", app.listSkills.bind(app));
   app.listEnvironments = hold("environments", app.listEnvironments.bind(app));
-  const request = fetch(`${s.base}/v1/admin/scopes`, { headers: ALICE_ADMIN });
+  const request = fetch(`${s.base}/v1/admin/scopes`, { headers: { ...testTenantHeaders(), ...ALICE_ADMIN } });
   try {
     await ready.promise;
     assert.deepEqual([...started].sort(), ["crons", "deployments", "environments", "skills"]);
@@ -59,24 +60,29 @@ test("the scope directory starts independent resource reads together", async () 
 test("the admin scope directory lists every known scope with labels and counts (powers the picker)", async () => {
   const s = start();
   try {
-    const session = await s.built.sessions.getOrCreateByThread("T1", "channel", "channel:C9", "eng");
-    await s.built.sessions.addParticipant(session.id, "U1");
-    const { lease } = await s.built.sessions.acquireLease(session.id);
-    await s.built.sessions.append(lease!, {
-      type: "user",
-      payload: { text: "ship the board deck" },
-      scopeLabel: "channel:C9",
-    });
-    await s.built.sessions.releaseLease(lease!);
-    await s.built.app.createCron({
-      ownerScopeId: "channel:GONE",
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "ping",
-    });
+    const session = await inTestTenant(() =>
+      s.built.sessions.getOrCreateByThread("T1", "channel", "channel:C9", "eng"),
+    );
+    await inTestTenant(() => s.built.sessions.addParticipant(session.id, "U1"));
+    const writer = { sessionId: session.id };
+    await inTestTenant(() =>
+      s.built.sessions.append(writer, {
+        type: "user",
+        payload: { text: "ship the board deck" },
+        scopeLabel: "channel:C9",
+      }),
+    );
+    await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: "channel:GONE",
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "ping",
+      }),
+    );
 
-    const r = await fetch(`${s.base}/v1/admin/scopes`, { headers: ALICE_ADMIN });
+    const r = await fetch(`${s.base}/v1/admin/scopes`, { headers: { ...testTenantHeaders(), ...ALICE_ADMIN } });
     assert.equal(r.status, 200);
     const first = await json(r);
     assert.equal(first.activityAsOf, undefined, "the first read does not wait for session counts");
@@ -84,7 +90,7 @@ test("the admin scope directory lists every known scope with labels and counts (
     let d = first;
     for (let i = 0; i < 50 && d.activityAsOf === undefined; i++) {
       await new Promise((r) => setTimeout(r, 10));
-      d = await json(await fetch(`${s.base}/v1/admin/scopes`, { headers: ALICE_ADMIN }));
+      d = await json(await fetch(`${s.base}/v1/admin/scopes`, { headers: { ...testTenantHeaders(), ...ALICE_ADMIN } }));
     }
     assert.equal(typeof d.activityAsOf, "number", "a later read serves the counts the background refresh computed");
     const byId = new Map(d.scopes.map((row: any) => [row.scopeId, row]));
@@ -105,12 +111,16 @@ test("the admin scope directory lists every known scope with labels and counts (
     assert.equal(d.scopes[0].scopeId, "channel:C9", "most-active scopes sort first");
 
     assert.equal(
-      (await fetch(`${s.base}/v1/admin/scopes`, { headers: { "x-admin-actor": "nobody@default-org" } })).status,
+      (
+        await fetch(`${s.base}/v1/admin/scopes`, {
+          headers: { ...testTenantHeaders(), "x-admin-actor": "nobody@default-org" },
+        })
+      ).status,
       403,
       "org_admin-only",
     );
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "scopes.read"),
+      (await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "scopes.read"),
       "the directory read is audited",
     );
   } finally {
@@ -121,22 +131,30 @@ test("the admin scope directory lists every known scope with labels and counts (
 test("scopes without a session label fall back to the org directory (people's names, channel names)", async () => {
   const s = start();
   try {
-    await s.built.app.upsertDirectory([{ principalId: "U1", displayName: "Uma Ada", type: "internal" }]);
-    await s.built.app.upsertChannels([
-      { channelId: "C7", name: "random" },
-      { channelId: "C8", name: "quiet" },
-    ]);
-    const session = await s.built.sessions.getOrCreateByThread("T7", "channel", "channel:C7");
-    await s.built.sessions.addParticipant(session.id, "U1");
-    await s.built.app.createCron({
-      ownerScopeId: "channel:C8",
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "ping",
-    });
+    await inTestTenant(() =>
+      s.built.app.upsertDirectory([{ principalId: "U1", displayName: "Uma Ada", type: "internal" }]),
+    );
+    await inTestTenant(() =>
+      s.built.app.upsertChannels([
+        { channelId: "C7", name: "random" },
+        { channelId: "C8", name: "quiet" },
+      ]),
+    );
+    const session = await inTestTenant(() => s.built.sessions.getOrCreateByThread("T7", "channel", "channel:C7"));
+    await inTestTenant(() => s.built.sessions.addParticipant(session.id, "U1"));
+    await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: "channel:C8",
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "ping",
+      }),
+    );
 
-    const d = await json(await fetch(`${s.base}/v1/admin/scopes`, { headers: ALICE_ADMIN }));
+    const d = await json(
+      await fetch(`${s.base}/v1/admin/scopes`, { headers: { ...testTenantHeaders(), ...ALICE_ADMIN } }),
+    );
     const byId = new Map(d.scopes.map((row: any) => [row.scopeId, row]));
     assert.equal(
       (byId.get("channel:C7") as any).label,
@@ -161,14 +179,22 @@ test("scopes without a session label fall back to the org directory (people's na
 test("the admin scope directory exposes named environments and attached scopes", async () => {
   const s = start();
   try {
-    await s.built.app.upsertChannels([
-      { channelId: "A", name: "source" },
-      { channelId: "B", name: "attached" },
-    ]);
-    await s.built.app.createEnvironment({ scopeId: "channel:A", name: "A-permanent", actorId: "U1" });
-    await s.built.app.attachScope({ scopeId: "channel:B", environmentId: "channel:A", actorId: "U1" });
+    await inTestTenant(() =>
+      s.built.app.upsertChannels([
+        { channelId: "A", name: "source" },
+        { channelId: "B", name: "attached" },
+      ]),
+    );
+    await inTestTenant(() =>
+      s.built.app.createEnvironment({ scopeId: "channel:A", name: "A-permanent", actorId: "U1" }),
+    );
+    await inTestTenant(() =>
+      s.built.app.attachScope({ scopeId: "channel:B", environmentId: "channel:A", actorId: "U1" }),
+    );
 
-    const directory = await json(await fetch(`${s.base}/v1/admin/scopes`, { headers: ALICE_ADMIN }));
+    const directory = await json(
+      await fetch(`${s.base}/v1/admin/scopes`, { headers: { ...testTenantHeaders(), ...ALICE_ADMIN } }),
+    );
     const byId = new Map(directory.scopes.map((row: any) => [row.scopeId, row]));
     assert.deepEqual(directory.environments, [
       { id: "channel:A", name: "A-permanent", ownerActorId: "U1", attachedScopes: ["channel:B"] },
@@ -179,7 +205,9 @@ test("the admin scope directory exposes named environments and attached scopes",
       environmentName: "A-permanent",
     });
 
-    const attached = await json(await fetch(`${s.base}/v1/admin/scopes/channel:B`, { headers: ALICE_ADMIN }));
+    const attached = await json(
+      await fetch(`${s.base}/v1/admin/scopes/channel:B`, { headers: { ...testTenantHeaders(), ...ALICE_ADMIN } }),
+    );
     assert.deepEqual(attached.environmentAttachment, {
       environmentId: "channel:A",
       environmentName: "A-permanent",

@@ -11,6 +11,7 @@ import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -67,91 +68,90 @@ async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
   };
 }
 
-test("participant can read child history and title across memory checkpoints", async () => {
-  const r = await rig();
-  const child = await r.sessions.getOrCreateByThread("subagent:synthetic", "dm", scope);
-  await r.sessions.setParentSession(child.id, r.room.id);
-  await r.sessions.addParticipant(child.id, actor.id);
-  await r.sessions.updateTitle(child.id, "PRIVATE_SENTINEL");
-  const { lease } = await r.sessions.acquireLease(child.id);
-  assert.ok(lease);
-  await r.sessions.append(lease, {
-    type: "user",
-    scopeLabel: scope,
-    payload: {
-      text: "PRIVATE_SENTINEL",
-      memoryContext: {
-        kind: "memory_context",
-        fingerprint: "old",
-        snapshot: { audience: "previous-audience" },
-        throughSeq: -1,
+test("participant can read child history and title across memory checkpoints", () =>
+  inTestTenant(async () => {
+    const r = await rig();
+    const child = await r.sessions.getOrCreateByThread("subagent:synthetic", "dm", scope);
+    await r.sessions.setParentSession(child.id, r.room.id);
+    await r.sessions.addParticipant(child.id, actor.id);
+    await r.sessions.updateTitle(child.id, "PRIVATE_SENTINEL");
+    const writer = { sessionId: child.id };
+    await r.sessions.append(writer, {
+      type: "user",
+      scopeLabel: scope,
+      payload: {
+        text: "PRIVATE_SENTINEL",
+        memoryContext: {
+          kind: "memory_context",
+          fingerprint: "old",
+          snapshot: { audience: "previous-audience" },
+          throughSeq: -1,
+        },
       },
-    },
-  });
-  await r.sessions.append(lease, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
-  await r.sessions.releaseLease(lease);
-  const result = await r.syscallsFor(r.room).read({ target: child.id });
-  assert.ok(result.ok && result.mode === "transcript");
-  assert.equal(result.title, "PRIVATE_SENTINEL");
-  assert.match(result.rendered, /PRIVATE_SENTINEL/);
-  const listed = await r.syscallsFor(r.room).read({});
-  assert.ok(listed.ok && listed.mode === "children");
-  assert.equal(listed.children[0]?.title, "PRIVATE_SENTINEL");
-  assert.equal(listed.children[0]?.lastSaid, "PRIVATE_SENTINEL");
-});
+    });
+    await r.sessions.append(writer, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
+    const result = await r.syscallsFor(r.room).read({ target: child.id });
+    assert.ok(result.ok && result.mode === "transcript");
+    assert.equal(result.title, "PRIVATE_SENTINEL");
+    assert.match(result.rendered, /PRIVATE_SENTINEL/);
+    const listed = await r.syscallsFor(r.room).read({});
+    assert.ok(listed.ok && listed.mode === "children");
+    assert.equal(listed.children[0]?.title, "PRIVATE_SENTINEL");
+    assert.equal(listed.children[0]?.lastSaid, "PRIVATE_SENTINEL");
+  }));
 
-test("explicit source title changes reach fresh child tasks without copying history", async () => {
-  const r = await rig();
-  await r.sessions.updateTitle(r.room.id, "PRIVATE_SENTINEL");
-  const { lease } = await r.sessions.acquireLease(r.room.id);
-  assert.ok(lease);
-  const old = await r.sessions.append(lease, {
-    type: "assistant",
-    scopeLabel: scope,
-    payload: { text: "PRIVATE_SENTINEL" },
-  });
-  await r.sessions.append(lease, {
-    type: "user",
-    scopeLabel: scope,
-    payload: {
-      text: "new audience turn",
-      memoryContext: { kind: "memory_context", snapshot: { audience: "safe-audience" }, throughSeq: old.seq },
-    },
-  });
-  await r.sessions.releaseLease(lease);
-  await r.sessions.updateTitle(r.room.id, "Current parent");
-  const opened = await r.syscallsFor((await r.sessions.get(r.room.id))!).open({ task: "safe task", name: "safe name" });
-  assert.ok(opened.ok);
-  const child = (await r.sessions.get(opened.sessionId))!;
-  const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
-  assert.match(run.request.text, /Current parent/);
-  assert.doesNotMatch(run.request.text, /PRIVATE_SENTINEL/);
-});
-test("participant sees child title in session write response", async () => {
-  const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "task", name: "PRIVATE_SENTINEL" });
-  assert.ok(opened.ok);
-  const child = (await r.sessions.get(opened.sessionId))!;
-  await r.sessions.setParentSession(child.id, r.room.id);
-  await r.sessions.addParticipant(child.id, actor.id);
-  await r.sessions.updateTitle(child.id, "PRIVATE_SENTINEL");
-  const { lease } = await r.sessions.acquireLease(child.id);
-  assert.ok(lease);
-  await r.sessions.append(lease, {
-    type: "user",
-    scopeLabel: scope,
-    payload: {
-      text: "PRIVATE_SENTINEL",
-      memoryContext: {
-        kind: "memory_context",
-        fingerprint: "old",
-        snapshot: { audience: "previous-audience" },
-        throughSeq: -1,
+test("explicit source title changes reach fresh child tasks without copying history", () =>
+  inTestTenant(async () => {
+    const r = await rig();
+    await r.sessions.updateTitle(r.room.id, "PRIVATE_SENTINEL");
+    const writer = { sessionId: r.room.id };
+    const old = await r.sessions.append(writer, {
+      type: "assistant",
+      scopeLabel: scope,
+      payload: { text: "PRIVATE_SENTINEL" },
+    });
+    await r.sessions.append(writer, {
+      type: "user",
+      scopeLabel: scope,
+      payload: {
+        text: "new audience turn",
+        memoryContext: { kind: "memory_context", snapshot: { audience: "safe-audience" }, throughSeq: old.seq },
       },
-    },
-  });
-  await r.sessions.append(lease, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
-  await r.sessions.releaseLease(lease);
-  const result = await r.syscallsFor(r.room).write({ target: child.id, text: "generic message" });
-  assert.match(JSON.stringify(result), /PRIVATE_SENTINEL/);
-});
+    });
+    await r.sessions.updateTitle(r.room.id, "Current parent");
+    const opened = await r
+      .syscallsFor((await r.sessions.get(r.room.id))!)
+      .open({ task: "safe task", name: "safe name" });
+    assert.ok(opened.ok);
+    const child = (await r.sessions.get(opened.sessionId))!;
+    const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+    assert.match(run.request.text, /Current parent/);
+    assert.doesNotMatch(run.request.text, /PRIVATE_SENTINEL/);
+  }));
+test("participant sees child title in session write response", () =>
+  inTestTenant(async () => {
+    const r = await rig();
+    const opened = await r.syscallsFor(r.room).open({ task: "task", name: "PRIVATE_SENTINEL" });
+    assert.ok(opened.ok);
+    const child = (await r.sessions.get(opened.sessionId))!;
+    await r.sessions.setParentSession(child.id, r.room.id);
+    await r.sessions.addParticipant(child.id, actor.id);
+    await r.sessions.updateTitle(child.id, "PRIVATE_SENTINEL");
+    const writer = { sessionId: child.id };
+    await r.sessions.append(writer, {
+      type: "user",
+      scopeLabel: scope,
+      payload: {
+        text: "PRIVATE_SENTINEL",
+        memoryContext: {
+          kind: "memory_context",
+          fingerprint: "old",
+          snapshot: { audience: "previous-audience" },
+          throughSeq: -1,
+        },
+      },
+    });
+    await r.sessions.append(writer, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
+    const result = await r.syscallsFor(r.room).write({ target: child.id, text: "generic message" });
+    assert.match(JSON.stringify(result), /PRIVATE_SENTINEL/);
+  }));

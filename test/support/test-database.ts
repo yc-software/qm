@@ -10,6 +10,7 @@ import { applyPgMigrations, createPgPool, registeredPgMigrations, type PgPool } 
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
+import { useOwnerDatabase } from "../../src/tenants/claim.ts";
 
 function baseDatabaseUrl(variable: "DATABASE_URL" | "DATABASE_OWNER_URL" = "DATABASE_URL"): URL {
   const base = process.env[variable];
@@ -79,8 +80,14 @@ export async function migrateTestDatabase(databaseUrl = baseDatabaseUrl().toStri
   }
 }
 
+function ownedDatabaseUrl(name: string): string {
+  const url = databaseUrl(name);
+  useOwnerDatabase(ownerUrlOf(url));
+  return url;
+}
+
 export function testDatabaseUrl(): string {
-  return databaseUrl(createDatabaseSync({}));
+  return ownedDatabaseUrl(createDatabaseSync({}));
 }
 
 export function testBareDatabaseUrl(): string {
@@ -90,7 +97,7 @@ export function testBareDatabaseUrl(): string {
 export function testMigratedDatabaseUrl(): string {
   const template = process.env.QM_TEST_TEMPLATE_DATABASE;
   if (!template) throw new Error("QM_TEST_TEMPLATE_DATABASE is unset: run tests through scripts/run-pg-tests.mjs");
-  return databaseUrl(createDatabaseSync({ template }));
+  return ownedDatabaseUrl(createDatabaseSync({ template }));
 }
 
 let shared: { url: string; maps: ReturnType<typeof createPostgresMapFactory> } | undefined;
@@ -125,7 +132,7 @@ export function testPgPool(): PgPool {
 }
 
 export function testAdvisoryLock(): AdvisoryLock {
-  return createPostgresAdvisoryLock(createPgPool(testDatabaseUrl()));
+  return createPostgresAdvisoryLock(createPgPool(databaseUrl(createDatabaseSync({}))));
 }
 
 export function testConfigStore(orgId: string, opts: Partial<Parameters<typeof createConfigStore>[1]> = {}) {
@@ -141,13 +148,13 @@ export function testAdminGrantStore(
     role: "org_admin" as const,
   })),
 ): AdminGrantStore {
-  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed });
+  return createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl(createDatabaseSync({}))), { seed });
 }
 
 export function testDeployBackings(
   backings: Partial<Parameters<typeof import("../../src/deploy/deploy-store.ts").createDeployStore>[0]> = {},
 ) {
-  const maps = createPostgresMapFactory(testDatabaseUrl());
+  const maps = createPostgresMapFactory(databaseUrl(createDatabaseSync({})));
   return {
     deployments: maps.map<import("../../src/deploy/deploy-store.ts").Deployment>("deployments"),
     pg: maps.pool,

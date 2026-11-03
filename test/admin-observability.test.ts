@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-")), ...overrides });
@@ -32,7 +33,8 @@ function start(overrides: Parameters<typeof testConfig>[0] = {}) {
 }
 
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
-const get = (base: string, path: string, headers: Record<string, string> = ALICE) => fetch(base + path, { headers });
+const get = (base: string, path: string, headers: Record<string, string> = ALICE) =>
+  fetch(base + path, { headers: { ...testTenantHeaders(), ...headers } });
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
   (await get(base, path, headers)).json();
 
@@ -45,7 +47,7 @@ test("an org admin sees conversations, transcripts, and files top-down", async (
       conversation: { kind: "dm", threadRef: "dm:U1:t1" },
       text: "hello there",
     };
-    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
 
     const sess = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org");
     assert.ok(sess.sessions.length >= 1, "at least one conversation");
@@ -64,16 +66,18 @@ test("an org admin sees conversations, transcripts, and files top-down", async (
     );
     assert.ok(!transcript.entries.some((e) => e.type === "soul"), "resolved prompt context is not a transcript entry");
 
-    await s.built.files.put({
-      id: "todo-art-1",
-      ownerScopeId: "org:default-org",
-      createdBy: "U1",
-      name: "todo.txt",
-      path: "notes/todo.txt",
-      mimetype: "text/plain",
-      data: Buffer.from("buy milk"),
-      direction: "out",
-    });
+    await inTestTenant(() =>
+      s.built.files.put({
+        id: "todo-art-1",
+        ownerScopeId: "org:default-org",
+        createdBy: "U1",
+        name: "todo.txt",
+        path: "notes/todo.txt",
+        mimetype: "text/plain",
+        data: Buffer.from("buy milk"),
+        direction: "out",
+      }),
+    );
     const files = await getJson(s.base, "/v1/admin/files?scope=org:default-org");
     const f = files.files.find((x: { name: string }) => x.name === "todo.txt");
     assert.ok(f, "the saved document is enumerated");
@@ -91,16 +95,18 @@ test("an org admin sees conversations, transcripts, and files top-down", async (
     assert.match(download.headers.get("content-disposition") ?? "", /todo\.txt/);
     assert.equal(Buffer.from(await download.arrayBuffer()).toString("utf8"), "buy milk");
 
-    await s.built.files.put({
-      id: "html-art-1",
-      ownerScopeId: "org:default-org",
-      createdBy: "U1",
-      name: "page.html",
-      path: "notes/page.html",
-      mimetype: "text/html",
-      data: Buffer.from("<script>alert(1)</script>"),
-      direction: "out",
-    });
+    await inTestTenant(() =>
+      s.built.files.put({
+        id: "html-art-1",
+        ownerScopeId: "org:default-org",
+        createdBy: "U1",
+        name: "page.html",
+        path: "notes/page.html",
+        mimetype: "text/html",
+        data: Buffer.from("<script>alert(1)</script>"),
+        direction: "out",
+      }),
+    );
     const unsafe = await get(s.base, "/v1/admin/files/download?id=html-art-1");
     assert.equal(unsafe.status, 200);
     assert.equal(
@@ -111,16 +117,18 @@ test("an org admin sees conversations, transcripts, and files top-down", async (
     assert.match(unsafe.headers.get("content-disposition") ?? "", /^attachment/);
     await unsafe.arrayBuffer();
 
-    await s.built.files.put({
-      id: "pic-art-1",
-      ownerScopeId: "org:default-org",
-      createdBy: "U1",
-      name: "pic.png",
-      path: "notes/pic.png",
-      mimetype: "image/png",
-      data: Buffer.from("png-bytes"),
-      direction: "out",
-    });
+    await inTestTenant(() =>
+      s.built.files.put({
+        id: "pic-art-1",
+        ownerScopeId: "org:default-org",
+        createdBy: "U1",
+        name: "pic.png",
+        path: "notes/pic.png",
+        mimetype: "image/png",
+        data: Buffer.from("png-bytes"),
+        direction: "out",
+      }),
+    );
     const img = await get(s.base, "/v1/admin/files/download?id=pic-art-1");
     assert.equal(img.status, 200);
     assert.equal(img.headers.get("content-type"), "image/png");
@@ -131,22 +139,24 @@ test("an org admin sees conversations, transcripts, and files top-down", async (
       "inline bytes render with no script/document powers",
     );
 
-    await s.built.files.put({
-      id: "svg-art-1",
-      ownerScopeId: "org:default-org",
-      createdBy: "U1",
-      name: "sneaky.svg",
-      path: "notes/sneaky.svg",
-      mimetype: "image/svg+xml",
-      data: Buffer.from("<svg/>"),
-      direction: "out",
-    });
+    await inTestTenant(() =>
+      s.built.files.put({
+        id: "svg-art-1",
+        ownerScopeId: "org:default-org",
+        createdBy: "U1",
+        name: "sneaky.svg",
+        path: "notes/sneaky.svg",
+        mimetype: "image/svg+xml",
+        data: Buffer.from("<svg/>"),
+        direction: "out",
+      }),
+    );
     const svg = await get(s.base, "/v1/admin/files/download?id=svg-art-1");
     assert.equal(svg.status, 200);
     assert.equal(svg.headers.get("content-type"), "application/octet-stream", "svg is never served inline");
     assert.match(svg.headers.get("content-disposition") ?? "", /^attachment/);
 
-    const actions = (await s.built.auditLog.events()).map((e) => e.action);
+    const actions = (await inTestTenant(() => s.built.auditLog.events())).map((e) => e.action);
     for (const a of ["sessions.read", "session.read", "files.read", "file.read", "file.download", "file.view"]) {
       assert.ok(actions.includes(a), `audited ${a}`);
     }
@@ -164,7 +174,7 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
       conversation: { kind: "dm", threadRef: "dm:U1:llm" },
       text: "what's the weather",
     };
-    assert.equal((await s.built.app.turn(dm)).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
 
     const sess = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org");
     const conv = sess.sessions[0];
@@ -228,7 +238,7 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
       403,
     );
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "session.llm.read"),
+      (await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "session.llm.read"),
       "audited session.llm.read",
     );
     assert.equal(
@@ -246,69 +256,86 @@ test("recipient delivery rows expose origin provenance and gated origin context"
   const s = start();
   try {
     const sourceScope = "channel:C-origin";
-    const source = await s.built.sessions.getOrCreateByThread("cron:c1:42", "channel", sourceScope, "ops");
-    const { lease } = await s.built.sessions.acquireLease(source.id);
-    assert.ok(lease);
-    const sourceUser = await s.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "post the digest" },
-      scopeLabel: sourceScope,
-    });
-    const sourceResume = await s.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "(system note: resume)" },
-      scopeLabel: sourceScope,
-    });
-    const sourceAssistant = await s.built.sessions.append(lease, {
-      type: "assistant",
-      payload: { text: "Digest posted." },
-      scopeLabel: sourceScope,
-    });
-    await s.built.sessions.releaseLease(lease);
-    await s.built.sessions.recordLlmRequest(source.id, {
-      turnSeq: sourceUser.seq,
-      step: 0,
-      model: "mock",
-      scopeLabel: sourceScope,
-      promptEnvelope: { model: "mock", messages: [{ role: "user", content: "post the digest" }] },
-      truncated: false,
-    });
-    await s.built.sessions.recordLlmRequest(source.id, {
-      turnSeq: sourceResume.seq,
-      step: 1,
-      model: "mock",
-      scopeLabel: sourceScope,
-      promptEnvelope: { model: "mock", messages: [{ role: "user", content: "(system note: resume)" }] },
-      truncated: false,
-    });
+    const source = await inTestTenant(() =>
+      s.built.sessions.getOrCreateByThread("cron:c1:42", "channel", sourceScope, "ops"),
+    );
+    const writer = { sessionId: source.id };
+    const sourceUser = await inTestTenant(() =>
+      s.built.sessions.append(writer, {
+        type: "user",
+        payload: { text: "post the digest" },
+        scopeLabel: sourceScope,
+      }),
+    );
+    const sourceResume = await inTestTenant(() =>
+      s.built.sessions.append(writer, {
+        type: "user",
+        payload: { text: "(system note: resume)" },
+        scopeLabel: sourceScope,
+      }),
+    );
+    const sourceAssistant = await inTestTenant(() =>
+      s.built.sessions.append(writer, {
+        type: "assistant",
+        payload: { text: "Digest posted." },
+        scopeLabel: sourceScope,
+      }),
+    );
+    await inTestTenant(() =>
+      s.built.sessions.recordLlmRequest(source.id, {
+        turnSeq: sourceUser.seq,
+        step: 0,
+        model: "mock",
+        scopeLabel: sourceScope,
+        promptEnvelope: { model: "mock", messages: [{ role: "user", content: "post the digest" }] },
+        truncated: false,
+      }),
+    );
+    await inTestTenant(() =>
+      s.built.sessions.recordLlmRequest(source.id, {
+        turnSeq: sourceResume.seq,
+        step: 1,
+        model: "mock",
+        scopeLabel: sourceScope,
+        promptEnvelope: { model: "mock", messages: [{ role: "user", content: "(system note: resume)" }] },
+        truncated: false,
+      }),
+    );
 
-    const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-erica", audienceScopeId: "personal:U-erica", onBehalfOf: "U-alice" },
-      text: "The script ran clean and posted the digest DM.",
-      attachments: [
-        {
-          name: "digest.gif",
-          mimetype: "image/gif",
-          sizeBytes: 99,
-          blobId: "blob-digest",
-          artifactId: "art-digest",
-          artifactViewerId: "U-alice",
+    const delivery = await inTestTenant(() =>
+      s.built.deliveries.enqueue({
+        destination: {
+          type: "principal",
+          target: "U-erica",
+          audienceScopeId: "personal:U-erica",
+          onBehalfOf: "U-alice",
         },
-      ],
-      idempotencyKey: "cron:c1:42",
-      provenance: {
-        trigger: "cron",
-        surface: "cron",
-        fireKey: "cron:c1:42",
-        sourceScopeId: sourceScope,
-        sourceThreadRef: "cron:c1:42",
-        sourceSessionId: source.id,
-        sourceUserSeq: sourceUser.seq,
-        sourceAssistantEntrySeq: sourceAssistant.seq,
-      },
-    });
-    await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-erica");
-    const recipient = await s.built.sessions.getByThread("dm:D-erica");
+        text: "The script ran clean and posted the digest DM.",
+        attachments: [
+          {
+            name: "digest.gif",
+            mimetype: "image/gif",
+            sizeBytes: 99,
+            blobId: "blob-digest",
+            artifactId: "art-digest",
+            artifactViewerId: "U-alice",
+          },
+        ],
+        idempotencyKey: "cron:c1:42",
+        provenance: {
+          trigger: "cron",
+          surface: "cron",
+          fireKey: "cron:c1:42",
+          sourceScopeId: sourceScope,
+          sourceThreadRef: "cron:c1:42",
+          sourceSessionId: source.id,
+          sourceUserSeq: sourceUser.seq,
+          sourceAssistantEntrySeq: sourceAssistant.seq,
+        },
+      }),
+    );
+    await inTestTenant(() => s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-erica"));
+    const recipient = await inTestTenant(() => s.built.sessions.getByThread("dm:D-erica"));
     assert.ok(recipient);
 
     const orgRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
@@ -374,28 +401,34 @@ test("recipient delivery rows expose non-cron wake provenance without cron idemp
   try {
     const sourceScope = "channel:C-webhook";
     const fireKey = "webhook:wh_123:delivery_456";
-    const source = await s.built.sessions.getOrCreateByThread(fireKey, "channel", sourceScope, "alerts");
-    const { lease } = await s.built.sessions.acquireLease(source.id);
-    assert.ok(lease);
-    const sourceUser = await s.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "triage the webhook" },
-      scopeLabel: sourceScope,
-    });
-    const sourceAssistant = await s.built.sessions.append(lease, {
-      type: "assistant",
-      payload: { text: "Webhook triaged." },
-      scopeLabel: sourceScope,
-    });
-    await s.built.sessions.releaseLease(lease);
-    await s.built.sessions.recordLlmRequest(source.id, {
-      turnSeq: sourceUser.seq,
-      step: 0,
-      model: "mock",
-      scopeLabel: sourceScope,
-      promptEnvelope: { model: "mock", messages: [{ role: "user", content: "triage the webhook" }] },
-      truncated: false,
-    });
+    const source = await inTestTenant(() =>
+      s.built.sessions.getOrCreateByThread(fireKey, "channel", sourceScope, "alerts"),
+    );
+    const writer = { sessionId: source.id };
+    const sourceUser = await inTestTenant(() =>
+      s.built.sessions.append(writer, {
+        type: "user",
+        payload: { text: "triage the webhook" },
+        scopeLabel: sourceScope,
+      }),
+    );
+    const sourceAssistant = await inTestTenant(() =>
+      s.built.sessions.append(writer, {
+        type: "assistant",
+        payload: { text: "Webhook triaged." },
+        scopeLabel: sourceScope,
+      }),
+    );
+    await inTestTenant(() =>
+      s.built.sessions.recordLlmRequest(source.id, {
+        turnSeq: sourceUser.seq,
+        step: 0,
+        model: "mock",
+        scopeLabel: sourceScope,
+        promptEnvelope: { model: "mock", messages: [{ role: "user", content: "triage the webhook" }] },
+        truncated: false,
+      }),
+    );
 
     const sourceRead = await get(
       s.base,
@@ -408,23 +441,30 @@ test("recipient delivery rows expose non-cron wake provenance without cron idemp
     assert.equal(sourceBody.origin.trigger, "webhook");
     assert.equal(sourceBody.origin.fireKey, fireKey);
 
-    const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-erica", audienceScopeId: "personal:U-erica", onBehalfOf: "U-alice" },
-      text: "Webhook alert triaged.",
-      idempotencyKey: "delivery:non-cron-key",
-      provenance: {
-        trigger: "webhook",
-        surface: "webhook",
-        fireKey,
-        sourceScopeId: sourceScope,
-        sourceThreadRef: fireKey,
-        sourceSessionId: source.id,
-        sourceUserSeq: sourceUser.seq,
-        sourceAssistantEntrySeq: sourceAssistant.seq,
-      },
-    });
-    await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-webhook-erica");
-    const recipient = await s.built.sessions.getByThread("dm:D-webhook-erica");
+    const delivery = await inTestTenant(() =>
+      s.built.deliveries.enqueue({
+        destination: {
+          type: "principal",
+          target: "U-erica",
+          audienceScopeId: "personal:U-erica",
+          onBehalfOf: "U-alice",
+        },
+        text: "Webhook alert triaged.",
+        idempotencyKey: "delivery:non-cron-key",
+        provenance: {
+          trigger: "webhook",
+          surface: "webhook",
+          fireKey,
+          sourceScopeId: sourceScope,
+          sourceThreadRef: fireKey,
+          sourceSessionId: source.id,
+          sourceUserSeq: sourceUser.seq,
+          sourceAssistantEntrySeq: sourceAssistant.seq,
+        },
+      }),
+    );
+    await inTestTenant(() => s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-webhook-erica"));
+    const recipient = await inTestTenant(() => s.built.sessions.getByThread("dm:D-webhook-erica"));
     assert.ok(recipient);
 
     const orgRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
@@ -453,26 +493,28 @@ test("recipient delivery rows expose non-cron wake provenance without cron idemp
     assert.equal(scopedBody.deliveryEvents[0].sourceSession, undefined);
     assert.equal(scopedBody.deliveryEvents[0].llmRequests, undefined);
 
-    const mismatched = await s.built.deliveries.enqueue({
-      destination: {
-        type: "principal",
-        target: "U-mismatch",
-        audienceScopeId: "personal:U-mismatch",
-        onBehalfOf: "U-alice",
-      },
-      text: "Mismatched legacy provenance.",
-      idempotencyKey: "delivery:mismatched-key",
-      provenance: {
-        trigger: "cron",
-        surface: "cron",
-        fireKey,
-        sourceScopeId: sourceScope,
-        sourceThreadRef: fireKey,
-        sourceSessionId: source.id,
-      },
-    });
-    await s.built.app.recordPrincipalDelivery(mismatched.id, "dm:D-mismatch");
-    const mismatchRecipient = await s.built.sessions.getByThread("dm:D-mismatch");
+    const mismatched = await inTestTenant(() =>
+      s.built.deliveries.enqueue({
+        destination: {
+          type: "principal",
+          target: "U-mismatch",
+          audienceScopeId: "personal:U-mismatch",
+          onBehalfOf: "U-alice",
+        },
+        text: "Mismatched legacy provenance.",
+        idempotencyKey: "delivery:mismatched-key",
+        provenance: {
+          trigger: "cron",
+          surface: "cron",
+          fireKey,
+          sourceScopeId: sourceScope,
+          sourceThreadRef: fireKey,
+          sourceSessionId: source.id,
+        },
+      }),
+    );
+    await inTestTenant(() => s.built.app.recordPrincipalDelivery(mismatched.id, "dm:D-mismatch"));
+    const mismatchRecipient = await inTestTenant(() => s.built.sessions.getByThread("dm:D-mismatch"));
     assert.ok(mismatchRecipient);
     const mismatchRead = await get(
       s.base,
@@ -493,22 +535,31 @@ test("a live conversation post's provenance joins its source session but renders
   const s = start();
   try {
     const sourceScope = "channel:C-live";
-    const source = await s.built.sessions.getOrCreateByThread("slack/C-live:171.5", "channel", sourceScope, "live");
-    const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-erica", audienceScopeId: "personal:U-erica", onBehalfOf: "U-alice" },
-      text: "forwarding this from the channel",
-      idempotencyKey: "post:live:1",
-      provenance: {
-        trigger: "conversation",
-        surface: "slack",
-        fireKey: "post:live:1",
-        sourceScopeId: sourceScope,
-        sourceThreadRef: "slack/C-live:171.5",
-        sourceSessionId: source.id,
-      },
-    });
-    await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-live-erica");
-    const recipient = await s.built.sessions.getByThread("dm:D-live-erica");
+    const source = await inTestTenant(() =>
+      s.built.sessions.getOrCreateByThread("slack/C-live:171.5", "channel", sourceScope, "live"),
+    );
+    const delivery = await inTestTenant(() =>
+      s.built.deliveries.enqueue({
+        destination: {
+          type: "principal",
+          target: "U-erica",
+          audienceScopeId: "personal:U-erica",
+          onBehalfOf: "U-alice",
+        },
+        text: "forwarding this from the channel",
+        idempotencyKey: "post:live:1",
+        provenance: {
+          trigger: "conversation",
+          surface: "slack",
+          fireKey: "post:live:1",
+          sourceScopeId: sourceScope,
+          sourceThreadRef: "slack/C-live:171.5",
+          sourceSessionId: source.id,
+        },
+      }),
+    );
+    await inTestTenant(() => s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-live-erica"));
+    const recipient = await inTestTenant(() => s.built.sessions.getByThread("dm:D-live-erica"));
     assert.ok(recipient);
     const read = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
     assert.equal(read.status, 200);
@@ -527,19 +578,23 @@ test("a cron-fired transcript carries its originating cron", async () => {
   const s = start();
   try {
     const scope = "channel:C9";
-    const cron = await s.built.app.createCron({
-      ownerScopeId: scope,
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      title: "Daily security audit",
-      action: "audit the new security advisories",
-    });
-    const session = await s.built.sessions.getOrCreateByThread(`cron:${cron.id}:42`, "channel", scope, "security");
-    const { lease } = await s.built.sessions.acquireLease(session.id);
-    assert.ok(lease);
-    await s.built.sessions.append(lease, { type: "user", payload: { text: cron.action }, scopeLabel: scope });
-    await s.built.sessions.releaseLease(lease);
+    const cron = await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: scope,
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        title: "Daily security audit",
+        action: "audit the new security advisories",
+      }),
+    );
+    const session = await inTestTenant(() =>
+      s.built.sessions.getOrCreateByThread(`cron:${cron.id}:42`, "channel", scope, "security"),
+    );
+    const writer = { sessionId: session.id };
+    await inTestTenant(() =>
+      s.built.sessions.append(writer, { type: "user", payload: { text: cron.action }, scopeLabel: scope }),
+    );
 
     const tx = await get(
       s.base,
@@ -563,35 +618,44 @@ test("a cron-fired transcript carries its originating cron", async () => {
 test("principal deliveries render as delivery events and later DM turns get structured context", async () => {
   const s = start();
   try {
-    const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:U-carol",
-      owner: "U-carol",
-      createdBy: "U-carol",
-      schedule: { everyMs: 60_000 },
-      title: "Deploy notice",
-      message: "the deploy is done",
-    });
-    const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-alice", audienceScopeId: "personal:U-alice", onBehalfOf: "U-carol" },
-      text: "the deploy is done",
-      attachments: [
-        {
-          name: "rsi.gif",
-          mimetype: "image/gif",
-          sizeBytes: 42,
-          blobId: "blob-1",
-          artifactId: "art-1",
-          artifactViewerId: "U-alice",
+    const cron = await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: "personal:U-carol",
+        owner: "U-carol",
+        createdBy: "U-carol",
+        schedule: { everyMs: 60_000 },
+        title: "Deploy notice",
+        message: "the deploy is done",
+      }),
+    );
+    const delivery = await inTestTenant(() =>
+      s.built.deliveries.enqueue({
+        destination: {
+          type: "principal",
+          target: "U-alice",
+          audienceScopeId: "personal:U-alice",
+          onBehalfOf: "U-carol",
         },
-      ],
-      idempotencyKey: `cron:${cron.id}:42`,
-    });
-    await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-alice");
+        text: "the deploy is done",
+        attachments: [
+          {
+            name: "rsi.gif",
+            mimetype: "image/gif",
+            sizeBytes: 42,
+            blobId: "blob-1",
+            artifactId: "art-1",
+            artifactViewerId: "U-alice",
+          },
+        ],
+        idempotencyKey: `cron:${cron.id}:42`,
+      }),
+    );
+    await inTestTenant(() => s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-alice"));
 
-    const session = await s.built.sessions.getByThread("dm:D-alice");
+    const session = await inTestTenant(() => s.built.sessions.getByThread("dm:D-alice"));
     assert.ok(session, "recipient session exists");
     assert.equal(
-      (await s.built.sessions.getEntries(session!.id)).some((e) => e.type === "assistant"),
+      (await inTestTenant(() => s.built.sessions.getEntries(session!.id))).some((e) => e.type === "assistant"),
       false,
     );
 
@@ -632,8 +696,8 @@ test("principal deliveries render as delivery events and later DM turns get stru
       conversation: { kind: "dm", threadRef: "dm:D-alice" },
       text: "what was that deploy note?",
     };
-    assert.equal((await s.built.app.turn(turn)).status, "ok");
-    const reqs = await s.built.sessions.listLlmRequests(session!.id);
+    assert.equal((await inTestTenant(() => s.built.app.turn(turn))).status, "ok");
+    const reqs = await inTestTenant(() => s.built.sessions.listLlmRequests(session!.id));
     const latest = reqs[reqs.length - 1] as any;
     const userMessage = latest.promptEnvelope.messages.at(-1).content;
     assert.match(userMessage, /Delivered here since the user's last message/);
@@ -647,49 +711,58 @@ test("monitor delivery origin context is scope-gated in admin", async () => {
   const s = start();
   try {
     const monitorId = "m1";
-    const source = await s.built.sessions.getOrCreateByThread(
-      `agent:main:monitor:${monitorId}`,
-      "dm",
-      "personal:U-carol",
+    const source = await inTestTenant(() =>
+      s.built.sessions.getOrCreateByThread(`agent:main:monitor:${monitorId}`, "dm", "personal:U-carol"),
     );
-    const { lease } = await s.built.sessions.acquireLease(source.id);
-    assert.ok(lease);
-    const sourceUser = await s.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "monitor wake" },
-      scopeLabel: "personal:U-carol",
-    });
-    const sourceAssistant = await s.built.sessions.append(lease, {
-      type: "assistant",
-      payload: { text: "Approval is due." },
-      scopeLabel: "personal:U-carol",
-    });
-    await s.built.sessions.releaseLease(lease);
-    await s.built.sessions.recordLlmRequest(source.id, {
-      turnSeq: sourceUser.seq,
-      step: 0,
-      model: "mock",
-      scopeLabel: "personal:U-carol",
-      promptEnvelope: { model: "mock", messages: [{ role: "user", content: "monitor wake" }] },
-      truncated: false,
-    });
-    const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-alice", audienceScopeId: "personal:U-alice", onBehalfOf: "U-carol" },
-      text: "Approval is due.",
-      idempotencyKey: `monitor:${monitorId}:42`,
-      provenance: {
-        trigger: "monitor",
-        surface: "monitor",
-        fireKey: `monitor:${monitorId}:42`,
-        sourceScopeId: "personal:U-carol",
-        sourceThreadRef: `agent:main:monitor:${monitorId}`,
-        sourceSessionId: source.id,
-        sourceUserSeq: sourceUser.seq,
-        sourceAssistantEntrySeq: sourceAssistant.seq,
-      },
-    });
-    await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-alice");
-    const recipient = await s.built.sessions.getByThread("dm:D-alice");
+    const writer = { sessionId: source.id };
+    const sourceUser = await inTestTenant(() =>
+      s.built.sessions.append(writer, {
+        type: "user",
+        payload: { text: "monitor wake" },
+        scopeLabel: "personal:U-carol",
+      }),
+    );
+    const sourceAssistant = await inTestTenant(() =>
+      s.built.sessions.append(writer, {
+        type: "assistant",
+        payload: { text: "Approval is due." },
+        scopeLabel: "personal:U-carol",
+      }),
+    );
+    await inTestTenant(() =>
+      s.built.sessions.recordLlmRequest(source.id, {
+        turnSeq: sourceUser.seq,
+        step: 0,
+        model: "mock",
+        scopeLabel: "personal:U-carol",
+        promptEnvelope: { model: "mock", messages: [{ role: "user", content: "monitor wake" }] },
+        truncated: false,
+      }),
+    );
+    const delivery = await inTestTenant(() =>
+      s.built.deliveries.enqueue({
+        destination: {
+          type: "principal",
+          target: "U-alice",
+          audienceScopeId: "personal:U-alice",
+          onBehalfOf: "U-carol",
+        },
+        text: "Approval is due.",
+        idempotencyKey: `monitor:${monitorId}:42`,
+        provenance: {
+          trigger: "monitor",
+          surface: "monitor",
+          fireKey: `monitor:${monitorId}:42`,
+          sourceScopeId: "personal:U-carol",
+          sourceThreadRef: `agent:main:monitor:${monitorId}`,
+          sourceSessionId: source.id,
+          sourceUserSeq: sourceUser.seq,
+          sourceAssistantEntrySeq: sourceAssistant.seq,
+        },
+      }),
+    );
+    await inTestTenant(() => s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-alice"));
+    const recipient = await inTestTenant(() => s.built.sessions.getByThread("dm:D-alice"));
     assert.ok(recipient);
 
     const orgRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
@@ -747,7 +820,7 @@ test("conversation listing pages by keyset cursor; counts come from the backgrou
         conversation: { kind: "dm", threadRef: `dm:U${i}:t` },
         text: `hi ${i}`,
       };
-      assert.equal((await s.built.app.turn(dm)).status, "ok");
+      assert.equal((await inTestTenant(() => s.built.app.turn(dm))).status, "ok");
     }
 
     const path = "/v1/admin/sessions?scope=org:default-org&limit=2";
@@ -786,35 +859,36 @@ test("history separates background cron monologues from human conversations", as
   const s = start();
   try {
     const scope = "channel:C9";
-    const cron = await s.built.app.createCron({
-      ownerScopeId: scope,
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      title: "Daily security audit",
-      action: "audit the new security advisories",
-    });
-
-    const human = await s.built.sessions.getOrCreateByThread("ch:C9:thread", "channel", scope, "security");
-    const { lease: humanLease } = await s.built.sessions.acquireLease(human.id);
-    assert.ok(humanLease);
-    await s.built.sessions.append(humanLease, {
-      type: "user",
-      payload: { text: "what happened in prod?" },
-      scopeLabel: scope,
-    });
-    await s.built.sessions.releaseLease(humanLease);
-
-    const monologue = await s.built.sessions.getOrCreateByThread(
-      `agent:main:cron:${cron.id}`,
-      "channel",
-      scope,
-      "security",
+    const cron = await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: scope,
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        title: "Daily security audit",
+        action: "audit the new security advisories",
+      }),
     );
-    const { lease: monologueLease } = await s.built.sessions.acquireLease(monologue.id);
-    assert.ok(monologueLease);
-    await s.built.sessions.append(monologueLease, { type: "user", payload: { text: cron.action }, scopeLabel: scope });
-    await s.built.sessions.releaseLease(monologueLease);
+
+    const human = await inTestTenant(() =>
+      s.built.sessions.getOrCreateByThread("ch:C9:thread", "channel", scope, "security"),
+    );
+    const humanWriter = { sessionId: human.id };
+    await inTestTenant(() =>
+      s.built.sessions.append(humanWriter, {
+        type: "user",
+        payload: { text: "what happened in prod?" },
+        scopeLabel: scope,
+      }),
+    );
+
+    const monologue = await inTestTenant(() =>
+      s.built.sessions.getOrCreateByThread(`agent:main:cron:${cron.id}`, "channel", scope, "security"),
+    );
+    const monologueWriter = { sessionId: monologue.id };
+    await inTestTenant(() =>
+      s.built.sessions.append(monologueWriter, { type: "user", payload: { text: cron.action }, scopeLabel: scope }),
+    );
 
     const conversations = await getJson(s.base, `/v1/admin/sessions?scope=${encodeURIComponent(scope)}`);
     assert.equal(conversations.category, "conversation");
@@ -862,21 +936,25 @@ test("the Crons history lists cron fires as session rows; ?cron= paginates one c
     const scope = "channel:C7";
     const mkFires = async (cronId: string, n: number) => {
       for (let i = 0; i < n; i++) {
-        const sess = await s.built.sessions.getOrCreateByThread(`cron:${cronId}:slot${i}`, "channel", scope, "eng");
-        const { lease } = await s.built.sessions.acquireLease(sess.id);
-        assert.ok(lease);
-        await s.built.sessions.append(lease, { type: "user", payload: { text: "fire " + i }, scopeLabel: scope });
-        await s.built.sessions.releaseLease(lease);
+        const sess = await inTestTenant(() =>
+          s.built.sessions.getOrCreateByThread(`cron:${cronId}:slot${i}`, "channel", scope, "eng"),
+        );
+        const writer = { sessionId: sess.id };
+        await inTestTenant(() =>
+          s.built.sessions.append(writer, { type: "user", payload: { text: "fire " + i }, scopeLabel: scope }),
+        );
       }
     };
-    const cron = await s.built.app.createCron({
-      ownerScopeId: scope,
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      title: "Tweet watcher",
-      action: "watch tweets",
-    });
+    const cron = await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: scope,
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        title: "Tweet watcher",
+        action: "watch tweets",
+      }),
+    );
     await mkFires(cron.id, 3);
     await mkFires("other-cron", 2);
 
@@ -918,45 +996,53 @@ test("cron fire rows carry the fire's result digest from the cron's fire log", a
   const s = start();
   try {
     const scope = "channel:C8";
-    const cron = await s.built.app.createCron({
-      ownerScopeId: scope,
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      title: "Sticky watcher",
-      action: "Check yna's watched stickies",
-    });
+    const cron = await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: scope,
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        title: "Sticky watcher",
+        action: "Check yna's watched stickies",
+      }),
+    );
     const mkFire = async (slot: string) => {
-      const sess = await s.built.sessions.getOrCreateByThread(`cron:${cron.id}:${slot}`, "channel", scope, "eng");
-      const { lease } = await s.built.sessions.acquireLease(sess.id);
-      assert.ok(lease);
-      await s.built.sessions.append(lease, {
-        type: "user",
-        payload: { text: "Stored cron task: Check yna's watched stickies" },
-        scopeLabel: scope,
-      });
-      await s.built.sessions.releaseLease(lease);
+      const sess = await inTestTenant(() =>
+        s.built.sessions.getOrCreateByThread(`cron:${cron.id}:${slot}`, "channel", scope, "eng"),
+      );
+      const writer = { sessionId: sess.id };
+      await inTestTenant(() =>
+        s.built.sessions.append(writer, {
+          type: "user",
+          payload: { text: "Stored cron task: Check yna's watched stickies" },
+          scopeLabel: scope,
+        }),
+      );
       return sess;
     };
     const replied = await mkFire("slot0");
     const noted = await mkFire("slot1");
     const bare = await mkFire("slot2");
-    await s.built.crons.recordFire(cron.id, {
-      fireKey: `cron:${cron.id}:slot0`,
-      threadRef: `cron:${cron.id}:slot0`,
-      firedAt: 1,
-      status: "ok",
-      reply: "No new stickies; nothing to report.",
-      note: "recipient consent missing",
-      sessionId: replied.id,
-    });
-    await s.built.crons.recordFire(cron.id, {
-      fireKey: `cron:${cron.id}:slot1`,
-      threadRef: `cron:${cron.id}:slot1`,
-      firedAt: 2,
-      status: "failed",
-      note: "sandbox provisioning failed",
-    });
+    await inTestTenant(() =>
+      s.built.crons.recordFire(cron.id, {
+        fireKey: `cron:${cron.id}:slot0`,
+        threadRef: `cron:${cron.id}:slot0`,
+        firedAt: 1,
+        status: "ok",
+        reply: "No new stickies; nothing to report.",
+        note: "recipient consent missing",
+        sessionId: replied.id,
+      }),
+    );
+    await inTestTenant(() =>
+      s.built.crons.recordFire(cron.id, {
+        fireKey: `cron:${cron.id}:slot1`,
+        threadRef: `cron:${cron.id}:slot1`,
+        firedAt: 2,
+        status: "failed",
+        note: "sandbox provisioning failed",
+      }),
+    );
 
     const fires = await getJson(
       s.base,
@@ -986,7 +1072,7 @@ test("cron fire rows carry the fire's result digest from the cron's fire log", a
 test("session deep links resolve by id even when the scope filter does not match", async () => {
   const s = start();
   try {
-    const sess = await s.built.sessions.getOrCreateByThread("dm:U9:t1", "dm", "personal:U9");
+    const sess = await inTestTenant(() => s.built.sessions.getOrCreateByThread("dm:U9:t1", "dm", "personal:U9"));
     const mismatched = await get(
       s.base,
       `/v1/admin/sessions/${encodeURIComponent(sess.id)}?scope=${encodeURIComponent("personal:someone-else")}`,
@@ -1009,16 +1095,18 @@ test("session deep links resolve by id even when the scope filter does not match
 test("the Files view is the document store (write-tool artifacts), not the sandbox backup", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-fly-")) }));
   const scope = "channel:C_FILE_FIXTURE";
-  await built.files.put({
-    id: "deck-1",
-    ownerScopeId: scope,
-    createdBy: "U1",
-    name: "slides.pdf",
-    path: "decks/slides.pdf",
-    mimetype: "application/pdf",
-    data: Buffer.from("%PDF-1.4 deck"),
-    direction: "out",
-  });
+  await inTestTenant(() =>
+    built.files.put({
+      id: "deck-1",
+      ownerScopeId: scope,
+      createdBy: "U1",
+      name: "slides.pdf",
+      path: "decks/slides.pdf",
+      mimetype: "application/pdf",
+      data: Buffer.from("%PDF-1.4 deck"),
+      direction: "out",
+    }),
+  );
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
@@ -1058,9 +1146,9 @@ test("the files listing filters by name server-side with q", async () => {
     direction: "out" as const,
   });
   try {
-    await s.built.files.put(doc("q-art-1", "Quarterly Report.pdf"));
-    await s.built.files.put(doc("q-art-2", "notes.txt"));
-    await s.built.files.put(doc("q-art-3", "report-draft.txt"));
+    await inTestTenant(() => s.built.files.put(doc("q-art-1", "Quarterly Report.pdf")));
+    await inTestTenant(() => s.built.files.put(doc("q-art-2", "notes.txt")));
+    await inTestTenant(() => s.built.files.put(doc("q-art-3", "report-draft.txt")));
 
     const hit = await getJson(s.base, `/v1/admin/files?scope=${encodeURIComponent(scope)}&q=REPORT`);
     assert.deepEqual(
@@ -1080,16 +1168,18 @@ test("the files listing filters by name server-side with q", async () => {
 test("a saved document is read and downloaded by artifact id", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-doc-")) }));
   const scope = "personal:U1";
-  await built.files.put({
-    id: "csv-1",
-    ownerScopeId: scope,
-    createdBy: "U1",
-    name: "report.csv",
-    path: "reports/report.csv",
-    mimetype: "text/csv",
-    data: Buffer.from("a,b\n1,2"),
-    direction: "out",
-  });
+  await inTestTenant(() =>
+    built.files.put({
+      id: "csv-1",
+      ownerScopeId: scope,
+      createdBy: "U1",
+      name: "report.csv",
+      path: "reports/report.csv",
+      mimetype: "text/csv",
+      data: Buffer.from("a,b\n1,2"),
+      direction: "out",
+    }),
+  );
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
@@ -1206,7 +1296,7 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
   const putModel = (scope: string, modelId: string, headers: Record<string, string>) =>
     fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/base-model`, {
       method: "PUT",
-      headers: { ...headers, "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), ...headers, "content-type": "application/json" },
       body: JSON.stringify({ modelId }),
     });
   try {
@@ -1246,7 +1336,7 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
 
     const nonString = await fetch(base + "/v1/admin/scopes/org%3Adefault-org/base-model", {
       method: "PUT",
-      headers: { ...ALICE, "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), ...ALICE, "content-type": "application/json" },
       body: JSON.stringify({ modelId: 123 }),
     });
     assert.equal(nonString.status, 400, "a non-string modelId is rejected, not treated as a clear");
@@ -1275,7 +1365,7 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
   const putSteps = (scope: string, steps: unknown, headers: Record<string, string>) =>
     fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/browse-max-steps`, {
       method: "PUT",
-      headers: { ...headers, "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), ...headers, "content-type": "application/json" },
       body: JSON.stringify({ steps }),
     });
   try {
@@ -1313,6 +1403,41 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
   }
 });
 
+test("admin governance: spend limits round-trip per scope, validate, and clear", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-spendlimit-")) }));
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    config: built.config,
+    auditLog: built.auditLog,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const put = (scope: string, body: unknown, headers: Record<string, string> = ALICE) =>
+    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/spend-limit`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).spendLimit, null, "no limit by default");
+    assert.equal(
+      (await put("org:default-org", { dailyUsd: 5 }, { "x-admin-actor": "nobody@default-org" })).status,
+      403,
+    );
+    assert.equal((await put("org:default-org", { dailyUsd: 25, monthlyUsd: 300 })).status, 200);
+    assert.deepEqual((await getJson(base, "/v1/admin/scopes/org:default-org")).spendLimit, {
+      dailyUsd: 25,
+      monthlyUsd: 300,
+    });
+    assert.equal((await put("channel:C1", { monthlyUsd: 40 })).status, 200, "any scope can carry its own cap");
+    assert.deepEqual(await built.config.getSpendLimitDurable("channel:C1"), { monthlyUsd: 40 });
+    assert.equal((await put("channel:C1", { inherit: true })).status, 200);
+    assert.equal(await built.config.getSpendLimitDurable("channel:C1"), null, "inherit clears it");
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("an OpenAI-only deployment still gets a browse model picker, and Anthropic picks are refused", async () => {
   const built = buildApp(
     testConfig({
@@ -1333,7 +1458,7 @@ test("an OpenAI-only deployment still gets a browse model picker, and Anthropic 
   const putModel = (modelId: unknown) =>
     fetch(base + "/v1/admin/scopes/org%3Adefault-org/browse-model", {
       method: "PUT",
-      headers: { ...ALICE, "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), ...ALICE, "content-type": "application/json" },
       body: JSON.stringify({ modelId }),
     });
   try {
@@ -1368,7 +1493,7 @@ test("admin governance: browse model round-trips, validates, and is org-scoped",
   const putModel = (scope: string, modelId: unknown, headers: Record<string, string>) =>
     fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/browse-model`, {
       method: "PUT",
-      headers: { ...headers, "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), ...headers, "content-type": "application/json" },
       body: JSON.stringify({ modelId }),
     });
   try {
@@ -1428,33 +1553,37 @@ test("the sessions listing digests cron fires from the fire table, even after th
   const s = start();
   try {
     const scope = "channel:C-digest";
-    const cron = await s.built.app.createCron({
-      ownerScopeId: scope,
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "count signups",
-    });
+    const cron = await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: scope,
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "count signups",
+      }),
+    );
     const threadRef = `cron:${cron.id}:fire:abc123`;
-    const session = await s.built.sessions.getOrCreateByThread(threadRef, "channel", scope, "ops");
-    const { lease } = await s.built.sessions.acquireLease(session.id);
-    assert.ok(lease);
-    await s.built.sessions.append(lease, { type: "user", payload: { text: "count signups" }, scopeLabel: scope });
-    await s.built.sessions.releaseLease(lease);
-    await s.built.crons.recordFire(cron.id, {
-      fireKey: `cron:${cron.id}:1000`,
-      threadRef,
-      firedAt: Date.now() - 1000,
-      endedAt: Date.now(),
-      status: "ok",
-      reply: "42 signups today",
-    });
+    const session = await inTestTenant(() => s.built.sessions.getOrCreateByThread(threadRef, "channel", scope, "ops"));
+    const writer = { sessionId: session.id };
+    await inTestTenant(() =>
+      s.built.sessions.append(writer, { type: "user", payload: { text: "count signups" }, scopeLabel: scope }),
+    );
+    await inTestTenant(() =>
+      s.built.crons.recordFire(cron.id, {
+        fireKey: `cron:${cron.id}:1000`,
+        threadRef,
+        firedAt: Date.now() - 1000,
+        endedAt: Date.now(),
+        status: "ok",
+        reply: "42 signups today",
+      }),
+    );
 
     const listed = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&category=background");
     const row = listed.sessions.find((x: any) => x.id === session.id);
     assert.equal(row?.result, "42 signups today", "the digest is read from the cron_fires table by thread ref");
 
-    await s.built.app.deleteCron(cron.id);
+    await inTestTenant(() => s.built.app.deleteCron(cron.id));
     const relisted = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&category=background");
     const survivor = relisted.sessions.find((x: any) => x.id === session.id);
     assert.equal(survivor?.result, "42 signups today", "fire digests outlive their cron");
@@ -1467,16 +1596,20 @@ test("admin errors paginate all retained records with scoped totals and bounded 
   const s = start();
   try {
     for (let i = 0; i < 260; i++) {
-      s.built.errors.record({
-        category: "turn",
-        code: String(i),
-        message: "failure",
-        scopeLabel: "personal:U1",
-        sessionId: "test-session",
-      });
-      await s.built.errors.flush();
+      inTestTenant(() =>
+        s.built.errors.record({
+          category: "turn",
+          code: String(i),
+          message: "failure",
+          scopeLabel: "personal:U1",
+          sessionId: "test-session",
+        }),
+      );
+      await inTestTenant(() => s.built.errors.flush());
     }
-    s.built.errors.record({ category: "turn", code: "other", message: "failure", scopeLabel: "personal:U2" });
+    inTestTenant(() =>
+      s.built.errors.record({ category: "turn", code: "other", message: "failure", scopeLabel: "personal:U2" }),
+    );
     const path = "/v1/admin/errors?scope=personal:U1&sessionId=test-session";
     const page = await getJson(s.base, path + "&limit=50&offset=200");
     assert.equal(page.total, 260);

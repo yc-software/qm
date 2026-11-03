@@ -9,14 +9,14 @@ import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { countTokens } from "../src/util/tokens.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 async function fixture() {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("recovery", "dm", "personal:test");
-  const { lease } = await sessions.acquireLease(session.id);
-  assert.ok(lease);
+  const writer = { sessionId: session.id };
   for (let i = 0; i < 12; i++)
-    await sessions.append(lease, {
+    await sessions.append(writer, {
       type: "user",
       payload: { text: `old message ${i} `.repeat(100) },
       scopeLabel: "personal:test",
@@ -37,7 +37,7 @@ async function fixture() {
   } as unknown as OrchestratorDeps);
   const input = {
     session,
-    lease,
+    writer,
     visibleHistory: forModelContext((await sessions.getContextWindow(session.id)).entries),
     scopeId: "personal:test",
     orgScopeId: "org:test",
@@ -46,32 +46,29 @@ async function fixture() {
   return { sessions, agent, compaction, input, resets: () => resets };
 }
 
-test("mandatory summarizer failure recovers instead of wedging the pending turn", async () => {
-  const f = await fixture();
-  try {
+test("mandatory summarizer failure recovers instead of wedging the pending turn", () =>
+  inTestTenant(async () => {
+    const f = await fixture();
     const history = await f.compaction.compactContextIfNeeded(f.input);
     assert.ok(history.length < f.input.visibleHistory.length);
     assert.equal(f.resets(), 1);
     assert.equal((await f.sessions.getEntries(f.input.session.id)).length, f.input.visibleHistory.length + 1);
     assert.deepEqual(forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries), history);
-  } finally {
-    await f.sessions.releaseLease(f.input.lease);
-  }
-});
+  }));
 
 async function refresh(f: Awaited<ReturnType<typeof fixture>>) {
   f.input.visibleHistory = forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries);
 }
 
-test("recent recovery preserves a fitting saved summary without a model call", async () => {
-  const f = await fixture();
-  try {
-    await f.sessions.append(f.input.lease, {
+test("recent recovery preserves a fitting saved summary without a model call", () =>
+  inTestTenant(async () => {
+    const f = await fixture();
+    await f.sessions.append(f.input.writer, {
       type: "system",
       payload: createContextSummaryPayload(11, "Saved work."),
       scopeLabel: "personal:test",
     });
-    await f.sessions.append(f.input.lease, {
+    await f.sessions.append(f.input.writer, {
       type: "user",
       payload: { text: "Continue verification." },
       scopeLabel: "personal:test",
@@ -92,15 +89,12 @@ test("recent recovery preserves a fitting saved summary without a model call", a
     assert.deepEqual(all.slice(0, before.length), before);
     assert.deepEqual(forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries), history);
     assert.equal((history[0]!.payload as { mode: string }).mode, "recent");
-  } finally {
-    await f.sessions.releaseLease(f.input.lease);
-  }
-});
+  }));
 
 for (const failure of ["throw", "empty", "oversized"] as const) {
-  test(`foreground ${failure} summary uses deterministic recovery`, async () => {
-    const f = await fixture();
-    try {
+  test(`foreground ${failure} summary uses deterministic recovery`, () =>
+    inTestTenant(async () => {
+      const f = await fixture();
       f.agent.compactHistory = async () => {
         if (failure === "throw") throw new Error("provider refused");
         return failure === "empty" ? "" : "x".repeat(20000);
@@ -108,17 +102,14 @@ for (const failure of ["throw", "empty", "oversized"] as const) {
       const history = await f.compaction.compactContextIfNeeded(f.input);
       assert.ok(estimateHistoryTokens(history) <= 300);
       assert.equal((history[0]!.payload as { mode: string }).mode, "recent");
-    } finally {
-      await f.sessions.releaseLease(f.input.lease);
-    }
-  });
+    }));
 }
 
 for (const stage of ["before", "during", "abort-error"] as const) {
-  test(`cancellation ${stage} cannot commit a recovery boundary`, async () => {
-    const f = await fixture();
-    const abort = new AbortController();
-    try {
+  test(`cancellation ${stage} cannot commit a recovery boundary`, () =>
+    inTestTenant(async () => {
+      const f = await fixture();
+      const abort = new AbortController();
       if (stage === "before") abort.abort();
       f.agent.compactHistory = async () => {
         if (stage === "during") abort.abort();
@@ -129,16 +120,13 @@ for (const stage of ["before", "during", "abort-error"] as const) {
       });
       assert.equal(f.resets(), 0);
       assert.deepEqual(await f.sessions.getEntries(f.input.session.id), f.input.visibleHistory);
-    } finally {
-      await f.sessions.releaseLease(f.input.lease);
-    }
-  });
+    }));
 }
 
 for (const stage of ["append", "reset"] as const) {
-  test(`${stage} failure is not swallowed or retried as summarization failure`, async () => {
-    const f = await fixture();
-    try {
+  test(`${stage} failure is not swallowed or retried as summarization failure`, () =>
+    inTestTenant(async () => {
+      const f = await fixture();
       let calls = 0;
       f.agent.compactHistory = async () => {
         calls++;
@@ -159,15 +147,12 @@ for (const stage of ["append", "reset"] as const) {
           (e) => (e.payload as { mode?: string }).mode === "recent",
         ),
       );
-    } finally {
-      await f.sessions.releaseLease(f.input.lease);
-    }
-  });
+    }));
 }
 
-test("oversized entries and orphaned parallel tool results cannot bypass the recent budget", async () => {
-  const f = await fixture();
-  try {
+test("oversized entries and orphaned parallel tool results cannot bypass the recent budget", () =>
+  inTestTenant(async () => {
+    const f = await fixture();
     for (const [type, payload] of [
       ["tool_call", { callId: "large", tool: "files", data: "oversized ".repeat(1000) }],
       ["tool_call", { callId: "small", tool: "files" }],
@@ -175,13 +160,13 @@ test("oversized entries and orphaned parallel tool results cannot bypass the rec
       ["tool_result", { callId: "small", result: "ok" }],
       ["user", { text: "Continue." }],
     ] as const)
-      await f.sessions.append(f.input.lease, { type, payload, scopeLabel: "personal:test" });
+      await f.sessions.append(f.input.writer, { type, payload, scopeLabel: "personal:test" });
     await refresh(f);
     const history = await f.compaction.compactRecent(f.input);
     assert.ok(estimateHistoryTokens(history) <= 300);
     assert.ok(!history.some((e) => e.type === "tool_result"));
     assert.equal(history.at(-1)!.type, "user");
-    await f.sessions.append(f.input.lease, {
+    await f.sessions.append(f.input.writer, {
       type: "user",
       payload: { text: "oversized ".repeat(1000) },
       scopeLabel: "personal:test",
@@ -190,20 +175,17 @@ test("oversized entries and orphaned parallel tool results cannot bypass the rec
     const emptyTail = await f.compaction.compactRecent(f.input);
     assert.equal(emptyTail.length, 1);
     assert.deepEqual(forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries), emptyTail);
-  } finally {
-    await f.sessions.releaseLease(f.input.lease);
-  }
-});
+  }));
 
-test("recent recovery drops an oversized request inside a completed turn", async () => {
-  const f = await fixture();
-  try {
-    await f.sessions.append(f.input.lease, {
+test("recent recovery drops an oversized request inside a completed turn", () =>
+  inTestTenant(async () => {
+    const f = await fixture();
+    await f.sessions.append(f.input.writer, {
       type: "user",
       payload: { text: "discarded oversized request ".repeat(1000) },
       scopeLabel: "personal:test",
     });
-    const last = await f.sessions.append(f.input.lease, {
+    const last = await f.sessions.append(f.input.writer, {
       type: "assistant",
       payload: { text: "The action is complete." },
       scopeLabel: "team:eng",
@@ -213,7 +195,4 @@ test("recent recovery drops an oversized request inside a completed turn", async
     assert.ok(countTokens(JSON.stringify(reconstructMessagesFromHistory(history))) < 500);
     assert.doesNotMatch(JSON.stringify(history), /discarded oversized request/);
     assert.equal(history.at(-1)!.seq, last.seq);
-  } finally {
-    await f.sessions.releaseLease(f.input.lease);
-  }
-});
+  }));

@@ -1,3 +1,4 @@
+import { useOwnerDatabase } from "../src/tenants/claim.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -10,9 +11,6 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { seedTestTenants } from "./support/tenant-seed.ts";
 import { tenantBoundUrl } from "./support/test-tenants.ts";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-
-const sessions = createPostgresSessionStore(testDatabaseUrl());
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -37,10 +35,14 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
   url.searchParams.set("options", `-c search_path=${schema}`);
   url.searchParams.set("application_name", schema);
   await seedTestTenants(url.toString());
+  const owner = new URL(process.env.DATABASE_OWNER_URL!);
+  owner.searchParams.set("options", `-c search_path=${schema}`);
+  useOwnerDatabase(owner.toString());
   return {
     url: url.toString(),
     admin,
     async cleanup() {
+      useOwnerDatabase(process.env.DATABASE_OWNER_URL);
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
       await admin.end();
     },
@@ -70,7 +72,6 @@ for (const duringClaim of [false, true]) {
     };
     const worker = createWorker({
       runs,
-      sessions,
       orchestrator: {
         handleTurn: async () => {
           finished = true;
@@ -113,7 +114,6 @@ test("missed notifications recover and reconnect checks immediately", async () =
   };
   const worker = createWorker({
     runs,
-    sessions,
     orchestrator: {} as Orchestrator,
     leaseTtlMs: 5_000,
     pollMs: 10,
@@ -222,7 +222,6 @@ test(
     const workers = Array.from({ length: 2 }, () =>
       createWorker({
         runs: reader.runs,
-        sessions,
         orchestrator: {
           handleTurn: async (input: OrchestratorInput) => {
             const id = input.conversation.threadRef;
@@ -280,7 +279,6 @@ test(
     const workers = Array.from({ length: 16 }, () =>
       createWorker({
         runs: reader.runs,
-        sessions,
         orchestrator: {
           handleTurn: async (input: OrchestratorInput) => {
             observed.push({ id: input.text, at: Date.now() });

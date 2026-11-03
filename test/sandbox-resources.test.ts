@@ -16,6 +16,8 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
   const records = testMap<SandboxResource>();
@@ -596,17 +598,20 @@ test("retirement waits for background startup to commit its live registry row", 
     return register(row);
   };
   const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0 });
-  const starting = broker.start(handle, "sleep 60", "Run background tests");
+  const starting = inTestTenant(() => broker.start(handle, "sleep 60", "Run background tests"));
   await entering.promise;
   let destroyed = false;
   backend.destroyScope = async () => {
     destroyed = true;
   };
-  const retiring = assert.rejects(resources.retire("alice", record.id), /live background work/);
+  const retiring = assert.rejects(
+    inTestTenant(() => resources.retire("alice", record.id)),
+    /live background work/,
+  );
   release.resolve();
   await Promise.all([starting, retiring]);
   assert.equal(destroyed, false);
-  assert.equal((await registry.get("job"))?.sandboxId, record.id);
+  assert.equal((await inTestTenant(() => registry.get("job")))?.sandboxId, record.id);
 });
 
 test("failed background registration kills its process and releases the resource lock", async () => {
@@ -883,8 +888,8 @@ test("two concurrent turns on one parking computer: only the last turn to finish
   };
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const start = async (sessionId: string) => {
-    await runs.enqueue({ sessionId, request: { origin: { kind: "direct" }, text: "x" } as never });
-    return (await runs.claim("worker", 60_000))!;
+    await inTestTenant(() => runs.enqueue({ sessionId, request: { origin: { kind: "direct" }, text: "x" } as never }));
+    return (await withoutTenant(() => runs.claim("worker", 60_000)))!;
   };
   const turn = (runId: string, sessionId: string) =>
     createTurnSandboxes({

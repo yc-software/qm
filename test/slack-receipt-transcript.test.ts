@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test as nodeTest, type TestOptions } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
@@ -11,6 +11,13 @@ import { scopeId } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { holdThread, testRuns } from "./support/live-run.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, ...args: [() => void | Promise<void>] | [TestOptions, () => void | Promise<void>]): void {
+  const [options, fn] = args.length === 1 ? [{}, args[0]] : args;
+  nodeTest(name, options, () => inTestTenant(fn));
+}
 
 const scope = scopeId("personal", "alice");
 const databaseUrl = process.env.DATABASE_URL;
@@ -26,14 +33,13 @@ for (const backend of ["memory", "postgres"] as const) {
         backend === "memory" ? createPostgresSessionStore(testDatabaseUrl()) : createPostgresSessionStore(databaseUrl!);
       const session = await sessions.getOrCreateByThread(`dm:${randomUUID()}`, "dm", scope, undefined, "slack");
       await sessions.addParticipant(session.id, "alice");
-      const { lease } = await sessions.acquireLease(session.id, "turn");
-      assert.ok(lease);
-      const receipt = await sessions.append(lease, {
+      const writer = { sessionId: session.id };
+      const receipt = await sessions.append(writer, {
         type: "user",
         scopeLabel: scope,
         payload: { text: "Receipt text", ts: "100.123", slackReplyReceipt: true, deliveryKey: "sent-1" },
       });
-      const middle = await sessions.append(lease, {
+      const middle = await sessions.append(writer, {
         type: "assistant",
         scopeLabel: scope,
         payload: { text: "Intervening reply" },
@@ -53,12 +59,11 @@ for (const backend of ["memory", "postgres"] as const) {
       );
       await sessions.removeParticipant(session.id, "alice");
       await sessions.addParticipant(session.id, "bob");
-      const event = await sessions.append(lease, {
+      const event = await sessions.append(writer, {
         type: "user",
         scopeLabel: scope,
         payload: { text: "Receipt text", ts: "100.123" },
       });
-      await sessions.releaseLease(lease);
       const page = await source.forRender(session.id, { limit: 1 });
       assert.deepEqual(
         page.entries.map((e) => e.seq),
@@ -100,9 +105,9 @@ for (const backend of ["memory", "postgres"] as const) {
           : createPostgresDeliveryStore(databaseUrl!, { maxAgeMs: 1 });
       const thread = `dm:${randomUUID()}`;
       const session = await sessions.getOrCreateByThread(thread, "dm", scope, undefined, "slack");
-      const { lease } = await sessions.acquireLease(session.id, "turn");
-      assert.ok(lease);
-      const deliveries = withWebTranscriptDeliveries(inner, sessions);
+      const runs = testRuns();
+      const finishTurn = await holdThread(runs, thread);
+      const deliveries = withWebTranscriptDeliveries(inner, sessions, runs);
       const row = await deliveries.enqueue({
         destination: {
           type: "web",
@@ -118,21 +123,18 @@ for (const backend of ["memory", "postgres"] as const) {
       assert.deepEqual(await deliveries.claimPending("web", 1), []);
       assert.equal((await inner.get(row.id))?.expiredAt, undefined);
       assert.equal((await sessions.getEntries(session.id)).length, 0);
-      await sessions.releaseLease(lease);
+      await finishTurn();
       await sleep(10);
       assert.equal((await deliveries.claimPending("web", 1)).length, 1);
-      const next = await sessions.acquireLease(session.id, "turn");
-      assert.ok(next.lease);
       await sessions.appendMany(
-        next.lease,
+        { sessionId: session.id },
         Array.from({ length: 210 }, (_, i) => ({
           type: "assistant" as const,
           scopeLabel: scope,
           payload: { text: `Reply ${i}` },
         })),
       );
-      await sessions.releaseLease(next.lease);
-      const restarted = withWebTranscriptDeliveries(inner, sessions);
+      const restarted = withWebTranscriptDeliveries(inner, sessions, runs);
       await restarted.pending("web");
       const entries = (await createTranscriptSource(sessions).forRender(session.id)).entries;
       assert.equal(entries.filter((e) => (e.payload as { slackReplyReceipt?: boolean }).slackReplyReceipt).length, 1);

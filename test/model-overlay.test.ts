@@ -8,10 +8,15 @@ import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
+import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 const MODEL_ID = "overlay-future-model";
 
 test("unknown builtin-provider model fails resolution and a live runtime selection request", async () => {
@@ -247,18 +252,20 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.ok(body.models.includes(MODEL_ID));
     const wire = JSON.stringify(body.modelCatalog);
     assert.doesNotMatch(wire, /baseUrl|headers|apiKey|local-test-key/);
-    const turn = await built.app.turn({
-      surface: "web",
-      actor: { externalId: "alice" },
-      conversation: { kind: "dm", threadRef: "overlay-live-test" },
-      text: "hello",
-      model: MODEL_ID,
-      async: true,
-    });
+    const turn = await inTestTenant(() =>
+      built.app.turn({
+        surface: "web",
+        actor: { externalId: "alice" },
+        conversation: { kind: "dm", threadRef: "overlay-live-test" },
+        text: "hello",
+        model: MODEL_ID,
+        async: true,
+      }),
+    );
     assert.equal(turn.status, "queued");
     assert.equal((await api(path, "PUT", { ...spec, name: "Renamed", maxTokens: 30_000 })).status, 200);
     assert.equal(getRequiredModel(MODEL_ID).name, "Renamed");
-    await built.config.setRuntimeSelection("org:default-org", { modelId: MODEL_ID });
+    await inTestTenant(() => built.config.setRuntimeSelection("org:default-org", { modelId: MODEL_ID }));
     assert.equal((await api(path, "DELETE")).status, 200);
     const afterDelete = await api(
       "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
@@ -274,31 +281,35 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.match(unavailable.unavailableReason, /deleted/);
     assert.ok(unavailable.models.includes("gpt-5.6-sol"));
     assert.equal((await api("/v1/runtime-config", "PUT", runtime)).status, 400);
-    const deletedTurn = await built.app.turn({
-      surface: "web",
-      actor: { externalId: "alice" },
-      conversation: { kind: "dm", threadRef: "overlay-deleted-test" },
-      text: "hello",
-      model: MODEL_ID,
-      async: true,
-    });
+    const deletedTurn = await inTestTenant(() =>
+      built.app.turn({
+        surface: "web",
+        actor: { externalId: "alice" },
+        conversation: { kind: "dm", threadRef: "overlay-deleted-test" },
+        text: "hello",
+        model: MODEL_ID,
+        async: true,
+      }),
+    );
     assert.equal(deletedTurn.status, "refused");
     assert.match(JSON.stringify(deletedTurn), /couldn.t set up that runtime choice/);
     const recovered = await api("/v1/runtime-config", "PUT", { ...runtime, modelId: "gpt-5.6-sol" });
     assert.equal(recovered.status, 200);
     assert.equal(((await recovered.json()) as { effective: { modelId: string } }).effective.modelId, "gpt-5.6-sol");
     for (const model of [undefined, "gpt-5.6-sol"]) {
-      const recoveredTurn = await built.app.turn({
-        surface: "web",
-        actor: { externalId: runtime.principalId },
-        conversation: { kind: "dm", threadRef: `overlay-recovered-${model ?? "saved-selection"}` },
-        text: "Continue with the replacement I selected",
-        ...(model ? { model } : {}),
-        async: true,
-      });
+      const recoveredTurn = await inTestTenant(() =>
+        built.app.turn({
+          surface: "web",
+          actor: { externalId: runtime.principalId },
+          conversation: { kind: "dm", threadRef: `overlay-recovered-${model ?? "saved-selection"}` },
+          text: "Continue with the replacement I selected",
+          ...(model ? { model } : {}),
+          async: true,
+        }),
+      );
       assert.equal(recoveredTurn.status, "queued", JSON.stringify(recoveredTurn));
     }
-    const events = await built.auditLog.events();
+    const events = await inTestTenant(() => built.auditLog.events());
     assert.equal(events.filter((e) => e.action === "model-registry.update").length, 2);
     assert.equal(events.filter((e) => e.action === "model-registry.delete").length, 1);
   } finally {

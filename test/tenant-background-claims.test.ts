@@ -1,10 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { mkdtempSync } from "node:fs";
 import { glob, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import pg from "pg";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import { claimAcrossTenants, crossTenantLoop, inTenantOf, useOwnerDatabase, rowTenant } from "../src/tenants/claim.ts";
@@ -17,6 +22,8 @@ import { createAskExpirySweep } from "../src/triggers/keychain-ask.ts";
 import type { KeychainAsk } from "../src/credentials/keychain.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testTenants } from "./support/test-tenants.ts";
+import { buildApp } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the claim tests";
 const [A, B] = skip ? ["00000000-0000-4000-8000-0000000000a1", "00000000-0000-4000-8000-0000000000b2"] : testTenants();
@@ -30,7 +37,7 @@ const turn = (text: string): OrchestratorInput => ({
 
 test("a cross-tenant claim refuses to run under a bound tenant", async () => {
   await assert.rejects(
-    withTenant(A, () => claimAcrossTenants("postgres://app@127.0.0.1/qm", "SELECT 1")),
+    withTenant(A, () => claimAcrossTenants("SELECT 1")),
     /A cross-tenant claim cannot run while a tenant is bound/,
   );
 });
@@ -82,7 +89,7 @@ test(
     const app = createPgPool(appUrl.toString());
     try {
       await assert.rejects(app.q("SELECT * FROM due_work"), /No tenant is bound/);
-      const { rows } = await claimAcrossTenants(appUrl.toString(), "SELECT * FROM due_work WHERE due ORDER BY id");
+      const { rows } = await claimAcrossTenants("SELECT * FROM due_work WHERE due ORDER BY id");
       assert.deepEqual(
         rows.map((row) => [row.id, row.tenant_id]),
         [
@@ -149,8 +156,7 @@ test("one worker claims across tenants and runs each turn under its run's tenant
         return { status: "silent" as const };
       },
     } as unknown as Orchestrator;
-    const sessions = { getByThread: async () => null, fenceTurnLease: async () => undefined };
-    const worker = withTenant(A, () => createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 }));
+    const worker = withTenant(A, () => createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 }));
     withTenant(B, () => worker.start());
     for (let i = 0; i < 400 && ran.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 5));
     await worker.stop(1);
@@ -215,4 +221,120 @@ test("the ask sweep settles each resolved ask under its own tenant", async () =>
   ];
   assert.deepEqual(fired, expected);
   assert.deepEqual(notified, expected);
+});
+
+test(
+  "a human turn under a bound tenant pokes the reaper unbound, and the poke reaps an expired run",
+  { skip },
+  async () => {
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "reaper-poke-")), workers: 0 }));
+    try {
+      const stale = (
+        await withTenant(A, () => built.runs.enqueue({ sessionId: "s-stale", request: turn("stale"), maxAttempts: 3 }))
+      ).run;
+      assert.equal((await built.runs.claim("dead-worker", 10))?.id, stale.id);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await withTenant(A, () =>
+        built.app.turn({
+          surface: "test",
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef: "poke" },
+          origin: { kind: "human" },
+          text: "hello",
+          async: true,
+        }),
+      );
+      let status = (await withTenant(A, () => built.runs.get(stale.id)))?.status;
+      for (let i = 0; i < 200 && status !== "pending"; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        status = (await withTenant(A, () => built.runs.get(stale.id)))?.status;
+      }
+      assert.equal(status, "pending");
+    } finally {
+      await built.runtime.stop();
+    }
+  },
+);
+
+test(
+  "under the restricted app login, spend refresh claims dirty rows across tenants and rolls each day up under its row's tenant",
+  { skip },
+  async () => {
+    const url = testDatabaseUrl();
+    const base = Date.UTC(2024, 0, 1);
+    const owner = createPostgresSessionStore(url, { now: () => base + 123 });
+    await owner.refreshSpendRollup!();
+    const role = `qmt_app_${randomBytes(6).toString("hex")}`;
+    const raw = new pg.Pool({ connectionString: url, max: 1 });
+    try {
+      await raw.query(`CREATE ROLE ${role} LOGIN PASSWORD '${role}' NOBYPASSRLS`);
+      await raw.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
+      await raw.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
+      await raw.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
+      const appUrl = new URL(url);
+      appUrl.username = role;
+      appUrl.password = role;
+      const store = createPostgresSessionStore(appUrl.toString(), { now: () => base + 123 });
+      const spent = [
+        [A, 0.25],
+        [B, 0.5],
+      ] as const;
+      for (const [tenant, costUsd] of spent)
+        await withTenant(tenant, async () => {
+          const scope = scopeId("personal", "spend");
+          const session = await store.getOrCreateByThread(scope, "dm", scope);
+          await store.recordLlmRequest(session.id, {
+            turnSeq: null,
+            step: 0,
+            model: "saved",
+            scopeLabel: scope,
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, costUsd },
+          });
+        });
+      await store.refreshSpendRollup!();
+      assert.equal((await raw.query("SELECT 1 FROM session_spend_dirty")).rowCount, 0);
+      assert.equal((await raw.query("SELECT 1 FROM session_spend_days")).rowCount, 2);
+      for (const [tenant, costUsd] of spent) {
+        const saved = await withTenant(tenant, () => store.spendReport!({ from: base, to: base + 86_400_000 }));
+        assert.deepEqual(
+          saved.rows.map((row) => [row.calls, row.costUsd]),
+          [[1, costUsd]],
+        );
+      }
+    } finally {
+      await raw.query(`DROP OWNED BY ${role}`);
+      await raw.query(`DROP ROLE ${role}`);
+      await raw.end();
+    }
+  },
+);
+
+test("pruning ended cron fires keeps the newest per cron within each tenant", { skip }, async () => {
+  const url = testDatabaseUrl();
+  const fires = createPostgresCronFireStore(url);
+  const raw = new pg.Pool({ connectionString: url, max: 1 });
+  try {
+    for (const tenant of [A, B])
+      await withTenant(tenant, async () => {
+        for (const [fireKey, endedAt] of [
+          ["k1", 10],
+          ["k2", 20],
+          ["k3", 30],
+        ] as const)
+          await fires.record("c-shared", { fireKey, threadRef: fireKey, firedAt: endedAt, endedAt, status: "ok" });
+      });
+    assert.equal(await fires.pruneEnded({ endedBefore: 25, keepPerCron: 2 }), 2);
+    const kept = await raw.query("SELECT tenant_id, fire_key FROM cron_fires");
+    assert.deepEqual(
+      kept.rows.map((row) => [row.tenant_id, row.fire_key]).sort(),
+      [
+        [A, "k2"],
+        [A, "k3"],
+        [B, "k2"],
+        [B, "k3"],
+      ].sort(),
+    );
+  } finally {
+    await raw.end();
+  }
 });
