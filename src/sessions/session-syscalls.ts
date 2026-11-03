@@ -1141,6 +1141,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "detectContext",
     "detectOpener",
     "conversationHeader",
+    "cronScript",
   ] as const)
     delete request[key];
   if (!originalParent) request.addressed = false;

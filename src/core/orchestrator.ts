@@ -2603,6 +2603,29 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
 
         const tools = external ? externalTools(baseTools, accessResource) : baseTools;
+        const cronScript =
+          input.cronScript && input.surface === "cron" && !input.sessionSenderId && !isRetry
+            ? await runCronScript(
+                input.cronScript,
+                (command, opts) => baseTools.execute(command, opts),
+                async (output) => {
+                  if (securityPolicy.screening === "off") return output;
+                  const verdict = await screenChunks(
+                    securityScreenChunks("tool_result:cron_script", output),
+                    classifyAs(
+                      { sessionId: session.id, hook: "tool_response", request: input.text, surface: "cron_script" },
+                      recordScreenRequest,
+                    ),
+                    { stopUnclean: true, signal: turnAbort.signal },
+                  );
+                  return cleanVerdict(verdict) ? output : "The script's output was withheld by the security screen.";
+                },
+                turnAbort.signal,
+              )
+            : undefined;
+        if (cronScript) audit({ action: "cron.script", resource: conversation.threadRef, detail: cronScript.verdict });
+        if (cronScript?.handled && input.cronScript?.mode === "live")
+          return { status: "silent", sessionId: session.id, scriptVerdict: cronScript.verdict };
 
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(input.attachments, (await turnWindow()).items);
@@ -2865,16 +2888,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (releasedToolOutput) {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
         }
-        const cronScript =
-          input.cronScript && !partial
-            ? await runCronScript(
-                input.cronScript,
-                (command, opts) => baseTools.execute(command, opts),
-                turnAbort.signal,
-              )
-            : undefined;
-        if (cronScript?.handled && input.cronScript?.mode === "live")
-          return { status: "silent", sessionId: session.id, scriptVerdict: cronScript.verdict };
         if (cronScript?.escalation) turnInput = `${turnInput}\n\n${cronScript.escalation}`;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
         const sessionUsedTools = visibleHistory.some(
