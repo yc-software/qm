@@ -156,7 +156,6 @@ export interface OrchestratorDeps {
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
-  skillsReady?: Promise<void>;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
   errors?: ErrorLog;
@@ -196,8 +195,7 @@ export interface OrchestratorDeps {
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
   environments?: EnvironmentStore;
   layerBrokerFor?: (tool: BrokeredLayerTool) => AwsRoleBroker | undefined;
-  brokeredTools?: readonly BrokeredLayerTool[];
-  deploymentLayer?: DeploymentLayerRuntime;
+  deploymentLayer?: () => DeploymentLayerRuntime;
   surfaceContext?: SurfaceContextPuller;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;

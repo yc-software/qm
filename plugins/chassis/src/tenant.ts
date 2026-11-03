@@ -8,8 +8,42 @@ export function isTenantId(value: unknown): value is string {
   return typeof value === "string" && TENANT_ID.test(value);
 }
 
+type BindHook = (tenant: string) => Promise<unknown>;
+const bindHooks = new Map<BindHook, Map<string, Promise<void> | true>>();
+
+export function onFirstBind(hook: BindHook): () => void {
+  bindHooks.set(hook, new Map());
+  return () => bindHooks.delete(hook);
+}
+
+function prepare(tenant: string): Promise<void> | undefined {
+  const pending: Array<Promise<void>> = [];
+  for (const [hook, done] of bindHooks) {
+    const existing = done.get(tenant);
+    if (existing === true) continue;
+    if (existing) {
+      pending.push(existing);
+      continue;
+    }
+    const run = Promise.resolve(tenant)
+      .then(hook)
+      .then(() => void done.set(tenant, true));
+    done.set(tenant, run);
+    run.catch(() => done.get(tenant) === run && done.delete(tenant));
+    pending.push(run);
+  }
+  return pending.length ? Promise.all(pending).then(() => undefined) : undefined;
+}
+
+export function tenantReady(): Promise<void> {
+  const id = binding.getStore();
+  if (id === undefined) return Promise.reject(new Error("No tenant is bound to this work"));
+  return prepare(id) ?? Promise.resolve();
+}
+
 export function withTenant<T>(id: string, fn: () => T): T {
   if (!isTenantId(id)) throw new Error(`Tenant id must be a lowercase uuid, got ${JSON.stringify(id)}`);
+  if (bindHooks.size) prepare(id)?.catch(() => undefined);
   return bind(id, fn);
 }
 

@@ -233,7 +233,7 @@ import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tool
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
-import { perTenant } from "../tenants/context.ts";
+import { perTenant, tenantReady } from "../tenants/context.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -1158,7 +1158,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
           : "";
 
-      await deps.skillsReady;
+      await tenantReady();
       const configuredProviders =
         !external && deps.resolveConnectorClient
           ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
@@ -1248,8 +1248,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const turnFilesDir = `${turnSessionDir}/${transferId}`;
       const turnInboxDir = `${turnFilesDir}/${INBOX_DIR}`;
 
-      if (!external && deps.deploymentLayer?.hints.length) {
-        systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
+      const layerHints = deps.deploymentLayer?.().hints ?? [];
+      if (!external && layerHints.length) {
+        systemPrompt += `\n\n## Deployment tool hints\n${layerHints.map((hint) => `- ${hint}`).join("\n")}`;
       }
       const gatewayBlock = renderGatewayContext(
         input.surface,
@@ -1394,7 +1395,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const cleaned = payload.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").trim();
         return cleaned.length > 16_000 ? `${cleaned.slice(0, 16_000)}…` : cleaned;
       };
-      const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
+      const brokeredTools = external ? [] : (deps.deploymentLayer?.().brokeredTools ?? []);
       const openSpeakerKeychain =
         liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
       const openAutomationKeychain =
@@ -1893,7 +1894,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       let toolCalls = 0;
       const commandPolicy = resolution.commandPolicy;
-      const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
+      const layerCommandRules = [...(deps.deploymentLayer?.().commandRules ?? [])];
       const turnSandboxResources = external
         ? deps.sandboxResources?.forTurn({
             actorId: actor.id,
@@ -2702,8 +2703,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.deploymentLayer
             ? {
                 layerAuth: {
-                  credentialPaths: deps.deploymentLayer.credentialPaths,
-                  splitEnvTemplates: deps.deploymentLayer.splitEnvTemplates,
+                  credentialPaths: deps.deploymentLayer().credentialPaths,
+                  splitEnvTemplates: deps.deploymentLayer().splitEnvTemplates,
                 },
               }
             : {}),

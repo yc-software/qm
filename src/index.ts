@@ -42,8 +42,6 @@ const server = createServer(built.app, {
   managedSlack,
 });
 
-await built.deploymentLayerReady;
-built.deploymentLayerRefresh.start();
 built.runtime.start();
 
 server.listen(config.port, () => {
@@ -182,7 +180,6 @@ function shutdown(signal: string): void {
   for (const runtime of slackAccountRuntimes)
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
   void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
-  built.deploymentLayerRefresh.stop();
   server.close();
   server.closeIdleConnections();
   stopWithBackstop(

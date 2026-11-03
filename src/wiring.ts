@@ -326,7 +326,7 @@ import {
 } from "./runs/instance-registry.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
-import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
+import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
 import { createJobComputerSweep } from "./processes/job-computers.ts";
@@ -372,12 +372,7 @@ import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-stor
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
 import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
-import {
-  emptyDeploymentLayer,
-  loadDeploymentLayer,
-  type BrokeredLayerTool,
-  type DeploymentLayerRuntime,
-} from "./deployment/load-layer.ts";
+import { emptyDeploymentLayer, loadDeploymentLayer, type BrokeredLayerTool } from "./deployment/load-layer.ts";
 import {
   createDeploymentLayerStore,
   LAYER_CREATED_BY,
@@ -443,11 +438,7 @@ export interface BuiltApp {
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
-  deploymentLayer: DeploymentLayerRuntime;
-  brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
-  deploymentLayerReady: Promise<unknown>;
-  deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
   signals: RunSignalStore;
@@ -656,12 +647,11 @@ export function buildApp(
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
-  const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
   const auditLog = createPostgresAuditLog(databaseUrl);
   const deploymentLayerStore = createDeploymentLayerStore({
     backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
-    runtime: deploymentLayer,
+    fallback: deploymentLayer,
     skills,
     skillBundles,
     scopeId: orgScope,
@@ -686,35 +676,26 @@ export function buildApp(
         }
       : {}),
   });
-  const deploymentLayerReady = deploymentLayerStore.hydrate();
-  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
-    label: "deployment layer refresh",
-  });
-  let skillsReady: Promise<void>;
-  if (config.seedSkills) {
-    const installCatalogs = async (): Promise<void> => {
-      await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
-      for (const dir of config.pluginSkillDirs) {
-        if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
-        await installSeedSkills(skills, {
-          dir,
-          scopeId: orgScope,
-          createdBy: "system:plugin-skills",
-          reviewer: "system:plugin-skills-reviewer",
-          respectArchived: true,
-        });
-      }
-    };
-    skillsReady = Promise.all([
+  const layer = () => deploymentLayerStore.runtime();
+  const installCatalogs = async (): Promise<void> => {
+    if (!config.seedSkills) return;
+    await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
+    for (const dir of config.pluginSkillDirs) {
+      if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
+      await installSeedSkills(skills, {
+        dir,
+        scopeId: orgScope,
+        createdBy: "system:plugin-skills",
+        reviewer: "system:plugin-skills-reviewer",
+        respectArchived: true,
+      });
+    }
+  };
+  const seedTenant = () =>
+    Promise.all([
       installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
-      deploymentLayerReady.catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
-    ]).then(() => undefined);
-  } else {
-    skillsReady = deploymentLayerReady.then(
-      () => undefined,
-      (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
-    );
-  }
+      deploymentLayerStore.hydrate().catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
+    ]);
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
@@ -818,10 +799,10 @@ export function buildApp(
         ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
         : {}),
       blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
       connectorSdk: loadConnectorSdk,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      layerToolFiles: () => layer().installFiles,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
@@ -835,9 +816,9 @@ export function buildApp(
       ...smol,
       ...(snapshotIntervalSec !== undefined ? { snapshotIntervalMs: snapshotIntervalSec * 1000 } : {}),
       blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
+      layerToolFiles: () => layer().installFiles,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
@@ -897,9 +878,9 @@ export function buildApp(
         ? { nativeSnapshotIntervalMs: e2b.nativeSnapshotIntervalSec * 1000 }
         : {}),
       ...(e2b.egressProxyUrl ? { egressProxyUrl: e2b.egressProxyUrl } : {}),
-      extraTools: [...(e2b.templateId ? E2B_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      extraTools: () => [...(e2b.templateId ? E2B_TEMPLATE_TOOLS : []), ...layer().advertisedTools],
+      credentialPaths: () => layer().credentialPaths,
+      layerToolFiles: () => layer().installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -930,9 +911,9 @@ export function buildApp(
         ? { snapshotIntervalMs: managedAgents.snapshotIntervalSec * 1000 }
         : {}),
       ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
-      extraTools: [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      extraTools: () => [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...layer().advertisedTools],
+      credentialPaths: () => layer().credentialPaths,
+      layerToolFiles: () => layer().installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -974,10 +955,10 @@ export function buildApp(
       ...(modal.rotateAfterSec ? { rotateAfterMs: modal.rotateAfterSec * 1000 } : {}),
       ...(modal.reapIdleSec ? { reapIdleMs: modal.reapIdleSec * 1000 } : {}),
       ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
       connectorSdk: loadConnectorSdk,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      layerToolFiles: () => layer().installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -994,8 +975,8 @@ export function buildApp(
       ...config.agent37Sandbox,
       advisoryLock,
       blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
@@ -1042,9 +1023,9 @@ export function buildApp(
       ...(ss.egressDeny ? { egressDeny: ss.egressDeny } : {}),
       ...(ss.defaultTimeoutSec ? { defaultTimeoutSec: ss.defaultTimeoutSec } : {}),
       advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
+      layerToolFiles: () => layer().installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -1059,8 +1040,8 @@ export function buildApp(
       ...config.awsSandbox,
       s3Bucket: config.awsSandbox.s3Bucket,
       advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -1074,8 +1055,8 @@ export function buildApp(
       ...config.porterSandbox,
       advisoryLock,
       blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
@@ -1094,9 +1075,9 @@ export function buildApp(
       scratchStore: renderScratch,
       cleanupStore: renderCleanup,
       advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
+      layerToolFiles: () => layer().installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -1336,7 +1317,9 @@ export function buildApp(
   };
   const loadTenant = () =>
     onFirstBind((tenant) =>
-      withTenant(tenant, () => Promise.all([identity.ready(), configStore.hydrate?.(), refreshCustomProviders()])),
+      withTenant(tenant, () =>
+        Promise.all([identity.ready(), configStore.hydrate?.(), refreshCustomProviders(), seedTenant()]),
+      ),
     );
   let stopTenantLoad: (() => void) | undefined = loadTenant();
   const refreshModels = async () => {
@@ -2112,7 +2095,6 @@ export function buildApp(
     memoryStrategy,
     skills,
     skillBundles,
-    skillsReady,
     errors,
     signals: runSignals,
     turnStream,
@@ -2140,8 +2122,7 @@ export function buildApp(
     projects,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     environments,
-    brokeredTools,
-    deploymentLayer,
+    deploymentLayer: layer,
     layerBrokerFor,
   };
   const orchestrator = createOrchestrator(orchestratorDeps);
@@ -2281,7 +2262,6 @@ export function buildApp(
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,
     ...(renderArtifacts ? { deploymentGitPrincipals: renderArtifacts } : {}),
-    deploymentLayer,
     ...(processes ? { processes } : {}),
     monitors,
     sandbox,
@@ -2955,11 +2935,7 @@ export function buildApp(
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
     },
-    deploymentLayer,
     deploymentLayerStore,
-    brokeredTools,
-    deploymentLayerReady,
-    deploymentLayerRefresh,
     sessions,
     runs,
     signals: runSignals,

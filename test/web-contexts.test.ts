@@ -13,7 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webctx-")) }));
-  const server = createInsecureTestServer(built.app, { identity: built.identity });
+  const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { built, base, close: () => new Promise<void>((r) => server.close(() => r())) };

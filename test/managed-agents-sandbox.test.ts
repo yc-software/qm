@@ -365,7 +365,7 @@ test("the profile advertises provider-managed persistence and parks on teardown"
 
 test("the QM template's tools are advertised as installed, not missing", () => {
   assert.ok(sandbox.profile.spec?.notInstalled?.includes("jq"));
-  const spec = make({ extraTools: QM_TEMPLATE_TOOLS }).profile.spec;
+  const spec = make({ extraTools: () => QM_TEMPLATE_TOOLS }).profile.spec;
   for (const tool of QM_TEMPLATE_TOOLS) {
     assert.ok(spec?.tools?.includes(tool), tool);
     assert.ok(!spec?.notInstalled?.includes(tool), tool);

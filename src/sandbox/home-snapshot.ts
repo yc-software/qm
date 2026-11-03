@@ -172,7 +172,7 @@ export interface HomeSnapshotOpsOptions<S> {
   label: string;
   homeDir: string;
   homeTarPath: string;
-  prunePaths: string[];
+  prunePaths: () => readonly string[];
   store: HomeSnapshotStore;
   io: HomeSnapshotSessionIo<S>;
   partBytes?: number;
@@ -211,7 +211,7 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
   const maxBytes = opts.maxBytes ?? SNAPSHOT_MAX_BYTES;
   const timeoutMs = opts.timeoutMs ?? SNAPSHOT_TIMEOUT_MS;
   const scratchInHome = homeTarPath.startsWith(`${homeDir}/`);
-  const prunePaths = scratchInHome ? [...opts.prunePaths, `./${basename(homeTarPath)}*`] : opts.prunePaths;
+  const prunePaths = () => (scratchInHome ? [...opts.prunePaths(), `./${basename(homeTarPath)}*`] : opts.prunePaths());
   const partPath = (i: number): string => `${homeTarPath}.${i}.part`;
   const listPath = `${homeTarPath}.list`;
 
@@ -291,9 +291,8 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
     async snapshotHome(scope, session): Promise<void> {
       if (isJobComputerScope(scope)) return;
       const left = startClock();
-      const prune = prunePaths.length
-        ? `\\( ${prunePaths.map((p) => `-path ${shq(p)}`).join(" -o ")} \\) -prune -o `
-        : "";
+      const pruned = prunePaths();
+      const prune = pruned.length ? `\\( ${pruned.map((p) => `-path ${shq(p)}`).join(" -o ")} \\) -prune -o ` : "";
       const script = `cd ${shq(homeDir)} 2>/dev/null || exit 0; find . ${prune}\\( ! -type d -o -exec test -r {} \\; \\) -print0 > ${shq(listPath)} 2>/dev/null; tar --no-recursion --null -T ${shq(listPath)} -cf ${shq(homeTarPath)}; rc=$?; rm -f ${shq(listPath)}; exit $rc`;
       try {
         const made = await run(session, script, 180_000, left);

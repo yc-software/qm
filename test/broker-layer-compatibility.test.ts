@@ -266,20 +266,22 @@ const BROKERED_ACME = {
   },
 };
 
-test("a layer installed after boot reaches the app that booted without one", () => {
+test("a layer installed after boot reaches the app that booted without one", async () => {
   const built = buildApp(testConfig({ orgId: "acme" }));
+  await built.deploymentLayerStore.hydrate();
+  const layer = () => built.deploymentLayerStore.runtime();
   assert.equal(
-    built.brokeredTools.length,
+    layer().brokeredTools.length,
     0,
     "a deployment with no DEPLOYMENT_LAYER boots empty; the layer arrives over the API afterwards",
   );
-  replaceDeploymentLayer(built.deploymentLayer, loadDeploymentLayer(layerDir({ acme: BROKERED_ACME })));
+  replaceDeploymentLayer(layer(), loadDeploymentLayer(layerDir({ acme: BROKERED_ACME })));
   assert.equal(
-    built.brokeredTools.length,
+    layer().brokeredTools.length,
     1,
     "credential vending reads this array; a copy taken at boot would stay empty forever",
   );
-  assert.equal(built.brokeredTools[0]?.service, "acme");
+  assert.equal(layer().brokeredTools[0]?.service, "acme");
 });
 
 test("replaceDeploymentLayer reaches every holder of the runtime arrays", () => {

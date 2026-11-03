@@ -23,11 +23,7 @@ function start(): { base: string; built: BuiltApp; close: () => Promise<void> } 
       seedSkills: false,
     }),
   );
-  const server = createInsecureTestServer(built.app, {
-    capabilitySecret: SECRET,
-    config: built.config,
-    identity: built.identity,
-  });
+  const server = createInsecureTestServer(built.app, { capabilitySecret: SECRET, config: built.config });
   server.listen(0);
   return {
     base: `http://localhost:${(server.address() as AddressInfo).port}`,

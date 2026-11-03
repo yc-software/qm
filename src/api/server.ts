@@ -21,6 +21,7 @@ import {
   type SourceAuth,
 } from "../auth/source-auth.ts";
 import { CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
+import { boundTenant } from "../tenants/context.ts";
 import { capabilityToken, requestCapability, withRequestTenant } from "./tenant-ingress.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
@@ -33,7 +34,7 @@ import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import { boundTenant, tenantReady } from "../tenants/context.ts";
+import { tenantReady } from "../tenants/context.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,

@@ -32,7 +32,7 @@ function awsSandbox(extraTools: string[]) {
     api: fake.api,
     s3: fake.s3,
     fetchImpl: fake.fetchImpl,
-    extraTools,
+    extraTools: () => extraTools,
   });
 }
 
