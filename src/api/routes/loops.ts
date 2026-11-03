@@ -17,7 +17,7 @@ import { settleGroup } from "../../loops/triage.ts";
 import type { CronStore } from "../../cron/cron-store.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } from "../../cron/schedule.ts";
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
-import { errMessage, swallow } from "../../util/errors.ts";
+import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj, resolveCapabilityDestination } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
@@ -489,7 +489,9 @@ export async function syncLoopSchedule(deps: LoopServiceDeps, loop: Loop, state:
   try {
     await deps.crons.setEnabled(loop.cronId, state === "enabled");
   } catch (e) {
-    await deps.store.update(loop.id, { restore: loop });
+    await deps.store
+      .update(loop.id, { restore: loop })
+      .catch((restoreErr: unknown) => reportFailure("loops: restore state after schedule failure", restoreErr));
     throw e;
   }
 }
