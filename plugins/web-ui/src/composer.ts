@@ -472,7 +472,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const scopeId = scopeKey();
     if (!scopeId) return;
     composerState.error = "";
-    composerState.note = "";
     const current = preserveSelection ? currentModelOption() : undefined;
     const settings = current ? activeLoadoutEntry(current) : undefined;
     const modelRevision = modelSelectionRevision;
@@ -1150,7 +1149,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       return;
     composerState.draft = prompt;
     composerState.error = "";
-    composerState.note = "";
     persistDraft();
     ctx.chat.drawActiveChat(agent);
     focusComposerEnd();
@@ -1324,7 +1322,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function stopStreaming(agent: Agent): void {
     composerState.error = "";
-    composerState.note = "";
     void ctx.chat.stopLiveRun().catch(() => {
       if (agent !== ctx.chat.state.agent) return;
       composerState.error = "Could not request stop. Try again.";
@@ -1356,7 +1353,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     composerState.draft = "";
     composerState.attachments = [];
     composerState.error = "";
-    composerState.note = "";
     ctx.chat.drawActiveChat(agent);
     clearComposerDom(agent);
     const { uploaded, skipped } = await uploadAttachments(staged);
@@ -1419,7 +1415,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     if (queuedEdit?.saving) return;
     queuedEdit = null;
     composerState.error = "";
-    composerState.note = "";
     ctx.chat.drawActiveChat(agent);
     focusComposerEnd();
   }
@@ -1429,7 +1424,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     if (!edit || edit.saving) return;
     edit.saving = true;
     composerState.error = "";
-    composerState.note = "";
     ctx.chat.drawActiveChat(agent);
     try {
       await editQueuedRun(edit.runId, edit.text, edit.original);
@@ -1457,7 +1451,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const threadRef = ctx.chat.state.threadRef;
     if (!threadRef) return;
     composerState.error = "";
-    composerState.note = "";
     try {
       await withdrawRun(queued.runId);
     } catch (err) {
@@ -1824,7 +1817,6 @@ ${draft}`
     }
     composerState.processingFiles = true;
     composerState.error = "";
-    composerState.note = "";
     ctx.chat.drawActiveChat(agent);
     const plan = planAdmission(files, folders.length);
     try {
@@ -2093,7 +2085,6 @@ ${draft}`
           ...loaded.map((attachment, index) => ({ ...attachment, id: prefix + index })),
         ];
         composerState.error = "";
-        composerState.note = "";
         return true;
       } catch {
         composerState.error = "Could not prepare annotation attachments. Retrying automatically.";
