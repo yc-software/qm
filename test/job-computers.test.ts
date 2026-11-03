@@ -5,6 +5,7 @@ import type { SandboxResource } from "../src/sandbox/sandbox-resources.ts";
 import type { ProcessSandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 function fixture() {
   const exited = new Set<string>();
@@ -85,19 +86,21 @@ test("the job sweep retires a job computer only after its jobs end and write bac
     ["p-a", "job-a"],
     ["p-b", "job-b"],
   ] as const)
-    await f.processes.register({
-      processId,
-      scopeId: "channel:room",
-      sandboxId,
-      kind: "background",
-      command: "bg: sync",
-      ttlMs: 600_000,
-    });
+    await inTestTenant(() =>
+      f.processes.register({
+        processId,
+        scopeId: "channel:room",
+        sandboxId,
+        kind: "background",
+        command: "bg: sync",
+        ttlMs: 600_000,
+      }),
+    );
   f.exited.add("p-a");
   await f.sweep();
   assert.deepEqual(f.retired, ["job-a"]);
   assert.deepEqual(f.finished, ["p-a"]);
-  assert.equal((await f.processes.get("p-a"))?.status, "exited");
+  assert.equal((await inTestTenant(() => f.processes.get("p-a")))?.status, "exited");
   f.exited.add("p-b");
   await f.sweep();
   assert.deepEqual(f.retired, ["job-a"], "a box checked within the last five minutes is left alone");
