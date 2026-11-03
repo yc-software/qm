@@ -48,12 +48,13 @@ test("only a source-signed service can open the all-tenant session-state and loo
     return res.status;
   };
   for (const stream of ["/v1/session-state/events", "/v1/loop-items/events"]) {
-    for (const headers of [
+    const refused: Array<Record<string, string>> = [
       {},
       { "x-agent-capability": capability },
       { authorization: `Bearer ${capability}` },
       { [PORTAL_IDENTITY_HEADER]: identity, "x-qm-tenant": tenant },
-    ])
+    ];
+    for (const headers of refused)
       assert.equal(await open(stream, headers), 401, `${stream} ${Object.keys(headers).join(",")}`);
     const signed = withSourceAuthNonce(stream, signingSecret);
     assert.equal(await open(signed, signedHeaders(signingSecret, "GET", signed, "")), 200, stream);
