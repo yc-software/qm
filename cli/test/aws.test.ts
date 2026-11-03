@@ -4974,6 +4974,7 @@ test("AWS renders adopted logGroup and stopTimeout pins; the defaults stay deriv
   });
   assert.equal(renderTaskDefinition(withDrain("90000"), "core", image).containerDefinitions[0]!.stopTimeout, 120);
   assert.throws(() => renderTaskDefinition(withDrain("90001"), "core", image), /SHUTDOWN_DRAIN_MS=90001/);
+  assert.equal(renderTaskDefinition(withDrain(""), "core", image).containerDefinitions[0]!.stopTimeout, 60);
   const adopted: QmConfig = {
     ...config,
     aws: {

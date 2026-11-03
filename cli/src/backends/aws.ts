@@ -27,6 +27,7 @@ import {
 import { CliError, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
 import {
   awsWorkloadArchitecture,
+  FARGATE_MAX_STOP_TIMEOUT_S,
   requiresAwsMicrovmImage,
   isDigestPinned,
   sandboxCoreEnv,
@@ -500,10 +501,9 @@ function workloadArchitecture(config: QmConfig, workload: string): "arm64" | "am
 
 const CORE_SHUTDOWN_DRAIN_MS = 30_000;
 const CORE_EXIT_AFTER_DRAIN_S = 30;
-const FARGATE_MAX_STOP_TIMEOUT_S = 120;
 
 function coreStopTimeout(environment: Record<string, string>): number {
-  const drainMs = Number(environment.SHUTDOWN_DRAIN_MS ?? CORE_SHUTDOWN_DRAIN_MS);
+  const drainMs = Number(environment.SHUTDOWN_DRAIN_MS?.trim() || CORE_SHUTDOWN_DRAIN_MS);
   const seconds = Math.ceil(drainMs / 1_000) + CORE_EXIT_AFTER_DRAIN_S;
   if (!(seconds <= FARGATE_MAX_STOP_TIMEOUT_S))
     throw new CliError(
