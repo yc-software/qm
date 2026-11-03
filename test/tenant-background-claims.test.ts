@@ -20,7 +20,7 @@ import { scopeId, type Principal } from "../src/types.ts";
 import { createSweeper } from "../src/util/sweeper.ts";
 import { createAskExpirySweep } from "../src/triggers/keychain-ask.ts";
 import type { KeychainAsk } from "../src/credentials/keychain.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { ownerUrlOf, testDatabaseUrl } from "./support/test-database.ts";
 import { testTenants } from "./support/test-tenants.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -64,7 +64,7 @@ test(
   async () => {
     const url = testDatabaseUrl();
     const role = `qmt_app_${randomBytes(6).toString("hex")}`;
-    const owner = new pg.Pool({ connectionString: url, max: 1 });
+    const owner = new pg.Pool({ connectionString: ownerUrlOf(url), max: 1 });
     for (const statement of TENANCY_BASE.statements) await owner.query(statement);
     await owner.query(`CREATE TABLE due_work(
     id TEXT PRIMARY KEY,
@@ -83,7 +83,7 @@ test(
       "INSERT INTO due_work(id, tenant_id, due) VALUES ('a1', $1, true), ('a2', $1, false), ('b1', $2, true)",
       [A, B],
     );
-    const appUrl = new URL(url);
+    const appUrl = new URL(ownerUrlOf(url));
     appUrl.username = role;
     appUrl.password = role;
     const app = createPgPool(appUrl.toString());
@@ -265,13 +265,13 @@ test(
     const owner = createPostgresSessionStore(url, { now: () => base + 123 });
     await owner.refreshSpendRollup!();
     const role = `qmt_app_${randomBytes(6).toString("hex")}`;
-    const raw = new pg.Pool({ connectionString: url, max: 1 });
+    const raw = new pg.Pool({ connectionString: ownerUrlOf(url), max: 1 });
     try {
       await raw.query(`CREATE ROLE ${role} LOGIN PASSWORD '${role}' NOBYPASSRLS`);
       await raw.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
       await raw.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
       await raw.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
-      const appUrl = new URL(url);
+      const appUrl = new URL(ownerUrlOf(url));
       appUrl.username = role;
       appUrl.password = role;
       const store = createPostgresSessionStore(appUrl.toString(), { now: () => base + 123 });
@@ -312,7 +312,7 @@ test(
 test("pruning ended cron fires keeps the newest per cron within each tenant", { skip }, async () => {
   const url = testDatabaseUrl();
   const fires = createPostgresCronFireStore(url);
-  const raw = new pg.Pool({ connectionString: url, max: 1 });
+  const raw = new pg.Pool({ connectionString: ownerUrlOf(url), max: 1 });
   try {
     for (const tenant of [A, B])
       await withTenant(tenant, async () => {
