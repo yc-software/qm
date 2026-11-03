@@ -133,9 +133,7 @@ export function withWebTranscriptDeliveries(
 
   const drained = async (rows: Delivery[]): Promise<Delivery[]> => {
     const out: Delivery[] = [];
-    const held = new Set<string>();
     for (const d of rows) {
-      if (held.has(d.destination.target)) continue;
       try {
         const disposition = classify(d);
         if (disposition === "settle") {
@@ -153,7 +151,6 @@ export function withWebTranscriptDeliveries(
           remember(d.idempotencyKey);
           out.push(d);
         } else {
-          held.add(d.destination.target);
           swallow(`web delivery ${d.idempotencyKey} transcript write (will retry)`, err);
         }
       }

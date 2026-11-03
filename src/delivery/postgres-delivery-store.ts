@@ -163,18 +163,19 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                AND (claim_expires_at IS NULL
                  OR claim_expires_at <= ${NOW_MS_SQL})
                ${
-                 opts?.wholeConversations
+                 opts?.oldestPerConversation
                    ? `AND NOT EXISTS (
                  SELECT 1 FROM deliveries o
                   WHERE o.destination->>'type' = $1 AND o.destination->>'target' = d.destination->>'target'
-                    AND o.delivered_at IS NULL AND o.expired_at IS NULL AND o.claim_expires_at > ${NOW_MS_SQL})`
+                    AND o.delivered_at IS NULL AND o.expired_at IS NULL AND NOT o.shadow
+                    AND (o.claim_expires_at > ${NOW_MS_SQL} OR (o.created_at, o.id) < (d.created_at, d.id)))`
                    : ""
                }
              ORDER BY created_at
                FOR UPDATE SKIP LOCKED
           )
           RETURNING *`;
-      const rows = opts?.wholeConversations
+      const rows = opts?.oldestPerConversation
         ? await withPgTransaction(await pool(), async (client) => {
             await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`deliveries:claim:${type}`]);
             return (await client.query(claim, [type, ttlMs])).rows;

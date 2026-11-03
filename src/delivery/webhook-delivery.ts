@@ -7,7 +7,7 @@ import type { Delivery } from "../types.ts";
 
 type Send = (d: Delivery) => Promise<{ refused: string } | void>;
 
-const CLAIM_MS = 60_000;
+const CLAIM_MS = 20_000;
 
 export function webhookSigningKey(signingSecret: string): string {
   return createHmac("sha256", signingSecret).update("delivery-webhook").digest("hex");
@@ -46,31 +46,28 @@ export function createWebhookDelivery(deliveries: DeliveryStore, send: Send) {
     inFlight.add(work);
     void work.finally(() => inFlight.delete(work));
   };
-  const deliverInOrder = async (rows: Delivery[]): Promise<void> => {
-    for (const d of rows) {
-      const outcome = await send(d).catch((e: unknown) => {
-        reportFailure("webhook delivery: not accepted; retrying once its claim lapses", e, `delivery=${d.id}`);
-        return null;
-      });
-      if (outcome === null) return;
-      if (outcome) await deliveries.fail(d.id, outcome.refused, Date.now());
-      else await deliveries.ack(d.id, Date.now());
-    }
+  const deliver = async (d: Delivery): Promise<void> => {
+    const outcome = await send(d).catch((e: unknown) => {
+      reportFailure("webhook delivery: not accepted; retrying once its claim lapses", e, `delivery=${d.id}`);
+      return null;
+    });
+    if (outcome === null) return;
+    if (outcome) await deliveries.fail(d.id, outcome.refused, Date.now());
+    else await deliveries.ack(d.id, Date.now());
     pass();
   };
   const pass = (): void => {
     if (stopped) return;
     track(
       deliveries
-        .claimPending("webhook", CLAIM_MS, { wholeConversations: true })
+        .claimPending("webhook", CLAIM_MS, { oldestPerConversation: true })
         .then((rows) => {
-          for (const conversation of Map.groupBy(rows, (d) => d.destination.target).values())
-            track(deliverInOrder(conversation).catch((e) => reportFailure("webhook delivery failed", e)));
+          for (const d of rows) track(deliver(d).catch((e) => reportFailure("webhook delivery failed", e)));
         })
         .catch((e) => reportFailure("webhook delivery: claim failed", e)),
     );
   };
-  const sweeper = createSweeper(pass, CLAIM_MS / 2, { label: "webhook deliveries", immediate: true });
+  const sweeper = createSweeper(pass, CLAIM_MS / 4, { label: "webhook deliveries", immediate: true });
   let unsubscribe: (() => void) | undefined;
   return {
     start(): void {

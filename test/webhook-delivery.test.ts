@@ -19,26 +19,21 @@ async function until(check: () => boolean | Promise<boolean>, ms = 30_000): Prom
 const enqueuer = (store: ReturnType<typeof createPostgresDeliveryStore>) => (target: string, text: string) =>
   store.enqueue({ destination: { type: "webhook", target }, text, idempotencyKey: `${target}:${text}` });
 
-test("a conversation is claimed whole, and not again while any of its rows is out", { skip }, async () => {
+test("only the oldest row of each conversation is claimed, and not while one is out", { skip }, async () => {
   const store = createPostgresDeliveryStore(testDatabaseUrl());
   const enqueue = enqueuer(store);
-  await enqueue("a", "a1");
+  const claim = async () =>
+    (await store.claimPending("webhook", 300, { oldestPerConversation: true })).map((d) => d.text);
+  const a1 = await enqueue("a", "a1");
   await enqueue("a", "a2");
   await enqueue("b", "b1");
-  const texts = (rows: Delivery[]) => rows.map((d) => d.text);
-  assert.deepEqual(texts(await store.claimPending("webhook", 300, { wholeConversations: true })), ["a1", "a2", "b1"]);
-  await enqueue("a", "a3");
+  assert.deepEqual(await claim(), ["a1", "b1"]);
   await enqueue("c", "c1");
-  assert.deepEqual(texts(await store.claimPending("webhook", 300, { wholeConversations: true })), ["c1"]);
-  const [a1] = await store.pending("webhook");
-  await store.ack(a1!.id, Date.now());
+  assert.deepEqual(await claim(), ["c1"]);
+  await store.ack(a1.id, Date.now());
+  assert.deepEqual(await claim(), ["a2"]);
   await new Promise((r) => setTimeout(r, 400));
-  assert.deepEqual(texts(await store.claimPending("webhook", 300, { wholeConversations: true })), [
-    "a2",
-    "b1",
-    "a3",
-    "c1",
-  ]);
+  assert.deepEqual(await claim(), ["a2", "b1", "c1"]);
 });
 
 test(
