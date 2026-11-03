@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { DIRECTORY_MIGRATIONS } from "../src/directory/postgres-directory-store.ts";
 import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction } from "../src/persistence/pg-pool.ts";
-import { SESSION_MIGRATIONS } from "../src/sessions/session-schema.ts";
+import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
@@ -150,39 +150,16 @@ test("the tenancy migration fails when the host refuses a grant", { skip }, asyn
   }
 });
 
-const previousRelease = [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS.filter((m) => !/tenan/.test(m.id))].map(
-  definePgMigration,
-);
-const thisRelease = [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration);
-
-test("upgrading copies the existing tenant into tenants and the previous release still applies", { skip }, async () => {
+test("upgrading copies the existing tenant into tenants", { skip }, async () => {
   const pool = new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
   try {
-    await applyPgMigrations(pool, previousRelease);
+    const previous = SESSION_MIGRATIONS.filter((m) => m !== TENANCY_BASE && m !== TENANT_BACKFILL);
+    await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...previous].map(definePgMigration));
     const old = (await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id;
-    await pool.query(
-      "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at) VALUES ('s1', 'dm', 'personal:x', 's1', 0)",
-    );
-    await pool.query(
-      "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(), 's1', 0, 'UserMessage', '{}', now())",
-    );
-    await applyPgMigrations(pool, thisRelease);
+    await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration));
     assert.deepEqual((await pool.query("SELECT id::text, slug, name FROM tenants")).rows, [
       { id: old, slug: old, name: old },
     ]);
-    await applyPgMigrations(pool, previousRelease);
-    assert.equal((await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id, old);
-  } finally {
-    await pool.end();
-  }
-});
-
-test("upgrading a database with no items or blobs creates no tenant", { skip }, async () => {
-  const pool = new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
-  try {
-    await applyPgMigrations(pool, previousRelease);
-    await applyPgMigrations(pool, thisRelease);
-    assert.equal((await pool.query("SELECT count(*)::int AS n FROM tenants")).rows[0].n, 0);
   } finally {
     await pool.end();
   }

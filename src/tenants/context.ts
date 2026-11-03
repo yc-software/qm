@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { z } from "zod";
+import { uuidSchema } from "../util/ids.ts";
 
-const TENANT_ID = z.uuid().lowercase();
+const TENANT_ID = uuidSchema.lowercase();
 
 const binding = new AsyncLocalStorage<string | undefined>();
 
