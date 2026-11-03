@@ -141,17 +141,18 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
   assert.equal(resolveEmbeddingModel("gateway/embed"), undefined);
 });
 
-test("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
-  const tables = testConfigTables();
-  const first = testConfigStore("test", { tables });
-  await first.setEmbeddingModel("gateway/embed");
-  await first.setRuntimeSelection("org:test", { modelId: "gpt-5.5" });
-  await first.setRuntimeSelection("org:test", null);
-  const restarted = testConfigStore("test", { tables });
-  assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
-  await restarted.setEmbeddingModel(null);
-  assert.equal(await first.getEmbeddingModelDurable(), null);
-});
+test("org embedding selection is durable and survives chat runtime replacement and clearing", () =>
+  inTestTenant(async () => {
+    const tables = testConfigTables();
+    const first = testConfigStore("test", { tables });
+    await first.setEmbeddingModel("gateway/embed");
+    await first.setRuntimeSelection("org:test", { modelId: "gpt-5.5" });
+    await first.setRuntimeSelection("org:test", null);
+    const restarted = testConfigStore("test", { tables });
+    assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
+    await restarted.setEmbeddingModel(null);
+    assert.equal(await first.getEmbeddingModelDurable(), null);
+  }));
 
 test("HTTP embedding selection accepts only known embedding models and survives a new recall", async (t) => {
   const config = testConfig({ openaiApiKey: "test-key" });

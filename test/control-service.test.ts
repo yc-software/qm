@@ -49,8 +49,8 @@ function claims(
 }
 
 async function setup(): Promise<{ built: BuiltApp; control: ControlService }> {
-  const built = await buildLoadedApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "control-svc-")), signingSecret: SECRET }),
+  const built = await inTestTenant(() =>
+    buildLoadedApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "control-svc-")), signingSecret: SECRET })),
   );
   const control = createControlService(built.app, built.scheduler, built.admin);
   return { built, control };
