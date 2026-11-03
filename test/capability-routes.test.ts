@@ -13,6 +13,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from ".
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "route-test-secret".repeat(3);
 
@@ -22,15 +23,17 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   let built: BuiltApp;
 
   const capFor = async (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    await mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scope,
-        destination: { type: "slack", target: `D-${actorId}`, audienceScopeId: scope },
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        ...extra,
-      },
-      SECRET,
+    await inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId,
+          scopeId: scope,
+          destination: { type: "slack", target: `D-${actorId}`, audienceScopeId: scope },
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          ...extra,
+        },
+        SECRET,
+      ),
     );
 
   const THREAD = {
@@ -48,17 +51,19 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     label: "#eng (the whole channel)",
   } as const;
   const capChannel = async (actorId: string, extra: Partial<CapabilityClaims> = {}) =>
-    await mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scopeId("channel", "C"),
-        destination: { type: THREAD.type, target: THREAD.target, audienceScopeId: THREAD.audienceScopeId },
-        destinations: [THREAD, ROOT],
-        defaultDestinationKey: THREAD.key,
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        ...extra,
-      },
-      SECRET,
+    await inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId,
+          scopeId: scopeId("channel", "C"),
+          destination: { type: THREAD.type, target: THREAD.target, audienceScopeId: THREAD.audienceScopeId },
+          destinations: [THREAD, ROOT],
+          defaultDestinationKey: THREAD.key,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          ...extra,
+        },
+        SECRET,
+      ),
     );
 
   before(async () => {
@@ -68,9 +73,11 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         signingSecret: SECRET,
       }),
     );
-    await built.directory.replaceChannels(
-      [{ channelId: "C", name: "eng", isPrivate: false }],
-      ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
+    await inTestTenant(() =>
+      built.directory.replaceChannels(
+        [{ channelId: "C", name: "eng", isPrivate: false }],
+        ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId })),
+      ),
     );
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -108,17 +115,19 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     { id: "U2", type: "internal" as const },
   ];
   const capChannelMembers = async (actorId: string) =>
-    await mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scopeId("channel", "C"),
-        destination: { type: ROOT.type, target: ROOT.target, audienceScopeId: ROOT.audienceScopeId },
-        destinations: [THREAD, ROOT],
-        defaultDestinationKey: ROOT.key,
-        members: MEMBERS,
-        exp: Date.now() + CAPABILITY_TTL_MS,
-      },
-      SECRET,
+    await inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId,
+          scopeId: scopeId("channel", "C"),
+          destination: { type: ROOT.type, target: ROOT.target, audienceScopeId: ROOT.audienceScopeId },
+          destinations: [THREAD, ROOT],
+          defaultDestinationKey: ROOT.key,
+          members: MEMBERS,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+        },
+        SECRET,
+      ),
     );
 
   it("enforces unattended grant creation and privileged-cron tamper rules at the HTTP boundary", async () => {
@@ -337,9 +346,8 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("creates a destination-less cron when the token carries no destination (nullable)", async () => {
-    const noDest = await mintCapabilityToken(
-      { actorId: "U9", scopeId: "personal:U9", exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
+    const noDest = await inTestTenant(() =>
+      mintCapabilityToken({ actorId: "U9", scopeId: "personal:U9", exp: Date.now() + CAPABILITY_TTL_MS }, SECRET),
     );
     const res = await post(
       "/v1/crons",
@@ -466,7 +474,9 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         .status,
       401,
     );
-    const expired = await mintCapabilityToken({ actorId: "U1", scopeId: "personal:U1", exp: Date.now() - 1 }, SECRET);
+    const expired = await inTestTenant(() =>
+      mintCapabilityToken({ actorId: "U1", scopeId: "personal:U1", exp: Date.now() - 1 }, SECRET),
+    );
     assert.equal(
       (await post("/v1/crons", { schedule: { everyMs: 60_000 }, action: "x" }, { "x-agent-capability": expired }))
         .status,
@@ -675,22 +685,26 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       )
     ).json()) as any;
     const id = created.cron.id;
-    await built.crons.recordFire(id, {
-      fireKey: "k1",
-      threadRef: "t1",
-      firedAt: 1_000,
-      endedAt: 2_000,
-      status: "failed",
-      note: "first",
-    });
-    await built.crons.recordFire(id, {
-      fireKey: "k2",
-      threadRef: "t2",
-      firedAt: 3_000,
-      endedAt: 4_000,
-      status: "ok",
-      reply: "second",
-    });
+    await inTestTenant(() =>
+      built.crons.recordFire(id, {
+        fireKey: "k1",
+        threadRef: "t1",
+        firedAt: 1_000,
+        endedAt: 2_000,
+        status: "failed",
+        note: "first",
+      }),
+    );
+    await inTestTenant(() =>
+      built.crons.recordFire(id, {
+        fireKey: "k2",
+        threadRef: "t2",
+        firedAt: 3_000,
+        endedAt: 4_000,
+        status: "ok",
+        reply: "second",
+      }),
+    );
 
     const res = await get(`/v1/crons/${id}/runs?limit=1`, { "x-agent-capability": await capFor("U1") });
     assert.equal(res.status, 200);
@@ -844,9 +858,11 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("registers a destination-less webhook when the token carries no destination (side-effect-only)", async () => {
-    const noDest = await mintCapabilityToken(
-      { actorId: "U9", scopeId: "personal:U9", liveAuthor: true, exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
+    const noDest = await inTestTenant(() =>
+      mintCapabilityToken(
+        { actorId: "U9", scopeId: "personal:U9", liveAuthor: true, exp: Date.now() + CAPABILITY_TTL_MS },
+        SECRET,
+      ),
     );
     const res = await post(
       "/v1/webhooks",
@@ -929,17 +945,21 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("a public channel remains available to an active internal principal outside its current roster", async () => {
-    await built.directory.replaceChannels(
-      [{ channelId: "C", name: "eng", isPrivate: false }],
-      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
+    await inTestTenant(() =>
+      built.directory.replaceChannels(
+        [{ channelId: "C", name: "eng", isPrivate: false }],
+        ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
+      ),
     );
     assert.equal((await get("/v1/soul", { "x-agent-capability": await capChannel("U8") })).status, 200);
   });
 
   it("a live verified bot retains private-channel tools without a Slack user principal", async () => {
-    await built.directory.replaceChannels(
-      [{ channelId: "C", name: "eng", isPrivate: true }],
-      ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
+    await inTestTenant(() =>
+      built.directory.replaceChannels(
+        [{ channelId: "C", name: "eng", isPrivate: true }],
+        ["admin-alice", "U1", "U2"].map((principalId) => ({ channelId: "C", principalId })),
+      ),
     );
     const members = [{ id: "B-LEGACY", type: "internal" as const }];
     const token = await capFor("B-LEGACY", scopeId("channel", "C"), {
