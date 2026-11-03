@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,7 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
-import { testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+import { test, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SECRET = "test-signing-secret".repeat(3);
 

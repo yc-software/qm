@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createKeychain, KeychainError, ASK_TTL_MS } from "../src/credentials/keychain.ts";
@@ -12,6 +11,7 @@ import type { Principal, ScopeId, TurnRequest } from "../src/types.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { test } from "./support/test-tenants.ts";
 
 function keychain(now = Date.now) {
   return createKeychain({

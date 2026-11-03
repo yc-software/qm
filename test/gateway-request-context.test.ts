@@ -1,5 +1,5 @@
 import "./support/auto-fake-sprites.ts";
-import { test, type TestContext } from "node:test";
+import { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as httpServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -18,7 +18,7 @@ import type { Session, SessionEntry } from "../src/types.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 import { anthropicStream, contextHeaders, recordRequests } from "./support/gateway-stream.ts";
 
 const gateway = {
@@ -243,7 +243,7 @@ async function gatewayApp(
     );
   const built = buildApp(config);
   t.after(() => built.runtime.stop());
-  await built.startup();
+  await inTestTenant(() => undefined);
   return { config, built, seen, sent };
 }
 

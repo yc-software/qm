@@ -1,7 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as httpServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -16,7 +15,7 @@ import {
 } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const model = "claude-opus-5";
 const key = "company-gateway-secret";

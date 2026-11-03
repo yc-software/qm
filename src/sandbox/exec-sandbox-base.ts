@@ -48,7 +48,7 @@ export interface ExecSandboxBaseDeps {
   prefix: string;
   homeDir: string;
   defaultTimeoutSec: number;
-  credentialPaths: CredentialPathSpec[];
+  credentialPaths: () => readonly CredentialPathSpec[];
   egressProxyUrl?: string;
   deleteFailureCode: string;
   onError?(e: { category: string; code: string; message: string; scopeLabel?: string }): void;
@@ -189,7 +189,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
       );
       const env = forceEgress ? forceThroughProxyEnv(deps.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
       if (Object.keys(env).length) handle.env = env;
-      const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
+      const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths())}`;
       const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;
       const toolIo = {
         exec: (script: string, t: number) => deps.exec(name, script, t),

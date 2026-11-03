@@ -2,7 +2,7 @@ import { nativeDocumentFormat } from "../src/agent/document-inputs.ts";
 import { runtimeFallback } from "../src/api/runtime-config.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
-import { afterEach, test } from "node:test";
+import { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
@@ -19,6 +19,7 @@ import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
 import { loadConfig } from "../src/config.ts";
 import { testConfigStore } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 const config = {
   url: "https://gateway.example/prefix/v1",
@@ -243,13 +244,13 @@ test("removed gateway selections never fall back to a different org or direct mo
   const fallback = { modelId: "claude-opus-5" };
   await store.setRuntimeSelection(org, { modelId: "gateway/removed" });
   await assert.rejects(
-    async () => await resolveRuntimeChoice(store, org, personal, fallback),
+    async () => resolveRuntimeChoice(store, org, personal, fallback),
     /Gateway model is unavailable/,
   );
   await store.setRuntimeSelection(org, fallback);
   await store.setRuntimeSelection(personal, { modelId: "gateway/removed" });
   await assert.rejects(
-    async () => await resolveRuntimeChoice(store, org, personal, fallback),
+    async () => resolveRuntimeChoice(store, org, personal, fallback),
     /Gateway model is unavailable/,
   );
 });

@@ -35,8 +35,8 @@ import {
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
-import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
-import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
+import { createRunStreamBus, emitRunReasoning, emitRunText, serveRunStreamSync } from "./runs/run-stream-events.ts";
+import { onFirstBind, perTenant } from "./tenants/context.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
@@ -327,7 +327,7 @@ import {
 } from "./runs/instance-registry.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
-import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
+import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
 import { createJobComputerSweep } from "./processes/job-computers.ts";
@@ -373,12 +373,7 @@ import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-stor
 import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
 import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
 import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
-import {
-  emptyDeploymentLayer,
-  loadDeploymentLayer,
-  type BrokeredLayerTool,
-  type DeploymentLayerRuntime,
-} from "./deployment/load-layer.ts";
+import { emptyDeploymentLayer, loadDeploymentLayer, type BrokeredLayerTool } from "./deployment/load-layer.ts";
 import {
   createDeploymentLayerStore,
   LAYER_CREATED_BY,
@@ -444,11 +439,7 @@ export interface BuiltApp {
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
-  deploymentLayer: DeploymentLayerRuntime;
-  brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
-  startup: () => Promise<void>;
-  deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
   signals: RunSignalStore;
@@ -657,12 +648,11 @@ export function buildApp(
     ? loadDeploymentLayer(config.deploymentLayerDir)
     : emptyDeploymentLayer();
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
-  const brokeredTools = deploymentLayer.brokeredTools;
   const orgScope = scopeId("org", config.orgId);
   const auditLog = createPostgresAuditLog(databaseUrl);
   const deploymentLayerStore = createDeploymentLayerStore({
     backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
-    runtime: deploymentLayer,
+    fallback: deploymentLayer,
     skills,
     skillBundles,
     scopeId: orgScope,
@@ -687,9 +677,20 @@ export function buildApp(
         }
       : {}),
   });
-  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
-    label: "deployment layer refresh",
-  });
+  const layer = () => deploymentLayerStore.runtime();
+  const installCatalogs = config.seedSkills
+    ? seedCatalogs(skills, {
+        seedDir: config.skillsSeedDir,
+        pluginDirs: config.pluginSkillDirs,
+        ...(layerSkillsDir ? { layerSkillsDir } : {}),
+        scopeId: orgScope,
+      })
+    : async () => undefined;
+  const seedTenant = () =>
+    Promise.all([
+      installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
+      deploymentLayerStore.hydrate().catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
+    ]);
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
@@ -794,10 +795,10 @@ export function buildApp(
         ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
         : {}),
       blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
       connectorSdk: loadConnectorSdk,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      layerToolFiles: () => layer().installFiles,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
@@ -811,9 +812,9 @@ export function buildApp(
       ...smol,
       ...(snapshotIntervalSec !== undefined ? { snapshotIntervalMs: snapshotIntervalSec * 1000 } : {}),
       blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
+      layerToolFiles: () => layer().installFiles,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
@@ -873,9 +874,9 @@ export function buildApp(
         ? { nativeSnapshotIntervalMs: e2b.nativeSnapshotIntervalSec * 1000 }
         : {}),
       ...(e2b.egressProxyUrl ? { egressProxyUrl: e2b.egressProxyUrl } : {}),
-      extraTools: [...(e2b.templateId ? E2B_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      extraTools: () => [...(e2b.templateId ? E2B_TEMPLATE_TOOLS : []), ...layer().advertisedTools],
+      credentialPaths: () => layer().credentialPaths,
+      layerToolFiles: () => layer().installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -906,9 +907,9 @@ export function buildApp(
         ? { snapshotIntervalMs: managedAgents.snapshotIntervalSec * 1000 }
         : {}),
       ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
-      extraTools: [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      extraTools: () => [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...layer().advertisedTools],
+      credentialPaths: () => layer().credentialPaths,
+      layerToolFiles: () => layer().installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -950,10 +951,10 @@ export function buildApp(
       ...(modal.rotateAfterSec ? { rotateAfterMs: modal.rotateAfterSec * 1000 } : {}),
       ...(modal.reapIdleSec ? { reapIdleMs: modal.reapIdleSec * 1000 } : {}),
       ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
       connectorSdk: loadConnectorSdk,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      layerToolFiles: () => layer().installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -970,8 +971,8 @@ export function buildApp(
       ...config.agent37Sandbox,
       advisoryLock,
       blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
@@ -1018,9 +1019,9 @@ export function buildApp(
       ...(ss.egressDeny ? { egressDeny: ss.egressDeny } : {}),
       ...(ss.defaultTimeoutSec ? { defaultTimeoutSec: ss.defaultTimeoutSec } : {}),
       advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
+      layerToolFiles: () => layer().installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -1035,8 +1036,8 @@ export function buildApp(
       ...config.awsSandbox,
       s3Bucket: config.awsSandbox.s3Bucket,
       advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -1050,8 +1051,8 @@ export function buildApp(
       ...config.porterSandbox,
       advisoryLock,
       blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
@@ -1070,9 +1071,9 @@ export function buildApp(
       scratchStore: renderScratch,
       cleanupStore: renderCleanup,
       advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
+      extraTools: () => layer().advertisedTools,
+      credentialPaths: () => layer().credentialPaths,
+      layerToolFiles: () => layer().installFiles,
       blobTransfer,
       ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
       ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -1301,6 +1302,24 @@ export function buildApp(
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
+  const checkBrokerCredentials = config.brokerCredentials?.length
+    ? brokerCredentialCheck(
+        credentialStore,
+        orgScope,
+        config.brokerCredentials.map((c) => c.slug),
+      )
+    : async () => undefined;
+  const loadTenant = () =>
+    onFirstBind(() =>
+      Promise.all([
+        identity.ready(),
+        configStore.hydrate?.(),
+        refreshCustomProviders(),
+        seedTenant(),
+        checkBrokerCredentials(),
+      ]),
+    );
+  let stopTenantLoad: (() => void) | undefined = loadTenant();
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
     await refreshCustomProviders();
@@ -1571,50 +1590,16 @@ export function buildApp(
   const replayDedupe = createPostgresReplayDedupe(databaseUrl);
   const credentialUsage = createPostgresCredentialUsageSink(databaseUrl);
   const egressAudit = createPostgresEgressAuditSink(databaseUrl);
-  const runStreamEvents = createPostgresNotifyBus<RunStreamEvent>(databaseUrl, "run_stream", "run-stream");
+  const runStreamEvents = createRunStreamBus(databaseUrl);
   const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
   const turnStream = createTurnStream({
     onDelta: (runId, text, offset, startOffset) => emitRunText(runStreamEvents, runId, text, offset, startOffset),
     onReasoning: (runId, block, text, offset) => emitRunReasoning(runStreamEvents, runId, block, text, offset),
     onChange: refreshRunStream,
   });
-  const syncRunStream = (event: RunStreamEvent): void => {
-    if (event.kind !== "sync") return;
-    const text = turnStream.snapshot(event.runId);
-    const startOffset = turnStream.startOffset(event.runId);
-    const offset = Math.max(event.offset, startOffset);
-    if (text) emitRunText(runStreamEvents, event.runId, text.slice(offset - startOffset), offset, startOffset);
-    for (const block of turnStream.reasoning(event.runId)) {
-      const sent = event.reasoning?.[reasoningKey(block)] ?? 0;
-      if (block.text.length > sent) emitRunReasoning(runStreamEvents, event.runId, block, block.text.slice(sent), sent);
-    }
-  };
   const startup = createStartup({
-    identity,
-    configStore,
-    deploymentLayer: deploymentLayerStore,
-    mcp: mcpToolService,
     blobTransfer,
-    listen: () => runStreamEvents.subscribe(syncRunStream),
-    ...(config.seedSkills
-      ? {
-          seedCatalogs: seedCatalogs(skills, {
-            seedDir: config.skillsSeedDir,
-            pluginDirs: config.pluginSkillDirs,
-            ...(layerSkillsDir ? { layerSkillsDir } : {}),
-            scopeId: orgScope,
-          }),
-        }
-      : {}),
-    ...(config.brokerCredentials?.length
-      ? {
-          checkBrokerCredentials: brokerCredentialCheck(
-            credentialStore,
-            orgScope,
-            config.brokerCredentials.map((c) => c.slug),
-          ),
-        }
-      : {}),
+    listen: () => serveRunStreamSync(runStreamEvents, turnStream),
   });
   runs.onTerminal((run) => refreshRunStream(run.id));
   const sessionStateBus: SessionStateBus = createPostgresSessionStateBus(databaseUrl);
@@ -1842,13 +1827,13 @@ export function buildApp(
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors", ["ownerScopeId"]));
   const loopStore = createLoopStore(artifactMap<Loop>("loops"));
   const loopItemsMap = artifactMap<LoopItem>("loop_items", ["loopId"]);
-  const loopOwnerCache = new Map<string, string>();
+  const loopOwnerCache = perTenant(() => new Map<string, string>());
   const publishLoopEvent = (event: import("./loops/ledger-events.ts").LedgerEvent): void => {
     void (async () => {
-      let owner = loopOwnerCache.get(event.loopId);
+      let owner = loopOwnerCache().get(event.loopId);
       if (owner === undefined) {
         owner = (await loopStore.get(event.loopId))?.owner ?? "";
-        loopOwnerCache.set(event.loopId, owner);
+        loopOwnerCache().set(event.loopId, owner);
       }
       if (owner) ledgerEventBus.emit({ ...event, owner });
     })().catch(() => {});
@@ -1955,7 +1940,7 @@ export function buildApp(
     });
   }
   const layerEnv = config.layerEnv ?? {};
-  const layerBrokerCache = new Map<string, AwsRoleBroker>();
+  const layerBrokerCache = perTenant(() => new Map<string, AwsRoleBroker>());
   const layerBrokerFor = (tool: BrokeredLayerTool): AwsRoleBroker | undefined => {
     const override = overrides.credentialBrokers?.[tool.service];
     if (override) return override;
@@ -1964,10 +1949,10 @@ export function buildApp(
     const region = (tool.broker.regionEnv ? layerEnv[tool.broker.regionEnv] : undefined) ?? tool.broker.region;
     if (!region) return undefined;
     const key = JSON.stringify([roleArn, region, tool.broker.sessionActions]);
-    let broker = layerBrokerCache.get(key);
+    let broker = layerBrokerCache().get(key);
     if (!broker) {
       broker = createAwsRoleBroker({ roleArn, region, sessionActions: tool.broker.sessionActions });
-      layerBrokerCache.set(key, broker);
+      layerBrokerCache().set(key, broker);
     }
     return broker;
   };
@@ -2112,7 +2097,6 @@ export function buildApp(
     memoryStrategy,
     skills,
     skillBundles,
-    skillsReady: startup.skills,
     errors,
     signals: runSignals,
     turnStream,
@@ -2140,8 +2124,7 @@ export function buildApp(
     projects,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     environments,
-    brokeredTools,
-    deploymentLayer,
+    deploymentLayer: layer,
     layerBrokerFor,
   };
   const orchestrator = createOrchestrator(orchestratorDeps);
@@ -2281,7 +2264,6 @@ export function buildApp(
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,
     ...(renderArtifacts ? { deploymentGitPrincipals: renderArtifacts } : {}),
-    deploymentLayer,
     ...(processes ? { processes } : {}),
     monitors,
     sandbox,
@@ -2889,9 +2871,10 @@ export function buildApp(
   const runtime: Runtime = {
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      stopTenantLoad ??= loadTenant();
       releasing = null;
       flyTunnel?.monitor();
-      void startup.begin().catch(reportFailureAs("startup: load deployment layer", undefined));
+      startup.begin();
       drain.start();
       renderBasePreparing = new AbortController();
       void renderBase
@@ -2926,6 +2909,8 @@ export function buildApp(
       await releaseInFlightRuns();
       await drain.stop();
       startup.stop();
+      stopTenantLoad?.();
+      stopTenantLoad = undefined;
       await Promise.all(
         [
           runs.close?.(),
@@ -2948,11 +2933,7 @@ export function buildApp(
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
     },
-    deploymentLayer,
     deploymentLayerStore,
-    brokeredTools,
-    startup: startup.begin,
-    deploymentLayerRefresh,
     sessions,
     runs,
     signals: runSignals,

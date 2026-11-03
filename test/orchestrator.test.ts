@@ -1,5 +1,4 @@
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
 import { mkdtempSync } from "node:fs";
@@ -26,7 +25,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
@@ -1082,6 +1081,7 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
     apiBaseUrl: "https://core.example.com",
   });
   const built = buildApp(config);
+  await inTestTenant(() => built.identity.ready());
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
@@ -1124,6 +1124,7 @@ test("a legacy browse-only model cannot strand managed default-model browsing", 
     apiBaseUrl: "https://core.example.com",
   });
   const built = buildApp(config);
+  await inTestTenant(() => built.identity.ready());
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
@@ -1152,6 +1153,7 @@ test("browse follows a live org base model change, not the process-start default
     apiBaseUrl: "https://core.example.com",
   });
   const built = buildApp(config);
+  await inTestTenant(() => built.identity.ready());
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
@@ -3425,7 +3427,12 @@ test("Auto screens text attachment contents (strict quarantines) and fails open 
     suspicious.app.turn(
       dm("please inspect this", {
         attachments: [
-          { name: "instructions.txt", mimetype: "text/plain", sizeBytes: injected.sizeBytes, blobId: injected.blobId },
+          {
+            name: "instructions.txt",
+            mimetype: "text/plain",
+            sizeBytes: injected.sizeBytes,
+            blobId: injected.blobId,
+          },
         ],
       }),
     ),
@@ -4058,6 +4065,7 @@ test("environments: an unattached scope provisions through its own scope (today'
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
   });
   const built = buildApp(config);
+  await inTestTenant(() => built.identity.ready());
   const { app, sandbox } = built;
   const realProvision = sandbox.provision.bind(sandbox);
   let rwScope: string | undefined;

@@ -1,5 +1,4 @@
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   auxiliaryModelFor,
@@ -17,6 +16,7 @@ import {
   codexSubscriptionModelId,
   modelSupportsFastMode,
 } from "../src/model/pi-models.ts";
+import { test } from "./support/test-tenants.ts";
 
 test("every selectable base model resolves against the pi-ai registry", () => {
   for (const m of SELECTABLE_BASE_MODELS) {

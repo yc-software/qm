@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import {
@@ -11,6 +10,7 @@ import {
 } from "../src/config.ts";
 import { boolEnv, numEnv } from "../src/util/env.ts";
 import { enabledSandboxBackends } from "../src/sandbox/sandbox-settings.ts";
+import { test } from "./support/test-tenants.ts";
 
 const RENDER_IMAGE = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
 

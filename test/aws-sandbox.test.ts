@@ -67,7 +67,7 @@ test("declared credential paths are symlinked outside the snapshotted home", asy
   const fake = installFakeMicrovm();
   const sb = makeSandbox(fake, {
     snapshotIntervalMs: 0,
-    credentialPaths: [
+    credentialPaths: () => [
       { path: ".acmecli", kind: "directory" },
       { path: ".acme/token.json", kind: "file" },
     ],

@@ -1,4 +1,4 @@
-import { describe, it, before, after } from "node:test";
+import { describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
@@ -16,7 +16,7 @@ import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+import { it, inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -93,11 +93,11 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     });
     await new Promise<void>((resolve) => strictServer.listen(0, "127.0.0.1", resolve));
     const strictBase = `http://127.0.0.1:${(strictServer.address() as AddressInfo).port}`;
-    const read = (identity?: string) => {
+    const read = async (identity?: string) => {
       const path = `/v1/runs/${run.id}/events?nonce=${crypto.randomUUID()}`;
       return fetch(`${strictBase}${path}`, {
         headers: {
-          ...inTestTenant(() => signedHeaders(SOURCE, "GET", path, "")),
+          ...(await inTestTenant(() => signedHeaders(SOURCE, "GET", path, ""))),
           ...(identity ? { "x-portal-identity": identity } : {}),
         },
         signal: AbortSignal.timeout(5_000),

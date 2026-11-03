@@ -5,7 +5,6 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
@@ -15,7 +14,7 @@ import { createModelCredentialStore, type StoredModelCredential } from "../src/m
 import { getRequiredModel, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
 import { testMap } from "./support/test-database.ts";
-import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -302,10 +301,7 @@ test("OpenRouter catalog exposes runtime-supported tool models as selectable bas
       body: JSON.stringify({ modelId: "stealth/ox-alpha" }),
     });
     assert.equal(selected.status, 200);
-    assert.equal(
-      inTestTenant(() => srv.built.config.getBaseModel("org:default-org")),
-      "stealth/ox-alpha",
-    );
+    assert.equal(await inTestTenant(() => srv.built.config.getBaseModel("org:default-org")), "stealth/ox-alpha");
 
     const governance = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
     assert.equal(governance.status, 200);

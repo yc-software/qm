@@ -1,9 +1,7 @@
 import type { BrokerSessionStore } from "../src/auth/broker-sessions.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
-import { testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import type { ReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testConfig } from "./support/test-config.ts";
+import { test, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SECRET = "auth-broker-claim-test-secret".repeat(2);
 const CLAIM_PATH = "/v1/auth/broker/claim";

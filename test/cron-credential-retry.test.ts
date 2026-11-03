@@ -10,6 +10,8 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import type { Claimed } from "../src/tenants/claim.ts";
+import { inTestTenant, tenantTest, testTenants } from "./support/test-tenants.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
@@ -54,7 +56,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   return { crons, cron, deliveries, idempotency, ask, deps };
 }
 
-test("cron credential resolution resumes in the original conversation exactly once", async () => {
+tenantTest("cron credential resolution resumes in the original conversation exactly once", async () => {
   const requests: TurnRequest[] = [];
   const f = await fixture(async (request) => {
     requests.push(request);
@@ -85,8 +87,8 @@ test("failed cron credential resolution notifies only the owner", async () => {
     return { status: "failed", reason: "model unavailable" };
   });
 
-  const failed = await fireAskResolution(f.deps, f.ask);
-  await fireAskResolution(f.deps, f.ask);
+  const failed = await inTestTenant(() => fireAskResolution(f.deps, f.ask));
+  await inTestTenant(() => fireAskResolution(f.deps, f.ask));
 
   assert.equal(failed.status, "failed");
   assert.equal(runs, 1);
@@ -107,8 +109,8 @@ test("a concurrent sweep cannot mark an in-flight resume notified before it fini
     entered.resolve();
     return release.promise;
   });
-  const asks = testMap<KeychainAsk>();
-  await asks.put(f.ask.id, f.ask);
+  const asks = testMap<Claimed<KeychainAsk>>();
+  await asks.put(f.ask.id, { ...f.ask, tenantId: testTenants()[0] });
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
     creds: testMap(),
@@ -117,7 +119,7 @@ test("a concurrent sweep cannot mark an in-flight resume notified before it fini
     key: deriveConnectorKey("concurrent-cron-resume-test"),
   });
   const sweep = createAskExpirySweep({ keychain, fire: (ask) => fireAskResolution(f.deps, ask) });
-  const initial = fireAskResolution(f.deps, f.ask);
+  const initial = inTestTenant(() => fireAskResolution(f.deps, f.ask));
   await entered.promise;
 
   await sweep(Date.now());

@@ -2,7 +2,6 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createSessionMethods } from "../src/api/app-sessions.ts";
 import { Readable } from "node:stream";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -12,6 +11,7 @@ import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { scopeId, type SessionEntry } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
   return {

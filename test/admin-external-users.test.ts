@@ -3,7 +3,6 @@ import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-
 import { mintSignedPayload, verifySignedPayload } from "../src/auth/signed-token.ts";
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +17,7 @@ import { coreEmailAdmission, coreEmailAllowed } from "../plugins/chassis/src/ext
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ALICE = "admin-alice@default-org";
 const NOBODY = "user-uma@default-org";
@@ -109,6 +108,7 @@ const capFor = (actorId: string) =>
 test("broker admission preserves configured email members without external invitations", async (t) => {
   const s = start({ signed: true, emailAuthDomain: "corp.example", emailAuthPrincipals: ["ops@allowed.example"] });
   t.after(s.close);
+  await s.built.identity.ready();
   for (const email of ["Ops@Allowed.example", "person@corp.example"]) {
     assert.equal(s.built.identity.externalMember(email), undefined);
     assert.deepEqual(await inTestTenant(() => coreEmailAdmission(s.base, SECRET, email)), { allowed: true });
@@ -549,6 +549,7 @@ test("an agent token may invite a member but never grant, demote, or revoke an o
 test("expiry classifies an external as guest, and the signed broker check answers accordingly", async () => {
   const s = start({ signed: true });
   try {
+    await s.built.identity.ready();
     const now = Date.now();
     const record = (email: string, expiresAt: number) => ({
       email,
@@ -836,7 +837,7 @@ test("invitation redemption requires source authentication before consuming a va
     assert.equal(unsigned.status, 401);
     const signed = await fetch(`${s.base}${path}`, {
       method: "POST",
-      headers: inTestTenant(() => signedHeaders(SECRET, "POST", path, body)),
+      headers: await inTestTenant(() => signedHeaders(SECRET, "POST", path, body)),
       body,
     });
     assert.equal(signed.status, 200);
@@ -844,7 +845,7 @@ test("invitation redemption requires source authentication before consuming a va
     const reusedPath = withSourceAuthNonce("/v1/auth/invitations/redeem", SECRET);
     const reused = await fetch(`${s.base}${reusedPath}`, {
       method: "POST",
-      headers: inTestTenant(() => signedHeaders(SECRET, "POST", reusedPath, body)),
+      headers: await inTestTenant(() => signedHeaders(SECRET, "POST", reusedPath, body)),
       body,
     });
     assert.equal(reused.status, 400);

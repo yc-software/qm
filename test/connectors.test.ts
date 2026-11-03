@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { envKey, withOperatorTokenFallback } from "../src/credentials/connector-token.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
@@ -12,6 +11,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import type { DurableMap } from "../src/persistence/durable-map.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 

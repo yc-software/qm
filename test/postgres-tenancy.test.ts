@@ -1,4 +1,4 @@
-import { after, before, test } from "node:test";
+import { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
@@ -8,6 +8,7 @@ import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-sch
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { ownerUrlOf, testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
 
@@ -107,34 +108,38 @@ test("the pool binds the current tenant to each query and transaction in one bat
 test("an open transaction refuses work for a different tenant until it has ended", { skip }, async () => {
   await withTenant(a, () =>
     withPgTransaction(app, async (client) => {
-      assert.throws(() => withTenant(b, () => 0), /already open for another tenant/);
-      assert.throws(() => withoutTenant(() => 0), /already open for another tenant/);
-      assert.equal(
-        withTenant(a, () => 1),
-        1,
+      await assert.rejects(
+        withTenant(b, () => 0),
+        /already open for another tenant/,
       );
+      assert.throws(() => withoutTenant(() => 0), /already open for another tenant/);
+      assert.equal(await withTenant(a, () => 1), 1);
       return client.query("SELECT 1");
     }),
   );
   await withoutTenant(() =>
-    withPgTransaction(app, async () => assert.throws(() => withTenant(a, () => 0), /already open/)),
+    withPgTransaction(app, () =>
+      assert.rejects(
+        withTenant(a, () => 0),
+        /already open/,
+      ),
+    ),
   );
   for (const fails of [false, true]) {
     const outcomes: string[] = [];
     let settled = false;
     let spawned: Promise<string[]> | undefined;
-    const watch = (resolve: (seen: string[]) => void) => {
-      try {
-        withTenant(b, () => outcomes.push("bound"));
-      } catch {
-        outcomes.push("refused");
+    const watch = async (): Promise<string[]> => {
+      for (;;) {
+        const last = settled;
+        await withTenant(b, () => outcomes.push("bound")).catch(() => outcomes.push("refused"));
+        if (last) return outcomes;
+        await new Promise((resolve) => setImmediate(resolve));
       }
-      if (settled) resolve(outcomes);
-      else setImmediate(watch, resolve);
     };
     const transaction = withTenant(a, () =>
       withPgTransaction(app, async () => {
-        spawned = new Promise(watch);
+        spawned = watch();
         if (fails) throw new Error("body failed");
       }),
     );

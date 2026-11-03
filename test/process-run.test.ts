@@ -343,6 +343,7 @@ test("a single definitive lease-lost beat does not cancel, but N consecutive do"
   await inTestTenant(() => store.runs.enqueue({ sessionId: "s1", request: turn }));
   const run = await withoutTenant(() => store.runs.claim("w1", 9_000));
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
+  await microtasks();
 
   t.mock.timers.tick(3_000);
   await microtasks();

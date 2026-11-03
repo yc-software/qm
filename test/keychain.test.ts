@@ -1,6 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test, describe, it, before, after } from "node:test";
+import { describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,7 +31,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { it, test, inTestTenant } from "./support/test-tenants.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
@@ -1316,6 +1316,7 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
       apiBaseUrl: "http://core.test",
     }),
   );
+  await inTestTenant(() => built.identity.ready());
   assert.ok(built.keychain, "buildApp with a signing secret wires the keychain");
   built.keychain.materializeOwn = async () => {
     throw new Error("eager owner materialization is forbidden");

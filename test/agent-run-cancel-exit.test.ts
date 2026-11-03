@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
 import { createGoalRecord, type GoalRecord } from "../src/agent/goal.ts";
@@ -6,6 +5,7 @@ import { createAgent } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { test } from "./support/test-tenants.ts";
 
 function cancelTurn(
   sessionId: string,

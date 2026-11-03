@@ -1,10 +1,10 @@
 import { availableRuntimeError } from "../src/api/runtime-config.ts";
-import test from "node:test";
 import assert from "node:assert/strict";
 import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { test } from "./support/test-tenants.ts";
 
 const ORG = "org:default-org" as const;
 const PERSONAL = "personal:alice" as const;
@@ -39,7 +39,7 @@ test("runtime resolution uses explicit choice, then scope, then org and rejects 
     modelId: "claude-sonnet-4-6",
   });
   await assert.rejects(
-    async () => await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "no-such-model" }),
+    async () => resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "no-such-model" }),
     /not approved/,
   );
 });

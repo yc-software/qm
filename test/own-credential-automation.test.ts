@@ -32,6 +32,8 @@ async function setup() {
       files: [{ path: ".aws/sso/cache/session.json", contentBase64: Buffer.from("own-login").toString("base64") }],
     }),
   );
+
+  await inTestTenant(() => built.identity.ready());
   const read = `!execute ${JSON.stringify({
     command: 'cat "$HOME/.aws/sso/cache/session.json"',
     credentials: [credentialHandle(credential)],
