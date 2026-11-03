@@ -1,7 +1,7 @@
 import type { App } from "../../api/app-types.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { Delivery } from "../../types.ts";
-import { errMessage, reportFailureAs } from "../../util/errors.ts";
+import { errMessage } from "../../util/errors.ts";
 import {
   partnerChatMessageId,
   partnerChatRef,
@@ -23,8 +23,11 @@ class PartnerChatHttpError extends Error {
   }
 }
 
+class UnsupportedDelivery extends Error {}
+
 const permanent = (e: unknown): boolean =>
-  e instanceof PartnerChatHttpError && e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429;
+  e instanceof UnsupportedDelivery ||
+  (e instanceof PartnerChatHttpError && e.status >= 400 && e.status < 500 && ![401, 403, 408, 429].includes(e.status));
 
 function parseJson(text: string): Record<string, unknown> {
   try {
@@ -50,15 +53,16 @@ export function createPartnerChatDeliveries(deps: {
 
   async function deliver(d: Delivery): Promise<void> {
     const ref = parsePartnerChatRef(d.destination.target);
-    const text = d.text.trim();
-    const body = text && d.destination.editNote ? `${text}\n\n${d.destination.editNote}` : text;
-    if (!ref) throw new PartnerChatHttpError(400, `unroutable target ${d.destination.target}`);
+    const body = d.text.trim();
+    if (!ref) throw new UnsupportedDelivery(`partner-chat: unroutable target ${d.destination.target}`);
     const { react, delete: del, pin, edit, editRef } = d.destination;
-    if (react || del || pin || edit || editRef || d.attachments?.length || !body)
-      throw new PartnerChatHttpError(400, "only non-empty text posts are supported");
+    if (react || del || pin || edit || editRef || !body)
+      throw new UnsupportedDelivery("partner-chat: only non-empty text posts are supported");
+    if (d.attachments?.length)
+      console.log(`[partner-chat] delivery ${d.id} posts its text without ${d.attachments.length} attachment(s)`);
     const thread = d.destination.threadTs ? partnerChatMessageId(d.destination.threadTs) : ref.thread;
     if (thread !== undefined && !MESSAGE_ID.test(thread))
-      throw new PartnerChatHttpError(400, `bad thread id ${thread}`);
+      throw new UnsupportedDelivery(`partner-chat: bad thread id ${thread}`);
     const payload = JSON.stringify({
       client_message_id: d.idempotencyKey,
       chat_id: ref.chat,
@@ -87,25 +91,23 @@ export function createPartnerChatDeliveries(deps: {
       return;
     }
     const at = now();
-    await deps.app
-      .ingestSurfaceEvents(
-        [
-          {
-            surface: "partner-chat",
-            container: partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat }),
-            ts: partnerChatTs(new Date(at).toISOString(), String(messageId)),
-            sub: thread ?? null,
-            authorId: SELF_AUTHOR,
-            text: body,
-            self: true,
-            bot: true,
-            handled: true,
-            createdAt: at,
-          },
-        ],
-        "partner-chat",
-      )
-      .catch(reportFailureAs("partner-chat: mirror own post", undefined));
+    await deps.app.ingestSurfaceEvents(
+      [
+        {
+          surface: "partner-chat",
+          container: partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat }),
+          ts: partnerChatTs(new Date(at).toISOString(), String(messageId)),
+          sub: thread ?? null,
+          authorId: SELF_AUTHOR,
+          text: body,
+          self: true,
+          bot: true,
+          handled: true,
+          createdAt: at,
+        },
+      ],
+      "partner-chat",
+    );
   }
 
   let draining: Promise<void> | null = null;
@@ -119,7 +121,8 @@ export function createPartnerChatDeliveries(deps: {
         await deps.deliveries.ack(d.id, now());
       } catch (e) {
         console.error(`[partner-chat] delivery ${d.id} failed: ${errMessage(e)}`);
-        if (permanent(e)) await deps.deliveries.fail(d.id, errMessage(e), now());
+        if (!permanent(e)) return;
+        await deps.deliveries.fail(d.id, errMessage(e), now());
       }
     }
   }

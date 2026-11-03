@@ -6,7 +6,8 @@ import type { CachedMessage, SurfaceCache } from "../../surface-cache/types.ts";
 const MAX_CLOCK_SKEW_S = 300;
 const MESSAGE_ID_WIDTH = 20;
 
-const id = z.string().regex(/^[A-Za-z0-9_-]+$/);
+const ID = /^[A-Za-z0-9_-]+$/;
+const id = z.string().regex(ID);
 const user = z.object({
   id,
   email: z.string().optional(),
@@ -70,7 +71,15 @@ export function partnerChatRef(c: PartnerChatRef): string {
 
 export function parsePartnerChatRef(ref: string): PartnerChatRef | null {
   const [surface, account, kind, chat, thread, ...rest] = ref.split(":");
-  if (surface !== "partner-chat" || !account || !chat || rest.length || (kind !== "group" && kind !== "dm"))
+  if (
+    surface !== "partner-chat" ||
+    !account ||
+    !chat ||
+    !ID.test(account) ||
+    !ID.test(chat) ||
+    rest.length ||
+    (kind !== "group" && kind !== "dm")
+  )
     return null;
   return { account, kind, chat, ...(thread ? { thread } : {}) };
 }

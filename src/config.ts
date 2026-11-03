@@ -1,3 +1,4 @@
+import { errMessage } from "./util/errors.ts";
 import { z } from "zod";
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
 import type { SurfacePromptHints } from "./surfaces/contract.ts";
@@ -370,17 +371,19 @@ const promptHintsSchema = z
   .strict();
 
 function partnerChatPromptHints(raw: string): Partial<SurfacePromptHints> {
+  const invalid = (problem: string) =>
+    new Error(
+      `PARTNER_CHAT_PROMPT_HINTS must be a JSON object of strings keyed by ${Object.keys(promptHintsSchema.shape).join(", ")}: ${problem}`,
+    );
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
-    parsed = null;
+  } catch (e) {
+    throw invalid(errMessage(e));
   }
   const hints = promptHintsSchema.safeParse(parsed);
   if (!hints.success)
-    throw new Error(
-      `PARTNER_CHAT_PROMPT_HINTS must be a JSON object of strings keyed by ${Object.keys(promptHintsSchema.shape).join(", ")}`,
-    );
+    throw invalid(hints.error.issues.map((i) => `${i.path.join(".") || "value"}: ${i.message}`).join("; "));
   return hints.data;
 }
 

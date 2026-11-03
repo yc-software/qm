@@ -18,7 +18,7 @@ import { runNowSettled, settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { loadConfig } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
-import { createPartnerChatLiveReply } from "../src/surfaces/partner-chat/live-reply.ts";
+import { createPartnerChatNotices } from "../src/surfaces/partner-chat/notices.ts";
 import type { Run } from "../src/runs/run-store.ts";
 
 const SECRET = "partner-chat-test-secret-0123456789abcdef";
@@ -301,8 +301,9 @@ test("partner-chat deliveries are signed posts mirrored as the agent's own, and 
       "cron:fire-1",
     );
     await deliveries.enqueue({
-      destination: { type: "partner-chat", target: CONTAINER, editNote: "Edited after a reply check: em dash" },
+      destination: { type: "partner-chat", target: CONTAINER },
       text: "Here is the full answer",
+      attachments: [{ name: "chart.png", mimeType: "image/png", blob: { kind: "inline", data: "" } }] as never,
       idempotencyKey: "run:00000000-0000-4000-8000-000000000001",
     });
     const refused = await Promise.all([
@@ -339,22 +340,19 @@ test("partner-chat deliveries are signed posts mirrored as the agent's own, and 
           {
             client_message_id: "run:00000000-0000-4000-8000-000000000001",
             chat_id: "88",
-            body: "Here is the full answer\n\nEdited after a reply check: em dash",
+            body: "Here is the full answer",
           },
           true,
         ],
       ],
     );
     for (const d of refused)
-      assert.equal(
-        (await deliveries.get(d.id))?.failedReason,
-        "partner-chat 400: only non-empty text posts are supported",
-      );
+      assert.equal((await deliveries.get(d.id))?.failedReason, "partner-chat: only non-empty text posts are supported");
     assert.deepEqual(
       mirrored.map((m) => [m.ts.split(".")[1]!.replace(/^0+/, ""), m.sub, m.text, m.self]),
       [
         ["42", "1009", "scheduled hello", true],
-        ["43", null, "Here is the full answer\n\nEdited after a reply check: em dash", true],
+        ["43", null, "Here is the full answer", true],
       ],
     );
     assert.ok(serialized() > 0);
@@ -364,9 +362,10 @@ test("partner-chat deliveries are signed posts mirrored as the agent's own, and 
   }
 });
 
-test("partner-chat rejections fail the delivery with the chat's reason while server errors leave it for retry", async () => {
+test("partner-chat rejections fail the delivery with the chat's reason while auth and server errors leave it for retry", async () => {
   for (const [status, failedReason] of [
     [404, "partner-chat 404: nope"],
+    [401, null],
     [503, null],
   ] as const) {
     const partnerChat = await fakePartnerChat(status);
@@ -477,7 +476,7 @@ test("partner-chat config requires the url and secret together and validates pro
 
 test("a direct run that ends refused or waiting on an approval, or a message answered without a run, gets one notice in its reply thread", async () => {
   const deliveries = createDeliveryStore();
-  const live = createPartnerChatLiveReply({ deliveries });
+  const notices = createPartnerChatNotices({ deliveries, runs: { terminalFinished: async () => [] } });
   const destination = { type: "partner-chat", target: `${CONTAINER}:1002` };
   const id = (n: number) => `00000000-0000-4000-8000-00000000001${n}`;
   const run = (n: number, opts: { kind?: string; result?: Record<string, unknown> }) =>
@@ -497,15 +496,15 @@ test("a direct run that ends refused or waiting on an approval, or a message ans
       },
       ...(opts.result ? { result: opts.result } : {}),
     }) as unknown as Run;
-  live.settle(run(1, {}));
-  live.settle(run(2, { kind: "ambient", result: { status: "refused", reason: "spent" } }));
-  live.settle(run(4, { result: { status: "ok", reply: "done" } }));
-  live.settle(
+  notices.runEnded(run(1, {}));
+  notices.runEnded(run(2, { kind: "ambient", result: { status: "refused", reason: "spent" } }));
+  notices.runEnded(run(4, { result: { status: "ok", reply: "done" } }));
+  notices.runEnded(
     run(5, { result: { status: "refused", reason: "project membership changed; retry from the current project" } }),
   );
-  live.settle(run(6, { result: { status: "pending_approval" } }));
-  live.settle(run(7, { result: { status: "pending_approval", reason: "Waiting on approval to run it." } }));
-  live.unanswered(
+  notices.runEnded(run(6, { result: { status: "pending_approval" } }));
+  notices.runEnded(run(7, { result: { status: "pending_approval", reason: "Waiting on approval to run it." } }));
+  notices.unanswered(
     {
       status: "pending_approval",
       reason: "This conversation is waiting for someone else to resolve a pending approval.",
@@ -513,8 +512,8 @@ test("a direct run that ends refused or waiting on an approval, or a message ans
     destination,
     "notice:m7",
   );
-  live.unanswered({ status: "refused", reason: "empty message" }, destination, "notice:m8");
-  live.unanswered({ status: "silent" }, destination, "notice:m9");
+  notices.unanswered({ status: "refused", reason: "empty message" }, destination, "notice:m8");
+  notices.unanswered({ status: "silent" }, destination, "notice:m9");
   await settle(async () => (await deliveries.pending("partner-chat")).length === 5);
   await new Promise((r) => setTimeout(r, 50));
   assert.deepEqual(
@@ -758,4 +757,25 @@ test("partner-chat signatures and bearer tokens follow the agent-app scheme", ()
   const hmac = (data: string) => createHmac("sha256", SECRET).update(data).digest("hex");
   assert.equal(signPartnerChat(SECRET, "1793649600", "{}"), `v0=${hmac("v0:1793649600:{}")}`);
   assert.equal(partnerChatToken(SECRET, "7001"), `7001.${hmac("agent-app-token:7001")}`);
+});
+
+test("a notice lost between a run ending and its enqueue is recovered by the sweep, once", async () => {
+  const deliveries = createDeliveryStore();
+  const ended = {
+    id: "00000000-0000-4000-8000-000000000031",
+    status: "done",
+    finishedAt: Date.now() - 120_000,
+    request: { surface: "partner-chat", deliveryTarget: `${CONTAINER}:1002`, origin: { kind: "human" } },
+    result: { status: "pending_approval", reason: "Waiting on approval to run it." },
+  } as unknown as Run;
+  const notices = createPartnerChatNotices({
+    deliveries,
+    runs: { terminalFinished: async (cursor) => (cursor.id === "" ? [ended] : []) },
+  });
+  await notices.sweep();
+  await notices.sweep();
+  assert.deepEqual(
+    (await deliveries.pending("partner-chat")).map((d) => [d.idempotencyKey, d.destination.target, d.text]),
+    [[`notice:${ended.id}`, `${CONTAINER}:1002`, "Waiting on approval to run it."]],
+  );
 });

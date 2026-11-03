@@ -43,7 +43,13 @@ export function createPartnerChatSurface(deps: {
   return {
     kind: "partner-chat",
     label: deps.label ?? DEFAULT_LABEL,
-    capabilities: { mirrored: true, liveReplies: false, nativeActor: true, externalParticipants: false },
+    capabilities: {
+      mirrored: true,
+      liveReplies: false,
+      nativeActor: true,
+      externalParticipants: false,
+      textOnly: true,
+    },
     promptHints: { ...DEFAULT_PROMPT_HINTS, ...deps.promptHints },
     async post(ref, message, idempotencyKey) {
       if (idempotencyKey.startsWith("run:"))

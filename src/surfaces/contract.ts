@@ -48,6 +48,7 @@ interface SurfaceCapabilities {
   liveReplies: boolean;
   nativeActor: boolean;
   externalParticipants: boolean;
+  textOnly: boolean;
 }
 
 export interface SurfacePromptHints {

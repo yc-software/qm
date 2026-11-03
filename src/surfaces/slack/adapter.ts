@@ -69,6 +69,7 @@ export function createSlackSurface(deps: { deliveries: DeliveryStore }): Surface
       liveReplies: true,
       nativeActor: true,
       externalParticipants: true,
+      textOnly: false,
     },
     promptHints: SLACK_PROMPT_HINTS,
     async post(ref, message, idempotencyKey) {

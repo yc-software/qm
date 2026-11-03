@@ -391,7 +391,7 @@ import { createSlackSurface } from "./surfaces/slack/adapter.ts";
 import { createPartnerChatSurface } from "./surfaces/partner-chat/adapter.ts";
 import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
 import { createPartnerChatDeliveries } from "./surfaces/partner-chat/outbound.ts";
-import { createPartnerChatLiveReply } from "./surfaces/partner-chat/live-reply.ts";
+import { createPartnerChatNotices } from "./surfaces/partner-chat/notices.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -2454,16 +2454,16 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
-  const partnerChatLiveReply = config.partnerChat ? createPartnerChatLiveReply({ deliveries }) : null;
-  if (partnerChatLiveReply) runs.onTerminal((run) => partnerChatLiveReply.settle(run));
+  const partnerChatNotices = config.partnerChat ? createPartnerChatNotices({ deliveries, runs }) : null;
+  if (partnerChatNotices) runs.onTerminal((run) => partnerChatNotices.runEnded(run));
   const partnerChatInbound =
-    config.partnerChat && partnerChatLiveReply
+    partnerChatNotices && config.partnerChat
       ? createPartnerChatInbound({
           secret: config.partnerChat.secret,
           app,
           surfaceCache,
           isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
-          unansweredReply: partnerChatLiveReply.unanswered,
+          unansweredReply: partnerChatNotices.unanswered,
         })
       : null;
   const partnerChatOutbound = config.partnerChat
@@ -2500,7 +2500,12 @@ export function buildApp(
     { label: "session-returns", immediate: true },
   );
   const runResultSweeper = createSweeper(
-    () => advisoryLock.tryWithLock("run-result-sweep", () => runResultRecovery.sweep()),
+    () =>
+      advisoryLock.tryWithLock("run-result-sweep", async () => {
+        const recovered = await runResultRecovery.sweep();
+        await partnerChatNotices?.sweep();
+        return recovered;
+      }),
     60_000,
     { label: "run-results" },
   );

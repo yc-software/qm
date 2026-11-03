@@ -2,7 +2,7 @@ import type { App } from "../../api/app-types.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import type { Destination, TurnResult } from "../../types.ts";
 import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
-import { reportFailureAs } from "../../util/errors.ts";
+import { errMessage, reportFailureAs } from "../../util/errors.ts";
 import { buildContextWindow } from "../context-window.ts";
 import { partnerChatPrincipal } from "./adapter.ts";
 import {
@@ -25,7 +25,7 @@ export function createPartnerChatInbound(deps: {
   app: InboundApp;
   surfaceCache: Pick<SurfaceCache, "readMessages">;
   isInternalEmail: (email: string) => Promise<boolean>;
-  unansweredReply: (result: TurnResult, destination: Destination, idempotencyKey: string) => void;
+  unansweredReply: (result: TurnResult, destination: Destination, idempotencyKey: string) => Promise<void>;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
@@ -48,8 +48,8 @@ export function createPartnerChatInbound(deps: {
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawBody);
-    } catch {
-      parsed = null;
+    } catch (e) {
+      return { status: 400, body: { error: "invalid_json", detail: errMessage(e) } };
     }
     const result = parsePartnerChatEvent(parsed);
     if (!result.success)
@@ -157,7 +157,7 @@ export function createPartnerChatInbound(deps: {
       account: { id: event.account, workspace: event.account },
     };
     if (!queued.runId)
-      deps.unansweredReply(queued, destination, `notice:${SURFACE}:${event.account}:${chat.id}:${message.id}`);
+      await deps.unansweredReply(queued, destination, `notice:${SURFACE}:${event.account}:${chat.id}:${message.id}`);
     return { status: 200, body: { ok: true } };
   }
 

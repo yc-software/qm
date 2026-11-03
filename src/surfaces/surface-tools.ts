@@ -99,6 +99,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
   const deliveries = deps.deliveries;
   const currentDestination = defaultDestination;
+  const textOnly = (d: Destination) => deps.surfaces.get(d.type)?.capabilities.textOnly === true;
   const homeSurface = deps.surfaces.get(currentDestination.type);
   const mirroredHome = homeSurface?.capabilities.mirrored ? homeSurface : undefined;
   const rateLimitRecipient =
@@ -244,6 +245,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       } else if (opts?.broadcast && destination.type !== "principal" && conversation.channelRef) {
         destination = { ...destination, target: conversation.channelRef };
       }
+      if (files?.length && textOnly(destination))
+        return { ok: false, message: "This conversation takes text messages only; nothing was sent." };
       const f = await resolveFiles(files, sandboxId);
       if (!f.ok) return { ok: false, message: f.message };
       const footer = buildDebugFooter();
@@ -290,7 +293,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
-      if (d.destination.type === "principal")
+      if (d.destination.type === "principal" || textOnly(d.destination))
         return { ok: false, message: "I can only react to a message in a channel, group DM, or this conversation." };
       return enqueue(withReact(d.destination, { messageTs: input.ts, emoji: input.emoji }), "", seq);
     },
@@ -312,6 +315,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
+      if (textOnly(d.destination)) return { ok: false, message: "Messages in this conversation can't be deleted." };
       return enqueue(withDelete(d.destination, { messageTs: input.ref }), "", seq);
     },
     readThread: async (opts?: { limit?: number }) => {
