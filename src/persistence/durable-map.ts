@@ -1,13 +1,13 @@
 import { createPgPool, queryTenant, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
+import { TENANCY, tenantColumn, tenantPolicies } from "../tenants/migrations.ts";
 
 export interface TenantEntry<T> {
   tenantId: string;
   id: string;
   value: T;
 }
-import { TENANCY, tenantColumn, tenantPolicies } from "../tenants/migrations.ts";
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];

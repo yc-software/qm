@@ -152,7 +152,9 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
     },
 
     async prune(olderThanMs) {
-      await q(`DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1`, [Date.now() - olderThanMs]);
+      await claimAcrossTenants(pg, `DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1`, [
+        Date.now() - olderThanMs,
+      ]);
     },
 
     onSignal(runId, cb) {

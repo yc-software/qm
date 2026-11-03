@@ -163,7 +163,7 @@ END $base_schema$`,
             `SELECT EXISTS (
           SELECT 1 FROM runs r WHERE r.status='pending' AND r.retry_after <= $1
           AND NOT EXISTS (
-            SELECT 1 FROM runs blocked WHERE blocked.session_id=r.session_id
+            SELECT 1 FROM runs blocked WHERE blocked.tenant_id=r.tenant_id AND blocked.session_id=r.session_id
               AND (blocked.status='running' OR (blocked.status='pending' AND blocked.retry_after > $1))
           )
         ) AS available`,
@@ -264,7 +264,7 @@ END $base_schema$`,
 
   const turnOrder = (run: string) => `(CASE WHEN ${run}.claim_priority <> 0 THEN 1
       WHEN EXISTS (
-        SELECT 1 FROM runs ahead WHERE ahead.session_id=${run}.session_id AND ahead.status='pending'
+        SELECT 1 FROM runs ahead WHERE ahead.tenant_id=${run}.tenant_id AND ahead.session_id=${run}.session_id AND ahead.status='pending'
           AND ahead.claim_priority > 0 AND ${parked("ahead")} IS NOT TRUE
           AND (ahead.created_at, ahead.seq) < (${run}.created_at, ${run}.seq)
       ) THEN 1 ELSE 0 END), ${run}.created_at, ${run}.seq`;
@@ -279,7 +279,7 @@ END $base_schema$`,
     behindRunning = false,
   ) => `candidate.status='pending' AND candidate.retry_after <= ${now}
     AND NOT EXISTS (
-      SELECT 1 FROM runs sibling WHERE sibling.session_id=candidate.session_id
+      SELECT 1 FROM runs sibling WHERE sibling.tenant_id=candidate.tenant_id AND sibling.session_id=candidate.session_id
         AND (${behindRunning ? "false" : "sibling.status='running'"} OR (sibling.status='pending'
           AND (sibling.retry_after > ${now} OR ${before("sibling", "candidate")})))
       OFFSET 0
