@@ -798,7 +798,7 @@ test("a partner-chat history read returns a long message whole", async () => {
   }
 });
 
-test("a bot message echoing one of the agent's own posts is dropped", async () => {
+test("a bot message echoing one of the agent's own posts is dropped, while its edits and deletes apply to the stored post", async () => {
   const { built, partnerChat, deliver } = await partnerChatApp();
   try {
     await deliver(event({ body: "!post on the record", mentions: true, eventId: "ev-own", messageId: "1095" }));
@@ -812,6 +812,31 @@ test("a bot message echoing one of the agent's own posts is dropped", async () =
     const echo = event({ body: "on the record", eventId: "ev-echo", messageId: posted.id, thread: "1095", bot: true });
     assert.deepEqual(await deliver(echo), { status: 200, body: { ok: true, ignored: "own_message" } });
     assert.deepEqual(await rows(), [[true, true]]);
+    const own = () =>
+      built.surfaceCache
+        .readMessages(CONTAINER, { surface: "partner-chat", self: true, includeDeleted: true, noFallback: true })
+        .then((all) =>
+          all
+            .filter((m) => m.ts.endsWith(`.${posted.id.padStart(20, "0")}`))
+            .map((m) => [m.text, Boolean(m.bot), Boolean(m.editedAt), Boolean(m.deleted)]),
+        );
+    const updated = event({
+      body: "on the record, revised",
+      eventId: "ev-echo-edit",
+      messageId: posted.id,
+      thread: "1095",
+      bot: true,
+    });
+    updated.type = "message.updated";
+    assert.deepEqual(await deliver(updated), { status: 200, body: { ok: true } });
+    assert.deepEqual(await own(), [["on the record, revised", true, true, false]]);
+    const deleted = event({ body: "", eventId: "ev-echo-delete", messageId: posted.id, thread: "1095", bot: true });
+    deleted.type = "message.deleted";
+    assert.deepEqual(await deliver(deleted), { status: 200, body: { ok: true } });
+    assert.deepEqual(
+      (await own()).map((m) => m[3]),
+      [true],
+    );
   } finally {
     await partnerChat.close();
   }

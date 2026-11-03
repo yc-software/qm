@@ -83,9 +83,14 @@ export function createPartnerChatInbound(deps: {
     const author = bot ? partnerChatPrincipal(listed, false) : humans[members.indexOf(listed)]!;
     const thread = event.thread_id ?? undefined;
     const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
-    if (bot && (await findMessage(cache, container, message.id, { self: true })))
+    const own = bot ? await findMessage(cache, container, message.id, { self: true }) : undefined;
+    if (own && event.type === "message.created") {
+      console.log(
+        `[partner-chat] ignoring chat ${chat.id} message ${message.id}: it echoes one of the agent's own posts`,
+      );
       return { status: 200, body: { ok: true, ignored: "own_message" } };
-    const ts = partnerChatTs(message.created_at, message.id);
+    }
+    const ts = own?.ts ?? partnerChatTs(message.created_at, message.id);
     const addressed =
       event.type === "message.created" &&
       !bot &&
@@ -98,16 +103,17 @@ export function createPartnerChatInbound(deps: {
           surface: SURFACE,
           container,
           ts,
-          sub: thread ?? null,
-          authorId: author.externalId,
-          ...(author.displayName ? { authorName: author.displayName } : {}),
+          sub: own ? (own.sub ?? null) : (thread ?? null),
+          authorId: own?.authorId ?? author.externalId,
+          ...(!own && author.displayName ? { authorName: author.displayName } : {}),
           text: message.body,
+          ...(own ? { self: true, handled: true } : {}),
           ...(bot ? { bot: true } : {}),
           ...(message.mentions_agent ? { mentionsSelf: true } : {}),
           ...(addressed ? { handled: true } : {}),
           ...(event.type === "message.updated" ? { editedAt: now() } : {}),
           ...(event.type === "message.deleted" ? { deleted: true } : {}),
-          createdAt: Date.parse(message.created_at),
+          createdAt: own?.createdAt ?? Date.parse(message.created_at),
           members: humans.map((p) => p.externalId),
           ...(chat.name ? { containerName: chat.name } : {}),
           kind: chat.kind,
