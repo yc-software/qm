@@ -67,8 +67,9 @@ any other way.
 4. **Provision Postgres and set `DATABASE_OWNER_URL` and `DATABASE_URL` before
    first boot.** The owner URL runs migrations; `DATABASE_URL` names the login
    core runs as. Run `node src/migrate-main.ts` with core's environment before
-   core starts (a pre-deploy job); it creates that login with the owner (or sets
-   its password from `DATABASE_URL`) and applies the migrations. Sign-in is not
+   core starts (a pre-deploy job); it creates that login with the owner when it
+   does not exist (an existing login's password is never changed) and applies the
+   migrations. Sign-in is not
    optional here: the auth broker's single-use claim endpoint needs core's durable
    store, so an instance without a database accepts no sign-ins at all. The Porter
    path has no `qm`-CLI database provisioning — create a datastore in the dashboard
