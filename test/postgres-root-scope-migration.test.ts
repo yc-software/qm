@@ -8,7 +8,7 @@ import { withTenant } from "../src/tenants/context.ts";
 import { composioNamespaceReader } from "../src/tenants/tenant-record.ts";
 import { hashId } from "../src/util/crypto.ts";
 
-const URL = process.env.DATABASE_URL;
+const URL = process.env.DATABASE_OWNER_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the root scope migration test";
 
 const KV_TABLES = [

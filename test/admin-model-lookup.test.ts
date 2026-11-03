@@ -174,10 +174,9 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
     ]);
     assert.deepEqual(await inTestTenant(() => built.config.getRuntimeSelectionDurable(TEST_ROOT_SCOPE)), priorDefault);
     assert.deepEqual(await inTestTenant(() => built.modelRegistry.statuses()), []);
-    const runtime = await fetch(
-      base + "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice",
-      { headers },
-    );
+    const runtime = await fetch(base + "/v1/runtime-config?principalId=admin-alice&scopeId=personal:admin-alice", {
+      headers,
+    });
     const body = (await runtime.json()) as { models: string[] };
     assert.ok(body.models.includes("claude-opus-4-6"));
   } finally {
