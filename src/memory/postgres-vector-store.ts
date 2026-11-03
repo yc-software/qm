@@ -1,4 +1,4 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { unitVector } from "../model/embeddings.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
@@ -62,15 +62,16 @@ function vectorWidth(dimensions: number | undefined): number | null {
   return dimensions;
 }
 
+export const MEMORY_VECTOR_MIGRATIONS: readonly PgMigrationDefinition[] = [
+  { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
+  { id: "memory/vectors/0002", statements: SCHEMA },
+  tenantTables("memory/vectors/0003-tenants", [
+    { table: "memory_fact_vectors", primaryKey: "scope_id, model, fact_id" },
+  ]),
+];
+
 export function createPostgresVectorStore(connectionString: string): MemoryVectorStore {
-  const db = createPgPool(connectionString, [
-    ...MEMORY_FACTS_MIGRATIONS,
-    { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
-    { id: "memory/vectors/0002", statements: SCHEMA },
-    tenantTables("memory/vectors/0003-tenants", [
-      { table: "memory_fact_vectors", primaryKey: "scope_id, model, fact_id" },
-    ]),
-  ]);
+  const db = createPgPool(connectionString, [...MEMORY_FACTS_MIGRATIONS, ...MEMORY_VECTOR_MIGRATIONS]);
   return {
     async search(input) {
       if (!input.ids.length) return [];
