@@ -9,6 +9,7 @@ import { deploymentSecretValue, readEnvFile } from "./util.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { isTenantSetting } from "./tenant-setting-names.ts";
+import { applyTenantImport, OperatorRouteError, tenantImport, type OperatorCall } from "./tenant-import.ts";
 
 function sandboxBackendSetting(config: QmConfig): Record<string, string> {
   const backend =
@@ -44,11 +45,6 @@ function portalSignInSettings(config: QmConfig): Record<string, string> {
   return config.target === "render" ? SLACK_SIGN_IN : {};
 }
 
-function webUiAccess(config: QmConfig): Record<string, string> {
-  const loopsUsers = config.services.includes("web-ui") ? config.env["web-ui"]?.LOOPS_USERS : undefined;
-  return loopsUsers ? { LOOPS_USERS: loopsUsers } : {};
-}
-
 export function tenantSettingsEnv(config: QmConfig, values: ReadonlyMap<string, string>): Record<string, string> {
   const secret = (name: string): string | undefined => deploymentSecretValue(name, values.get(name));
   const fromSecrets: Record<string, string> = {};
@@ -76,15 +72,13 @@ export function tenantSettingsEnv(config: QmConfig, values: ReadonlyMap<string, 
     ...portalSignInSettings(config),
     ...config.env.auth,
     ...config.env.portal,
+    ...config.env["web-ui"],
     ...config.env.core,
     ...securityScreenEnv(config),
     ...renderSandbox,
     ...fromSecrets,
   };
-  return {
-    ...Object.fromEntries(Object.entries(env).filter(([name]) => isTenantSetting(name))),
-    ...webUiAccess(config),
-  };
+  return Object.fromEntries(Object.entries(env).filter(([name]) => isTenantSetting(name)));
 }
 
 export interface TenantSettingsTarget {
@@ -132,7 +126,7 @@ export async function seedTenantSettings(
     warn(`tenant settings: skipped (${errMessage(error)}); run \`qm settings push\` with them in .env`);
     return;
   }
-  const settings = tenantSettingsEnv(opts.config, values);
+  const plan = tenantImport(tenantSettingsEnv(opts.config, values));
   let core: CoreLink;
   try {
     core = await target.coreLink();
@@ -141,27 +135,27 @@ export async function seedTenantSettings(
     warn(`tenant settings: ${errMessage(error)}; run \`qm settings push\` once core is reachable`);
     return;
   }
+  const call: OperatorCall = async (path, body) => {
+    const text = JSON.stringify(body);
+    return core.request(path, operatorInit(credentials, "PUT", path, text)).catch((error) => {
+      if (!isCoreUnreachable(error)) throw error;
+      throw new CoreUnreachableError(`core did not answer ${path}: ${errMessage(error)}`);
+    });
+  };
+  let result: Awaited<ReturnType<typeof applyTenantImport>>;
   try {
-    for (const [path, body] of [
-      ["/v1/install/tenant", { tenant: tenantOf(opts.config) }],
-      ["/v1/tenant-settings", { tenant: tenantOf(opts.config), env: settings }],
-    ] as const) {
-      const text = JSON.stringify(body);
-      const response = await core.request(path, operatorInit(credentials, "PUT", path, text)).catch((error) => {
-        if (!isCoreUnreachable(error)) throw error;
-        throw new CoreUnreachableError(`core did not answer ${path}: ${errMessage(error)}`);
-      });
-      if (response.status < 200 || response.status >= 300)
-        throw new CliError(`${path} failed (${response.status}): ${response.body}`);
-    }
+    result = await applyTenantImport(plan, tenantOf(opts.config), call, (message) =>
+      warn(`tenant settings: ${message}`),
+    );
   } catch (error) {
+    if (error instanceof OperatorRouteError) throw new CliError(error.message);
     if (mode === "push" || !(error instanceof CoreUnreachableError)) throw error;
     warn(`tenant settings: ${errMessage(error)}; run \`qm settings push\` once core is reachable`);
     return;
   } finally {
     core.close();
   }
-  step(`tenant settings: ${Object.keys(settings).sort().join(", ") || "nothing to seed"}`);
-  const retired = target.retireTenantEnv?.(Object.keys(settings)) ?? [];
+  step(`tenant settings: ${result.applied.join(", ") || "nothing new to import"}`);
+  const retired = target.retireTenantEnv?.(plan.names.filter((name) => !result.unsaved.includes(name))) ?? [];
   if (retired.length) step(`tenant settings: removing ${retired.join(", ")} from the service env at the next deploy`);
 }

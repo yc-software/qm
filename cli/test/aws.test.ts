@@ -23,6 +23,7 @@ import {
   awsDown,
   awsLogs,
   awsMigrateCandidate,
+  awsOperatorSecret,
   awsRollback,
   awsSecretsPush,
   awsSetBackgroundWork,
@@ -6384,3 +6385,30 @@ for (const mode of ["unchanged", "migration", "missing", "unstable", "failure"] 
     }
   });
 }
+
+test("reading an operator secret from Secrets Manager skips only a missing secret", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secret-"));
+  const prior = process.env.AWS_BIN;
+  try {
+    const bin = join(dir, "aws");
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+const id = process.argv[process.argv.indexOf("--secret-id") + 1];
+if (id.endsWith("PRESENT")) console.log("value");
+else if (id.endsWith("MISSING")) { console.error("An error occurred (ResourceNotFoundException) when calling the GetSecretValue operation"); process.exit(254); }
+else { console.error("An error occurred (AccessDeniedException) when calling the GetSecretValue operation"); process.exit(254); }
+`,
+    );
+    chmodSync(bin, 0o755);
+    process.env.AWS_BIN = bin;
+    const config = oneServiceConfig();
+    assert.equal(awsOperatorSecret(config, "PRESENT"), "value");
+    assert.equal(awsOperatorSecret(config, "MISSING"), undefined);
+    assert.throws(() => awsOperatorSecret(config, "DENIED"), /AccessDeniedException/);
+  } finally {
+    if (prior === undefined) delete process.env.AWS_BIN;
+    else process.env.AWS_BIN = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -56,7 +56,3 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- printf "%s%s%s:%s" .root.Values.image.repository (.root.Values.image.separator | default "/") .service.image $tag -}}
 {{- end -}}
 {{- end -}}
-
-{{- define "qm.webUiAccessKeys" -}}
-LOOPS_USERS
-{{- end -}}

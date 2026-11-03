@@ -57,21 +57,26 @@ history. Never commit these values.
 
 Settings that belong to the install's tenant go under `tenantSettings`, not in any
 service's environment: `ADMIN_GRANTS`, `AUTH_ALLOWED_EMAILS` or
-`AUTH_ALLOWED_EMAIL_DOMAIN`, the portal's `OIDC_*` values and
-`PORTAL_EXPECTED_TEAM_ID`. The chart refuses them in `env`, `secretEnv` or
+`AUTH_ALLOWED_EMAIL_DOMAIN`, the portal's `OIDC_*` values, `PORTAL_EXPECTED_TEAM_ID`,
+the model, gateway and sandbox settings (`SANDBOX_BACKEND` and its provider
+tokens), and the values the hook imports into the tenant's admin settings:
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ORG_BRAND_*`,
+`HARNESS_SECURITY_POSTURE`, `HARNESS_SHARING_POSTURE`, the
+`<PROVIDER>_OAUTH_CLIENT_ID`/`_SECRET` pairs with `GOOGLE_WORKSPACE_DOMAIN`, and
+`LOOPS_USERS`. The chart refuses all of them in `env`, `secretEnv` or
 `services.<name>.env`. After each install or upgrade, a hook Job running the core
 image creates the tenant named by `tenant` (default `main`) on a fresh install
 (`PUT /v1/install/tenant`; once tenants exist the slug must be one of them, or the
-Job fails with `unknown_tenant`) and writes these settings to it (`PUT /v1/tenant-settings`), signed with `CORE_SIGNING_SECRET` and
+Job fails with `unknown_tenant`), writes the settings to it (`PUT /v1/tenant-settings`)
+and imports the rest through the admin routes, keeping any branding, posture,
+OAuth client or model key the tenant already has; each `LOOPS_USERS` entry turns on
+`inbox_loops` for that person. Every call is signed with `CORE_SIGNING_SECRET` and
 authorized by `DEPLOYMENT_CONTROL_SECRET`. With the embedded auth broker, the chart
 derives the portal's OIDC endpoints and copies `AUTH_CLIENT_ID`/`AUTH_CLIENT_SECRET`
 from `secretEnv` and the auth allowlist into the matching `OIDC_*` settings; an
 explicit `tenantSettings.OIDC_*` value wins. With `envFrom`, set
 `tenantSettings.OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` yourself, since Helm
 cannot read an external Secret.
-A `LOOPS_USERS` list in `secretEnv`, `env` or `services.web-ui.env` is sent with
-these settings when set, turning on the `inbox_loops` flag for each listed person;
-it is not passed to any service's environment.
 
 Only portal should normally have public ingress. `ingress.service` accepts an
 enabled `portal`, `core` or `web-ui`, not embedded modules or the TCP egress proxy.
@@ -103,8 +108,8 @@ services:
 ```
 
 This fragment expects `DATABASE_OWNER_URL`, `DATABASE_URL`,
-`DEPLOYMENT_CONTROL_SECRET`, a remote `SANDBOX_BACKEND` and S3 credentials
-in `qm-runtime`; see
+`DEPLOYMENT_CONTROL_SECRET` and S3 credentials in `qm-runtime`, and a remote
+`tenantSettings.SANDBOX_BACKEND` with its provider token; see
 [Core data and rollout behavior](#core-data-and-rollout-behavior). After supplying
 runtime config and `images.yaml`, render and inspect before applying:
 
@@ -134,7 +139,7 @@ Choose one of two layouts.
 
 **Shared storage (recommended, supports multiple replicas).** Set `DATABASE_URL`
 with `SNAPSHOT_STORE=s3`, `TRANSFER_STORE=s3`, `S3_BUCKET`
-and `S3_REGION` (optionally `S3_PREFIX`) on core, use a remote `SANDBOX_BACKEND`,
+and `S3_REGION` (optionally `S3_PREFIX`) on core, use a remote `tenantSettings.SANDBOX_BACKEND`,
 and leave `services.core.persistence` disabled. Sessions and runs then live in
 Postgres, and uploaded artifacts, session shares, published-app source archives and
 sandbox file transfers go to the bucket, so replicas share that state and pods can

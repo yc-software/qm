@@ -113,27 +113,35 @@ test("a dev instance writes its settings to the main tenant beside an older one,
     try {
       await prepareDevTenant(inputs, record);
       status = 404;
-      await assert.rejects(prepareDevTenant(inputs, record), /this core has no PUT \/v1\/tenant-settings route/);
+      await assert.rejects(
+        prepareDevTenant(inputs, record),
+        /tenant settings: \/v1\/install\/tenant failed \(404\): \{\}/,
+      );
     } finally {
       await new Promise<void>((resolve) => core.close(() => resolve()));
     }
     assert.deepEqual(phases, [
       "tenant start ",
       `tenant ok using install tenant ${carried}`,
-      "tenant ok wrote ADMIN_GRANTS, ANTHROPIC_API_KEY, LOOPS_USERS to the install tenant",
+      "tenant ok wrote ADMIN_GRANTS, inbox_loops for personal:dev@example.com, anthropic API key to the install tenant",
       "tenant start ",
       `tenant ok using install tenant ${carried}`,
     ]);
-    assert.equal(requests[0]!.path, "/v1/tenant-settings");
-    assert.equal(requests[0]!.authorization, `Bearer ${"c".repeat(64)}`);
-    assert.deepEqual(JSON.parse(requests[0]!.body), {
+    assert.deepEqual(
+      requests.slice(0, 4).map((request) => request.path),
+      [
+        "/v1/install/tenant",
+        "/v1/tenant-settings",
+        "/v1/admin/scopes/org:default-org/feature-flags",
+        "/v1/admin/model-providers/anthropic",
+      ],
+    );
+    assert.ok(requests.every((request) => request.authorization === `Bearer ${"c".repeat(64)}`));
+    assert.deepEqual(JSON.parse(requests[1]!.body), {
       tenant: "main",
-      env: {
-        ANTHROPIC_API_KEY: "sk-dev",
-        LOOPS_USERS: "dev@example.com",
-        ADMIN_GRANTS: "dev@example.com:org_admin",
-      },
+      env: { ADMIN_GRANTS: "dev@example.com:org_admin" },
     });
+    assert.deepEqual(JSON.parse(requests[3]!.body), { tenant: "main", apiKey: "sk-dev", ifUnset: true });
     const { rows } = await admin.query(`SELECT slug FROM ${schema}.tenants ORDER BY slug`);
     assert.deepEqual(rows, [{ slug: "main" }, { slug: "other" }]);
   } finally {

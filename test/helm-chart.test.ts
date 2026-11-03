@@ -253,34 +253,27 @@ test("Helm pushes sign-in and admin settings to the install tenant instead of an
   assert.match(push.env.find((entry) => entry.name === "QM_CORE_URL")!.value, /^http:\/\/test-qm-core\./);
 });
 
-test("Helm imports LOOPS_USERS only when set and the web UI runs, and keeps it out of service env", options, () => {
-  assert.equal(tenantSettings(render()).LOOPS_USERS, undefined);
-  assert.equal(tenantSettings(render({ env: { LOOPS_USERS: "a@example.com" } })).LOOPS_USERS, "a@example.com");
-  const withSecret = render({
-    secretEnv: { LOOPS_USERS: "b@example.com", AUTH_CLIENT_SECRET: "client-secret" },
-    services: { "web-ui": { env: { WEB_UI_PUBLIC_URL: "https://agent.example.com" } } },
-  });
-  assert.equal(tenantSettings(withSecret).LOOPS_USERS, "b@example.com");
-  for (const service of ["core", "portal", "web-ui"]) {
-    const names = (container(withSecret, service).env ?? []).map((entry) => entry.name);
-    assert.ok(!names.includes("LOOPS_USERS"), service);
-  }
-  const envSecret = withSecret.find((r) => r.kind === "Secret" && r.metadata.name === "test-qm-env");
-  assert.equal(envSecret?.stringData?.AUTH_CLIENT_SECRET, "client-secret");
-  assert.equal(envSecret?.stringData?.LOOPS_USERS, undefined);
-  const without = tenantSettings(
-    render({
-      env: { LOOPS_USERS: "a@example.com" },
-      services: {
-        "web-ui": { enabled: false },
-        portal: { enabled: false },
-        admin: { enabled: false },
-        auth: { enabled: false },
-      },
-    }),
-  );
-  assert.equal(without.LOOPS_USERS, undefined);
-});
+test(
+  "Helm sends model keys, branding and LOOPS_USERS from tenantSettings and refuses them in service env",
+  options,
+  () => {
+    const settings = tenantSettings(
+      render({
+        tenantSettings: { ANTHROPIC_API_KEY: "sk-ant", ORG_BRAND_ORG_NAME: "Acme", LOOPS_USERS: "a@example.com" },
+      }),
+    );
+    assert.equal(settings.ANTHROPIC_API_KEY, "sk-ant");
+    assert.equal(settings.ORG_BRAND_ORG_NAME, "Acme");
+    assert.equal(settings.LOOPS_USERS, "a@example.com");
+    for (const values of [
+      { secretEnv: { ANTHROPIC_API_KEY: "sk-ant" } },
+      { env: { LOOPS_USERS: "a@example.com" } },
+      { services: { "web-ui": { env: { LOOPS_USERS: "a@example.com" } } } },
+      { secretEnv: { SANDBOX_BACKEND: "e2b" } },
+    ])
+      assert.throws(() => render(values), /is a tenant setting; move it to tenantSettings/);
+  },
+);
 
 test("Helm runs the database release in the core pod with core's environment before core starts", options, () => {
   const resources = render({ services: { core: { persistence: { enabled: true } } } });

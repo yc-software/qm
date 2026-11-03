@@ -77,12 +77,10 @@ test("Render seeds its sandbox backend with the deployment's workspace and key",
   assert.equal(settings.RENDER_API_KEY, undefined);
 });
 
-test("a deployment running the web UI sends LOOPS_USERS only when set", () => {
+test("LOOPS_USERS in the web UI's env is imported, and only when set", () => {
   const listed = config({ services: ["core", "web-ui"], env: { "web-ui": { LOOPS_USERS: "a@example.com" } } });
   assert.equal(tenantSettingsEnv(listed, new Map()).LOOPS_USERS, "a@example.com");
-  const unset = tenantSettingsEnv(config({ services: ["core", "web-ui"] }), new Map());
-  assert.equal("LOOPS_USERS" in unset, false);
-  assert.equal("LOOPS_USERS" in tenantSettingsEnv(config(), new Map()), false);
+  assert.equal("LOOPS_USERS" in tenantSettingsEnv(config({ services: ["core", "web-ui"] }), new Map()), false);
 });
 
 function quietly<T>(fn: (lines: string[]) => Promise<T>): Promise<T> {
@@ -122,15 +120,21 @@ test("seeding creates the install tenant, then pushes its settings with the oper
     });
     assert.deepEqual(
       seen.map((entry) => entry.path),
-      ["/v1/install/tenant", "/v1/tenant-settings"],
+      [
+        "/v1/install/tenant",
+        "/v1/tenant-settings",
+        "/v1/admin/scopes/org:default-org/branding",
+        "/v1/admin/model-providers/anthropic",
+      ],
     );
+    assert.deepEqual(JSON.parse(String(seen[3]!.init.body)), { tenant: "main", apiKey: "sk-ant", ifUnset: true });
     assert.ok(closed);
     assert.deepEqual(JSON.parse(String(seen[0]!.init.body)), { tenant: "main" });
     const settings = seen[1]!;
     const headers = settings.init.headers as Record<string, string>;
     assert.equal(headers.authorization, `Bearer ${control}`);
     const body = String(settings.init.body);
-    assert.equal(JSON.parse(body).env.ANTHROPIC_API_KEY, "sk-ant");
+    assert.equal(JSON.parse(body).env.ANTHROPIC_API_KEY, undefined, "provider keys are not tenant settings");
     assert.equal(JSON.parse(body).tenant, "main");
     const expected = createHmac("sha256", signing)
       .update(`v0:${headers["x-timestamp"]}:PUT\n/v1/tenant-settings\n${body}`)
@@ -164,7 +168,7 @@ test("seeding reads missing operator and tenant secrets from the target's secret
         "push",
       ),
     );
-    assert.equal(JSON.parse(bodies[1]!).env.ANTHROPIC_API_KEY, "sk-stored");
+    assert.equal(JSON.parse(bodies.at(-1)!).apiKey, "sk-stored");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -266,9 +270,9 @@ test("the target retires only the pushed names, and only after core accepts them
       assert.match(lines.join("\n"), /removing OPENAI_API_KEY from the service env at the next deploy/);
       assert.ok(!lines.join("\n").includes("sk-local"), "values are never printed");
     });
-    const pushed = Object.keys(JSON.parse(events[1]!.slice("/v1/tenant-settings ".length)).env).sort();
-    assert.equal(events.at(-1), `retire ${pushed.join(",")}`);
-    assert.ok(pushed.includes("OPENAI_API_KEY") && !pushed.includes("CORE_SIGNING_SECRET"));
+    const retired = events.at(-1)!.slice("retire ".length).split(",");
+    assert.ok(retired.includes("OPENAI_API_KEY") && retired.includes("PI_MODEL"));
+    assert.ok(!retired.includes("CORE_SIGNING_SECRET"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

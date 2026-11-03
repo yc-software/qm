@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { operatorInit } from "../../../cli/src/operator-request.ts";
 import { isTenantSetting } from "../../../cli/src/tenant-setting-names.ts";
+import { applyTenantImport, tenantImport, type OperatorCall } from "../../../cli/src/tenant-import.ts";
 import { ensureInstallTenant } from "../../../src/tenants/install.ts";
 import { envFileGet } from "../lib/envctx.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
@@ -79,18 +80,24 @@ export async function prepareDevTenant(
     Object.entries(inputs.baseEnv).filter(([name, value]) => value.trim() && isTenantSetting(name)),
   );
   if (inputs.adminGrantsSeed) env.ADMIN_GRANTS = inputs.adminGrantsSeed;
-  const path = "/v1/tenant-settings";
   const credentials = {
     signing: inputs.baseEnv.CORE_SIGNING_SECRET ?? "",
     control: inputs.baseEnv.DEPLOYMENT_CONTROL_SECRET ?? "",
   };
-  const response = await fetch(
-    `http://127.0.0.1:${inputs.ports.core}${path}`,
-    operatorInit(credentials, "PUT", path, JSON.stringify({ tenant: "main", env })),
-  );
-  if (response.status === 404) throw new Error("tenant settings: this core has no PUT /v1/tenant-settings route");
-  if (!response.ok) throw new Error(`tenant settings: ${response.status} ${await response.text()}`);
-  phase("tenant", "ok", `wrote ${Object.keys(env).sort().join(", ")} to the install tenant`);
+  const call: OperatorCall = async (path, body) => {
+    const text = JSON.stringify(body);
+    const response = await fetch(
+      `http://127.0.0.1:${inputs.ports.core}${path}`,
+      operatorInit(credentials, "PUT", path, text),
+    );
+    return { status: response.status, body: await response.text() };
+  };
+  const { applied } = await applyTenantImport(tenantImport(env), "main", call, (message) =>
+    phase("tenant", "warn", message),
+  ).catch((error) => {
+    throw new Error(`tenant settings: ${errMessage(error)}`, { cause: error });
+  });
+  phase("tenant", "ok", `wrote ${applied.join(", ") || "nothing new"} to the install tenant`);
 }
 
 export async function runDatabaseRelease(spec: ChildSpec, phase: Phase): Promise<void> {
