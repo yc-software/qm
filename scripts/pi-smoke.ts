@@ -11,11 +11,12 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
-const { app } = buildApp({
+const { app, runtime } = buildApp({
   ...loadConfig(),
   port: 0,
   dataDir: mkdtempSync(join(tmpdir(), "pi-smoke-")),
 });
+runtime.start();
 
 const actor = { externalId: "U1" };
 function dm(text: string, thread = "t1"): TurnRequest {

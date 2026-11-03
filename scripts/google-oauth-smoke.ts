@@ -187,6 +187,7 @@ const built = buildApp({
   dataDir: process.env.DATA_DIR ?? mkdtempSync(join(tmpdir(), "qm-google-oauth-smoke-")),
   orgId,
 });
+built.runtime.start();
 const core = createServer(built.app, {
   signingSecret: secret,
   connectorTokens: built.connectorTokens,

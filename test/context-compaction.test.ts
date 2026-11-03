@@ -441,8 +441,7 @@ test("a model-overridden session's background pass sizes against the override's 
   const { agent, compactCalls } = spyAgent();
   const OVERRIDE = "tiny-context-model";
   const overrideBudget = budgetBetweenSoftAndHard(tokensOf(...msgTexts(8)));
-  agent.contextTokenBudget = (_scopeLabel?: string, model?: string) =>
-    model === OVERRIDE ? overrideBudget : 1_000_000;
+  agent.contextTokenBudget = (model?: string) => (model === OVERRIDE ? overrideBudget : 1_000_000);
   const { orch, sessions } = buildOrchestrator(agent);
   const sid = await seed(
     sessions,
@@ -460,6 +459,7 @@ test("a model-overridden session's background pass sizes against the override's 
     "the background pass judges fullness by the override model's budget — under the scope default it would never fire",
   );
   assert.equal(compactCalls.length, 1, "exactly one background compaction against the override's budget");
+  assert.equal(compactCalls[0]!.runtime?.modelId, OVERRIDE, "and summarizes on the session's own model");
 });
 
 test("a rapid follow-up that outran the background pass AND is over the HARD limit blocks and compacts inline", async () => {
@@ -999,16 +999,21 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
       return { reply: "done" };
     },
   };
-  const router = withResolvedRuntime(adapter, (input) =>
-    resolveRuntimeChoice(
-      built.config,
-      "org:default-org",
-      input.scopeLabel,
-      category,
-      input.runtime,
-      undefined,
-      input.runtimePurpose,
-    ),
+  const router = withResolvedRuntime(
+    adapter,
+    (input) =>
+      resolveRuntimeChoice(
+        built.config,
+        "org:default-org",
+        input.scopeLabel,
+        category,
+        input.runtime,
+        undefined,
+        input.runtimePurpose,
+      ),
+    async () => {
+      throw new Error("no compaction in this test");
+    },
   );
   const built = buildOrchestrator(router);
   await built.config.setRuntimeSelection(PERSONAL, {
@@ -1040,16 +1045,21 @@ test("human child continuations respect non-fast category defaults", async () =>
       return { reply: "done" };
     },
   };
-  const router = withResolvedRuntime(adapter, (input) =>
-    resolveRuntimeChoice(
-      built.config,
-      "org:default-org",
-      input.scopeLabel,
-      category,
-      input.runtime,
-      undefined,
-      input.runtimePurpose,
-    ),
+  const router = withResolvedRuntime(
+    adapter,
+    (input) =>
+      resolveRuntimeChoice(
+        built.config,
+        "org:default-org",
+        input.scopeLabel,
+        category,
+        input.runtime,
+        undefined,
+        input.runtimePurpose,
+      ),
+    async () => {
+      throw new Error("no compaction in this test");
+    },
   );
   const built = buildOrchestrator(router);
   await built.config.setInteractiveFastMode(true);
@@ -1096,16 +1106,21 @@ test("verified swarm workers resolve their own defaults instead of copying the r
         return { reply: "done" };
       },
     };
-    const router = withResolvedRuntime(adapter, (input) =>
-      resolveRuntimeChoice(
-        built.config,
-        "org:default-org",
-        input.scopeLabel,
-        inherited,
-        input.runtime,
-        undefined,
-        input.runtimePurpose,
-      ),
+    const router = withResolvedRuntime(
+      adapter,
+      (input) =>
+        resolveRuntimeChoice(
+          built.config,
+          "org:default-org",
+          input.scopeLabel,
+          inherited,
+          input.runtime,
+          undefined,
+          input.runtimePurpose,
+        ),
+      async () => {
+        throw new Error("no compaction in this test");
+      },
     );
     const built = buildOrchestrator(router, undefined, undefined, f);
     if (configured) await built.config.setPurposeRuntime("subagent", category);
@@ -1178,16 +1193,21 @@ test("swarm workers keep the runtime chosen at spawn over the category and scope
           return { reply: "done" };
         },
       };
-      const router = withResolvedRuntime(adapter, (input) =>
-        resolveRuntimeChoice(
-          built.config,
-          "org:default-org",
-          input.scopeLabel,
-          inherited,
-          input.runtime,
-          undefined,
-          input.runtimePurpose,
-        ),
+      const router = withResolvedRuntime(
+        adapter,
+        (input) =>
+          resolveRuntimeChoice(
+            built.config,
+            "org:default-org",
+            input.scopeLabel,
+            inherited,
+            input.runtime,
+            undefined,
+            input.runtimePurpose,
+          ),
+        async () => {
+          throw new Error("no compaction in this test");
+        },
       );
       const built = buildOrchestrator(router, undefined, undefined, f);
       if (configured) await built.config.setPurposeRuntime("subagent", category);

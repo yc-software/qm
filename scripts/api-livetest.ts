@@ -18,6 +18,7 @@ const built = buildApp({
   port: 0,
   dataDir: DATA,
 });
+built.runtime.start();
 await built.config.setSoul(scopeId("personal", "USOUL"), "When you reply, always end with the exact token --AGENT-X.");
 
 const server = createInsecureTestServer(built.app);
