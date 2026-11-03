@@ -440,6 +440,8 @@ for (const stopBeforeIntake of [false, true]) {
       return sse(events);
     }) as typeof fetch;
     const entries: SessionEntry[] = [];
+    let steerTaken = () => {};
+    const taken = new Promise<void>((resolve) => (steerTaken = resolve));
     try {
       await agent.runTurn(
         turnInput(
@@ -451,7 +453,7 @@ for (const stopBeforeIntake of [false, true]) {
             tools: {
               memoryRead: async () => {
                 await signals.send("tool-steer", { kind: "steer", text: "use the other file", ts: "tool.1" });
-                await new Promise((resolve) => setTimeout(resolve, 30));
+                await taken;
                 assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
                 assert.equal((await signals.pending("tool-steer")).length, 1);
                 if (stopBeforeIntake) {
@@ -461,6 +463,10 @@ for (const stopBeforeIntake of [false, true]) {
                 return "saved facts";
               },
             } as AgentTurnInput["tools"],
+            prepareSteer: async (text) => {
+              setTimeout(steerTaken);
+              return { text };
+            },
             emit: async (entry) => {
               const saved = await store.append(lease, entry);
               entries.push(saved);
@@ -582,13 +588,19 @@ test("a consumed steer is recorded when its acknowledgement fails", async () => 
     events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
     return sse(events);
   }) as typeof fetch;
+  let steerTaken = () => {};
+  const taken = new Promise<void>((resolve) => (steerTaken = resolve));
   try {
     const turn = turnInput("steer-failure", sink, {
       runId: "steer-failure",
+      prepareSteer: async (text) => {
+        setTimeout(steerTaken);
+        return { text };
+      },
       tools: {
         memoryRead: async () => {
           await signals.send("steer-failure", { kind: "steer", text: "use the other file", ts: "fail.1" });
-          await new Promise((resolve) => setTimeout(resolve, 30));
+          await taken;
           return "saved facts";
         },
       } as AgentTurnInput["tools"],
