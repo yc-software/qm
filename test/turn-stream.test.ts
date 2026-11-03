@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { createTurnStream, goalView } from "../src/runs/turn-stream.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -117,16 +118,18 @@ test("a queued run surfaces replyComplete via getRun once the reply is final", a
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t1" },
-      text: "hello",
-      async: true,
-    });
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const ack = await inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "t1" },
+        text: "hello",
+        async: true,
+      }),
+    );
+    const finished = await inTestTenant(() => built.runs.waitFor(ack.runId!, 5_000));
     assert.equal(finished.status, "done");
-    const run = await built.app.getRun(ack.runId!);
+    const run = await inTestTenant(() => built.app.getRun(ack.runId!));
     assert.equal(run?.replyComplete, true, "a completed reply is flagged replyComplete");
     assert.notEqual(run?.alive, true, "a finished turn is not reported alive");
   } finally {
@@ -143,22 +146,24 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
       reaperIntervalMs: 60_000,
     }),
   );
-  const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
-  await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+  const computer = await inTestTenant(() => built.sandboxResources.create("U1", "personal:U1", "sprites", "default"));
+  await inTestTenant(() => built.sandboxResources.setDefault("U1", "personal:U1", computer.id));
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t1" },
-      text: "!run echo hi",
-      async: true,
-    });
+    const ack = await inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "t1" },
+        text: "!run echo hi",
+        async: true,
+      }),
+    );
     assert.equal(ack.status, "queued");
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const finished = await inTestTenant(() => built.runs.waitFor(ack.runId!, 5_000));
     assert.equal(finished.status, "done");
 
-    const run = await built.app.getRun(ack.runId!);
+    const run = await inTestTenant(() => built.app.getRun(ack.runId!));
     const types = (run?.activity ?? []).map((a) => a.type);
     assert.ok(types.includes("tool_call"), "the execute tool_call was mirrored to the run's activity");
     assert.ok(types.includes("tool_result"), "the execute tool_result was mirrored too");
@@ -180,20 +185,22 @@ test("a queued run exposes the agent's in-flight reply via getRun().partial", as
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t1" },
-      text: "hello",
-      async: true,
-    });
+    const ack = await inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "t1" },
+        text: "hello",
+        async: true,
+      }),
+    );
     assert.equal(ack.status, "queued");
     assert.ok(ack.runId);
 
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const finished = await inTestTenant(() => built.runs.waitFor(ack.runId!, 5_000));
     assert.equal(finished.status, "done");
 
-    const run = await built.app.getRun(ack.runId!);
+    const run = await inTestTenant(() => built.app.getRun(ack.runId!));
     assert.ok(run?.partial, "the agent's reply was streamed to the run");
     assert.equal(run!.partial, finished.result?.reply, "streamed partial matches the final reply");
   } finally {
@@ -262,16 +269,18 @@ test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t-fb" },
-      text: "!preamble On it — checking.",
-      async: true,
-    });
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const ack = await inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "t-fb" },
+        text: "!preamble On it — checking.",
+        async: true,
+      }),
+    );
+    const finished = await inTestTenant(() => built.runs.waitFor(ack.runId!, 5_000));
     assert.equal(finished.status, "done");
-    const run = await built.app.getRun(ack.runId!);
+    const run = await inTestTenant(() => built.app.getRun(ack.runId!));
     assert.equal(run?.firstBlock, "On it — checking.", "the opening block is exposed for the surface to harvest");
     assert.equal(run?.firstBlockClosed, true, "the tool call closed it");
     assert.ok(run?.partial?.includes("All clear — nothing broke."), "the final reply still streams as partial");
@@ -291,14 +300,16 @@ test("a harvested first block is stripped from the final reply (never shown twic
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t-strip" },
-      text: "!preamble On it — checking.",
-      async: true,
-    });
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const ack = await inTestTenant(() =>
+      built.app.turn({
+        surface: "slack",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "t-strip" },
+        text: "!preamble On it — checking.",
+        async: true,
+      }),
+    );
+    const finished = await inTestTenant(() => built.runs.waitFor(ack.runId!, 5_000));
     assert.equal(finished.status, "done");
     assert.equal(finished.deliveryState?.replying, true, "Slack engagement survives outside the worker stream");
     assert.equal(finished.result?.reply, "All clear — nothing broke.", "the acked preamble is stripped from the reply");
@@ -319,14 +330,16 @@ test("a long first block is harvested too (no length gate) and stripped from the
   built.runtime.start();
   try {
     const long = "x".repeat(400);
-    const ack = await built.app.turn({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t-held" },
-      text: `!preamble ${long}`,
-      async: true,
-    });
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const ack = await inTestTenant(() =>
+      built.app.turn({
+        surface: "slack",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "t-held" },
+        text: `!preamble ${long}`,
+        async: true,
+      }),
+    );
+    const finished = await inTestTenant(() => built.runs.waitFor(ack.runId!, 5_000));
     assert.equal(finished.status, "done");
     assert.equal(
       finished.result?.reply,
@@ -349,14 +362,16 @@ test("a non-slack surface never strips the first block from the reply", async ()
   );
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t-web" },
-      text: "!preamble On it — checking.",
-      async: true,
-    });
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const ack = await inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "t-web" },
+        text: "!preamble On it — checking.",
+        async: true,
+      }),
+    );
+    const finished = await inTestTenant(() => built.runs.waitFor(ack.runId!, 5_000));
     assert.equal(finished.status, "done");
     assert.ok(
       finished.result?.reply?.startsWith("On it — checking."),
@@ -432,14 +447,16 @@ test("monitor wakes persist engagement after the reply gate", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ts-monitor-")), workers: 1 }));
   built.runtime.start();
   try {
-    const ack = await built.app.turn({
-      surface: "monitor",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "t-monitor" },
-      text: "!preamble Checking background results.",
-      async: true,
-    });
-    const finished = await built.runs.waitFor(ack.runId!, 5_000);
+    const ack = await inTestTenant(() =>
+      built.app.turn({
+        surface: "monitor",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "t-monitor" },
+        text: "!preamble Checking background results.",
+        async: true,
+      }),
+    );
+    const finished = await inTestTenant(() => built.runs.waitFor(ack.runId!, 5_000));
     assert.equal(finished.status, "done");
     assert.equal(finished.deliveryState?.replying, true);
   } finally {
