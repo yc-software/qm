@@ -170,9 +170,8 @@ const ORIGIN_HELPERS = [
         ELSE
           o := typed;
         END IF;
-        IF jsonb_typeof(o -> 'destination') = 'object' THEN
-          o := jsonb_set(o, '{destination}', pg_temp.qm_surface_account(o -> 'destination'));
-        END IF;
+        IF typed IS NULL THEN RETURN r || jsonb_build_object('origin', o); END IF;
+        IF o = typed THEN RETURN r; END IF;
         RETURN (r - ${LEGACY_ORIGIN_KEYS.map((key) => `'${key}'`).join(" - ")}) || jsonb_build_object('origin', o);
       END $f$`,
   `CREATE FUNCTION pg_temp.qm_turn_origin_request_text(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
@@ -295,10 +294,8 @@ const rewriteRuns = (rows: string) =>
     "runs",
     `UPDATE runs r SET request = pg_temp.qm_turn_origin_request_text(r.request) WHERE ${rows} AND ${runOriginChanges("r")}`,
   );
-
-export const TURN_ORIGIN_MIGRATION = originMigration("surfaces/0005-turn-origin-backfill", [
-  rewriteRuns("r.status NOT IN ('pending', 'running')"),
-  rewriteRuns("(r.status IN ('pending', 'running') OR r.finished_at >= (extract(epoch FROM now()) * 1000)::bigint)"),
+const LIVE_RUNS = "(r.status IN ('pending', 'running') OR r.finished_at >= (extract(epoch FROM now()) * 1000)::bigint)";
+const REPLAYABLE_ORIGIN_REWRITES = [
   ifTable(
     "run_signals",
     `UPDATE run_signals SET payload = payload
@@ -312,11 +309,22 @@ export const TURN_ORIGIN_MIGRATION = originMigration("surfaces/0005-turn-origin-
     `UPDATE approvals SET json = jsonb_set(json, '{request}', pg_temp.qm_turn_origin_request(json -> 'request'))
      WHERE jsonb_typeof(json -> 'request') = 'object' AND ${originChanges("json -> 'request'")}`,
   ),
+];
+
+export const TURN_ORIGIN_MIGRATION = originMigration("surfaces/0005-turn-origin-backfill", [
+  rewriteRuns("r.status NOT IN ('pending', 'running')"),
+  rewriteRuns(LIVE_RUNS),
+  ...REPLAYABLE_ORIGIN_REWRITES,
+]);
+
+const OVERLAP_TURN_ORIGIN_REWRITE = originMigration("surface-origin-rewrite/overlap-turn-origins", [
+  rewriteRuns(LIVE_RUNS),
+  ...REPLAYABLE_ORIGIN_REWRITES,
 ]);
 
 export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
   const pool = await pg.pool();
-  for (const migration of LIVE_ORIGIN_REWRITES)
+  for (const migration of [OVERLAP_TURN_ORIGIN_REWRITE, ...LIVE_ORIGIN_REWRITES])
     await withPgTransaction(pool, async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('qm:surface-origin-rewrite'))");
       for (const statement of migration.statements) await client.query(statement);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import pg from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { TURN_ORIGIN_MIGRATION } from "../src/surfaces/origin-migration.ts";
@@ -54,7 +54,6 @@ const LEGACY_KEYS = [
   "liveActor",
 ];
 const oldDestination = { type: "slack", target: "C1", slackAccountId: "partner", slackTeamId: "TPARTNER" };
-const newDestination = { type: "slack", target: "C1", account: { id: "partner", workspace: "TPARTNER" } };
 const request = (extra: Record<string, unknown>) => ({
   surface: "slack",
   actor: { externalId: "U1" },
@@ -80,7 +79,12 @@ const CASES: [name: string, stored: Record<string, unknown>, origin: Record<stri
       triggerDestination: oldDestination,
       ownerKeychainUnion: true,
     },
-    { kind: "automation", screenData: "external payload", destination: newDestination, useOwnerKeychain: true },
+    { kind: "automation", screenData: "external payload", destination: oldDestination, useOwnerKeychain: true },
+  ],
+  [
+    "typed-destination",
+    { origin: { kind: "automation", destination: oldDestination } },
+    { kind: "automation", destination: oldDestination },
   ],
   [
     "automation-wins",
@@ -179,11 +183,13 @@ test("the migration folds every stored legacy origin into `origin`, as the trans
         string,
         unknown
       >;
-    for (const [name, , origin] of CASES)
+    for (const [name, before, origin] of CASES)
       for (const id of [`live-${name}`, `settled-${name}`]) {
         const stored = await raw(id);
         assert.deepEqual(stored.origin, origin, id);
-        for (const key of LEGACY_KEYS) assert.equal(key in stored, false, `${id} keeps ${key}`);
+        const folded = "origin" in before && !isDeepStrictEqual(before.origin, origin);
+        for (const key of LEGACY_KEYS)
+          assert.deepEqual(stored[key], folded ? undefined : before[key], `${id} ${folded ? "drops" : "keeps"} ${key}`);
         assert.equal(stored.text, "hi", id);
       }
     assert.equal((await admin.query("SELECT request FROM runs WHERE id = 'unparseable'")).rows[0].request, unparseable);
@@ -201,13 +207,13 @@ test("the migration folds every stored legacy origin into `origin`, as the trans
     const signals = (await admin.query("SELECT payload, consumed_at FROM run_signals ORDER BY id")).rows;
     assert.equal(signals[0].payload.request.unprompted, true, "consumed signals are left alone");
     assert.deepEqual(signals[1].payload.request.origin, { kind: "ambient", entryTs: "7" });
-    assert.equal("unprompted" in signals[1].payload.request, false);
+    assert.equal(signals[1].payload.request.unprompted, true, "the previous release still reads the legacy flag");
     assert.deepEqual(signals[1].payload.sessionRequest.origin, { kind: "automation", screenData: "s" });
     const approvals = Object.fromEntries(
       (await admin.query("SELECT id, json FROM approvals")).rows.map((r) => [r.id, r.json.request]),
     );
     assert.deepEqual(approvals.a1.origin, { kind: "automation", screenData: "d" });
-    assert.equal("triggered" in approvals.a1, false);
+    assert.equal(approvals.a1.triggered, true, "the previous release still reads the legacy flag");
     assert.deepEqual(approvals.a2.origin, { kind: "direct" });
 
     const migrated = await snapshot(admin);

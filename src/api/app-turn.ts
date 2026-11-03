@@ -28,6 +28,7 @@ import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
+import { LEGACY_ORIGIN_KEYS } from "../surfaces/origin-migration.ts";
 import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
@@ -156,6 +157,8 @@ export function createTurnMethods(
         approvedRequest.conversation.threadRef === req.conversation.threadRef;
       let privateRequest = req.privateSessionMessage ? req : undefined;
       if (approvedRequest?.privateSessionMessage) privateRequest = approvedRequest;
+      if (!req.origin && LEGACY_ORIGIN_KEYS.some((key) => key in req))
+        throw new Error("turn request carries retired origin fields but no origin");
       let origin: TurnOrigin = req.origin ?? { kind: "direct" };
       if (privateRequest && privateRequest === approvedRequest) {
         if (!privateRequest.origin) throw new Error("stored approval request has no origin");
