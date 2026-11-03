@@ -31,16 +31,40 @@ struct DraftStore {
     return URL.applicationSupportDirectory.appendingPathComponent("Drafts/\(key)")
   }
 
-  private var file: URL {
+  var file: URL {
     let key = SHA256.hash(data: Data(thread.utf8)).map { String(format: "%02x", $0) }.joined()
     return Self.directory(account).appendingPathComponent(key + ".json")
   }
 
   func read() -> Record {
-    guard let data = try? Data(contentsOf: file),
-      let record = try? JSONDecoder().decode(Record.self, from: data)
-    else { return Record() }
-    return record
+    do {
+      return try JSONDecoder().decode(Record.self, from: Data(contentsOf: file))
+    } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+      return Record()
+    } catch {
+      setAside(error)
+      return Record()
+    }
+  }
+
+  private func setAside(_ error: Error) {
+    let stamp = Int(Date().timeIntervalSince1970 * 1000)
+    let destination = file.appendingPathExtension("corrupt-\(stamp)")
+    Log.drafts.error(
+      "Unreadable draft moved to \(destination.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)"
+    )
+    do {
+      try FileManager.default.moveItem(at: file, to: destination)
+    } catch {
+      Log.drafts.error("Could not set aside an unreadable draft: \(error, privacy: .public)")
+    }
+  }
+
+  private static func records(_ account: String) -> [URL] {
+    let files =
+      (try? FileManager.default.contentsOfDirectory(
+        at: directory(account), includingPropertiesForKeys: nil)) ?? []
+    return files.filter { $0.pathExtension == "json" }
   }
 
   func write(_ record: Record) throws {
@@ -65,9 +89,7 @@ struct DraftStore {
   }
 
   static func conversations(_ account: String) -> [Conversation] {
-    let files =
-      (try? FileManager.default.contentsOfDirectory(
-        at: directory(account), includingPropertiesForKeys: nil)) ?? []
+    let files = records(account)
     return files.compactMap { file in
       guard let data = try? Data(contentsOf: file),
         let record = try? JSONDecoder().decode(Record.self, from: data),
@@ -84,9 +106,7 @@ struct DraftStore {
   }
 
   static func pruneAttachments(_ account: String) throws {
-    let files =
-      (try? FileManager.default.contentsOfDirectory(
-        at: directory(account), includingPropertiesForKeys: nil)) ?? []
+    let files = records(account)
     var referenced: Set<String> = []
     for file in files {
       guard let data = try? Data(contentsOf: file),

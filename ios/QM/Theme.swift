@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import os
 
 enum QMTheme {
   static let conversationWidth: CGFloat = 760
@@ -251,7 +252,10 @@ struct NativeSuggestedActivities: View {
           if !response.activities.isEmpty { generated = response.activities }
           if response.pending != true { return }
           try await Task.sleep(for: .seconds(10))
-        } catch { return }
+        } catch {
+          Log.background.failure("Suggested activities", error)
+          return
+        }
       }
     }
   }

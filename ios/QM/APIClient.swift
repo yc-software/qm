@@ -213,10 +213,11 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
   nonisolated private static func readEvents(
     _ bytes: URLSession.AsyncBytes, onData: @MainActor (Data) throws -> Bool
   ) async throws {
-    for try await line in bytes.lines {
+    var decoder = EventStreamDecoder()
+    for try await byte in bytes {
+      guard let data = decoder.push(byte) else { continue }
       try Task.checkCancellation()
-      guard line.hasPrefix("data:") else { continue }
-      if try await onData(Data(line.dropFirst(5).utf8)) { return }
+      if try await onData(data) { return }
     }
   }
 

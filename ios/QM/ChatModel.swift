@@ -382,8 +382,14 @@ final class ChatModel {
     if result.isTerminalResult {
       recordCompletion(id: result.runId, reply: result.reply)
     }
-    let active: QueuedInputsResponse? = try? await client.fetch(
-      "api/runs/active", query: [.init(name: "threadRef", value: conversation.threadRef)])
+    let active: QueuedInputsResponse?
+    do {
+      active = try await client.fetch(
+        "api/runs/active", query: [.init(name: "threadRef", value: conversation.threadRef)])
+    } catch {
+      Log.background.failure("Active run check after submission", error)
+      active = nil
+    }
     guard current == generation, !Task.isCancelled else { return }
     if let active { reconcileQueuedPresentations(active) }
     let next = active?.runId ?? activeRunID ?? (active == nil ? result.runId : nil)

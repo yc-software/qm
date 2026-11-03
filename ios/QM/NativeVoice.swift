@@ -1,6 +1,8 @@
 import AVFAudio
+import CryptoKit
 import SwiftUI
 @preconcurrency import WebRTC
+import os
 
 struct NativeVoiceFragment: Identifiable {
   let id = UUID()
@@ -362,6 +364,11 @@ final class NativeVoiceModel: NSObject {
       }
     } catch { fail(error.localizedDescription) }
   }
+  nonisolated static func submissionKey(revision: UUID, delegation: String?) -> String {
+    let source = "\(revision.uuidString.lowercased()):\(delegation ?? UUID().uuidString)"
+    let digest = SHA256.hash(data: Data(source.utf8)).map { String(format: "%02x", $0) }
+    return "voice-" + digest.joined()
+  }
   private static var clock: Double { ProcessInfo.processInfo.systemUptime }
   var canSpeak: Bool { connected && !stopping && !audioPaused }
   private func flushEvents() {
@@ -369,11 +376,23 @@ final class NativeVoiceModel: NSObject {
   }
   private func briefing() async -> String? {
     guard let conversation else { return nil }
-    let active: ActiveRun? = try? await client.fetch(
-      "api/runs/active", query: [.init(name: "threadRef", value: threadRef)])
-    let history: Transcript? = try? await client.fetch(
-      "api/sessions/\(conversation.id.apiComponent)", query: [.init(name: "tailTurns", value: "25")]
-    )
+    let active: ActiveRun?
+    do {
+      active = try await client.fetch(
+        "api/runs/active", query: [.init(name: "threadRef", value: threadRef)])
+    } catch {
+      Log.background.failure("Voice briefing active run check", error)
+      active = nil
+    }
+    let history: Transcript?
+    do {
+      history = try await client.fetch(
+        "api/sessions/\(conversation.id.apiComponent)",
+        query: [.init(name: "tailTurns", value: "25")])
+    } catch {
+      Log.background.failure("Voice briefing history", error)
+      history = nil
+    }
     let messages = chatMessages(history?.entries ?? []).filter {
       $0.role == "user" || $0.role == "assistant"
     }
@@ -405,8 +424,14 @@ final class NativeVoiceModel: NSObject {
   }
   private func watchThread(revision current: UUID) async {
     while current == revision && !Task.isCancelled {
-      let active: ActiveRun? = try? await client.fetch(
-        "api/runs/active", query: [.init(name: "threadRef", value: threadRef)])
+      let active: ActiveRun?
+      do {
+        active = try await client.fetch(
+          "api/runs/active", query: [.init(name: "threadRef", value: threadRef)])
+      } catch {
+        Log.background.failure("Voice active run check", error)
+        active = nil
+      }
       if let id = active?.runId, !followed.contains(id) {
         await follow(id, delegation: nil, revision: current)
         continue
@@ -424,7 +449,7 @@ final class NativeVoiceModel: NSObject {
         body: [
           "text": text, "threadRef": threadRef, "scopeId": scopeID,
           "timezone": TimeZone.current.identifier,
-          "idempotencyKey": "voice-\(UUID().uuidString.lowercased())",
+          "idempotencyKey": Self.submissionKey(revision: current, delegation: delegation),
         ])
       guard current == revision, !Task.isCancelled else { return }
       if let id = submission.runId {

@@ -170,6 +170,33 @@ final class NativeVoiceTests: XCTestCase {
   }
 
   @MainActor
+  func testRetriedHandOffReusesItsIdempotencyKey() async throws {
+    VoiceTaskProtocol.turnKeys.withLock { $0 = [] }
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [VoiceTaskProtocol.self]
+    let client = APIClient(
+      baseURL: URL(string: "https://voice-failure-retry.example")!, configuration: configuration)
+    let model = NativeVoiceModel(client: client, conversation: nil)
+    model.connected = true
+    await model.submit("Read my tasks", delegation: "call", revision: model.revision)
+    await model.submit("Read my tasks", delegation: "call", revision: model.revision)
+    await model.submit("Read my mail", delegation: "other", revision: model.revision)
+    let keys = VoiceTaskProtocol.turnKeys.withLock { $0 }
+    XCTAssertEqual(keys.count, 3)
+    XCTAssertEqual(keys[0], keys[1])
+    XCTAssertNotEqual(keys[0], keys[2])
+    for key in keys {
+      XCTAssertNotNil(key.wholeMatch(of: /[A-Za-z0-9._-]{1,128}/))
+    }
+    XCTAssertNotEqual(
+      NativeVoiceModel.submissionKey(revision: UUID(), delegation: "call"), keys[0])
+    XCTAssertNotEqual(
+      NativeVoiceModel.submissionKey(revision: model.revision, delegation: nil),
+      NativeVoiceModel.submissionKey(revision: model.revision, delegation: nil))
+    model.finish()
+  }
+
+  @MainActor
   func testAudioInterruptionsAndHeadphoneRemovalDoNotEndVoice() {
     let model = NativeVoiceModel(
       client: APIClient(baseURL: URL(string: "https://voice.example")!), conversation: nil)
@@ -219,10 +246,29 @@ private final class DelayedDictationProvider: SpeechToTextProvider {
 
 final class VoiceTaskProtocol: URLProtocol, @unchecked Sendable {
   static let counts = OSAllocatedUnfairLock(initialState: [String: Int]())
+  static let turnKeys = OSAllocatedUnfairLock(initialState: [String]())
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+  private var requestBody: Data {
+    if let body = request.httpBody { return body }
+    guard let stream = request.httpBodyStream else { return Data() }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while case let count = stream.read(&buffer, maxLength: buffer.count), count > 0 {
+      data.append(buffer, count: count)
+    }
+    return data
+  }
   override func startLoading() {
-    let failed = request.url?.host == "voice-failure.example"
+    let failed = request.url?.host?.hasPrefix("voice-failure") == true
+    if request.url?.path == "/api/turn",
+      let object = try? JSONSerialization.jsonObject(with: requestBody) as? [String: Any],
+      let key = object["idempotencyKey"] as? String
+    {
+      Self.turnKeys.withLock { $0.append(key) }
+    }
     var body =
       failed
       ? #"{"message":"Unavailable"}"#
