@@ -45,7 +45,7 @@ export interface McpServerRows {
 }
 
 export interface LinkTables {
-  oauthFlows: OneTimeRows<Omit<OAuthState, "tenant">>;
+  oauthFlows: OneTimeRows<OAuthState>;
   consentLinks: OneTimeRows<ConsentLinkRecord>;
   secretDrops: SecretDropRows;
   composioReturns: ComposioReturnRows;
@@ -54,7 +54,7 @@ export interface LinkTables {
 }
 
 type Spec<T> = { readonly [K in keyof T & string]-?: ColumnCast };
-type OAuthFlowRow = Omit<OAuthState, "orgId" | "nonce" | "tenant"> & { id: string };
+type OAuthFlowRow = Omit<OAuthState, "orgId" | "nonce"> & { id: string };
 type ConsentLinkRow = Omit<ConsentLinkRecord, "orgId"> & { id: string };
 type SecretDropRow = Omit<SecretDropRecord, "orgId"> & { id: string };
 type ComposioReturnRow = ComposioReturn & { id: string };

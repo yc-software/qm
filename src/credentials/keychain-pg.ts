@@ -14,7 +14,6 @@ import { askMatches, matchesOwner, ownerKeys, type KeychainAskFilter, type Keych
 
 const NON_ASCII = `'[^\\x01-\\x7f]'`;
 
-type Row = Record<string, unknown>;
 type Stored<T> = Omit<T, "orgId">;
 
 const CREDENTIAL_SPEC: { readonly [K in keyof Stored<KeychainCredential>]-?: ColumnCast } = {
@@ -228,12 +227,12 @@ function askWhere(filter: KeychainAskFilter): { sql: string; params: unknown[] }
 
 interface Table<T> {
   name: string;
-  columns: TypedColumns<Stored<T>>;
+  columns: TypedColumns<T>;
 }
 
-const CREDENTIALS: Table<KeychainCredential> = { name: "keychain_credentials", columns: CREDENTIAL };
-const GRANTS: Table<KeychainGrant> = { name: "keychain_grants", columns: GRANT };
-const ASKS: Table<KeychainAsk> = { name: "keychain_asks", columns: ASK };
+const CREDENTIALS: Table<Stored<KeychainCredential>> = { name: "keychain_credentials", columns: CREDENTIAL };
+const GRANTS: Table<Stored<KeychainGrant>> = { name: "keychain_grants", columns: GRANT };
+const ASKS: Table<Stored<KeychainAsk>> = { name: "keychain_asks", columns: ASK };
 
 export function createPostgresKeychainRows(connectionString: string): KeychainRows & { close(): Promise<void> } {
   const { q, query, pool, close } = createPgPool(connectionString, [TENANCY_BASE, ...KEYCHAIN_MIGRATIONS]);
@@ -241,12 +240,12 @@ export function createPostgresKeychainRows(connectionString: string): KeychainRo
     `SELECT ${table.columns.names} FROM ${table.name} WHERE ${MINE}${where}`;
 
   async function rows<T>(table: Table<T>, where: string, params: unknown[] = []): Promise<T[]> {
-    return (await q(`${select(table, where)} ORDER BY id`, params)).map((row) => table.columns.fromRow(row) as T);
+    return (await q(`${select(table, where)} ORDER BY id`, params)).map((row) => table.columns.fromRow(row));
   }
 
   async function one<T>(table: Table<T>, id: string): Promise<T | null> {
     const [row] = await q(select(table, " AND id = $1"), [id]);
-    return row ? (table.columns.fromRow(row) as T) : null;
+    return row ? table.columns.fromRow(row) : null;
   }
 
   async function put<T>(table: Table<T>, value: T): Promise<void> {
@@ -260,7 +259,7 @@ export function createPostgresKeychainRows(connectionString: string): KeychainRo
   ): Promise<R> {
     return withPgTransaction(await pool(), async (client) => {
       const found = await client.query(`${select(table, " AND id = $1")} FOR UPDATE`, [id]);
-      return apply(found.rows[0] ? (table.columns.fromRow(found.rows[0] as Row) as T) : null, client);
+      return apply(found.rows[0] ? table.columns.fromRow(found.rows[0]) : null, client);
     });
   }
 
@@ -340,7 +339,7 @@ export function createPostgresKeychainRows(connectionString: string): KeychainRo
           `SELECT ${ASK.names} FROM keychain_asks WHERE ${where.sql} ORDER BY created_at DESC, id DESC`,
           where.params,
         );
-        return found.map((row) => ASK.fromRow(row) as KeychainAsk).filter((ask) => askMatches(ask, filter));
+        return found.map((row) => ASK.fromRow(row)).filter((ask) => askMatches(ask, filter));
       },
     },
   };
