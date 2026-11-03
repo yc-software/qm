@@ -302,7 +302,7 @@ test("outputs and ship grants keep their state machines on typed rows", { skip }
       assert.equal("revokedAt" in renewed, false);
       assert.equal(renewed.revocationHistory?.[0]?.revokedBy, "bob");
       assert.deepEqual(await grants.byLoop("L2"), [renewed]);
-      await outputs.deleteByLoop("L2");
+      await outputs.deleteByLoop("L1");
       await grants.deleteByLoop("L2");
       assert.deepEqual(await outputs.byItem("I1"), []);
       assert.equal(await grants.get("g1"), null);
@@ -341,7 +341,7 @@ test("ingress sources and deliveries queue per tenant and background claims span
         await store.sources.insert(source("s3", { enabled: false }));
         await store.sources.update("s2", (s) => ({ ...s, gmail: { ...gmail, email: "b@example.com" } }));
         assert.deepEqual(
-          (await owner.sources.gmailWatching("b@example.com")).map((s) => s.id),
+          (await withoutTenant(() => owner.sources.gmailWatching("b@example.com"))).map((s) => s.id),
           ["s2"],
         );
         await store.sources.update("s2", (s) => ({ ...s, gmail }));
@@ -381,7 +381,7 @@ test("ingress sources and deliveries queue per tenant and background claims span
         assert.deepEqual(await store.deliveries.pending("s1", 100, 20), []);
       });
       assert.deepEqual(
-        (await owner.sources.enabled()).map((s) => [s.tenantId, s.id]),
+        (await withoutTenant(() => owner.sources.enabled())).map((s) => [s.tenantId, s.id]),
         [
           [tenant, "s1"],
           [tenant, "s2"],
@@ -389,10 +389,12 @@ test("ingress sources and deliveries queue per tenant and background claims span
         ].sort((a, b) => a[0]!.localeCompare(b[0]!)),
       );
       assert.deepEqual(
-        new Set((await owner.sources.gmailWatching("a@example.com")).map((s) => `${s.tenantId}/${s.id}`)),
+        new Set(
+          (await withoutTenant(() => owner.sources.gmailWatching("a@example.com"))).map((s) => `${s.tenantId}/${s.id}`),
+        ),
         new Set([`${tenant}/s2`, `${otherTenant}/s9`]),
       );
-      assert.equal(await owner.deliveries.pruneCompleted(60), 2);
+      assert.equal(await withoutTenant(() => owner.deliveries.pruneCompleted(60)), 2);
       assert.deepEqual(
         (await withTenant(tenant, () => store.loopStore.inboxLoops())).map((l) => l.name),
         ["Inbox"],
@@ -401,7 +403,7 @@ test("ingress sources and deliveries queue per tenant and background claims span
         (await withTenant(otherTenant, () => store.loopStore.inboxLoops())).map((l) => l.name),
         ["Other inbox"],
       );
-      const stale = await owner.loopStore.staleGoverned(Date.now() + 10);
+      const stale = await withoutTenant(() => owner.loopStore.staleGoverned(Date.now() + 10));
       assert.deepEqual(
         stale.map((l) => [l.tenantId, l.name]),
         [[tenant, "Inbox"]],

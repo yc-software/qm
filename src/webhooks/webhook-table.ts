@@ -1,3 +1,4 @@
+import { claimAcrossTenants } from "../tenants/claim.ts";
 import type { Webhook } from "../triggers/types.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { WEBHOOK_SEARCH_DESCRIPTION, WEBHOOK_SEARCH_TITLE } from "../search/resource-search.ts";
@@ -13,9 +14,12 @@ export interface WebhookEvent {
 
 export const WEBHOOK_EVENTS_KEPT = 50;
 
+export type TenantWebhook = Webhook & { tenantId: string };
+
 export interface WebhookRows {
   insertIfAbsent(webhook: Webhook): Promise<Webhook>;
   get(id: string): Promise<Webhook | null>;
+  claim(id: string): Promise<TenantWebhook | null>;
   list(): Promise<Webhook[]>;
   ownedBy(scopeId: string): Promise<Webhook[]>;
   update(id: string, apply: (webhook: Webhook) => Webhook): Promise<Webhook | null>;
@@ -169,6 +173,14 @@ export function createPostgresWebhookRows(connectionString: string): WebhookRows
     },
     async get(id) {
       return (await many(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND id = $1`, [id]))[0] ?? null;
+    },
+    async claim(id) {
+      const { rows } = await claimAcrossTenants(
+        connectionString,
+        `SELECT tenant_id::text AS tenant_id, ${COLUMNS} FROM webhooks WHERE id = $1`,
+        [id],
+      );
+      return rows[0] ? { ...rowToWebhook(rows[0]), tenantId: rows[0].tenant_id as string } : null;
     },
     list: () => many(`${SELECT} WHERE tenant_id = qm_bound_tenant() ORDER BY id`),
     ownedBy: (scopeId) =>

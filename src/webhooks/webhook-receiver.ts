@@ -2,6 +2,7 @@ import type { Destination } from "../types.ts";
 import type { Webhook } from "../triggers/types.ts";
 import type { WebhookStore } from "./webhook-store.ts";
 import { getVerifier, type VerifierInput } from "./verifiers.ts";
+import { inTenantOf } from "../tenants/claim.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import { buildWebhookWakeEnvelope, capForEscaping } from "../wake/wake-envelope.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
@@ -80,71 +81,77 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
     ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
   };
 
-  return {
-    async deliver(id, req) {
-      const wh = await deps.webhooks.get(id);
-      if (!wh || !wh.enabled) return { status: 404 };
+  async function accept(
+    wh: Webhook,
+    req: { headers: VerifierInput["headers"]; rawBody: string },
+  ): Promise<DeliverResult> {
+    const verifier = getVerifier(wh.verification.scheme);
+    if (!verifier) return { status: 404 };
 
-      const verifier = getVerifier(wh.verification.scheme);
-      if (!verifier) return { status: 404 };
+    const input: VerifierInput = {
+      ...(wh.verification.secret ? { secret: wh.verification.secret } : {}),
+      headers: req.headers,
+      rawBody: req.rawBody,
+    };
+    if (!verifier.verify(input)) return { status: 401 };
 
-      const input: VerifierInput = {
-        ...(wh.verification.secret ? { secret: wh.verification.secret } : {}),
-        headers: req.headers,
-        rawBody: req.rawBody,
-      };
-      if (!verifier.verify(input)) return { status: 401 };
+    const parsed = parseBody(req.headers, req.rawBody);
 
-      const parsed = parseBody(req.headers, req.rawBody);
+    const hs = verifier.handshake?.(input, parsed);
+    if (hs != null) return { status: 200, body: hs };
 
-      const hs = verifier.handshake?.(input, parsed);
-      if (hs != null) return { status: 200, body: hs };
+    if (!passesFilters(wh.filters, parsed)) return { status: 200, body: "skipped" };
 
-      if (!passesFilters(wh.filters, parsed)) return { status: 200, body: "skipped" };
+    const deliveryId = verifier.deliveryId(input);
+    const fireKey = `webhook:${wh.id}:${deliveryId}`;
+    if (await deps.idempotency.committed(fireKey)) return { status: 200, body: "duplicate" };
 
-      const deliveryId = verifier.deliveryId(input);
-      const fireKey = `webhook:${wh.id}:${deliveryId}`;
-      if (await deps.idempotency.committed(fireKey)) return { status: 200, body: "duplicate" };
+    const event = renderEvent(wh, deliveryId, parsed, req.rawBody);
+    const destination: Destination | undefined = wh.destination;
+    await deps.webhooks.recordEvent(wh.id, {
+      deliveryId,
+      receivedAt: Date.now(),
+      payload: event.securityScreenData,
+    });
 
-      const event = renderEvent(wh, deliveryId, parsed, req.rawBody);
-      const destination: Destination | undefined = wh.destination;
-      await deps.webhooks.recordEvent(wh.id, {
-        deliveryId,
-        receivedAt: Date.now(),
-        payload: event.securityScreenData,
+    void runTrigger(triggerDeps, {
+      owner: wh.owner,
+      ownerScopeId: wh.ownerScopeId,
+      input: event.input,
+      securityScreenData: event.securityScreenData,
+      fireKey,
+      surface: "webhook",
+      ...(destination ? { destination } : {}),
+      errorNotice: (s) => `⚠️ Webhook did not complete: ${s}`,
+    })
+      .then(async (outcome) => {
+        if (outcome.authzFailed) {
+          await deps.webhooks.setEnabled(wh.id, false);
+          await deps.webhooks.recordFire(wh.id, { at: Date.now(), error: outcome.note ?? "fail-closed" });
+          return;
+        }
+        await deps.webhooks.recordFire(wh.id, {
+          at: Date.now(),
+          deliveryId,
+          ...(outcome.note ? { error: outcome.note } : {}),
+        });
+      })
+      .catch((e: unknown) => {
+        const msg = errMessage(e);
+        void deps.webhooks
+          .recordFire(wh.id, { at: Date.now(), error: msg })
+          .catch(reportFailureAs("webhook: persist fire failure", undefined, `webhook=${wh.id}`));
+        reportFailure("webhook: fire", e, `webhook=${wh.id}`);
       });
 
-      void runTrigger(triggerDeps, {
-        owner: wh.owner,
-        ownerScopeId: wh.ownerScopeId,
-        input: event.input,
-        securityScreenData: event.securityScreenData,
-        fireKey,
-        surface: "webhook",
-        ...(destination ? { destination } : {}),
-        errorNotice: (s) => `⚠️ Webhook did not complete: ${s}`,
-      })
-        .then(async (outcome) => {
-          if (outcome.authzFailed) {
-            await deps.webhooks.setEnabled(wh.id, false);
-            await deps.webhooks.recordFire(wh.id, { at: Date.now(), error: outcome.note ?? "fail-closed" });
-            return;
-          }
-          await deps.webhooks.recordFire(wh.id, {
-            at: Date.now(),
-            deliveryId,
-            ...(outcome.note ? { error: outcome.note } : {}),
-          });
-        })
-        .catch((e: unknown) => {
-          const msg = errMessage(e);
-          void deps.webhooks
-            .recordFire(wh.id, { at: Date.now(), error: msg })
-            .catch(reportFailureAs("webhook: persist fire failure", undefined, `webhook=${wh.id}`));
-          reportFailure("webhook: fire", e, `webhook=${wh.id}`);
-        });
+    return { status: 202 };
+  }
 
-      return { status: 202 };
+  return {
+    async deliver(id, req) {
+      const wh = await deps.webhooks.claim(id);
+      if (!wh?.enabled) return { status: 404 };
+      return inTenantOf(wh.tenantId, () => accept(wh, req));
     },
   };
 }

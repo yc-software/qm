@@ -12,6 +12,7 @@ import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
+import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 
 export async function swarmFixture(
   options: {
@@ -28,6 +29,7 @@ export async function swarmFixture(
   const runs = options.runs ?? createPostgresRunStore(url).runs;
   const lock = options.lock ?? testAdvisoryLock();
   const store = options.store ?? createSwarmStore(createPostgresSwarmRows(url));
+  await migrateRegisteredPgSchemas(url);
   const records = testMap<SandboxResource>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];

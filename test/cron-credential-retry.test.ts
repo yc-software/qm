@@ -11,6 +11,7 @@ import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testCronRows } from "./support/typed-stores.ts";
+import { testTenants } from "./support/test-tenants.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
@@ -124,7 +125,15 @@ test("a concurrent sweep cannot mark an in-flight busy resume notified before it
     asks,
     key: deriveConnectorKey("concurrent-cron-resume-test"),
   });
-  const sweep = createAskExpirySweep({ keychain, fire: (ask) => fireAskResolution(f.deps, ask) });
+  const [tenantId] = testTenants();
+  const sweep = createAskExpirySweep({
+    keychain: {
+      unnotifiedResolvedAsks: async (now) =>
+        (await keychain.unnotifiedResolvedAsks(now)).map((ask) => ({ ...ask, tenantId })),
+      markAskNotified: (id, status) => keychain.markAskNotified(id, status),
+    },
+    fire: (ask) => fireAskResolution(f.deps, ask),
+  });
   const initial = assert.rejects(fireAskResolution(f.deps, f.ask), /waiting for the original conversation/);
   await entered.promise;
 

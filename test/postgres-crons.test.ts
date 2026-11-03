@@ -115,10 +115,10 @@ test("due crons are claimed across tenants and each slot is claimed once", { ski
         crons.create(input({ action: "later", schedule: { everyMs: HOUR, firstFireAt: Date.now() + HOUR } })),
       );
       assert.deepEqual(
-        new Set((await claims.scheduled()).map((c) => `${c.tenantId}/${c.id}`)),
+        new Set((await withoutTenant(() => claims.scheduled())).map((c) => `${c.tenantId}/${c.id}`)),
         new Set([`${tenant}/${a.id}`, `${otherTenant}/${b.id}`, `${tenant}/${later.id}`]),
       );
-      const due = await claims.due(Date.now());
+      const due = await withoutTenant(() => claims.due(Date.now()));
       assert.deepEqual(
         due.map((c) => [c.id, c.tenantId]),
         [[a.id, tenant]],
@@ -132,15 +132,15 @@ test("due crons are claimed across tenants and each slot is claimed once", { ski
       assert.equal(await withTenant(tenant, () => crons.claimSlot(a.id, slot, now)), true);
       assert.equal(await withTenant(tenant, () => crons.claimSlot(a.id, slot, now)), false);
       assert.equal(await withTenant(otherTenant, () => crons.claimSlot(a.id, slot, now)), false);
-      assert.deepEqual(await claims.due(Date.now()), []);
+      assert.deepEqual(await withoutTenant(() => claims.due(Date.now())), []);
       await withTenant(tenant, () => crons.unclaimSlot(a.id, slot, now, undefined));
       assert.deepEqual(
-        (await claims.due(Date.now())).map((c) => c.id),
+        (await withoutTenant(() => claims.due(Date.now()))).map((c) => c.id),
         [a.id],
       );
       await assert.rejects(
-        withoutTenant(() => crons.due(Date.now())),
-        /No tenant is bound/,
+        withTenant(tenant, () => crons.due(Date.now())),
+        /cannot run while a tenant is bound/,
       );
       await ownerRows.close();
     },

@@ -41,7 +41,7 @@ const put = (value: SwarmStorage) => () => value;
 async function asOwner<T>(ownerUrl: string, fn: (rows: ReturnType<typeof createPostgresSwarmRows>) => Promise<T>) {
   const rows = createPostgresSwarmRows(ownerUrl);
   try {
-    return await fn(rows);
+    return await withoutTenant(() => fn(rows));
   } finally {
     await rows.close?.();
   }
@@ -75,13 +75,9 @@ test("writes round-trip every field and pending claims page across tenants", { s
       ["s3"],
     );
     assert.equal((await asOwner(ownerUrl, (owner) => owner.pending(undefined, 1))).length, 1);
-    assert.deepEqual(
-      (await withTenant(tenant, () => store.pending(undefined, 10))).map((row) => [row.id, row.tenantId]),
-      [["s1", tenant]],
-    );
     await assert.rejects(
-      withoutTenant(() => store.pending(undefined, 10)),
-      /No tenant is bound/,
+      withTenant(tenant, () => store.pending(undefined, 10)),
+      /cannot run while a tenant is bound/,
     );
     await withTenant(tenant, () => store.write("s1", (current) => ({ ...current!, pending: false })));
     assert.deepEqual(

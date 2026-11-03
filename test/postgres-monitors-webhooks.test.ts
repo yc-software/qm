@@ -54,16 +54,16 @@ test("monitors are watched per thread, claimed across tenants and swept only whe
           assert.equal(await monitors.get(b.id), null);
         });
         assert.deepEqual(
-          new Set((await claims.enabled()).map((m) => `${m.tenantId}/${m.id}`)),
+          new Set((await withoutTenant(() => claims.enabled())).map((m) => `${m.tenantId}/${m.id}`)),
           new Set([`${tenant}/${a.id}`, `${otherTenant}/${b.id}`]),
         );
         await assert.rejects(
-          withoutTenant(() => monitors.enabled()),
-          /No tenant is bound/,
+          withTenant(tenant, () => monitors.enabled()),
+          /cannot run while a tenant is bound/,
         );
         await withTenant(otherTenant, () => monitors.setEnabled(b.id, false));
-        assert.equal(await claims.deleteDefunct(Date.now()), 0);
-        assert.equal(await claims.deleteDefunct(Date.now() + 9 * DAY), 1);
+        assert.equal(await withoutTenant(() => claims.deleteDefunct(Date.now())), 0);
+        assert.equal(await withoutTenant(() => claims.deleteDefunct(Date.now() + 9 * DAY)), 1);
         assert.equal(await withTenant(otherTenant, () => monitors.get(b.id)), null);
         assert.equal((await withTenant(tenant, () => monitors.get(a.id)))?.enabled, true);
       } finally {
@@ -154,6 +154,13 @@ test("webhooks dedupe per tenant and keep the newest events per webhook", { skip
         const twin = await webhooks.create(hook());
         assert.notEqual(twin.id, mine.id);
       });
+      const claimed = await withoutTenant(() => webhooks.claim(mine.id));
+      assert.deepEqual([claimed?.id, claimed?.tenantId], [mine.id, tenant]);
+      assert.equal(await withoutTenant(() => webhooks.claim("missing")), null);
+      await assert.rejects(
+        withTenant(tenant, () => webhooks.claim(mine.id)),
+        /cannot run while a tenant is bound/,
+      );
       assert.equal((await withTenant(tenant, () => webhooks.get(mine.id)))?.action, "triage the event");
       await assert.rejects(
         withoutTenant(() => webhooks.list()),
