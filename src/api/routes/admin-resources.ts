@@ -1,3 +1,4 @@
+import { parseSpendLimit, type SpendLimit } from "../../ratelimit/spend-limits.ts";
 import type { TeamChange } from "../../teams/teams.ts";
 import { decisionsResource } from "./decisions-resource.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
@@ -667,6 +668,19 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { value: steps };
       },
       (deps, scope, steps) => deps.config!.setBrowseMaxSteps(scope, steps),
+    ),
+  },
+  {
+    id: "spend-limit",
+    kind: "custom",
+    target: "any",
+    label:
+      "Model spend caps in USD: { dailyUsd?, monthlyUsd? } per UTC day and month. On the org scope it is the default for each person's personal scope; on any other scope it caps that scope and overrides the default. {} means no cap there; { inherit: true } clears it.",
+    readKey: "spendLimit",
+    get: (deps, scope) => deps.config!.getSpendLimit(scope),
+    apply: generic<SpendLimit | null>(
+      (body) => parseSpendLimit(body),
+      (deps, scope, limit) => deps.config!.setSpendLimit(scope, limit),
     ),
   },
   {
