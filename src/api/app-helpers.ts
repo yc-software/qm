@@ -13,7 +13,6 @@ import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import { isTerminal, RUN_WAIT_FALLBACK_MS, type Run, type SessionWatch } from "../runs/run-store.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
-import { processRun } from "../runs/worker.ts";
 import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
 import type { Skill } from "../skills/skill-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -203,7 +202,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     };
   }
 
-  async function drive(runId: string): Promise<TurnResult> {
+  async function awaitRun(runId: string): Promise<TurnResult> {
     const timeoutMs = deps.runWaitMs ?? 60_000;
     const deadline = performance.now() + timeoutMs;
     let watch: SessionWatch | undefined;
@@ -219,22 +218,6 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         watch ??= deps.runs.watchSession(run.sessionId);
         const shutdown = deps.shutdown?.();
         if (shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId };
-        const claimed =
-          run.status === "running" ? null : await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
-        if (claimed) {
-          try {
-            const result = await processRun(
-              { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
-              claimed,
-              { shutdown },
-            );
-            if (claimed.id === runId && !shutdown?.aborted) return withAdminLink(result);
-          } catch (error) {
-            if (claimed.id === runId && !shutdown?.aborted) throw error;
-            swallow("inline run did not complete", error);
-          }
-          continue;
-        }
         const remaining = deadline - performance.now();
         if (remaining <= 0) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);
         await watch.changed(Math.min(RUN_WAIT_FALLBACK_MS, remaining), shutdown);
@@ -823,7 +806,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     approvalVisibleToViewer,
     pendingApprovalForSession,
     pendingApprovalResultForThread,
-    drive,
+    awaitRun,
     mayUseSharedScope,
     viewerMayUseRun,
     projectView,

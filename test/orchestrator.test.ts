@@ -10,6 +10,7 @@ import { buildApp as buildAppRaw } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
+import { failedTurnError } from "./support/failed-turn.ts";
 import { loadConfig, type Config } from "../src/config.ts";
 import type { SandboxHandle, ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
 import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
@@ -209,9 +210,10 @@ test("inbound file problems reach the model in the environment footer, not a log
 });
 
 test("a failed turn still records which inbound files did not arrive", async () => {
-  const { app, sessions, errors } = freshApp();
+  const built = freshApp({ maxAttempts: 1 });
+  const { sessions, errors } = built;
   const note = 'skipped "screenshot.png" — too many files in one message (max 10)';
-  await assert.rejects(app.turn(dm("!boom", { inboundNotes: [note] })), /boom/);
+  await failedTurnError(built, dm("!boom", { inboundNotes: [note] }));
   const { sessionId } = (await errors.list()).find((e) => e.category === "turn")!;
   const user = (await sessions.getItems(sessionId!)).find((item) => item.kind === "UserMessage");
   assert.match(String(user?.body.environment), /screenshot\.png/);
@@ -361,47 +363,9 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   assert.doesNotMatch(footer, /deploy digest ready/);
 });
 
-test(
-  "an inline turn retries its failed predecessor before executing without a background worker",
-  { timeout: 10_000 },
-  async (t) => {
-    t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-    const built = freshApp();
-    const { app, keychain } = built;
-    assert.ok(keychain);
-
-    const realGrantsForScope = keychain.grantsForScope.bind(keychain);
-    const attempted: string[] = [];
-    const claimForSession = built.runs.claimForSession.bind(built.runs);
-    built.runs.claimForSession = async (...args) => {
-      const run = await claimForSession(...args);
-      if (run) attempted.push(run.request.text);
-      return run;
-    };
-    let injectFailure = true;
-    keychain.grantsForScope = async (...args: Parameters<typeof realGrantsForScope>) => {
-      if (injectFailure) {
-        injectFailure = false;
-        throw new Error("injected setup failure");
-      }
-      return realGrantsForScope(...args);
-    };
-
-    await assert.rejects(app.turn(dm("hi")), /injected setup failure/);
-    t.mock.timers.tick(18_000);
-
-    const res = await app.turn(dm("hi again"));
-    assert.equal(res.status, "ok", res.reason);
-    assert.doesNotMatch(res.reason ?? "", /session busy/);
-    assert.deepEqual(attempted, ["hi", "hi", "hi again"]);
-  },
-);
-
 test("a retried run RESUMES the interrupted turn from the durable ledger instead of restarting it", async () => {
   const { app } = freshApp();
   const req = dm("!work-then-boom", { idempotencyKey: "resume-1" });
-
-  await assert.rejects(app.turn(req), /boom/);
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
@@ -419,8 +383,6 @@ test("a retried run RESUMES the interrupted turn from the durable ledger instead
 test("a retry of an attempt that recorded NO work continues from the recorded request without re-sending it", async () => {
   const { app } = freshApp();
   const req = dm("!boom", { idempotencyKey: "rerun-1" });
-
-  await assert.rejects(app.turn(req), /boom/);
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
@@ -586,10 +548,12 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
 });
 
 test("Composio backend access is announced without delivering the project key", async () => {
-  const { app, serviceCreds, acl, sandbox } = freshApp({
+  const built = freshApp({
     apiBaseUrl: "https://core.example.com",
     signingSecret: "test-secret",
+    maxAttempts: 1,
   });
+  const { app, serviceCreds, acl, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const provision = sandbox.provision.bind(sandbox);
   sandbox.provision = (owner, opts) => {
@@ -619,8 +583,9 @@ test("Composio backend access is announced without delivering the project key", 
   assert.match(granted, /## Connected app access/);
   assert.match(granted, /Composio is configured in the backend/);
   assert.doesNotMatch(granted, /`composio`/);
-  await assert.rejects(
-    app.turn(
+  assert.match(
+    await failedTurnError(
+      built,
       dm(`!execute ${JSON.stringify({ command: "true", credentials: ["composio"] })}`, {
         conversation: { kind: "dm", threadRef: "dm:U1:composio-explicit" },
       }),
@@ -774,8 +739,10 @@ test("a credential flipped away from env between the metadata read and the secre
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
+    maxAttempts: 1,
   });
-  const { app, sandbox, serviceCreds, acl } = buildApp(config);
+  const built = buildApp(config);
+  const { sandbox, serviceCreds, acl } = built;
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
@@ -798,8 +765,9 @@ test("a credential flipped away from env between the metadata read and the secre
     return realProvision(owner, opts);
   };
 
-  await assert.rejects(
-    app.turn(
+  assert.match(
+    await failedTurnError(
+      built,
       dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel"] })}`, {
         conversation: { kind: "dm", threadRef: "dm:U1:env4" },
       }),
@@ -1719,6 +1687,7 @@ test("turn-private transfer files are removed after staging", async () => {
   assert.ok(usedHandle);
   await settle(async () => cleanupAttempts === 3);
   assert.equal(cleanupAttempts, 3);
+  await settle(async () => (await sandbox.listDir(usedHandle!, TURN_FILES_DIR)).length === 0);
   assert.deepEqual(await sandbox.listDir(usedHandle, TURN_FILES_DIR), []);
 });
 
@@ -1919,9 +1888,10 @@ test("a file shared with the session is counted, not named, in the system prompt
   assert.equal(boxes.provisioned, 0, "listing shared files must not provision a box");
 });
 
-test("an unexpected turn fault is recorded to the error log (then rethrown → 500)", async () => {
-  const { app, errors } = freshApp();
-  await assert.rejects(app.turn(dm("!boom")), /boom: simulated turn fault/);
+test("an unexpected turn fault is recorded to the error log and fails the turn", async () => {
+  const built = freshApp({ maxAttempts: 1 });
+  const { errors } = built;
+  await failedTurnError(built, dm("!boom"));
   const turnError = (await errors.list()).find((e) => e.category === "turn" && e.code === "error");
   assert.ok(turnError, "the turn fault should be recorded in the error log");
   assert.match(turnError!.message, /boom/);
@@ -3557,6 +3527,7 @@ test("a HiLO approval falls back to the static reason when the summarizer throws
 
 test("a HiLO approval summarizer that hangs past the deadline falls back without delaying the approval", async () => {
   const { app } = freshApp({ approvalSummaryTimeoutMs: 50 });
+  assert.equal((await app.turn(dm("hello"))).status, "ok");
   const started = Date.now();
   const first = await app.turn(dm("!run rm -rf build !summary-hang"));
   assert.equal(first.status, "pending_approval");
@@ -3783,7 +3754,7 @@ test("a preamble failure after the machine boots still reclaims it", async () =>
     }
     return realRemove(handle, dir);
   };
-  await built.app.turn(dm("!run echo hi")).catch(() => null);
+  await built.app.turn(dm("!run echo hi"));
   await settle(async () => boxes.live === 0);
   assert.equal(boxes.live, 0, "a machine whose preamble threw must not stay booted");
 });
@@ -3818,11 +3789,12 @@ const turnFailure = (e: Item): string | null =>
   e.kind === "Error" && e.errorCode === "turn_failure" ? (e.text ?? "") : null;
 
 test("a terminal turn failure is recorded durably and never replays to the model", async () => {
-  const { app, errors } = freshApp();
+  const built = freshApp();
+  const { app, errors } = built;
   const t1 = await app.turn(dm("please summarize the attendee chats"));
   assert.equal(t1.status, "ok");
 
-  await assert.rejects(app.turn(dm("!refuse")), /reduce refusals/);
+  assert.match(await failedTurnError(built, dm("!refuse")), /reduce refusals/);
 
   const recorded = (await errors.list()).find((e) => e.category === "turn" && e.code === "error");
   assert.ok(recorded, "the failure is recorded in the error log");
@@ -3843,12 +3815,13 @@ test("a terminal turn failure is recorded durably and never replays to the model
 });
 
 test("a failure before the agent records the user message back-fills it — no orphan error in the transcript", async () => {
-  const { app } = freshApp();
+  const built = freshApp();
+  const { app } = built;
   const t1 = await app.turn(dm("hello"));
   assert.equal(t1.status, "ok");
 
-  await assert.rejects(
-    app.turn(dm("use the fancy model", { model: "not-a-real-model", origin: { kind: "human" } })),
+  assert.match(
+    await failedTurnError(built, dm("use the fancy model", { model: "not-a-real-model", origin: { kind: "human" } })),
     /not approved/,
   );
 
@@ -3870,12 +3843,13 @@ test("a failure before the agent records the user message back-fills it — no o
 });
 
 test("repeated terminal failures keep failing loudly — history is never rewritten", async () => {
-  const { app } = freshApp();
+  const built = freshApp();
+  const { app } = built;
   const t1 = await app.turn(dm("please summarize the attendee chats"));
   assert.equal(t1.status, "ok");
 
-  await assert.rejects(app.turn(dm("!refuse")), /reduce refusals/);
-  await assert.rejects(app.turn(dm("!refuse")), /reduce refusals/);
+  assert.match(await failedTurnError(built, dm("!refuse")), /reduce refusals/);
+  assert.match(await failedTurnError(built, dm("!refuse")), /reduce refusals/);
 
   const found = await app.getSession(t1.sessionId!);
   assert.equal(found!.items.filter((e) => turnFailure(e)).length, 2, "each failure leaves its own durable trace");
@@ -3912,24 +3886,33 @@ test("an exhausted model budget refuses the turn with a plain explanation instea
   assert.match(logged!.message, /ExceededBudget: Team=team-a over 1d budget/, "operators keep the gateway's detail");
 });
 
-test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async () => {
+test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure record — no dead air", async (t) => {
   const { app, runs, errors } = freshApp();
   const t1 = await app.turn(dm("hello"));
   assert.equal(t1.status, "ok");
 
-  const req = dm("!boom-always", { idempotencyKey: "exhaust-1" });
-  await assert.rejects(app.turn(req), /boom/);
-  await assert.rejects(app.turn(req), /boom/);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const requeuedAfter = async (errorAttempts: number) => {
+    await settle(async () => {
+      const run = await runs.activeForThread("dm:U1:t1");
+      return run?.status === "pending" && run.errorAttempts === errorAttempts;
+    });
+    return runs.activeForThread("dm:U1:t1");
+  };
+  const finished = app.turn(dm("!boom-always", { idempotencyKey: "exhaust-1" }));
+  await requeuedAfter(1);
+  t.mock.timers.tick(61_000);
+  const midway = await requeuedAfter(2);
   let found = await app.getSession(t1.sessionId!);
   assert.equal(
     found!.items.filter((e) => turnFailure(e)).length,
     0,
     "attempts with retry budget left write no failure record",
   );
-  const midway = await runs.activeForThread("dm:U1:t1");
   assert.equal(midway?.status, "pending", "the run really is mid-cycle — requeued, not parked");
 
-  await assert.rejects(app.turn(req), /boom/);
+  t.mock.timers.tick(61_000);
+  assert.equal((await finished).status, "failed");
   assert.equal(await runs.activeForThread("dm:U1:t1"), null, "the run parked: no attempt is left to record it");
   assert.equal((await runs.get(midway!.id))?.status, "failed");
   found = await app.getSession(t1.sessionId!);

@@ -45,5 +45,32 @@ export function buildApp(
       { agent: recordingModelCalls(createMockAgent(), modelCalls), ...overrides },
     ),
   );
+  const { runtime } = app;
+  const { start, startBackground } = runtime;
+  let testStartedWorkers = false;
+  let waiting = 0;
+  runtime.setBackgroundAdmission(
+    () => !config.backgroundDeploymentId && (testStartedWorkers || waiting > 0),
+    () => false,
+  );
+  runtime.start = () => {
+    testStartedWorkers = true;
+    start();
+  };
+  runtime.startBackground = () => {
+    testStartedWorkers = true;
+    startBackground();
+  };
+  const turn = app.app.turn.bind(app.app);
+  app.app.turn = async (req, replay) => {
+    if (req.async) return turn(req, replay);
+    waiting++;
+    start();
+    try {
+      return await turn(req, replay);
+    } finally {
+      waiting--;
+    }
+  };
   return Object.assign(app, { modelCalls });
 }

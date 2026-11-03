@@ -547,7 +547,7 @@ export function buildApp(
   const admittedWork = createAdmittedWork({
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
   });
-  let inlineShutdown = new AbortController();
+  let turnWaitShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   const databaseUrl = config.databaseUrl;
@@ -2239,7 +2239,7 @@ export function buildApp(
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
-    shutdown: () => inlineShutdown.signal,
+    shutdown: () => turnWaitShutdown.signal,
     resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool),
     swarms,
     identity,
@@ -2248,7 +2248,6 @@ export function buildApp(
     orchestrator,
     surfaces,
     runs,
-    leaseTtlMs,
     maxAttempts,
     turnStream,
     runStreamEvents,
@@ -2880,10 +2879,10 @@ export function buildApp(
   }
   let releasing: Promise<void> | null = null;
   function releaseInFlightRuns(): Promise<void> {
-    inlineShutdown.abort();
+    turnWaitShutdown.abort();
     releasing ??= Promise.all([
-      withTimeout(() => admittedWork.drained(), SHUTDOWN_RELEASE_MS, "inline turn handback").catch(
-        swallowAs("wiring: inline turn handback failed", undefined),
+      withTimeout(() => admittedWork.drained(), SHUTDOWN_RELEASE_MS, "synchronous turn wait release").catch(
+        swallowAs("wiring: synchronous turn wait release failed", undefined),
       ),
       worker.releaseInFlight(),
     ]).then(() => {});
@@ -2891,7 +2890,7 @@ export function buildApp(
   }
   const runtime: Runtime = {
     start() {
-      if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      if (turnWaitShutdown.signal.aborted) turnWaitShutdown = new AbortController();
       releasing = null;
       flyTunnel?.monitor();
       drain.start();

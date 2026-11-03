@@ -253,7 +253,7 @@ END $base_schema$`,
   async function claim(
     workerId: string,
     ttlMs: number,
-    target: { limit?: number; runId?: string; sessionId?: string } = {},
+    target: { limit?: number; runId?: string } = {},
   ): Promise<Run[]> {
     const now = Date.now();
     try {
@@ -261,13 +261,12 @@ END $base_schema$`,
         `WITH picked AS (
            SELECT candidate.id FROM runs candidate WHERE ${claimable("$3")}
              AND ($4::text IS NULL OR candidate.id=$4)
-             AND ($5::text IS NULL OR candidate.session_id=$5)
-           ORDER BY candidate.claim_priority ASC, candidate.created_at ASC, candidate.seq ASC FOR UPDATE SKIP LOCKED LIMIT $6
+           ORDER BY candidate.claim_priority ASC, candidate.created_at ASC, candidate.seq ASC FOR UPDATE SKIP LOCKED LIMIT $5
          )
          UPDATE runs SET status='running', lease_token=gen_random_uuid()::text, lease_expires_at=$1, worker_id=$2,
            attempts=attempts+1, started_at=COALESCE(started_at,$3)
          FROM picked WHERE runs.id = picked.id RETURNING runs.*`,
-        [now + ttlMs, workerId, now, target.runId ?? null, target.sessionId ?? null, target.limit ?? 1],
+        [now + ttlMs, workerId, now, target.runId ?? null, target.limit ?? 1],
       );
       return rows.map(rowToRun);
     } catch (err) {
@@ -328,7 +327,6 @@ END $base_schema$`,
 
     claim: (workerId, ttlMs, limit) => claim(workerId, ttlMs, { limit }),
     claimById: async (runId, workerId, ttlMs) => (await claim(workerId, ttlMs, { runId }))[0] ?? null,
-    claimForSession: async (sessionId, workerId, ttlMs) => (await claim(workerId, ttlMs, { sessionId }))[0] ?? null,
     async personWaiting(createdBefore) {
       const { rows } = await q(
         `SELECT EXISTS (

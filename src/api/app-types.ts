@@ -648,7 +648,6 @@ export interface AppDeps {
   sessions: SessionStore;
   orchestrator: Orchestrator;
   runs: RunStore;
-  leaseTtlMs: number;
   maxAttempts: number;
   runWaitMs?: number;
   turnStream?: TurnStream;
