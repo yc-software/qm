@@ -493,8 +493,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         actor.id,
         scopeLabel,
         sessionId
-          ? async (rec, signal) => {
-              await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel }, signal);
+          ? async (rec) => {
+              await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel });
             }
           : undefined,
         { ...steerContext, mode: "enforce" },
@@ -810,13 +810,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
       const screenSession: { id?: string } = {};
       const pendingScreenRequests: TurnLlmRequestRecord[] = [];
-      const recordScreenRequest = async (rec: TurnLlmRequestRecord, signal?: AbortSignal): Promise<void> => {
+      const recordScreenRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
         if (!screenSession.id) {
           pendingScreenRequests.push(rec);
           return;
         }
         try {
-          await deps.sessions.recordLlmRequest(screenSession.id, { ...rec, scopeLabel: scopeId }, signal);
+          await deps.sessions.recordLlmRequest(screenSession.id, { ...rec, scopeLabel: scopeId });
         } catch (err) {
           reportFailure("orchestrator: persist security screen request snapshot", err);
         }
@@ -1291,9 +1291,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       screenSession.id = session.id;
       const origin = await originOf(session);
       Object.assign(currentModelRequestContext(), { sessionId: session.id, origin });
-      const recordSessionLlmRequest = async (rec: TurnLlmRequestRecord, signal?: AbortSignal): Promise<void> => {
+      const recordSessionLlmRequest = async (rec: TurnLlmRequestRecord): Promise<void> => {
         try {
-          await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId }, signal);
+          await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId });
         } catch (err) {
           reportFailure("orchestrator: persist LLM request snapshot", err);
         }
