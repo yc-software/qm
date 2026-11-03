@@ -247,10 +247,18 @@ struct NativeProcessOutput: View {
   let command: String
   @State private var output = ""
   @State private var cursor = 0
-  @State private var status = ""
+  @State private var state = ""
+  @State private var exitCode: Int?
   @State private var error: String?
   @State private var busy = false
   @Environment(\.scenePhase) private var phase
+  private var status: String {
+    switch state {
+    case "exited": "Exited\(exitCode.map { " (\($0))" } ?? "")"
+    case "": ""
+    default: "Running"
+    }
+  }
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 12) {
@@ -267,7 +275,7 @@ struct NativeProcessOutput: View {
       guard phase == .active else { return }
       while !Task.isCancelled {
         await load()
-        if status.hasPrefix("Exited") { return }
+        if state == "exited" { return }
         do { try await Task.sleep(for: .seconds(3)) } catch { return }
       }
     }
@@ -283,8 +291,8 @@ struct NativeProcessOutput: View {
       try Task.checkCancellation()
       output = String((output + result.chunk).suffix(200_000))
       cursor = result.cursor
-      status =
-        result.state == "exited" ? "Exited\(result.exitCode.map { " (\($0))" } ?? "")" : "Running"
+      state = result.state
+      exitCode = result.exitCode
       error = nil
     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
   }

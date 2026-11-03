@@ -37,37 +37,45 @@ struct Conversation: Codable, Identifiable, Hashable {
   var archived: Bool?
   var localOnly: Bool?
   var parentSessionId: String?
-  var type: String?
   var status: Status?
   var color: String?
   var forkedFrom: ForkOrigin?
   var forkBoundarySeq: Int?
 
-  var isShared: Bool {
-    type == "group" || type == "channel" || scopeId.hasPrefix("group:")
-      || scopeId.hasPrefix("channel:")
-  }
+  var isShared: Bool { scopeId.hasPrefix("group:") || scopeId.hasPrefix("channel:") }
 
   var contextLabel: String? {
     if let channelName, !channelName.isEmpty { return channelName }
     if scopeId.hasPrefix("personal:") { return nil }
     if scopeId.hasPrefix("project:") { return "Project conversation" }
-    if type == "group" || scopeId.hasPrefix("group:") { return "Group conversation" }
-    if type == "channel" || scopeId.hasPrefix("channel:") { return "Slack channel" }
+    if scopeId.hasPrefix("group:") { return "Group conversation" }
+    if scopeId.hasPrefix("channel:") { return "Slack channel" }
     return "Shared conversation"
+  }
+
+  private var slackArchivePath: String? {
+    let parts = threadRef.split(separator: ":", omittingEmptySubsequences: false)
+    guard parts.count == 2 || parts.count == 3, parts[0] == "dm" || parts[0] == "ch",
+      !parts[1].isEmpty,
+      parts[1].unicodeScalars.allSatisfy({
+        $0.isASCII && $0.properties.isAlphabetic || ("0"..."9").contains($0)
+      })
+    else { return nil }
+    guard parts.count == 3 else { return "/archives/\(parts[1])" }
+    let stamp = parts[2].split(separator: ".", omittingEmptySubsequences: false)
+    guard stamp.count == 2,
+      stamp.allSatisfy({ !$0.isEmpty && $0.unicodeScalars.allSatisfy { ("0"..."9").contains($0) } })
+    else { return nil }
+    return "/archives/\(parts[1])/p\(stamp[0])\(stamp[1])"
   }
 
   func slackURL(workspaceURL: String?) -> URL? {
     guard let workspaceURL, var components = URLComponents(string: workspaceURL),
       components.scheme == "https", let host = components.host,
       host.hasSuffix(".slack.com"), components.user == nil, components.password == nil,
-      components.port == nil,
-      let match = threadRef.wholeMatch(of: /(?:dm|ch):([A-Za-z0-9]+)(?::([0-9]+)\.([0-9]+))?/)
+      components.port == nil, let path = slackArchivePath
     else { return nil }
-    components.path = "/archives/\(match.1)"
-    if let seconds = match.2, let fraction = match.3 {
-      components.path += "/p\(seconds)\(fraction)"
-    }
+    components.path = path
     components.query = nil
     components.fragment = nil
     return components.url

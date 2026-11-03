@@ -31,37 +31,122 @@ struct NativeSentEmail: Decodable, Identifiable {
   }
   var chatTrimmed: Bool { chatSource.utf16.count > Self.chatLimit }
   var chatText: String {
-    let text = chatSource
-    guard text.utf16.count > Self.chatLimit else { return text }
-    return String(text[..<String.Index(utf16Offset: Self.chatLimit, in: text)])
+    var units = 0
+    return String(
+      chatSource.prefix {
+        units += $0.utf16.count
+        return units <= Self.chatLimit
+      })
   }
   static func plain(_ html: String) -> String {
-    var text = html.replacingOccurrences(
-      of: "(?is)<(script|style)\\b[^>]*>.*?</\\1\\s*>", with: "", options: .regularExpression
-    )
-    .replacingOccurrences(
-      of: "(?i)<br\\s*/?>|</(?:p|div|tr|li|h[1-6])>", with: "\n", options: .regularExpression
-    )
-    .replacingOccurrences(of: "<[^>]*>", with: "", options: .regularExpression)
-    let numeric = try! NSRegularExpression(pattern: "&#(x[0-9a-fA-F]+|[0-9]+);")
-    for match in numeric.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed()
-    {
-      guard let range = Range(match.range(at: 1), in: text),
-        let whole = Range(match.range, in: text)
-      else { continue }
-      let value = String(text[range])
-      let number = value.hasPrefix("x") ? UInt32(value.dropFirst(), radix: 16) : UInt32(value)
-      if let number, let scalar = UnicodeScalar(number) {
-        text.replaceSubrange(whole, with: String(scalar))
+    NativeHTMLText(html).text.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+}
+
+struct NativeHTMLText {
+  private static let hidden: Set<String> = ["script", "style", "head", "title", "template"]
+  private static let breaks: Set<String> = [
+    "br", "/p", "/div", "/tr", "/li", "/h1", "/h2", "/h3", "/h4", "/h5", "/h6",
+  ]
+  private static let named: [String: String] = [
+    "nbsp": " ", "quot": "\"", "apos": "'", "lt": "<", "gt": ">", "amp": "&",
+  ]
+  private(set) var text = ""
+  private let source: [Character]
+  private var index = 0
+
+  init(_ html: String) {
+    source = Array(html)
+    while index < source.count {
+      switch source[index] {
+      case "<": tag()
+      case "&": entity()
+      default:
+        text.append(source[index])
+        index += 1
       }
     }
-    for (entity, value) in [
-      ("&nbsp;", " "), ("&quot;", "\""), ("&apos;", "'"), ("&lt;", "<"), ("&gt;", ">"),
-      ("&amp;", "&"),
-    ] {
-      text = text.replacingOccurrences(of: entity, with: value)
+  }
+
+  private func starts(_ prefix: String, at position: Int) -> Bool {
+    let candidate = Array(prefix)
+    guard position + candidate.count <= source.count else { return false }
+    return zip(source[position...], candidate).allSatisfy {
+      $0.0.lowercased() == $0.1.lowercased()
     }
-    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func find(_ needle: String, from position: Int) -> Int? {
+    var cursor = position
+    while cursor < source.count {
+      if starts(needle, at: cursor) { return cursor }
+      cursor += 1
+    }
+    return nil
+  }
+
+  private mutating func tag() {
+    if starts("<!--", at: index) {
+      index = find("-->", from: index + 4).map { $0 + 3 } ?? source.count
+      return
+    }
+    var cursor = index + 1
+    let closing = cursor < source.count && source[cursor] == "/"
+    if closing { cursor += 1 }
+    let nameStart = cursor
+    while cursor < source.count, source[cursor].isLetter || source[cursor].isNumber { cursor += 1 }
+    guard cursor > nameStart || (!closing && cursor < source.count && source[cursor] == "!")
+    else {
+      text.append("<")
+      index += 1
+      return
+    }
+    let name = String(source[nameStart..<cursor]).lowercased()
+    var quote: Character?
+    while cursor < source.count {
+      let character = source[cursor]
+      if let open = quote {
+        if character == open { quote = nil }
+      } else if character == "\"" || character == "'" {
+        quote = character
+      } else if character == ">" {
+        break
+      }
+      cursor += 1
+    }
+    index = min(cursor + 1, source.count)
+    if !closing, Self.hidden.contains(name) {
+      index =
+        find("</\(name)", from: index).map { end in
+          (source[end...].firstIndex(of: ">") ?? source.count - 1) + 1
+        } ?? source.count
+      return
+    }
+    if Self.breaks.contains(closing ? "/" + name : name) { text.append("\n") }
+  }
+
+  private mutating func entity() {
+    guard let end = source[index...].prefix(32).firstIndex(of: ";") else {
+      text.append("&")
+      index += 1
+      return
+    }
+    let body = String(source[(index + 1)..<end])
+    var decoded: String?
+    if body.hasPrefix("#x") || body.hasPrefix("#X") {
+      decoded = UInt32(body.dropFirst(2), radix: 16).flatMap(Unicode.Scalar.init).map(String.init)
+    } else if body.hasPrefix("#") {
+      decoded = UInt32(body.dropFirst()).flatMap(Unicode.Scalar.init).map(String.init)
+    } else {
+      decoded = Self.named[body]
+    }
+    guard let decoded else {
+      text.append("&")
+      index += 1
+      return
+    }
+    text += decoded
+    index = end + 1
   }
 }
 struct NativeSentMailPage: Decodable {
