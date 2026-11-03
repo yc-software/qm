@@ -74,6 +74,7 @@ export function testTenantSettings(values: TenantSettingValues = {}, databaseUrl
   };
 }
 import { tenantReady } from "../../src/tenants/context.ts";
+import { swallowAs } from "../../src/util/errors.ts";
 
 const built: BuiltApp[] = [];
 after(() => Promise.all(built.splice(0).map((app) => app.runtime.stop())));
@@ -117,6 +118,7 @@ export function buildApp(
       tenantSettings: overrides.tenantSettings ?? testTenantSettings(),
     }),
   );
+  void app.startup().catch(swallowAs("test: startup", undefined));
   return Object.assign(app, { modelCalls });
 }
 

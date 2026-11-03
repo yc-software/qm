@@ -240,6 +240,7 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
         }),
       );
       await inTestTenant(() => built.tenantSettings.get());
+      await built.startup();
       await built.refreshModels();
       const runtime = await runtimeConfigBody(
         {

@@ -1,5 +1,6 @@
 import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { claimAcrossTenants, rowTenant, type Claimed } from "../tenants/claim.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 export type ProcessKind = "build" | "dev-server" | "background";
@@ -49,7 +50,7 @@ export interface ProcessRegistry {
   markStatus(processId: string, status: ProcessStatus): Promise<boolean>;
   credentialFiles(processId: string): Promise<ProcessCredentialFiles | null>;
   setCredentialFiles(processId: string, files: ProcessCredentialFiles | null): Promise<void>;
-  listExpired(now?: number): Promise<ProcessRecord[]>;
+  listExpired(now?: number): Promise<Array<Claimed<ProcessRecord>>>;
   delete(processId: string): Promise<void>;
   close?(): void;
 }
@@ -180,8 +181,11 @@ export function createPostgresProcessRegistry(connectionString: string): Process
       return updated.length > 0;
     },
     async listExpired(now = Date.now()) {
-      const rows = await q("SELECT * FROM process_sessions WHERE status = 'running' AND expires_at <= $1", [now]);
-      return rows.map(pgRowToRecord);
+      const { rows } = await claimAcrossTenants(
+        "SELECT * FROM process_sessions WHERE status = 'running' AND expires_at <= $1",
+        [now],
+      );
+      return rows.map((r) => ({ ...pgRowToRecord(r), ...rowTenant(r) }));
     },
     async delete(processId) {
       await q("DELETE FROM process_sessions WHERE process_id = $1", [processId]);

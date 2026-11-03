@@ -361,12 +361,12 @@ test("only the leader instance's interval sweep reaps (one replica kills, not al
     assert.equal(killed.length, 0);
 
     leader = true;
-    await sleep(40);
-    assert.equal(
-      (await inTestTenant(() => reg.get(ID)))!.status,
-      "reaped",
-      "the leader's interval reaps the expired process",
-    );
+    let status = (await inTestTenant(() => reg.get(ID)))!.status;
+    for (let i = 0; i < 200 && status !== "reaped"; i++) {
+      await sleep(10);
+      status = (await inTestTenant(() => reg.get(ID)))!.status;
+    }
+    assert.equal(status, "reaped", "the leader's interval reaps the expired process");
     assert.ok(killed.length >= 1);
   } finally {
     reaper.stop();

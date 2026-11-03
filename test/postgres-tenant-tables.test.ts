@@ -12,14 +12,16 @@ import { createAppLogin, type AppLogin } from "./support/app-login.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenant table tests";
 const [a, b] = process.env.DATABASE_URL ? testTenants() : ["", ""];
-const UNTENANTED = [
-  "durable_map_versions",
-  "qm_schema_migrations",
-  "qm_settings",
-  "qm_tenant",
-  "source_auth_replay",
-  "tenants",
-];
+const UNTENANTED_REASONS: Record<string, string> = {
+  durable_map_versions: "version counters of the durable map store itself",
+  instance_heartbeats: "liveness and build of each server process, shared by every tenant",
+  qm_schema_migrations: "the migration ledger of the database",
+  qm_settings: "install-wide settings",
+  qm_tenant: "the legacy single-install tenant id, copied into tenants by the upgrade",
+  source_auth_replay: "replay guard for signed source requests, checked before any tenant is known",
+  tenants: "the tenant registry",
+};
+const UNTENANTED = Object.keys(UNTENANTED_REASONS);
 const BOUND_BY_ITEMS_TENANT = ["blobs", "items"];
 const TABLES = ["sessions", "runs", "deliveries", "acl_grants", "audit_log", "memory_facts"];
 
@@ -101,6 +103,31 @@ test("every typed table carries a tenant with row security enabled but not force
     ),
     [],
   );
+});
+
+test("an unbound read of any tenant table raises instead of returning nothing", { skip }, async () => {
+  const { rows } = await owner.query(
+    `SELECT c.relname AS table,
+            (SELECT a.attname FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                AND a.attname <> 'tenant_id' ORDER BY a.attnum LIMIT 1) AS column
+       FROM pg_class c
+      WHERE c.relnamespace = current_schema()::regnamespace AND c.relkind = 'r' AND c.relrowsecurity
+      ORDER BY c.relname`,
+  );
+  assert.ok(rows.length > 40);
+  for (const { table, column } of rows) {
+    for (const sql of [
+      `SELECT * FROM ${table} LIMIT 1`,
+      `SELECT count(*) FROM ${table}`,
+      `SELECT * FROM ${table} WHERE ${column}::text = 'absent'`,
+    ]) {
+      await assert.rejects(
+        inTenant(app, null, (c) => c.query(sql)),
+        /No tenant is bound to this query/,
+        sql,
+      );
+    }
+  }
 });
 
 test("the app login cannot read, change or delete another tenant's rows", { skip }, async () => {

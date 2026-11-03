@@ -121,13 +121,15 @@ test("broker admission preserves configured email members without external invit
   await inTestTenant(() => s.built.identity.ready());
   for (const email of ["Ops@Allowed.example", "person@corp.example"]) {
     assert.equal(s.built.identity.externalMember(email), undefined);
-    assert.deepEqual(await coreEmailAdmission(s.base, SECRET, email), { allowed: true });
+    assert.deepEqual(await inTestTenant(() => coreEmailAdmission(s.base, SECRET, email)), { allowed: true });
   }
   for (const email of ["stranger@allowed.example", "person@othercorp.example", "person@corp.example.attacker.test"]) {
-    assert.deepEqual(await coreEmailAdmission(s.base, SECRET, email), { allowed: false });
+    assert.deepEqual(await inTestTenant(() => coreEmailAdmission(s.base, SECRET, email)), { allowed: false });
   }
   await inTestTenant(() => s.built.identity.deactivate("ops@allowed.example"));
-  assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "ops@allowed.example"), { allowed: false });
+  assert.deepEqual(await inTestTenant(() => coreEmailAdmission(s.base, SECRET, "ops@allowed.example")), {
+    allowed: false,
+  });
   await inTestTenant(() =>
     s.built.identity.putExternalMember({
       email: "person@corp.example",
@@ -138,7 +140,9 @@ test("broker admission preserves configured email members without external invit
       updatedAt: Date.now(),
     }),
   );
-  assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "person@corp.example"), { allowed: false });
+  assert.deepEqual(await inTestTenant(() => coreEmailAdmission(s.base, SECRET, "person@corp.example")), {
+    allowed: false,
+  });
 });
 
 test("inviting an external user stores the record, lists it as active, audits, and reports the missing mailer", async () => {
@@ -570,18 +574,24 @@ test("expiry classifies an external as guest, and the signed broker check answer
     assert.equal(s.built.identity.classify("live@partner.example").type, "internal");
     assert.equal(s.built.identity.classify("Gone@Partner.example").type, "guest");
 
-    assert.equal(await coreEmailAllowed(s.base, SECRET, "Live@Partner.example", "test"), true);
-    assert.equal(await coreEmailAllowed(s.base, SECRET, "gone@partner.example", "test"), false);
-    assert.equal(await coreEmailAllowed(s.base, SECRET, "stranger@partner.example", "test"), false);
-    assert.equal(await coreEmailAllowed(s.base, "wrong-secret".repeat(4), "live@partner.example", "test"), false);
-    assert.equal(await coreEmailAllowed("http://127.0.0.1:1", SECRET, "live@partner.example", "test"), false);
+    assert.equal(await inTestTenant(() => coreEmailAllowed(s.base, SECRET, "Live@Partner.example", "test")), true);
+    assert.equal(await inTestTenant(() => coreEmailAllowed(s.base, SECRET, "gone@partner.example", "test")), false);
+    assert.equal(await inTestTenant(() => coreEmailAllowed(s.base, SECRET, "stranger@partner.example", "test")), false);
+    assert.equal(
+      await inTestTenant(() => coreEmailAllowed(s.base, "wrong-secret".repeat(4), "live@partner.example", "test")),
+      false,
+    );
+    assert.equal(
+      await inTestTenant(() => coreEmailAllowed("http://127.0.0.1:1", SECRET, "live@partner.example", "test")),
+      false,
+    );
     const unsigned = await fetch(`${s.base}/v1/auth/broker/email-allowed?email=live%40partner.example`, {
       headers: testTenantHeaders(),
     });
     assert.equal(unsigned.status, 401);
 
     await inTestTenant(() => s.built.identity.deactivate("live@partner.example"));
-    assert.equal(await coreEmailAllowed(s.base, SECRET, "live@partner.example", "test"), false);
+    assert.equal(await inTestTenant(() => coreEmailAllowed(s.base, SECRET, "live@partner.example", "test")), false);
     await inTestTenant(() => s.built.identity.reactivate("live@partner.example"));
 
     const list = await roster(s.base, { "x-agent-capability": await capFor("admin-alice") });
@@ -704,12 +714,12 @@ test("teammates receive permanent access and appear before their first session",
     const list = await roster(s.base);
     assert.ok(list.users.some((u: any) => u.principalId === "engineer@corp.example" && u.sessionCount === 0));
     assert.equal(list.externalUsers[0].status, "active");
-    assert.equal(await coreEmailAllowed(s.base, undefined, "engineer@corp.example", "test"), true);
+    assert.equal(await inTestTenant(() => coreEmailAllowed(s.base, undefined, "engineer@corp.example", "test")), true);
     assert.equal((await inviteTeammate(s.base, { email: "engineer@corp.example" })).status, 200);
     assert.equal(sent.length, 2);
     assert.equal((await roster(s.base)).externalUsers.length, 1);
     assert.equal((await revoke(s.base, "engineer@corp.example")).status, 200);
-    assert.equal(await coreEmailAllowed(s.base, undefined, "engineer@corp.example", "test"), false);
+    assert.equal(await inTestTenant(() => coreEmailAllowed(s.base, undefined, "engineer@corp.example", "test")), false);
     assert.equal(s.built.identity.classify("engineer@corp.example").type, "guest");
   } finally {
     await s.close();

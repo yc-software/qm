@@ -83,9 +83,21 @@ const MCP_SERVERS =
 const LINKS = "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
 
 const routes: Route<ApiCtx>[] = [
-  { method: "POST", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
-  { method: "DELETE", path: "/v1/slack/managed/installation", auth: "public", handle: managedSlackRequest },
-  { method: "POST", path: "/v1/slack/managed/events", auth: "public", handle: managedSlackRequest },
+  {
+    method: "POST",
+    path: "/v1/slack/managed/installation",
+    auth: "public",
+    tenant: "row",
+    handle: managedSlackRequest,
+  },
+  {
+    method: "DELETE",
+    path: "/v1/slack/managed/installation",
+    auth: "public",
+    tenant: "row",
+    handle: managedSlackRequest,
+  },
+  { method: "POST", path: "/v1/slack/managed/events", auth: "public", tenant: "row", handle: managedSlackRequest },
   ...withAdmin([
     { method: "POST", path: "/v1/admin/slack-installation/start", auth: "either", handle: startSlackInstallation },
     { method: "GET", path: "/v1/admin/slack-installation", auth: "either", handle: getSlackInstallation },

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { glob, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,6 +12,9 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { createProcessReaper } from "../src/processes/process-reaper.ts";
+import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { claimAcrossTenants, crossTenantLoop, inTenantOf, useOwnerDatabase, rowTenant } from "../src/tenants/claim.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
@@ -338,3 +341,69 @@ test("pruning ended cron fires keeps the newest per cron within each tenant", { 
     await raw.end();
   }
 });
+
+test("pruning consumed run signals deletes old consumed rows in every tenant", { skip }, async () => {
+  const url = testDatabaseUrl();
+  const signals = createPostgresRunSignalStore(url);
+  const raw = new pg.Pool({ connectionString: ownerUrlOf(url), max: 1 });
+  try {
+    for (const tenant of [A, B])
+      await withTenant(tenant, async () => {
+        await signals.send(`consumed-${tenant}`, { kind: "abort" });
+        await signals.send(`pending-${tenant}`, { kind: "abort" });
+        await signals.takePending(`consumed-${tenant}`);
+      });
+    await signals.prune(-1);
+    const kept = await raw.query("SELECT tenant_id, run_id FROM run_signals");
+    assert.deepEqual(
+      kept.rows.map((row) => [row.tenant_id, row.run_id]).sort(),
+      [
+        [A, `pending-${A}`],
+        [B, `pending-${B}`],
+      ].sort(),
+    );
+  } finally {
+    await signals.close?.();
+    await raw.end();
+  }
+});
+
+test(
+  "the process reaper claims expired sessions across tenants and reaps each under its own tenant",
+  { skip },
+  async () => {
+    const url = testDatabaseUrl();
+    const registry = createPostgresProcessRegistry(url);
+    const raw = new pg.Pool({ connectionString: ownerUrlOf(url), max: 1 });
+    const ids = new Map([
+      [A, randomUUID()],
+      [B, randomUUID()],
+    ]);
+    try {
+      for (const [tenant, processId] of ids)
+        await withTenant(tenant, () =>
+          registry.register({ processId, scopeId: "s", sandboxId: "vm", kind: "build", command: "x", ttlMs: -1 }),
+        );
+      const killed: Array<[string, string | undefined]> = [];
+      const notified: Array<[string, string | undefined]> = [];
+      const reaper = createProcessReaper(registry, {
+        intervalMs: 60_000,
+        leaderLease: createNoopLeaderLease(),
+        kill: async (rec) => void killed.push([rec.processId, boundTenant()]),
+        onReaped: async (rec) => void notified.push([rec.processId, boundTenant()]),
+      });
+      assert.equal((await reaper.sweep()).reaped, 2);
+      const expected = [...ids].map(([tenant, processId]) => [processId, tenant]).sort();
+      assert.deepEqual(killed.sort(), expected);
+      assert.deepEqual(notified.sort(), expected);
+      const rows = await raw.query("SELECT process_id, tenant_id, status FROM process_sessions");
+      assert.deepEqual(
+        rows.rows.map((row) => [row.process_id, row.tenant_id, row.status]).sort(),
+        expected.map(([processId, tenant]) => [processId, tenant, "reaped"]),
+      );
+    } finally {
+      registry.close?.();
+      await raw.end();
+    }
+  },
+);

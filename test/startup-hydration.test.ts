@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
-import { tenantReady } from "../src/tenants/context.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMap } from "./support/test-database.ts";
+import { settle } from "./support/settle.ts";
 
 const identityFailure = new Error("identity persistence unavailable");
 const configFailure = new Error("configuration persistence unavailable");
@@ -41,13 +41,23 @@ mock.module("../src/resolution/config-store.ts", {
   },
 });
 
-const { buildApp } = await import("./support/build-app.ts");
+const { buildApp } = await import("../src/wiring.ts");
 
-test("a failed first-bind load fails closed and runs again on the next use", async () => {
+test("startup hydration failures are contained while explicit hydration remains fail-closed", async (t) => {
+  const errors = t.mock.method(console, "error", () => {});
   const built = buildApp(testConfig());
   try {
+    const logged = (context: string) =>
+      errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes(context));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(logged("startup: hydrate"), false);
+    await built.startup();
+    await settle(async () => logged("startup: hydrate identity") && logged("startup: hydrate configuration"));
+    assert.ok(logged("startup: hydrate identity"));
+    assert.ok(logged("startup: hydrate configuration"));
     for (let attempt = 0; attempt < 2; attempt++) {
-      await assert.rejects(tenantReady(), (error: unknown) => error === identityFailure || error === configFailure);
+      await assert.rejects(built.identity.refresh(), (error: unknown) => error === identityFailure);
+      await assert.rejects(built.config.hydrate!(), (error: unknown) => error === configFailure);
     }
   } finally {
     await built.runtime.stop();

@@ -37,6 +37,7 @@ for (const warm of [false, true]) {
     const config = testConfig({ memoryStrategy: "agent-only" });
     const app = () => buildApp(config, { tenantSettings: testTenantSettings({ SECURITY_SCREEN: "off" }) });
     let built = app();
+    await built.startup();
     await inTestTenant(() => built.modelCredentials.set("anthropic", "sk-test", "test"));
     const requests: string[] = [];
     const originalFetch = globalThis.fetch;
@@ -84,6 +85,7 @@ for (const warm of [false, true]) {
       assert.match(requestText, /Alex, can you approve/);
       await built.runtime.stop();
       built = app();
+      await built.startup();
       const second = await inTestTenant(() => built.app.turn({ ...input, text: "yes, go ahead" }));
       assert.equal(second.status, "ok", second.reason);
       const next = JSON.stringify(JSON.parse(requests.at(-1)!).messages);
