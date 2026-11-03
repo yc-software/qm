@@ -795,7 +795,7 @@ test("runtime pauses without closing stores and restores worker capacity after a
   }
 });
 
-test("inline turns remain admitted through pause and queued intake survives rollback", async () => {
+test("synchronous turns remain admitted through pause and queued intake survives rollback", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "inline-drain-")),
@@ -808,6 +808,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
     () => admitted,
     () => admitted,
   );
+  built.runtime.startBackground();
   const completing = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const complete = built.runs.complete.bind(built.runs);
@@ -828,7 +829,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
       text: "hello",
       async,
     });
-  const running = turn("inline-before-pause");
+  const running = turn("sync-before-pause");
   try {
     await completing.promise;
     admitted = false;
@@ -839,7 +840,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
     });
     await sleep(10);
     assert.equal(drained, false);
-    assert.equal((await turn("inline-after-pause")).status, "refused");
+    assert.equal((await turn("sync-after-pause")).status, "refused");
     const queued = await turn("queued-after-pause", true);
     assert.equal(queued.status, "queued");
     assert.equal((await built.runs.get(queued.runId!))?.status, "pending");
@@ -849,7 +850,7 @@ test("inline turns remain admitted through pause and queued intake survives roll
     admitted = true;
     built.runtime.startBackground();
     assert.equal((await built.runs.waitFor(queued.runId!, 5000)).status, "done");
-    assert.equal((await turn("inline-after-resume")).status, "ok");
+    assert.equal((await turn("sync-after-resume")).status, "ok");
   } finally {
     release.resolve();
     await running;
@@ -955,7 +956,7 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
   }
 });
 
-test("final shutdown holds an inline turn's lease until the step unwinds, then hands the run back", async () => {
+test("final shutdown holds a synchronous turn's lease until the step unwinds, then hands the run back", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "inline-shutdown-")),
     workers: 1,
@@ -989,7 +990,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
       stopped = true;
     });
     await sleep(300);
-    assert.equal(stopped, false, "stop waits for the inline step to unwind");
+    assert.equal(stopped, false, "stop waits for the running step to unwind");
     assert.equal((await built.runs.get(running.id))?.leaseToken, running.leaseToken);
     assert.equal((await built.runs.claim("replacement", 5_000))[0] ?? null, null);
     gate.resolve();

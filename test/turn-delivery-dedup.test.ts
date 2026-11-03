@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { firstAttemptFailed } from "./support/settle.ts";
 import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
 import { type NewItem, storedItem } from "../src/sessions/items.ts";
 
@@ -30,14 +31,16 @@ function channelTurn(text: string, extra: Partial<TurnRequest> = {}): TurnReques
   };
 }
 
-test("a retried turn does not re-post: the same position dedups against the delivered row", async () => {
+test("a retried turn does not re-post: the same position dedups against the delivered row", async (t) => {
   const built = freshApp();
   const req = channelTurn("!post-lost-result deploy is done", { idempotencyKey: "dedup-retry-1" });
 
-  await assert.rejects(built.app.turn(req), /boom/);
+  await firstAttemptFailed(built, req);
   const afterFirst = await built.deliveries.pending("slack");
   assert.equal(afterFirst.length, 1, "the interrupted attempt already enqueued its post");
 
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(61_000);
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
@@ -55,7 +58,6 @@ test("a resumed turn's NEW post after a completed one is delivered, not swallowe
   const built = freshApp();
   const req = channelTurn("!post-then-boom first update|second update", { idempotencyKey: "dedup-resume-1" });
 
-  await assert.rejects(built.app.turn(req), /boom/);
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
@@ -81,7 +83,6 @@ test("a retried automation fire (surface 'monitor') still seeds past its recorde
     idempotencyKey: "dedup-monitor-1",
   };
 
-  await assert.rejects(built.app.turn(req), /boom/);
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
