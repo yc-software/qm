@@ -162,7 +162,7 @@ export function workspaceTools(kit: ToolKit) {
     name: "save_skill",
     label: "Save skill",
     description:
-      "Save a repeatable procedure as a new skill in this conversation's scope: yours alone in a 1:1 DM, shared with everyone in a channel, group DM or project. A name already taken here fails; edit that skill instead.",
+      "Save a repeatable procedure as a new skill in this conversation's scope: private to you in a 1:1 DM, otherwise usable by everyone here. A name already taken here fails; edit that skill instead.",
     parameters: Type.Object({
       name: Type.String({
         minLength: 1,
