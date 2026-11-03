@@ -131,7 +131,7 @@ import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
-import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
+import { BUDGET_MIGRATIONS, createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
@@ -734,7 +734,7 @@ export function buildApp(
 
   const s3 = config.s3Endpoint ? s3Client(config.s3Region, { endpoint: config.s3Endpoint }) : undefined;
   const s3Override = s3 ? { _client: s3 } : {};
-  registerPgMigrations(databaseUrl, [...RENDER_WORKSPACE_MIGRATIONS, ...FILE_UPLOAD_MIGRATIONS]);
+  registerPgMigrations(databaseUrl, [...RENDER_WORKSPACE_MIGRATIONS, ...FILE_UPLOAD_MIGRATIONS, ...BUDGET_MIGRATIONS]);
   const workspace =
     config.workspaceStore === "postgres"
       ? createRenderWorkspaceStore(config.dataDir, databaseUrl)

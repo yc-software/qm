@@ -805,8 +805,8 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("refuses webhook registration without a live person in personal and channel scopes", async () => {
-    const webhooksBefore = await built.app.listWebhooks();
-    const auditBefore = (await built.auditLog.events()).filter((e) => e.action !== "turn");
+    const webhooksBefore = await inTestTenant(() => built.app.listWebhooks());
+    const auditBefore = (await inTestTenant(() => built.auditLog.events())).filter((e) => e.action !== "turn");
     for (const scope of [scopeId("personal", "U1"), scopeId("channel", "C")]) {
       for (const extra of [
         {},
@@ -822,9 +822,9 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
         );
         assert.equal(res.status, 403, JSON.stringify({ scope, extra }));
         assert.equal(((await res.json()) as { error: string }).error, "forbidden");
-        assert.deepEqual(await built.app.listWebhooks(), webhooksBefore);
+        assert.deepEqual(await inTestTenant(() => built.app.listWebhooks()), webhooksBefore);
         assert.deepEqual(
-          (await built.auditLog.events()).filter((e) => e.action !== "turn"),
+          (await inTestTenant(() => built.auditLog.events())).filter((e) => e.action !== "turn"),
           auditBefore,
         );
       }

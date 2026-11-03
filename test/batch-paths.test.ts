@@ -6,7 +6,7 @@ import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { migrateTestDatabase, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 for (const backend of ["memory", "postgres"] as const) {
@@ -17,6 +17,7 @@ for (const backend of ["memory", "postgres"] as const) {
     async () => {
       const factory = backend === "postgres" ? createPostgresMapFactory(process.env.DATABASE_URL!) : null;
       const map = factory?.map<{ n: number }>(`batch_${randomUUID().replaceAll("-", "")}`) ?? testMap<{ n: number }>();
+      if (factory) await migrateTestDatabase(process.env.DATABASE_URL!);
       try {
         const increment = (value: { n: number } | null) => ({ n: (value?.n ?? 0) + 1 });
         assert.deepEqual(
@@ -86,7 +87,7 @@ for (const backend of ["memory", "postgres"] as const) {
         assert.deepEqual(await store.appendMany(writer, []), []);
         const batch = [5, 6].map((n) => ({ kind: "UserMessage" as const, text: `message ${n}` }));
         if (backend === "postgres") {
-          const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+          const pool = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
           try {
             const constraint = `items_batch_${randomUUID().replaceAll("-", "")}`;
             await pool.query(

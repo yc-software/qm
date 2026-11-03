@@ -11,7 +11,7 @@ import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { migrateTestDatabase, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -24,7 +24,7 @@ const IDEM_TABLE = "cron_queue_test_idempotency";
 before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
   await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}, ${IDEM_TABLE}`);
@@ -68,6 +68,7 @@ test(
     const fires = createPostgresCronFireStore(testDatabaseUrl());
     const a = instance(calls, 12_000, fires);
     const b = instance(calls, 12_000, fires);
+    await migrateTestDatabase(URL);
     a.scheduler.start(1000);
     b.scheduler.start(1000);
     try {
@@ -103,6 +104,7 @@ test(
     const fireStore = createPostgresCronFireStore(testDatabaseUrl());
     const a = instance(calls, 0, fireStore);
     const b = instance(calls, 0, fireStore);
+    await migrateTestDatabase(URL);
     a.scheduler.start(1000);
     b.scheduler.start(1000);
     try {
@@ -143,6 +145,7 @@ test(
     const fires = createPostgresCronFireStore(testDatabaseUrl());
     const a = instance(calls, 0, fires);
     const b = instance(calls, 0, fires);
+    await migrateTestDatabase(URL);
     const cron = await inTestTenant(() =>
       a.crons.create({
         schedule: { firstFireAt: Date.now() - 1000 },
