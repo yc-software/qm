@@ -3,7 +3,7 @@ import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
-import { errMessage, reportFailure } from "../../util/errors.ts";
+import { errMessage, reportFailure, swallow, swallowAs } from "../../util/errors.ts";
 import { redactCommand } from "../../sandbox/exec-process-session.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { isObj } from "../../util/objects.ts";
@@ -65,7 +65,6 @@ export function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMa
 
 const RESOURCE_TOOL_NAMES = new Set(["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"]);
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "tool_search", "mcp_call"]);
-const SELF_CANCELLING_TOOLS = new Set(["execute", "goal"]);
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
 const APPROVAL_ARGS_MAX_CHARS = 16_000;
@@ -202,7 +201,10 @@ export function withToolSpan(tool: ToolDefinition, ref: ToolContextRef): ToolDef
   } as ToolDefinition;
 }
 
-export function withRuntimeBarrier(tool: ToolDefinition, kit: Pick<ToolKit, "ref" | "log">): ToolDefinition {
+export function withRuntimeBarrier(
+  tool: ToolDefinition & { handlesAbort?: boolean },
+  kit: Pick<ToolKit, "ref" | "log">,
+): ToolDefinition {
   const { ref, log } = kit;
   return {
     ...tool,
@@ -236,18 +238,34 @@ export function withRuntimeBarrier(tool: ToolDefinition, kit: Pick<ToolKit, "ref
           ref.runtimeMutationPending = false;
         }
       }
+      const [callId] = args;
       const inFlight = (ref.runtimeInFlight ??= new Set());
-      const signal = SELF_CANCELLING_TOOLS.has(tool.name) ? undefined : ref.abortSignal;
-      const result = withAbort(() => tool.execute(...args), signal);
-      inFlight.add(result);
+      const signal = tool.handlesAbort ? undefined : ref.abortSignal;
+      const stopped = (ref.stoppedCalls ??= new Set());
       try {
-        return await result;
+        signal?.throwIfAborted();
+        const running = Promise.resolve().then(() => tool.execute(...args));
+        inFlight.add(running);
+        void running.then(
+          () => {
+            inFlight.delete(running);
+            if (stopped.has(callId))
+              console.warn(`[agent] ${tool.name} call ${callId} finished after the turn stopped`);
+          },
+          (error: unknown) => {
+            inFlight.delete(running);
+            if (stopped.has(callId)) swallow(`${tool.name}: call ${callId} failed after the turn stopped`, error);
+          },
+        );
+        return await withAbort(() => running, signal);
       } catch (error) {
-        if (signal?.aborted)
-          await log("tool_result", { tool: tool.name, callId: args[0], isError: true, result: errMessage(error) });
+        if (signal?.aborted) {
+          stopped.add(callId);
+          await log("tool_result", { tool: tool.name, callId, isError: true, result: errMessage(error) }).catch(
+            swallowAs(`${tool.name}: record stopped result`, undefined),
+          );
+        }
         throw error;
-      } finally {
-        inFlight.delete(result);
       }
     },
   };

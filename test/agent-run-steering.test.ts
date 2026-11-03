@@ -577,9 +577,8 @@ for (const abort of ["shutdown", "stop"] as const) {
     const shutdown = new AbortController();
     const cancel = new AbortController();
     const entries: SessionEntry[] = [];
-    let toolFinished!: Promise<void>;
+    const toolFinished = Promise.withResolvers<void>();
     try {
-      const started = Date.now();
       await agent.runTurn(
         turnInput(
           session.id,
@@ -593,8 +592,7 @@ for (const abort of ["shutdown", "stop"] as const) {
               memoryRead: async () => {
                 if (abort === "shutdown") shutdown.abort();
                 cancel.abort();
-                toolFinished = new Promise((resolve) => setTimeout(resolve, 3_000));
-                await toolFinished;
+                await toolFinished.promise;
                 return "[exit 143]";
               },
             } as AgentTurnInput["tools"],
@@ -606,9 +604,8 @@ for (const abort of ["shutdown", "stop"] as const) {
           },
         ),
       );
-      assert.ok(Date.now() - started < 2_000, "the turn settles without waiting for the tool");
-      await toolFinished;
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      toolFinished.resolve();
+      await new Promise((resolve) => setImmediate(resolve));
       const results = entries.filter((entry) => entry.type === "tool_result");
       assert.equal(results.length, 1, "the late tool outcome does not add a second result");
       assert.deepEqual(

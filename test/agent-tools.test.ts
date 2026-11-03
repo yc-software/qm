@@ -3799,11 +3799,11 @@ test("a client tool times out with an error the model can act on", async () => {
 test("a client tool stops waiting when the turn is cancelled", async () => {
   const { emitted, cancel, ref } = clientToolRef();
   const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 60_000)] }).slice(-1);
-  const pending = call(tool, {});
-  await new Promise((resolve) => setImmediate(resolve));
+  const pending = call(tool, {}) as Promise<{ content: Array<{ text: string }> }>;
   cancel.abort();
-  await assert.rejects(pending, { name: "AbortError" });
-  assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.stopped, true);
+  const ret = await pending;
+  assert.match(ret.content[0]?.text ?? "", /cancelled/);
+  assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.cancelled, true);
 });
 
 test("context recovery drains in-flight effects, preserves an active goal, and blocks subsequent calls", async () => {

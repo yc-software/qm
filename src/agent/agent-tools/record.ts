@@ -125,6 +125,7 @@ export function createRecorder(ref: ToolContextRef) {
     screenAs?: { provenance: ToolResultProvenance; source?: string },
   ): Promise<T> =>
     resultQueue("result", async () => {
+      if (ref.stoppedCalls?.has(callId)) return ret;
       const originalTool = String(summary.tool ?? "");
       const t = ret.content
         .filter((c) => c.type === "text")
@@ -210,6 +211,7 @@ export function createRecorder(ref: ToolContextRef) {
           };
         }
       }
+      if (ref.stoppedCalls?.has(callId)) return ret;
       const mail = await deliverMessages(ret);
       result += mail.text;
       const goal = ref.goal;
