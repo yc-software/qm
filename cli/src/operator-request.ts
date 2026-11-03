@@ -35,11 +35,18 @@ export function operatorCredentials(
   return { signing, control };
 }
 
-export function operatorInit(credentials: OperatorCredentials, method: "PUT", path: string, body: string): RequestInit {
+export function operatorInit(
+  credentials: OperatorCredentials,
+  method: "PUT",
+  path: string,
+  body: string,
+  tenant?: string,
+): RequestInit {
   return {
     method,
     headers: {
-      ...signingHeaders(credentials.signing, method, path, body),
+      ...signingHeaders(credentials.signing, method, path, body, tenant),
+      ...(tenant ? { "x-qm-tenant": tenant } : {}),
       authorization: `Bearer ${credentials.control}`,
     },
     body,

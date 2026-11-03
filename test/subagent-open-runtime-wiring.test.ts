@@ -12,6 +12,7 @@ const scope = scopeId("personal", "U1");
 
 async function opener() {
   const built = stopAtEnd(buildApp(testConfig(), { tenantSettings: testTenantSettings() }));
+  await built.identity.ready();
   await built.modelCredentials.set("openai", "sk-test", "admin");
   await built.tenantSettings.get();
   await built.featureFlags.setEnabled("persistent_subagents", scope, true, "admin");

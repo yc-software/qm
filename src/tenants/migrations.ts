@@ -5,8 +5,6 @@ export const TENANCY_BASE: PgMigrationDefinition = {
   statements: [
     `CREATE TABLE IF NOT EXISTS tenants(
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      slug TEXT NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9][a-z0-9-]*$'),
-      name TEXT NOT NULL CHECK (name <> ''),
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
     `CREATE OR REPLACE FUNCTION qm_bound_tenant() RETURNS uuid LANGUAGE plpgsql STABLE PARALLEL SAFE AS $qm_bound_tenant$
@@ -18,6 +16,12 @@ BEGIN
   END IF;
   RETURN bound::uuid;
 END $qm_bound_tenant$`,
+    `DO $adopt_tenant$
+BEGIN
+  IF to_regclass('qm_tenant') IS NOT NULL THEN
+    INSERT INTO tenants(id) SELECT id FROM qm_tenant ON CONFLICT (id) DO NOTHING;
+  END IF;
+END $adopt_tenant$`,
   ],
 };
 
@@ -43,10 +47,7 @@ BEGIN
     RETURN;
   END IF;
   SELECT count(*), min(id::text)::uuid INTO tenant_count, tenant FROM tenants;
-  IF tenant_count = 0 AND to_regclass('qm_tenant') IS NOT NULL THEN
-    EXECUTE 'SELECT id FROM qm_tenant' INTO tenant;
-    INSERT INTO tenants(id, slug, name) VALUES (tenant, tenant::text, tenant::text);
-  ELSIF tenant_count <> 1 THEN
+  IF tenant_count <> 1 THEN
     RAISE EXCEPTION 'Rows in ${table} need a tenant, but this database has % tenants', tenant_count;
   END IF;
   EXECUTE format('ALTER TABLE ${table} ADD COLUMN tenant_id UUID NOT NULL DEFAULT %L', tenant);
@@ -148,16 +149,15 @@ export const FEATURE_FLAGS_MIGRATION: PgMigrationDefinition = {
      )`,
     `DO $qm_flags_copy$ BEGIN
        IF to_regclass('feature_flags_json') IS NOT NULL THEN
-         IF EXISTS (SELECT 1 FROM feature_flags_json) AND (SELECT count(*) FROM tenants) <> 1 THEN
-           RAISE EXCEPTION 'Feature flags need a tenant, but this database has % tenants', (SELECT count(*) FROM tenants);
+         IF to_regclass('qm_tenant') IS NOT NULL THEN
+           INSERT INTO feature_flags(tenant_id, feature_name, enabled_scopes, updated_at, updated_by)
+             SELECT (SELECT id FROM qm_tenant), id,
+                    ARRAY(SELECT jsonb_array_elements_text(COALESCE(json->'enabledScopes', '[]'::jsonb))),
+                    to_timestamp(COALESCE((json->>'updatedAt')::double precision, 0) / 1000),
+                    COALESCE(json->>'updatedBy', '')
+             FROM feature_flags_json
+             ON CONFLICT DO NOTHING;
          END IF;
-         INSERT INTO feature_flags(tenant_id, feature_name, enabled_scopes, updated_at, updated_by)
-           SELECT (SELECT id FROM tenants), id,
-                  ARRAY(SELECT jsonb_array_elements_text(COALESCE(json->'enabledScopes', '[]'::jsonb))),
-                  to_timestamp(COALESCE((json->>'updatedAt')::double precision, 0) / 1000),
-                  COALESCE(json->>'updatedBy', '')
-           FROM feature_flags_json
-           ON CONFLICT DO NOTHING;
          DROP TABLE feature_flags_json;
          IF to_regclass('durable_map_versions') IS NOT NULL THEN
            DELETE FROM durable_map_versions WHERE tbl = 'feature_flags';

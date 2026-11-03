@@ -70,8 +70,8 @@ export interface PorterSandboxOptions {
   signingSecret?: string;
   capabilitySecret?: string;
   apiBaseUrl?: string;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   advisoryLock: AdvisoryLock;
   client?: PorterClientLike;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
@@ -238,10 +238,20 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       os: "Debian 12 container on Porter Sandboxes — $HOME persists on a volume; paths outside $HOME reset when the sandbox rotates",
       runtimes: ["Node 24", "Python 3"],
       get tools() {
-        return visibleTools(["git", "curl", "wget", "jq", "unzip", "python3", "gh", "aws", ...(opts.extraTools ?? [])]);
+        return visibleTools([
+          "git",
+          "curl",
+          "wget",
+          "jq",
+          "unzip",
+          "python3",
+          "gh",
+          "aws",
+          ...(opts.extraTools?.() ?? []),
+        ]);
       },
       get notInstalled() {
-        return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+        return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools?.() ?? []);
       },
       homeDir,
       workdir: workspaceDir,
@@ -269,7 +279,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: homeDir,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => rel),
   });
 
   const sandbox: Sandbox = {
@@ -309,7 +319,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       };
 
       try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? [])}`;
+        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths?.() ?? [])}`;
         const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
           throw new Error(`porter provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);

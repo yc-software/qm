@@ -8,7 +8,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
-import { UnknownTenant } from "../src/tenants/install.ts";
+import { AmbiguousInstallTenant } from "../src/tenants/install.ts";
 import {
   createBackgroundOwnershipStore,
   type BackgroundOwnership,
@@ -21,7 +21,7 @@ const path = "/v1/install/tenant";
 
 async function fixture(
   secret: string | undefined,
-  installTenant: (slug: string) => Promise<{ tenant: string; created: boolean }>,
+  installTenant: () => Promise<{ tenant: string; created: boolean }>,
   backgroundOwnership?: BackgroundOwnershipControl,
 ) {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
@@ -30,7 +30,6 @@ async function fixture(
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),
-    requireSignedPortalIdentity: true,
     deploymentControlSecret: secret,
     installTenant,
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
@@ -38,14 +37,14 @@ async function fixture(
   server.listen(0);
   const url = `http://localhost:${(server.address() as AddressInfo).port}${path}`;
   let nonce = 0;
-  const request = (overrides: Record<string, string> = {}, body = '{"tenant":"main"}') => {
+  const request = (overrides: Record<string, string> = {}, body = "{}") => {
     const ts = Math.floor(Date.now() / 1000) + nonce++;
     return fetch(url, {
       method: "PUT",
       headers: {
         "content-type": "application/json",
         "x-timestamp": String(ts),
-        "x-signature": signRequest(sourceSecret, ts, `PUT\n${path}\n${body}`),
+        "x-signature": signRequest(sourceSecret, ts, `PUT\n${path}\n\n${body}`),
         authorization: `Bearer ${controlSecret}`,
         ...overrides,
       },
@@ -57,9 +56,7 @@ async function fixture(
 
 test("the install tenant route needs both the source signature and the operator credential", async () => {
   let calls = 0;
-  const slugs: string[] = [];
-  const srv = await fixture(controlSecret, async (slug) => {
-    slugs.push(slug);
+  const srv = await fixture(controlSecret, async () => {
     calls++;
     return { tenant: "00000000-0000-4000-8000-000000000001", created: calls === 1 };
   });
@@ -74,12 +71,7 @@ test("the install tenant route needs both the source signature and the operator 
     const created = await srv.request();
     assert.equal(created.status, 200);
     assert.deepEqual(await created.json(), { tenant: "00000000-0000-4000-8000-000000000001", created: true });
-    for (const body of ["{}", '{"tenant":"Main"}', '{"tenant":"-x"}', '{"tenant":7}']) {
-      const refused = await srv.request({}, body);
-      assert.equal(refused.status, 400, body);
-      assert.equal(((await refused.json()) as { error: string }).error, "invalid_tenant");
-    }
-    assert.deepEqual(slugs, ["main"]);
+    assert.equal(calls, 1);
   } finally {
     await srv.close();
   }
@@ -94,18 +86,18 @@ test("the install tenant route is unavailable without a distinct operator creden
   }
 });
 
-test("the install tenant route reports an unknown slug with the existing ones", async () => {
-  const srv = await fixture(controlSecret, async (slug) => {
-    throw new UnknownTenant(slug, ["acme", "other"]);
+test("the install tenant route refuses a database that holds several tenants", async () => {
+  const tenants = ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"];
+  const srv = await fixture(controlSecret, async () => {
+    throw new AmbiguousInstallTenant(tenants);
   });
   try {
     const response = await srv.request();
-    assert.equal(response.status, 404);
+    assert.equal(response.status, 409);
     assert.deepEqual(await response.json(), {
-      error: "unknown_tenant",
-      message: "No tenant has the slug main; this database has acme, other",
-      tenant: "main",
-      tenants: ["acme", "other"],
+      error: "ambiguous_install_tenant",
+      message: "This database has 2 tenants; an install holds exactly one",
+      tenants,
     });
   } finally {
     await srv.close();

@@ -209,6 +209,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
     dataDir: mkdtempSync(join(tmpdir(), "seeded-skills-")),
   });
   const built = buildApp(config);
+  await built.identity.ready();
   await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"));
   await built.config.setConnectorClient(scopeId("org", "default-org"), "google", {
     clientId: "google-client",

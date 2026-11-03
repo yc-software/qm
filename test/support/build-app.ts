@@ -50,10 +50,6 @@ export function testTenantSettings(values: TenantSettingValues = {}, databaseUrl
       if (!seededOk) throw new TenantSettingsNotLoadedError();
       return store.peek();
     },
-    refreshAll: async () => {
-      await seeded;
-      return store.refreshAll();
-    },
     start: () => {
       void seeded.then(
         () => stopped || store.start(),
@@ -64,9 +60,9 @@ export function testTenantSettings(values: TenantSettingValues = {}, databaseUrl
       stopped = true;
       return store.stop();
     },
-    tenantForSlug: async (slug) => {
+    hasTenant: async (tenant) => {
       await seeded;
-      return store.tenantForSlug(slug);
+      return store.hasTenant(tenant);
     },
     update: async (changes) => {
       await seeded;
@@ -74,6 +70,7 @@ export function testTenantSettings(values: TenantSettingValues = {}, databaseUrl
     },
   };
 }
+import { tenantReady } from "../../src/tenants/context.ts";
 
 const built: BuiltApp[] = [];
 after(() => Promise.all(built.splice(0).map((app) => app.runtime.stop())));
@@ -118,4 +115,13 @@ export function buildApp(
     }),
   );
   return Object.assign(app, { modelCalls });
+}
+
+export async function buildLoadedApp(
+  config: Config,
+  overrides: Parameters<typeof buildProductionApp>[1] = {},
+): Promise<BuiltApp & { modelCalls: ModelCall[] }> {
+  const app = buildApp(config, overrides);
+  await tenantReady();
+  return app;
 }

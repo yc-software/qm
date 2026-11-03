@@ -80,12 +80,14 @@ test("each tenant keeps its own flags for the same person", async () => {
   });
 });
 
-test("upgrading moves the install's existing flags into its only tenant", async () => {
+test("upgrading moves the install's existing flags into its original tenant", async () => {
   const url = testDatabaseUrl();
   const raw = new pg.Client({ connectionString: url });
   await raw.connect();
   try {
-    await raw.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
+    const original = TEST_TENANT;
+    await raw.query("CREATE TABLE qm_tenant (id UUID PRIMARY KEY)");
+    await raw.query("INSERT INTO qm_tenant VALUES ($1)", [original]);
     await raw.query("CREATE TABLE feature_flags (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
     await raw.query("INSERT INTO feature_flags VALUES ('inbox_loops', $1)", [
       { featureName: "inbox_loops", enabledScopes: ["personal:ada"], updatedAt: 1_700_000_000_000, updatedBy: "admin" },
@@ -96,7 +98,7 @@ test("upgrading moves the install's existing flags into its only tenant", async 
       "SELECT tenant_id::text AS tenant, feature_name, enabled_scopes, updated_by FROM feature_flags",
     );
     assert.deepEqual(rows, [
-      { tenant: TEST_TENANT, feature_name: "inbox_loops", enabled_scopes: ["personal:ada"], updated_by: "admin" },
+      { tenant: original, feature_name: "inbox_loops", enabled_scopes: ["personal:ada"], updated_by: "admin" },
     ]);
     assert.equal((await raw.query("SELECT to_regclass('feature_flags_json') AS t")).rows[0].t, null);
   } finally {

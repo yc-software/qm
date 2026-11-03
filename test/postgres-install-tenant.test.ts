@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { ensureInstallTenant, UnknownTenant } from "../src/tenants/install.ts";
+import { AmbiguousInstallTenant, ensureInstallTenant } from "../src/tenants/install.ts";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { prepareDevTenant } from "../scripts/dev/supervisor/durability.ts";
@@ -11,7 +11,7 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the install tenant test";
 
 test(
-  "a fresh install creates exactly one tenant even when installs race with different slugs, and a populated one only finds existing slugs",
+  "a fresh install creates exactly one tenant even when installs race, and refuses a database with several",
   { skip },
   async () => {
     const schema = `install_${randomUUID().replaceAll("-", "")}`;
@@ -19,43 +19,21 @@ test(
     url.searchParams.set("options", `-c search_path=${schema}`);
     const admin = new pg.Pool({ connectionString: url.toString() });
     await admin.query(`CREATE SCHEMA ${schema}`);
-    await admin.query(`CREATE TABLE ${schema}.tenants(
-    id UUID PRIMARY KEY,
-    slug TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-  )`);
+    await admin.query(
+      `CREATE TABLE ${schema}.tenants(id UUID PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    );
     try {
-      const raced = await Promise.allSettled(
-        ["acme", "rival"].flatMap((slug) => Array.from({ length: 3 }, () => ensureInstallTenant(url.toString(), slug))),
-      );
-      const won = raced.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
-      const lost = raced.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
-      assert.equal(won.length, 3);
-      assert.equal(new Set(won.map((result) => result.tenant)).size, 1);
-      assert.equal(won.filter((result) => result.created).length, 1);
-      assert.ok(lost.every((reason) => reason instanceof UnknownTenant));
-      const { rows: created } = await admin.query(`SELECT slug FROM ${schema}.tenants`);
-      assert.equal(created.length, 1);
-      await admin.query(`UPDATE ${schema}.tenants SET slug = 'acme'`);
-      const results = await Promise.all(Array.from({ length: 6 }, () => ensureInstallTenant(url.toString(), "acme")));
-      assert.equal(new Set(results.map((result) => result.tenant)).size, 1);
-      assert.equal(results[0]!.tenant, won[0]!.tenant);
-      assert.ok(results.every((result) => !result.created));
-      assert.deepEqual(await ensureInstallTenant(url.toString(), "acme"), {
-        tenant: results[0]!.tenant,
-        created: false,
-      });
+      const raced = await Promise.all(Array.from({ length: 6 }, () => ensureInstallTenant(url.toString())));
+      assert.equal(new Set(raced.map((result) => result.tenant)).size, 1);
+      assert.equal(raced.filter((result) => result.created).length, 1);
+      assert.deepEqual(await ensureInstallTenant(url.toString()), { tenant: raced[0]!.tenant, created: false });
       const other = randomUUID();
-      await admin.query(`INSERT INTO ${schema}.tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [other]);
-      assert.deepEqual(await ensureInstallTenant(url.toString(), "other"), { tenant: other, created: false });
-      await assert.rejects(ensureInstallTenant(url.toString(), "main"), (error: unknown) => {
-        assert.ok(error instanceof UnknownTenant);
-        assert.equal(error.message, "No tenant has the slug main; this database has acme, other");
+      await admin.query(`INSERT INTO ${schema}.tenants(id) VALUES ($1)`, [other]);
+      await assert.rejects(ensureInstallTenant(url.toString()), (error: unknown) => {
+        assert.ok(error instanceof AmbiguousInstallTenant);
+        assert.deepEqual(error.tenants, [raced[0]!.tenant, other].sort());
         return true;
       });
-      const { rows } = await admin.query(`SELECT slug FROM ${schema}.tenants ORDER BY slug`);
-      assert.deepEqual(rows, [{ slug: "acme" }, { slug: "other" }]);
     } finally {
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
       await admin.end();
@@ -63,89 +41,61 @@ test(
   },
 );
 
-test("a dev instance writes its settings to the main tenant beside an older one, or stops", { skip }, async () => {
-  const schema = `install_${randomUUID().replaceAll("-", "")}`;
-  const url = new globalThis.URL(URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
-  const admin = new pg.Pool({ connectionString: url.toString() });
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  await admin.query(
-    `CREATE TABLE ${schema}.tenants(
-        id UUID PRIMARY KEY,
-        slug TEXT NOT NULL UNIQUE,
-        name TEXT NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-      )`,
-  );
-  const carried = randomUUID();
-  await admin.query(
-    `INSERT INTO ${schema}.tenants(id, slug, name, created_at) VALUES ($1, 'main', 'Main', now()), ($2, 'other', 'Other', now() - interval '1 day')`,
-    [carried, randomUUID()],
-  );
-  try {
-    assert.deepEqual(await ensureInstallTenant(url.toString(), "main"), { tenant: carried, created: false });
-    const requests: { path?: string; authorization?: string; body: string }[] = [];
-    let status = 200;
-    const core = createServer((req, res) => {
-      let body = "";
-      req.on("data", (chunk) => (body += chunk));
-      req.on("end", () => {
-        requests.push({ path: req.url?.split("?")[0], authorization: req.headers.authorization, body });
-        res.writeHead(status).end("{}");
+test("a dev instance installs its tenant through core and names it on every later call, or stops", async () => {
+  const tenant = randomUUID();
+  const requests: { path?: string; tenant?: string; authorization?: string; body: string }[] = [];
+  let status = 200;
+  const core = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const header = req.headers["x-qm-tenant"];
+      requests.push({
+        path: req.url?.split("?")[0],
+        ...(typeof header === "string" ? { tenant: header } : {}),
+        authorization: req.headers.authorization,
+        body,
       });
+      res.writeHead(status).end(req.url?.startsWith("/v1/install/tenant") ? JSON.stringify({ tenant }) : "{}");
     });
-    await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
-    const inputs = {
-      databaseUrl: url.toString(),
-      adminGrantsSeed: "dev@example.com:org_admin",
-      baseEnv: {
-        CORE_SIGNING_SECRET: "s".repeat(64),
-        DEPLOYMENT_CONTROL_SECRET: "c".repeat(64),
-        ANTHROPIC_API_KEY: "sk-dev",
-        PI_MODEL: "",
-        LOOPS_USERS: "dev@example.com",
-        PORT: "8080",
-      },
-      ports: { core: (core.address() as AddressInfo).port },
-    };
-    const phases: string[] = [];
-    const record = (name: string, state: string, detail?: string) => phases.push(`${name} ${state} ${detail ?? ""}`);
-    try {
-      await prepareDevTenant(inputs, record);
-      status = 404;
-      await assert.rejects(
-        prepareDevTenant(inputs, record),
-        /tenant settings: \/v1\/install\/tenant failed \(404\): \{\}/,
-      );
-    } finally {
-      await new Promise<void>((resolve) => core.close(() => resolve()));
-    }
-    assert.deepEqual(phases, [
-      "tenant start ",
-      `tenant ok using install tenant ${carried}`,
-      "tenant ok wrote ADMIN_GRANTS, inbox_loops for personal:dev@example.com, anthropic API key to the install tenant",
-      "tenant start ",
-      `tenant ok using install tenant ${carried}`,
-    ]);
-    assert.deepEqual(
-      requests.slice(0, 4).map((request) => request.path),
-      [
-        "/v1/install/tenant",
-        "/v1/tenant-settings",
-        "/v1/admin/scopes/tenant/feature-flags",
-        "/v1/admin/model-providers/anthropic",
-      ],
-    );
-    assert.ok(requests.every((request) => request.authorization === `Bearer ${"c".repeat(64)}`));
-    assert.deepEqual(JSON.parse(requests[1]!.body), {
-      tenant: "main",
-      env: { ADMIN_GRANTS: "dev@example.com:org_admin" },
-    });
-    assert.deepEqual(JSON.parse(requests[3]!.body), { tenant: "main", apiKey: "sk-dev", ifUnset: true });
-    const { rows } = await admin.query(`SELECT slug FROM ${schema}.tenants ORDER BY slug`);
-    assert.deepEqual(rows, [{ slug: "main" }, { slug: "other" }]);
+  });
+  await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
+  const inputs = {
+    adminGrantsSeed: "dev@example.com:org_admin",
+    baseEnv: {
+      CORE_SIGNING_SECRET: "s".repeat(64),
+      DEPLOYMENT_CONTROL_SECRET: "c".repeat(64),
+      ANTHROPIC_API_KEY: "sk-dev",
+      PI_MODEL: "",
+      LOOPS_USERS: "dev@example.com",
+      PORT: "8080",
+    },
+    ports: { core: (core.address() as AddressInfo).port },
+  };
+  const phases: string[] = [];
+  const record = (name: string, state: string, detail?: string) => phases.push(`${name} ${state} ${detail ?? ""}`);
+  try {
+    await prepareDevTenant(inputs, record);
+    status = 404;
+    await assert.rejects(prepareDevTenant(inputs, record), /tenant settings: \/v1\/install\/tenant failed \(404\)/);
   } finally {
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.end();
+    await new Promise<void>((resolve) => core.close(() => resolve()));
   }
+  assert.deepEqual(phases, [
+    "tenant start ",
+    `tenant ok wrote ADMIN_GRANTS, inbox_loops for personal:dev@example.com, anthropic API key to the install tenant ${tenant}`,
+    "tenant start ",
+  ]);
+  assert.deepEqual(
+    requests.slice(0, 4).map((request) => [request.path, request.tenant]),
+    [
+      ["/v1/install/tenant", undefined],
+      ["/v1/tenant-settings", tenant],
+      ["/v1/admin/scopes/tenant/feature-flags", tenant],
+      ["/v1/admin/model-providers/anthropic", tenant],
+    ],
+  );
+  assert.ok(requests.every((request) => request.authorization === `Bearer ${"c".repeat(64)}`));
+  assert.deepEqual(JSON.parse(requests[1]!.body), { env: { ADMIN_GRANTS: "dev@example.com:org_admin" } });
+  assert.deepEqual(JSON.parse(requests[3]!.body), { apiKey: "sk-dev", ifUnset: true });
 });

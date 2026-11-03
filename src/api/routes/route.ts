@@ -8,6 +8,7 @@ import type { ServerDeps } from "../deps.ts";
 import type { SourceAuth } from "../../auth/source-auth.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import type { PortalIdentity } from "../../auth/portal-identity.ts";
+import { withModelRequestContext } from "../../model/request-context.ts";
 
 export interface BaseCtx {
   req: IncomingMessage;
@@ -50,6 +51,7 @@ export type Route<C extends BaseCtx = ApiCtx> = {
   allowedInStrict?: true;
   maxBodyBytes?: number;
   unbound?: true;
+  tenantFromHost?: true;
 } & ({ method: string; path: string } | { match: (method: string, pathname: string) => boolean });
 
 export function withActor<C extends BaseCtx>(actor: RouteActor, routes: Route<C>[]): Route<C>[] {
@@ -62,5 +64,5 @@ export function withAdmin<C extends BaseCtx>(routes: Route<C>[]): Route<C>[] {
 
 export async function run<C extends BaseCtx>(route: Route<C>, params: Record<string, string>, ctx: C): Promise<void> {
   ctx.params = params;
-  await route.handle(ctx);
+  await withModelRequestContext(ctx.capability ?? {}, () => route.handle(ctx));
 }

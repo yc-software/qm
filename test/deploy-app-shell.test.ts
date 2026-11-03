@@ -10,7 +10,6 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { createHmac } from "node:crypto";
 import { scopeId } from "../src/types.ts";
@@ -19,14 +18,15 @@ import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-f
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
+import { testDatabaseUrl, testMap, testDeployBackings, testIdentity } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
 const PORTAL = "https://portal.example.com";
 
-function appServingUpstream(upstreamPort: number) {
+async function appServingUpstream(upstreamPort: number) {
   const deployStore = createDeployStore(testDeployBackings());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
@@ -49,7 +49,7 @@ function appServingUpstream(upstreamPort: number) {
     acl,
     directory,
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: await testIdentity(),
     orgId: "acme",
   } as unknown as Parameters<typeof createApp>[0]);
   return { app, directory, acl };
@@ -82,7 +82,7 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
   upstream.listen(0);
   await new Promise((r) => upstream.once("listening", r));
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const { app, directory, acl } = appServingUpstream(upstreamPort);
+  const { app, directory, acl } = await appServingUpstream(upstreamPort);
   const d = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -93,12 +93,13 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
   });
   await app.shareDeployment(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
   const featureFlags = createFeatureFlagStore(testMap<FeatureFlagRecord>());
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     featureFlags,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: GATE_SECRET,
     deployAppsLoginUrl: PORTAL,
     deployAppsSessionSecret: "portal-session-secret",
+    rowTenants: async () => [TEST_TENANT],
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
@@ -114,7 +115,7 @@ function mintPortalSession(sub: string, expiresInSeconds = 3600): string {
   const key = createHmac("sha256", "portal-session-secret").update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(
-    JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + expiresInSeconds }),
+    JSON.stringify({ k: "session", sub, org: "acme", tenant: TEST_TENANT, iat: now, exp: now + expiresInSeconds }),
   ).toString("base64url");
   return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }

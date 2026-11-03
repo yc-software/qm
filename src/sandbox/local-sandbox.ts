@@ -373,7 +373,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: homeDir,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths().map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths().map(({ rel }) => rel),
   });
 
   const sandbox: Sandbox = {

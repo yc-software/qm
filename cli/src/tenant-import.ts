@@ -89,7 +89,11 @@ export function tenantImport(env: Readonly<Record<string, string>>): TenantImpor
   return plan;
 }
 
-export type OperatorCall = (path: string, body: Record<string, unknown>) => Promise<{ status: number; body: string }>;
+export type OperatorCall = (
+  path: string,
+  body: Record<string, unknown>,
+  tenant?: string,
+) => Promise<{ status: number; body: string }>;
 
 export class OperatorRouteError extends Error {}
 
@@ -99,24 +103,25 @@ const personal = (id: string): string => `personal:${id.includes("@") ? id.toLow
 
 export async function applyTenantImport(
   plan: TenantImport,
-  tenant: string,
   call: OperatorCall,
   warn: (message: string) => void,
-): Promise<{ applied: string[]; unsaved: string[] }> {
-  const unique: OperatorCall = (path, body) => call(`${path}?nonce=${randomUUID()}`, body);
-  const put = async (path: string, body: Record<string, unknown>): Promise<{ unchanged?: boolean }> => {
-    const response = await unique(path, { tenant, ...body });
+): Promise<{ tenant: string; applied: string[]; unsaved: string[] }> {
+  const send = async (path: string, body: Record<string, unknown>, tenant?: string) => {
+    const response = await call(`${path}?nonce=${randomUUID()}`, body, tenant);
     if (response.status < 200 || response.status >= 300)
       throw new OperatorRouteError(`${path} failed (${response.status}): ${response.body}`);
-    return response.body ? (JSON.parse(response.body) as { unchanged?: boolean }) : {};
+    return response.body ? (JSON.parse(response.body) as { unchanged?: boolean; tenant?: string }) : {};
   };
+  const { tenant } = await send("/v1/install/tenant", {});
+  if (!tenant) throw new OperatorRouteError("/v1/install/tenant answered without a tenant id");
+  const unique: OperatorCall = (path, body) => call(`${path}?nonce=${randomUUID()}`, body, tenant);
+  const put = (path: string, body: Record<string, unknown>) => send(path, body, tenant);
   const applied: string[] = [];
   const unsaved: string[] = [];
   const resource = (name: string): string => `/v1/admin/scopes/${TENANT_ROOT_SCOPE}/${name}`;
   const putIfUnset = async (label: string, path: string, body: Record<string, unknown>): Promise<void> => {
     if (!(await put(path, { ...body, ifUnset: true })).unchanged) applied.push(label);
   };
-  await put("/v1/install/tenant", {});
   await put("/v1/tenant-settings", { env: plan.settings });
   applied.push(...Object.keys(plan.settings).sort());
   if (Object.keys(plan.branding).length) await putIfUnset("branding", resource("branding"), plan.branding);
@@ -129,11 +134,11 @@ export async function applyTenantImport(
   }
   for (const [provider, apiKey] of Object.entries(plan.modelKeys)) {
     const path = `/v1/admin/model-providers/${provider}`;
-    const response = await unique(path, { tenant, apiKey, ifUnset: true });
+    const response = await unique(path, { apiKey, ifUnset: true });
     if (response.status < 200 || response.status >= 300) {
       warn(`${provider} API key was not saved (${response.status}): ${response.body}`);
       unsaved.push(MODEL_KEY_ENV[provider as ModelProvider]);
     } else if (!(JSON.parse(response.body) as { unchanged?: boolean }).unchanged) applied.push(`${provider} API key`);
   }
-  return { applied, unsaved };
+  return { tenant, applied, unsaved };
 }

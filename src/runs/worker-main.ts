@@ -2,17 +2,11 @@ import "./instrument.ts";
 import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
-import { reportFailureAs } from "../util/errors.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
-await built.tenantSettings.refreshAll();
-await built.sandboxResources.initialize();
-await built.config.hydrate?.();
-await built.identity.refresh();
-void built.mcpToolService.refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
 const { runtime } = built;
 runtime.start();
 console.log(`[qm:worker] draining runs (org=${config.orgId}, workers=${config.workers})`);

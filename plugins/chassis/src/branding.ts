@@ -1,3 +1,5 @@
+import { boundTenant } from "./tenant.ts";
+
 export interface OrgBranding {
   orgName?: string;
   accent?: string;
@@ -16,44 +18,55 @@ export interface BrandingCache {
   refreshNow(): Promise<void>;
 }
 
-export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): BrandingCache {
-  let value: OrgBranding = {};
-  let warmed = false;
-  let nextAt = 0;
-  let inflight: Promise<void> | null = null;
+interface BrandingState {
+  value: OrgBranding;
+  warmed: boolean;
+  nextAt: number;
+  inflight: Promise<void> | null;
+}
 
-  const kick = (): void => {
-    if (inflight || Date.now() < nextAt) return;
-    inflight = (async () => {
+export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): BrandingCache {
+  const tenants = new Map<string, BrandingState>();
+  const state = (): BrandingState => {
+    const tenant = boundTenant() ?? "";
+    const found = tenants.get(tenant) ?? { value: {}, warmed: false, nextAt: 0, inflight: null };
+    tenants.set(tenant, found);
+    return found;
+  };
+
+  const kick = (s: BrandingState): void => {
+    if (s.inflight || Date.now() < s.nextAt) return;
+    s.inflight = (async () => {
       try {
-        value = await fetchBranding();
-        if (process.env.BRANDING_DEBUG) console.error("[branding] fetched:", JSON.stringify(value));
-        warmed = true;
-        nextAt = Date.now() + REFRESH_MS;
+        s.value = await fetchBranding();
+        if (process.env.BRANDING_DEBUG) console.error("[branding] fetched:", JSON.stringify(s.value));
+        s.warmed = true;
+        s.nextAt = Date.now() + REFRESH_MS;
       } catch (err) {
         if (process.env.BRANDING_DEBUG) console.error("[branding] fetch failed:", String(err));
-        nextAt = Date.now() + RETRY_MS;
+        s.nextAt = Date.now() + RETRY_MS;
       } finally {
-        inflight = null;
+        s.inflight = null;
       }
     })();
   };
-  setTimeout(kick, 0);
 
   return {
-    current: () => value,
+    current: () => state().value,
     async forRender(): Promise<OrgBranding> {
-      kick();
-      if (!warmed && inflight) {
-        await Promise.race([inflight, new Promise((r) => setTimeout(r, FIRST_RENDER_WAIT_MS))]);
+      const s = state();
+      kick(s);
+      if (!s.warmed && s.inflight) {
+        await Promise.race([s.inflight, new Promise((r) => setTimeout(r, FIRST_RENDER_WAIT_MS))]);
       }
-      return value;
+      return s.value;
     },
     async refreshNow(): Promise<void> {
-      if (inflight) await inflight;
-      nextAt = 0;
-      kick();
-      if (inflight) await inflight;
+      const s = state();
+      if (s.inflight) await s.inflight;
+      s.nextAt = 0;
+      kick(s);
+      if (s.inflight) await s.inflight;
     },
   };
 }

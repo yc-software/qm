@@ -1,4 +1,5 @@
 import {
+  MODEL_REQUEST_CONTEXT_HEADERS,
   parseProviderBaseUrl,
   type ModelGatewayTransportConfig,
   type ProviderBaseUrls,
@@ -101,6 +102,9 @@ export function parseModelGateway(values: TenantSettingValues): ModelGatewayTran
   const apiKeyHeader = values.MODEL_GATEWAY_API_KEY_HEADER!.trim();
   if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(apiKeyHeader)) {
     throw new TenantSettingsInvalidError("MODEL_GATEWAY_API_KEY_HEADER must be a valid HTTP header name");
+  }
+  if (Object.hasOwn(MODEL_REQUEST_CONTEXT_HEADERS, apiKeyHeader.toLowerCase())) {
+    throw new TenantSettingsInvalidError("MODEL_GATEWAY_API_KEY_HEADER cannot be a QM request context header");
   }
   const models: Record<string, string> = {};
   for (const mapping of values.MODEL_GATEWAY_MODELS?.trim() ? values.MODEL_GATEWAY_MODELS.split(",") : []) {

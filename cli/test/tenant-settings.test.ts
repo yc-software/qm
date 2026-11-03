@@ -97,6 +97,7 @@ function quietly<T>(fn: (lines: string[]) => Promise<T>): Promise<T> {
 
 const signing = "core-signing-secret".repeat(3);
 const control = "deployment-control-secret".repeat(3);
+const TENANT = "00000000-0000-4000-8000-00000000000a";
 
 test("seeding creates the install tenant, then pushes its settings with the operator credential", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-tenant-seed-"));
@@ -110,7 +111,7 @@ test("seeding creates the install tenant, then pushes its settings with the oper
     const link = async (): Promise<CoreLink> => ({
       request: async (path, init) => {
         seen.push({ path: path.split("?")[0]!, signed: path, init });
-        return { status: 200, body: "{}" };
+        return { status: 200, body: JSON.stringify({ tenant: TENANT }) };
       },
       close: () => void (closed = true),
     });
@@ -127,17 +128,18 @@ test("seeding creates the install tenant, then pushes its settings with the oper
         "/v1/admin/model-providers/anthropic",
       ],
     );
-    assert.deepEqual(JSON.parse(String(seen[3]!.init.body)), { tenant: "main", apiKey: "sk-ant", ifUnset: true });
+    assert.deepEqual(JSON.parse(String(seen[3]!.init.body)), { apiKey: "sk-ant", ifUnset: true });
     assert.ok(closed);
-    assert.deepEqual(JSON.parse(String(seen[0]!.init.body)), { tenant: "main" });
+    assert.deepEqual(JSON.parse(String(seen[0]!.init.body)), {});
+    assert.equal((seen[0]!.init.headers as Record<string, string>)["x-qm-tenant"], undefined);
     const settings = seen[1]!;
     const headers = settings.init.headers as Record<string, string>;
     assert.equal(headers.authorization, `Bearer ${control}`);
     const body = String(settings.init.body);
     assert.equal(JSON.parse(body).env.ANTHROPIC_API_KEY, undefined, "provider keys are not tenant settings");
-    assert.equal(JSON.parse(body).tenant, "main");
+    assert.equal(headers["x-qm-tenant"], TENANT);
     const expected = createHmac("sha256", signing)
-      .update(`v0:${headers["x-timestamp"]}:PUT\n${settings.signed}\n${body}`)
+      .update(`v0:${headers["x-timestamp"]}:PUT\n${settings.signed}\n${TENANT}\n${body}`)
       .digest("hex");
     assert.equal(headers["x-signature"], `v0=${expected}`);
   } finally {
@@ -152,7 +154,7 @@ test("seeding reads missing operator and tenant secrets from the target's secret
     const link = async (): Promise<CoreLink> => ({
       request: async (_path, init) => {
         bodies.push(String(init.body));
-        return { status: 200, body: "{}" };
+        return { status: 200, body: JSON.stringify({ tenant: TENANT }) };
       },
       close: () => {},
     });
@@ -177,7 +179,10 @@ test("seeding reads missing operator and tenant secrets from the target's secret
 test("seeding refuses without a distinct operator credential, surfaces rejections and defers when core is unreachable", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-tenant-seed-"));
   try {
-    const ok = async (): Promise<CoreLink> => ({ request: async () => ({ status: 200, body: "{}" }), close: () => {} });
+    const ok = async (): Promise<CoreLink> => ({
+      request: async () => ({ status: 200, body: JSON.stringify({ tenant: TENANT }) }),
+      close: () => {},
+    });
     writeFileSync(join(dir, ".env"), `CORE_SIGNING_SECRET=${signing}\nDEPLOYMENT_CONTROL_SECRET=${signing}\n`);
     await assert.rejects(
       seedTenantSettings({ config: config(), configDir: dir }, { coreLink: ok }, "push"),
@@ -189,10 +194,10 @@ test("seeding refuses without a distinct operator credential, surfaces rejection
     });
     writeFileSync(join(dir, ".env"), `CORE_SIGNING_SECRET=${signing}\nDEPLOYMENT_CONTROL_SECRET=${control}\n`);
     const rejected = async (): Promise<CoreLink> => ({
-      request: async (path) => ({
-        status: path.startsWith("/v1/tenant-settings?") ? 400 : 200,
-        body: '{"error":"not_tenant_settings"}',
-      }),
+      request: async (path) =>
+        path.startsWith("/v1/tenant-settings?")
+          ? { status: 400, body: '{"error":"not_tenant_settings"}' }
+          : { status: 200, body: JSON.stringify({ tenant: TENANT }) },
       close: () => {},
     });
     await assert.rejects(
@@ -248,7 +253,10 @@ test("the target retires only the pushed names, and only after core accepts them
       coreLink: async (): Promise<CoreLink> => ({
         request: async (path: string, init: RequestInit) => {
           events.push(`${path.split("?")[0]} ${String(init.body)}`);
-          return { status: path.startsWith("/v1/tenant-settings?") ? settingsStatus : 200, body: "{}" };
+          return {
+            status: path.startsWith("/v1/tenant-settings?") ? settingsStatus : 200,
+            body: JSON.stringify({ tenant: TENANT }),
+          };
         },
         close: () => {},
       }),
@@ -258,11 +266,10 @@ test("the target retires only the pushed names, and only after core accepts them
       },
     };
     await assert.rejects(
-      seedTenantSettings({ config: config({ tenant: "acme" }), configDir: dir }, target, "push"),
+      seedTenantSettings({ config: config(), configDir: dir }, target, "push"),
       /\/v1\/tenant-settings failed \(400\)/,
     );
     assert.ok(!events.some((event) => event.startsWith("retire")), "a rejected import retires nothing");
-    assert.ok(events.includes('/v1/install/tenant {"tenant":"acme"}'), "the configured tenant slug is sent");
     events.length = 0;
     settingsStatus = 200;
     await quietly(async (lines) => {
@@ -286,7 +293,7 @@ test("a secret-store read that fails for any reason but a missing secret is repo
       coreLink: async (): Promise<CoreLink> => ({
         request: async (_path: string, init: RequestInit) => {
           bodies.push(String(init.body));
-          return { status: 200, body: "{}" };
+          return { status: 200, body: JSON.stringify({ tenant: TENANT }) };
         },
         close: () => {},
       }),

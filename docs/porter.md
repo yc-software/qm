@@ -80,9 +80,9 @@ any other way.
 5. **Name the administrator at first boot.** `ADMIN_GRANTS=<email>:org_admin` and the
    sign-in allowlist (`AUTH_ALLOWED_EMAILS=<email>`) are tenant settings, not app
    environment: once core is up, create the deployment's tenant with
-   `PUT /v1/install/tenant {"tenant":"main"}` and write both with
-   `PUT /v1/tenant-settings {"tenant":"main","env":{…}}` (source-signed, with
-   `Authorization: Bearer <DEPLOYMENT_CONTROL_SECRET>`); the Helm chart's hook Job does
+   `PUT /v1/install/tenant`, which answers with its id, and write both with
+   `PUT /v1/tenant-settings {"env":{…}}` naming that id in `x-qm-tenant`
+   (source-signed over the header, with `Authorization: Bearer <DEPLOYMENT_CONTROL_SECRET>`); the Helm chart's hook Job does
    this from `tenantSettings`. Do not skip this step: with Postgres and no
    `ADMIN_GRANTS`, the instance boots, everyone
    allowed can sign in, and the admin console is permanently unreachable — there is no

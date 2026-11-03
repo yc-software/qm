@@ -9,6 +9,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 
@@ -17,7 +18,7 @@ test("admin list endpoints accept fractional limit values", { skip: !URL }, asyn
     dataDir: mkdtempSync(join(tmpdir(), "admin-paging-")),
   });
   const built = buildApp(config, { tenantSettings: testTenantSettings({ ADMIN_GRANTS: "admin-alice:org_admin" }) });
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,

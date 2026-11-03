@@ -9,18 +9,19 @@ import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId } from "../src/types.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { verifyDeployGitAccess } from "../src/deploy/access-token.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings, testIdentity } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { PORTAL_IDENTITY_HEADER, mintPortalIdentity } from "../src/auth/portal-identity.ts";
+import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
-function appWithFakeRuntime() {
+async function appWithFakeRuntime() {
   const deployStore = createDeployStore(testDeployBackings());
   const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({
@@ -42,13 +43,13 @@ function appWithFakeRuntime() {
     acl,
     directory,
     sessions,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: await testIdentity(),
   } as unknown as Parameters<typeof createApp>[0]);
   return { app, acl, directory, sessions };
 }
 
 test("reachDeployment: org → any non-empty principal; personal → owner only; empty/unknown → denied", async () => {
-  const { app } = appWithFakeRuntime();
+  const { app } = await appWithFakeRuntime();
 
   const org = await app.deploy({
     ownerScopeId: scopeId("org", "default-org"),
@@ -72,13 +73,13 @@ test("reachDeployment: org → any non-empty principal; personal → owner only;
 });
 
 test("reachDeployment: a team-owned deployment is denied (membership ingress is a follow-up)", async () => {
-  const { app } = appWithFakeRuntime();
+  const { app } = await appWithFakeRuntime();
   const team = await app.deploy({ ownerScopeId: scopeId("team", "eng"), createdBy: "U1", entrypoint: "x", files: [] });
   assert.equal((await app.reachDeployment(team.id, "U1")).status, "denied");
 });
 
 test("reachDeployment: a read grant lets a non-owner reach a personal deployment; revoke re-denies", async () => {
-  const { app, acl } = appWithFakeRuntime();
+  const { app, acl } = await appWithFakeRuntime();
   const personal = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -102,7 +103,7 @@ test("reachDeployment: a read grant lets a non-owner reach a personal deployment
 });
 
 test("reachDeployment: shared-scope read grants require current channel or group membership", async () => {
-  const { app, acl, directory, sessions } = appWithFakeRuntime();
+  const { app, acl, directory, sessions } = await appWithFakeRuntime();
   const personal = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -159,7 +160,7 @@ test("reachDeployment: shared-scope read grants require current channel or group
 });
 
 test("listDeploymentsForViewer includes owned and ACL-visible deployments only", async () => {
-  const { app, acl, directory } = appWithFakeRuntime();
+  const { app, acl, directory } = await appWithFakeRuntime();
   const own = await app.deploy({
     ownerScopeId: scopeId("personal", "U2"),
     createdBy: "U2",
@@ -198,7 +199,7 @@ test("listDeploymentsForViewer includes owned and ACL-visible deployments only",
 });
 
 test("listDeploymentsForViewer: a write grant yields permission write for a non-owner", async () => {
-  const { app, acl } = appWithFakeRuntime();
+  const { app, acl } = await appWithFakeRuntime();
   const shared = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -217,7 +218,7 @@ test("listDeploymentsForViewer: a write grant yields permission write for a non-
 });
 
 test("HTTP: /v1/deployments?principalId= filters through viewer authz", async () => {
-  const { app, acl, directory } = appWithFakeRuntime();
+  const { app, acl, directory } = await appWithFakeRuntime();
   const shared = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -236,7 +237,7 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
-  const server = createInsecureTestServer(app);
+  const server = createInsecureTestServer(TEST_TENANT, app);
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -254,7 +255,7 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
 });
 
 test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ingress is configured", async () => {
-  const { app, acl, directory } = appWithFakeRuntime();
+  const { app, acl, directory } = await appWithFakeRuntime();
   const shared = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -283,7 +284,11 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     const path = "/v1/deployments?principalId=U2";
-    const headers = signedRequestHeaders(secret, "GET", path, "", {}) as Record<string, string>;
+    const identity = await mintPortalIdentity({ t: TEST_TENANT, p: "U2", exp: Date.now() + 60_000 }, secret);
+    const headers = signedRequestHeaders(secret, "GET", path, "", {
+      ...TENANT_HEADERS,
+      [PORTAL_IDENTITY_HEADER]: identity,
+    });
     const r = await fetch(`${base}${path}`, { headers });
     assert.equal(r.status, 200);
     const body = (await r.json()) as { deployments: Array<{ id: string; permission: string; gitUrl?: string }> };
@@ -303,7 +308,7 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
 });
 
 test("reachDeployment: an org grant on a personal deployment opens it to any verified principal", async () => {
-  const { app, acl } = appWithFakeRuntime();
+  const { app, acl } = await appWithFakeRuntime();
   const personal = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -322,7 +327,7 @@ test("reachDeployment: an org grant on a personal deployment opens it to any ver
 });
 
 test("reachDeployment: admin bypass reaches running deployments without owner scope membership", async () => {
-  const { app } = appWithFakeRuntime();
+  const { app } = await appWithFakeRuntime();
   const personal = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",

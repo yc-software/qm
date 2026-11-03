@@ -3,8 +3,10 @@ import type { SecretSource } from "../credentials/secret-source.ts";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
-import { swallow } from "../util/errors.ts";
+import { currentTenant, isTenantId } from "../tenants/context.ts";
+import { reportFailureAs, swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
+import { perTenant } from "../tenants/context.ts";
 import { publicFetch } from "../util/network.ts";
 
 export const ACCOUNT_TYPES = ["default", "personal", "company"] as const;
@@ -516,10 +518,35 @@ export interface PublicOAuthClient {
   label: string;
 }
 
-const publicClients = new Map<string, PublicOAuthClient>();
-const publicProviders = new Map<string, OAuthProviderConfig>();
+const PUBLIC_CLIENTS_TTL_MS = 5 * 60_000;
+let publicClientSource: (() => Promise<PublicOAuthClient[]>) | undefined;
+const publicOAuth = perTenant<{
+  clients: Map<string, PublicOAuthClient>;
+  providers: Map<string, OAuthProviderConfig>;
+  loadedAt: number;
+  loading?: Promise<void>;
+}>(() => ({ clients: new Map(), providers: new Map(), loadedAt: -Infinity }));
+
+export function setPublicOAuthClientSource(source: () => Promise<PublicOAuthClient[]>): void {
+  publicClientSource = source;
+}
+
+export async function publicOAuthClientsReady(): Promise<void> {
+  const state = publicOAuth();
+  const source = publicClientSource;
+  if (!source || Date.now() - state.loadedAt < PUBLIC_CLIENTS_TTL_MS) return;
+  state.loading ??= source()
+    .then(setPublicOAuthClients, reportFailureAs("oauth: load public clients", undefined))
+    .finally(() => {
+      state.loading = undefined;
+    });
+  await state.loading;
+}
 
 export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
+  const state = publicOAuth();
+  const { clients: publicClients, providers: publicProviders } = state;
+  state.loadedAt = Date.now();
   publicClients.clear();
   publicProviders.clear();
   for (const c of clients) {
@@ -545,16 +572,17 @@ export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
 }
 
 export function oauthProviderEntries(): Array<[string, OAuthProviderConfig]> {
-  return [...Object.entries(PROVIDERS), ...publicProviders.entries()];
+  return [...Object.entries(PROVIDERS), ...publicOAuth().providers.entries()];
 }
 
 export function oauthProvider(name: string): OAuthProviderConfig | undefined {
-  return PROVIDERS[name] ?? publicProviders.get(name);
+  return PROVIDERS[name] ?? publicOAuth().providers.get(name);
 }
 
 export function withPublicOAuthClients(resolve: OAuthClientResolver): OAuthClientResolver {
   return async (provider, ctx) => {
-    const c = publicClients.get(provider);
+    await publicOAuthClientsReady();
+    const c = publicOAuth().clients.get(provider);
     return c ? { id: c.clientId, secret: "", clientRef: `public:${provider}` } : resolve(provider, ctx);
   };
 }
@@ -591,7 +619,7 @@ export interface OAuthState {
   issuedAt: number;
   nonce: string;
   returnTo?: string;
-  orgId?: string;
+  tenant: string;
   accountType?: AccountType;
   clientRef?: string;
   codeVerifier?: string;
@@ -608,7 +636,7 @@ function isOAuthState(v: unknown): v is OAuthState {
     typeof s.issuedAt === "number" &&
     typeof s.nonce === "string" &&
     (s.returnTo === undefined || typeof s.returnTo === "string") &&
-    (s.orgId === undefined || typeof s.orgId === "string") &&
+    isTenantId(s.tenant) &&
     (s.accountType === undefined || isAccountType(s.accountType)) &&
     (s.clientRef === undefined || typeof s.clientRef === "string") &&
     (s.codeVerifier === undefined || typeof s.codeVerifier === "string") &&
@@ -617,7 +645,7 @@ function isOAuthState(v: unknown): v is OAuthState {
 }
 
 export function sealOAuthState(
-  state: Omit<OAuthState, "issuedAt" | "nonce"> & { issuedAt?: number; nonce?: string },
+  state: Omit<OAuthState, "issuedAt" | "nonce" | "tenant"> & { issuedAt?: number; nonce?: string },
   opts: { secret: string; now?: () => number } = { secret: "" },
 ): Promise<string> {
   if (!opts.secret) throw new Error("OAuth state secret required");
@@ -626,6 +654,7 @@ export function sealOAuthState(
       ...state,
       issuedAt: state.issuedAt ?? (opts.now ?? Date.now)(),
       nonce: state.nonce ?? randomUUID(),
+      tenant: currentTenant(),
     },
     opts.secret,
   );
@@ -692,6 +721,7 @@ export async function exchangeCode(
     codeVerifier?: string;
   },
 ): Promise<{ hosts: string[]; token: OAuthToken }> {
+  await publicOAuthClientsReady();
   const p = oauthProvider(provider);
   if (!p) throw new Error(`unknown OAuth provider: ${provider}`);
   const adapter = p.exchange ?? defaultExchange;
@@ -708,7 +738,7 @@ export async function exchangeCode(
 }
 
 function providerForHost(host: string): { name: string; config: OAuthProviderConfig } | null {
-  for (const [name, config] of [...Object.entries(PROVIDERS), ...publicProviders]) {
+  for (const [name, config] of [...Object.entries(PROVIDERS), ...publicOAuth().providers]) {
     if (config.hosts.includes(host)) return { name, config };
   }
   return null;
@@ -724,6 +754,7 @@ export function makeRefresh(opts: {
   now?: () => number;
 }): OAuthRefresh {
   return async (host, token, ctx) => {
+    await publicOAuthClientsReady();
     const match = providerForHost(host);
     if (!match) throw new Error(`cannot refresh ${host} (unknown provider)`);
     if (match.config.refresh === null) throw new Error(`${match.name} tokens do not refresh — reconnect`);

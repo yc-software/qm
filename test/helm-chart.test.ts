@@ -213,18 +213,19 @@ test("Helm rejects services it does not know", options, () => {
   assert.throws(() => render({ services: { unknown: { enabled: true } } }), /unknown service "unknown" in services/);
 });
 
-function tenantImport(resources: Resource[]): { tenant: string; env: Record<string, string> } {
+function tenantImport(resources: Resource[]): { env: Record<string, string> } {
   const secret = resources.find((r) => r.kind === "Secret" && r.metadata.name === "test-qm-tenant-settings");
   assert.ok(secret?.stringData?.["settings.json"], "missing tenant settings secret");
-  return JSON.parse(secret.stringData["settings.json"]) as { tenant: string; env: Record<string, string> };
+  return JSON.parse(secret.stringData["settings.json"]) as { env: Record<string, string> };
 }
 
 const tenantSettings = (resources: Resource[]): Record<string, string> => tenantImport(resources).env;
 
-test("Helm sends the configured tenant slug and refuses an invalid one", options, () => {
-  assert.equal(tenantImport(render()).tenant, "main");
-  assert.equal(tenantImport(render({ tenant: "acme" })).tenant, "acme");
-  assert.throws(() => render({ tenant: "Acme" }), /tenant must be a tenant slug/);
+test("Helm names no tenant and the hook sends core's install tenant id on every later call", options, () => {
+  const resources = render();
+  assert.deepEqual(Object.keys(tenantImport(resources)), ["env"]);
+  const job = resources.find((r) => r.kind === "Job" && r.metadata.name === "test-qm-tenant-settings");
+  assert.match(JSON.stringify(job), /x-qm-tenant/);
 });
 
 test("Helm pushes sign-in and admin settings to the install tenant instead of any service env", options, () => {

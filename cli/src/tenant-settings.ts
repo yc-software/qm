@@ -1,4 +1,4 @@
-import { sandboxConfigBackend, securityScreenEnv, tenantOf, type QmConfig } from "./config.ts";
+import { sandboxConfigBackend, securityScreenEnv, type QmConfig } from "./config.ts";
 import { CoreUnreachableError, isCoreUnreachable } from "./deployment-layer.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { operatorCredentials, operatorInit, type CoreLink } from "./operator-request.ts";
@@ -130,18 +130,16 @@ export async function seedTenantSettings(
     warn(`tenant settings: ${errMessage(error)}; run \`qm settings push\` once core is reachable`);
     return;
   }
-  const call: OperatorCall = async (path, body) => {
+  const call: OperatorCall = async (path, body, tenant) => {
     const text = JSON.stringify(body);
-    return core.request(path, operatorInit(credentials, "PUT", path, text)).catch((error) => {
+    return core.request(path, operatorInit(credentials, "PUT", path, text, tenant)).catch((error) => {
       if (!isCoreUnreachable(error)) throw error;
       throw new CoreUnreachableError(`core did not answer ${path.split("?")[0]}: ${errMessage(error)}`);
     });
   };
   let result: Awaited<ReturnType<typeof applyTenantImport>>;
   try {
-    result = await applyTenantImport(plan, tenantOf(opts.config), call, (message) =>
-      warn(`tenant settings: ${message}`),
-    );
+    result = await applyTenantImport(plan, call, (message) => warn(`tenant settings: ${message}`));
   } catch (error) {
     if (error instanceof OperatorRouteError) throw new CliError(error.message);
     if (mode === "push" || !(error instanceof CoreUnreachableError)) throw error;

@@ -65,9 +65,9 @@ tokens), and the values the hook imports into the tenant's admin settings:
 `<PROVIDER>_OAUTH_CLIENT_ID`/`_SECRET` pairs with `GOOGLE_WORKSPACE_DOMAIN`, and
 `LOOPS_USERS`. The chart refuses all of them in `env`, `secretEnv` or
 `services.<name>.env`. After each install or upgrade, a hook Job running the core
-image creates the tenant named by `tenant` (default `main`) on a fresh install
-(`PUT /v1/install/tenant`; once tenants exist the slug must be one of them, or the
-Job fails with `unknown_tenant`), writes the settings to it (`PUT /v1/tenant-settings`)
+image creates the install's one tenant on a fresh install (`PUT /v1/install/tenant`
+answers with its id; a database with several tenants fails the Job with
+`ambiguous_install_tenant`), writes the settings to it (`PUT /v1/tenant-settings`)
 and imports the rest through the admin routes, keeping any branding, posture,
 OAuth client or model key the tenant already has; each `LOOPS_USERS` entry turns on
 `inbox_loops` for that person. Every call is signed with `CORE_SIGNING_SECRET` and

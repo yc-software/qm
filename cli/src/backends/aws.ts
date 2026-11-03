@@ -27,6 +27,7 @@ import {
 import { CliError, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
 import {
   awsWorkloadArchitecture,
+  FARGATE_MAX_STOP_TIMEOUT_S,
   requiresAwsMicrovmImage,
   isDigestPinned,
   sandboxCoreEnv,
@@ -183,13 +184,13 @@ export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploym
     return url;
   },
   request: awsCoreRequest,
-  secretFallback: (config) =>
+  secretFallback: (config, name) =>
     config.aws
       ? capture(process.env.AWS_BIN ?? "aws", [
           "secretsmanager",
           "get-secret-value",
           "--secret-id",
-          `${config.aws.secretsPrefix}CORE_SIGNING_SECRET`,
+          `${config.aws.secretsPrefix}${name}`,
           "--query",
           "SecretString",
           "--output",
@@ -428,9 +429,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       }),
     );
   }
-  if (config.services.includes("portal") && service === "web-ui") {
-    env.REQUIRE_SIGNED_PORTAL_IDENTITY = "1";
-  }
   env[def.docker.portEnv] = String(def.docker.internalPort);
   return Object.fromEntries(Object.entries(withoutTenantSettings(env)).sort(([a], [b]) => a.localeCompare(b)));
 }
@@ -483,6 +481,22 @@ function workloadArchitecture(config: QmConfig, workload: string): "arm64" | "am
   return awsWorkloadArchitecture(config, workload);
 }
 
+const CORE_SHUTDOWN_DRAIN_MS = 30_000;
+const CORE_EXIT_AFTER_DRAIN_S = 30;
+
+function coreStopTimeout(environment: Record<string, string>): number {
+  const raw = environment.SHUTDOWN_DRAIN_MS?.trim();
+  const drainMs = raw ? Number(raw) : CORE_SHUTDOWN_DRAIN_MS;
+  if (!Number.isFinite(drainMs) || drainMs < 0)
+    throw new CliError(`env.core.SHUTDOWN_DRAIN_MS=${raw} is not a number of milliseconds`);
+  const seconds = Math.ceil(drainMs / 1_000) + CORE_EXIT_AFTER_DRAIN_S;
+  if (seconds > FARGATE_MAX_STOP_TIMEOUT_S)
+    throw new CliError(
+      `env.core.SHUTDOWN_DRAIN_MS=${raw} leaves core no time to hand turns back before Fargate stops it (at most ${FARGATE_MAX_STOP_TIMEOUT_S} s after SIGTERM); use at most ${(FARGATE_MAX_STOP_TIMEOUT_S - CORE_EXIT_AFTER_DRAIN_S) * 1_000}, or set aws.services.core.stopTimeout`,
+    );
+  return seconds;
+}
+
 export function renderTaskDefinition(
   config: QmConfig,
   service: string,
@@ -509,6 +523,8 @@ export function renderTaskDefinition(
       })),
     )
     .sort((a, b) => a.name.localeCompare(b.name));
+  const environment = workloadEnvironment(config, service, backgroundDeploymentId);
+  const stopTimeout = spec.stopTimeout ?? (service === "core" ? coreStopTimeout(environment) : undefined);
   const healthCheck = def
     ? {
         command: def.tcpIngress?.healthCheck ?? [
@@ -540,9 +556,7 @@ export function renderTaskDefinition(
         name: service,
         image,
         essential: true,
-        environment: Object.entries(workloadEnvironment(config, service, backgroundDeploymentId)).map(
-          ([name, value]) => ({ name, value }),
-        ),
+        environment: Object.entries(environment).map(([name, value]) => ({ name, value })),
         secrets,
         portMappings: [
           {
@@ -554,7 +568,7 @@ export function renderTaskDefinition(
           },
         ],
         ...(healthCheck ? { healthCheck } : {}),
-        ...(spec.stopTimeout !== undefined ? { stopTimeout: spec.stopTimeout } : {}),
+        ...(stopTimeout !== undefined ? { stopTimeout } : {}),
         logConfiguration: {
           logDriver: "awslogs",
           options: {
@@ -2991,7 +3005,7 @@ function awsBackgroundWorkTransport(
   return (method, body = "") => {
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = createHmac("sha256", signing)
-      .update(`v0:${timestamp}:${method}\n${url.pathname}\n${body}`)
+      .update(`v0:${timestamp}:${method}\n${url.pathname}\n\n${body}`)
       .digest("hex");
     const init: RequestInit = {
       method,

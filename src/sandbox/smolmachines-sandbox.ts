@@ -80,8 +80,8 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   store: DurableMap<StoredSmolmachinesSandbox>;
   advisoryLock: AdvisoryLock;
   snapshots?: HomeSnapshotStore;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
   fetchImpl?: typeof fetch;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
@@ -349,9 +349,9 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
         label: "smolmachines",
         homeDir: HOME_DIR,
         homeTarPath: HOME_TAR,
-        prunePaths: [
+        prunePaths: () => [
           ...HOME_SNAPSHOT_PRUNE,
-          ...ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => `./${rel}`),
+          ...ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => `./${rel}`),
         ],
         store: opts.snapshots,
         io: {
@@ -435,7 +435,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     prefix,
     homeDir: HOME_DIR,
     defaultTimeoutSec,
-    credentialPaths: opts.credentialPaths ?? [],
+    credentialPaths: () => opts.credentialPaths?.() ?? [],
     ...(opts.layerToolFiles ? { installLayerTools: createLayerToolInstaller(opts.layerToolFiles) } : {}),
     egressProxyUrl: opts.egressProxyUrl,
     deleteFailureCode: "machine_delete_failed",
@@ -465,10 +465,10 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       os: `smolmachines microVM booted from the ${image} image (the whole disk persists across stops${idleNote})`,
       runtimes: ["Node", "Python 3"],
       get tools() {
-        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
+        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools?.() ?? [])]);
       },
       get notInstalled() {
-        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools?.() ?? []);
       },
       cpus: opts.cpus ?? DEFAULT_CPUS,
       memoryMb: opts.memoryMb ?? DEFAULT_MEMORY_MB,
@@ -499,7 +499,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: HOME_DIR,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => rel),
   });
 
   async function recoveryFor(scopeId: string): Promise<Pick<ComputerStatus, "recovery">> {

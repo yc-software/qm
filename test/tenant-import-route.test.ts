@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { canonicalPayload, TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 import { orgScope } from "../src/config.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { applyTenantImport, tenantImport, type OperatorCall } from "../cli/src/tenant-import.ts";
@@ -14,7 +15,6 @@ import { testConfig } from "./support/test-config.ts";
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
 const [TEST_TENANT] = testTenants();
-const SLUG = "test-0";
 
 test("the CLI import lands in the named tenant through core's operator routes and keeps admin edits", async () => {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
@@ -23,7 +23,6 @@ test("the CLI import lands in the named tenant through core's operator routes an
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),
-    requireSignedPortalIdentity: true,
     deploymentControlSecret: controlSecret,
     tenantSettings: built.tenantSettings,
     modelCredentials: built.modelCredentials,
@@ -36,7 +35,7 @@ test("the CLI import lands in the named tenant through core's operator routes an
   });
   server.listen(0);
   const origin = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const call: OperatorCall = async (path, body) => {
+  const call: OperatorCall = async (path, body, tenant) => {
     const raw = JSON.stringify(body);
     const ts = Math.floor(Date.now() / 1000);
     const response = await fetch(`${origin}${path}`, {
@@ -44,8 +43,9 @@ test("the CLI import lands in the named tenant through core's operator routes an
       headers: {
         "content-type": "application/json",
         "x-timestamp": String(ts),
-        "x-signature": signRequest(sourceSecret, ts, `PUT\n${path}\n${raw}`),
+        "x-signature": signRequest(sourceSecret, ts, canonicalPayload("PUT", path, raw, tenant)),
         authorization: `Bearer ${controlSecret}`,
+        ...(tenant ? { [TENANT_HEADER]: tenant } : {}),
       },
       body: raw,
     });
@@ -62,9 +62,7 @@ test("the CLI import lands in the named tenant through core's operator routes an
   };
   try {
     const warnings: string[] = [];
-    const { applied: first } = await applyTenantImport(tenantImport(env), SLUG, call, (message) =>
-      warnings.push(message),
-    );
+    const { applied: first } = await applyTenantImport(tenantImport(env), call, (message) => warnings.push(message));
     assert.deepEqual(warnings, []);
     assert.deepEqual(first, [
       "PI_MODEL",
@@ -79,10 +77,11 @@ test("the CLI import lands in the named tenant through core's operator routes an
       assert.equal((await built.config.getBrandingDurable(orgScope()))?.orgName, "Acme");
       assert.equal(await built.config.getSecurityPostureOwnDurable(orgScope()), "strict");
       assert.equal((await built.config.getConnectorClientSecret(orgScope(), "google"))?.clientId, "gid");
-      const aliased = await call("/v1/admin/scopes/tenant/security-posture?nonce=alias", {
-        tenant: SLUG,
-        posture: "strict",
-      });
+      const aliased = await call(
+        "/v1/admin/scopes/tenant/security-posture?nonce=alias",
+        { posture: "strict" },
+        TEST_TENANT,
+      );
       assert.equal(aliased.status, 200, aliased.body);
       assert.equal(
         JSON.parse(aliased.body).scopeId,
@@ -96,13 +95,12 @@ test("the CLI import lands in the named tenant through core's operator routes an
     });
     const { applied: again } = await applyTenantImport(
       tenantImport({ ...env, HARNESS_SECURITY_POSTURE: "dangerous", ANTHROPIC_API_KEY: "sk-ant-other" }),
-      SLUG,
       call,
       () => {},
     );
     assert.deepEqual(again, ["PI_MODEL", "inbox_loops for personal:ada@example.com"]);
     const repeated = tenantImport({ ...env, HARNESS_SECURITY_POSTURE: "dangerous", ANTHROPIC_API_KEY: "sk-ant-other" });
-    const { applied: immediate } = await applyTenantImport(repeated, SLUG, call, () => {});
+    const { applied: immediate } = await applyTenantImport(repeated, call, () => {});
     assert.deepEqual(immediate, again, "an identical import right after the last one is not refused as a replay");
     await withTenant(TEST_TENANT, async () => {
       assert.equal(await built.config.getSecurityPostureOwnDurable(orgScope()), "auto");

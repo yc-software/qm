@@ -4,7 +4,6 @@ import { test } from "node:test";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
 import type { Config } from "../src/config.ts";
 import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
-import { testTenants } from "./support/test-tenants.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
@@ -22,7 +21,7 @@ test("admin lookup recognizes an existing model without asking for a clone templ
   const config = testConfig();
   const built = buildApp(config);
   await built.modelCredentials.set("anthropic", "test-only", "admin");
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   try {
     const result = await fetch(
@@ -150,7 +149,7 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
   });
   await built.modelCredentials.set("anthropic", "lookup-key", "admin");
   await built.tenantSettings.get();
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const post = (path: string, body: object, actor = "admin-alice@default-org") =>
@@ -195,7 +194,7 @@ test("enable rechecks serving credentials before mutating the picker", async () 
   const config = testConfig();
   const built = buildApp(config, { modelVerificationProbe: async () => onProbe() });
   await built.modelCredentials.set("anthropic", "test-key", "admin");
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/model-registry/claude-opus-4-6/enable`;
   const enable = () =>
@@ -226,8 +225,7 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 
 import { createServer } from "node:http";
 import { testMap } from "./support/test-database.ts";
-
-const [TEST_TENANT] = testTenants();
+import { TEST_TENANT } from "./support/tenant.ts";
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

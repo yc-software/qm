@@ -11,9 +11,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
     ...loadConfig({}),
     databaseUrl,
-    databaseOwnerUrl: databaseUrl,
-    databasePoolMax: 4,
-    databaseDirectPoolMax: 8,
+    databaseOwnerUrl: overrides.databaseOwnerUrl ?? databaseUrl,
     port: 0,
     pluginSkillDirs: [],
     memoryCaptureQuietMs: 0,

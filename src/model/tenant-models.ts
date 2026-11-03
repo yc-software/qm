@@ -90,6 +90,7 @@ export function createTenantModels(deps: {
   keychain: () => Keychain | undefined;
   fetch?: typeof fetch;
   anthropicKey: () => Promise<string | null>;
+  actorKey?: string;
 }): TenantModels {
   const gateways = new Map<string, { fingerprint: string; transport: ModelGatewayTransportConfig }>();
   const chatgpt = new Map<string, { credentialId: string; value: CompanyChatGPTAuth }>();
@@ -104,9 +105,14 @@ export function createTenantModels(deps: {
     const fingerprint = JSON.stringify(settings.modelGateway);
     const known = gateways.get(tenant);
     if (known?.fingerprint === fingerprint) return known.transport;
-    const transport = createGatewayCatalog(settings.modelGateway, deps.fetch, Date.now, (models, aliases) => {
-      if (gateways.get(tenant)?.transport === transport) setGatewayModels(models, aliases);
-    }).transport;
+    const transport = createGatewayCatalog(
+      { ...settings.modelGateway, ...(deps.actorKey ? { actorKey: deps.actorKey } : {}) },
+      deps.fetch,
+      Date.now,
+      (models, aliases) => {
+        if (gateways.get(tenant)?.transport === transport) setGatewayModels(models, aliases);
+      },
+    ).transport;
     gateways.set(tenant, { fingerprint, transport });
     return transport;
   }

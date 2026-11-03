@@ -13,14 +13,13 @@ import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin 
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { assertRuntimeLogin } from "./persistence/runtime-login.ts";
+import { singleTenantResolver } from "./tenants/resolver.ts";
 
 const config = loadConfig();
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 await assertRuntimeLogin(config.databaseUrl!);
-await built.tenantSettings.refreshAll();
-await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
@@ -42,14 +41,9 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
 const server = createServer(built.app, {
   ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
   managedSlack,
+  tenants: singleTenantResolver(built.tenants),
 });
 
-await built.config.hydrate?.();
-await built.refreshCustomProviders();
-await built.identity.refresh();
-void built.mcpToolService.refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
-await built.deploymentLayerReady;
-built.deploymentLayerRefresh.start();
 built.runtime.start();
 
 server.listen(config.port, () => {
@@ -182,7 +176,6 @@ function shutdown(signal: string): void {
   for (const runtime of slackAccountRuntimes)
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
   void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
-  built.deploymentLayerRefresh.stop();
   server.close();
   server.closeIdleConnections();
   stopWithBackstop(

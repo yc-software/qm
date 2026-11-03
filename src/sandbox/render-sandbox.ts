@@ -67,8 +67,8 @@ export interface RenderSandboxOptions extends BlobStagingOptions {
   homeDir?: string;
   defaultTimeoutSec?: number;
   checkpointIntervalMs?: number;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
@@ -424,7 +424,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     prefix,
     homeDir,
     defaultTimeoutSec,
-    credentialPaths: opts.credentialPaths ?? [],
+    credentialPaths: () => opts.credentialPaths?.() ?? [],
     deleteFailureCode: "render_destroy_failed",
     onError: opts.onError,
     exec,
@@ -469,7 +469,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     exec,
     readAbsBytes,
     defaultHomeDir: homeDir,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => rel),
   });
 
   return {
@@ -497,11 +497,11 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
             "python3",
             "gh",
             "aws (CLI v2)",
-            ...(opts.extraTools ?? []),
+            ...(opts.extraTools?.() ?? []),
           ]);
         },
         get notInstalled() {
-          return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+          return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools?.() ?? []);
         },
       },
     },

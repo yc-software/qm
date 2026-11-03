@@ -10,13 +10,13 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testDeployBackings, testIdentity } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 
@@ -37,7 +37,7 @@ function httpGet(
 }
 
 async function fixture(
-  deps: Parameters<typeof createInsecureTestServer>[1],
+  deps: Parameters<typeof createInsecureTestServer>[2],
   upstreamContentType = "text/html; charset=utf-8",
   upstreamHeaders: Record<string, string> = {},
 ) {
@@ -65,7 +65,7 @@ async function fixture(
     acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     directory: createPostgresDirectoryStore(testDatabaseUrl()),
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: await testIdentity(),
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({
     ownerScopeId: scopeId("personal", "alice@example.com"),
@@ -74,7 +74,7 @@ async function fixture(
     files: [],
     name: "mysite",
   });
-  const server = createInsecureTestServer(app, deps);
+  const server = createInsecureTestServer(TEST_TENANT, app, { rowTenants: async () => [TEST_TENANT], ...deps });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
   const close = async () => {

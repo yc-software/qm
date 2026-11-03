@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
+import { tenantReady } from "../src/tenants/context.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testMap } from "./support/test-database.ts";
 
@@ -42,15 +43,12 @@ mock.module("../src/resolution/config-store.ts", {
 
 const { buildApp } = await import("./support/build-app.ts");
 
-test("building the app starts no hydration, and explicit startup hydration fails closed", async (t) => {
-  const errors = t.mock.method(console, "error", () => {});
+test("a failed first-bind load fails closed and runs again on the next use", async () => {
   const built = buildApp(testConfig());
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
-      await assert.rejects(built.identity.refresh(), (error: unknown) => error === identityFailure);
-      await assert.rejects(built.config.hydrate!(), (error: unknown) => error === configFailure);
+      await assert.rejects(tenantReady(), (error: unknown) => error === identityFailure || error === configFailure);
     }
-    assert.ok(!errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("startup: hydrate")));
   } finally {
     await built.runtime.stop();
   }

@@ -8,6 +8,7 @@ import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } fro
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
+import { perTenant } from "../tenants/context.ts";
 
 export interface SandboxResource {
   id: string;
@@ -117,19 +118,15 @@ export function createSandboxResources(opts: {
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
 }): SandboxResources {
-  const upgraded = new Map<string, Promise<void>>();
+  const upgrade = perTenant<{ done?: Promise<void> }>(() => ({}));
   const initialize = async (): Promise<void> => {
     if (!opts.upgrade) return;
-    const tenant = boundTenant() ?? "";
-    let upgrade = upgraded.get(tenant);
-    if (!upgrade) {
-      upgrade = opts.upgrade().catch((error: unknown) => {
-        upgraded.delete(tenant);
-        throw error;
-      });
-      upgraded.set(tenant, upgrade);
-    }
-    await upgrade;
+    const state = upgrade();
+    state.done ??= opts.upgrade().catch((error: unknown) => {
+      state.done = undefined;
+      throw error;
+    });
+    await state.done;
   };
   const actionsFor = (backend: Sandbox | undefined): string[] => {
     if (!backend) return [];

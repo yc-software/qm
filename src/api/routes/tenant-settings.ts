@@ -6,25 +6,16 @@ import { requireOperatorControl } from "./background-work.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
-const TENANT_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-
-export async function operatorTenant(ctx: ApiCtx): Promise<string | null> {
-  const { deps, body, res } = ctx;
+export async function operatorTenantKnown(ctx: ApiCtx): Promise<boolean> {
+  const { deps, res } = ctx;
   if (!deps.tenantSettings) {
     sendJson(res, 404, { error: "not_found" });
-    return null;
+    return false;
   }
-  const slug = isObj(body) ? body.tenant : undefined;
-  if (typeof slug !== "string" || !TENANT_SLUG.test(slug)) {
-    sendJson(res, 400, {
-      error: "invalid_tenant",
-      message: "tenant must be a tenant slug: lowercase letters, digits and inner hyphens",
-    });
-    return null;
-  }
-  const tenant = await deps.tenantSettings.tenantForSlug(slug);
-  if (!tenant) sendJson(res, 404, { error: "unknown_tenant", message: `No tenant has the slug ${slug}`, tenant: slug });
-  return tenant;
+  const tenant = currentTenant();
+  if (await deps.tenantSettings.hasTenant(tenant)) return true;
+  sendJson(res, 404, { error: "unknown_tenant", message: `No tenant has the id ${tenant}`, tenant });
+  return false;
 }
 
 async function putTenantSettings(ctx: ApiCtx): Promise<void> {

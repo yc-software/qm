@@ -47,8 +47,6 @@ secretEnv:
   RESEND_API_KEY: ""
   PORTAL_SESSION_SECRET: ""
 
-tenant: main
-
 tenantSettings: {}
 
 ingress:

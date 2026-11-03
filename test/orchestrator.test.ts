@@ -1029,6 +1029,7 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
     apiBaseUrl: "https://core.example.com",
   });
   const built = buildApp(config);
+  await built.identity.ready();
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
@@ -1071,6 +1072,7 @@ test("a legacy browse-only model cannot strand managed default-model browsing", 
     apiBaseUrl: "https://core.example.com",
   });
   const built = buildApp(config);
+  await built.identity.ready();
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
@@ -1097,6 +1099,7 @@ test("browse follows a live org base model change, not the process-start default
     apiBaseUrl: "https://core.example.com",
   });
   const built = buildApp(config);
+  await built.identity.ready();
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
@@ -3869,6 +3872,7 @@ test("environments: an unattached scope provisions through its own scope (today'
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
   });
   const built = buildApp(config);
+  await built.identity.ready();
   const { app, sandbox } = built;
   const realProvision = sandbox.provision.bind(sandbox);
   let rwScope: string | undefined;
@@ -4550,6 +4554,7 @@ test("inventories ride a byte-stable system prompt; a warm turn's environment ca
 
 test("an isolated channel environment does not disclose the actor's private sandbox", async () => {
   const built = await posturedApp({ sharing: "isolated" });
+  await built.identity.ready();
   await built.directory.replace([
     { principalId: "U1", displayName: "One", type: "internal" },
     { principalId: "U2", displayName: "Two", type: "internal" },

@@ -521,6 +521,7 @@ export interface SessionStore {
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;
+  latestToolPurposes(turnIds: readonly string[]): Promise<Map<string, string>>;
   goals(sessionIds: readonly string[]): Promise<Map<string, GoalRecord>>;
   setGoal(lease: Lease, goal: GoalRecord, notices?: readonly NewEntry[]): Promise<void>;
 
@@ -534,6 +535,7 @@ export interface SessionStore {
   participantScopes(principalId: string): Promise<ParticipantScope[]>;
   listParticipantPage(principalId: string, query: ParticipantPageQuery): Promise<ParticipantPage>;
   descendantsOf(rootIds: readonly string[]): Promise<SessionDescendant[]>;
+  inheritedOrigin(session: Pick<Session, "id" | "parentSessionId">): Promise<SessionOrigin>;
   listDescendantsForParticipant(rootId: string, principalId: string, limit: number): Promise<Session[]>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
 

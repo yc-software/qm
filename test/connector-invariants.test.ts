@@ -16,6 +16,8 @@ import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
@@ -39,6 +41,7 @@ test("C3 — a host-wide environment token never reaches an unconnected catalog 
   process.env[envName] = "shared-service-token";
   try {
     const ok = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "c3-ok-")) }));
+    await ok.identity.ready();
     assert.equal(
       await ok.connectorTokens.connectorAccessToken(offending, "nobody"),
       null,
@@ -53,9 +56,10 @@ test("C3 — a host-wide environment token never reaches an unconnected catalog 
 const SECRET = "invariant-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
 
-test("cross-org — the callback rejects sealed state minted for a different org BEFORE exchange", async () => {
+test("cross-tenant — the callback rejects sealed state that names no tenant BEFORE exchange", async () => {
   let exchanged = false;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
+  await built.identity.ready();
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
@@ -69,19 +73,15 @@ test("cross-org — the callback rejects sealed state minted for a different org
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const state = await sealOAuthState(
-      {
-        provider: "google",
-        principalId: "U1",
-        redirectUri: `${base}/v1/connectors/oauth/google/callback`,
-        orgId: "other",
-      },
-      { secret: SECRET },
+    const redirectUri = `${base}/v1/connectors/oauth/google/callback`;
+    const state = await mintSignedPayload(
+      { provider: "google", principalId: "U1", redirectUri, issuedAt: Date.now(), nonce: "n1", orgId: "other" },
+      SECRET,
     );
-    const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
+    const res = await fetch(`${redirectUri}?code=c&state=${encodeURIComponent(state)}`);
     assert.equal(res.status, 400);
-    assert.match(await res.text(), /different org/);
-    assert.equal(exchanged, false, "exchange must NOT run for a foreign-org state");
+    assert.match(await res.text(), /invalid OAuth state/);
+    assert.equal(exchanged, false, "exchange must NOT run for a state that names no tenant");
     assert.equal(await built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
@@ -90,6 +90,7 @@ test("cross-org — the callback rejects sealed state minted for a different org
 
 test("empty-token guard — an adapter returning no access token fails the connect (nothing stored)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "empty-")), signingSecret: SECRET }));
+  await built.identity.ready();
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe: built.replayDedupe,
@@ -101,7 +102,11 @@ test("empty-token guard — an adapter returning no access token fails the conne
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     const state = await sealOAuthState(
-      { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
+      {
+        provider: "google",
+        principalId: "U1",
+        redirectUri: `${base}/v1/connectors/oauth/google/callback`,
+      },
       { secret: SECRET },
     );
     const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
@@ -119,13 +124,14 @@ test("empty-token guard — an adapter returning no access token fails the conne
 
 test("status/selector parity — a personal-only connection reports connected (matches the DM selector)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "status-")) }));
+  await built.identity.ready();
   await built.connectorTokens.setConnectorToken(
     "gmail.googleapis.com",
     "U1",
     { accessToken: "u1-personal", accountType: "personal" },
     "personal",
   );
-  const server = createInsecureTestServer(built.app, { connectorTokens: built.connectorTokens });
+  const server = createInsecureTestServer(TEST_TENANT, built.app, { connectorTokens: built.connectorTokens });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -156,6 +162,7 @@ function turn(kind: "dm" | "channel", text: string): TurnRequest {
 
 test("F1/F3 — a live DM receives only its requested connector; a channel receives none", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "floor-")) }));
+  await built.identity.ready();
   await selectDefaultSandbox(built, "U1", "personal:U1", "channel:C1");
   await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
   const key = envKey("gmail.googleapis.com");
@@ -183,6 +190,7 @@ function wake(text: string, readOnly: boolean): TurnRequest {
 for (const surface of ["cron", "loop"]) {
   test(`personal ${surface} selects owner credentials without grants`, async () => {
     const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wake-conn-")) }));
+    await built.identity.ready();
     await selectDefaultSandbox(built, "U1", "personal:U1");
     await built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "u1-gmail" });
     const saved = await built.keychain!.save({
@@ -237,6 +245,7 @@ test("a read-only wake never reaches the sandbox (execute stripped), so no exec 
 for (const expiredPersonal of [false, true]) {
   test(`connector catalog (bulk) exposes company and ${expiredPersonal ? "expired" : "live"} personal accounts without eager access`, async () => {
     const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "connector-accounts-")), maxAttempts: 1 }));
+    await built.identity.ready();
     await selectDefaultSandbox(built, "U1", "personal:U1");
     const host = "gmail.googleapis.com";
     await built.connectorTokens.setConnectorToken(
@@ -272,6 +281,7 @@ for (const expiredPersonal of [false, true]) {
 
 test("explicit default OAuth accounts remain discoverable through bulk metadata", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "default-account-")), maxAttempts: 1 }));
+  await built.identity.ready();
   await selectDefaultSandbox(built, "U1", "personal:U1");
   const host = "gmail.googleapis.com";
   await built.connectorTokens.setConnectorToken(

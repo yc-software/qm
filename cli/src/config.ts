@@ -26,6 +26,8 @@ import {
 import { githubRepoUrl, isGitBranchName } from "./render-source.ts";
 import { envNum, isEnvVarName, isMissingOrPlaceholder } from "./util.ts";
 
+export const FARGATE_MAX_STOP_TIMEOUT_S = 120;
+
 export const CONFIG_FILENAME = "qm.config.jsonc";
 
 export const CONTRACT_VERSION = 1 as const;
@@ -171,7 +173,6 @@ export interface QmConfig {
   botName?: string;
   orgName?: string;
   appPrefix?: string;
-  tenant?: string;
   region?: string;
   flyOrg?: string;
   imageFrom?: string;
@@ -217,7 +218,6 @@ export function loadConfigInDir(dir: string, overrides?: { target?: Target }): {
 }
 
 export const appPrefixOf = (config: QmConfig): string => config.appPrefix ?? config.deploymentId;
-export const tenantOf = (config: QmConfig): string => config.tenant ?? "main";
 
 export const dockerBasePort = (config: QmConfig): number => envNum("QM_BASE_PORT", config.basePort ?? 8080);
 
@@ -535,7 +535,6 @@ const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "botName",
   "orgName",
   "appPrefix",
-  "tenant",
   "region",
   "flyOrg",
   "imageFrom",
@@ -769,11 +768,6 @@ function validate(raw: unknown, path: string): QmConfig {
   const orgName = identityName("orgName", 40, "it is how the bot refers to your organization");
   if (orgName) out.orgName = orgName;
   if (typeof o["appPrefix"] === "string") out.appPrefix = o["appPrefix"];
-  if (o["tenant"] !== undefined) {
-    if (typeof o["tenant"] !== "string" || !validDeploymentId(o["tenant"]))
-      throw new CliError(`${path}: "tenant" must be a tenant slug (a-z, 0-9, and hyphens between)`);
-    out.tenant = o["tenant"];
-  }
   if (typeof o["region"] === "string") out.region = o["region"];
   if (typeof o["flyOrg"] === "string") out.flyOrg = o["flyOrg"];
   if (typeof o["imageFrom"] === "string") out.imageFrom = o["imageFrom"];
@@ -1395,9 +1389,14 @@ function validateAws(
     }
     if (value["stopTimeout"] !== undefined) {
       const stopTimeout = value["stopTimeout"];
-      if (typeof stopTimeout !== "number" || !Number.isInteger(stopTimeout) || stopTimeout < 2 || stopTimeout > 120) {
+      if (
+        typeof stopTimeout !== "number" ||
+        !Number.isInteger(stopTimeout) ||
+        stopTimeout < 2 ||
+        stopTimeout > FARGATE_MAX_STOP_TIMEOUT_S
+      ) {
         throw new CliError(
-          `${path}: "aws.services.${name}.stopTimeout" must be an integer between 2 and 120 seconds (the Fargate limit)`,
+          `${path}: "aws.services.${name}.stopTimeout" must be an integer between 2 and ${FARGATE_MAX_STOP_TIMEOUT_S} seconds (the Fargate limit)`,
         );
       }
       service.stopTimeout = stopTimeout;
