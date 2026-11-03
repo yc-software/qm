@@ -4,8 +4,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
-import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
-import { inTestTenant, tenantBoundUrl } from "./support/test-tenants.ts";
+import { tenantBoundUrl } from "./support/test-tenants.ts";
 
 const url = process.env.DATABASE_URL;
 
@@ -20,7 +19,8 @@ test("a 4500-fact scope fully drains 3072-dimensional recall in under one second
     await client.end();
     await index.close();
   });
-  await migrateRegisteredPgSchemas(url!);
+  await base.facts!(scope);
+  await index.missing(model, 1);
   await client.query(
     `INSERT INTO memory_facts(scope_id, text, sensitivity, source_unknown, created_at, updated_at)
     SELECT $1, 'Large notebook fact ' || g, 'ordinary', false, g, g FROM generate_series(1,4500) g`,
@@ -34,9 +34,9 @@ test("a 4500-fact scope fully drains 3072-dimensional recall in under one second
     [scope, model, JSON.stringify(vector)],
   );
   await client.query("ANALYZE memory_facts; ANALYZE memory_fact_vectors");
-  const facts = await inTestTenant(() => base.facts!(scope));
+  const facts = await base.facts!(scope);
   const start = performance.now();
-  const matches = await inTestTenant(() => index.search({ scope, model, vector, ids: facts.map((fact) => fact.id) }));
+  const matches = await index.search({ scope, model, vector, ids: facts.map((fact) => fact.id) });
   const elapsed = performance.now() - start;
   assert.equal(matches.length, 4500);
   assert.ok(matches.slice(0, 4490).every((row) => row.score > 0.99));
