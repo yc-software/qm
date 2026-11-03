@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { withWebTranscriptDeliveries } from "../src/delivery/web-transcript-delivery.ts";
+import { holdThread, testRuns } from "./support/live-run.ts";
 import { wireRunResultDeliveries } from "../src/delivery/run-result-delivery.ts";
 import { createTranscriptSource } from "../src/sessions/transcript-source.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
@@ -36,8 +37,9 @@ async function webSession(sessions: SessionStore, threadRef = THREAD) {
 function wired() {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const inner = createDeliveryStore();
-  const deliveries = withWebTranscriptDeliveries(inner, sessions);
-  return { sessions, inner, deliveries };
+  const runs = testRuns();
+  const deliveries = withWebTranscriptDeliveries(inner, sessions, runs);
+  return { sessions, inner, deliveries, runs };
 }
 
 function quietErrors(): { lines: string[]; restore: () => void } {
@@ -103,7 +105,7 @@ test("the recorded entry renders through the transcript source", async () => {
 });
 
 test("repeated drains and a restarted decorator never duplicate the transcript entry", async () => {
-  const { sessions, inner, deliveries } = wired();
+  const { sessions, inner, deliveries, runs } = wired();
   const session = await webSession(sessions);
 
   await deliveries.enqueue({
@@ -114,7 +116,7 @@ test("repeated drains and a restarted decorator never duplicate the transcript e
   });
   await deliveries.pending("web");
   await deliveries.pending("web");
-  const restarted = withWebTranscriptDeliveries(inner, sessions);
+  const restarted = withWebTranscriptDeliveries(inner, sessions, runs);
   await restarted.pending("web");
 
   assert.equal((await sessions.getEntries(session.id)).length, 1, "one delivery across drains and restarts");
@@ -134,7 +136,7 @@ test("a failed transcript write converges on retry: one entry", async () => {
     },
   };
   const inner = createDeliveryStore();
-  const deliveries = withWebTranscriptDeliveries(inner, flaky);
+  const deliveries = withWebTranscriptDeliveries(inner, flaky, testRuns());
   const session = await webSession(sessions);
 
   await deliveries.enqueue({
@@ -150,10 +152,10 @@ test("a failed transcript write converges on retry: one entry", async () => {
   assert.equal((await sessions.getEntries(session.id)).length, 1);
 });
 
-test("a busy session lease holds the delivery back, unacked, until the write lands", async () => {
-  const { sessions, deliveries } = wired();
+test("a live turn holds the delivery back, unacked, until the write lands", async () => {
+  const { sessions, deliveries, runs } = wired();
   const session = await webSession(sessions);
-  const { lease } = await sessions.acquireLease(session.id, "turn");
+  const finishTurn = await holdThread(runs, THREAD);
 
   await deliveries.enqueue({
     destination: webDestination(),
@@ -164,21 +166,21 @@ test("a busy session lease holds the delivery back, unacked, until the write lan
   assert.deepEqual(await deliveries.pending("web"), [], "not visible (and so never acked) while the turn runs");
   assert.equal((await sessions.getEntries(session.id)).length, 0);
 
-  await sessions.releaseLease(lease!);
+  await finishTurn();
   const drained = await deliveries.pending("web");
   assert.equal(drained.length, 1);
   assert.equal((await sessions.getEntries(session.id)).length, 1);
 });
 
-test("a lease wedged past the giveup window degrades to a loud nudge-only delivery", async () => {
-  const { sessions, inner, deliveries } = wired();
+test("a turn wedged past the giveup window degrades to a loud nudge-only delivery", async () => {
+  const { sessions, inner, deliveries, runs } = wired();
   await webSession(sessions);
   const session = await sessions.getByThread(THREAD);
-  await sessions.acquireLease(session!.id, "turn");
+  await holdThread(runs, THREAD);
 
   const row = await deliveries.enqueue({
     destination: webDestination(),
-    text: "stuck behind a wedged lease",
+    text: "stuck behind a wedged turn",
     idempotencyKey: "k-wedged",
     provenance: cronProvenance(),
   });
@@ -328,13 +330,14 @@ test("a failure the orchestrator already recorded for this run is not written tw
   const { sessions, inner, deliveries } = wired();
   const session = await webSession(sessions);
   await terminalRun(deliveries, inner, { fail: "boom" }, async () => {
-    const { lease } = await sessions.acquireLease(session.id, "turn");
-    await sessions.append(lease!, {
-      type: "system",
-      payload: { kind: "turn_failure", message: "boom" },
-      scopeLabel: SCOPE,
-    });
-    await sessions.releaseLease(lease!);
+    await sessions.append(
+      { sessionId: session.id },
+      {
+        type: "system",
+        payload: { kind: "turn_failure", message: "boom" },
+        scopeLabel: SCOPE,
+      },
+    );
   });
   await deliveries.pending("web");
 
@@ -347,18 +350,17 @@ test("a failure the orchestrator already recorded for this run is not written tw
 test("another run's failure record never suppresses this run's note", async () => {
   const { sessions, inner, deliveries } = wired();
   const session = await webSession(sessions);
-  const { lease } = await sessions.acquireLease(session.id, "turn");
-  await sessions.append(lease!, {
+  const writer = { sessionId: session.id };
+  await sessions.append(writer, {
     type: "system",
     payload: { kind: "turn_failure", message: "earlier run, delivered note", runId: "earlier-run" },
     scopeLabel: SCOPE,
   });
-  await sessions.append(lease!, {
+  await sessions.append(writer, {
     type: "system",
     payload: { kind: "turn_failure", message: "overlapping run, in-turn record", runId: "other-run" },
     scopeLabel: SCOPE,
   });
-  await sessions.releaseLease(lease!);
   await terminalRun(deliveries, inner, { fail: "boom" });
   await deliveries.pending("web");
 
@@ -436,10 +438,9 @@ test("a delivery marks the web conversation unread for its participant", async (
 });
 
 test("Slack send receipts survive a restart, retry a busy session, and collapse against the Slack event", async () => {
-  const { sessions, inner, deliveries } = wired();
+  const { sessions, inner, deliveries, runs } = wired();
   const session = await webSession(sessions, "dm:D123");
-  const { lease } = await sessions.acquireLease(session.id, "turn");
-  assert.ok(lease);
+  const finishTurn = await holdThread(runs, "dm:D123");
   const input = {
     destination: {
       ...webDestination("dm:D123"),
@@ -451,22 +452,22 @@ test("Slack send receipts survive a restart, retry a busy session, and collapse 
   await deliveries.enqueue(input);
   assert.equal((await sessions.getEntries(session.id)).length, 0);
   assert.equal((await inner.pending("web")).length, 1);
-  await sessions.releaseLease(lease);
-  const restarted = withWebTranscriptDeliveries(inner, sessions);
+  await finishTurn();
+  const restarted = withWebTranscriptDeliveries(inner, sessions, runs);
   assert.equal((await restarted.pending("web")).length, 1);
   await restarted.enqueue(input);
   const entries = (await createTranscriptSource(sessions).forRender(session.id)).entries;
   assert.equal(entries.length, 1);
   assert.equal(entries[0]!.type, "user");
   assert.equal((entries[0]!.payload as { text: string }).text, input.text);
-  const eventLease = await sessions.acquireLease(session.id, "turn");
-  assert.ok(eventLease.lease);
-  await sessions.append(eventLease.lease, {
-    type: "user",
-    scopeLabel: SCOPE,
-    payload: { text: input.text, name: "Alice", ts: "123.789" },
-  });
-  await sessions.releaseLease(eventLease.lease);
+  await sessions.append(
+    { sessionId: session.id },
+    {
+      type: "user",
+      scopeLabel: SCOPE,
+      payload: { text: input.text, name: "Alice", ts: "123.789" },
+    },
+  );
   const visible = (await createTranscriptSource(sessions).forRender(session.id)).entries;
   assert.equal(visible.length, 1);
   assert.equal((visible[0]!.payload as { slackReplyReceipt?: boolean }).slackReplyReceipt, undefined);

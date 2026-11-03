@@ -230,6 +230,31 @@ Not available through you: who governs the org changes only in the admin dashboa
 where the admin acts directly. If asked, point them there — don't try the API
 (`POST/DELETE /v1/admin/grants` refuses agent tokens).
 
+## Offboarding a user
+
+When someone leaves, `offboard_user` (`POST /v1/admin/users/<principal>/offboard`) stops what runs as them in
+one call. Run it from a DM with the admin; it reads private inventory.
+
+1. Preview: call without `apply`. `changes` lists every step it would take, first to last: deactivate
+   sign-in, disable and archive crons they own anywhere, pause their loops, disable their webhooks,
+   revoke their active keychain grants, archive apps and skills in their personal scope, retire their
+   personal computers (clearing the default first). An empty list for a misspelled id is your hint to
+   check the spelling.
+2. Show the admin the preview in plain words and get a yes. Retiring a computer destroys its disk; back up
+   its workspace first if they want it.
+3. Apply with `value: {"apply": true}`. Each change comes back `done` or `failed` with the error and is
+   audited as the admin. Re-running is safe: finished items drop out, so a retry does only what's left.
+4. Look for what it deliberately leaves, and ask the admin about each:
+   - apps, skills and computers they created in shared scopes (`deployments`, `skills`, `sandboxes`
+     filtered by creator) — others may rely on them;
+   - their stored credentials (`keychain`) — they stay encrypted and unused once grants are revoked;
+   - an admin grant — portal-only, revoked under Admins in the dashboard;
+   - computers whose provider can't retire them.
+
+Conversations, memory and files stay as the record. `reactivate_user` turns sign-in back on (even after a
+directory-sync removal) and restores nothing else; owners or admins restore crons, loops, apps and skills
+through their usual controls.
+
 ## Scheduling admin-reading work
 
 Cron fires are autonomous, so the admin plane refuses them unless the cron carries

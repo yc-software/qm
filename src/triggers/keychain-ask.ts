@@ -61,15 +61,11 @@ export async function fireAskResolution(
     fireKey: `ask:${ask.id}:${ask.status}`,
     surface: "keychain-ask",
     ...(cron?.runtime ? { runtime: cron.runtime } : {}),
-    deferWhenBusy: true,
     ...(destination ? { destination } : {}),
     ...(ask.requesterThreadRef ? { threadRef: ask.requesterThreadRef } : {}),
   });
-  if (
-    outcome.deferred ||
-    (!outcome.ran && !outcome.authzFailed && !(await deps.idempotency.committed(`ask:${ask.id}:${ask.status}`)))
-  )
-    throw new Error("credential approval resume is waiting for the original conversation to become idle");
+  if (!outcome.ran && !outcome.authzFailed && !(await deps.idempotency.committed(`ask:${ask.id}:${ask.status}`)))
+    throw new Error("credential approval resume is already running for this request");
   if (outcome.ran && outcome.status === "ok") return outcome;
   if (cronId && (!outcome.ran || outcome.status === "refused")) return outcome;
   if (!outcome.ran && !outcome.authzFailed) {

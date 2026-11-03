@@ -9,14 +9,7 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import type { RunPriority } from "./run-store.ts";
-import {
-  countedClaims,
-  isTerminal,
-  releasesDedupKey,
-  runPriority,
-  stopErrorCode,
-  withTraceCarrier,
-} from "./run-store.ts";
+import { countedClaims, isTerminal, runPriority, stopErrorCode, withTraceCarrier } from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 
 export interface PostgresRuntime {
@@ -315,10 +308,9 @@ END $base_schema$`,
 
     async complete(runId, leaseToken, result): Promise<boolean> {
       const { rowCount } = await q(
-        `UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2,
-           idempotency_key = CASE WHEN $5 THEN NULL ELSE idempotency_key END
+        `UPDATE runs SET status='done', result=$1, lease_token=NULL, lease_expires_at=NULL, finished_at=$2
          WHERE id=$3 AND lease_token=$4 RETURNING pg_notify('qm_run_available', 'null')`,
-        [JSON.stringify(result), Date.now(), runId, leaseToken, releasesDedupKey(result)],
+        [JSON.stringify(result), Date.now(), runId, leaseToken],
       );
       if (rowCount > 0) {
         settle(await getRun(runId));
@@ -504,10 +496,10 @@ END $base_schema$`,
       return rows.map(rowToRun);
     },
 
-    async reapExpired(
-      onRetired?: (sessionIds: string[]) => Promise<void>,
-      opts?: { maxAgeMs?: number; onReap?: (event: ReapEvent) => void },
-    ): Promise<{ requeued: number; parked: number }> {
+    async reapExpired(opts?: {
+      maxAgeMs?: number;
+      onReap?: (event: ReapEvent) => void;
+    }): Promise<{ requeued: number; parked: number }> {
       const now = Date.now();
       const { rows } = await q(
         "SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1",
@@ -525,7 +517,6 @@ END $base_schema$`,
           [fenceToken, run.id, run.leaseToken, now, now + FENCE_HOLD_MS],
         );
         if (!fenced.rows[0]) continue;
-        if (onRetired) await onRetired([run.sessionId]);
         const r = await retire({ ...run, leaseToken: fenceToken }, reason, !tooOld);
         if (!r.applied) continue;
         if (r.requeued) requeued++;

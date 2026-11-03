@@ -8,10 +8,8 @@ async function appendAll(
   scope: ReturnType<typeof scopeId>,
   payloads: Array<{ type: "user" | "assistant"; payload: Record<string, unknown> }>,
 ): Promise<void> {
-  const { lease } = await store.acquireLease(sessionId);
-  assert.ok(lease);
-  for (const { type, payload } of payloads) await store.append(lease, { type, payload, scopeLabel: scope });
-  await store.releaseLease(lease);
+  const writer = { sessionId: sessionId };
+  for (const { type, payload } of payloads) await store.append(writer, { type, payload, scopeLabel: scope });
 }
 
 export async function assertParticipantSessionParity(store: SessionStore, prefix: string): Promise<void> {

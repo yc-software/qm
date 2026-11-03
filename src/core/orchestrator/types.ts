@@ -135,7 +135,6 @@ export interface OrchestratorDeps {
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
   approvalSummaryTimeoutMs?: number;
-  turnLeaseWaitMs?: number;
   securityScreenTimeoutMs?: number;
   securityScreener?: SecurityScreener;
   backgroundJobTtlMs?: number;
