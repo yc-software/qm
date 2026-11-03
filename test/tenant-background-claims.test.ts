@@ -90,7 +90,7 @@ test(
     await owner.query(
       "CREATE POLICY due_work_tenant ON due_work USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())",
     );
-    await owner.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`);
+    await owner.query(`CREATE ROLE ${role} LOGIN PASSWORD '${role}' NOBYPASSRLS`);
     await owner.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
     await owner.query(`GRANT SELECT, UPDATE ON due_work TO ${role}`);
     await owner.query(
@@ -98,7 +98,8 @@ test(
       [A, B],
     );
     const appUrl = new URL(url);
-    appUrl.searchParams.set("options", `-c role=${role}`);
+    appUrl.username = role;
+    appUrl.password = role;
     const app = createPgPool(appUrl.toString());
     try {
       await assert.rejects(app.q("SELECT * FROM due_work"), /No tenant is bound/);

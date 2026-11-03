@@ -17,8 +17,10 @@ export function requireOwnerDatabase(): void {
 }
 
 function ownerPool(appDatabaseUrl: string): PgPool {
-  const url = ownerDatabaseUrl();
-  url.pathname = new URL(appDatabaseUrl).pathname;
+  const owner = ownerDatabaseUrl();
+  const url = new URL(appDatabaseUrl);
+  url.username = owner.username;
+  url.password = owner.password;
   const key = url.toString();
   const existing = ownerPools.get(key);
   if (existing) return existing;
