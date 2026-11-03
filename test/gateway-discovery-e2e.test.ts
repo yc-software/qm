@@ -293,18 +293,19 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
     );
   });
 
-test("gateway outage leaves direct providers available", async () => {
-  const built = stopAtEnd(
-    buildApp(testConfig(), {
-      modelCredentialFetch: async () => new Response(null, { status: 503 }),
-      tenantSettings: testTenantSettings(
-        gatewaySettings({ url: "https://gateway.invalid", apiKey: "company-key", apiKeyHeader: "x-api-key" }),
-      ),
-    }),
-  );
-  await inTestTenant(() => built.modelCredentials.set("anthropic", "independent-key", "admin"));
-  const providers = await built.modelCredentials.availability();
-  assert.equal(providers.anthropic, true);
-  assert.deepEqual([...providers.modelIds!], []);
-  await built.refreshModels();
-});
+test("gateway outage leaves direct providers available", () =>
+  inTestTenant(async () => {
+    const built = stopAtEnd(
+      buildApp(testConfig(), {
+        modelCredentialFetch: async () => new Response(null, { status: 503 }),
+        tenantSettings: testTenantSettings(
+          gatewaySettings({ url: "https://gateway.invalid", apiKey: "company-key", apiKeyHeader: "x-api-key" }),
+        ),
+      }),
+    );
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "independent-key", "admin"));
+    const providers = await built.modelCredentials.availability();
+    assert.equal(providers.anthropic, true);
+    assert.deepEqual([...providers.modelIds!], []);
+    await built.refreshModels();
+  }));

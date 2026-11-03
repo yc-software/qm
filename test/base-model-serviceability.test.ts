@@ -51,98 +51,107 @@ async function effectiveModel(base: string): Promise<string> {
   return ((await res.json()) as { effective: { modelId: string } }).effective.modelId;
 }
 
-test("base-model set rejects a model whose provider key is absent (would fail provider-side)", async () => {
-  const srv = await start();
-  try {
-    const bad = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ modelId: "gpt-5.6-sol" }),
-    });
-    assert.equal(bad.status, 400);
-    assert.match(((await bad.json()) as { message?: string }).message ?? "", /serviceable|provider key/i);
-
-    const ok = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ modelId: "claude-opus-4-8" }),
-    });
-    assert.equal(ok.status, 200, "an Anthropic model stays selectable when the Anthropic key is present");
-  } finally {
-    await srv.close();
-  }
-});
-
-test("ChatGPT OAuth stays separate from OpenAI API-key availability", async () => {
-  const built = stopAtEnd(
-    buildApp(testConfig(), { tenantSettings: testTenantSettings({ CODEX_AUTH_CREDENTIAL: "company-chatgpt" }) }),
-  );
-  await inTestTenant(() => built.tenantSettings.get());
-  const configured = await built.modelCredentials.availability();
-  assert.equal(configured.openai, false);
-  assert.equal(configured.codexOAuth, true);
-});
-
-test("a deployment that declares a provider runs that provider's base model", async () => {
-  for (const [modelProvider, expected] of [
-    ["anthropic", "claude-opus-5"],
-    ["openai", "gpt-6.1-sol"],
-    ["openrouter", "openrouter/auto"],
-  ] as const) {
-    const srv = await start({ [modelProvider]: `deployment-${modelProvider}-key` }, { MODEL_PROVIDER: modelProvider });
+test("base-model set rejects a model whose provider key is absent (would fail provider-side)", () =>
+  inTestTenant(async () => {
+    const srv = await start();
     try {
-      assert.equal(
-        await effectiveModel(srv.base),
-        expected,
-        `modelProvider "${modelProvider}" must land on a model that provider can bill`,
-      );
+      const bad = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify({ modelId: "gpt-5.6-sol" }),
+      });
+      assert.equal(bad.status, 400);
+      assert.match(((await bad.json()) as { message?: string }).message ?? "", /serviceable|provider key/i);
+
+      const ok = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify({ modelId: "claude-opus-4-8" }),
+      });
+      assert.equal(ok.status, 200, "an Anthropic model stays selectable when the Anthropic key is present");
     } finally {
       await srv.close();
     }
-  }
-});
+  }));
 
-test("an undeclared deployment keeps the shipped default, whatever keys it holds", async () => {
-  for (const keys of [{}, { openrouter: "k" }, { openai: "k" }] as const) {
-    const srv = await start(keys);
-    try {
-      assert.equal(
-        await effectiveModel(srv.base),
-        "claude-opus-5",
-        "upgrading must not move an existing deployment's model or its billing",
+test("ChatGPT OAuth stays separate from OpenAI API-key availability", () =>
+  inTestTenant(async () => {
+    const built = stopAtEnd(
+      buildApp(testConfig(), { tenantSettings: testTenantSettings({ CODEX_AUTH_CREDENTIAL: "company-chatgpt" }) }),
+    );
+    await inTestTenant(() => built.tenantSettings.get());
+    const configured = await built.modelCredentials.availability();
+    assert.equal(configured.openai, false);
+    assert.equal(configured.codexOAuth, true);
+  }));
+
+test("a deployment that declares a provider runs that provider's base model", () =>
+  inTestTenant(async () => {
+    for (const [modelProvider, expected] of [
+      ["anthropic", "claude-opus-5"],
+      ["openai", "gpt-6.1-sol"],
+      ["openrouter", "openrouter/auto"],
+    ] as const) {
+      const srv = await start(
+        { [modelProvider]: `deployment-${modelProvider}-key` },
+        { MODEL_PROVIDER: modelProvider },
       );
+      try {
+        assert.equal(
+          await effectiveModel(srv.base),
+          expected,
+          `modelProvider "${modelProvider}" must land on a model that provider can bill`,
+        );
+      } finally {
+        await srv.close();
+      }
+    }
+  }));
+
+test("an undeclared deployment keeps the shipped default, whatever keys it holds", () =>
+  inTestTenant(async () => {
+    for (const keys of [{}, { openrouter: "k" }, { openai: "k" }] as const) {
+      const srv = await start(keys);
+      try {
+        assert.equal(
+          await effectiveModel(srv.base),
+          "claude-opus-5",
+          "upgrading must not move an existing deployment's model or its billing",
+        );
+      } finally {
+        await srv.close();
+      }
+    }
+  }));
+
+test("the declaration outranks a stray key from another vendor", () =>
+  inTestTenant(async () => {
+    const srv = await start(
+      { openrouter: "deployment-openrouter-key", anthropic: "stray-anthropic-key" },
+      { MODEL_PROVIDER: "openrouter" },
+    );
+    try {
+      assert.equal(await effectiveModel(srv.base), "openrouter/auto");
     } finally {
       await srv.close();
     }
-  }
-});
+  }));
 
-test("the declaration outranks a stray key from another vendor", async () => {
-  const srv = await start(
-    { openrouter: "deployment-openrouter-key", anthropic: "stray-anthropic-key" },
-    { MODEL_PROVIDER: "openrouter" },
-  );
-  try {
-    assert.equal(await effectiveModel(srv.base), "openrouter/auto");
-  } finally {
-    await srv.close();
-  }
-});
-
-test("company ChatGPT-only deployments offer their plain GPT default through managed availability", async () => {
-  const srv = await start({}, { CODEX_AUTH_CREDENTIAL: "company-chatgpt" });
-  try {
-    const res = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
-    assert.equal(res.status, 200);
-    const body = (await res.json()) as {
-      effective: { modelId: string };
-      models: string[];
-      unavailableReason?: string;
-    };
-    assert.equal(body.effective.modelId, "gpt-6.1-sol");
-    assert.ok(body.models.includes("gpt-6.1-sol"));
-    assert.equal(body.unavailableReason, undefined);
-  } finally {
-    await srv.close();
-  }
-});
+test("company ChatGPT-only deployments offer their plain GPT default through managed availability", () =>
+  inTestTenant(async () => {
+    const srv = await start({}, { CODEX_AUTH_CREDENTIAL: "company-chatgpt" });
+    try {
+      const res = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as {
+        effective: { modelId: string };
+        models: string[];
+        unavailableReason?: string;
+      };
+      assert.equal(body.effective.modelId, "gpt-6.1-sol");
+      assert.ok(body.models.includes("gpt-6.1-sol"));
+      assert.equal(body.unavailableReason, undefined);
+    } finally {
+      await srv.close();
+    }
+  }));
