@@ -156,7 +156,7 @@ import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environ
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { inTenantOf } from "./tenants/claim.ts";
-import { withoutTenant } from "./tenants/context.ts";
+import { withoutTenant, withTenant } from "./tenants/context.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
@@ -2775,8 +2775,8 @@ export function buildApp(
   const composioReturns = artifactMap<ComposioReturn>("composio_returns");
   const composioReturnSweeper = createSweeper(
     async () => {
-      for (const [id, entry] of await composioReturns.entries())
-        if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
+      for (const { tenantId, id, value } of await composioReturns.acrossTenants())
+        if (value.expiresAt <= Date.now()) await withTenant(tenantId, () => composioReturns.delete(id));
     },
     30 * 60_000,
     { label: "Composio consent returns", immediate: true },
