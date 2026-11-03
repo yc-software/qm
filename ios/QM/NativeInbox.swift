@@ -435,109 +435,11 @@ struct NativeInboxItemView: View {
   }
   var body: some View {
     QMForm {
-      Section {
-        Text(model.item.title).font(.headline)
-        if let from = model.item.sourcePayload.from { Text(from) }
-        if let detail = model.item.sourcePayload.fromDetail { Text(detail).font(.caption) }
-        if let summary = model.item.summary { Text(summary) }
-        if let reason = model.item.parkedReason { Text(reason).foregroundStyle(.orange) }
-        if let raw = model.item.sourcePayload.externalUrl,
-          let url = NativeModelConnection.httpsURL(raw)
-        {
-          Link("Open original", destination: url)
-        }
-        if model.item.sourcePayload.sentChat == true && model.item.handled {
-          Button("Draft a follow-up reply") { Task { _ = await model.action("reply") } }.disabled(
-            !model.loaded || model.dirty)
-        }
-        Button(model.item.handled ? "Reopen" : "Archive") {
-          Task { _ = await model.action(model.item.handled ? "reopen" : "dismiss") }
-        }.disabled(!model.loaded || model.dirty)
-      }
-      Section("Context") {
-        ForEach(Array((model.item.sourcePayload.context ?? []).enumerated()), id: \.offset) {
-          index, message in
-          VStack(alignment: .leading, spacing: 6) {
-            Text(message.author).font(.caption.bold())
-            Text(message.text).textSelection(.enabled)
-            ForEach(Array((message.images ?? []).indices), id: \.self) { image in
-              NativeInboxImage(client: model.client, path: model.path, context: index, index: image)
-            }
-          }
-        }
-        ForEach(Array((model.item.sourcePayload.images ?? []).indices), id: \.self) { image in
-          NativeInboxImage(client: model.client, path: model.path, context: -1, index: image)
-        }
-        if let snippet = model.item.sourcePayload.snippet,
-          model.item.sourcePayload.context?.isEmpty != false
-        {
-          Text(snippet).textSelection(.enabled)
-        }
-      }
-      if model.item.canReply && !model.item.handled && model.loaded {
-        Section("Draft reply") {
-          if model.item.kind == "gmail" {
-            TextField("To", text: $model.to).textInputAutocapitalization(.never)
-              .autocorrectionDisabled()
-            TextField("Cc", text: $model.cc).textInputAutocapitalization(.never)
-              .autocorrectionDisabled()
-            TextField("Subject", text: $model.subject)
-          }
-          TextEditor(text: $model.text).frame(minHeight: 150)
-          Button("Save draft") { Task { _ = await model.action("edit") } }.disabled(!model.dirty)
-          Button("Send reply", systemImage: "paperplane") { sending = true }.disabled(
-            model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-          if model.item.proposal == nil {
-            Button("Ask QM to draft a reply") { Task { _ = await model.requestDraft() } }.disabled(
-              model.dirty)
-          }
-        }
-      }
-      if !model.outputs.isEmpty {
-        Section("Proposed actions") {
-          ForEach(model.outputs) { candidate in
-            VStack(alignment: .leading, spacing: 8) {
-              Text(candidate.title).font(.headline)
-              if let summary = candidate.summary { Text(summary) }
-              Text(candidate.state).font(.caption)
-              if candidate.state == "ready" {
-                Button("Review action") {
-                  output = candidate
-                  note = ""
-                  decision = "ship"
-                }.disabled(model.dirty)
-              }
-            }
-          }
-        }
-      }
-      Section("Conversation with QM") {
-        ForEach(model.item.thread) { message in
-          VStack(alignment: .leading, spacing: 6) {
-            Text(message.role == "human" ? "You" : "QM").font(.caption.bold())
-            Text(message.text).textSelection(.enabled)
-          }
-        }
-        TextField("Ask QM about this item", text: $model.followup, axis: .vertical).disabled(
-          !model.loaded)
-        Button("Ask QM") {
-          Task {
-            if await model.action(
-              "followup", message: model.followup.trimmingCharacters(in: .whitespacesAndNewlines))
-            {
-              model.followup = ""
-              model.persistDraft()
-            }
-          }
-        }.disabled(
-          model.followup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.dirty
-            || !model.loaded)
-        if let session = model.item.proposal?.sessionId {
-          NavigationLink("Open worklog") {
-            NativeConversationDestination(client: model.client, user: user, sessionID: session)
-          }
-        }
-      }
+      summarySection
+      contextSection
+      draftSection
+      proposedActionsSection
+      threadSection
       if let error = model.error {
         Text(error).foregroundStyle(.red)
         Text("Your unsaved draft is still here.").font(.caption)
@@ -571,37 +473,161 @@ struct NativeInboxItemView: View {
           : "Post this reply to the original Slack conversation.")
     }
     .sheet(item: $output) { candidate in
-      NavigationStack {
-        QMForm {
-          Text(candidate.title).font(.headline)
-          if let summary = candidate.summary { Text(summary) }
-          LabeledContent("Action", value: candidate.shipAction)
-          Picker("Decision", selection: $decision) {
-            Text("Approve action").tag("ship")
-            Text("Request changes").tag("return")
-          }
-          TextField("Review note", text: $note, axis: .vertical)
-          if let error = model.error { Text(error).foregroundStyle(.red) }
-        }
-        .disabled(model.busy).navigationTitle("Review action")
-        .toolbar {
-          ToolbarItem(placement: .cancellationAction) {
-            Button("Cancel") { output = nil }.disabled(model.busy)
-          }
-          ToolbarItem(placement: .confirmationAction) {
-            Button(decision == "ship" ? "Approve" : "Return") {
-              Task {
-                await model.decide(candidate, decision: decision, note: note)
-                if model.error == nil { output = nil }
-              }
-            }.disabled(
-              model.busy
-                || (decision == "return"
-                  && note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            )
-          }
-        }.interactiveDismissDisabled(model.busy)
+      reviewSheet(candidate)
+    }
+  }
+
+  private var summarySection: some View {
+    Section {
+      Text(model.item.title).font(.headline)
+      if let from = model.item.sourcePayload.from { Text(from) }
+      if let detail = model.item.sourcePayload.fromDetail { Text(detail).font(.caption) }
+      if let summary = model.item.summary { Text(summary) }
+      if let reason = model.item.parkedReason { Text(reason).foregroundStyle(.orange) }
+      if let raw = model.item.sourcePayload.externalUrl,
+        let url = NativeModelConnection.httpsURL(raw)
+      {
+        Link("Open original", destination: url)
       }
+      if model.item.sourcePayload.sentChat == true && model.item.handled {
+        Button("Draft a follow-up reply") { Task { _ = await model.action("reply") } }.disabled(
+          !model.loaded || model.dirty)
+      }
+      Button(model.item.handled ? "Reopen" : "Archive") {
+        Task { _ = await model.action(model.item.handled ? "reopen" : "dismiss") }
+      }.disabled(!model.loaded || model.dirty)
+    }
+  }
+
+  private var contextSection: some View {
+    Section("Context") {
+      ForEach(Array((model.item.sourcePayload.context ?? []).enumerated()), id: \.offset) {
+        index, message in
+        VStack(alignment: .leading, spacing: 6) {
+          Text(message.author).font(.caption.bold())
+          Text(message.text).textSelection(.enabled)
+          ForEach(Array((message.images ?? []).indices), id: \.self) { image in
+            NativeInboxImage(client: model.client, path: model.path, context: index, index: image)
+          }
+        }
+      }
+      ForEach(Array((model.item.sourcePayload.images ?? []).indices), id: \.self) { image in
+        NativeInboxImage(client: model.client, path: model.path, context: -1, index: image)
+      }
+      if let snippet = model.item.sourcePayload.snippet,
+        model.item.sourcePayload.context?.isEmpty != false
+      {
+        Text(snippet).textSelection(.enabled)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var draftSection: some View {
+    if model.item.canReply && !model.item.handled && model.loaded {
+      Section("Draft reply") {
+        if model.item.kind == "gmail" {
+          TextField("To", text: $model.to).textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+          TextField("Cc", text: $model.cc).textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+          TextField("Subject", text: $model.subject)
+        }
+        TextEditor(text: $model.text).frame(minHeight: 150)
+        Button("Save draft") { Task { _ = await model.action("edit") } }.disabled(!model.dirty)
+        Button("Send reply", systemImage: "paperplane") { sending = true }.disabled(
+          model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        if model.item.proposal == nil {
+          Button("Ask QM to draft a reply") { Task { _ = await model.requestDraft() } }.disabled(
+            model.dirty)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var proposedActionsSection: some View {
+    if !model.outputs.isEmpty {
+      Section("Proposed actions") {
+        ForEach(model.outputs) { candidate in
+          VStack(alignment: .leading, spacing: 8) {
+            Text(candidate.title).font(.headline)
+            if let summary = candidate.summary { Text(summary) }
+            Text(candidate.state).font(.caption)
+            if candidate.state == "ready" {
+              Button("Review action") {
+                output = candidate
+                note = ""
+                decision = "ship"
+              }.disabled(model.dirty)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private var threadSection: some View {
+    Section("Conversation with QM") {
+      ForEach(model.item.thread) { message in
+        VStack(alignment: .leading, spacing: 6) {
+          Text(message.role == "human" ? "You" : "QM").font(.caption.bold())
+          Text(message.text).textSelection(.enabled)
+        }
+      }
+      TextField("Ask QM about this item", text: $model.followup, axis: .vertical).disabled(
+        !model.loaded)
+      Button("Ask QM") {
+        Task {
+          if await model.action(
+            "followup", message: model.followup.trimmingCharacters(in: .whitespacesAndNewlines))
+          {
+            model.followup = ""
+            model.persistDraft()
+          }
+        }
+      }.disabled(
+        model.followup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.dirty
+          || !model.loaded)
+      if let session = model.item.proposal?.sessionId {
+        NavigationLink("Open worklog") {
+          NativeConversationDestination(client: model.client, user: user, sessionID: session)
+        }
+      }
+    }
+  }
+
+  private func reviewSheet(_ candidate: NativeLoopOutput) -> some View {
+    NavigationStack {
+      QMForm {
+        Text(candidate.title).font(.headline)
+        if let summary = candidate.summary { Text(summary) }
+        LabeledContent("Action", value: candidate.shipAction)
+        Picker("Decision", selection: $decision) {
+          Text("Approve action").tag("ship")
+          Text("Request changes").tag("return")
+        }
+        TextField("Review note", text: $note, axis: .vertical)
+        if let error = model.error { Text(error).foregroundStyle(.red) }
+      }
+      .disabled(model.busy).navigationTitle("Review action")
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { output = nil }.disabled(model.busy)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button(decision == "ship" ? "Approve" : "Return") {
+            Task {
+              await model.decide(candidate, decision: decision, note: note)
+              if model.error == nil { output = nil }
+            }
+          }.disabled(
+            model.busy
+              || (decision == "return"
+                && note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          )
+        }
+      }.interactiveDismissDisabled(model.busy)
     }
   }
 }
