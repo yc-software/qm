@@ -275,11 +275,13 @@ export async function materializeInbound(
       }
       if (!verdict || verdict.unscreened) unscreened.push(name);
     }
+    const image = await visionImage(bytes);
+    if (!image.ok && VISION_MIME_TYPES.has(mimetype))
+      console.warn(`attachments: ${name} (${mimetype}) not shown to the model: ${image.reason}`);
+    const stored = image.ok ? image.mimeType : mimetype;
     const box = await computer();
     if (box) await sandbox.writeFileBytes(box, `${inboxDir}/${name}`, bytes);
-    const registered = register
-      ? await registerArtifact(register, "in", metas.length, name, mimetype, bytes)
-      : undefined;
+    const registered = register ? await registerArtifact(register, "in", metas.length, name, stored, bytes) : undefined;
     if (!box) {
       if (!registered) {
         unavailable.push(name);
@@ -289,16 +291,13 @@ export async function materializeInbound(
     }
     metas.push({
       name,
-      mimetype,
+      mimetype: stored,
       sizeBytes: bytes.length,
       direction: "in",
       ...(a.author ? { author: a.author } : {}),
       ...(a.sourceId ? { sourceId: a.sourceId } : {}),
       ...(registered ? { artifactId: registered.id } : {}),
     });
-    const image = await visionImage(bytes);
-    if (!image.ok && VISION_MIME_TYPES.has(mimetype))
-      console.warn(`attachments: ${name} (${mimetype}) not shown to the model: ${image.reason}`);
     if (image.ok)
       images.push({
         name,
