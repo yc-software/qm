@@ -316,7 +316,7 @@ export interface SessionSyscallDeps {
     | "getForParticipant"
   >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw">;
-  signals: Pick<RunSignalStore, "send" | "pending">;
+  signals: Pick<RunSignalStore, "send" | "pending" | "aborted">;
   maxAttempts: number;
   treeRunCap?: number;
   advisoryLock: AdvisoryLock;
@@ -520,17 +520,17 @@ async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Se
 
 async function sessionRunCancelled(
   runs: Pick<RunStore, "get">,
-  signals: Pick<RunSignalStore, "pending">,
+  signals: Pick<RunSignalStore, "pending" | "aborted">,
   runId: string | undefined,
 ): Promise<boolean> {
   const seen = new Set<string>();
   while (runId) {
     if (seen.has(runId)) return true;
-    if ((await signals.pending(runId)).some(({ signal }) => signal.kind === "abort")) return true;
     const run = await runs.get(runId);
-    if (!run) return seen.size === 0;
-    if (run.result?.stopped) return true;
+    if (!run) return seen.size === 0 || (await signals.aborted(runId));
     seen.add(runId);
+    if (run.result?.stopped || (await signals.pending(runId)).some(({ signal }) => signal.kind === "abort"))
+      return true;
     runId = run.request.delegatingRunId;
   }
   return false;
@@ -1092,7 +1092,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 }
 
 export interface SubagentMailDeps {
-  signals?: Pick<RunSignalStore, "pending">;
+  signals?: Pick<RunSignalStore, "pending" | "aborted">;
   deliveries?: Pick<DeliveryStore, "enqueue">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
@@ -1116,14 +1116,14 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
   const initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
-  if (run.request.delegatingRunId && !initiatingRun)
-    console.warn(
-      `[subagent-return] delegating run ${run.request.delegatingRunId} of ${run.id} is gone; returning with the parent's stored context and no inherited authority`,
-    );
   const initiatingContext = initiatingRun?.request ?? (run.request.delegatingRunId ? undefined : child.spawnMeta);
   const currentContext = storedContext(parent);
   const originalParent = !!initiatingContext && parent.threadRef === initiatingContext.conversation.threadRef;
   if (!originalParent && !currentContext) throw new Error("the current parent has no verified runtime context yet");
+  if (run.request.delegatingRunId && !initiatingRun)
+    console.warn(
+      `[subagent-return] delegating run ${run.request.delegatingRunId} of ${run.id} is gone; returning with the parent's stored context and no inherited authority`,
+    );
   const meta =
     originalParent && initiatingContext
       ? initiatingContext

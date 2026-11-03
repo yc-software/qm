@@ -21,6 +21,7 @@ export interface RunSignalStore {
   send(runId: string, signal: RunSignal): Promise<boolean>;
   hasDedupeKey(dedupeKey: string): Promise<boolean>;
   pending(runId: string): Promise<Array<{ id: string; signal: RunSignal }>>;
+  aborted(runId: string): Promise<boolean>;
   acknowledge(runId: string, id: string): Promise<void>;
   takePending(runId: string): Promise<RunSignal[]>;
   steerAuthors(runId: string): Promise<string[]>;

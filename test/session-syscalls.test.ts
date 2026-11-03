@@ -985,6 +985,7 @@ test("a stopped tree stays stopped after its released parent run is withdrawn", 
   await r.runs.releaseLease(parent.id, parentLease!.leaseToken!);
   assert.equal(await stopSessionTree(r, r.room, "by the person"), true);
   assert.equal(await r.runs.get(parent.id), null);
+  await r.signals.takePending(parent.id);
   assert.equal(
     await deliverSubagentMail(
       { ...r, maxAttempts: 3, delegationEnabled: async () => true },

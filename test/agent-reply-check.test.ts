@@ -94,6 +94,7 @@ function memorySignals(): RunSignalStore & { send(runId: string, signal: RunSign
     },
     hasDedupeKey: async () => false,
     pending: async (runId) => [...(queued.get(runId) ?? [])],
+    aborted: async (runId) => (queued.get(runId) ?? []).some(({ signal }) => signal.kind === "abort"),
     acknowledge: async (runId, id) =>
       void queued.set(
         runId,

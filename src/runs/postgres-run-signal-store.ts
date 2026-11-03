@@ -113,6 +113,10 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       );
       return rows.map((row) => ({ id: String(row.id), signal: toSignals([row])[0]! }));
     },
+    async aborted(runId) {
+      const { rows } = await q("SELECT 1 FROM run_signals WHERE run_id=$1 AND kind='abort' LIMIT 1", [runId]);
+      return rows.length > 0;
+    },
     async acknowledge(runId, id) {
       await q("UPDATE run_signals SET consumed_at=$3 WHERE run_id=$1 AND id=$2 AND consumed_at IS NULL", [
         runId,
