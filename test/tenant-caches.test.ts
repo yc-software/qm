@@ -13,7 +13,9 @@ import {
   unboundTenantAllowed,
   withTenant,
 } from "../src/tenants/context.ts";
-import { orgId, orgIdentity } from "../src/config.ts";
+import { orgId } from "../src/config.ts";
+import { configureTenantSettings, tenantSettings } from "../src/tenants/settings.ts";
+import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { customModelCatalog, customProvidersVersion, setCustomProviders } from "../src/model/custom-providers.ts";
 import { overlayUnavailableReason, overlaysVersion, publishModelOverlays } from "../src/model/model-overlay.ts";
 import { gatewayModelCatalog, gatewayModelsVersion, setGatewayModels } from "../src/model/gateway-models.ts";
@@ -118,7 +120,7 @@ test("with no registered tenants, unbound work shares one process slot and bound
     withTenant(A, () => slot().seen),
     ["a"],
   );
-  assert.equal(orgIdentity(), orgId());
+  assert.equal(orgId(), process.env.ORG_ID ?? "default-org");
 });
 
 test("each tenant gets its own custom providers, model overlays and gateway models", () => {
@@ -313,19 +315,63 @@ test("a tenant loader loads each tenant once and retries a tenant whose load fai
   assert.equal(attempts, 2);
 });
 
+test("each tenant's org label comes from its settings, so it sees its own org-scoped rows and not the other's", async () => {
+  configureTenantSettings(async (tenant) => (tenant === A ? { orgId: "acme" } : { orgId: "globex" }));
+  try {
+    await withTenant(A, () => tenantSettings());
+    await withTenant(B, () => tenantSettings());
+    assert.equal(
+      withTenant(A, () => orgId()),
+      "acme",
+    );
+    assert.equal(
+      withTenant(B, () => orgId()),
+      "globex",
+    );
+    const identity = tenantMap<{ orgId: string }>();
+    const store = createConfigStore("default-org", {
+      ...configStoreMaps(() => tenantMap<never>()),
+      deploymentIdentity: identity,
+    });
+    await withTenant(B, () => identity.put("singleton", { orgId: "globex" }));
+    await withTenant(A, async () => {
+      await store.hydrate?.();
+      await store.setSoul(scopeId("org", "acme"), "Acme instructions");
+    });
+    await withTenant(B, () => store.hydrate?.());
+    withTenant(A, () => assert.equal(store.getSoul(scopeId("org", "acme")), "Acme instructions"));
+    withTenant(B, () => {
+      assert.equal(store.getSoul(scopeId("org", "acme")), null);
+      assert.notEqual(store.getSoul(scopeId("org", "globex")), "Acme instructions");
+    });
+    const installs = createSlackInstallationStore("default-org", tenantMap(), "k".repeat(32));
+    await withTenant(A, () => installs.set({ botToken: "xoxb-acme", updatedBy: "admin" }));
+    assert.equal((await withTenant(A, () => installs.status())).configured, true);
+    assert.equal((await withTenant(B, () => installs.status())).configured, false);
+  } finally {
+    configureTenantSettings(undefined);
+  }
+});
+
 test("with several tenants, unbound cache reads fail closed, org identities differ, and seeds stay with the install", async () => {
   registerTenants(A, undefined);
   const slot = perTenant(() => ({}));
   assert.throws(() => slot(), /No tenant is bound/);
   assert.equal(unboundTenantAllowed(), false);
   assert.equal(
-    withTenant(A, () => orgIdentity()),
-    orgId(),
+    withTenant(A, () => orgId()),
+    process.env.ORG_ID ?? "default-org",
   );
   assert.equal(
-    withTenant(B, () => orgIdentity()),
+    withTenant(B, () => orgId()),
     B,
   );
+  configureTenantSettings(async () => ({}));
+  try {
+    assert.throws(() => withTenant(B, () => orgId()), /settings are not loaded/);
+  } finally {
+    configureTenantSettings(undefined);
+  }
   assert.equal(
     withTenant(B, () => isInstallTenant()),
     false,
@@ -345,7 +391,7 @@ test("with several tenants, unbound cache reads fail closed, org identities diff
       },
       async remove() {},
     },
-    { seed: [{ principalId: "admin@example.com", scopeId: scopeId("org", orgId()), role: "org_admin" }] },
+    { seed: [{ principalId: "admin@example.com", scopeId: scopeId("org", "acme"), role: "org_admin" }] },
   );
   assert.deepEqual(
     (await withTenant(A, () => grants.list())).map((grant) => grant.principalId),

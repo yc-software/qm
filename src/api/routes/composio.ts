@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { cacheTenant } from "../../tenants/context.ts";
-import { orgId, orgIdentity } from "../../config.ts";
+import { orgId } from "../../config.ts";
 import { entitledScopes } from "../../resolution/context-filter.ts";
 import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
@@ -28,7 +28,7 @@ export function composioUserId(org: string, principal: string): string {
 }
 
 export function composioUserIds(principal: string): string[] {
-  return [...new Set(personIds(principal).map((id) => composioUserId(orgIdentity(), id)))];
+  return [...new Set(personIds(principal).map((id) => composioUserId(orgId(), id)))];
 }
 
 export async function activeRun(ctx: ApiCtx): Promise<boolean> {
@@ -237,7 +237,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
       return sendJson(ctx.res, 400, { error: "invalid_callback" });
     }
   }
-  const userId = composioUserId(orgIdentity(), canonicalPerson(access.principal));
+  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
   try {
     const session = await request(ctx, access.key, "/tool_router/session", {
       user_id: userId,
@@ -279,7 +279,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
           {
             purpose: "slack-account-link",
             principal: access.principal,
-            org: orgIdentity(),
+            org: orgId(),
             accountId: link.connected_account_id,
             exp: Date.now() + 20 * 60_000,
           },
@@ -576,7 +576,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
     connectFailed();
     return sendJson(ctx.res, 400, { error: "invalid_session" });
   }
-  const userId = composioUserId(orgIdentity(), canonicalPerson(access.principal));
+  const userId = composioUserId(orgId(), canonicalPerson(access.principal));
   let accountId: string;
   try {
     const result = await request(ctx, access.key, "/connected_accounts/complete_auth", {
@@ -703,7 +703,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
   if (
     !proof ||
     proof.purpose !== "slack-account-link" ||
-    proof.org !== orgIdentity() ||
+    proof.org !== orgId() ||
     proof.principal !== access.principal ||
     typeof proof.exp !== "number" ||
     proof.exp <= Date.now() ||
@@ -805,7 +805,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
         const priorAccounts = await request(
           ctx,
           projectKey,
-          `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(orgIdentity(), member.principalId), limit: "1" })}`,
+          `/connected_accounts?${new URLSearchParams({ user_ids: composioUserId(orgId(), member.principalId), limit: "1" })}`,
         );
         if (!Array.isArray(priorAccounts.items)) throw Error("Could not inspect existing connections");
         hasPriorAccounts ||= priorAccounts.items.length > 0;

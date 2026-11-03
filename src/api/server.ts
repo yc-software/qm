@@ -513,20 +513,13 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     if (raw) {
       if ("path" in raw.route) nameRequest(base.method, raw.route.path);
       const routeAuth = raw.route.auth;
-      return withRequestTenant(
-        req,
-        res,
-        raw.route,
-        capabilitySecret,
-        async () => {
-          if (typeof routeAuth === "object") {
-            base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth);
-            if (!base.capability) return void req.resume();
-          }
-          await run(raw.route, raw.params, base);
-        },
-        deps.loadTenant,
-      );
+      return withRequestTenant(req, res, raw.route, capabilitySecret, deps.tenancy, async () => {
+        if (typeof routeAuth === "object") {
+          base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth);
+          if (!base.capability) return void req.resume();
+        }
+        await run(raw.route, raw.params, base);
+      });
     }
     const matched = findRoute(apiRoutes, base.method, base.pathname);
     if (matched && "path" in matched.route) nameRequest(base.method, matched.route.path);
@@ -548,7 +541,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     }
     rawBodies.set(req, await readRawBody(req, matched?.route.maxBodyBytes));
     await ready;
-    await withRequestTenant(req, res, matched?.route, capabilitySecret, () => routing(req, res), deps.loadTenant);
+    await withRequestTenant(req, res, matched?.route, capabilitySecret, deps.tenancy, () => routing(req, res));
   }
   return server;
 }

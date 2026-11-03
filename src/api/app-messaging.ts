@@ -1,5 +1,5 @@
 import type { ScopeId } from "../types.ts";
-import { orgId as orgIdOf, orgIdentity } from "../config.ts";
+import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
 import type { Destination } from "../types.ts";
@@ -316,7 +316,7 @@ export function createMessagingMethods(
     },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
-      if (self && (self.name || self.mentionId)) ambientSelf.set(`${orgIdentity()}:${surface}`, self);
+      if (self && (self.name || self.mentionId)) ambientSelf.set(`${orgIdOf()}:${surface}`, self);
       const out = await deps.surfaceCache.ingest(events);
       if (surface === "slack" && hasRevisionEvents(events)) {
         void recordMessageRevisions(deps.sessions, deps.runs, events).catch(

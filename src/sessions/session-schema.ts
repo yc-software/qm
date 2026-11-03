@@ -1,5 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { TENANCY, tenantPolicies, tenantTables } from "../tenants/migrations.ts";
+import { TENANCY, TENANT_HOSTS, tenantPolicies, tenantTables } from "../tenants/migrations.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
@@ -499,4 +499,5 @@ export const SESSION_MIGRATIONS = [
   SESSION_FACTS,
   SESSION_FACTS_COPY,
   SESSION_TABLES,
+  TENANT_HOSTS,
 ];

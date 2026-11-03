@@ -78,7 +78,7 @@ import {
   baseModelProviders,
   companySubscriptionAuth,
   configuredModel,
-  orgIdentity,
+  orgId,
   providerKeysPresent,
   type Config,
 } from "./config.ts";
@@ -158,6 +158,10 @@ import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environ
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
+import { ownerPgPool } from "./tenants/owner-pool.ts";
+import { createTenancy, type Tenancy } from "./tenants/tenancy.ts";
+import { configureTenantSettings } from "./tenants/settings.ts";
+import { configureTenantCaches } from "./api/tenant-ingress.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
@@ -465,6 +469,7 @@ export interface BuiltApp {
   resolveClient: OAuthClientResolver;
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
+  tenancy: Tenancy;
   secretDrops: SecretDropStore;
   modelGatewayTransport?: ModelGatewayTransportConfig;
   resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
@@ -649,7 +654,7 @@ export function buildApp(
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
-  const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
+  const teams = createPostgresTeamStore(databaseUrl, featureFlags, () => scopeId("org", orgId()));
   const decisions = createPostgresDecisionStore(databaseUrl);
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
@@ -1300,6 +1305,9 @@ export function buildApp(
   const connectorTokens = withOperatorTokenFallback(credentialStore, config.egressServiceHosts ?? [], secretSource);
   const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
+  const tenancy = createTenancy(pgArtifactMap.pool, ownerPgPool(pgArtifactMap.pool));
+  configureTenantSettings(tenancy.settings);
+  configureTenantCaches(() => tenantLoader.load());
   const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
 
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
@@ -1428,9 +1436,9 @@ export function buildApp(
     const subscription = codexSubscriptionModelId(id);
     return resolveModel(subscription) ? subscription : id;
   };
-  const runtimeOrgScope = scopeId("org", config.orgId);
+  const runtimeOrgScope = () => scopeId("org", orgId());
   const orgBaseModelId = (): string | undefined =>
-    configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
+    configStore.getRuntimeSelection(runtimeOrgScope())?.modelId ?? configStore.getBaseModel(runtimeOrgScope()) ?? undefined;
   const deploymentDefaultModel = () =>
     defaultModel(
       configuredModel(config),
@@ -1463,7 +1471,7 @@ export function buildApp(
         ...(config.modelGateway ? { gateway: config.modelGateway } : {}),
         credential: async (slug) => {
           const rec = keychain
-            ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug))
+            ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", orgId()), slug))
             : null;
           return rec ? { host: rec.host, enabled: rec.enabled, headers: credentialRequestHeaders(rec) } : null;
         },
@@ -1480,8 +1488,8 @@ export function buildApp(
   const resolveRequestedRuntime = (route: SessionRoute, requested: SessionRoute["runtime"]) =>
     resolveRuntimeChoice(
       configStore,
-      runtimeOrgScope,
-      route.scopeLabel ?? runtimeOrgScope,
+      runtimeOrgScope(),
+      route.scopeLabel ?? runtimeOrgScope(),
       fallback,
       requested,
       hydrateModelCatalog,
@@ -1607,7 +1615,7 @@ export function buildApp(
           },
         })
       : undefined;
-  const productAnalytics = createProductAnalytics(orgIdentity, config.productAnalytics);
+  const productAnalytics = createProductAnalytics(orgId, config.productAnalytics);
   runs.onTerminal((run) => void productAnalytics.responseFinished(run));
 
   let processes: ProcessRegistry | undefined;
@@ -1834,7 +1842,7 @@ export function buildApp(
     ...(deployGitSecret && deployGitBase
       ? {
           deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
-            const orgScope = scopeId("org", config.orgId);
+            const orgScope = scopeId("org", orgId());
             const credentials = await deploymentCredentialSlugs(
               await serviceCreds.listServiceCredentials(orgScope),
               orgScope,
@@ -2059,7 +2067,7 @@ export function buildApp(
       if (Object.keys(requested).length === 0) {
         await resolveRuntimeChoice(
           configStore,
-          runtimeOrgScope,
+          runtimeOrgScope(),
           scope,
           fallback,
           requested,
@@ -2191,7 +2199,7 @@ export function buildApp(
               {
                 serviceCredential: async (slug) => {
                   const record = nonDeploymentCredential(
-                    await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug),
+                    await serviceCreds.getServiceCredentialSecret(scopeId("org", orgId()), slug),
                   );
                   return record && record.delivery !== "env" ? record : undefined;
                 },
@@ -2995,6 +3003,7 @@ export function buildApp(
     resolveClient,
     consentLinks,
     oauthFlows,
+    tenancy,
     secretDrops,
     modelGatewayTransport: gatewayTransport,
     budget,
@@ -3089,7 +3098,6 @@ export function serverDeps(
     resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,
     checkReadiness: built.checkReadiness,
-    loadTenant: built.tenantLoader.load,
     ...(built.backgroundOwnership
       ? {
           backgroundOwnership: built.backgroundOwnership,
@@ -3128,6 +3136,7 @@ export function serverDeps(
     resolveClient: built.resolveClient,
     consentLinks: built.consentLinks,
     oauthFlows: built.oauthFlows,
+    tenancy: built.tenancy,
     secretDrops: built.secretDrops,
     ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),

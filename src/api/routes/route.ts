@@ -44,6 +44,7 @@ export interface AdminAccess {
 export type Route<C extends BaseCtx = ApiCtx> = {
   handle: (ctx: C) => void | Promise<void>;
   auth: RouteAuth;
+  tenant?: "none" | "row";
   actor?: RouteActor;
   admin?: AdminAccess;
   allowedInStrict?: true;
