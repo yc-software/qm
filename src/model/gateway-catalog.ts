@@ -130,13 +130,13 @@ export function createGatewayCatalog(
 ) {
   const root = gatewayRoot(config.url);
   const baseUrl = `${root}/v1`;
-  const discovery = perTenant(() => ({
-    routes: { ...config.models } as Readonly<Record<string, string>>,
-    discovered: false,
-    retryAt: 0,
-    lastSuccessAt: 0,
-    inFlight: undefined as Promise<void> | undefined,
-  }));
+  const discovery = perTenant<{
+    routes: Readonly<Record<string, string>>;
+    discovered: boolean;
+    retryAt: number;
+    lastSuccessAt: number;
+    inFlight?: Promise<void>;
+  }>(() => ({ routes: { ...config.models }, discovered: false, retryAt: 0, lastSuccessAt: 0 }));
   const transport: ModelGatewayTransportConfig = {
     ...config,
     reservedModelIds: new Set(Object.keys(config.models)),

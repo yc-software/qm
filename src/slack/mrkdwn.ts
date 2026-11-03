@@ -41,8 +41,8 @@ export function neutralizeMassMentions(text: string): string {
 const RESERVED_MENTION_NAMES = new Set(["here", "channel", "everyone"]);
 
 const mentionIndex = perTenant(() => ({
-  idByName: new Map() as ReadonlyMap<string, string>,
-  nameById: new Map() as ReadonlyMap<string, string>,
+  idByName: new Map<string, string>(),
+  nameById: new Map<string, string>(),
 }));
 export function setMentionIndex(index: ReadonlyMap<string, string>): void {
   const byId = new Map<string, string>();

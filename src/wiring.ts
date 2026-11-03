@@ -627,8 +627,6 @@ export function buildApp(
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
-  const loadIdentity = () => onFirstBind((tenant) => withTenant(tenant, () => identity.ready()));
-  let stopIdentityLoad: (() => void) | undefined = loadIdentity();
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
     tables: createPostgresConfigTables(databaseUrl),
@@ -636,8 +634,6 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  const preloadConfig = () => onFirstBind((tenant) => withTenant(tenant, () => configStore.hydrate()));
-  let stopConfigPreload: (() => void) | undefined = preloadConfig();
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills", ["scopeId"]),
     advisoryLock,
@@ -1337,6 +1333,11 @@ export function buildApp(
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
+  const loadTenant = () =>
+    onFirstBind((tenant) =>
+      withTenant(tenant, () => Promise.all([identity.ready(), configStore.hydrate?.(), refreshCustomProviders()])),
+    );
+  let stopTenantLoad: (() => void) | undefined = loadTenant();
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
     await refreshCustomProviders();
@@ -2892,8 +2893,7 @@ export function buildApp(
   const runtime: Runtime = {
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
-      stopConfigPreload ??= preloadConfig();
-      stopIdentityLoad ??= loadIdentity();
+      stopTenantLoad ??= loadTenant();
       flyTunnel?.monitor();
       drain.start();
       renderBasePreparing = new AbortController();
@@ -2918,8 +2918,6 @@ export function buildApp(
     },
     releaseInFlightRuns,
     async stop() {
-      stopConfigPreload?.();
-      stopConfigPreload = undefined;
       renderBasePreparing?.abort();
       await stopBackground();
       await Promise.all([
@@ -2931,8 +2929,8 @@ export function buildApp(
       await releaseInFlightRuns();
       await drain.stop();
       stopStreamSync();
-      stopIdentityLoad?.();
-      stopIdentityLoad = undefined;
+      stopTenantLoad?.();
+      stopTenantLoad = undefined;
       await Promise.all(
         [
           runs.close?.(),

@@ -11,6 +11,7 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
 async function withDefaultComputer(built: ReturnType<typeof buildApp>) {
+  await built.identity.ready();
   const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
   await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
   return built;

@@ -499,6 +499,7 @@ test("an agent token may invite a member but never grant, demote, or revoke an o
 test("expiry classifies an external as guest, and the signed broker check answers accordingly", async () => {
   const s = start({ signed: true });
   try {
+    await s.built.identity.ready();
     const now = Date.now();
     const record = (email: string, expiresAt: number) => ({
       email,

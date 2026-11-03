@@ -172,13 +172,18 @@ export function createMcpToolService(opts: {
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const refreshIntervalMs = opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS;
-  const tenantState = perTenant(() => ({
-    clients: new Map<string, { client: McpClient; server: McpServer }>(),
-    snapshot: [] as McpToolDescriptor[],
-    perUserServers: new Map<string, McpServer>(),
-    catalogs: new LRUCache<string, Promise<RemoteTool[]>>({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS }),
-    loadedAt: undefined as number | undefined,
-    pending: undefined as Promise<void> | undefined,
+  const tenantState = perTenant<{
+    clients: Map<string, { client: McpClient; server: McpServer }>;
+    snapshot: McpToolDescriptor[];
+    perUserServers: Map<string, McpServer>;
+    catalogs: LRUCache<string, Promise<RemoteTool[]>>;
+    loadedAt?: number;
+    pending?: Promise<void>;
+  }>(() => ({
+    clients: new Map(),
+    snapshot: [],
+    perUserServers: new Map(),
+    catalogs: new LRUCache({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS }),
   }));
 
   function signInMessage(server: McpServer): string {

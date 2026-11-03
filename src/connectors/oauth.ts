@@ -519,12 +519,12 @@ export interface PublicOAuthClient {
 
 const PUBLIC_CLIENTS_TTL_MS = 5 * 60_000;
 let publicClientSource: (() => Promise<PublicOAuthClient[]>) | undefined;
-const publicOAuth = perTenant(() => ({
-  clients: new Map<string, PublicOAuthClient>(),
-  providers: new Map<string, OAuthProviderConfig>(),
-  loadedAt: -Infinity,
-  loading: undefined as Promise<void> | undefined,
-}));
+const publicOAuth = perTenant<{
+  clients: Map<string, PublicOAuthClient>;
+  providers: Map<string, OAuthProviderConfig>;
+  loadedAt: number;
+  loading?: Promise<void>;
+}>(() => ({ clients: new Map(), providers: new Map(), loadedAt: -Infinity }));
 
 export function setPublicOAuthClientSource(source: () => Promise<PublicOAuthClient[]>): void {
   publicClientSource = source;

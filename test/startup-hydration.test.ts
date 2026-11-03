@@ -43,13 +43,11 @@ mock.module("../src/resolution/config-store.ts", {
 
 const { buildApp } = await import("./support/build-app.ts");
 
-test("first-bind load failures are contained while explicit loads and tenant readiness stay fail-closed", async () => {
+test("a failed first-bind load fails closed and runs again on the next use", async () => {
   const built = buildApp(testConfig());
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
-      await assert.rejects(built.identity.refresh(), (error: unknown) => error === identityFailure);
-      await assert.rejects(built.config.hydrate(), (error: unknown) => error === configFailure);
-      await assert.rejects(tenantReady(), (error: unknown) => error === configFailure || error === identityFailure);
+      await assert.rejects(tenantReady(), (error: unknown) => error === identityFailure || error === configFailure);
     }
   } finally {
     await built.runtime.stop();
