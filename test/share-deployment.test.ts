@@ -33,7 +33,7 @@ import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
-function test(name: string, fn: () => unknown): void {
+function test(name: string, fn: () => void | Promise<void>): void {
   nodeTest(name, () => inTestTenant(fn));
 }
 
