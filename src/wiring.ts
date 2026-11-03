@@ -114,7 +114,7 @@ import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling, createPgPool } from "./persistence/pg-pool.ts";
 import { installRowTenants, type RowTenants } from "./tenants/row-tenant.ts";
-import { pgTenants } from "./tenants/resolver.ts";
+import { inInstallTenant, pgTenants, type TenantList } from "./tenants/resolver.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
@@ -437,6 +437,7 @@ export function stopWithBackstop(
 }
 
 export interface BuiltApp {
+  tenants: TenantList;
   rowTenants: RowTenants;
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
@@ -545,15 +546,17 @@ export function buildApp(
 ): BuiltApp {
   let backgroundAdmission = () => !config.backgroundDeploymentId;
   let backgroundActive = () => false;
+  const databaseUrl = config.databaseUrl;
+  if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
+  const tenants = pgTenants(createPgPool(databaseUrl));
+  const rowTenants = installRowTenants(tenants);
   const admittedWork = createAdmittedWork({
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
+    bind: (work) => inInstallTenant(tenants, work),
   });
   let inlineShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
-  const databaseUrl = config.databaseUrl;
-  if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
-  const rowTenants = installRowTenants(pgTenants(createPgPool(databaseUrl)));
   if (!config.connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
   configurePgPooling({
     databaseUrl,
@@ -2976,6 +2979,7 @@ export function buildApp(
     consentLinks,
     oauthFlows,
     secretDrops,
+    tenants,
     rowTenants,
     modelGatewayTransport: gatewayTransport,
     budget,

@@ -312,10 +312,21 @@ export const TENANT_BACKFILL: PgMigrationDefinition = {
   ],
 };
 
+const TENANT_ROW_SECURITY: PgMigrationDefinition = {
+  id: "sessions/store/0051-tenant-row-security",
+  statements: ["items", "blobs"].flatMap((table) => [
+    `ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()`,
+    `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
+    `CREATE POLICY tenant_isolation ON ${table}
+       USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())`,
+  ]),
+};
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,
   TENANT_BACKFILL,
+  TENANT_ROW_SECURITY,
 ];
