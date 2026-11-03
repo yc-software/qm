@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const org = TEST_ROOT_SCOPE;
 const manifest = { name: "demo", description: "d", requiredCapabilities: [], body: "# Demo" };

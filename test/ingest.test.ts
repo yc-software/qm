@@ -5,7 +5,7 @@ import { createSkillStore } from "../src/skills/skill-store.ts";
 import { createSkillPackStore } from "../src/skills/skill-pack-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const md = (front: string, body = "# Body\ntext") => `---\n${front}\n---\n${body}`;
 

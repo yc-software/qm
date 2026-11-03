@@ -8,23 +8,24 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
+import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdminGrantStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant-root.ts";
+import { OTHER_TENANT, TEST_TENANT, TENANT_HEADERS, TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function start(withAdmin = true, signingSecret?: string) {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-whoami-")) }));
   const deps = {
     ...(withAdmin ? { admin: built.admin } : {}),
     auditLog: built.auditLog,
-    tenantName: built.tenantName,
   };
   const server = signingSecret
     ? createServer(built.app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), ...deps, signingSecret })
-    : createInsecureTestServer(built.app, deps);
+    : createInsecureTestServer(TEST_TENANT, built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -44,7 +45,6 @@ test("whoami reports an org_admin as admin with the org scope", async () => {
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
       tenant: TEST_TENANT,
-      tenantName: "test-0",
     });
   } finally {
     await s.close();
@@ -60,7 +60,6 @@ test("whoami reports an ungranted actor as not-admin", async () => {
       isAdmin: false,
       permissions: [],
       tenant: TEST_TENANT,
-      tenantName: "test-0",
     });
   } finally {
     await s.close();
@@ -76,7 +75,6 @@ test("whoami reports a foreign-org actor as not-admin (resolveActor null → 200
       isAdmin: false,
       permissions: [],
       tenant: TEST_TENANT,
-      tenantName: "test-0",
     });
   } finally {
     await s.close();
@@ -92,7 +90,6 @@ test("whoami with no x-admin-actor is not-admin (200)", async () => {
       isAdmin: false,
       permissions: [],
       tenant: TEST_TENANT,
-      tenantName: "test-0",
     });
   } finally {
     await s.close();
@@ -128,16 +125,27 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
     assert.equal(unsigned.status, 401);
 
     const ts = Math.floor(Date.now() / 1000);
-    const badSig = signRequest("not-the-secret", ts, `GET\n/v1/admin/whoami\n`);
+    const canonical = canonicalPayload("GET", "/v1/admin/whoami", "", TEST_TENANT);
+    const identity = await mintPortalIdentity({ t: TEST_TENANT, p: "admin-alice", exp: Date.now() + 60_000 }, SECRET);
+    const headers = (signature: string, tenant = TENANT_HEADERS) => ({
+      ...tenant,
+      "x-portal-identity": identity,
+      "x-timestamp": String(ts),
+      "x-signature": signature,
+    });
     const forged = await fetch(`${s.base}/v1/admin/whoami`, {
-      headers: { "x-admin-actor": "admin-alice", "x-timestamp": String(ts), "x-signature": badSig },
+      headers: headers(signRequest("not-the-secret", ts, canonical)),
     });
     assert.equal(forged.status, 401);
 
-    const goodSig = signRequest(SECRET, ts, `GET\n/v1/admin/whoami\n`);
-    const ok = await fetch(`${s.base}/v1/admin/whoami`, {
-      headers: { "x-admin-actor": "admin-alice", "x-timestamp": String(ts), "x-signature": goodSig },
+    const foreign = await fetch(`${s.base}/v1/admin/whoami`, {
+      headers: headers(signRequest(SECRET, ts, canonicalPayload("GET", "/v1/admin/whoami", "", OTHER_TENANT)), {
+        "x-qm-tenant": OTHER_TENANT,
+      }),
     });
+    assert.equal(foreign.status, 401, "an identity minted for one tenant is refused on another tenant's request");
+
+    const ok = await fetch(`${s.base}/v1/admin/whoami`, { headers: headers(signRequest(SECRET, ts, canonical)) });
     assert.equal(ok.status, 200);
     assert.deepEqual(await ok.json(), {
       isAdmin: true,
@@ -145,7 +153,6 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
       tenant: TEST_TENANT,
-      tenantName: "test-0",
     });
   } finally {
     await s.close();

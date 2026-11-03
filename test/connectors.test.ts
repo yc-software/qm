@@ -12,7 +12,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import type { DurableMap } from "../src/persistence/durable-map.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 

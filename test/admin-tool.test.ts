@@ -111,8 +111,11 @@ test("cancelled admin calls never reach HTTP", async () => {
     },
     { controlTools: true },
   ).find((t) => t.name === "admin")!;
-  await native.execute("stopped", { action: "whoami" }, undefined, undefined, {} as never);
-  assert.equal(received, signal);
+  await assert.rejects(
+    native.execute("stopped", { action: "whoami" }, undefined, undefined, {} as never),
+    /synthetic stop/,
+  );
+  assert.equal(received, undefined);
 });
 
 test("admin error diagnostics retain request evidence and redact secrets", async () => {

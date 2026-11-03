@@ -8,7 +8,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { userRuntimeConfigBody } from "../src/api/runtime-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_TENANT, TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -16,7 +16,7 @@ type Snapshot = Awaited<ReturnType<typeof userRuntimeConfigBody>>;
 
 async function setup() {
   const built = buildApp(testConfig());
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     userModelCredentials: built.userModelCredentials,
     providerKeys: { anthropic: false, openai: false, openrouter: false },

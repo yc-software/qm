@@ -5,7 +5,8 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type, type TSchema } from "typebox";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { NeedsApproval, CommandDenied } from "../../tools/primitives.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, swallow } from "../../util/errors.ts";
+import { withAbort } from "../../util/async.ts";
 import { computerVerdict } from "../../sandbox/sandbox.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { SANDBOX_CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
@@ -445,11 +446,24 @@ export function computerTools(kit: ToolKit) {
       try {
         switch (params.action) {
           case "poll": {
-            const r = await tc.backgroundPoll(params.process_id!, {
-              ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
-              ...(params.max_bytes !== undefined ? { maxBytes: params.max_bytes } : {}),
-              ...(params.wait_seconds !== undefined ? { waitSeconds: params.wait_seconds } : {}),
-            });
+            const poll = (waitSeconds?: number) =>
+              tc.backgroundPoll(params.process_id!, {
+                ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
+                ...(params.max_bytes !== undefined ? { maxBytes: params.max_bytes } : {}),
+                ...(waitSeconds !== undefined ? { waitSeconds } : {}),
+              });
+            const steered = ref.steered;
+            const pollUntilSteered = () => {
+              const waiting = poll(params.wait_seconds);
+              void waiting.catch((error: unknown) => {
+                if (steered?.aborted) swallow("background: poll left behind for a steer", error);
+              });
+              return withAbort(() => waiting, steered).catch(async (error: unknown) => {
+                if (error !== steered?.reason) throw error;
+                return poll();
+              });
+            };
+            const r = steered?.aborted ? await poll() : await pollUntilSteered();
             const { chunks: _chunks, ...pollMeta } = r;
             return recordResult(
               callId,

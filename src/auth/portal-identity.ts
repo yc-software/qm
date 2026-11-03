@@ -1,6 +1,8 @@
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
+import { boundTenant, isTenantId } from "../tenants/context.ts";
 
 export interface PortalIdentity {
+  t: string;
   p: string;
   authenticatedAs?: string;
   n?: string;
@@ -21,6 +23,7 @@ export async function verifyPortalIdentity(
 ): Promise<PortalIdentity | null> {
   const claims = (await verifySignedPayload(token, secret)) as PortalIdentity | null;
   if (!claims || typeof claims.p !== "string" || !claims.p || typeof claims.exp !== "number") return null;
+  if (!isTenantId(claims.t) || claims.t !== boundTenant()) return null;
   if (claims.authenticatedAs !== undefined && (typeof claims.authenticatedAs !== "string" || !claims.authenticatedAs))
     return null;
   if (nowMs > claims.exp) return null;

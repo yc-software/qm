@@ -13,7 +13,7 @@ import {
   securityScreenPayload,
 } from "../src/security/security-posture.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("security posture parses only the three named modes", () => {
   assert.equal(parseSecurityPosture("dangerous"), "dangerous");

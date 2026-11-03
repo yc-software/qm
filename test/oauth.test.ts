@@ -16,9 +16,10 @@ import {
   type OAuthState,
 } from "../src/connectors/oauth.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { createOAuthFlowStore } from "../src/connectors/oauth-flow-store.ts";
 import { testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant-root.ts";
+import { TEST_TENANT, TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const env = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",
@@ -372,11 +373,11 @@ test("OAuth state is sealed, scoped (tenant/accountType/clientRef), and expires"
     principalId: "U1",
     redirectUri: "https://app/callback",
     returnTo: "/settings",
+    tenant: TEST_TENANT,
     accountType: "company",
     clientRef: "env:google",
     issuedAt: 1_000,
     nonce: "n1",
-    tenant: TEST_TENANT,
   });
   await assert.rejects(() => openOAuthState(`${state}x`, { secret: "state-secret" }), /invalid OAuth state/);
   await assert.rejects(
@@ -441,6 +442,14 @@ test("OAuth state round-trips the PKCE verifier", async () => {
   );
   const opened = await openOAuthState(sealed, { secret: "state-secret" });
   assert.equal(opened.codeVerifier, "ver-abc");
+});
+
+test("OAuth state without a valid tenant does not open", async () => {
+  const state = { provider: "x", principalId: "U1", redirectUri: "https://app/cb", issuedAt: Date.now(), nonce: "n" };
+  for (const tenant of ["default-org", undefined]) {
+    const sealed = await mintSignedPayload({ ...state, ...(tenant ? { tenant } : {}) }, "state-secret");
+    await assert.rejects(() => openOAuthState(sealed, { secret: "state-secret" }), /invalid OAuth state/);
+  }
 });
 
 const xClient = (): Promise<ResolvedClient> => resolve("x", {});
@@ -557,6 +566,7 @@ test("oauth flow store — a short opaque state resolves once, then expires", as
     provider: "x",
     principalId: "person@example.com",
     redirectUri: "https://example.test/v1/connectors/oauth/x/callback",
+    tenant: TEST_TENANT,
     codeVerifier: "verifier",
   });
   assert.equal(flowId.length, 43);
@@ -567,6 +577,9 @@ test("oauth flow store — a short opaque state resolves once, then expires", as
   assert.equal(await store.finish(flowId), null, "single use");
 
   const stale = createOAuthFlowStore(testMap<OAuthState>(), { now: () => 1_000, ttlMs: 10 });
-  const staleId = await stale.start({ provider: "x", principalId: "U1", redirectUri: "https://example.test/cb" }, 0);
+  const staleId = await stale.start(
+    { provider: "x", principalId: "U1", redirectUri: "https://example.test/cb", tenant: TEST_TENANT },
+    0,
+  );
   assert.equal(await stale.finish(staleId), null, "expired");
 });

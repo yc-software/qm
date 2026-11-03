@@ -6,7 +6,7 @@ import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { PersistedEgressPolicy, PersistedSoul } from "../src/resolution/config-store.ts";
 import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 

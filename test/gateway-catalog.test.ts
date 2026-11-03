@@ -19,7 +19,7 @@ import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
 import { loadConfig } from "../src/config.ts";
 import { testConfigStore } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const config = {
   url: "https://gateway.example/prefix/v1",

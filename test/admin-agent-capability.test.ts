@@ -27,7 +27,7 @@ import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = TEST_ROOT_SCOPE;

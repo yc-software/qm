@@ -12,7 +12,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const U1 = "U1";
 const C1 = "C1";

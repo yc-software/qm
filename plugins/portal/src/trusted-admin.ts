@@ -3,7 +3,7 @@ import { CompactSign } from "jose";
 import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 
 export async function provisionTrustedAdmin(
-  config: { core: string; signingSecret: string; identitySecret: string; issuer: string },
+  config: { core: string; signingSecret: string; identitySecret: string; tenant: string; issuer: string },
   subject: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
@@ -11,6 +11,7 @@ export async function provisionTrustedAdmin(
     purpose: "trusted-entry-admin",
     issuer: config.issuer,
     subject,
+    tenant: config.tenant,
     exp: Date.now() + 60_000,
     jti: randomUUID(),
   };

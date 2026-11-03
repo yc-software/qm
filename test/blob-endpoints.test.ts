@@ -10,10 +10,11 @@ import { createHash } from "node:crypto";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function start(): { base: string; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobapi-")) }));
-  const server = createInsecureTestServer(built.app, { blobTransfer: built.blobTransfer });
+  const server = createInsecureTestServer(TEST_TENANT, built.app, { blobTransfer: built.blobTransfer });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -71,7 +72,7 @@ test("GET /v1/blobs/:id is 404 for an unknown id", async () => {
 
 function startWithDeadline(deadlineMs: number): { base: string; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobapi-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     blobTransfer: built.blobTransfer,
     requestBodyDeadlineMs: deadlineMs,
   });

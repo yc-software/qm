@@ -26,6 +26,8 @@ import {
 import { githubRepoUrl, isGitBranchName } from "./render-source.ts";
 import { envNum, isEnvVarName, isMissingOrPlaceholder } from "./util.ts";
 
+export const FARGATE_MAX_STOP_TIMEOUT_S = 120;
+
 export const CONFIG_FILENAME = "qm.config.jsonc";
 
 export const CONTRACT_VERSION = 1 as const;
@@ -1371,9 +1373,14 @@ function validateAws(
     }
     if (value["stopTimeout"] !== undefined) {
       const stopTimeout = value["stopTimeout"];
-      if (typeof stopTimeout !== "number" || !Number.isInteger(stopTimeout) || stopTimeout < 2 || stopTimeout > 120) {
+      if (
+        typeof stopTimeout !== "number" ||
+        !Number.isInteger(stopTimeout) ||
+        stopTimeout < 2 ||
+        stopTimeout > FARGATE_MAX_STOP_TIMEOUT_S
+      ) {
         throw new CliError(
-          `${path}: "aws.services.${name}.stopTimeout" must be an integer between 2 and 120 seconds (the Fargate limit)`,
+          `${path}: "aws.services.${name}.stopTimeout" must be an integer between 2 and ${FARGATE_MAX_STOP_TIMEOUT_S} seconds (the Fargate limit)`,
         );
       }
       service.stopTimeout = stopTimeout;

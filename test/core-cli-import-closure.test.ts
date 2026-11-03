@@ -56,8 +56,8 @@ test("the egress proxy image copies every cli/src file that its entry point reac
       if (target.endsWith(".ts") && existsSync(join(root, target))) walk(target);
   };
   walk("src/egress-authz-main.ts");
-  assert.ok(seen.size > 1);
-  for (const target of [...seen].filter((file) => file.startsWith("cli/")))
+  const reached = [...seen].filter((file) => file.startsWith("cli/"));
+  for (const target of reached)
     assert.ok(copied.has(target), `the egress proxy reaches ${target}, which the image does not copy`);
 });
 

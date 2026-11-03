@@ -14,7 +14,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createIsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("sharing posture is isolated by default and isolated wins composition", () => {
   assert.equal(parseSharingPosture("open"), "open");

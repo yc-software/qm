@@ -6,7 +6,7 @@ import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { testConfigStore } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const adaptiveId = "claude-sonnet-4-6";
 

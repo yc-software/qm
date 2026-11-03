@@ -13,6 +13,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-keychain-")) }));
@@ -23,7 +24,7 @@ function start() {
     asks: testMap(),
     key: deriveConnectorKey("admin-keychain-test-key"),
   });
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,

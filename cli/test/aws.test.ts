@@ -579,7 +579,6 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
   assert.deepEqual(serviceEnvironment(config, "web-ui"), {
     CORE_API_URL: "http://core.acme.internal:8080",
     PORT: "8080",
-    REQUIRE_SIGNED_PORTAL_IDENTITY: "1",
     WEB_UI_PUBLIC_URL: "https://agent.acme.example",
   });
   const core = serviceEnvironment(config, "core");
@@ -4962,7 +4961,16 @@ test("AWS renders adopted logGroup and stopTimeout pins; the defaults stay deriv
     (derived.logConfiguration as { options: Record<string, string> }).options["awslogs-group"],
     "/ecs/acme-core",
   );
-  assert.equal(derived.stopTimeout, undefined);
+  assert.equal(derived.stopTimeout, 60, "core waits out its 30 s drain plus 30 s to hand turns back");
+  assert.equal(renderTaskDefinition(config, "web-ui", image).containerDefinitions[0]!.stopTimeout, undefined);
+  const withDrain = (drain: string): QmConfig => ({
+    ...config,
+    env: { ...config.env, core: { ...config.env.core, SHUTDOWN_DRAIN_MS: drain } },
+  });
+  assert.equal(renderTaskDefinition(withDrain("90000"), "core", image).containerDefinitions[0]!.stopTimeout, 120);
+  assert.throws(() => renderTaskDefinition(withDrain("90001"), "core", image), /SHUTDOWN_DRAIN_MS=90001/);
+  assert.equal(renderTaskDefinition(withDrain(""), "core", image).containerDefinitions[0]!.stopTimeout, 60);
+  assert.throws(() => renderTaskDefinition(withDrain("soon"), "core", image), /SHUTDOWN_DRAIN_MS=soon/);
   const adopted: QmConfig = {
     ...config,
     aws: {
@@ -4979,6 +4987,8 @@ test("AWS renders adopted logGroup and stopTimeout pins; the defaults stay deriv
     "/ecs/legacy-core",
   );
   assert.equal(container.stopTimeout, 120);
+  const pinnedLongDrain: QmConfig = { ...adopted, env: withDrain("100000").env };
+  assert.equal(renderTaskDefinition(pinnedLongDrain, "core", image).containerDefinitions[0]!.stopTimeout, 120);
 });
 
 test("AWS doctor classifies an un-pushed secret store as pending, not drift", () => {
@@ -5207,7 +5217,7 @@ test("AWS layer GET and PUT bind the selected ALB while retaining API Host, TLS 
       assert.equal(headers.host, "api.acme.example");
       assert.equal(
         headers["x-signature"],
-        `v0=${createHmac("sha256", TEST_SECRET_VALUE).update(`v0:${headers["x-timestamp"]}:${options.method}\n${url.pathname}${url.search}\n${body}`).digest("hex")}`,
+        `v0=${createHmac("sha256", TEST_SECRET_VALUE).update(`v0:${headers["x-timestamp"]}:${options.method}\n${url.pathname}${url.search}\n\n${body}`).digest("hex")}`,
       );
     }
     assert.match(readFileSync(fake.log, "utf8"), /describe-load-balancers --names inactive-stack/);
@@ -5281,7 +5291,7 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
       assert.equal(
         headers["x-signature"],
         `v0=${createHmac("sha256", TEST_SECRET_VALUE)
-          .update(`v0:${headers["x-timestamp"]}:${init.method}\n/v1/deployment-layer\n${init.body ?? ""}`)
+          .update(`v0:${headers["x-timestamp"]}:${init.method}\n/v1/deployment-layer\n\n${init.body ?? ""}`)
           .digest("hex")}`,
       );
     }
@@ -6022,7 +6032,7 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
         assert.equal(
           headers.get("x-signature"),
           `v0=${createHmac("sha256", TEST_SECRET_VALUE)
-            .update(`v0:${headers.get("x-timestamp")}:POST\n/v1/deployment/live-session\n${body}`)
+            .update(`v0:${headers.get("x-timestamp")}:POST\n/v1/deployment/live-session\n\n${body}`)
             .digest("hex")}`,
         );
         assert.deepEqual(request, {
@@ -6045,7 +6055,7 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
       assert.equal(headers.get("authorization"), "Bearer separate-control-secret-value-0000000000");
       const body = String(init?.body ?? "");
       const signature = createHmac("sha256", TEST_SECRET_VALUE)
-        .update(`v0:${headers.get("x-timestamp")}:${init?.method}\n/v1/background-work\n${body}`)
+        .update(`v0:${headers.get("x-timestamp")}:${init?.method}\n/v1/background-work\n\n${body}`)
         .digest("hex");
       assert.equal(headers.get("x-signature"), `v0=${signature}`);
       if (init?.method === "POST") {

@@ -11,6 +11,7 @@ import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
 import { existsSync, readdirSync } from "node:fs";
 import {
+  MODEL_REQUEST_CONTEXT_HEADERS,
   parseProviderBaseUrl,
   providerBaseUrlsFromEnv,
   type ModelGatewayTransportConfig,
@@ -56,7 +57,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   swarmsEnabled?: boolean;
   swarmDefaults?: SwarmSettings;
   production: boolean;
-  allowUnauthenticatedCore: boolean;
   port: number;
   dataDir: string;
   databaseUrl?: string;
@@ -64,8 +64,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   databaseCaCertFile?: string;
   databasePoolUrl?: string;
   databasePoolCaCert?: string;
-  databasePoolMax?: number;
-  databaseDirectPoolMax?: number;
   securityPosture: SecurityPosture;
   sharingPosture: SharingPosture;
   egressServiceHosts?: string[];
@@ -116,7 +114,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
-  requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
   secretsBackend: "env" | "aws";
@@ -306,6 +303,9 @@ export function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTranspo
   if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(apiKeyHeader)) {
     throw new Error("MODEL_GATEWAY_API_KEY_HEADER must be a valid HTTP header name");
   }
+  if (Object.hasOwn(MODEL_REQUEST_CONTEXT_HEADERS, apiKeyHeader.toLowerCase())) {
+    throw new Error("MODEL_GATEWAY_API_KEY_HEADER cannot be a QM request context header");
+  }
   const models: Record<string, string> = {};
   for (const mapping of env.MODEL_GATEWAY_MODELS?.trim() ? env.MODEL_GATEWAY_MODELS.split(",") : []) {
     const separator = mapping.indexOf("=");
@@ -485,7 +485,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { suggestedActivitiesContext: env.SUGGESTED_ACTIVITIES_CONTEXT.slice(0, 8000) }
       : {}),
     production: env.NODE_ENV === "production",
-    allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
     dataDir,
     ...(env.POSTHOG_API_KEY?.trim()
@@ -494,10 +493,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
-    ...(env.DATABASE_POOL_MAX ? { databasePoolMax: numEnvStrict("DATABASE_POOL_MAX", env.DATABASE_POOL_MAX) } : {}),
-    ...(env.DATABASE_DIRECT_POOL_MAX
-      ? { databaseDirectPoolMax: numEnvStrict("DATABASE_DIRECT_POOL_MAX", env.DATABASE_DIRECT_POOL_MAX) }
-      : {}),
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT_FILE ? { databaseCaCertFile: env.DATABASE_CA_CERT_FILE } : {}),
     securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
@@ -592,7 +587,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     capabilityTokenCompression:
       boolEnvStrict("CAPABILITY_TOKEN_COMPRESSION", env.CAPABILITY_TOKEN_COMPRESSION) ?? false,
-    requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
     secretsBackend: secretsBackendEnvStrict(env.SECRETS_BACKEND, env.SECRETS_PREFIX ?? ""),

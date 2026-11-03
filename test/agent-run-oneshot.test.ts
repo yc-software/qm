@@ -29,7 +29,7 @@ import type { DetectInput, TurnLlmRequestRecord } from "../src/agent/agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 import { sanitizeLlmPayload, trimPayloadToByteBudget, transportFromModel } from "../src/agent/provider-payload.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;

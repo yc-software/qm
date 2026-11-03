@@ -5,7 +5,7 @@ import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { DecryptedServiceCredential, ServiceCredentialReader } from "../src/credentials/keychain.ts";
 import { createPostgresCredentialUsageSink } from "../src/admin/postgres-credential-usage-sink.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const SECRET = "super-secret-bearer";
 

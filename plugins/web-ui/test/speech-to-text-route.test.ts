@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const testTmp = await mkdtemp(join(tmpdir(), "dictation-route-test-"));
 process.env.TMPDIR = testTmp;
@@ -22,7 +23,10 @@ const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((resolve) => surface.listen(0, resolve));
 const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
 const identity = (user = "alice") => ({
-  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, "voice-route-test"),
+  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+    { t: TEST_TENANT, p: user, exp: Date.now() + 60_000 },
+    "voice-route-test",
+  ),
 });
 const headers = { ...identity(), "content-type": "audio/mp4", origin: "https://qm.example.test" };
 
@@ -63,7 +67,7 @@ test("dictation checks identity, origin, allowlist and format before provider ac
       {
         ...headers,
         [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
-          { p: "alice", imp: "admin", exp: Date.now() + 60_000 },
+          { t: TEST_TENANT, p: "alice", imp: "admin", exp: Date.now() + 60_000 },
           "voice-route-test",
         ),
       },

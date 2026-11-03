@@ -13,7 +13,7 @@ import { scopeId, type ConversationKind, type Principal } from "../src/types.ts"
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testConfigStore, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const orgScope = TEST_ROOT_SCOPE;
 const internal = (id: string): Principal => ({ id, type: "internal" });

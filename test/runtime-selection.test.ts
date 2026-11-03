@@ -5,7 +5,7 @@ import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const ORG = TEST_ROOT_SCOPE;
 const PERSONAL = "personal:alice" as const;

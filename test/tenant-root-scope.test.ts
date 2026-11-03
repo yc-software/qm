@@ -5,7 +5,7 @@ import { createResolutionService } from "../src/resolution/resolution-service.ts
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
-import { OTHER_TENANT, TEST_TENANT } from "./support/tenant-root.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 import { composioNamespaceReader } from "../src/tenants/tenant-record.ts";
 import { createProductAnalytics } from "../src/util/product-analytics.ts";
 

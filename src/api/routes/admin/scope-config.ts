@@ -115,7 +115,7 @@ export async function whoami(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.admin) return sendJson(res, 404, { error: "not_found" });
   const actor = adminActorFrom(ctx);
-  const tenant = { tenant: currentTenant(), ...(deps.tenantName ? { tenantName: await deps.tenantName() } : {}) };
+  const tenant = { tenant: currentTenant() };
   if (!actor || !(await activePrincipal(deps, actor.id)))
     return sendJson(res, 200, { isAdmin: false, permissions: [], ...tenant });
   const status = await deps.admin.adminStatusOf(actor);

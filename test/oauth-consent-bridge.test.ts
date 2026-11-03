@@ -10,7 +10,7 @@ import { createServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { PROVIDERS, openOAuthState, type FetchLike } from "../src/connectors/oauth.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
+import { signedCoreHeaders } from "./support/signed-core.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -18,6 +18,7 @@ import {
   CONTROL_PLANE_AUD,
 } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
@@ -74,13 +75,10 @@ const controlTok = async (actorId: string) =>
 const coreRedeemPath = (connectPath: string): string =>
   connectPath.replace(/^\/connect\/redeem\//, "/v1/connectors/oauth/consent/redeem/");
 
-function redeem(base: string, path: string, clicker?: string): Promise<Response> {
-  const ts = Math.floor(Date.now() / 1000);
-  const headers: Record<string, string> = {
-    "x-timestamp": String(ts),
-    "x-signature": signRequest(SECRET, ts, `GET\n${path}\n`),
-    ...(clicker ? { "x-consent-clicker": clicker } : {}),
-  };
+async function redeem(base: string, path: string, clicker?: string): Promise<Response> {
+  const headers = await signedCoreHeaders(SECRET, "GET", path, "", {
+    headers: clicker ? { "x-consent-clicker": clicker } : {},
+  });
   return fetch(`${base}${path}`, { headers });
 }
 
@@ -121,6 +119,7 @@ test("mint → intended teammate redeems → callback connects them; the link is
     assert.equal(consent.searchParams.get("client_id"), "gid");
     const state = await openOAuthState(consent.searchParams.get("state") ?? "", { secret: SECRET });
     assert.equal(state.principalId, "U1");
+    assert.equal(state.tenant, TEST_TENANT);
 
     const second = await redeem(srv.base, coreRedeemPath(connectPath), "U1");
     assert.equal(

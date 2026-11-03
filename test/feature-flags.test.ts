@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
 import { testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("feature flags map each feature to enabled scopes", async () => {
   const store = createFeatureFlagStore(testMap<FeatureFlagRecord>());

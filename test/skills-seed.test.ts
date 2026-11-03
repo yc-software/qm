@@ -16,7 +16,7 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("seed skill parser reads the repo frontmatter subset", () => {
   const manifest = parseSeedSkill(`---

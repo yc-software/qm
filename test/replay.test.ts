@@ -10,7 +10,7 @@ import {
   selectOverheardToImport,
 } from "../src/agent/replay.ts";
 import type { ConversationTurn, OverheardMessage, SessionEntry } from "../src/types.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function entry(type: SessionEntry["type"], text: string): SessionEntry {
   return {

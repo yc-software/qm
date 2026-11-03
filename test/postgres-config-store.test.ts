@@ -10,7 +10,7 @@ import {
 import { defaultOrgPolicy } from "../src/policy/command-policy.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres config-store tests";
