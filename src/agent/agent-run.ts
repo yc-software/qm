@@ -72,7 +72,11 @@ import {
   contextTokenBudgetForModel,
   modelHasPrices,
 } from "../model/pi-models.ts";
-import { modelGatewayRequest, type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
+import {
+  modelGatewayRequest,
+  type ModelGatewayTransportConfig,
+  type ModelRequestPurpose,
+} from "../model/provider-endpoints.ts";
 import {
   type Agent,
   type CompactInput,
@@ -142,7 +146,6 @@ export interface AgentOptions {
   resolveProviderKeys?: () => Promise<ProviderKeys>;
   tempDirPrefix?: string;
   captureRequests?: boolean;
-  reachExec?: boolean;
   controlTools?: boolean;
   sandboxResources?: boolean;
   turnWallClockMs?: number;
@@ -734,11 +737,12 @@ export async function oneShot(
   opts?: {
     signal?: AbortSignal;
     modelGateway?: ModelGatewayTransportConfig;
+    purpose?: ModelRequestPurpose;
     thinkingLevel?: LegacyThinkingLevel;
     recordLlmRequest?: (rec: TurnLlmRequestRecord) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
-  const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway);
+  const modelRuntime = await buildModelRuntime(keys, opts?.modelGateway, opts?.purpose);
   const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
     prefix,
     systemPrompt,
@@ -885,7 +889,6 @@ export function createAgent(opts?: AgentOptions): Agent {
   const keyForModel = (keys: ProviderKeys, model: Model<Api>): string | undefined =>
     modelGatewayRequest(modelGateway, model)?.apiKey ?? keys[String(model.provider)];
   const captureRequests = opts?.captureRequests ?? true;
-  const reachExec = opts?.reachExec ?? false;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
@@ -893,7 +896,6 @@ export function createAgent(opts?: AgentOptions): Agent {
     return createAgentTools(ref, {
       sessionTools: Boolean(turn.tools.sessionSyscalls),
       delegateWork: turn.delegateWork === true,
-      reachExec,
       ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
       controlTools,
       ...(turn.surfaceTools ? { surfaceTools: true } : {}),
@@ -923,6 +925,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     const modelRuntime = await buildModelRuntime(
       turnProviderKeys ?? (await resolveProviderKeys()),
       turnProviderKeys ? undefined : modelGateway,
+      "turn",
       "long",
     );
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
@@ -1131,6 +1134,8 @@ export function createAgent(opts?: AgentOptions): Agent {
         let thinkTail: Promise<unknown> = Promise.resolve();
         let triggerSeen = continueTurn;
         const toolAbort = new AbortController();
+        let steerWake = new AbortController();
+        entry.ref.steered = steerWake.signal;
         const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
         let persistError: Error | undefined;
         const persist = (write: () => Promise<unknown>): void => {
@@ -1158,6 +1163,10 @@ export function createAgent(opts?: AgentOptions): Agent {
             const text = textFromContent((message as { content?: unknown }).content);
             const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
             const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
+            if (steerWake.signal.aborted && !entry.agentSession.agent.hasQueuedMessages()) {
+              steerWake = new AbortController();
+              entry.ref.steered = steerWake.signal;
+            }
             persist(() =>
               steer
                 ? recordSteerIntake(turn, steer)
@@ -1286,6 +1295,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                           data: image.dataBase64,
                         })),
                       );
+                      steerWake.abort();
                     } catch (error) {
                       const at = pendingSteers.indexOf(steer);
                       if (at >= 0) pendingSteers.splice(at, 1);
@@ -1518,6 +1528,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           entry.ref.onModelRequest = undefined;
           toolAbort.abort();
           entry.ref.abortSignal = undefined;
+          entry.ref.steered = undefined;
           entry.ref.screenToolResult = undefined;
         }
         if (persistError) throw persistError;
@@ -1609,6 +1620,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       const out = (
         (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, {
           modelGateway,
+          purpose: "detect",
           ...(detect.recordLlmRequest ? { recordLlmRequest: detect.recordLlmRequest } : {}),
         })) ?? ""
       ).trim();
@@ -1618,7 +1630,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     async compactHistory(input: CompactInput): Promise<string> {
       const primaryId = resolveModelId();
       const providerKeys = await resolveProviderKeys();
-      const runtime = await buildModelRuntime(providerKeys, modelGateway);
+      const runtime = await buildModelRuntime(providerKeys, modelGateway, "compaction");
       const summarize = (compactModelId: string) =>
         summarizeHistory(input.history, requiredModel(compactModelId), (summaryModel, context, options) => {
           input.recordModelCall({
@@ -1656,19 +1668,25 @@ export function createAgent(opts?: AgentOptions): Agent {
       return contextTokenBudgetForModel(id);
     },
 
-    async oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
+    async oneShot(systemPrompt: string, prompt: string, purpose?: ModelRequestPurpose): Promise<string | undefined> {
       const model = requiredModel(resolveModelId());
       const providerKeys = await resolveProviderKeys();
       if (!keyForModel(providerKeys, model)) return undefined;
-      return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway });
+      return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway, purpose });
     },
 
-    async judge(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
+    async judge(
+      systemPrompt: string,
+      prompt: string,
+      signal?: AbortSignal,
+      purpose: ModelRequestPurpose = "judge",
+    ): Promise<string | undefined> {
       const model = requiredModel(judgeModelId());
       const providerKeys = await resolveProviderKeys();
       if (!keyForModel(providerKeys, model)) return undefined;
       return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
         modelGateway,
+        purpose,
         signal,
         thinkingLevel: "low",
       });
@@ -1697,6 +1715,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           await oneShot("pi-security-screen", model, providerKeys, systemPrompt, payload, {
             signal,
             modelGateway,
+            purpose: "security_screen",
           }),
         );
       } catch (e) {
@@ -1713,7 +1732,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       const providerKeys = await resolveProviderKeys();
       if (!keyForModel(providerKeys, model)) return undefined;
       const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-      const runtime = await buildModelRuntime(providerKeys, modelGateway);
+      const runtime = await buildModelRuntime(providerKeys, modelGateway, "ack_emoji");
       const reply = await runtime.completeSimple(
         model,
         { systemPrompt: ACK_EMOJI_PROMPT, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
@@ -1733,6 +1752,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       if (!keyForModel(providerKeys, model)) return undefined;
       const out = await oneShot("pi-title", model, providerKeys, TITLE_GENERATION_PROMPT, titleUserPrompt(transcript), {
         modelGateway,
+        purpose: "title",
       });
       return sanitizeTitle(out);
     },
@@ -1750,7 +1770,10 @@ export function createAgent(opts?: AgentOptions): Agent {
         command.slice(0, 4000),
       ].join("\n");
       const out = (
-        await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, { modelGateway })
+        await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, {
+          modelGateway,
+          purpose: "approval_summary",
+        })
       )?.trim();
       if (!out || out === "NONE") return undefined;
       return out.replace(/^["']|["']$/g, "").slice(0, 300);

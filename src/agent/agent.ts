@@ -1,3 +1,4 @@
+import type { ModelRequestPurpose } from "../model/provider-endpoints.ts";
 import type { ReplayImageLoader } from "./replay-images.ts";
 import type { ResumableToolCall } from "../core/turn-resume.ts";
 import type { DocumentInput } from "../core/documents.ts";
@@ -47,7 +48,7 @@ export interface ScreenSecurityInput {
   payload: string;
   signal: AbortSignal;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: TurnLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+  recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;
 }
 
 export interface AgentTurnInput {
@@ -106,7 +107,7 @@ export interface AgentTurnInput {
   runtimePinned?: boolean;
   onRuntime?(runtime: TurnRuntime): void;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: TurnLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+  recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;
   onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onModelRequest?(): void;
   onDelta?(chunk: string): void;
@@ -146,7 +147,7 @@ export interface DetectInput {
   reactionGuidance?: string;
   history: SessionEntry[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: TurnLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+  recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;
 }
 
 export interface DetectResult {
@@ -165,8 +166,13 @@ export interface ModelUtilities {
   shouldRespond?(input: DetectInput): Promise<DetectResult>;
   compactHistory?(input: CompactInput): Promise<string>;
   contextTokenBudget?(scopeLabel?: string, model?: string): number | undefined;
-  oneShot?(systemPrompt: string, prompt: string): Promise<string | undefined>;
-  judge?(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined>;
+  oneShot?(systemPrompt: string, prompt: string, purpose?: ModelRequestPurpose): Promise<string | undefined>;
+  judge?(
+    systemPrompt: string,
+    prompt: string,
+    signal?: AbortSignal,
+    purpose?: ModelRequestPurpose,
+  ): Promise<string | undefined>;
   screenSecurity?(input: ScreenSecurityInput): Promise<SecurityScreenVerdict | undefined>;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
   generateTitle?(transcript: string): Promise<string | undefined>;

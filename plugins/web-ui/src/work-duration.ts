@@ -18,13 +18,18 @@ export function workSeconds(work: WorkBlock): number {
   return Math.max(0, (end - start) / 1000);
 }
 
-export function workDuration(secs: number): string {
+export function workDurationParts(secs: number): { lead: string; seconds: number } {
   const whole = Math.max(0, Math.floor(secs));
   const hours = Math.floor(whole / 3600);
   const minutes = Math.floor((whole % 3600) / 60);
   const seconds = whole % 60;
-  if (hours) return `${hours}h ${minutes}m ${seconds}s`;
-  return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
+  if (hours) return { lead: `${hours}h ${minutes}m `, seconds };
+  return { lead: minutes ? `${minutes}m ` : "", seconds };
+}
+
+function workDuration(secs: number): string {
+  const { lead, seconds } = workDurationParts(secs);
+  return `${lead}${seconds}s`;
 }
 
 export function workedLabel(prefix: string, secs: number): string {

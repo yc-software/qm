@@ -10,8 +10,8 @@ const pooling = {
   ...(direct ? { databaseUrl: direct } : {}),
   ...(pooled ? { poolUrl: pooled } : {}),
   ...(process.env.DATABASE_POOL_CA_CERT ? { caCert: process.env.DATABASE_POOL_CA_CERT } : {}),
-  queryMax: Number(process.env.DATABASE_POOL_MAX ?? 4),
-  sessionMax: Number(process.env.DATABASE_DIRECT_POOL_MAX ?? 1),
+  queryMax: 4,
+  sessionMax: 1,
 };
 configurePgPooling(pooling);
 const skip = !direct || !pooled ? "requires direct Postgres and transaction PgBouncer URLs" : false;

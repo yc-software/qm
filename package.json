@@ -97,7 +97,7 @@
     "modal": "^0.10.1",
     "nodemailer": "^10.2.1",
     "officeparser": "^8.0.0",
-    "pg": "^8.13.1",
+    "pg": "8.23.1",
     "pg-boss": "^12.26.1",
     "pg-connection-string": "2.14.0",
     "porter-sandbox": "^0.1.41",
@@ -135,7 +135,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.0.0",
-    "@types/pg": "^8.11.10",
+    "@types/pg": "^8.23.1",
     "@types/tar-stream": "^3.1.4",
     "@types/ws": "^8.18.1",
     "@yc-software/qm": "file:./cli",
