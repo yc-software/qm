@@ -15,12 +15,16 @@ dialogue; otherwise the newest facts come first. Each notebook and each provider
 order, and recall and search take one row from each of them in turn until the budget or limit is
 full; scores are never compared across sources. Later turns add only newly selected facts.
 Provider rows without fact ids are compared by content hash. An MCP provider whose answer carries
-`structuredContent.facts` (`[{ id, text, date?, kind?, arm? }]`, as gbrain's `memory_recall` does) gives one
-row per fact, addressed as `<provider id>:<fact id>`; rows marked `arm: "own"` (the member's recent
-facts) and `arm: "ranked"` take turns as two lists. Otherwise its answer becomes one row per line,
-so it should return one self-contained fact per line; a `memorable` procedure block stays one row.
-A claim held by several sources is shown once, as the notebook's copy when there is one, followed
-by the addresses of the provider copies, such as `(also acme-company:4821)`. Only new rows are added, a row already shown stays counted while its provider keeps
+`structuredContent.facts`, a list of `{ id, text, date?, kind?, arm? }` with string `id` and `text`
+(gbrain's `memory_recall` returns `id`, `text`, `date` and `kind`), gives one row per fact, and
+search shows it as `<provider id>:<fact id>`. Facts that carry an `arm` label take turns by label
+inside that provider's own list, so a run of one kind (such as a member's recent facts) can't push
+out the rest. A `facts` value that isn't such a list fails the read with `malformed_fact`. Without
+`structuredContent.facts`, the answer becomes one row per line, so it should return one
+self-contained fact per line; a `memorable` procedure block stays one row. A claim held by several
+sources (compared ignoring case and surrounding spaces) is shown once, as the first notebook's copy
+when there is one; search ends that line with the other copies' addresses, such as
+`(also acme-company:4821)`. Only new rows are added, a row already shown stays counted while its provider keeps
 answering (at most as many earlier rows as its latest answer showed, and at least one, so a later
 refusal is still noted), and a row that drops out is never announced as removed. When a provider
 that showed rows earlier refuses the member, is withheld from the conversation or is no longer
@@ -139,18 +143,19 @@ Post-turn capture waits for a conversation to go quiet. QM buffers consecutive t
 
 ## Troubleshooting
 
-| Symptom                                                                                | Cause                                                                                   | Fix                                                                                                                        |
-| -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Startup fails with `… url (https://host) must not carry credentials or a #fragment`    | The provider URL has `user:pass@` or a `#fragment`.                                     | Move credentials to the `clientIdEnv`/`clientSecretEnv` variables and drop the fragment.                                   |
-| Startup fails with `… must use HTTPS or a recognized private HTTP host`                | Plain HTTP to a public host.                                                            | Use `https://`, or HTTP only on `localhost`, `127.0.0.1`, `*.internal`, `*.flycast` or `*.local`.                          |
-| Startup fails with `… is not a valid URL (value not shown)`                            | The URL does not parse; QM never echoes it, since it may hold secrets.                  | Check the value of `url` in `MEMORY_PROVIDER_CONFIG`.                                                                      |
-| Outcome `denied` with `http_401`, `http_403` or an OAuth code such as `invalid_client` | The provider rejected QM's OAuth client.                                                | Check the client id and secret variables and the client's grant on the provider.                                           |
-| Outcome `denied` with `actor_not_attested`                                             | `attestActor` is set but the provider has not granted QM's client the attest right.     | Grant that client the attest right on the provider.                                                                        |
-| Outcome `denied` with `invalid_actor`                                                  | The member's canonical id is not 1 to 256 visible ASCII characters, so QM made no call. | Link the member to a conforming principal id with `POST /v1/admin/principal-links`.                                        |
-| Outcome `empty` or `denied` with `actor_unlinked`                                      | The provider has no member linked to this QM person id.                                 | Link the QM person id to their member on the provider.                                                                     |
-| Outcome `timed_out` or write `unknown`                                                 | The provider took longer than `timeoutMs`.                                              | Raise `timeoutMs` (up to 30000) or fix the provider's latency; check whether a timed-out write landed before repeating it. |
-| Outcome `failed`, including `server_error` from the provider's token endpoint          | Wrong tool name, schema mismatch, a provider error, or its OAuth server failing.        | Check the provider's logs and the `tool` and `*Arg` mappings.                                                              |
-| New facts reach the provider minutes late                                              | Automatic capture waits `MEMORY_CAPTURE_QUIET_MS`.                                      | Lower `MEMORY_CAPTURE_QUIET_MS`, or use explicit writes.                                                                   |
+| Symptom                                                                                | Cause                                                                                            | Fix                                                                                                                        |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| Startup fails with `… url (https://host) must not carry credentials or a #fragment`    | The provider URL has `user:pass@` or a `#fragment`.                                              | Move credentials to the `clientIdEnv`/`clientSecretEnv` variables and drop the fragment.                                   |
+| Startup fails with `… must use HTTPS or a recognized private HTTP host`                | Plain HTTP to a public host.                                                                     | Use `https://`, or HTTP only on `localhost`, `127.0.0.1`, `*.internal`, `*.flycast` or `*.local`.                          |
+| Startup fails with `… is not a valid URL (value not shown)`                            | The URL does not parse; QM never echoes it, since it may hold secrets.                           | Check the value of `url` in `MEMORY_PROVIDER_CONFIG`.                                                                      |
+| Outcome `denied` with `http_401`, `http_403` or an OAuth code such as `invalid_client` | The provider rejected QM's OAuth client.                                                         | Check the client id and secret variables and the client's grant on the provider.                                           |
+| Outcome `denied` with `actor_not_attested`                                             | `attestActor` is set but the provider has not granted QM's client the attest right.              | Grant that client the attest right on the provider.                                                                        |
+| Outcome `denied` with `invalid_actor`                                                  | The member's canonical id is not 1 to 256 visible ASCII characters, so QM made no call.          | Link the member to a conforming principal id with `POST /v1/admin/principal-links`.                                        |
+| Outcome `empty` or `denied` with `actor_unlinked`                                      | The provider has no member linked to this QM person id.                                          | Link the QM person id to their member on the provider.                                                                     |
+| Outcome `timed_out` or write `unknown`                                                 | The provider took longer than `timeoutMs`.                                                       | Raise `timeoutMs` (up to 30000) or fix the provider's latency; check whether a timed-out write landed before repeating it. |
+| Outcome `failed`, including `server_error` from the provider's token endpoint          | Wrong tool name, schema mismatch, a provider error, or its OAuth server failing.                 | Check the provider's logs and the `tool` and `*Arg` mappings.                                                              |
+| Outcome `failed` with `malformed_fact`                                                 | The answer's `structuredContent.facts` is not a list, or an entry lacks a string `id` or `text`. | Fix the provider's `facts`; QM uses none of that answer.                                                                   |
+| New facts reach the provider minutes late                                              | Automatic capture waits `MEMORY_CAPTURE_QUIET_MS`.                                               | Lower `MEMORY_CAPTURE_QUIET_MS`, or use explicit writes.                                                                   |
 
 ## Migrating from the retired `BRAIN_*` variables
 

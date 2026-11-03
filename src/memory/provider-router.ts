@@ -42,7 +42,11 @@ export function createRoutedMemoryService(opts: {
   const tagged = (route: MemoryProviderRoute, rows: MemoryCandidate[]): MemoryCandidate[] =>
     route.provider === "default"
       ? rows
-      : rows.map((row) => ({ ...row, source: { provider: route.provider, label: route.label ?? route.provider } }));
+      : rows.map((row) => ({
+          ...row,
+          ...(row.ref === undefined ? {} : { ref: `${route.provider}:${row.ref}` }),
+          source: { provider: route.provider, label: route.label ?? route.provider },
+        }));
   const managerFor = (scopeId: ScopeId): MemoryService | undefined => {
     const route = routesFor(scopeId).find((candidate) => candidate.manage !== false);
     return route ? providerFor(route) : undefined;

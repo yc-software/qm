@@ -36,7 +36,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   return { base, memory, calls, workspace };
 }
 
-test("one ranking picks across notebooks and groups each under one heading", async (t) => {
+test("each notebook keeps its own semantic order under one heading, in scope order", async (t) => {
   const { base, memory, calls } = await fixture(t);
   await base.capture("personal:a", ["0.7 local near tie", "0.1 irrelevant local"], AT);
   await base.capture("channel:b", ["0.72 remote near tie", "0.99 remote best"], AT);
@@ -75,7 +75,7 @@ test("global packing counts source labels, skips oversized rows, deduplicates, a
   assert.equal(renderRecall(await recallAcrossScopes(memory, scopes, { query: "verify", maxChars: 0 }), new Map()), "");
 });
 
-test("provider routing takes notebooks in scope order, never by score, and excludes recall-disabled routes", async (t) => {
+test("provider routing excludes recall-disabled routes and embeds the query once", async (t) => {
   const { base, memory, calls } = await fixture(t);
   await base.capture("personal:a", ["0.6 local"], AT);
   await base.capture("channel:b", ["0.99 remote"], AT);
@@ -100,7 +100,7 @@ test("provider routing takes notebooks in scope order, never by score, and exclu
     }),
     new Map(),
   );
-  assert.ok(out.indexOf("local") < out.indexOf("remote"));
+  assert.match(out, /0\.99 remote/);
   assert.equal(calls.filter((batch) => batch[0] === "verify").length, 1, "routing keeps one query embedding per turn");
 });
 

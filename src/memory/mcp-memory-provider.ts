@@ -3,7 +3,7 @@ import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp
 import { withTimeout } from "../util/async.ts";
 import { attestedPerson } from "../directory/person.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
-import type { MemoryCandidate } from "./facts.ts";
+import { takeTurns, type MemoryCandidate } from "./facts.ts";
 import { DENIED_CODES, reportEnvelope } from "./provider-outcome.ts";
 
 export interface McpMemoryOperation {
@@ -39,21 +39,27 @@ interface ProviderFact {
 
 function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
   const facts = (result.structuredContent as { facts?: unknown } | undefined)?.facts;
-  if (!Array.isArray(facts)) return undefined;
-  return facts.map((fact: Partial<ProviderFact> | null) => {
+  if (facts === undefined) return undefined;
+  if (!Array.isArray(facts))
+    throw new McpCallError(`memory provider returned facts as ${typeof facts}, not a list`, { code: "malformed_fact" });
+  facts.forEach((fact: Partial<ProviderFact> | null, index) => {
     if (typeof fact?.id !== "string" || typeof fact.text !== "string")
-      throw new Error("memory provider returned a fact without a string id and text");
-    return fact as ProviderFact;
+      throw new McpCallError(
+        `memory provider returned fact ${index} with id ${typeof fact?.id} and text ${typeof fact?.text}; both must be strings`,
+        { code: "malformed_fact" },
+      );
   });
+  return takeTurns(
+    Map.groupBy(facts as ProviderFact[], (fact) => (typeof fact.arm === "string" ? fact.arm : undefined)).values(),
+  );
 }
 
 const stamped = (fact: ProviderFact) => {
   const stamp = [fact.date, fact.kind].filter((part) => typeof part === "string" && part).join("; ");
-  return stamp ? `${fact.text} (${stamp})` : fact.text;
+  return stamp ? `(${stamp}) ${fact.text}` : fact.text;
 };
 
 export function createMcpMemoryProvider(opts: {
-  id: string;
   read: McpMemoryOperation;
   write?: McpMemoryOperation;
   attestActor?: boolean;
@@ -85,29 +91,31 @@ export function createMcpMemoryProvider(opts: {
     return result;
   };
 
-  const rows = (
-    result: CallToolResult,
-    maxChars: number | undefined,
-    line: (fact: ProviderFact, ref: string) => string,
-  ): MemoryCandidate[] => {
+  const rows = (result: CallToolResult, maxChars: number | undefined, bullet: string): MemoryCandidate[] => {
+    if (DENIED_CODES.has(mcpEnvelope(result).code ?? "")) return [];
     const facts = providerFacts(result);
-    if (facts)
-      return facts.map((fact) => {
-        const ref = `${opts.id}:${fact.id}`;
-        const arm = fact.arm === "own" || fact.arm === "ranked" ? fact.arm : undefined;
-        return { ref, claim: fact.text, text: line(fact, ref), ...(arm ? { arm } : {}) };
-      });
-    const text = resultText(result);
-    return (maxChars && text.length > maxChars ? text.slice(0, maxChars) : text)
-      .split("\n")
-      .filter((line) => line.trim())
-      .map((line) => ({ text: line }));
+    if (!facts) {
+      const text = resultText(result);
+      return (maxChars && text.length > maxChars ? text.slice(0, maxChars) : text)
+        .split("\n")
+        .filter((line) => line.trim())
+        .map((line) => ({ text: line }));
+    }
+    const fitting: MemoryCandidate[] = [];
+    let room = (maxChars || Infinity) + 1;
+    for (const fact of facts) {
+      const text = `${bullet}${stamped(fact)}`;
+      room -= text.length + 1;
+      if (room < 0) break;
+      fitting.push({ ref: fact.id, claim: fact.text, text });
+    }
+    return fitting;
   };
 
   return {
     async recall(scopeId, context) {
       const result = await read(scopeId, context?.query ?? "", context);
-      return rows(result, context?.maxChars, (fact) => `- ${stamped(fact)}`);
+      return rows(result, context?.maxChars, "- ");
     },
 
     async capture(scopeId, facts, at, author, context) {
@@ -130,7 +138,7 @@ export function createMcpMemoryProvider(opts: {
 
     async query(scopeId, q, limit = 20, context) {
       const result = await read(scopeId, q, context);
-      return rows(result, context?.maxChars, (fact, ref) => `${ref} ${stamped(fact)}`).slice(0, limit);
+      return rows(result, context?.maxChars, "").slice(0, limit);
     },
 
     read: async (scopeId) => resultText(await read(scopeId, "")),

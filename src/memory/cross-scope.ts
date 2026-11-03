@@ -1,55 +1,33 @@
 import type { ScopeId } from "../types.ts";
 import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
 import { RECALL_MAX_CHARS } from "./notebook.ts";
-import { factLine, type MemoryCandidate, type MemorySource } from "./facts.ts";
+import { factLine, normalizeClaim, takeTurns, type MemoryCandidate, type MemorySource } from "./facts.ts";
 import { quotedData, untrustedText } from "../util/text.ts";
 
 export interface RecalledFact {
   scope: ScopeId;
   id?: string;
-  ref?: string;
   text: string;
-  also?: string[];
   source?: MemorySource;
 }
 
-type ScopedRow = MemoryCandidate & { scope: ScopeId; also?: string[] };
-
-const alsoText = ({ also }: Pick<RecalledFact, "also">) => (also?.length ? ` (also ${also.join(", ")})` : "");
-
-const naming = (copies: readonly ScopedRow[], row: ScopedRow): ScopedRow => {
-  const also = [...new Set(copies.flatMap(({ ref }) => (ref !== undefined && ref !== row.ref ? [ref] : [])))];
-  return also.length ? { ...row, also } : row;
-};
-
-function interleave(rows: readonly ScopedRow[]): ScopedRow[][] {
-  const lists = new Map<string, ScopedRow[]>();
-  for (const row of rows) {
-    const key = JSON.stringify([row.scope, row.source?.provider ?? null, row.arm ?? null]);
-    const list = lists.get(key);
-    if (list) list.push(row);
-    else lists.set(key, [row]);
-  }
-  const copies = new Map<string, ScopedRow[]>();
-  for (let i = 0, taken = 0; taken < rows.length; i++)
-    for (const list of lists.values()) {
-      const row = list[i];
-      if (!row) continue;
-      taken++;
-      const claim = row.claim ?? row.text;
-      const same = copies.get(claim);
-      if (same) same.push(row);
-      else copies.set(claim, [row]);
-    }
-  return [...copies.values()].map((same) => {
-    const kept = same.find((row) => row.id !== undefined) ?? same[0]!;
-    return [kept, ...same.filter((row) => row !== kept)];
-  });
-}
+type ScopedRow = MemoryCandidate & { scope: ScopeId };
 
 type Block = Pick<RecalledFact, "scope" | "source">;
 
 const blockKey = ({ scope, source }: Block) => JSON.stringify([scope, source?.provider ?? null]);
+
+const claimOf = (row: ScopedRow) => normalizeClaim(row.claim ?? row.text);
+
+function copiesInTurn(rows: readonly ScopedRow[]): ScopedRow[][] {
+  const copies = Map.groupBy(rows, claimOf);
+  const claims = new Set(takeTurns(Map.groupBy(rows, blockKey).values()).map(claimOf));
+  return [...claims].map((claim) => {
+    const same = copies.get(claim)!;
+    const kept = same.find((row) => row.id !== undefined) ?? same[0]!;
+    return [kept, ...same.filter((row) => row !== kept)];
+  });
+}
 
 export const recallLabel = (text: string) => untrustedText(text).replace(/\s+/g, " ");
 
@@ -76,30 +54,22 @@ export async function recallAcrossScopes(
   const blocks = new Set<string>();
   let size = 0;
   const place = (row: ScopedRow): boolean => {
-    const { scope, id, ref, claim, text: full, also, source } = row;
+    const { scope, id, claim, text: full, source } = row;
     if (!full.trim()) return false;
     const overhead = blocks.has(blockKey(row))
       ? 1
       : (blocks.size ? 2 : 0) + heading(row, labels).length + 1 + BLOCK_FRAME;
-    const suffix = alsoText(row);
-    const room = Math.max(0, budget - size - overhead - suffix.length);
+    const room = Math.max(0, budget - size - overhead);
     const clipped = full.slice(0, room);
     const text = claim === undefined ? clipped.slice(0, room - (quotedLength(clipped) - clipped.length)) : full;
-    const cost = quotedLength(text + suffix) + overhead;
+    const cost = quotedLength(text) + overhead;
     if (!text.trim() || size + cost > budget) return false;
     size += cost;
     blocks.add(blockKey(row));
-    picked.push({
-      scope,
-      ...(id !== undefined ? { id } : {}),
-      ...(ref !== undefined ? { ref } : {}),
-      text,
-      ...(also ? { also } : {}),
-      ...(source ? { source } : {}),
-    });
+    picked.push({ scope, ...(id !== undefined ? { id } : {}), text, ...(source ? { source } : {}) });
     return true;
   };
-  for (const copies of interleave(batches.flat())) copies.some((copy) => place(naming(copies, copy)));
+  for (const copies of copiesInTurn(batches.flat())) copies.some(place);
   return picked;
 }
 
@@ -108,7 +78,7 @@ export function renderRecall(facts: readonly RecalledFact[], labels: ReadonlyMap
   for (const fact of facts) {
     const key = blockKey(fact);
     const block = blocks.get(key) ?? { block: fact, rows: [] };
-    block.rows.push(fact.text + alsoText(fact));
+    block.rows.push(fact.text);
     blocks.set(key, block);
   }
   return [...blocks.values()]
@@ -130,10 +100,16 @@ export async function searchAcrossScopes(
     if (result.status === "rejected") throw result.reason;
     return result.value.map((row) => ({ ...row, scope: unique[j]! }));
   });
-  return interleave(rows)
+  return copiesInTurn(rows)
     .slice(0, count)
-    .map((copies) => naming(copies, copies[0]!))
-    .map((row) => ({ scopeId: row.scope, fact: row.text + alsoText(row) }));
+    .map(([kept, ...others]) => {
+      const also = [...new Set(others.flatMap(({ ref }) => (ref === undefined ? [] : [ref])))];
+      const address = kept!.ref === undefined ? "" : `${kept!.ref} `;
+      return {
+        scopeId: kept!.scope,
+        fact: `${address}${kept!.text}${also.length ? ` (also ${also.join(", ")})` : ""}`,
+      };
+    });
 }
 
 export async function searchNotebooks(

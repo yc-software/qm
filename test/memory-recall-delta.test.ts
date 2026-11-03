@@ -123,7 +123,7 @@ test("id-less provider lines inject only new lines over 20 turns, and timeouts o
         reportEnvelope({ code: "actor_unlinked" });
         return [];
       }
-      return Array.from({ length: 6 }, (_, k) => ({ text: line(window + k) }));
+      return Array.from({ length: 6 }, (_, k) => ({ ref: `brain:${window + k}`, text: line(window + k) }));
     },
     async capture() {
       return 0;

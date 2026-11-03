@@ -8,7 +8,6 @@ import { DENIED_CODES } from "./provider-outcome.ts";
 interface Shown {
   scope: string;
   id?: string;
-  ref?: string;
   provider?: string;
   hash: string;
 }
@@ -18,10 +17,9 @@ interface RecallRecord {
   anchorSeq?: number;
 }
 
-const shownOf = ({ scope, id, ref, text, source }: RecalledFact): Shown => ({
+const shownOf = ({ scope, id, text, source }: RecalledFact): Shown => ({
   scope,
   ...(id !== undefined ? { id } : {}),
-  ...(ref !== undefined ? { ref } : {}),
   ...(source ? { provider: source.provider } : {}),
   hash: factHash(text).slice(0, 16),
 });

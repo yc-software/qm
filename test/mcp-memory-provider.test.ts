@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
-import type { McpClient } from "../src/mcp/mcp-client.ts";
+import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
+import type { MemoryProviderOutcome } from "../src/memory/memory-service.ts";
+import { McpCallError, type McpClient } from "../src/mcp/mcp-client.ts";
 import { recallText } from "./support/recall-text.ts";
+import { structuredRecall } from "./support/structured-recall.ts";
 
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {
@@ -19,7 +22,6 @@ function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, t
 test("MCP provider passes query, actor, and explicit writes through configured tools", async () => {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
   const memory = createMcpMemoryProvider({
-    id: "test",
     read: {
       client: client(calls),
       tool: "search_knowledge",
@@ -53,7 +55,6 @@ test("MCP provider passes query, actor, and explicit writes through configured t
 test("MCP recall is locally bounded and times out", async () => {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
   const bounded = createMcpMemoryProvider({
-    id: "test",
     read: { client: client(calls, "abcdefgh"), tool: "read", timeoutMs: 100 },
   });
   assert.equal(recallText(await bounded.recall("org:acme", { maxChars: 4 })), "abcd");
@@ -66,13 +67,12 @@ test("MCP recall is locally bounded and times out", async () => {
       return new Promise(() => {});
     },
   };
-  const timed = createMcpMemoryProvider({ id: "test", read: { client: hanging, tool: "read", timeoutMs: 10 } });
+  const timed = createMcpMemoryProvider({ read: { client: hanging, tool: "read", timeoutMs: 10 } });
   await assert.rejects(timed.recall("org:acme"), /timed out after 10ms/);
 });
 
 test("MCP recall returns one row per line of the provider's answer", async () => {
   const memory = createMcpMemoryProvider({
-    id: "test",
     read: { client: client([], "first fact\n\nsecond fact\n"), tool: "search_knowledge", timeoutMs: 100 },
   });
   assert.deepEqual(
@@ -84,7 +84,6 @@ test("MCP recall returns one row per line of the provider's answer", async () =>
 test("a write that carries no member is not sent to an attested provider", async () => {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
   const memory = createMcpMemoryProvider({
-    id: "test",
     read: { client: client(calls), tool: "search_knowledge", timeoutMs: 100 },
     write: { client: client(calls), tool: "write_knowledge", timeoutMs: 100 },
     attestActor: true,
@@ -96,66 +95,71 @@ test("a write that carries no member is not sent to an attested provider", async
   assert.deepEqual(calls, []);
 });
 
-const gbrainAnswer = (facts: Array<Record<string, unknown>>, code?: string): McpClient => ({
-  async listTools() {
-    return { tools: [] };
-  },
-  async callTool() {
-    return {
-      content: [
-        {
-          type: "text",
-          text: facts.map((fact) => `- ${String(fact.text)} (${String(fact.date)}; ${String(fact.kind)})`).join("\n"),
-        },
-      ],
-      structuredContent: { facts, truncated: false, ...(code ? { code } : {}) },
-    };
-  },
+test("MCP recall reads structured facts as rows with their fact id and raw claim, taking the provider's arms in turn", async () => {
+  const facts = [
+    { id: "4821", text: "Dana prefers email", date: "2026-11-01", kind: "preference", arm: "own" },
+    { id: "4822", text: "Standup moved to 9", date: "2026-11-01", kind: "fact", arm: "own" },
+    { id: "17", text: "Launch moved to Friday", date: "2026-10-28", kind: "fact", arm: "ranked" },
+    { id: "9", text: "No arm yet", date: "2026-10-20", kind: "fact" },
+  ];
+  const memory = createMcpMemoryProvider({
+    read: { client: structuredRecall(() => facts), tool: "memory_recall", timeoutMs: 100 },
+  });
+  const recalled = await memory.recall("personal:U1", { query: "dana" });
+  assert.deepEqual(recalled, [
+    { ref: "4821", claim: "Dana prefers email", text: "- (2026-11-01; preference) Dana prefers email" },
+    { ref: "17", claim: "Launch moved to Friday", text: "- (2026-10-28; fact) Launch moved to Friday" },
+    { ref: "9", claim: "No arm yet", text: "- (2026-10-20; fact) No arm yet" },
+    { ref: "4822", claim: "Standup moved to 9", text: "- (2026-11-01; fact) Standup moved to 9" },
+  ]);
+  const fit = recalled[0]!.text.length + 1 + recalled[1]!.text.length;
+  assert.deepEqual(
+    (await memory.recall("personal:U1", { query: "dana", maxChars: fit })).map((row) => row.ref),
+    ["4821", "17"],
+  );
+  assert.deepEqual(
+    (await memory.query("personal:U1", "dana", 2)).map((row) => row.text),
+    ["(2026-11-01; preference) Dana prefers email", "(2026-10-28; fact) Launch moved to Friday"],
+  );
 });
 
-test("MCP recall reads structured facts as rows with a brain ref, the raw claim and gbrain's arm", async () => {
-  const memory = createMcpMemoryProvider({
-    id: "acme",
+test("a refused recall yields no rows even with facts attached, and a malformed fact fails as malformed_fact", async () => {
+  const unlinked = createMcpMemoryProvider({
     read: {
-      client: gbrainAnswer([
-        { id: "4821", text: "Dana prefers email", date: "2026-11-01", kind: "preference", arm: "own" },
-        { id: "17", text: "Launch moved to Friday", date: "2026-10-28", kind: "fact", arm: "ranked" },
-        { id: "9", text: "No arm yet", date: "2026-10-20", kind: "fact" },
-      ]),
+      client: structuredRecall(() => [{ id: "1", text: "never shown" }], "actor_unlinked"),
       tool: "memory_recall",
       timeoutMs: 100,
     },
   });
-  assert.deepEqual(await memory.recall("personal:U1", { query: "dana" }), [
-    {
-      ref: "acme:4821",
-      claim: "Dana prefers email",
-      text: "- Dana prefers email (2026-11-01; preference)",
-      arm: "own",
-    },
-    {
-      ref: "acme:17",
-      claim: "Launch moved to Friday",
-      text: "- Launch moved to Friday (2026-10-28; fact)",
-      arm: "ranked",
-    },
-    { ref: "acme:9", claim: "No arm yet", text: "- No arm yet (2026-10-20; fact)" },
-  ]);
-  assert.deepEqual(
-    (await memory.query("personal:U1", "dana", 2)).map((row) => row.text),
-    ["acme:4821 Dana prefers email (2026-11-01; preference)", "acme:17 Launch moved to Friday (2026-10-28; fact)"],
-  );
-});
-
-test("an unlinked recall yields no rows and a structured fact without a string id fails the read", async () => {
-  const unlinked = createMcpMemoryProvider({
-    id: "acme",
-    read: { client: gbrainAnswer([], "actor_unlinked"), tool: "memory_recall", timeoutMs: 100 },
-  });
   assert.deepEqual(await unlinked.recall("personal:U1", { query: "q" }), []);
-  const malformed = createMcpMemoryProvider({
-    id: "acme",
-    read: { client: gbrainAnswer([{ id: 4821, text: "numeric id" }]), tool: "memory_recall", timeoutMs: 100 },
+  const answering = (facts: unknown) =>
+    createMcpMemoryProvider({
+      read: {
+        client: {
+          async listTools() {
+            return { tools: [] };
+          },
+          async callTool() {
+            return { content: [{ type: "text", text: "x" }], structuredContent: { facts } };
+          },
+        },
+        tool: "memory_recall",
+        timeoutMs: 100,
+      },
+    });
+  await assert.rejects(
+    answering("x").recall("personal:U1", { query: "q" }),
+    (error) => error instanceof McpCallError && error.code === "malformed_fact",
+  );
+  const outcomes: MemoryProviderOutcome[] = [];
+  const routed = createRoutedMemoryService({
+    providers: { default: answering([]), acme: answering([{ id: 4821, text: "numeric id" }]) },
+    routes: [
+      { provider: "default", scopes: ["personal"] },
+      { provider: "acme", scopes: ["personal"], manage: false, failOpen: true },
+    ],
   });
-  await assert.rejects(malformed.recall("personal:U1", { query: "q" }), /without a string id and text/);
+  assert.deepEqual(await routed.recall("personal:U1", { query: "q", report: (o) => void outcomes.push(o) }), []);
+  const acme = outcomes.find(({ provider }) => provider === "acme");
+  assert.deepEqual({ outcome: acme?.outcome, code: acme?.code }, { outcome: "failed", code: "malformed_fact" });
 });
