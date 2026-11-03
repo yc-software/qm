@@ -8,6 +8,8 @@ import { join } from "node:path";
 import pg from "pg";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import { claimAcrossTenants, crossTenantLoop, inTenantOf, useOwnerDatabase, rowTenant } from "../src/tenants/claim.ts";
@@ -256,3 +258,86 @@ test(
     }
   },
 );
+
+test(
+  "under the restricted app login, spend refresh claims dirty rows across tenants and rolls each day up under its row's tenant",
+  { skip },
+  async () => {
+    const url = testDatabaseUrl();
+    const base = Date.UTC(2024, 0, 1);
+    const owner = createPostgresSessionStore(url, { now: () => base + 123 });
+    await owner.refreshSpendRollup!();
+    const role = `qmt_app_${randomBytes(6).toString("hex")}`;
+    const raw = new pg.Pool({ connectionString: url, max: 1 });
+    try {
+      await raw.query(`CREATE ROLE ${role} LOGIN PASSWORD '${role}' NOBYPASSRLS`);
+      await raw.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
+      await raw.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
+      await raw.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
+      const appUrl = new URL(url);
+      appUrl.username = role;
+      appUrl.password = role;
+      const store = createPostgresSessionStore(appUrl.toString(), { now: () => base + 123 });
+      const spent = [
+        [A, 0.25],
+        [B, 0.5],
+      ] as const;
+      for (const [tenant, costUsd] of spent)
+        await withTenant(tenant, async () => {
+          const scope = scopeId("personal", "spend");
+          const session = await store.getOrCreateByThread(scope, "dm", scope);
+          await store.recordLlmRequest(session.id, {
+            turnSeq: null,
+            step: 0,
+            model: "saved",
+            scopeLabel: scope,
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, costUsd },
+          });
+        });
+      await store.refreshSpendRollup!();
+      assert.equal((await raw.query("SELECT 1 FROM session_spend_dirty")).rowCount, 0);
+      assert.equal((await raw.query("SELECT 1 FROM session_spend_days")).rowCount, 2);
+      for (const [tenant, costUsd] of spent) {
+        const saved = await withTenant(tenant, () => store.spendReport!({ from: base, to: base + 86_400_000 }));
+        assert.deepEqual(
+          saved.rows.map((row) => [row.calls, row.costUsd]),
+          [[1, costUsd]],
+        );
+      }
+    } finally {
+      await raw.query(`DROP OWNED BY ${role}`);
+      await raw.query(`DROP ROLE ${role}`);
+      await raw.end();
+    }
+  },
+);
+
+test("pruning ended cron fires keeps the newest per cron within each tenant", { skip }, async () => {
+  const url = testDatabaseUrl();
+  const fires = createPostgresCronFireStore(url);
+  const raw = new pg.Pool({ connectionString: url, max: 1 });
+  try {
+    for (const tenant of [A, B])
+      await withTenant(tenant, async () => {
+        for (const [fireKey, endedAt] of [
+          ["k1", 10],
+          ["k2", 20],
+          ["k3", 30],
+        ] as const)
+          await fires.record("c-shared", { fireKey, threadRef: fireKey, firedAt: endedAt, endedAt, status: "ok" });
+      });
+    assert.equal(await fires.pruneEnded({ endedBefore: 25, keepPerCron: 2 }), 2);
+    const kept = await raw.query("SELECT tenant_id, fire_key FROM cron_fires");
+    assert.deepEqual(
+      kept.rows.map((row) => [row.tenant_id, row.fire_key]).sort(),
+      [
+        [A, "k2"],
+        [A, "k3"],
+        [B, "k2"],
+        [B, "k3"],
+      ].sort(),
+    );
+  } finally {
+    await raw.end();
+  }
+});
