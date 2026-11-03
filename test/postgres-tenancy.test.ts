@@ -6,7 +6,7 @@ import { DIRECTORY_MIGRATIONS } from "../src/directory/postgres-directory-store.
 import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction } from "../src/persistence/pg-pool.ts";
 import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
-import { TENANCY_BASE } from "../src/tenants/migrations.ts";
+import { TENANCY_BASE, TENANT_HOSTS } from "../src/tenants/migrations.ts";
 import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
@@ -153,7 +153,7 @@ test("an open transaction refuses work for a different tenant until it has ended
 test("upgrading copies the existing tenant into tenants", { skip }, async () => {
   const pool = new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
   try {
-    const previous = SESSION_MIGRATIONS.filter((m) => m !== TENANCY_BASE && m !== TENANT_BACKFILL);
+    const previous = SESSION_MIGRATIONS.filter((m) => ![TENANCY_BASE, TENANT_BACKFILL, TENANT_HOSTS].includes(m));
     await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...previous].map(definePgMigration));
     const old = (await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id;
     await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration));
