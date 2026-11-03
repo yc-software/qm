@@ -12,7 +12,7 @@ import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
-import { test, inTestTenant } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite?: boolean } = {}) {
   const store = createPostgresDirectoryStore(testDatabaseUrl());
