@@ -8,25 +8,27 @@ import {
 } from "../src/playgrounds/playground.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const HTML = "<!doctype html><button id='go'>Go</button><script>go.onclick=()=>go.textContent='Done'</script>";
 
-test("playgrounds are stored unchanged as ordinary scoped file artifacts", async () => {
-  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const result = await createPlaygroundArtifact(store, {
-    title: "  Tiny   demo  ",
-    html: HTML,
-    ownerScopeId: "personal:alice",
-    createdBy: "alice",
-  });
+test("playgrounds are stored unchanged as ordinary scoped file artifacts", () =>
+  inTestTenant(async () => {
+    const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    const result = await createPlaygroundArtifact(store, {
+      title: "  Tiny   demo  ",
+      html: HTML,
+      ownerScopeId: "personal:alice",
+      createdBy: "alice",
+    });
 
-  assert.equal(result.kind, "playground");
-  assert.equal(result.title, "Tiny demo");
-  const opened = await store.open(result.artifactId);
-  assert.equal(opened?.artifact.mimetype, "text/html");
-  assert.equal(opened?.artifact.ownerScopeId, "personal:alice");
-  assert.equal(await opened?.stream.toArray().then((chunks) => Buffer.concat(chunks).toString()), HTML);
-});
+    assert.equal(result.kind, "playground");
+    assert.equal(result.title, "Tiny demo");
+    const opened = await store.open(result.artifactId);
+    assert.equal(opened?.artifact.mimetype, "text/html");
+    assert.equal(opened?.artifact.ownerScopeId, "personal:alice");
+    assert.equal(await opened?.stream.toArray().then((chunks) => Buffer.concat(chunks).toString()), HTML);
+  }));
 
 test("validation enforces storage limits without parsing or rewriting HTML", () => {
   assert.throws(() => validatePlaygroundHtml("  "), /empty/);

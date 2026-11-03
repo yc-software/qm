@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { acquireLeaseWithin, cronIdOf, sessionCategory, sessionOrigin } from "../src/sessions/session-store.ts";
 import { parseSessionWakeRef } from "../src/api/routes/admin/origins.ts";
@@ -7,6 +7,11 @@ import { assertParticipantSessionParity } from "./support/participant-session-pa
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => void | Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 test("sessionOrigin classifies trigger threads by prefix", () => {
   assert.equal(sessionOrigin("agent:main:cron:abc"), "cron");
