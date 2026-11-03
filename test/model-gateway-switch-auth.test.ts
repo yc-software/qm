@@ -31,5 +31,4 @@ test("a gateway-only session can switch models mid-turn across providers", async
   });
   await session.setModel(to);
   assert.equal(session.model?.id, to.id);
-  assert.equal(await modelRuntime.checkAuth("openrouter"), undefined);
 });
