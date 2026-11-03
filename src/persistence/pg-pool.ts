@@ -411,27 +411,21 @@ export function registeredPgMigrations(connectionString: string): readonly PgMig
   return [...(registeredMigrations.get(connectionString)?.values() ?? [])].sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[]): Promise<void> {
-  if (!maintenance.length) return;
-  const client = await pool.connect();
-  let discard: Error | undefined;
-  try {
-    await lockSchema(client, "qm:schema-maintenance");
-    for (const operation of maintenance) {
-      await client.query("BEGIN");
-      try {
-        for (const statement of operation.statements) await client.query(statement);
-        await client.query("COMMIT");
-      } catch (error) {
-        discard = await rollbackOrReport(client, `pg-pool: rollback maintenance ${operation.id}`);
-        throw error;
-      }
+export async function verifyRegisteredPgSchemas(connectionString?: string): Promise<void> {
+  const databases = connectionString ? [connectionString] : [...registeredMigrations.keys()];
+  for (const databaseUrl of databases) {
+    const pool = await retainPool(databaseUrl, "migration");
+    const client = await pool.connect();
+    try {
+      const pending = await pendingPgMigrations(client, registeredPgMigrations(databaseUrl));
+      if (pending.length)
+        throw new Error(
+          `pg-pool: migrations ${pending.map((migration) => migration.id).join(", ")} are pending; run the release migration step first`,
+        );
+    } finally {
+      client.release();
+      await releasePool(databaseUrl, pool, "migration");
     }
-  } finally {
-    await client
-      .query("SELECT pg_advisory_unlock(hashtext('qm:schema-maintenance'))")
-      .catch(swallowAs("pg-pool: schema-maintenance unlock", undefined));
-    client.release(discard);
   }
 }
 
@@ -455,14 +449,9 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
   }
 }
 
-export function createPgPool(
-  connectionString: string,
-  definitions: readonly PgMigrationDefinition[] = [],
-  maintenanceDefinitions: readonly PgMigrationDefinition[] = [],
-): PgPool {
+export function createPgPool(connectionString: string, definitions: readonly PgMigrationDefinition[] = []): PgPool {
   const migrations = definitions.map(definePgMigration);
   for (const migration of migrations) registerPgMigration(connectionString, migration);
-  const maintenance = maintenanceDefinitions.map(definePgMigration);
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
@@ -480,10 +469,7 @@ export function createPgPool(
   }
   async function ready(): Promise<void> {
     if (closed) throw new Error("Postgres store is closed");
-    await (readyP ??= withMigrationPool(async (instance) => {
-      await applyPgMigrations(instance, migrations);
-      await applyPgMaintenance(instance, maintenance);
-    }).catch((error) => {
+    await (readyP ??= withMigrationPool((instance) => applyPgMigrations(instance, migrations)).catch((error) => {
       readyP = null;
       throw error;
     }));

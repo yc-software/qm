@@ -13,6 +13,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "env-route-test-secret".repeat(3);
 
@@ -22,7 +23,7 @@ describe("environment verbs (list / create / attach, owner-gated)", async () => 
   let built: BuiltApp;
 
   const cap = (actorId: string, scope = scopeId("personal", actorId)) =>
-    mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS }, SECRET);
+    inTestTenant(() => mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS }, SECRET));
 
   const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
     fetch(`${base}${path}`, {
@@ -39,9 +40,11 @@ describe("environment verbs (list / create / attach, owner-gated)", async () => 
         signingSecret: SECRET,
       }),
     );
-    await built.directory.replaceChannels(
-      [{ channelId: "C-eng", name: "eng", isPrivate: false }],
-      [{ channelId: "C-eng", principalId: "U-owner" }],
+    await inTestTenant(() =>
+      built.directory.replaceChannels(
+        [{ channelId: "C-eng", name: "eng", isPrivate: false }],
+        [{ channelId: "C-eng", principalId: "U-owner" }],
+      ),
     );
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -72,10 +75,7 @@ describe("environment verbs (list / create / attach, owner-gated)", async () => 
   });
 
   it("the owner attaches another conversation freely", async () => {
-    const channelCap = await mintCapabilityToken(
-      { actorId: "U-owner", scopeId: scopeId("channel", "C-eng"), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
+    const channelCap = await cap("U-owner", scopeId("channel", "C-eng"));
     const res = await post("/v1/environments/attach", { name: "prod" }, { "x-agent-capability": channelCap });
     assert.equal(res.status, 200);
     const list = (await (await get("/v1/environments", { "x-agent-capability": await cap("U-owner") })).json()) as any;

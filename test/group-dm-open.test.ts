@@ -7,6 +7,7 @@ import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../src/reach/reach.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const MEMBERS = [
   { principalId: "alice@acme.dev", displayName: "alice", type: "internal" as const },
@@ -526,35 +527,37 @@ describe("the directory crawl when another instance holds the sync lease", () =>
 });
 
 describe("directory resolution by Slack id", () => {
-  it("resolves a teammate the agent named by their Slack member id", async () => {
-    const store = createPostgresDirectoryStore(testDatabaseUrl());
-    await store.replace([
-      { principalId: "kai@acme.dev", displayName: "kai", type: "internal", slackId: "U09LKC3KATS" },
-      { principalId: "alice@acme.dev", displayName: "alice", type: "internal", slackId: "U07QR5C33S7" },
-    ]);
-    assert.deepEqual(await store.resolve("U09LKC3KATS"), {
-      kind: "one",
-      member: {
-        principalId: "kai@acme.dev",
-        displayName: "kai",
-        type: "internal",
-        slackId: "U09LKC3KATS",
-      },
-    });
-    assert.equal((await store.resolve("kai")).kind, "one");
-    assert.equal((await store.resolve("U-nobody")).kind, "none");
-  });
+  it("resolves a teammate the agent named by their Slack member id", () =>
+    inTestTenant(async () => {
+      const store = createPostgresDirectoryStore(testDatabaseUrl());
+      await store.replace([
+        { principalId: "kai@acme.dev", displayName: "kai", type: "internal", slackId: "U09LKC3KATS" },
+        { principalId: "alice@acme.dev", displayName: "alice", type: "internal", slackId: "U07QR5C33S7" },
+      ]);
+      assert.deepEqual(await store.resolve("U09LKC3KATS"), {
+        kind: "one",
+        member: {
+          principalId: "kai@acme.dev",
+          displayName: "kai",
+          type: "internal",
+          slackId: "U09LKC3KATS",
+        },
+      });
+      assert.equal((await store.resolve("kai")).kind, "one");
+      assert.equal((await store.resolve("U-nobody")).kind, "none");
+    }));
 });
 
 describe("directory group upsert", () => {
-  it("makes a just-opened group resolvable and its members visible at once", async () => {
-    const store = createPostgresDirectoryStore(testDatabaseUrl());
-    await store.replaceGroups([]);
-    assert.equal((await store.resolveGroupByParticipants(["a", "b"])).kind, "none");
+  it("makes a just-opened group resolvable and its members visible at once", () =>
+    inTestTenant(async () => {
+      const store = createPostgresDirectoryStore(testDatabaseUrl());
+      await store.replaceGroups([]);
+      assert.equal((await store.resolveGroupByParticipants(["a", "b"])).kind, "none");
 
-    await store.upsertGroup("C-new", ["a", "b"]);
-    assert.deepEqual(await store.resolveGroupByParticipants(["b", "a"]), { kind: "one", groupId: "C-new" });
-    assert.equal(await store.groupMember("C-new", "a"), true);
-    assert.equal(await store.groupMember("C-new", "c"), false);
-  });
+      await store.upsertGroup("C-new", ["a", "b"]);
+      assert.deepEqual(await store.resolveGroupByParticipants(["b", "a"]), { kind: "one", groupId: "C-new" });
+      assert.equal(await store.groupMember("C-new", "a"), true);
+      assert.equal(await store.groupMember("C-new", "c"), false);
+    }));
 });
