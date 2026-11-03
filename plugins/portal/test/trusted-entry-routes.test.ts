@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT, compactVerify } from "jose";
 import { deriveKey, openSession } from "../src/session.ts";
+import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 const preferenceEnabled = process.env.TRUSTED_LOGIN_LABEL_TEST !== "0";
 const adminEnabled = process.env.TRUSTED_ADMIN_ROUTE_TEST === "1";
@@ -104,8 +105,8 @@ Object.assign(process.env, {
   }),
   PORTAL_TRUSTED_OIDC_CLIENT_SECRET: "trusted-client-secret-of-at-least-32-characters",
 });
-process.env.QM_TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
 const { server } = await import("../src/index.ts");
+setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 test.after(() => {

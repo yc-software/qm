@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { deriveKey, seal } from "../src/session.ts";
+import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 let idpRequests = 0;
 const idp = createServer((_req, res) => {
@@ -28,8 +29,8 @@ Object.assign(process.env, {
   PORTAL_LOCAL_AUTH_BYPASS: "0",
   AUTH_BROKER_UPSTREAM: "",
 });
-process.env.QM_TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
 const { server } = await import("../src/index.ts");
+setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 test.after(() => {

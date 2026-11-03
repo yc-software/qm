@@ -5,6 +5,7 @@ import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
 import { format } from "node:util";
 import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 let whoamiMode: "ok" | "down" | "fail-once" | "malformed" = "ok";
 let whoamiRequests = 0;
@@ -56,8 +57,8 @@ process.env.PORTAL_DEPLOYMENTS_ENABLED = "1";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 
-process.env.QM_TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
 const { server, consumeState, consumedStates } = await import("../src/index.ts");
+setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 const { deriveKey, seal } = await import("../src/session.ts");
 await new Promise<void>((r) => server.listen(0, r));
 const port = (server.address() as AddressInfo).port;

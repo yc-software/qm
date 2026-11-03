@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { spawn } from "node:child_process";
 import { deriveKey, seal, openSession, type SessionClaims } from "../src/session.ts";
+import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 const claimed = new Set<string>();
 let claimCalls = 0;
@@ -41,8 +42,8 @@ const SESSION_TTL_S = 28800;
 process.env.PORTAL_SESSION_TTL_S = String(SESSION_TTL_S);
 delete process.env.PORTAL_LOCAL_AUTH_BYPASS;
 
-process.env.QM_TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
 const { server, mintBucketOf } = await import("../src/index.ts");
+setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
