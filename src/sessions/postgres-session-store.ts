@@ -677,7 +677,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       await q(
         `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at)
            SELECT $1, $2, $3, 'turn', $4 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $1)
-         ON CONFLICT (session_id) DO UPDATE SET token = $2, expires_at = $3, holder = 'turn', acquired_at = $4
+         ON CONFLICT (tenant_id, session_id) DO UPDATE SET token = $2, expires_at = $3, holder = 'turn', acquired_at = $4
            WHERE session_leases.holder = 'turn' OR session_leases.expires_at <= $4`,
         [sessionId, randomUUID(), until, t],
       );

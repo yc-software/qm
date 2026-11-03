@@ -13,6 +13,7 @@ import { scopeId } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const DAY = 86_400_000;
 const today = new Date(Math.floor(Date.now() / DAY) * DAY).toISOString().slice(0, 10);
@@ -29,36 +30,42 @@ async function start(options: { sessions?: false } = {}) {
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  await built.app.upsertDirectory([
-    { principalId: "alice", displayName: "Alice", type: "internal" },
-    { principalId: "bob", displayName: "Bob", type: "internal" },
-  ]);
-  await built.app.upsertChannels(
-    [
-      { channelId: "C1", name: "general", isPrivate: false },
-      { channelId: "P1", name: "bobs-room", isPrivate: true },
-      { channelId: "P2", name: "alices-room", isPrivate: true },
-    ],
-    [
-      { channelId: "P1", principalId: "bob" },
-      { channelId: "P2", principalId: "alice" },
-    ],
+  await inTestTenant(() =>
+    built.app.upsertDirectory([
+      { principalId: "alice", displayName: "Alice", type: "internal" },
+      { principalId: "bob", displayName: "Bob", type: "internal" },
+    ]),
+  );
+  await inTestTenant(() =>
+    built.app.upsertChannels(
+      [
+        { channelId: "C1", name: "general", isPrivate: false },
+        { channelId: "P1", name: "bobs-room", isPrivate: true },
+        { channelId: "P2", name: "alices-room", isPrivate: true },
+      ],
+      [
+        { channelId: "P1", principalId: "bob" },
+        { channelId: "P2", principalId: "alice" },
+      ],
+    ),
   );
   const cron = (owner: string, ownerScopeId: string, extra: Partial<Cron> = {}) =>
-    built.app.createCron({
-      title: `${owner} ${ownerScopeId}`,
-      action: "tick",
-      schedule: { everyMs: 3_600_000 },
-      owner,
-      createdBy: owner,
-      ownerScopeId: ownerScopeId as Cron["ownerScopeId"],
-      ...extra,
-    });
+    inTestTenant(() =>
+      built.app.createCron({
+        title: `${owner} ${ownerScopeId}`,
+        action: "tick",
+        schedule: { everyMs: 3_600_000 },
+        owner,
+        createdBy: owner,
+        ownerScopeId: ownerScopeId as Cron["ownerScopeId"],
+        ...extra,
+      }),
+    );
   return {
     base,
     built,
     cron,
-    mine: (query = WINDOW) => fetch(`${base}/v1/spend?principalId=alice&${query}`),
+    mine: (query = WINDOW) => fetch(`${base}/v1/spend?principalId=alice&${query}`, { headers: testTenantHeaders() }),
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }
@@ -67,25 +74,29 @@ test("self spend: your personal scope plus the shared scopes you can see, nothin
   const s = await start();
   try {
     const sessions = s.built.sessions;
-    await bill(sessions, "dm:alice:t1", "dm", scopeId("personal", "alice"), { costUsd: 2 });
-    await bill(sessions, "dm:bob:t1", "dm", scopeId("personal", "bob"), { costUsd: 1.25 });
-    await bill(sessions, "ch:C1:t1", "channel", scopeId("channel", "C1"), { costUsd: 3 });
-    await bill(sessions, "ch:P1:t1", "channel", scopeId("channel", "P1"), { costUsd: 4 });
-    await bill(sessions, "ch:P2:t1", "channel", scopeId("channel", "P2"), { costUsd: 5 });
-    const project = (await s.built.app.createProject("alice", "Launch"))!;
-    await bill(sessions, "web:alice:launch", "group", project.scopeId, { costUsd: 6 });
-    await s.built.app.upsertGroups([
-      { groupId: "G1", principalId: "alice" },
-      { groupId: "G1", principalId: "bob" },
-      { groupId: "G2", principalId: "bob" },
-    ]);
+    await inTestTenant(() => bill(sessions, "dm:alice:t1", "dm", scopeId("personal", "alice"), { costUsd: 2 }));
+    await inTestTenant(() => bill(sessions, "dm:bob:t1", "dm", scopeId("personal", "bob"), { costUsd: 1.25 }));
+    await inTestTenant(() => bill(sessions, "ch:C1:t1", "channel", scopeId("channel", "C1"), { costUsd: 3 }));
+    await inTestTenant(() => bill(sessions, "ch:P1:t1", "channel", scopeId("channel", "P1"), { costUsd: 4 }));
+    await inTestTenant(() => bill(sessions, "ch:P2:t1", "channel", scopeId("channel", "P2"), { costUsd: 5 }));
+    const project = (await inTestTenant(() => s.built.app.createProject("alice", "Launch")))!;
+    await inTestTenant(() => bill(sessions, "web:alice:launch", "group", project.scopeId, { costUsd: 6 }));
+    await inTestTenant(() =>
+      s.built.app.upsertGroups([
+        { groupId: "G1", principalId: "alice" },
+        { groupId: "G1", principalId: "bob" },
+        { groupId: "G2", principalId: "bob" },
+      ]),
+    );
     for (const [group, costUsd] of [
       ["G1", 7],
       ["G2", 8],
     ] as const) {
-      await bill(sessions, `grp:${group}:t1`, "group", scopeId("group", group), { costUsd });
-      const session = await sessions.getOrCreateByThread(`grp:${group}:t1`, "group", scopeId("group", group));
-      await sessions.addParticipant(session.id, "alice");
+      await inTestTenant(() => bill(sessions, `grp:${group}:t1`, "group", scopeId("group", group), { costUsd }));
+      const session = await inTestTenant(() =>
+        sessions.getOrCreateByThread(`grp:${group}:t1`, "group", scopeId("group", group)),
+      );
+      await inTestTenant(() => sessions.addParticipant(session.id, "alice"));
     }
 
     const response = await s.mine();
@@ -114,7 +125,9 @@ test("self spend: your personal scope plus the shared scopes you can see, nothin
     );
 
     const admin = (await (
-      await fetch(`${s.base}/v1/admin/spend?${WINDOW}`, { headers: { "x-admin-actor": "admin-alice@default-org" } })
+      await fetch(`${s.base}/v1/admin/spend?${WINDOW}`, {
+        headers: { "x-admin-actor": "admin-alice@default-org", ...testTenantHeaders() },
+      })
     ).json()) as any;
     const totals = ({ displayName: _name, ...row }: any) => row;
     assert.deepEqual(
@@ -123,8 +136,9 @@ test("self spend: your personal scope plus the shared scopes you can see, nothin
       "your row matches the admin page's row for you",
     );
     assert.equal(
-      (await s.built.auditLog.events()).filter((e) => e.action === "spend.self.read" && e.principalId === "alice")
-        .length,
+      (await inTestTenant(() => s.built.auditLog.events())).filter(
+        (e) => e.action === "spend.self.read" && e.principalId === "alice",
+      ).length,
       1,
     );
   } finally {
@@ -147,24 +161,28 @@ test("self spend: your crons are split from the crons others made that you can s
     const bobsGroup = await s.cron("bob", "group:G1");
     t.after(async () => {
       for (const cron of [yours, yoursInChannel, shared, toYou, bobsOwn, bobsPrivate, bobsGroup])
-        await s.built.app.deleteCron(cron.id);
+        await inTestTenant(() => s.built.app.deleteCron(cron.id));
     });
-    await s.built.app.upsertGroups([
-      { groupId: "G1", principalId: "alice" },
-      { groupId: "G1", principalId: "bob" },
-    ]);
+    await inTestTenant(() =>
+      s.built.app.upsertGroups([
+        { groupId: "G1", principalId: "alice" },
+        { groupId: "G1", principalId: "bob" },
+      ]),
+    );
     const fire = (cron: Cron, scope: string, type: "dm" | "channel" | "group", costUsd: number) =>
-      bill(sessions, `cron:${cron.id}:fire:abc123`, type, scope, { costUsd });
+      inTestTenant(() => bill(sessions, `cron:${cron.id}:fire:abc123`, type, scope, { costUsd }));
     await fire(yours, "personal:alice", "dm", 0.5);
     await fire(yoursInChannel, "channel:C1", "channel", 0.75);
     await fire(shared, "channel:C1", "channel", 1);
     await fire(toYou, "personal:bob", "dm", 2);
     await fire(bobsOwn, "personal:bob", "dm", 4);
     await fire(bobsPrivate, "channel:P1", "channel", 8);
-    await bill(sessions, "cron:gone:fire:abc123", "dm", "personal:alice", { costUsd: 0.25 });
+    await inTestTenant(() => bill(sessions, "cron:gone:fire:abc123", "dm", "personal:alice", { costUsd: 0.25 }));
     await fire(bobsGroup, "group:G1", "group", 0.125);
-    const groupFire = await sessions.getOrCreateByThread(`cron:${bobsGroup.id}:fire:abc123`, "group", "group:G1");
-    await sessions.addParticipant(groupFire.id, "alice");
+    const groupFire = await inTestTenant(() =>
+      sessions.getOrCreateByThread(`cron:${bobsGroup.id}:fire:abc123`, "group", "group:G1"),
+    );
+    await inTestTenant(() => sessions.addParticipant(groupFire.id, "alice"));
 
     const body = (await (await s.mine()).json()) as any;
     assert.deepEqual(
@@ -193,8 +211,10 @@ test("self spend: a linked sign-in's personal spend is yours", async (t) => {
   installPrincipalLinks({ canonical: (id) => (id === "slack-alice" ? "alice" : undefined), aliases: () => [] });
   t.after(() => installPrincipalLinks(null));
   try {
-    await bill(s.built.sessions, "dm:alice:t1", "dm", scopeId("personal", "alice"), { costUsd: 2 });
-    await bill(s.built.sessions, "dm:slack-alice:t1", "dm", scopeId("personal", "slack-alice"), { costUsd: 3 });
+    await inTestTenant(() => bill(s.built.sessions, "dm:alice:t1", "dm", scopeId("personal", "alice"), { costUsd: 2 }));
+    await inTestTenant(() =>
+      bill(s.built.sessions, "dm:slack-alice:t1", "dm", scopeId("personal", "slack-alice"), { costUsd: 3 }),
+    );
     const body = (await (await s.mine()).json()) as any;
     assert.deepEqual(
       body.people.map((p: any) => [p.principalId, p.costUsd]),
@@ -213,7 +233,7 @@ test("self spend: rejects a window over 93 days, an unknown bucket and a missing
     assert.equal(await status("from=2026-01-01&to=2026-04-04"), 200);
     assert.equal(await status(`${WINDOW}&bucket=month`), 400);
     assert.equal(await status(`${WINDOW}&bucket=week`), 200);
-    assert.equal((await fetch(`${s.base}/v1/spend?${WINDOW}`)).status, 400);
+    assert.equal((await fetch(`${s.base}/v1/spend?${WINDOW}`, { headers: testTenantHeaders() })).status, 400);
   } finally {
     await s.close();
   }

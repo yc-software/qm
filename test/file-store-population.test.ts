@@ -8,6 +8,7 @@ import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const owner = scopeId("channel", "C1");
 const HANDLE = { id: "h", rootDir: "/workspace" } as SandboxHandle;
@@ -52,32 +53,34 @@ async function drain(store: FileArtifactStore, id: string): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-test("collectNamedOutbound registers an 'out' artifact at the registration owner, openable", async () => {
-  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const { sandbox } = memSandbox({ "flag.png": PNG });
+test("collectNamedOutbound registers an 'out' artifact at the registration owner, openable", () =>
+  inTestTenant(async () => {
+    const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    const { sandbox } = memSandbox({ "flag.png": PNG });
 
-  const out = await collectNamedOutbound(sandbox, HANDLE, ["flag.png"], createMemoryBlobTransferStore(), reg(store));
-  assert.equal(out.attachments.length, 1, "the file is still delivered");
+    const out = await collectNamedOutbound(sandbox, HANDLE, ["flag.png"], createMemoryBlobTransferStore(), reg(store));
+    assert.equal(out.attachments.length, 1, "the file is still delivered");
 
-  const page = await store.listOwnedByScopes([owner]);
-  assert.equal(page.files.length, 1);
-  const a = page.files[0]!;
-  assert.equal(out.attachments[0]!.artifactId, a.id, "delivery attachment points at its durable artifact");
-  assert.equal(out.attachments[0]!.artifactViewerId, "U1", "surface replay can re-open as the creator");
-  assert.equal(a.direction, "out");
-  assert.equal(a.ownerScopeId, owner);
-  assert.equal(a.name, "flag.png");
-  assert.deepEqual(await drain(store, a.id), PNG, "bytes captured into the doc store");
-});
+    const page = await store.listOwnedByScopes([owner]);
+    assert.equal(page.files.length, 1);
+    const a = page.files[0]!;
+    assert.equal(out.attachments[0]!.artifactId, a.id, "delivery attachment points at its durable artifact");
+    assert.equal(out.attachments[0]!.artifactViewerId, "U1", "surface replay can re-open as the creator");
+    assert.equal(a.direction, "out");
+    assert.equal(a.ownerScopeId, owner);
+    assert.equal(a.name, "flag.png");
+    assert.deepEqual(await drain(store, a.id), PNG, "bytes captured into the doc store");
+  }));
 
-test("collectNamedOutbound is idempotent on re-run with the same seed (G6 requeue: no dup row)", async () => {
-  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const { sandbox } = memSandbox({ "a.txt": "one", "b.txt": "two" });
+test("collectNamedOutbound is idempotent on re-run with the same seed (G6 requeue: no dup row)", () =>
+  inTestTenant(async () => {
+    const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    const { sandbox } = memSandbox({ "a.txt": "one", "b.txt": "two" });
 
-  await collectNamedOutbound(sandbox, HANDLE, ["a.txt", "b.txt"], createMemoryBlobTransferStore(), reg(store));
-  await collectNamedOutbound(sandbox, HANDLE, ["a.txt", "b.txt"], createMemoryBlobTransferStore(), reg(store));
-  assert.equal((await store.listOwnedByScopes([owner])).files.length, 2, "two files, not four");
-});
+    await collectNamedOutbound(sandbox, HANDLE, ["a.txt", "b.txt"], createMemoryBlobTransferStore(), reg(store));
+    await collectNamedOutbound(sandbox, HANDLE, ["a.txt", "b.txt"], createMemoryBlobTransferStore(), reg(store));
+    assert.equal((await store.listOwnedByScopes([owner])).files.length, 2, "two files, not four");
+  }));
 
 test("a doc-store fault does NOT break delivery (best-effort registration)", async () => {
   const throwing = {
@@ -99,36 +102,37 @@ test("a doc-store fault does NOT break delivery (best-effort registration)", asy
   assert.equal(errors.length, 1, "the fault is reported, not swallowed silently");
 });
 
-test("materializeInbound registers an 'in' artifact, openable", async () => {
-  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const transfer = createMemoryBlobTransferStore();
-  const { blobId } = await transfer.put(PNG);
-  const { sandbox } = memSandbox();
+test("materializeInbound registers an 'in' artifact, openable", () =>
+  inTestTenant(async () => {
+    const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    const transfer = createMemoryBlobTransferStore();
+    const { blobId } = await transfer.put(PNG);
+    const { sandbox } = memSandbox();
 
-  const inb = await materializeInbound(
-    sandbox,
-    HANDLE,
-    [{ name: "shared.png", mimetype: "image/png", sizeBytes: PNG.length, blobId }],
-    transfer,
-    reg(store),
-  );
-  assert.equal(inb.metas.length, 1);
+    const inb = await materializeInbound(
+      sandbox,
+      HANDLE,
+      [{ name: "shared.png", mimetype: "image/png", sizeBytes: PNG.length, blobId }],
+      transfer,
+      reg(store),
+    );
+    assert.equal(inb.metas.length, 1);
 
-  const page = await store.listOwnedByScopes([owner]);
-  assert.equal(page.files.length, 1);
-  assert.equal(page.files[0]!.direction, "in");
-  assert.deepEqual(await drain(store, page.files[0]!.id), PNG);
-  assert.equal(
-    inb.metas[0]!.artifactId,
-    page.files[0]!.id,
-    "the persisted meta points at its durable artifact (surfaces re-render from it)",
-  );
-  assert.equal(
-    inb.images[0]!.artifactId,
-    page.files[0]!.id,
-    "the exact model image carries the same durable ref for replay",
-  );
-});
+    const page = await store.listOwnedByScopes([owner]);
+    assert.equal(page.files.length, 1);
+    assert.equal(page.files[0]!.direction, "in");
+    assert.deepEqual(await drain(store, page.files[0]!.id), PNG);
+    assert.equal(
+      inb.metas[0]!.artifactId,
+      page.files[0]!.id,
+      "the persisted meta points at its durable artifact (surfaces re-render from it)",
+    );
+    assert.equal(
+      inb.images[0]!.artifactId,
+      page.files[0]!.id,
+      "the exact model image carries the same durable ref for replay",
+    );
+  }));
 
 test("materializeInbound omits artifactId when registration fails or is absent", async () => {
   const transfer = createMemoryBlobTransferStore();
