@@ -1,6 +1,7 @@
 import type { CronFireLogEntry } from "../triggers/types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
+import { claimAcrossTenants } from "../tenants/claim.ts";
 
 export interface CronFireRecord extends CronFireLogEntry {
   cronId: string;
@@ -119,7 +120,7 @@ const LEGACY_FIRE_MAINTENANCE = {
 };
 
 export function createPostgresCronFireStore(connectionString: string): CronFireStore {
-  const { q, query, pool } = createPgPool(
+  const pg = createPgPool(
     connectionString,
     [
       {
@@ -145,6 +146,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
     ],
     [LEGACY_FIRE_MAINTENANCE],
   );
+  const { q, query, pool } = pg;
 
   return {
     async record(cronId, entry) {
@@ -167,7 +169,8 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
       });
     },
     async sweepStranded(now, staleRunningMs, note) {
-      const result = await query(
+      const result = await claimAcrossTenants(
+        pg,
         `UPDATE cron_fires
             SET status = 'failed', ended_at = $1, note = $2
           WHERE status = 'running' AND fired_at <= $3`,

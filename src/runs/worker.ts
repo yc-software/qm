@@ -19,6 +19,8 @@ import {
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
+import { inTenantOf } from "../tenants/claim.ts";
+import { withoutTenant } from "../tenants/context.ts";
 import { FLUSH_MS, traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface ProcessDeps {
@@ -47,21 +49,23 @@ export async function processRun(
   opts?: { shutdown?: AbortSignal; park?: TurnPark },
 ): Promise<TurnResult> {
   const { trace, ...request } = run.request;
-  return traceQueued(
-    trace,
-    "run",
-    {
-      "messaging.system": "qm",
-      "messaging.destination.name": "runs",
-      "messaging.message.id": run.id,
-      "messaging.message.retry.count": Math.max(0, run.attempts - 1),
-      "messaging.message.receive.latency":
-        run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
-      "qm.surface": request.surface,
-      "qm.origin": "origin" in request ? request.origin.kind : undefined,
-    },
-    () => attemptRun(deps, { ...run, request }, opts),
-    (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
+  return inTenantOf(run.tenantId, () =>
+    traceQueued(
+      trace,
+      "run",
+      {
+        "messaging.system": "qm",
+        "messaging.destination.name": "runs",
+        "messaging.message.id": run.id,
+        "messaging.message.retry.count": Math.max(0, run.attempts - 1),
+        "messaging.message.receive.latency":
+          run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
+        "qm.surface": request.surface,
+        "qm.origin": "origin" in request ? request.origin.kind : undefined,
+      },
+      () => attemptRun(deps, { ...run, request }, opts),
+      (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
+    ),
   );
 }
 
@@ -288,9 +292,9 @@ export function createWorker(deps: WorkerDeps): Worker {
     if (batch.length && (stopped || !admitted())) {
       await Promise.all(
         batch.map((run) =>
-          deps.runs
-            .releaseLease(run.id, run.leaseToken!)
-            .catch((e) => swallow("worker: post-stop claim handback failed", e)),
+          inTenantOf(run.tenantId, () => deps.runs.releaseLease(run.id, run.leaseToken!)).catch((e) =>
+            swallow("worker: post-stop claim handback failed", e),
+          ),
         ),
       );
       return limit;
@@ -349,7 +353,7 @@ export function createWorker(deps: WorkerDeps): Worker {
     await settled();
   };
   function run(): void {
-    loopDone = loop().then(
+    loopDone = withoutTenant(loop).then(
       () => {
         loopDone = null;
         if (!stopped) run();

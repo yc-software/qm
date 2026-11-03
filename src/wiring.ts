@@ -155,6 +155,8 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
+import { inTenantOf } from "./tenants/claim.ts";
+import { withoutTenant } from "./tenants/context.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
@@ -2200,17 +2202,18 @@ export function buildApp(
   let reapInFlight = false;
   let lastReapAt = 0;
   const REAP_POKE_COOLDOWN_MS = 1_000;
-  const pokeReaper = (): void => {
-    if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
-    reapInFlight = true;
-    void leaderLease
-      .hold(REAPER_LEASE_KEY, () => reaper.sweep())
-      .catch(swallowAs("wake: reaper poke", null))
-      .finally(() => {
-        reapInFlight = false;
-        lastReapAt = Date.now();
-      });
-  };
+  const pokeReaper = (): void =>
+    withoutTenant(() => {
+      if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
+      reapInFlight = true;
+      void leaderLease
+        .hold(REAPER_LEASE_KEY, () => reaper.sweep())
+        .catch(swallowAs("wake: reaper poke", null))
+        .finally(() => {
+          reapInFlight = false;
+          lastReapAt = Date.now();
+        });
+    });
   const liveFallback = async (
     container: string,
     opts?: { limit?: number; surface?: string },
@@ -2436,7 +2439,10 @@ export function buildApp(
     for (;;) {
       const batch = await runs.pendingReturns(100, afterId);
       if (!batch.length) return;
-      for (const run of batch) await returnSessionRun(run).catch(swallowAs("sessions: recover return", undefined));
+      for (const run of batch)
+        await inTenantOf(run.tenantId, () => returnSessionRun(run)).catch(
+          swallowAs("sessions: recover return", undefined),
+        );
       afterId = batch.at(-1)!.id;
     }
   };
@@ -2460,10 +2466,12 @@ export function buildApp(
   );
   const orphanedSignalSweeper = createSweeper(
     async () => {
-      for (const runId of await runSignals.pendingRunIds()) {
-        const run = await runs.get(runId);
-        if (!run || isTerminal(run.status))
-          await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
+      for (const { runId, tenantId } of await runSignals.pendingRuns()) {
+        await inTenantOf(tenantId, async () => {
+          const run = await runs.get(runId);
+          if (!run || isTerminal(run.status))
+            await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
+        });
       }
       if (Date.now() - lastSignalPrune > 60 * 60_000) {
         lastSignalPrune = Date.now();

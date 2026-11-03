@@ -3,6 +3,7 @@ import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export interface CronFireJob {
+  tenantId?: string;
   cronId: string;
   scheduledAt: number;
   notBefore?: number;
@@ -94,7 +95,7 @@ export function createPgBossCronQueue(
       await boss
         .send(FIRE_QUEUE, job, {
           startAfter: new Date(fireJobStartsAt(job)),
-          singletonKey: `${job.cronId}:${job.scheduledAt}`,
+          singletonKey: `${job.tenantId === undefined ? "" : `${job.tenantId}:`}${job.cronId}:${job.scheduledAt}`,
           retryLimit: 0,
         })
         .catch((e: unknown) => {
