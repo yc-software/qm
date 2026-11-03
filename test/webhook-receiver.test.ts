@@ -7,6 +7,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
 import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "topsecret";
 let inFlight = 0;
@@ -246,7 +247,7 @@ test("fail-closed: a deactivated owner accepts the delivery but runs no turn and
     action: "x",
     verification: { scheme: "github", secret: SECRET },
   });
-  await identity.deactivate("U1");
+  await inTestTenant(() => identity.deactivate("U1"));
   const out = await receiver.deliver(wh.id, githubReq("{}"));
   assert.equal(out.status, 202);
   await flush();
