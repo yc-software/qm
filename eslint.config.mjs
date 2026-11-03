@@ -1,6 +1,7 @@
 import js from "@eslint/js";
 import globals from "globals";
 import tseslint from "typescript-eslint";
+import { slackBoundary, slackBoundaryExempt, slackBoundaryFiles } from "./lint/slack-boundary.mjs";
 
 export default tseslint.config(
   {
@@ -133,5 +134,11 @@ export default tseslint.config(
         },
       ],
     },
+  },
+  {
+    files: slackBoundaryFiles,
+    ignores: slackBoundaryExempt,
+    plugins: { qm: { rules: { "slack-boundary": slackBoundary } } },
+    rules: { "qm/slack-boundary": "error" },
   },
 );
