@@ -36,8 +36,7 @@ import { parseChannelPage, parseLogLevel } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { AuthTestResponse } from "@slack/web-api";
 import type { ReceiverEvent } from "@slack/bolt";
-import type { DueEnvelope } from "./slack-tables.ts";
-import type { TenantResolver } from "../tenants/resolver.ts";
+import type { DueEnvelope, SlackTeamTenant } from "./slack-tables.ts";
 import { currentTenant, withTenant } from "../tenants/context.ts";
 const { App } = bolt;
 
@@ -102,7 +101,7 @@ export interface SlackAccountRuntime {
 export async function startSlackPlugin(
   cfg: SlackPluginConfig,
   core: SlackCoreClient,
-  resolver: TenantResolver,
+  teamTenant: SlackTeamTenant,
 ): Promise<SlackAccountRuntime> {
   const EVENTS_MODE = cfg.eventsMode ?? "socket";
   if (!cfg.botToken) {
@@ -209,7 +208,7 @@ export async function startSlackPlugin(
     const team = slackTeamOf(body);
     if (!team) return null;
     if ((admittedTeams.get(team) ?? 0) > Date.now()) return TENANT;
-    if ((await resolver.forSlackTeam(team)) !== TENANT) return null;
+    if ((await teamTenant(team)) !== TENANT) return null;
     if (admittedTeams.size >= 1000) admittedTeams.clear();
     admittedTeams.set(team, Date.now() + TEAM_ADMISSION_TTL_MS);
     return TENANT;
@@ -494,7 +493,7 @@ export async function startSlackPlugin(
     if (!ids.ownTeamId || !ids.botUserId) {
       throw new Error("auth.test returned no team_id/user_id — refusing to start (cannot classify members safely)");
     }
-    if ((await resolver.forSlackTeam(ids.ownTeamId)) !== TENANT)
+    if ((await teamTenant(ids.ownTeamId)) !== TENANT)
       throw new Error(`Slack workspace ${ids.ownTeamId} does not belong to this tenant`);
     if (!cfg.identityEmail) {
       ids.identityMode = await directory.resolveAutoIdentityMode(app.client);

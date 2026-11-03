@@ -6,7 +6,7 @@ import { testTenants } from "./support/test-tenants.ts";
 
 const [TEST_TENANT] = testTenants();
 
-const resolver = { forHost: async () => TEST_TENANT, forSlackTeam: async () => TEST_TENANT };
+const teamTenant = async () => TEST_TENANT;
 
 type Handler = (args: any) => Promise<void>;
 
@@ -416,7 +416,7 @@ async function fixture(
       ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
     },
     core,
-    resolver,
+    teamTenant,
   );
   const app = FakeApp.instances.at(-1)!;
   app.client.membershipDelayMs = options.membershipDelayMs ?? 0;

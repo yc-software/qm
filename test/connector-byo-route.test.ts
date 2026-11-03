@@ -35,7 +35,7 @@ function start(socketAppId = "A-ACME", managed = false): { base: string; built: 
             appId: "A123",
             stateSecret: "byo-route-state-secret",
             store: built.slackInstallation,
-            resolver: { forHost: async () => TEST_TENANT, forSlackTeam: async () => TEST_TENANT },
+            teamTenant: async () => TEST_TENANT,
             runtimes: { current: () => [], accounts: async () => [], refresh: async () => {} },
           }),
         }

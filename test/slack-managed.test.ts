@@ -41,7 +41,7 @@ async function fixture(t: test.TestContext, db: Db, opts: { appId?: string } = {
     stateSecret: "state-secret",
     ...(opts.appId === "" ? {} : { appId: opts.appId ?? "A123" }),
     store,
-    resolver: { forHost: async () => null, forSlackTeam: async (team) => teams[team] ?? null },
+    teamTenant: async (team) => teams[team] ?? null,
     runtimes: {
       current: () => runtimes.get(boundTenant()!) ?? [],
       accounts: async () => runtimes.get(boundTenant()!) ?? [],
@@ -139,7 +139,7 @@ test("an installation state is single-use and only this deployment's key can min
       token: "company-token",
       stateSecret: "another-deployment",
       store: f.store,
-      resolver: { forHost: async () => null, forSlackTeam: async () => null },
+      teamTenant: async () => null,
       runtimes: { current: () => [], accounts: async () => [], refresh: async () => {} },
       fetchImpl: (async (_url: URL, init?: RequestInit) => {
         f.sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
@@ -312,7 +312,7 @@ test("installation launch restricts redirect origin and hides service credential
       stateSecret: "state-secret",
       appId: "A123",
       store: f.store,
-      resolver: { forHost: async () => null, forSlackTeam: async () => null },
+      teamTenant: async () => null,
       runtimes: { current: () => [], accounts: async () => [], refresh: async () => {} },
       fetchImpl: (async () => Response.json({ url: "https://evil.example" })) as typeof fetch,
     });
@@ -328,7 +328,7 @@ test("managed Slack refuses a service credential that a bearer header cannot car
     serviceUrl: "https://slack.example.com",
     stateSecret: "state-secret",
     store: {} as never,
-    resolver: { forHost: async () => null, forSlackTeam: async () => null },
+    teamTenant: async () => null,
     runtimes: { current: () => [], accounts: async () => [], refresh: async () => {} },
   };
   for (const token of ["", "company-token\n", " company-token"]) {

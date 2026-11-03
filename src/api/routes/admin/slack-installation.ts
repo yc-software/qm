@@ -183,7 +183,7 @@ export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
   if (!managed) return sendJson(ctx.res, 404, { error: "not_configured" });
   if (!managed.authenticated(ctx.req)) return sendJson(ctx.res, 401, { error: "unauthorized" });
   const team = slackTeamOf(ctx.body);
-  const tenant = team && ctx.deps.tenants ? await ctx.deps.tenants.forSlackTeam(team) : null;
+  const tenant = team ? await managed.teamTenant(team) : null;
   if (!tenant) return sendJson(ctx.res, 404, { error: "unknown_workspace" });
   await withTenant(tenant, () => managed.handle(ctx.req, ctx.res, ctx.body));
 }

@@ -9,6 +9,7 @@ import { jsonbStringify } from "../util/text.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
+import { withoutTenant } from "../tenants/context.ts";
 import { z } from "zod";
 import type { StagedEnvelopeRows } from "./envelope-staging.ts";
 import type { SlackSessionStatusRows, SlackSessionStatusState } from "./session-status.ts";
@@ -274,6 +275,21 @@ export async function installedSlackTenants(pg: PgPool): Promise<Array<{ tenant_
     "SELECT tenant_id::text AS tenant_id, version FROM slack_installation WHERE NOT disabled",
   );
   return rows.map((row) => ({ tenant_id: String(row.tenant_id), version: String(row.version) }));
+}
+
+export type SlackTeamTenant = (team: string) => Promise<string | null>;
+
+export function slackTeamTenant(pg: PgPool): SlackTeamTenant {
+  return async (team) => {
+    const { rows } = await withoutTenant(() =>
+      claimAcrossTenants(
+        pg,
+        "SELECT tenant_id::text AS tenant_id FROM slack_installation WHERE team_id = $1 AND NOT disabled",
+        [team],
+      ),
+    );
+    return rows.length === 1 ? String(rows[0]!.tenant_id) : null;
+  };
 }
 
 export interface DueEnvelope {

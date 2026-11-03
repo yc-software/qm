@@ -32,7 +32,7 @@ async function fixture(t: test.TestContext) {
     token: "SENTINEL-bridge",
     stateSecret: "state-secret",
     store,
-    resolver: { forHost: async () => TEST_TENANT, forSlackTeam: async () => TEST_TENANT },
+    teamTenant: async () => TEST_TENANT,
     runtimes: { current: () => [], accounts: async () => [], refresh: async () => {} },
     fetchImpl: (async (url: URL, init: RequestInit) => {
       calls.push({ path: url.pathname, body: init.body as string | undefined });

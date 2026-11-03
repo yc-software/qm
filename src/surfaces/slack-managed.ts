@@ -11,7 +11,7 @@ import { slackTeamOf, type SlackAccountRuntime } from "../slack/index.ts";
 import { sendJson } from "../api/http.ts";
 import { isBearerSecret } from "../auth/source-auth.ts";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
-import type { TenantResolver } from "../tenants/resolver.ts";
+import type { SlackTeamTenant } from "../slack/slack-tables.ts";
 import { currentTenant, withTenant } from "../tenants/context.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 
@@ -31,7 +31,7 @@ export function createManagedSlack(opts: {
   stateSecret: string;
   appId?: string;
   store: SlackInstallationStore;
-  resolver: TenantResolver;
+  teamTenant: SlackTeamTenant;
   runtimes: ManagedSlackRuntimes;
   fetchImpl?: typeof fetch;
   now?: () => number;
@@ -81,7 +81,7 @@ export function createManagedSlack(opts: {
     }
     const state = await verifyState(input.state);
     if (!state) return sendJson(res, 403, { error: "invalid_state" });
-    const owner = await opts.resolver.forSlackTeam(input.teamId);
+    const owner = await opts.teamTenant(input.teamId);
     if (owner && owner !== state.tenant) return sendJson(res, 409, { error: "workspace_conflict" });
     const installId = input.installId as string;
     return withTenant(state.tenant, async () => {
@@ -105,7 +105,7 @@ export function createManagedSlack(opts: {
   async function uninstall(res: ServerResponse, input: Record<string, unknown>): Promise<void> {
     if (typeof input.teamId !== "string" || !TEAM_ID.test(input.teamId))
       return sendJson(res, 400, { error: "invalid_installation" });
-    const tenant = await opts.resolver.forSlackTeam(input.teamId);
+    const tenant = await opts.teamTenant(input.teamId);
     if (!tenant) return sendJson(res, 403, { error: "unknown_team" });
     return withTenant(tenant, async () => {
       await opts.store.disableManaged(input.installId as string);
@@ -118,7 +118,7 @@ export function createManagedSlack(opts: {
     const body = input.body as Record<string, unknown> | undefined;
     if (!body || typeof body !== "object" || Array.isArray(body)) return sendJson(res, 400, { error: "invalid_body" });
     const team = slackTeamOf(body);
-    const tenant = team ? await opts.resolver.forSlackTeam(team) : null;
+    const tenant = team ? await opts.teamTenant(team) : null;
     if (!tenant) return sendJson(res, 403, { error: "unknown_team" });
     return withTenant(tenant, async () => {
       const stored = await opts.store.get();
@@ -165,6 +165,7 @@ export function createManagedSlack(opts: {
 
   return {
     authenticated,
+    teamTenant: opts.teamTenant,
     async setupStatus(): Promise<{ companyOwned: boolean; appReady: boolean; connected: boolean } | undefined> {
       const response = await (opts.fetchImpl ?? fetch)(new URL("/install/status", serviceUrl), {
         headers: { authorization: `Bearer ${opts.token}` },

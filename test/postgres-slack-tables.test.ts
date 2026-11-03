@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   claimStagedEnvelopes,
   installedSlackTenants,
+  slackTeamTenant,
   tenantsWithSessionStatus,
   tenantsWithUnsettledAcks,
 } from "../src/slack/slack-tables.ts";
@@ -130,6 +131,17 @@ test(
           previous: [],
           finished: false,
         }),
+      );
+      const teamTenant = slackTeamTenant(owner.pool);
+      assert.equal(await withTenant(otherTenant, () => teamTenant("TA")), tenant);
+      assert.equal(await teamTenant("TB"), otherTenant);
+      assert.equal(await teamTenant("TZ"), null);
+      await withTenant(otherTenant, () =>
+        installs.set({ botToken: "xoxb", appToken: "xapp", teamId: "TA", updatedBy: "admin" }),
+      );
+      assert.equal(await teamTenant("TA"), null, "a workspace two tenants claim binds to neither");
+      await withTenant(otherTenant, () =>
+        installs.set({ botToken: "xoxb", appToken: "xapp", teamId: "TB", updatedBy: "admin" }),
       );
       assert.deepEqual(
         (await withoutTenant(() => installedSlackTenants(owner.pool))).map((row) => row.tenant_id).sort(),

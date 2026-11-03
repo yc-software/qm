@@ -11,6 +11,7 @@ import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackPluginConfigFromEnv } from "./slack/index.ts";
 import { createSlackRuntime } from "./slack/runtime.ts";
+import { slackTeamTenant } from "./slack/slack-tables.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { singleTenantResolver } from "./tenants/resolver.ts";
 import { deriveConnectorKey } from "./connectors/connector-client-store.ts";
@@ -28,13 +29,13 @@ const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLA
 let slackEnvironmentState: "absent" | "configured" | "partial" = "absent";
 if (slackConfig) slackEnvironmentState = "configured";
 else if (envSlackAttempted) slackEnvironmentState = "partial";
-const resolver = singleTenantResolver(built.tenants);
+const teamTenant = slackTeamTenant(built.slackTables.pool);
 const slackRuntime = createSlackRuntime({
   env: process.env,
   core: built.slackCore,
   tables: built.slackTables,
   installation: built.slackInstallation,
-  resolver,
+  teamTenant,
   managed: Boolean(process.env.QM_SLACK_SERVICE_URL),
 });
 const managedSlack = process.env.QM_SLACK_SERVICE_URL
@@ -46,14 +47,14 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
         : "",
       appId: process.env.QM_SLACK_APP_ID ?? "",
       store: built.slackInstallation,
-      resolver,
+      teamTenant,
       runtimes: slackRuntime,
     })
   : undefined;
 const server = createServer(built.app, {
   ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
   managedSlack,
-  tenants: resolver,
+  tenants: singleTenantResolver(built.tenants),
 });
 
 await built.config.hydrate?.();

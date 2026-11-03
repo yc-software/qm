@@ -2,7 +2,6 @@ import { WebClient } from "@slack/web-api";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { SlackInstallationStore } from "../surfaces/slack-installation.ts";
 import { currentTenant } from "../tenants/context.ts";
-import type { TenantResolver } from "../tenants/resolver.ts";
 import {
   NO_RETRY,
   normalizeSlackApiUrl,
@@ -18,6 +17,7 @@ import {
   tenantsWithSessionStatus,
   tenantsWithUnsettledAcks,
   type SlackTables,
+  type SlackTeamTenant,
 } from "./slack-tables.ts";
 import { createSlackTenants } from "./tenant-runtimes.ts";
 
@@ -26,10 +26,10 @@ export function createSlackRuntime(opts: {
   core: SlackCoreClient;
   tables: SlackTables;
   installation: SlackInstallationStore;
-  resolver: TenantResolver;
+  teamTenant: SlackTeamTenant;
   managed: boolean;
 }) {
-  const { env, installation, resolver, tables } = opts;
+  const { env, installation, teamTenant, tables } = opts;
   const environment = slackPluginConfigFromEnv(env);
   const extraAccounts = slackAccountConfigsFromEnv(env);
   const witness = environment ?? extraAccounts[0];
@@ -50,7 +50,7 @@ export function createSlackRuntime(opts: {
   };
   const tenantOfEnvironment = async (): Promise<string | null> => {
     const team = witness ? await teamOf(witness.botToken) : undefined;
-    return team ? resolver.forSlackTeam(team) : null;
+    return team ? teamTenant(team) : null;
   };
   const workspaceToken = async (token: string | undefined, teamId: string | undefined) =>
     token && teamId && (await teamOf(token).catch(() => undefined)) === teamId ? token : undefined;
@@ -82,6 +82,6 @@ export function createSlackRuntime(opts: {
       if (!accounts.length) return null;
       return { version: stored?.version ?? "environment", accounts };
     },
-    start: (config) => startSlackPlugin(config, opts.core, resolver),
+    start: (config) => startSlackPlugin(config, opts.core, teamTenant),
   });
 }
