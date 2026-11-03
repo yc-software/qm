@@ -17,18 +17,18 @@ const ADMIN = {
   "content-type": "application/json",
   ...testTenantHeaders(),
 };
+const env = {
+  ...process.env,
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@t",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@t",
+};
 const json = async (r: Response): Promise<any> => r.json();
 const md = (front: string) => `---\n${front}\n---\n# Body\ntext`;
 
 function makeFixtureRepo(): { dir: string; sha: string } {
   const dir = mkdtempSync(join(tmpdir(), "qm-reg-fixture-"));
-  const env = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@t",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@t",
-  };
   const g = (...a: string[]): void => {
     execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
   };
@@ -57,13 +57,6 @@ function makeFixtureRepo(): { dir: string; sha: string } {
 
 function makeRepoWithSharedLib(skillName: string): { dir: string; sha: string } {
   const dir = mkdtempSync(join(tmpdir(), "qm-col-fixture-"));
-  const env = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@t",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@t",
-  };
   const g = (...a: string[]): void => {
     execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
   };
@@ -80,13 +73,6 @@ function makeRepoWithSharedLib(skillName: string): { dir: string; sha: string } 
 
 function makeRepoWithLayerCollision(): { dir: string; sha: string } {
   const dir = mkdtempSync(join(tmpdir(), "qm-layer-col-fixture-"));
-  const env = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@t",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@t",
-  };
   const g = (...a: string[]): void => {
     execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
   };
@@ -104,6 +90,11 @@ function makeRepoWithLayerCollision(): { dir: string; sha: string } {
   return { dir, sha };
 }
 
+const bound =
+  <A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
+  (...args: A) =>
+    inTestTenant(() => fn(...args));
+
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "reg-routes-")) }));
   const server = createInsecureTestServer(built.app, {
@@ -113,9 +104,20 @@ function start() {
     errors: built.errors,
   });
   server.listen(0);
+  const { skills, skillBundles } = built;
   return {
     base: `http://localhost:${(server.address() as AddressInfo).port}`,
     built,
+    skills: {
+      create: bound(skills.create),
+      review: bound(skills.review),
+      publish: bound(skills.publish),
+      get: bound(skills.get),
+      resolve: bound(skills.resolve),
+      listAll: bound(skills.listAll),
+    },
+    bundle: bound(skillBundles.get),
+    putLayer: bound(built.deploymentLayerStore.put),
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }
@@ -166,7 +168,7 @@ test("register → browse → import → list → remove a git skill pack (org s
       "an imported skill reports the scope it landed in on re-browse",
     );
 
-    const bundle = await s.built.skillBundles.get(id);
+    const bundle = await s.bundle(id);
     assert.deepEqual(
       (bundle?.files ?? []).map((f) => f.path).sort(),
       ["lib/shared.mjs", "skills/_conventions/quality.md"],
@@ -188,7 +190,7 @@ test("register → browse → import → list → remove a git skill pack (org s
     const del = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}`, { method: "DELETE", headers: ADMIN }));
     assert.equal(del.removed, 2);
     assert.equal((await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }))).packs.length, 0);
-    assert.equal(await s.built.skillBundles.get(id), null, "removing the pack deletes its shared bundle too");
+    assert.equal(await s.bundle(id), null, "removing the pack deletes its shared bundle too");
   } finally {
     rmSync(repo.dir, { recursive: true, force: true });
     await s.close();
@@ -207,13 +209,13 @@ test("pack removal and re-import identify pack skills by their pack record, not 
       }),
     );
     const id = reg.pack.id as string;
-    const lookalike = await s.built.skills.create({
+    const lookalike = await s.skills.create({
       scopeId: "org:default-org",
       manifest: { name: "reg-alpha", description: "native", body: "native body", requiredCapabilities: [] },
       createdBy: `pack:${id}`,
     });
-    await s.built.skills.review(lookalike.id, "admin-alice@default-org", []);
-    await s.built.skills.publish(lookalike.id);
+    await s.skills.review(lookalike.id, "admin-alice@default-org", []);
+    await s.skills.publish(lookalike.id);
 
     const imp = await json(
       await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
@@ -223,11 +225,11 @@ test("pack removal and re-import identify pack skills by their pack record, not 
       }),
     );
     assert.deepEqual(imp.imported, ["reg-beta"]);
-    assert.equal((await s.built.skills.get(lookalike.id))?.manifest.body, "native body", "import leaves it alone");
+    assert.equal((await s.skills.get(lookalike.id))?.manifest.body, "native body", "import leaves it alone");
 
     const del = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}`, { method: "DELETE", headers: ADMIN }));
     assert.equal(del.removed, 1);
-    assert.equal((await s.built.skills.get(lookalike.id))?.status, "published", "pack removal leaves it alone");
+    assert.equal((await s.skills.get(lookalike.id))?.status, "published", "pack removal leaves it alone");
   } finally {
     rmSync(repo.dir, { recursive: true, force: true });
     await s.close();
@@ -265,13 +267,13 @@ test("a legacy published skill with an unsafe name does not block unrelated pack
   const repo = makeFixtureRepo();
   const s = start();
   try {
-    const legacy = await s.built.skills.create({
+    const legacy = await s.skills.create({
       scopeId: "org:default-org",
       manifest: { name: "legacy-safe", description: "legacy", requiredCapabilities: [], body: "legacy" },
       createdBy: "legacy-import",
     });
-    await s.built.skills.review(legacy.id, "reviewer", []);
-    await s.built.skills.publish(legacy.id);
+    await s.skills.review(legacy.id, "reviewer", []);
+    await s.skills.publish(legacy.id);
     legacy.manifest.name = "Legacy Skill";
 
     const reg = await json(
@@ -330,11 +332,11 @@ test("supporting files are namespaced per pack, so same paths never clobber", as
     assert.equal(impB.status, 200);
 
     assert.equal(
-      (await s.built.skillBundles.get(idA))?.files.find((f) => f.path === "lib/shared.mjs")?.content,
+      (await s.bundle(idA))?.files.find((f) => f.path === "lib/shared.mjs")?.content,
       'export const who = "col-alpha";',
     );
     assert.equal(
-      (await s.built.skillBundles.get(idB))?.files.find((f) => f.path === "lib/shared.mjs")?.content,
+      (await s.bundle(idB))?.files.find((f) => f.path === "lib/shared.mjs")?.content,
       'export const who = "col-beta";',
     );
     const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }));
@@ -379,7 +381,7 @@ test("pack reconciliation and deployment-layer replacement serialize their mater
       body: JSON.stringify({ selected: "all" }),
     });
     await bundleEntered;
-    const replacing = s.built.deploymentLayerStore.put(
+    const replacing = s.putLayer(
       {
         contract: 1,
         tools: [],
@@ -446,7 +448,7 @@ test("pack removal waits for an in-flight reconciliation and leaves no orphan re
 
     assert.equal((await importing).status, 200);
     assert.equal((await removing).status, 200);
-    assert.equal(await s.built.skillBundles.get(id), null);
+    assert.equal(await s.bundle(id), null);
     const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }));
     assert.ok(!skills.skills.some((skill: any) => skill.createdBy === `pack:${id}`));
     const packs = await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }));
@@ -496,13 +498,6 @@ test("an older tracked-pack fetch cannot roll back a newer reconciliation", asyn
     });
     await oldFetchEntered;
 
-    const env = {
-      ...process.env,
-      GIT_AUTHOR_NAME: "t",
-      GIT_AUTHOR_EMAIL: "t@t",
-      GIT_COMMITTER_NAME: "t",
-      GIT_COMMITTER_EMAIL: "t@t",
-    };
     writeFileSync(
       join(repo.dir, "skills", "reg-alpha", "SKILL.md"),
       md("name: reg-alpha\ndescription: newest\nscope: company"),
@@ -522,8 +517,8 @@ test("an older tracked-pack fetch cannot roll back a newer reconciliation", asyn
     const stale = await older;
     assert.equal(stale.status, 500);
     assert.equal((await json(stale)).message, "internal server error");
-    assert.equal((await s.built.skillBundles.get(id))?.commit, newestCommit);
-    const stored = (await s.built.skills.listAll()).find(
+    assert.equal((await s.bundle(id))?.commit, newestCommit);
+    const stored = (await s.skills.listAll()).find(
       (skill) => skill.createdBy === `pack:${id}` && skill.manifest.name === "reg-alpha",
     );
     assert.equal(stored?.manifest.description, "newest");
@@ -535,13 +530,6 @@ test("an older tracked-pack fetch cannot roll back a newer reconciliation", asyn
 
 test("re-import archives removed/renamed/now-ineligible skills and keeps unchanged ones", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-recon-"));
-  const env = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@t",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@t",
-  };
   const g = (...a: string[]): void => {
     execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
   };
@@ -615,13 +603,6 @@ test("re-import archives removed/renamed/now-ineligible skills and keeps unchang
 
 test("sync refreshes IMPORTED skills (update + archive) but does NOT add un-imported ones; PATCH flips syncMode", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-sync-"));
-  const env = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@t",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@t",
-  };
   const g = (...a: string[]): void => {
     execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
   };
@@ -736,13 +717,13 @@ test("an admin can replace an archived seeded org skill with a same-named pack s
   const repo = makeFixtureRepo();
   const s = start();
   try {
-    const seeded = await s.built.skills.create({
+    const seeded = await s.skills.create({
       scopeId: "org:default-org",
       manifest: { name: "reg-alpha", description: "bundled default", requiredCapabilities: [], body: "bundled" },
       createdBy: "system:skills-seed",
     });
-    await s.built.skills.review(seeded.id, "system:skills-seed", []);
-    await s.built.skills.publish(seeded.id);
+    await s.skills.review(seeded.id, "system:skills-seed", []);
+    await s.skills.publish(seeded.id);
 
     const reg = await json(
       await fetch(`${s.base}/v1/admin/skill-packs`, {
@@ -763,14 +744,14 @@ test("an admin can replace an archived seeded org skill with a same-named pack s
     });
     assert.equal(blockedImport.status, 200);
     assert.deepEqual((await json(blockedImport)).imported, []);
-    assert.equal((await s.built.skills.resolve("reg-alpha", ["org:default-org"])).skill?.id, seeded.id);
+    assert.equal((await s.skills.resolve("reg-alpha", ["org:default-org"])).skill?.id, seeded.id);
 
     const archived = await fetch(`${s.base}/v1/admin/skills/${seeded.id}?scope=org:default-org`, {
       method: "DELETE",
       headers: ADMIN,
     });
     assert.equal(archived.status, 200);
-    assert.equal((await s.built.skills.get(seeded.id))?.status, "archived");
+    assert.equal((await s.skills.get(seeded.id))?.status, "archived");
 
     const after = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}/catalog`, { headers: ADMIN }));
     assert.equal(
@@ -785,8 +766,8 @@ test("an admin can replace an archived seeded org skill with a same-named pack s
     });
     assert.equal(imported.status, 200);
     assert.deepEqual((await json(imported)).imported, ["reg-alpha"]);
-    assert.equal((await s.built.skills.get(seeded.id))?.status, "archived");
-    const replacement = (await s.built.skills.resolve("reg-alpha", ["org:default-org"])).skill;
+    assert.equal((await s.skills.get(seeded.id))?.status, "archived");
+    const replacement = (await s.skills.resolve("reg-alpha", ["org:default-org"])).skill;
     assert.ok(replacement);
     assert.notEqual(replacement.id, seeded.id);
     assert.equal(replacement.createdBy, `pack:${id}`);
@@ -918,13 +899,6 @@ test("imports a pack into MULTIPLE scopes at once; catalog reports per-scope; im
 
 test("re-importing into ONE scope archives only that scope's deselected skills, not another scope's", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-scoped-"));
-  const env = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@t",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@t",
-  };
   const g = (...a: string[]): void => {
     execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
   };
@@ -982,13 +956,6 @@ test("re-importing into ONE scope archives only that scope's deselected skills, 
 
 test("sync refreshes EVERY scope the pack was imported into", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-syncmulti-"));
-  const env = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@t",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@t",
-  };
   const g = (...a: string[]): void => {
     execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
   };
@@ -1068,13 +1035,6 @@ test("import rejects malformed scopeIds with a 400", async () => {
 
 test("a pack skill whose name collides with a native skill in ANOTHER scope still imports into its own scope", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-xscope-"));
-  const env = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@t",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@t",
-  };
   const g = (...a: string[]): void => {
     execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
   };
@@ -1089,13 +1049,13 @@ test("a pack skill whose name collides with a native skill in ANOTHER scope stil
 
   const s = start();
   try {
-    const nat = await s.built.skills.create({
+    const nat = await s.skills.create({
       scopeId: "org:default-org",
       manifest: { name: "shared-name", description: "native", requiredCapabilities: [], body: "x" },
       createdBy: "system:native",
     });
-    await s.built.skills.review(nat.id, "system:native", []);
-    await s.built.skills.publish(nat.id);
+    await s.skills.review(nat.id, "system:native", []);
+    await s.skills.publish(nat.id);
 
     const reg = await json(
       await fetch(`${s.base}/v1/admin/skill-packs`, {

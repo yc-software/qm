@@ -89,55 +89,56 @@ appTest("an unpublished (draft/reviewed) skill is not visible", async ({ app, sk
   assert.ok(!visible.some((r) => r.skill!.manifest.name === "wip"));
 });
 
-test("visibleFor reads the requested scopes once, not once per skill name", async () => {
-  const base = testSkillStore({ signingSecret: "visible-test" });
-  let listReads = 0;
-  let scopedReads = 0;
-  const rows: SkillRows = {
-    ...base,
-    inScopes: (scopes, name) => {
-      scopedReads += 1;
-      return base.inScopes(scopes, name);
-    },
-    listAll: () => {
-      listReads += 1;
-      return base.listAll();
-    },
-    save: () => Promise.reject(new Error("read-only")),
-    touch: () => Promise.reject(new Error("read-only")),
-  };
-  const skills = base;
-  const org = scopeId("org", "default-org");
-  const personal = scopeId("personal", "U1");
-  for (let i = 0; i < 200; i++) {
-    const scope = i % 2 === 0 ? org : personal;
-    const sk = await skills.create({
-      scopeId: scope,
-      manifest: { name: `skill-${i}`, description: `skill ${i}`, requiredCapabilities: [], body: `# skill-${i}` },
-      createdBy: "author",
+test("visibleFor reads the requested scopes once, not once per skill name", () =>
+  inTestTenant(async () => {
+    const base = testSkillStore({ signingSecret: "visible-test" });
+    let listReads = 0;
+    let scopedReads = 0;
+    const rows: SkillRows = {
+      ...base,
+      inScopes: (scopes, name) => {
+        scopedReads += 1;
+        return base.inScopes(scopes, name);
+      },
+      listAll: () => {
+        listReads += 1;
+        return base.listAll();
+      },
+      save: () => Promise.reject(new Error("read-only")),
+      touch: () => Promise.reject(new Error("read-only")),
+    };
+    const skills = base;
+    const org = scopeId("org", "default-org");
+    const personal = scopeId("personal", "U1");
+    for (let i = 0; i < 200; i++) {
+      const scope = i % 2 === 0 ? org : personal;
+      const sk = await skills.create({
+        scopeId: scope,
+        manifest: { name: `skill-${i}`, description: `skill ${i}`, requiredCapabilities: [], body: `# skill-${i}` },
+        createdBy: "author",
+      });
+      await skills.review(sk.id, "reviewer-1", []);
+      await skills.publish(sk.id);
+    }
+    const shadowing = await skills.create({
+      scopeId: personal,
+      manifest: { name: "skill-0", description: "personal override", requiredCapabilities: [], body: "# skill-0" },
+      createdBy: "U1",
     });
-    await skills.review(sk.id, "reviewer-1", []);
-    await skills.publish(sk.id);
-  }
-  const shadowing = await skills.create({
-    scopeId: personal,
-    manifest: { name: "skill-0", description: "personal override", requiredCapabilities: [], body: "# skill-0" },
-    createdBy: "U1",
-  });
-  await skills.review(shadowing.id, "reviewer-1", []);
-  await skills.publish(shadowing.id);
+    await skills.review(shadowing.id, "reviewer-1", []);
+    await skills.publish(shadowing.id);
 
-  scopedReads = 0;
-  const visible = await skillStore(rows, {
-    signingSecret: "visible-test",
-    advisoryLock: testAdvisoryLock(),
-  }).visibleFor([personal, org]);
+    scopedReads = 0;
+    const visible = await skillStore(rows, {
+      signingSecret: "visible-test",
+      advisoryLock: testAdvisoryLock(),
+    }).visibleFor([personal, org]);
 
-  assert.equal(listReads, 0, "no full skills table read");
-  assert.equal(scopedReads, 1, "one scoped skills read per visibleFor call");
-  assert.equal(visible.length, 200);
-  const shadowed = visible.find((r) => r.skill!.manifest.name === "skill-0")!;
-  assert.equal(shadowed.skill!.scopeId, personal);
-  assert.equal(shadowed.shadowed.length, 1);
-  assert.equal(shadowed.shadowed[0]!.scopeId, org);
-});
+    assert.equal(listReads, 0, "no full skills table read");
+    assert.equal(scopedReads, 1, "one scoped skills read per visibleFor call");
+    assert.equal(visible.length, 200);
+    const shadowed = visible.find((r) => r.skill!.manifest.name === "skill-0")!;
+    assert.equal(shadowed.skill!.scopeId, personal);
+    assert.equal(shadowed.shadowed.length, 1);
+    assert.equal(shadowed.shadowed[0]!.scopeId, org);
+  }));
