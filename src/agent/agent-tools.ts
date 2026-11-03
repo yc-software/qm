@@ -162,9 +162,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       list: discoverSkills(false),
       search: discoverSkills(true),
       read: skill,
-      ...(controlTools
-        ? { save: saveSkill, edit: editSkill, share: sharingTool("skill"), move: sharingTool("skill", true) }
-        : {}),
+      ...(controlTools && (ref.current === null || ref.current.selfApi) ? { save: saveSkill, edit: editSkill } : {}),
+      ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
     }),
     {
       ...resourceTool("files", {

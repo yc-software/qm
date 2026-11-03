@@ -2679,7 +2679,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
           ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
             ? {
-                selfApi: createSelfApiCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
+                ...(securityPolicy.posture !== "strict"
+                  ? { selfApi: createSelfApiCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN) }
+                  : {}),
                 admin: {
                   call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
                   operationsAvailable:

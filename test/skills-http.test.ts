@@ -18,6 +18,7 @@ import type { ToolContext } from "../src/tools/primitives.ts";
 import { createSelfApiCall, type SelfApiCall } from "../src/tools/self-api.ts";
 import { SHARED_SKILL_TRIGGER_REFUSAL } from "../src/api/artifact-share.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
+import { SKILL_NAME_RULE } from "../src/skills/skill-name.ts";
 
 function start() {
   const built = buildApp(
@@ -463,13 +464,24 @@ async function startSecure() {
   };
 }
 
-function skillsTool(selfApi?: SelfApiCall) {
-  const tool = createAgentTools(
+function skillsDefinition(selfApi?: SelfApiCall) {
+  return createAgentTools(
     { current: (selfApi ? { selfApi } : {}) as unknown as ToolContext },
     {
       controlTools: true,
     },
   ).find((t) => t.name === "skills")!;
+}
+
+function skillsActions(selfApi?: SelfApiCall) {
+  const { parameters } = skillsDefinition(selfApi) as unknown as {
+    parameters: { properties: { action: { anyOf: Array<{ const: string }> } } };
+  };
+  return parameters.properties.action.anyOf.map((a) => a.const);
+}
+
+function skillsTool(selfApi?: SelfApiCall) {
+  const tool = skillsDefinition(selfApi);
   return async (args: Record<string, unknown>) => {
     const result = await tool.execute("call", args, undefined, undefined, {} as never);
     return (result.content[0] as { text: string }).text;
@@ -1190,18 +1202,38 @@ test("the skills tool cannot save or edit where the skill API refuses", async ()
     assert.match(await outsider({ action: "edit", id, description: "taken over" }), /isn't yours to edit/);
 
     assert.equal(
-      await skillsTool()({ action: "save", name: "tokenless", description: "d", body: "# b" }),
-      "[error] skills can't be saved or edited on this turn",
+      await skillsTool(createSelfApiCall(srv.base, await srv.cap("namer")))({
+        action: "save",
+        name: "Weekly Investor Update",
+        description: "d",
+        body: "# b",
+      }),
+      `[error] ${SKILL_NAME_RULE}`,
+    );
+    assert.deepEqual(skillsActions(), ["list", "search", "read", "share", "move"]);
+    assert.equal(
+      await skillsTool(async () => {
+        throw new Error("connect ECONNREFUSED");
+      })({ action: "save", name: "unreachable", description: "d", body: "# b" }),
+      "[error] connect ECONNREFUSED",
+    );
+    assert.equal(
+      await skillsTool(async () => ({ status: 502, body: "<html>bad gateway</html>", requestId: "r1" }))({
+        action: "edit",
+        id,
+        body: "# b",
+      }),
+      "[error] HTTP 502 (request r1)",
     );
     const names = (await srv.skills.list()).map((s) => s.manifest.name);
-    for (const name of ["auto-thing", "strict-thing", "tokenless"]) assert.ok(!names.includes(name), name);
+    for (const name of ["auto-thing", "strict-thing", "Weekly Investor Update"]) assert.ok(!names.includes(name), name);
     assert.notEqual((await srv.skills.get(id))!.manifest.description, "taken over");
   } finally {
     await srv.close();
   }
 });
 
-test("a turn's skills tool saves with that turn's own capability, and a read-only turn gets no save", async () => {
+test("a turn's skills tool saves with that turn's own capability, and read-only and strict-posture turns get no save", async () => {
   const SECRET = "skills-turn-cap-secret".repeat(3);
   const mock = createMockAgent();
   const seen: ToolContext[] = [];
@@ -1240,13 +1272,13 @@ test("a turn's skills tool saves with that turn's own capability, and a read-onl
       [{ channelId: "C9", principalId: "avery" }],
     );
     const avery = { externalId: "avery" };
-    const turn = (readOnly: boolean) =>
+    const turn = (readOnly: boolean, label = readOnly ? "read" : "live") =>
       built.app.turn({
         surface: "test",
         actor: avery,
         conversation: {
           kind: "channel",
-          threadRef: `ch:C9:${readOnly ? "read" : "live"}`,
+          threadRef: `ch:C9:${label}`,
           channelRef: "C9",
           audience: [avery],
           publishMembers: [avery],
@@ -1266,6 +1298,9 @@ test("a turn's skills tool saves with that turn's own capability, and a read-onl
     const sk = (await built.skills.list()).find((s) => s.manifest.name === "from-a-turn");
     assert.equal(sk?.scopeId, scopeId("channel", "C9"));
     assert.equal(sk?.createdBy, "avery");
+    await built.config.setSecurityPosture(scopeId("channel", "C9"), "strict");
+    assert.equal((await turn(false, "strict")).status, "ok");
+    assert.equal(seen[2]!.selfApi, undefined);
   } finally {
     globalThis.fetch = realFetch;
     await new Promise<void>((r) => server.close(() => r()));
