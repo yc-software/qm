@@ -210,6 +210,23 @@ test("spine ON: the steer signal carries the message's real surface ts (so the a
   assert.equal(signals[1]!.ts, "800.011", "unprompted steer forwards entryTs as the persist/dedupe key");
 });
 
+test("an un-mentioned bare 'stop' from the person who started the run stops it", async () => {
+  const built = freshApp();
+  const channel = "C17";
+  const root = "1700.7";
+  const first = await built.app.turn(mention("@bot do a long thing", channel, root));
+  const liveRunId = first.runId!;
+  assert.ok(await built.runs.claimById(liveRunId, "worker", 30_000));
+
+  const stop = await built.app.turn({ ...overheard("stop", channel, root), actor });
+  assert.equal(stop.stopped, true, "the starter's stop stopped the live run");
+  const signals = await built.signals.takePending(liveRunId);
+  assert.deepEqual(
+    signals.map((signal) => signal.kind),
+    ["abort"],
+  );
+});
+
 test("spine ON: an overheard bare 'stop' folds in as steer text (a bystander does NOT abort)", async () => {
   const built = freshApp();
   const channel = "C7";

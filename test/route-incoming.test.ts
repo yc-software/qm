@@ -58,3 +58,13 @@ test("isHalt matches a bare stop, optionally after the agent's own handle, and n
   for (const s of ["@qm stop", "@qm Stop!"]) assert.ok(isHalt(s, "qm"), s);
   for (const s of ["@qm stop it", "@qmstop", "@alice stop", "@here stop"]) assert.ok(!isHalt(s, "qm"), s);
 });
+
+test("an un-mentioned bare stop stops a run only when the run's starter sends it", () => {
+  const overheardStop: Incoming = { ...person, origin: "ambient", person: true, text: "stop" };
+  assert.deepEqual(routeIncoming(overheardStop, live, steer), { kind: "abort" });
+  assert.deepEqual(routeIncoming({ ...overheardStop, actorId: "U2" }, live, steer), { kind: "steer" });
+  assert.deepEqual(routeIncoming(overheardStop, { kind: "descendants" }, steer), {
+    kind: "turn",
+    reason: "nothing-live",
+  });
+});
