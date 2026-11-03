@@ -1,3 +1,4 @@
+import { testCronRows } from "./support/typed-stores.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
@@ -10,8 +11,6 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { testCronRows } from "./support/typed-stores.ts";
-import { testTenants } from "./support/test-tenants.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
@@ -56,28 +55,22 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   return { crons, cron, deliveries, idempotency, ask, deps };
 }
 
-test("busy cron credential resolution leaves its fire retryable and resumes exactly once when available", async () => {
+test("cron credential resolution resumes in the original conversation exactly once", async () => {
   const requests: TurnRequest[] = [];
   const f = await fixture(async (request) => {
     requests.push(request);
-    return requests.length === 1
-      ? { status: "refused", refusalKind: "session_busy", reason: "conversation is busy" }
-      : { status: "ok", reply: "dummy scheduled result" };
+    return { status: "ok", reply: "dummy scheduled result" };
   });
   const fireKey = `ask:${f.ask.id}:approved`;
 
-  await assert.rejects(fireAskResolution(f.deps, f.ask));
-
-  assert.equal(requests[0]?.model, "gpt-6-luna");
-  assert.equal(requests[0]?.thinkingLevel, "low");
-  assert.equal(await f.idempotency.committed(fireKey), false);
-  assert.equal((await f.deliveries.pending("principal")).length, 0);
   const resumed = await fireAskResolution(f.deps, f.ask);
   assert.equal(resumed.status, "ok");
+  assert.equal(requests[0]?.model, "gpt-6-luna");
+  assert.equal(requests[0]?.thinkingLevel, "low");
   assert.equal(await f.idempotency.committed(fireKey), true);
   await fireAskResolution(f.deps, f.ask);
 
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 1);
   assert.ok(requests.every((request) => request.conversation.threadRef === f.ask.requesterThreadRef));
   assert.ok(requests.every((request) => request.triggered === true));
   const pending = await f.deliveries.pending("principal");
@@ -106,13 +99,12 @@ test("failed cron credential resolution notifies only the owner", async () => {
   assert.equal(pending.filter((delivery) => delivery.destination.target === "U_BOB").length, 0);
 });
 
-test("a concurrent sweep cannot mark an in-flight busy resume notified before it becomes retryable", async () => {
+test("a concurrent sweep cannot mark an in-flight resume notified before it finishes", async () => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<TurnResult>();
   let runs = 0;
   const f = await fixture(async () => {
     runs++;
-    if (runs > 1) return { status: "ok", reply: "dummy scheduled result" };
     entered.resolve();
     return release.promise;
   });
@@ -125,28 +117,20 @@ test("a concurrent sweep cannot mark an in-flight busy resume notified before it
     asks,
     key: deriveConnectorKey("concurrent-cron-resume-test"),
   });
-  const [tenantId] = testTenants();
-  const sweep = createAskExpirySweep({
-    keychain: {
-      unnotifiedResolvedAsks: async (now) =>
-        (await keychain.unnotifiedResolvedAsks(now)).map((ask) => ({ ...ask, tenantId })),
-      markAskNotified: (id, status) => keychain.markAskNotified(id, status),
-    },
-    fire: (ask) => fireAskResolution(f.deps, ask),
-  });
-  const initial = assert.rejects(fireAskResolution(f.deps, f.ask), /waiting for the original conversation/);
+  const sweep = createAskExpirySweep({ keychain, fire: (ask) => fireAskResolution(f.deps, ask) });
+  const initial = fireAskResolution(f.deps, f.ask);
   await entered.promise;
 
   await sweep(Date.now());
   assert.equal((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
-  release.resolve({ status: "refused", refusalKind: "session_busy", reason: "conversation is busy" });
-  await initial;
-  assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), false);
+  release.resolve({ status: "ok", reply: "dummy scheduled result" });
+  assert.equal((await initial).status, "ok");
+  assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), true);
 
   await sweep(Date.now());
   await sweep(Date.now());
 
-  assert.equal(runs, 2);
+  assert.equal(runs, 1);
   assert.notEqual((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
   assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), true);
   const pending = await f.deliveries.pending("principal");

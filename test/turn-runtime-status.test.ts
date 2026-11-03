@@ -3,6 +3,7 @@ import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import * as mockAgent from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 let started!: () => void;
 let release!: () => void;
@@ -41,23 +42,25 @@ test("a run reports the runtime its turn runs on while working and after it fini
       const ready = new Promise<void>((resolve) => {
         started = resolve;
       });
-      const queued = await built.app.turn({
-        surface: "web",
-        liveActor: true,
-        actor: { externalId: "U1" },
-        conversation: { kind: "dm", threadRef: `runtime-${model ?? "default"}` },
-        text: "hello",
-        async: true,
-        ...(model ? { model } : {}),
-      });
+      const queued = await inTestTenant(() =>
+        built.app.turn({
+          surface: "web",
+          liveActor: true,
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef: `runtime-${model ?? "default"}` },
+          text: "hello",
+          async: true,
+          ...(model ? { model } : {}),
+        }),
+      );
       await ready;
-      const live = (await built.app.getRun(queued.runId!))?.runtime;
+      const live = (await inTestTenant(() => built.app.getRun(queued.runId!)))?.runtime;
       assert.ok(live?.modelId);
       if (model) assert.equal(live.modelId, model);
       assert.equal(live.change, undefined);
       release();
-      await built.runs.waitFor(queued.runId!, 5000);
-      assert.deepEqual((await built.runs.get(queued.runId!))?.result?.runtime, live);
+      await inTestTenant(() => built.runs.waitFor(queued.runId!, 5000));
+      assert.deepEqual((await inTestTenant(() => built.runs.get(queued.runId!)))?.result?.runtime, live);
     }
   } finally {
     release?.();
@@ -73,21 +76,23 @@ test("a runtime the agent switches to mid-turn is reported as its switch", async
       started = resolve;
     });
     handoffTo = "claude-haiku-5-5";
-    const queued = await built.app.turn({
-      surface: "web",
-      liveActor: true,
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "runtime-switch" },
-      text: "switch me to haiku",
-      async: true,
-    });
+    const queued = await inTestTenant(() =>
+      built.app.turn({
+        surface: "web",
+        liveActor: true,
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "runtime-switch" },
+        text: "switch me to haiku",
+        async: true,
+      }),
+    );
     await ready;
-    const live = (await built.app.getRun(queued.runId!))?.runtime;
+    const live = (await inTestTenant(() => built.app.getRun(queued.runId!)))?.runtime;
     assert.equal(live?.modelId, "claude-haiku-5-5");
     assert.deepEqual(live.change, { agent: "task" });
     release();
-    await built.runs.waitFor(queued.runId!, 5000);
-    assert.deepEqual((await built.runs.get(queued.runId!))?.result?.runtime, live);
+    await inTestTenant(() => built.runs.waitFor(queued.runId!, 5000));
+    assert.deepEqual((await inTestTenant(() => built.runs.get(queued.runId!)))?.result?.runtime, live);
   } finally {
     release?.();
     await built.runtime.stop();

@@ -15,8 +15,13 @@ import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { discoverOAuth } from "../src/mcp/oauth-discovery.ts";
 import { errMessage } from "../src/util/errors.ts";
 import { testMap } from "./support/test-database.ts";
+import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 
 test("MCP admin validates and preserves credential scope, without returning secrets", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-"));
@@ -139,31 +144,39 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
     else process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM = previous;
     await rm(dir, { recursive: true, force: true });
   });
-  await built.mcpServers.put({
-    id: "crm",
-    name: "CRM",
-    url: `${remote.url}/mcp`,
-    auth: "oauth-user",
-    credentialScope: "per-user",
-    credentialHost: "accounts.example.com",
-    tools: [{ name: "identity", description: "", inputSchema: { type: "object" } }],
-    readOnly: true,
-    enabled: true,
-    updatedAt: Date.now(),
-    updatedBy: "internal:admin",
-  });
-  await built.mcpToolService.refresh();
+  await inTestTenant(() =>
+    built.mcpServers.put({
+      id: "crm",
+      name: "CRM",
+      url: `${remote.url}/mcp`,
+      auth: "oauth-user",
+      credentialScope: "per-user",
+      credentialHost: "accounts.example.com",
+      tools: [{ name: "identity", description: "", inputSchema: { type: "object" } }],
+      readOnly: true,
+      enabled: true,
+      updatedAt: Date.now(),
+      updatedBy: "internal:admin",
+    }),
+  );
+  await inTestTenant(() => built.mcpToolService.refresh());
   assert.equal(
-    await built.connectorTokens.connectorAccessToken("accounts.example.com", "internal:alice"),
+    await inTestTenant(() => built.connectorTokens.connectorAccessToken("accounts.example.com", "internal:alice")),
     "operator-token",
   );
-  assert.match(await built.mcpToolService.call("crm_identity", {}, "internal:alice"), /Sign in to CRM/);
+  assert.match(
+    await inTestTenant(() => built.mcpToolService.call("crm_identity", {}, "internal:alice")),
+    /Sign in to CRM/,
+  );
   assert.equal(remote.requests.length, 0);
-  await built.connectorTokens.setConnectorToken("accounts.example.com", "internal:alice", {
-    accessToken: "alice-only",
-  });
-  await assert.rejects(built.mcpToolService.call("crm_identity", {}, "internal:alice"), (e: unknown) =>
-    /private network address/.test(errMessage(e)),
+  await inTestTenant(() =>
+    built.connectorTokens.setConnectorToken("accounts.example.com", "internal:alice", {
+      accessToken: "alice-only",
+    }),
+  );
+  await assert.rejects(
+    inTestTenant(() => built.mcpToolService.call("crm_identity", {}, "internal:alice")),
+    (e: unknown) => /private network address/.test(errMessage(e)),
   );
   assert.equal(remote.requests.length, 0, "production wiring refuses a loopback MCP server");
 });

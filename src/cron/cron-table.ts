@@ -211,15 +211,11 @@ export function createPostgresCronRows(connectionString: string): CronRows & { c
     },
     async scheduled() {
       return (
-        await claimAcrossTenants(
-          connectionString,
-          `${SELECT} WHERE enabled AND archived IS NOT TRUE ORDER BY tenant_id, id`,
-        )
+        await claimAcrossTenants(`${SELECT} WHERE enabled AND archived IS NOT TRUE ORDER BY tenant_id, id`)
       ).rows.map(tenantRow);
     },
     async dueCandidates(now) {
       const { rows } = await claimAcrossTenants(
-        connectionString,
         `${SELECT} WHERE enabled AND archived IS NOT TRUE
            AND (next_fire_at IS NULL OR next_fire_at <= $1)
            AND (defer_until IS NULL OR defer_until <= $1)

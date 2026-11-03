@@ -13,7 +13,7 @@ function entry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
     dedupeKey: "gmail:thread-1",
     source: "gmail",
     summary: "can you look at this?",
-    sourcePayload: { source: "gmail", title: "Budget", from: "Ada", snippet: "can you look at this?" },
+    sourcePayload: { title: "Budget", from: "Ada", snippet: "can you look at this?" },
     sourceAt: 1_000,
     ...over,
   };
@@ -58,7 +58,7 @@ test("a newer source event refreshes the payload and the proposal", async () => 
   const outcome = await ledger.ingest([
     entry({
       sourceAt: 2_000,
-      sourcePayload: { source: "gmail", title: "Budget", from: "Ada", snippet: "bumping this" },
+      sourcePayload: { title: "Budget", from: "Ada", snippet: "bumping this" },
       proposal: { data: { body: "second" }, by: "agent" },
     }),
   ]);
@@ -169,7 +169,6 @@ test("annotate merges into the source payload, leaving the item's state and prop
   assert.equal(ledgerState(annotated!), "held");
   assert.deepEqual(annotated?.proposal?.data, { body: "on it" });
   assert.deepEqual(annotated?.sourcePayload, {
-    source: "gmail",
     title: "Budget",
     from: "Ada",
     snippet: "can you look at this?",
@@ -403,7 +402,7 @@ test("email classification projection is opt-in, scoped, and never changes store
   const originalSummaries = rows.summaries.bind(rows);
   t.mock.method(rows, "summaries", async (loopIds: readonly string[], payloadKeys?: readonly string[]) => {
     assert.deepEqual(loopIds, [LOOP]);
-    if (payloadKeys) assert.deepEqual(payloadKeys, ["source", "automated", "participants", "slackAvatarsRefreshAt"]);
+    if (payloadKeys) assert.deepEqual(payloadKeys, ["automated", "participants", "slackAvatarsRefreshAt"]);
     const summaries = await originalSummaries(loopIds, payloadKeys);
     for (const row of summaries) {
       assert.equal(row.sourcePayload?.privateDetail, undefined);
@@ -423,34 +422,15 @@ test("email classification projection is opt-in, scoped, and never changes store
   assert.deepEqual(await ledger.get(loopItemId(LOOP, "gmail:thread-1")), stored);
 });
 
-test("flagged summaries classify payload-only legacy email without changing stored records", async () => {
-  const ledger = createLoopItemLedger(testItemRows());
-  await ledger.ingest([entry({ source: undefined, sourcePayload: { source: "gmail", automated: true } })]);
-  const before = await ledger.summaries([LOOP]);
-  const [classified] = await ledger.summaries([LOOP], { includeInboxMetadata: true });
-  assert.equal(classified!.source, "gmail");
-  assert.equal(classified!.inboxPreview!.automated, true);
-  assert.deepEqual(await ledger.summaries([LOOP]), before);
-  assert.equal((await ledger.byLoop(LOOP))[0]!.source, undefined);
-});
-
-test("ingest batches per-loop locks and writes while resolving legacy IDs and duplicate events", async () => {
+test("ingest batches per-loop locks and writes and skips duplicate events", async () => {
   const rows = testItemRows();
   const seed = createLoopItemLedger(rows);
   await seed.ingest([entry()]);
-  const original = (await seed.byLoop(LOOP))[0]!;
-  await rows.delete([original.id]);
-  await rows.insertIfAbsent({ ...original, id: "legacy" });
-  let selects = 0;
   let writes = 0;
   let locks = 0;
   const ledger = createLoopItemLedger(
     {
       ...rows,
-      idsBySourceKey: async (loopId, sourceKeys) => {
-        selects++;
-        return rows.idsBySourceKey(loopId, sourceKeys);
-      },
       get: async () => {
         throw new Error("per-item read");
       },
@@ -474,10 +454,8 @@ test("ingest batches per-loop locks and writes while resolving legacy IDs and du
   const batch = Array.from({ length: 100 }, (_, i) => entry({ dedupeKey: `new:${i}` }));
   const outcome = await ledger.ingest([entry(), ...batch, ...batch]);
   assert.deepEqual(outcome, { created: 100, updated: 0, skipped: 101 });
-  assert.deepEqual({ selects, writes, locks }, { selects: 1, writes: 1, locks: 1 });
+  assert.deepEqual({ writes, locks }, { writes: 1, locks: 1 });
   assert.equal((await rows.byLoop(LOOP)).length, 101);
-  assert.ok(await rows.get("legacy"));
-  assert.equal(await rows.get(original.id), null);
 });
 
 test("conditional annotations reject changed source payloads even within the same clock tick", async (t) => {

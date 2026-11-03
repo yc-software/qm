@@ -19,7 +19,6 @@ function slackEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
     source: "slack",
     summary: "any update?",
     sourcePayload: {
-      source: "slack",
       title: "DM with Sam",
       from: "Sam",
       snippet: "any update?",
@@ -37,7 +36,6 @@ function gmailEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
     source: "gmail",
     summary: "contract question",
     sourcePayload: {
-      source: "gmail",
       title: "Contract question",
       from: "Ada",
       snippet: "contract question",
@@ -130,7 +128,6 @@ test("events in unrelated conversations or other sources queue nothing", async (
     slackEntry({
       dedupeKey: "C9:100.1",
       sourcePayload: {
-        source: "slack",
         title: "#eng",
         from: "Ada",
         snippet: "thread ask",
@@ -166,7 +163,6 @@ test("a thread reply reaches a channel card anchored at the thread root", async 
     slackEntry({
       dedupeKey: "C9:100.1",
       sourcePayload: {
-        source: "slack",
         title: "#eng",
         from: "Ada",
         snippet: "thread ask",

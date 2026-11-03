@@ -176,20 +176,12 @@ export function createPostgresMonitorRows(connectionString: string): MonitorRows
       await q(`DELETE FROM monitors WHERE tenant_id = qm_bound_tenant() AND id = $1`, [id]);
     },
     async enabled() {
-      const { rows } = await claimAcrossTenants(
-        connectionString,
-        `${SELECT} WHERE enabled ORDER BY created_at, tenant_id, id`,
-      );
+      const { rows } = await claimAcrossTenants(`${SELECT} WHERE enabled ORDER BY created_at, tenant_id, id`);
       return rows.map((r) => ({ ...rowToMonitor(r), tenantId: r.tenant_id as string }));
     },
     async deleteDisabledBefore(cutoff) {
-      return (
-        await claimAcrossTenants(
-          connectionString,
-          `DELETE FROM monitors WHERE NOT enabled AND ${LAST_ACTIVITY} <= $1`,
-          [cutoff],
-        )
-      ).rowCount;
+      return (await claimAcrossTenants(`DELETE FROM monitors WHERE NOT enabled AND ${LAST_ACTIVITY} <= $1`, [cutoff]))
+        .rowCount;
     },
   };
 }

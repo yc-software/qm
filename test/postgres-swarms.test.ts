@@ -1,7 +1,7 @@
-import { test, before, after } from "node:test";
+import { test as nodeTest, after, type TestContext, type TestOptions } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createPgPool, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
@@ -9,44 +9,18 @@ import { createSwarmStore, SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
 import { createPostgresSwarmRows, type SwarmRows } from "../src/swarms/swarm-table.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { seedTestTenants } from "./support/tenant-seed.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
-const baseUrl = process.env.DATABASE_URL;
-const schema = `swarm_test_${process.pid}`;
-const isolatedUrl = baseUrl ? new URL(baseUrl) : undefined;
-isolatedUrl?.searchParams.set("options", `-c search_path=${schema}`);
-const databaseUrl = isolatedUrl?.toString();
+const databaseUrl = process.env.DATABASE_URL;
 const opened: SwarmRows[] = [];
 const swarmRows = (): SwarmRows => {
   const rows = createPostgresSwarmRows(databaseUrl!);
   opened.push(rows);
   return rows;
 };
-before(async () => {
-  if (!baseUrl) return;
-  const { default: pg } = await import("pg");
-  const pool = new pg.Pool({ connectionString: baseUrl });
-  try {
-    await pool.query(`CREATE SCHEMA ${schema}`);
-    createPostgresSessionStore(databaseUrl!);
-    swarmRows();
-    await migrateRegisteredPgSchemas(databaseUrl!);
-  } finally {
-    await pool.end();
-  }
-  await seedTestTenants(databaseUrl!);
-});
-after(async () => {
-  if (!baseUrl) return;
-  await Promise.all(opened.map((rows) => rows.close?.()));
-  const { default: pg } = await import("pg");
-  const pool = new pg.Pool({ connectionString: baseUrl });
-  try {
-    await pool.query(`DROP SCHEMA ${schema} CASCADE`);
-  } finally {
-    await pool.end();
-  }
-});
+after(() => Promise.all(opened.map((rows) => rows.close?.())));
+const test = (name: string, options: TestOptions, fn: (context: TestContext) => Promise<void>) =>
+  nodeTest(name, options, (context) => inTestTenant(() => fn(context)));
 const skip = databaseUrl ? false : "set DATABASE_URL to a disposable Postgres database";
 
 test(
@@ -295,7 +269,7 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
     const recovered = (await store.get(initial.id))!;
     assert.equal(recovered.messages[0]!.notifications[member!.id]!.runId, notification.runId);
     const recoveredRun = (await restoredRuntime.runs.get(notification.runId!))!;
-    assert.ok(await sibling.binding({ ...recoveredRun.request, runId: recoveredRun.id, attempt: 1, background: true }));
+    assert.ok(await sibling.binding({ ...recoveredRun.request, runId: recoveredRun.id, attempt: 1 }));
     const session = await restoredSessions.get(recovered.members[1]!.sessionId!);
     assert.equal(session?.scopeId, initial.scopeId);
     assert.ok(await restoredSessions.getForParticipant(session!.id, "alice"));

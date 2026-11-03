@@ -261,7 +261,6 @@ export function createPostgresLoopRows(connectionString: string): LoopRows {
     },
     async staleGoverned(now) {
       const { rows } = await claimAcrossTenants(
-        connectionString,
         `${SELECT} WHERE governor ? 'staleFireMs' AND state = 'enabled'
            AND $1 - COALESCE(last_fired_at, created_at) > (governor->>'staleFireMs')::numeric
          ORDER BY tenant_id, id`,

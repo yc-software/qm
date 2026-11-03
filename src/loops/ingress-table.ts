@@ -246,17 +246,14 @@ export function createPostgresIngressSourceRows(connectionString: string): Ingre
       });
     },
     async enabled() {
-      return (
-        await claimAcrossTenants(connectionString, `${SELECT_SOURCE} WHERE enabled ORDER BY tenant_id, id`)
-      ).rows.map(tenantSource);
+      return (await claimAcrossTenants(`${SELECT_SOURCE} WHERE enabled ORDER BY tenant_id, id`)).rows.map(tenantSource);
     },
     async claim(id) {
-      const { rows } = await claimAcrossTenants(connectionString, `${SELECT_SOURCE} WHERE id = $1`, [id]);
+      const { rows } = await claimAcrossTenants(`${SELECT_SOURCE} WHERE id = $1`, [id]);
       return rows[0] ? tenantSource(rows[0]) : null;
     },
     async gmailWatching(email) {
       const { rows } = await claimAcrossTenants(
-        connectionString,
         `${SELECT_SOURCE} WHERE enabled AND kind = 'gmail' AND gmail_email = $1 ORDER BY tenant_id, id`,
         [email],
       );
@@ -297,11 +294,8 @@ export function createPostgresIngressDeliveryRows(connectionString: string): Ing
       });
     },
     async pruneCompleted(before) {
-      return (
-        await claimAcrossTenants(connectionString, `DELETE FROM loop_ingress_deliveries WHERE completed_at < $1`, [
-          before,
-        ])
-      ).rowCount;
+      return (await claimAcrossTenants(`DELETE FROM loop_ingress_deliveries WHERE completed_at < $1`, [before]))
+        .rowCount;
     },
     close,
   };

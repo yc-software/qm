@@ -201,18 +201,8 @@ test(
         assert.equal(first.sourcePayload?.snippet, "Hi there");
         assert.equal(first.inboxPreview?.title, "Hello");
         assert.deepEqual(first.runIds, []);
-        await store.items.delete([first.id]);
-        await store.items.insertIfAbsent({ ...first, id: "older-id" });
-        assert.deepEqual(
-          await store.items.idsBySourceKey("L1", ["t1", "t2", "missing"]),
-          [
-            { id: loopItemId("L1", "t2"), sourceKey: "t2" },
-            { id: "older-id", sourceKey: "t1" },
-          ].sort((a, b) => (a.id < b.id ? -1 : 1)),
-        );
         await ledger.ingest([entry("L1", "t1", { snippet: "newer" }), { ...entry("L1", "t1"), sourceAt: 2_000.25 }]);
-        assert.equal(await ledger.get(loopItemId("L1", "t1")), null);
-        assert.equal((await ledger.get("older-id"))?.sourceAt, 2_000.25);
+        assert.equal((await ledger.get(loopItemId("L1", "t1")))?.sourceAt, 2_000.25);
         const plain = await ledger.summaries(["L1"]);
         assert.equal(plain.length, 2);
         for (const row of plain)

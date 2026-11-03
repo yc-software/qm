@@ -13,7 +13,6 @@ export interface ItemRows {
   get(id: string): Promise<LoopItem | null>;
   byLoop(loopId: string): Promise<LoopItem[]>;
   summaries(loopIds: readonly string[], payloadKeys?: readonly string[]): Promise<ItemSummary[]>;
-  idsBySourceKey(loopId: string, sourceKeys: readonly string[]): Promise<Array<{ id: string; sourceKey: string }>>;
   lifecycle(loopId: string): Promise<ItemLifecycle[]>;
   queued(loopId: string, staleClaimBefore: number, limit?: number): Promise<LoopItem[]>;
   insertIfAbsent(item: LoopItem): Promise<boolean>;
@@ -224,15 +223,6 @@ export function createPostgresItemRows(connectionString: string): ItemRows {
         payloadKeys ? [[...loopIds], [...payloadKeys]] : [[...loopIds]],
       );
       return rows.map((row) => fromRow(row) as ItemSummary);
-    },
-    async idsBySourceKey(loopId, sourceKeys) {
-      if (!sourceKeys.length) return [];
-      const rows = await q(
-        `SELECT id, source_key FROM loop_items
-          WHERE ${MINE} AND loop_id = $1 AND source_key = ANY($2::text[]) ORDER BY id`,
-        [loopId, texts(sourceKeys)],
-      );
-      return rows.map((row) => ({ id: row.id as string, sourceKey: row.source_key as string }));
     },
     async lifecycle(loopId) {
       const rows = await q(

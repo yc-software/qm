@@ -240,20 +240,9 @@ export function createLoopItemLedger(
 
   const forLoop = (loopId: string): Promise<LoopItem[]> => rows.byLoop(loopId);
 
-  const idsFor = async (loopId: string, sourceKeys: readonly string[]): Promise<Map<string, string>> => {
-    const found = await rows.idsBySourceKey(loopId, [...new Set(sourceKeys)]);
-    const ids = new Map<string, string>();
-    for (const sourceKey of sourceKeys) {
-      const canonical = loopItemId(loopId, sourceKey);
-      const matches = found.filter((row) => row.sourceKey === sourceKey);
-      ids.set(sourceKey, matches.some((row) => row.id === canonical) ? canonical : (matches[0]?.id ?? canonical));
-    }
-    return ids;
-  };
-
   const ledger: LoopItemLedger = {
     async enqueue(input) {
-      const id = (await idsFor(input.loopId, [input.sourceKey])).get(input.sourceKey)!;
+      const id = loopItemId(input.loopId, input.sourceKey);
       const now = Date.now();
       const candidate: LoopItem = {
         id,
@@ -272,13 +261,11 @@ export function createLoopItemLedger(
     },
     async summaries(loopIds, options) {
       if (!options?.includeInboxMetadata) return rows.summaries(loopIds);
-      const items = await rows.summaries(loopIds, ["source", "automated", "participants", "slackAvatarsRefreshAt"]);
+      const items = await rows.summaries(loopIds, ["automated", "participants", "slackAvatarsRefreshAt"]);
       return items.map(({ sourcePayload, ...item }) => {
-        const source = item.source ?? (typeof sourcePayload?.source === "string" ? sourcePayload.source : undefined);
         return {
           ...item,
-          ...(source !== undefined ? { source } : {}),
-          ...(source === "slack"
+          ...(item.source === "slack"
             ? {
                 inboxPreview: {
                   ...item.inboxPreview,
@@ -287,7 +274,7 @@ export function createLoopItemLedger(
                 },
               }
             : {}),
-          ...(source === "gmail"
+          ...(item.source === "gmail"
             ? { inboxPreview: { ...item.inboxPreview, automated: sourcePayload?.automated === true } }
             : {}),
         };
@@ -296,19 +283,10 @@ export function createLoopItemLedger(
     async ingest(entries) {
       const outcome: IngestOutcome = { created: 0, updated: 0, skipped: 0 };
       if (!entries.length) return outcome;
-      const ids = new Map<string, Map<string, string>>();
-      for (const loopId of new Set(entries.map((entry) => entry.loopId)))
-        ids.set(
-          loopId,
-          await idsFor(
-            loopId,
-            entries.filter((entry) => entry.loopId === loopId).map((entry) => entry.dedupeKey),
-          ),
-        );
       const changed: LoopItem[] = [];
       await rows.mutateMany(
         entries.map((entry) => {
-          const id = ids.get(entry.loopId)!.get(entry.dedupeKey)!;
+          const id = loopItemId(entry.loopId, entry.dedupeKey);
           return {
             id,
             apply: (item: LoopItem | null): LoopItem => {

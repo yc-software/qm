@@ -15,6 +15,7 @@ import { testConfig } from "./support/test-config.ts";
 import { DeploymentLayerPersistedError } from "../src/deployment/deployment-layer-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "layer-routes-secret".repeat(3);
 const PATH = "/v1/deployment-layer";
@@ -179,7 +180,7 @@ test("GET distinguishes a poisoned stored revision from the prior durable revisi
     assert.equal(failedBody.ok, true);
     assert.equal(failedBody.status, "degraded");
     assert.match(failedBody.message, /poisoned skill store/);
-    const audits = await srv.auditLog.events();
+    const audits = await inTestTenant(() => srv.auditLog.events());
     assert.equal(
       audits.filter((event) => event.action === "deployment_layer.updated").length,
       2,
@@ -322,7 +323,9 @@ test("cross-tool credential collisions and unpaired surrogates are 400s", async 
 test("a skill collision racing after validation is accepted degraded and audited", async (t) => {
   const srv = start();
   try {
-    const record = await srv.deploymentLayerStore.put({ contract: 1, tools: [], skills: [] }, "setup");
+    const record = await inTestTenant(() =>
+      srv.deploymentLayerStore.put({ contract: 1, tools: [], skills: [] }, "setup"),
+    );
     t.mock.method(srv.deploymentLayerStore, "put", async () => {
       throw new DeploymentLayerPersistedError("deployment layer persisted but skills acme collide", record);
     });
@@ -336,7 +339,7 @@ test("a skill collision racing after validation is accepted degraded and audited
     assert.equal(body.status, "degraded");
     assert.match(body.message, /persisted but skills acme collide/);
 
-    const events = await srv.auditLog.events();
+    const events = await inTestTenant(() => srv.auditLog.events());
     assert.ok(
       events.some((event) => event.action === "deployment_layer.updated" && event.resource === body.contentHash),
     );

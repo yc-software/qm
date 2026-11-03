@@ -8,6 +8,18 @@ import { scopeId } from "../src/types.ts";
 import { testMap, testAdvisoryLock, testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testCronRows } from "./support/typed-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 test("crons persist to the backing map (a second store instance reads them back)", async () => {
   const map = testCronRows();
@@ -72,7 +84,7 @@ test("skill mutations reject names that could escape or collide when materialize
 
 test("deployments persist with immutable versions across store instances", async () => {
   const map = testMap<Deployment>();
-  const s1 = createDeployStore(testDeployBackings({ deployments: map }));
+  const s1 = tenantBound(createDeployStore(testDeployBackings({ deployments: map })));
   const d = await s1.create({
     ownerScopeId: scopeId("team", "T1"),
     createdBy: "U1",
@@ -81,7 +93,7 @@ test("deployments persist with immutable versions across store instances", async
   });
   await s1.addVersion(d.id, { entrypoint: "node server.js --v2", snapshotDir: "/snap/2" });
 
-  const s2 = createDeployStore(testDeployBackings({ deployments: map }));
+  const s2 = tenantBound(createDeployStore(testDeployBackings({ deployments: map })));
   const got = await s2.get(d.id);
   assert.equal(got?.versions.length, 2);
   assert.equal(got?.currentVersion, 2);

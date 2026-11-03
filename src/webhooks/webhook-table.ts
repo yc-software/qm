@@ -176,7 +176,6 @@ export function createPostgresWebhookRows(connectionString: string): WebhookRows
     },
     async claim(id) {
       const { rows } = await claimAcrossTenants(
-        connectionString,
         `SELECT tenant_id::text AS tenant_id, ${COLUMNS} FROM webhooks WHERE id = $1`,
         [id],
       );

@@ -1,6 +1,7 @@
 import type { CronFireLogEntry } from "../triggers/types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
+import { claimAcrossTenants } from "../tenants/claim.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 export interface CronFireRecord extends CronFireLogEntry {
@@ -117,7 +118,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
       });
     },
     async sweepStranded(now, staleRunningMs, note) {
-      const result = await query(
+      const result = await claimAcrossTenants(
         `UPDATE cron_fires
             SET status = 'failed', ended_at = $1, note = $2
           WHERE status = 'running' AND fired_at <= $3`,
@@ -126,7 +127,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
       return result.rowCount;
     },
     async pruneEnded({ endedBefore, keepPerCron }) {
-      const result = await query(
+      const result = await claimAcrossTenants(
         `DELETE FROM cron_fires cf
           USING (SELECT tenant_id, cron_id, fire_key,
                         ROW_NUMBER() OVER (PARTITION BY tenant_id, cron_id ORDER BY fired_at DESC, fire_key DESC) AS rn
@@ -136,7 +137,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
             AND cf.ended_at IS NOT NULL AND cf.ended_at < $2`,
         [keepPerCron, endedBefore],
       );
-      return result.rowCount;
+      return result.rowCount ?? 0;
     },
     async listByCron(cronId, opts) {
       if (opts?.limit !== undefined && opts.limit <= 0) {

@@ -168,7 +168,6 @@ export function createPostgresSwarmRows(connectionString: string): SwarmRows {
     },
     async pending(afterId, limit) {
       const { rows } = await claimAcrossTenants(
-        connectionString,
         `SELECT tenant_id::text AS tenant_id, ${COLUMNS} FROM swarms
           WHERE pending AND ($1::text IS NULL OR id > $1) ORDER BY id LIMIT $2`,
         [afterId ?? null, limit],

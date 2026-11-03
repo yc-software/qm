@@ -1,25 +1,15 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresEgressAuditSink } from "../src/admin/postgres-egress-audit-sink.ts";
 import { scopeId } from "../src/types.ts";
 import { settle } from "./support/settle.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres egress-audit tests";
 
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS egress_events CASCADE");
-  await p.end();
-});
-
-test(
-  "pg egress-audit sink: persists firewall decisions, filters by scope/source/since, newest-first",
-  { skip },
-  async (t) => {
+test("pg egress-audit sink: persists firewall decisions, filters by scope/source/since, newest-first", { skip }, (t) =>
+  inTestTenant(async () => {
     const sink = createPostgresEgressAuditSink(URL!);
     const s1 = scopeId("personal", "U1");
     const s2 = scopeId("personal", "U2");
@@ -73,11 +63,13 @@ test(
 
     const future = await sink.list({ since: Date.now() + 60_000, limit: 100 });
     assert.equal(future.length, 0, "nothing at/after a future cutoff");
-  },
+  }),
 );
 
-test("pg egress-audit sink: survives a fresh sink over the same table (durability)", { skip }, async () => {
-  const reopened = createPostgresEgressAuditSink(URL!);
-  const rows = await reopened.list({ limit: 100 });
-  assert.ok(rows.length >= 2, "decisions written by a prior sink instance are still readable");
-});
+test("pg egress-audit sink: survives a fresh sink over the same table (durability)", { skip }, () =>
+  inTestTenant(async () => {
+    const reopened = createPostgresEgressAuditSink(URL!);
+    const rows = await reopened.list({ limit: 100 });
+    assert.ok(rows.length >= 2, "decisions written by a prior sink instance are still readable");
+  }),
+);

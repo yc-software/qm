@@ -3,8 +3,13 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { deliveryCandidatesFor } from "../src/core/orchestrator/turn-helpers.ts";
 import { jsonbStringify } from "../src/util/text.ts";
-import { type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
-import { test } from "node:test";
+import {
+  createPostgresSessionMailbox,
+  type SessionMailbox,
+  type SessionMessage,
+} from "../src/sessions/session-mailbox.ts";
+import { testSessionMailbox } from "./support/typed-stores.ts";
+import { test as nodeTest, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import {
   createSessionSyscalls,
@@ -26,8 +31,12 @@ import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { testSessionMailbox } from "./support/typed-stores.ts";
-import { createPostgresSessionMailbox } from "../src/sessions/session-mailbox.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
+
+function test(name: string, fn: (t: TestContext) => void | Promise<void>): void {
+  nodeTest(name, (t) => inTestTenant(() => fn(t)));
+}
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -47,9 +56,10 @@ async function rig(opts?: {
   treeRunCap?: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }): Promise<Rig> {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const { runs } = createPostgresRunStore(url);
+  const signals = createPostgresRunSignalStore(url);
   const mailbox = testSessionMailbox();
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
@@ -289,10 +299,8 @@ test("read lists children with status and renders a child's recent transcript", 
   const opened = await syscalls.open({ task: "research callers", name: "research_callers" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id, "turn");
-  assert.ok(lease);
-  await r.sessions.append(lease!, { type: "assistant", payload: { text: "found 3 call sites" }, scopeLabel: scope });
-  await r.sessions.releaseLease(lease!);
+  const writer = { sessionId: child.id };
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "found 3 call sites" });
 
   const list = await syscalls.read({});
   assert.ok(list.ok && list.mode === "children");
@@ -345,9 +353,8 @@ test("a silent child mails a completed-without-reply notice without borrowing tr
   const opened = await r.syscallsFor(r.room).open({ task: "quiet work" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id, "turn");
-  await r.sessions.append(lease!, { type: "assistant", payload: { text: "halfway there" }, scopeLabel: scope });
-  await r.sessions.releaseLease(lease!);
+  const writer = { sessionId: child.id };
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "halfway there" });
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
   await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "silent" });
@@ -423,14 +430,8 @@ test("concurrent opens and wakes share one admission limit; a wake past it sends
 test("session reads hide history outside the viewer's participant tenure", async () => {
   const r = await rig();
   const target = await r.sessions.getOrCreateByThread("web:private-old", "dm", scope);
-  const { lease } = await r.sessions.acquireLease(target.id);
-  assert.ok(lease);
-  await r.sessions.append(lease, {
-    type: "assistant",
-    payload: { text: "hidden-before-membership" },
-    scopeLabel: scope,
-  });
-  await r.sessions.releaseLease(lease);
+  const writer = { sessionId: target.id };
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "hidden-before-membership" });
   await r.sessions.addParticipant(target.id, actor.id);
   const view = await r.syscallsFor(r.room).read({ target: target.id });
   assert.ok(view.ok && view.mode === "transcript");
@@ -475,7 +476,7 @@ test("terminal children remain recoverable until their return is acknowledged", 
   const [queued] = await r.runs.inFlightForThread(child.threadRef);
   const claimed = await r.runs.claimById(queued!.id, "worker", 30_000);
   await r.runs.complete(queued!.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  const [pending] = await r.runs.pendingReturns();
+  const [pending] = await withoutTenant(() => r.runs.pendingReturns());
   assert.equal(pending!.id, queued!.id);
   let failed = false;
   await assert.rejects(
@@ -496,7 +497,7 @@ test("terminal children remain recoverable until their return is acknowledged", 
     ),
   );
   assert.equal(failed, true);
-  assert.equal((await r.runs.pendingReturns()).length, 1);
+  assert.equal((await withoutTenant(() => r.runs.pendingReturns())).length, 1);
   await deliverSubagentMail(
     { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
     pending!,
@@ -520,7 +521,7 @@ test("terminal children remain recoverable until their return is acknowledged", 
     true,
   );
   await r.runs.markReturned(pending!.id);
-  assert.deepEqual(await r.runs.pendingReturns(), []);
+  assert.deepEqual(await withoutTenant(() => r.runs.pendingReturns()), []);
   assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
 });
 
@@ -573,12 +574,12 @@ test("return pagination reaches later children while earlier returns remain bloc
     const claimed = await r.runs.claimById(run.id, "worker", 30_000);
     await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
   }
-  const first = await r.runs.pendingReturns(100);
-  const next = await r.runs.pendingReturns(100, first.at(-1)!.id);
+  const first = await withoutTenant(() => r.runs.pendingReturns(100));
+  const next = await withoutTenant(() => r.runs.pendingReturns(100, first.at(-1)!.id));
   assert.equal(first.length, 100);
   assert.equal(next.length, 5);
   assert.equal(new Set([...first, ...next].map((run) => run.id)).size, 105);
-  assert.equal((await r.runs.pendingReturns(100, next.at(-1)!.id)).length, 0);
+  assert.equal((await withoutTenant(() => r.runs.pendingReturns(100, next.at(-1)!.id))).length, 0);
 });
 
 test("ordinary-session messages queue privately without steering an externally delivering turn", async () => {
@@ -673,7 +674,7 @@ test("completion cannot expand the finished run's audience and retries after its
   let expanded = true;
   let attempts = 0;
   const recover = async () => {
-    for (const pending of await r.runs.pendingReturns()) {
+    for (const pending of await withoutTenant(() => r.runs.pendingReturns())) {
       attempts++;
       try {
         if (
@@ -971,13 +972,8 @@ test("queued results recheck source-entry visibility after participant tenure ch
   const opened = await api.open({ task: "shared result" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id);
-  const entry = await r.sessions.append(lease!, {
-    type: "assistant",
-    payload: { text: "OLD_PRIVATE_RESULT" },
-    scopeLabel: sharedScope,
-  });
-  await r.sessions.releaseLease(lease!);
+  const writer = { sessionId: child.id };
+  const entry = await r.sessions.append(writer, { kind: "AgentMessage", text: "OLD_PRIVATE_RESULT" });
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   const claimed = await r.runs.claimById(run!.id, "child-worker", 30_000);
   await r.runs.complete(run!.id, claimed!.leaseToken!, {
@@ -992,7 +988,7 @@ test("queued results recheck source-entry visibility after participant tenure ch
   assert.equal((await api.receive!()).length, 1);
   await r.sessions.removeParticipant(child.id, other.id);
   await r.sessions.addParticipant(child.id, other.id);
-  assert.equal((await r.sessions.visibleEntries(child.id, other.id)).length, 0);
+  assert.equal((await r.sessions.visibleItems(child.id, other.id)).length, 0);
   assert.deepEqual(await api.receive!(), []);
   assert.equal((await r.mailbox.pending(shared.id)).length, 1);
 });
@@ -1375,7 +1371,7 @@ test("completed children do not fill a working parent's run slots and consumed r
     assert.equal(await deliverSubagentMail(deps, finished), false);
     assert.equal(await sessionTreeRunCount(r.sessions, r.runs, r.room), 1);
   }
-  const pending = await r.runs.pendingReturns();
+  const pending = await withoutTenant(() => r.runs.pendingReturns());
   assert.equal(pending.length, 12);
   let received = 0;
   while (received < 12) {
@@ -1389,7 +1385,7 @@ test("completed children do not fill a working parent's run slots and consumed r
     assert.equal(await deliverSubagentMail(deps, run), true);
     await r.runs.markReturned(run.id);
   }
-  assert.deepEqual(await r.runs.pendingReturns(), []);
+  assert.deepEqual(await withoutTenant(() => r.runs.pendingReturns()), []);
   assert.equal(await sessionTreeRunCount(r.sessions, r.runs, r.room), 1);
 });
 
@@ -1412,20 +1408,21 @@ test("unread completions survive parent shutdown and share one pending wakeup", 
     assert.equal(await deliverSubagentMail(deps, (await r.runs.get(run!.id))!), false);
   }
   await r.runs.complete(parent.run.id, active!.leaseToken!, { status: "silent" });
-  for (const run of await r.runs.pendingReturns()) assert.equal(await deliverSubagentMail(deps, run), false);
+  for (const run of await withoutTenant(() => r.runs.pendingReturns()))
+    assert.equal(await deliverSubagentMail(deps, run), false);
   const wakes = await r.runs.inFlightForThread(r.room.threadRef);
   assert.equal(wakes.length, 1);
   const wake = await r.runs.claimById(wakes[0]!.id, "parent-restarted", 60_000);
   const mail = await r.syscallsFor(r.room).receive!();
   assert.equal(mail.length, 3);
   await r.syscallsFor(r.room).acknowledge!(mail.map((message) => message.id));
-  for (const run of await r.runs.pendingReturns()) {
+  for (const run of await withoutTenant(() => r.runs.pendingReturns())) {
     assert.equal(await deliverSubagentMail(deps, run), true);
     await r.runs.markReturned(run.id);
   }
   assert.equal((await r.runs.get(wake!.id))!.status, "running");
   await r.runs.complete(wake!.id, wake!.leaseToken!, { status: "silent" });
-  assert.deepEqual(await r.runs.pendingReturns(), []);
+  assert.deepEqual(await withoutTenant(() => r.runs.pendingReturns()), []);
   assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
 });
 
@@ -1447,12 +1444,12 @@ test("legacy returned children with consumed mail release queued wakeups without
   });
   await r.mailbox.acknowledge(r.room.id, [`subagent-mail-${finished.id}`]);
   assert.deepEqual(
-    (await r.runs.pendingReturns()).map((pending) => pending.id),
+    (await withoutTenant(() => r.runs.pendingReturns())).map((pending) => pending.id),
     [finished.id],
   );
   assert.equal(await deliverSubagentMail(deps, finished), true);
   await r.runs.markReturned(finished.id);
-  assert.deepEqual(await r.runs.pendingReturns(), []);
+  assert.deepEqual(await withoutTenant(() => r.runs.pendingReturns()), []);
   assert.deepEqual(
     (await r.runs.inFlightForThread(r.room.threadRef)).map((pending) => pending.id),
     [user.run.id],
@@ -1478,7 +1475,7 @@ test("a completion wake that consumed mail and then retries retains its turn and
   await r.runs.markReturned(finished.id);
   assert.equal((await r.runs.get(wake.id))!.status, "pending");
   assert.equal((await r.runs.get(wake.id))!.attempts, 1);
-  assert.deepEqual(await r.runs.pendingReturns(), []);
+  assert.deepEqual(await withoutTenant(() => r.runs.pendingReturns()), []);
 });
 
 for (const addressed of [true, false]) {
@@ -1752,13 +1749,14 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const policies = { ext: access };
   const admitted = (request: OrchestratorInput) =>
     externalSlackRequestAllowed({ ...request, surface: request.surface ?? "" }, policies);
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const { runs } = createPostgresRunStore(url);
   const factory = createSessionSyscalls({
     mailbox: testSessionMailbox(),
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals: createPostgresRunSignalStore(url),
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
   });
@@ -1796,8 +1794,9 @@ test("children of a Slack group turn keep its source so external-workspace polic
 });
 
 test("sessions list shows only sidebar sessions the whole audience can see and create needs a live turn", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const { runs } = createPostgresRunStore(url);
   const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];
   const room = await sessions.getOrCreateByThread("web:U1:room", "dm", scope, undefined, "web");
   await sessions.updateTitle(room.id, "room");
@@ -1812,7 +1811,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     mailbox: testSessionMailbox(),
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals: createPostgresRunSignalStore(url),
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
     conversations: {

@@ -13,6 +13,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { testMonitorRows } from "./support/typed-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SCOPE = "personal:U1";
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
@@ -130,14 +131,16 @@ async function agent(opts?: {
   });
 
   fake.seed("p-1");
-  await processes.register({
-    processId: "p-1",
-    scopeId: SCOPE,
-    sandboxId: "sandbox-1",
-    kind: "background",
-    command: "bg: npm run build",
-    ttlMs: 600_000,
-  });
+  await inTestTenant(() =>
+    processes.register({
+      processId: "p-1",
+      scopeId: SCOPE,
+      sandboxId: "sandbox-1",
+      kind: "background",
+      command: "bg: npm run build",
+      ttlMs: 600_000,
+    }),
+  );
   const arm = (overrides: Record<string, unknown> = {}) =>
     monitors.create({
       owner: "U1",
@@ -289,7 +292,7 @@ test("exit wakes the agent once with the final output, disarms the watch, and ma
   assert.match(h.calls[0]?.text ?? "", /exited with code 0/);
   assert.match(h.calls[0]?.text ?? "", /all done/);
   assert.equal((await h.monitors.get(m.id))?.enabled, false);
-  assert.equal((await h.processes.get("p-1"))?.status, "exited");
+  assert.equal((await inTestTenant(() => h.processes.get("p-1")))?.status, "exited");
 
   await h.poller.tick();
   assert.equal(h.calls.length, 1);

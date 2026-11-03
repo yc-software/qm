@@ -10,33 +10,47 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 function agent(failRestore = false) {
   let applies = 0;
   let destroys = 0;
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore: createDeployStore(testDeployBackings()),
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => {
-        applies++;
-        if (failRestore && applies > 1) throw new Error("runtime unavailable");
-        return { host: "127.0.0.1", port: 20200 + applies };
+  const deploy = tenantBound(
+    createDeployService({
+      ...singleProcessDeps(),
+      deployStore: tenantBound(createDeployStore(testDeployBackings())),
+      provider: {
+        profile: { managedScaleToZero: false },
+        apply: async () => {
+          applies++;
+          if (failRestore && applies > 1) throw new Error("runtime unavailable");
+          return { host: "127.0.0.1", port: 20200 + applies };
+        },
+        destroy: async () => {
+          destroys++;
+        },
       },
-      destroy: async () => {
-        destroys++;
-      },
-    },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    deployDir: mkdtempSync(join(tmpdir(), "deploy-restore-")),
-  });
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      deployDir: mkdtempSync(join(tmpdir(), "deploy-restore-")),
+    }),
+  );
   return { deploy, counts: () => ({ applies, destroys }) };
 }
 
 function persistenceFailureHarness(failMethod: "setVersionImage" | "setEndpoint" | "setStatus" | "setAppliedVersion") {
-  const base = createDeployStore(testDeployBackings());
+  const base = tenantBound(createDeployStore(testDeployBackings()));
   let armed = false;
   let failed = false;
   const store = new Proxy(base, {
@@ -53,20 +67,22 @@ function persistenceFailureHarness(failMethod: "setVersionImage" | "setEndpoint"
   }) as DeployStore;
   let destroys = 0;
   let applies = 0;
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore: store,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 20300, image: `image:${++applies}` }),
-      destroy: async () => {
-        destroys++;
+  const deploy = tenantBound(
+    createDeployService({
+      ...singleProcessDeps(),
+      deployStore: store,
+      provider: {
+        profile: { managedScaleToZero: false },
+        apply: async () => ({ host: "127.0.0.1", port: 20300, image: `image:${++applies}` }),
+        destroy: async () => {
+          destroys++;
+        },
       },
-    },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    deployDir: mkdtempSync(join(tmpdir(), "deploy-restore-persistence-")),
-  });
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      deployDir: mkdtempSync(join(tmpdir(), "deploy-restore-persistence-")),
+    }),
+  );
   return {
     deploy,
     arm: () => {

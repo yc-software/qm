@@ -494,7 +494,6 @@ test("conversation events reopen a known item for others' messages, skip the own
       summary: "Can you send the deck?",
       sourceAt: 1000,
       sourcePayload: {
-        source: "gmail",
         title: "Deck",
         snippet: "Can you send the deck?",
         gmail: { threadId: "thread-1" },
