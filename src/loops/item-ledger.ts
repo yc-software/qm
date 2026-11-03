@@ -86,7 +86,6 @@ export interface LoopItemLedger {
   prune(loopId: string, options: PruneOptions): Promise<number>;
   get(id: string): Promise<LoopItem | null>;
   byLoop(loopId: string): Promise<LoopItem[]>;
-  moveSource(from: string, to: string, source: string): Promise<void>;
   summaries(
     loopIds: string[],
     options?: { includeInboxMetadata?: boolean },
@@ -256,28 +255,6 @@ export function createLoopItemLedger(
   };
 
   const ledger: LoopItemLedger = {
-    async moveSource(from, to, source) {
-      const targets = await forLoop(to);
-      for (const item of await forLoop(from)) {
-        if ((item.source ?? item.sourcePayload?.source) !== source) continue;
-        if (targets.some((target) => target.sourceKey === item.sourceKey && target.id !== item.id)) continue;
-        await update(item.id, (current) => {
-          if (
-            current.loopId !== from ||
-            current.status === "in_progress" ||
-            (current.decisionToken && (current.decisionAt ?? 0) + DECISION_LEASE_MS > Date.now())
-          )
-            return current;
-          return {
-            ...current,
-            source,
-            loopId: to,
-            previousLoopId: from,
-            inboxPreview: inboxPreview(current.sourcePayload),
-          };
-        });
-      }
-    },
     async enqueue(input) {
       const id = await idFor(input.loopId, input.sourceKey);
       const now = Date.now();
@@ -701,22 +678,14 @@ export function createLoopItemLedger(
     },
   };
   if (!coordination) return ledger;
-  const guarded = async <T>(ids: string[], fn: () => Promise<T>, check = true): Promise<T> => {
-    let run = async () => {
-      if (check)
-        for (const id of ids)
-          if (!(await coordination.accepts(id))) throw new Error("This Loop no longer accepts intake");
+  const guarded = <T>(loopId: string, fn: () => Promise<T>): Promise<T> =>
+    coordination.lock.withLock(`loop-intake:${loopId}`, async () => {
+      if (!(await coordination.accepts(loopId))) throw new Error("This Loop no longer accepts intake");
       return fn();
-    };
-    for (const id of [...new Set(ids)].sort().reverse()) {
-      const next = run;
-      run = () => coordination.lock.withLock(`loop-intake:${id}`, next);
-    }
-    return run();
-  };
+    });
   return {
     ...ledger,
-    enqueue: (input) => guarded([input.loopId], () => ledger.enqueue(input)),
+    enqueue: (input) => guarded(input.loopId, () => ledger.enqueue(input)),
     ingest: async (entries) => {
       const result = { created: 0, updated: 0, skipped: 0 };
       const groups = new Map<string, typeof entries>();
@@ -726,13 +695,12 @@ export function createLoopItemLedger(
         groups.set(entry.loopId, group);
       }
       for (const [loopId, group] of groups) {
-        const next = await guarded([loopId], () => ledger.ingest(group));
+        const next = await guarded(loopId, () => ledger.ingest(group));
         result.created += next.created;
         result.updated += next.updated;
         result.skipped += next.skipped;
       }
       return result;
     },
-    moveSource: (from, to, source) => guarded([from, to], () => ledger.moveSource(from, to, source), false),
   };
 }

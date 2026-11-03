@@ -44,6 +44,11 @@ export function withTenant<T>(id: string, fn: () => T): T {
   return bindTenant(id, fn);
 }
 
+export function tenantClaim(): { tenant?: string } {
+  const tenant = boundTenant();
+  return tenant === undefined ? {} : { tenant };
+}
+
 export function currentTenant(): string {
   const id = boundTenant();
   if (id === undefined) throw new Error("No tenant is bound to this work");

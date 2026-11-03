@@ -43,8 +43,14 @@ export interface ScopedRuntimeSelection extends RuntimeSelection {
 export interface ScopedConfigStore {
   refreshSecurity(ids: ScopeId[]): Promise<void>;
   getSoul(id: ScopeId): string | null;
-  setSoul(id: ScopeId, content: string, updatedBy?: string): Promise<number>;
-  setSoulIfVersion(id: ScopeId, expectedVersion: number, content: string, updatedBy?: string): Promise<number | null>;
+  setSoul(id: ScopeId, content: string, updatedBy?: string, sessionId?: string): Promise<number>;
+  setSoulIfVersion(
+    id: ScopeId,
+    expectedVersion: number,
+    content: string,
+    updatedBy?: string,
+    sessionId?: string,
+  ): Promise<number | null>;
   soulVersion(id: ScopeId): number;
   soulHistory(id: ScopeId): SoulRevision[];
   getCommandPolicy(id: ScopeId): CommandPolicy | null;

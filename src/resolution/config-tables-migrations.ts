@@ -72,9 +72,9 @@ const scopeBackfill = ([table, columns]: [string, Record<string, string>]) => {
 };
 
 const soulRevisionsFrom = (source: string, scope: string, revision: string, where: string) =>
-  `INSERT INTO soul_revisions(scope_id, version, content, updated_at, updated_by)
+  `INSERT INTO soul_revisions(scope_id, version, content, updated_at, updated_by, session_id)
     SELECT ${scope}, (${revision}->>'version')::integer, ${revision}->>'content',
-      ${at(`${revision}->>'updatedAt'`)}, ${revision}->>'updatedBy'
+      ${at(`${revision}->>'updatedAt'`)}, ${revision}->>'updatedBy', ${revision}->>'sessionId'
     ${source} WHERE ${where} ON CONFLICT DO NOTHING`;
 
 const ORG_ROW = (table: string) => `(SELECT json FROM ${table} WHERE id LIKE 'org:%' LIMIT 1)`;
@@ -120,6 +120,7 @@ const CREATE_TABLES = [
      content TEXT NOT NULL,
      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
      updated_by TEXT,
+     session_id TEXT,
      PRIMARY KEY (scope_id, version)
    )`,
   `CREATE TABLE purpose_runtimes(

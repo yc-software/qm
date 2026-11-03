@@ -1,3 +1,4 @@
+import type { Claimed } from "../tenants/claim.ts";
 import type { GoalCreateInput } from "../agent/goal.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
@@ -108,7 +109,7 @@ export interface SwarmStore {
   get(id: string): Promise<Swarm | null>;
   create(swarm: Swarm, fence?: SwarmRunFence): Promise<Swarm>;
   update(id: string, mutate: (swarm: Swarm) => void, fence?: SwarmRunFence): Promise<Swarm>;
-  pending(afterId?: string): Promise<Swarm[]>;
+  pending(afterId?: string): Promise<Array<Claimed<Swarm>>>;
 }
 
 export interface SwarmStorage extends Omit<Swarm, "members" | "messages"> {

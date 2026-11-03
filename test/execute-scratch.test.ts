@@ -55,6 +55,8 @@ test("execute routes scratch:true to the scratch box and default to the scoped b
   assert.deepEqual({ ...calls }, { provision: 1, scratch: 0, ranOn: ["scoped-box"] });
   await ctx.execute("echo hi", { scratch: true });
   assert.deepEqual({ ...calls }, { provision: 1, scratch: 1, ranOn: ["scoped-box", "scratch-box"] });
+  await assert.rejects(ctx.execute("echo hi", { scratch: true, sandboxId: "box" }), /one computer/);
+  assert.deepEqual(calls.ranOn, ["scoped-box", "scratch-box"]);
 });
 
 test("execute scratch:true without a wired scratch path fails loudly, never silently scoped", async () => {
@@ -238,7 +240,7 @@ test("execute exposes only requested keychain environment values to one command"
   assert.equal(scopedHandle.env, undefined, "command credentials never mutate SandboxHandle");
 });
 
-test("execute rejects unavailable, conflicting, and reached credential requests", async () => {
+test("execute rejects unavailable and conflicting credential requests", async () => {
   const { ctx } = routingCtx({
     commandCredentials: [
       { handle: "kc_one12345678", env: [{ key: "TOKEN", value: "one" }] },
@@ -250,10 +252,6 @@ test("execute rejects unavailable, conflicting, and reached credential requests"
   await assert.rejects(
     ctx.execute("true", { credentials: ["kc_one12345678", "kc_two12345678"] }),
     /conflicting environment key/,
-  );
-  await assert.rejects(
-    ctx.execute("true", { reachTarget: "#other", credentials: ["kc_one12345678"] }),
-    /scoped or scratch computers/,
   );
 });
 

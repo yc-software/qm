@@ -137,12 +137,20 @@ test("refreshScope carries a write from one core to another", { skip }, async ()
     const a = await store(tenant);
     const b = await store(tenant);
     await withTenant(tenant, async () => {
-      await a.setSoul(channel, "fresh");
+      await a.setSoul(channel, "first", "U1", "session-a");
+      await a.setSoulIfVersion(channel, 1, "fresh", "U1", "session-b");
       await a.setEgress(channel, { allowedHosts: ["x.example"] });
       assert.equal(b.getSoul(channel), null);
       await b.refreshScope(channel);
       await b.refreshScope(org);
       assert.equal(b.getSoul(channel), "fresh");
+      assert.deepEqual(
+        b.soulHistory(channel).map(({ version, sessionId }) => ({ version, sessionId })),
+        [
+          { version: 2, sessionId: "session-b" },
+          { version: 1, sessionId: "session-a" },
+        ],
+      );
       assert.deepEqual(b.getEgress(channel), { allowedHosts: ["x.example"] });
     });
   });

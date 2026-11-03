@@ -57,23 +57,36 @@ export function soulMethods(
   const { org, tables } = ctx;
   const baseVersion = (id: ScopeId) => (id === org ? 1 : 0);
   const current = (id: ScopeId) => ctx.cached().souls.get(id)?.[0];
-  const revision = (id: ScopeId, content: string, version: number, updatedBy?: string): SoulRevision => ({
+  const revision = (
+    id: ScopeId,
+    content: string,
+    version: number,
+    updatedBy?: string,
+    sessionId?: string,
+  ): SoulRevision => ({
     scopeId: id,
     content,
     version,
     updatedAt: Date.now(),
     ...(updatedBy ? { updatedBy } : {}),
+    ...(sessionId ? { sessionId } : {}),
   });
   return {
     getSoul: (id) => current(id)?.content ?? (id === org ? DEFAULT_ORG_SOUL : null),
     soulVersion: (id) => current(id)?.version ?? baseVersion(id),
     soulHistory: (id) => (ctx.cached().souls.get(id) ?? []).map((r) => ({ ...r })),
-    setSoul(id, content, updatedBy) {
+    setSoul(id, content, updatedBy, sessionId) {
       return ctx.queue(`scope:${id}`, async () => {
         for (;;) {
           const [latest] = await tables.soulRevisions(1, [id]);
           const expected = Math.max(latest?.version ?? 0, baseVersion(id));
-          if (await tables.appendSoul(revision(id, content, expected + 1, updatedBy), expected, baseVersion(id))) {
+          if (
+            await tables.appendSoul(
+              revision(id, content, expected + 1, updatedBy, sessionId),
+              expected,
+              baseVersion(id),
+            )
+          ) {
             ctx.markWritten(id);
             await ctx.reloadSouls(id);
             return expected + 1;
@@ -81,9 +94,9 @@ export function soulMethods(
         }
       });
     },
-    setSoulIfVersion(id, expectedVersion, content, updatedBy) {
+    setSoulIfVersion(id, expectedVersion, content, updatedBy, sessionId) {
       return ctx.queue(`scope:${id}`, async () => {
-        const next = revision(id, content, expectedVersion + 1, updatedBy);
+        const next = revision(id, content, expectedVersion + 1, updatedBy, sessionId);
         if (!(await tables.appendSoul(next, expectedVersion, baseVersion(id)))) return null;
         ctx.markWritten(id);
         await ctx.reloadSouls(id);

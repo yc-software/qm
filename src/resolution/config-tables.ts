@@ -51,6 +51,7 @@ export interface SoulRevision {
   version: number;
   updatedAt: number;
   updatedBy?: string;
+  sessionId?: string;
 }
 
 export interface SlackEmojiCatalog {

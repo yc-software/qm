@@ -195,6 +195,7 @@ const SOUL_ROW = z.object({
   version: z.number(),
   updated_at: z.date(),
   updated_by: text,
+  session_id: text,
 });
 
 const soulFromRow = (row: Row): SoulRevision => {
@@ -205,6 +206,7 @@ const soulFromRow = (row: Row): SoulRevision => {
     version: r.version,
     updatedAt: r.updated_at.getTime(),
     updatedBy: r.updated_by,
+    sessionId: r.session_id,
   });
 };
 
@@ -259,12 +261,12 @@ const EMOJI_ROW = z.object({ emoji: z.record(z.string(), z.string()), updated_at
 const SCOPE_SELECT = `SELECT scope_id, ${SCOPE_COLUMNS.join(", ")} FROM scope_settings WHERE ${TENANT}`;
 const SCOPE_UPDATE = `UPDATE scope_settings SET ${SCOPE_COLUMNS.map((c, i) => `${c} = $${i + 2}`).join(", ")}
   WHERE ${TENANT} AND scope_id = $1`;
-const soulSelect = (scoped: boolean) => `SELECT scope_id, version, content, updated_at, updated_by FROM (
+const soulSelect = (scoped: boolean) => `SELECT scope_id, version, content, updated_at, updated_by, session_id FROM (
     SELECT *, row_number() OVER (PARTITION BY scope_id ORDER BY version DESC) AS rank
     FROM soul_revisions WHERE ${TENANT}${scoped ? " AND scope_id = ANY($2)" : ""}
   ) ranked WHERE rank <= $1 ORDER BY scope_id, version DESC`;
-const SOUL_APPEND = `INSERT INTO soul_revisions(scope_id, version, content, updated_at, updated_by)
-  SELECT $1, $2, $3, to_timestamp($4::double precision / 1000), $5
+const SOUL_APPEND = `INSERT INTO soul_revisions(scope_id, version, content, updated_at, updated_by, session_id)
+  SELECT $1, $2, $3, to_timestamp($4::double precision / 1000), $5, $8
   WHERE GREATEST(COALESCE((SELECT max(version) FROM soul_revisions WHERE ${TENANT} AND scope_id = $1), 0), $7) = $6
   ON CONFLICT DO NOTHING RETURNING version`;
 const CONNECTOR_COLUMNS = `scope_id, provider, client_id, secret_enc, scopes, redirect_allowlist, consent_mode,
@@ -292,7 +294,16 @@ export function createPostgresConfigTables(databaseUrl: string): ConfigTables {
     soulRevisions: async (perScope, ids) =>
       (await (ids ? db.q(soulSelect(true), [perScope, ids]) : db.q(soulSelect(false), [perScope]))).map(soulFromRow),
     async appendSoul(r, expectedVersion, baseVersion) {
-      const params = [r.scopeId, r.version, r.content, r.updatedAt, r.updatedBy ?? null, expectedVersion, baseVersion];
+      const params = [
+        r.scopeId,
+        r.version,
+        r.content,
+        r.updatedAt,
+        r.updatedBy ?? null,
+        expectedVersion,
+        baseVersion,
+        r.sessionId ?? null,
+      ];
       return (await db.q(SOUL_APPEND, params)).length === 1;
     },
     async purposeRuntimes() {

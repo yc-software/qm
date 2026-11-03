@@ -12,8 +12,6 @@ import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "turns-union-")) }));
@@ -275,11 +273,7 @@ test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: name
   });
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
-    headers: {
-      ...signedHeaders(SECRET, "POST", "/v1/turns", body),
-      "content-type": "application/json",
-      "x-portal-identity": await mintPortalIdentity({ t: TEST_TENANT, p: "U1", exp: Date.now() + 60_000 }, SECRET),
-    },
+    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
     body,
   });
   assert.equal(r.status, 400);
