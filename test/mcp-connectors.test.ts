@@ -11,6 +11,7 @@ import type { AddressInfo } from "node:net";
 import { settle } from "./support/settle.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { installPrincipalLinks, UnattestableActor } from "../src/directory/person.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {
@@ -267,6 +268,33 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
     lists + 1,
     "refresh drops the cache and parallel lookups share one listing",
   );
+  service.close();
+});
+
+test("attested connectors send one canonical person and never call for an actor QM can't attest", async (t) => {
+  installPrincipalLinks({
+    canonical: (key) => (key === "alice@example.com" || key === "U_ALICE" ? "U_ALICE" : undefined),
+    aliases: () => [],
+  });
+  t.after(() => installPrincipalLinks(null));
+  const mcp = await startMcpTestServer(t, {
+    tools: [{ name: "find-record", description: "Find a record", inputSchema: { type: "object" } }],
+  });
+  const store = createMcpServerStore(testMap<McpServer>());
+  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 3600_000 });
+  await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
+  await service.refresh();
+  for (const person of ["alice@example.com", "U_ALICE"])
+    await service.call("records", { operation: "invoke", tool: "find-record", arguments: {} }, person);
+  assert.ok(mcp.requests.length > 0);
+  assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U_ALICE"]));
+  const sent = mcp.requests.length;
+  for (const person of ["jörg@example.com", "x".repeat(257)])
+    await assert.rejects(
+      service.call("records", { operation: "search" }, person),
+      (error: unknown) => error instanceof UnattestableActor && /POST \/v1\/admin\/principal-links/.test(error.message),
+    );
+  assert.equal(mcp.requests.length, sent);
   service.close();
 });
 

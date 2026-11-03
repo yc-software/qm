@@ -10,7 +10,7 @@ import { withTenant } from "../src/tenants/context.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy upgrade test";
-const TENANCY = /^0000-tenancy\/|-tenants$|^sessions\/store\/(0048|0049|0050)-/;
+const TENANCY = /^0000-tenancy\/|-tenants$|^sessions\/store\/005[01]-/;
 
 async function withSchema(fn: (url: string, db: pg.Pool) => Promise<void>): Promise<void> {
   const schema = `upgrade_${randomUUID().replaceAll("-", "")}`;
@@ -67,19 +67,31 @@ test(
         { display_name: "A" },
         { display_name: "B" },
       ]);
-      assert.equal((await db.query("SELECT to_regclass('qm_tenant') AS t")).rows[0].t, null);
       const grants = createPostgresGrantStore(url);
       assert.equal((await withTenant(instance, () => grants.all())).length, 1);
     });
   },
 );
 
-test("a fresh database ends with no tenant row", { skip }, async () => {
+test("rows that cannot name their one tenant stop the upgrade instead of picking one", { skip }, async () => {
   await withSchema(async (url, db) => {
-    createPostgresSessionStore(url);
-    createPostgresRunStore(url);
     createPostgresGrantStore(url);
-    await migrateRegisteredPgSchemas(url);
-    assert.deepEqual((await db.query("SELECT count(*)::int AS n FROM tenants")).rows, [{ n: 0 }]);
+    await applyPgMigrations(
+      db,
+      registeredPgMigrations(url).filter((m) => !TENANCY.test(m.id)),
+    );
+    await db.query(`INSERT INTO acl_grants VALUES ('personal:a', 'p', 'personal:b', 'read', 'a')`);
+    await applyPgMigrations(
+      db,
+      registeredPgMigrations(url).filter((m) => m.id.startsWith("0000-tenancy/")),
+    );
+    await db.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'one', 'One'), ($2, 'two', 'Two')`, [
+      randomUUID(),
+      randomUUID(),
+    ]);
+    await assert.rejects(
+      migrateRegisteredPgSchemas(url),
+      /Rows in acl_grants need a tenant, but this database has 2 tenants/,
+    );
   });
 });

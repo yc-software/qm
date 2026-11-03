@@ -1,33 +1,40 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { uuidSchema } from "../util/ids.ts";
 
-const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const TENANT_ID = uuidSchema.lowercase();
 
-const bound = new AsyncLocalStorage<string>();
+const binding = new AsyncLocalStorage<string | undefined>();
+const pinned = new AsyncLocalStorage<{ tenant: string | undefined }>();
 
-function tenantId(id: string): string {
-  const normalized = id.toLowerCase();
-  if (!TENANT_ID.test(normalized)) throw new Error(`Invalid tenant id: ${JSON.stringify(id)}`);
-  return normalized;
+export function isTenantId(value: unknown): value is string {
+  return TENANT_ID.safeParse(value).success;
 }
 
 export function withTenant<T>(id: string, fn: () => T): T {
-  return bound.run(tenantId(id), fn);
+  if (!isTenantId(id)) throw new Error(`Tenant id must be a lowercase uuid, got ${JSON.stringify(id)}`);
+  return bind(id, fn);
 }
 
 export function withoutTenant<T>(fn: () => T): T {
-  return bound.exit(fn);
+  return bind(undefined, fn);
 }
 
-export function enterTenant(id: string): void {
-  bound.enterWith(tenantId(id));
+export function pinTenant<T>(fn: () => T): T {
+  return pinned.run({ tenant: binding.getStore() }, fn);
+}
+
+function bind<T>(id: string | undefined, fn: () => T): T {
+  const pin = pinned.getStore();
+  if (pin && pin.tenant !== id) throw new Error("A transaction is already open for another tenant");
+  return binding.run(id, fn);
 }
 
 export function boundTenant(): string | undefined {
-  return bound.getStore();
+  return binding.getStore();
 }
 
 export function currentTenant(): string {
-  const id = bound.getStore();
-  if (!id) throw new Error("No tenant is bound to this operation");
+  const id = binding.getStore();
+  if (id === undefined) throw new Error("No tenant is bound to this work");
   return id;
 }

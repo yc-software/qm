@@ -8,12 +8,13 @@ import { orgScope } from "../src/config.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { applyTenantImport, tenantImport, type OperatorCall } from "../cli/src/tenant-import.ts";
 import { buildApp } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
-const SLUG = `t-${TEST_TENANT.slice(-12)}`;
+const [TEST_TENANT] = testTenants();
+const SLUG = "test-0";
 
 test("the CLI import lands in the named tenant through core's operator routes and keeps admin edits", async () => {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));

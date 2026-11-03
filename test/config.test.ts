@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { loadConfig, CONFIG_DEFAULTS } from "../src/config.ts";
 import { boolEnv, numEnv } from "../src/util/env.ts";
 
+const RENDER_IMAGE = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
+
 const productionEnv = {
   NODE_ENV: "production",
   CORE_SIGNING_SECRET: "core-signing-secret-0123456789abcdef",
@@ -628,4 +630,12 @@ test("the security screen timeout defaults to 15 seconds and accepts only positi
       /SECURITY_SCREEN_TIMEOUT_MS must be a positive integer/,
     );
   }
+});
+
+test("RENDER_SANDBOX_IMAGE must be tagged and digest-pinned", () => {
+  assert.equal(loadConfig({ RENDER_SANDBOX_IMAGE: RENDER_IMAGE }).renderSandbox.image, RENDER_IMAGE);
+  assert.throws(
+    () => loadConfig({ RENDER_SANDBOX_IMAGE: RENDER_IMAGE.replace(/:[0-9a-f]{40}@/, "@") }),
+    /must be <repository>:<tag>@sha256:<digest>/,
+  );
 });

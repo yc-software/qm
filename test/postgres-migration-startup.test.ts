@@ -1,29 +1,23 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import test from "node:test";
 import { databaseLoginEnv } from "../cli/src/database-logins.ts";
 import pg from "pg";
 import { createPgPool, migrateRegisteredPgSchemas, PG_MIGRATIONS_TABLE } from "../src/persistence/pg-pool.ts";
+import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = !databaseUrl;
 const exec = promisify(execFile);
 
 async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
-  const parent = new pg.Pool({ connectionString: databaseUrl });
-  const name = `migration_startup_${randomUUID().replaceAll("-", "")}`;
-  await parent.query(`CREATE DATABASE ${name}`);
-  const url = new URL(databaseUrl!);
-  url.pathname = `/${name}`;
-  const admin = new pg.Pool({ connectionString: url.toString() });
+  const url = testBareDatabaseUrl();
+  const admin = new pg.Pool({ connectionString: url });
   try {
-    await run(url.toString(), admin);
+    await run(url, admin);
   } finally {
     await admin.end();
-    await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
-    await parent.end();
   }
 }
 

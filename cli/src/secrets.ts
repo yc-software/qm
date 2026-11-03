@@ -344,13 +344,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: MINT_LOCALLY,
   },
   {
-    name: "CORE_SIGNING_SECRET",
-    service: "admin",
-    required: true,
-    description: "HMAC key shared by core and surface plugins.",
-    generate: MINT_LOCALLY,
-  },
-  {
     name: "OIDC_CLIENT_ID",
     service: "portal",
     required: {
@@ -413,13 +406,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "PORTAL_IDENTITY_SECRET",
     service: "web-ui",
-    required: true,
-    description: "Signing key shared with core for portal-bound user identity.",
-    generate: MINT_LOCALLY,
-  },
-  {
-    name: "PORTAL_IDENTITY_SECRET",
-    service: "admin",
     required: true,
     description: "Signing key shared with core for portal-bound user identity.",
     generate: MINT_LOCALLY,
@@ -528,7 +514,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     service: "core",
     required: false,
     description:
-      "Sender for external-user invitations sent from the admin Users tab or by chatting with QM; the same verified sender the sign-in broker uses.",
+      "Sender for external-user invitations sent from the Users settings page or by chatting with QM; the same verified sender the sign-in broker uses.",
   },
   {
     name: "RESEND_API_KEY",
@@ -544,7 +530,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     service: "core",
     required: false,
     description:
-      "Lets core email invitations to external users, added from the admin Users tab or by chatting with QM, through Resend.",
+      "Lets core email invitations to external users, added from the Users settings page or by chatting with QM, through Resend.",
   },
   {
     name: "SMTP_HOST",

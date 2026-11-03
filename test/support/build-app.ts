@@ -11,9 +11,11 @@ import {
 } from "../../src/tenants/settings.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockAgent } from "./mock-agent.ts";
-import { TEST_TENANT } from "./tenant.ts";
+import { testTenants } from "./test-tenants.ts";
 import { migrateSettings, seedSettingsTenants, settingsDatabase } from "./tenant-settings.ts";
 import { TEST_ADMIN_GRANTS } from "./test-database.ts";
+
+const [TEST_TENANT] = testTenants();
 
 export const TEST_TENANT_SETTINGS: TenantSettingValues = {
   SECURITY_SCREEN: "enforce",

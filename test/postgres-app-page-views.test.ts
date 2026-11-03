@@ -1,9 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAppPageViewLog } from "../src/deploy/page-views.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const view = () => ({

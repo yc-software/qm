@@ -1,22 +1,27 @@
-import { createPgPool } from "../../src/persistence/pg-pool.ts";
+import pg from "pg";
+import { applyPgMigrations, definePgMigration } from "../../src/persistence/pg-pool.ts";
 import { TENANCY_BASE } from "../../src/tenants/migrations.ts";
+import { testTenants } from "./test-tenants.ts";
 
-export const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
-export const OTHER_TENANT = "00000000-0000-4000-8000-000000000002";
-
-export async function seedTenant(url: string, id = TEST_TENANT): Promise<void> {
-  const db = createPgPool(url, [TENANCY_BASE]);
+export async function seedTestTenants(databaseUrl: string): Promise<void> {
+  const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
   try {
-    await db.q(`INSERT INTO tenants(id, slug, name) VALUES ($1, $2, $2) ON CONFLICT (id) DO NOTHING`, [
-      id,
-      `t-${id.slice(-12)}`,
-    ]);
+    await applyPgMigrations(pool, [definePgMigration(TENANCY_BASE)]);
+    for (const [index, id] of testTenants().entries()) {
+      await pool.query("INSERT INTO tenants(id, slug, name) VALUES ($1, $2, $2)", [id, `test-${index}`]);
+    }
   } finally {
-    await db.close();
+    await pool.end();
   }
 }
 
-export async function seedTestTenants(url: string): Promise<void> {
-  await seedTenant(url, TEST_TENANT);
-  await seedTenant(url, OTHER_TENANT);
+export async function recreateTenantSchema(databaseUrl: string): Promise<void> {
+  const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+  try {
+    await pool.query("DROP SCHEMA public CASCADE");
+    await pool.query("CREATE SCHEMA public");
+  } finally {
+    await pool.end();
+  }
+  await seedTestTenants(databaseUrl);
 }

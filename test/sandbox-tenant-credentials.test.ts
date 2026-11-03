@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { FIFTH_TENANT, FOURTH_TENANT, testSettingsStore, THIRD_TENANT } from "./support/tenant-settings.ts";
-import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +33,8 @@ import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+
+const [TEST_TENANT, OTHER_TENANT] = testTenants();
 
 interface FakeClient {
   readonly nativePause?: boolean;

@@ -1,7 +1,6 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import pg from "pg";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
@@ -20,13 +19,11 @@ import { materializeGrant } from "./support/materialize-grant.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { testTenantsSeeded } from "./support/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
 
 before(async () => {
-  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
@@ -317,8 +314,7 @@ test("pg map: original folded-index migration upgrades without changing its ledg
     await factory.pool.q(
       "DELETE FROM qm_schema_migrations WHERE id LIKE 'durable-map/map_wide_widgets/%' AND id <> 'durable-map/map_wide_widgets/0001'",
     );
-    const migrator = new pg.Pool({ connectionString: URL });
-    await applyPgMigrations(migrator, [legacy]).finally(() => migrator.end());
+    await applyPgMigrations(await factory.pool.pool(), [legacy]);
     const ledger = await factory.pool.q("SELECT * FROM qm_schema_migrations WHERE id = $1", [legacy.id]);
     const indexed = factory.map<{ owner: string }>("map_wide_widgets", ["owner"]);
     const owner = randomBytes(3000).toString("hex");

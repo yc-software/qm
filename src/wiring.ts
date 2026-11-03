@@ -20,6 +20,7 @@ import {
   type StoredRenderScratch,
 } from "./sandbox/render-sandbox.ts";
 import { createSdkRenderClient } from "./sandbox/render-client.ts";
+import { createRenderBase, type RenderBase, type StoredRenderBase } from "./sandbox/render-base.ts";
 import { renderSandboxProblem } from "./sandbox/render-limits.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
@@ -127,8 +128,7 @@ import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
-import { estimateCostUsd, type BudgetTracker } from "./ratelimit/budget.ts";
-import type { SecurityScreenProbe } from "./security/security-screener.ts";
+import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
@@ -427,7 +427,6 @@ export interface BuiltApp {
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
-  screenSecurity?: SecurityScreenProbe;
   deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
@@ -852,6 +851,30 @@ export function buildApp(
   const renderBodies = artifactMap<StoredRenderSandbox>("render_sandbox_bodies");
   const renderScratch = artifactMap<StoredRenderScratch>("render_scratch_bodies");
   const renderCleanup = artifactMap<StoredRenderCleanup>("render_sandbox_cleanup");
+  const renderImage = config.renderSandbox.image;
+  const renderBase = renderImage
+    ? createRenderBase({
+        client: tenantClients.render((apiKey, workspaceId) => createSdkRenderClient({ apiKey, workspaceId })),
+        store: artifactMap<StoredRenderBase>("render_sandbox_bases"),
+        image: renderImage,
+        hold: (work) => leaderLease.hold(`render:sandbox-base:${currentTenant()}:${renderImage}`, work),
+        onError: sandboxOnError,
+      })
+    : undefined;
+  const renderBasePreparing = new AbortController();
+  const renderBasePrepared = new Set<string>();
+  const tenantRenderBase = (base: RenderBase): RenderBase => ({
+    prepare: base.prepare,
+    ready(onStatus) {
+      if (!renderBasePrepared.has(currentTenant())) {
+        renderBasePrepared.add(currentTenant());
+        void base
+          .prepare(renderBasePreparing.signal)
+          .catch(reportFailureAs("render-base: prepare the golden snapshot", undefined));
+      }
+      return base.ready(onStatus);
+    },
+  });
   const e2bClient = (use: "computers" | "apps", apiKey: string): E2bClient => {
     const e2b = config.e2bSandbox;
     const ttlSec = use === "apps" ? E2B_DEPLOY_IDLE_TIMEOUT_SEC : e2b.sandboxTtlSec;
@@ -1064,10 +1087,11 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       onError: sandboxOnError,
     });
-  const buildRender = (): Sandbox => {
+  const buildRender = (base: RenderBase): Sandbox => {
     const render = config.renderSandbox;
     return createRenderSandbox(workspace, {
       client: tenantClients.render((apiKey, workspaceId) => createSdkRenderClient({ apiKey, workspaceId })),
+      base: tenantRenderBase(base),
       ...(render.defaultTimeoutSec !== undefined ? { defaultTimeoutSec: render.defaultTimeoutSec } : {}),
       store: renderBodies,
       scratchStore: renderScratch,
@@ -1083,7 +1107,9 @@ export function buildApp(
       onError: sandboxOnError,
     });
   };
-  const renderProblem = renderSandboxProblem(config.workspaceStore, config.renderSandbox.defaultTimeoutSec);
+  const renderProblem = renderBase
+    ? renderSandboxProblem(config.workspaceStore, config.renderSandbox.defaultTimeoutSec)
+    : "render requires RENDER_SANDBOX_IMAGE";
   const superserveTemplate = config.superserveSandbox.template;
   const buildBackend: Partial<Record<SandboxBackendName, () => Sandbox>> = {
     ...(config.localSandbox.image ? { local: buildLocal } : {}),
@@ -1094,7 +1120,7 @@ export function buildApp(
     ...(config.awsSandbox.s3Bucket ? { aws: buildAws } : {}),
     ...(config.porterSandbox.token ? { porter: buildPorter } : {}),
     agent37: buildAgent37,
-    ...(renderProblem ? {} : { render: buildRender }),
+    ...(renderBase && !renderProblem ? { render: () => buildRender(renderBase) } : {}),
     ...(superserveTemplate ? { superserve: () => buildSuperserve(superserveTemplate) } : {}),
     "do-managed-agents": buildManagedAgents,
   };
@@ -2160,18 +2186,6 @@ export function buildApp(
   const channelPolicy: ChannelPolicyStore = createPostgresChannelPolicyStore(databaseUrl);
   const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
-  const screenSecurity: SecurityScreenProbe | undefined = agent.screenSecurity
-    ? ({ payload, modelId, systemPrompt, actorId, signal }) =>
-        agent.screenSecurity!({
-          payload,
-          modelId,
-          systemPrompt,
-          signal,
-          recordModelCall: (rec) => {
-            void budget?.record(actorId, estimateCostUsd(rec.inputTokens));
-          },
-        })
-    : undefined;
   const app = createApp({
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
@@ -2234,7 +2248,6 @@ export function buildApp(
     ...(agent.judge
       ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal) }
       : {}),
-    ...(screenSecurity ? { screenSecurity } : {}),
     ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
     ambientJudgments,
     ackEmojiPicks,
@@ -2840,6 +2853,7 @@ export function buildApp(
     },
     releaseInFlightRuns,
     async stop() {
+      renderBasePreparing.abort();
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
@@ -2876,7 +2890,6 @@ export function buildApp(
     checkReadiness: async (signal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
     },
-    ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
@@ -3009,7 +3022,6 @@ export function serverDeps(
     replayDedupe: built.replayDedupe,
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
-    ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
     baseModelDefault: built.baseModelDefault,
     modelCredentials: built.modelCredentials,
     userModelCredentials: built.userModelCredentials,

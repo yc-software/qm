@@ -1,121 +1,56 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 
-export const TENANT = "qm_bound_tenant()";
-const MATCH = `tenant_id = ${TENANT}`;
-
-const TENANT_FUNCTIONS = [
-  `CREATE OR REPLACE FUNCTION qm_tenant_unbound() RETURNS uuid LANGUAGE plpgsql STABLE PARALLEL SAFE
-     AS $qm_tenant_unbound$ BEGIN
-       RAISE 'No tenant is bound to this transaction' USING ERRCODE = 'insufficient_privilege';
-     END $qm_tenant_unbound$`,
-  `CREATE OR REPLACE FUNCTION qm_bound_tenant() RETURNS uuid LANGUAGE sql STABLE PARALLEL SAFE
-     AS $qm_bound_tenant$ SELECT COALESCE(NULLIF(current_setting('qm.tenant_id', true), '')::uuid, qm_tenant_unbound()) $qm_bound_tenant$`,
-];
-
-function grantsWhereAllowed(statements: readonly string[]): string {
-  return `DO $qm_grants$ DECLARE statement text; BEGIN
-     FOREACH statement IN ARRAY ARRAY[${statements.join(", ")}] LOOP
-       BEGIN
-         EXECUTE statement;
-       EXCEPTION WHEN insufficient_privilege THEN
-         RAISE WARNING 'Skipped % (%)', statement, SQLERRM;
-       END;
-     END LOOP;
-   END $qm_grants$`;
-}
-
 export const TENANCY_BASE: PgMigrationDefinition = {
   id: "0000-tenancy/base",
   statements: [
-    `DO $qm_logins$ BEGIN
-       IF current_user IN ('qm_app', 'qm_reader') THEN
-         RAISE 'Migrations must run as the owner login, not %', current_user;
-       END IF;
-       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qm_app') THEN
-         BEGIN
-           CREATE ROLE qm_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-         EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL;
-         END;
-       END IF;
-       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qm_reader') THEN
-         BEGIN
-           CREATE ROLE qm_reader LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-         EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL;
-         END;
-       END IF;
-       IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname IN ('qm_app', 'qm_reader') AND (rolsuper OR rolbypassrls)) THEN
-         RAISE 'qm_app and qm_reader must not bypass row-level security';
-       END IF;
-     END $qm_logins$`,
     `CREATE TABLE IF NOT EXISTS tenants(
-       id UUID PRIMARY KEY,
-       slug TEXT NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9][a-z0-9-]*$'),
-       name TEXT NOT NULL,
-       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-     )`,
-    ...["tenants", "qm_schema_migrations"].flatMap((table) => [
-      `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
-      `DROP POLICY IF EXISTS read_only ON ${table}`,
-      `CREATE POLICY read_only ON ${table} FOR SELECT TO qm_app, qm_reader USING (true)`,
-    ]),
-    grantsWhereAllowed([
-      `format('GRANT USAGE ON SCHEMA %I TO qm_app, qm_reader', current_schema())`,
-      `format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO qm_app', current_schema())`,
-      `format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO qm_reader', current_schema())`,
-      `format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I TO qm_app', current_schema())`,
-      `'ALTER DEFAULT PRIVILEGES GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO qm_app'`,
-      `'ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO qm_reader'`,
-      `'ALTER DEFAULT PRIVILEGES GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO qm_app'`,
-      `'ALTER DEFAULT PRIVILEGES GRANT USAGE ON SCHEMAS TO qm_app, qm_reader'`,
-    ]),
-    ...TENANT_FUNCTIONS,
-    `CREATE OR REPLACE FUNCTION qm_tenant_column(target regclass) RETURNS void LANGUAGE plpgsql
-     AS $qm_tenant_column$
-     DECLARE
-       populated boolean;
-       present boolean;
-       tenant uuid;
-       tenant_count bigint;
-     BEGIN
-       EXECUTE format('SELECT EXISTS (SELECT 1 FROM %s)', target) INTO populated;
-       SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = target AND attname = 'tenant_id' AND NOT attisdropped)
-         INTO present;
-       IF populated THEN
-         SELECT count(*), min(id::text)::uuid INTO tenant_count, tenant FROM tenants;
-         IF tenant_count = 0 THEN
-           IF to_regclass('qm_tenant') IS NOT NULL THEN
-             EXECUTE 'SELECT id FROM qm_tenant' INTO tenant;
-           END IF;
-           INSERT INTO tenants(id, slug, name) VALUES (COALESCE(tenant, gen_random_uuid()), 'main', 'Main')
-             RETURNING id INTO tenant;
-         ELSIF tenant_count > 1 AND NOT present THEN
-           RAISE 'Rows in % need a tenant but this database has % tenants', target, tenant_count;
-         END IF;
-       END IF;
-       IF NOT present AND populated THEN
-         EXECUTE format('ALTER TABLE %s ADD COLUMN tenant_id UUID NOT NULL DEFAULT %L', target, tenant);
-       ELSIF NOT present THEN
-         EXECUTE format('ALTER TABLE %s ADD COLUMN tenant_id UUID NOT NULL', target);
-       END IF;
-       EXECUTE format('ALTER TABLE %s ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()', target);
-       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = target AND contype = 'f'
-                        AND confrelid = 'tenants'::regclass) THEN
-         EXECUTE format('ALTER TABLE %s ADD FOREIGN KEY (tenant_id) REFERENCES tenants', target);
-       END IF;
-     END $qm_tenant_column$`,
-    grantsWhereAllowed([`'REVOKE ALL ON FUNCTION qm_tenant_column(regclass) FROM PUBLIC'`]),
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      slug TEXT NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9][a-z0-9-]*$'),
+      name TEXT NOT NULL CHECK (name <> ''),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE OR REPLACE FUNCTION qm_bound_tenant() RETURNS uuid LANGUAGE plpgsql STABLE PARALLEL SAFE AS $qm_bound_tenant$
+DECLARE
+  bound text := current_setting('qm.tenant_id', true);
+BEGIN
+  IF bound IS NULL OR bound = '' THEN
+    RAISE insufficient_privilege USING MESSAGE = 'No tenant is bound to this query';
+  END IF;
+  RETURN bound::uuid;
+END $qm_bound_tenant$`,
   ],
 };
 
 function tenantPolicies(table: string): string[] {
   return [
+    `ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()`,
+    `ALTER TABLE ${table} ADD CONSTRAINT ${table}_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)`,
     `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
-    `DROP POLICY IF EXISTS tenant_app ON ${table}`,
-    `DROP POLICY IF EXISTS tenant_reader ON ${table}`,
-    `CREATE POLICY tenant_app ON ${table} FOR ALL TO qm_app USING (${MATCH}) WITH CHECK (${MATCH})`,
-    `CREATE POLICY tenant_reader ON ${table} FOR SELECT TO qm_reader USING (${MATCH})`,
+    `CREATE POLICY tenant_isolation ON ${table}
+       USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())`,
   ];
 }
+
+export const TENANT = "qm_bound_tenant()";
+
+const tenantColumn = (table: string): string => `DO $tenant_column$
+DECLARE
+  tenant uuid;
+  tenant_count bigint;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM ${table}) THEN
+    ALTER TABLE ${table} ADD COLUMN tenant_id UUID NOT NULL;
+    RETURN;
+  END IF;
+  SELECT count(*), min(id::text)::uuid INTO tenant_count, tenant FROM tenants;
+  IF tenant_count = 0 AND to_regclass('qm_tenant') IS NOT NULL THEN
+    EXECUTE 'SELECT id FROM qm_tenant' INTO tenant;
+    INSERT INTO tenants(id, slug, name) VALUES (tenant, tenant::text, tenant::text);
+  ELSIF tenant_count <> 1 THEN
+    RAISE EXCEPTION 'Rows in ${table} need a tenant, but this database has % tenants', tenant_count;
+  END IF;
+  EXECUTE format('ALTER TABLE ${table} ADD COLUMN tenant_id UUID NOT NULL DEFAULT %L', tenant);
+END $tenant_column$`;
 
 interface TenantIndex {
   name: string;
@@ -123,14 +58,14 @@ interface TenantIndex {
   where?: string;
 }
 
-export interface TenantTable {
+interface TenantTable {
   table: string;
   primaryKey?: string;
   unique?: readonly (TenantIndex & { constraint?: boolean })[];
   replacesOrgId?: readonly TenantIndex[];
 }
 
-export interface TenantForeignKey {
+interface TenantForeignKey {
   table: string;
   name: string;
   columns: string;
@@ -139,20 +74,16 @@ export interface TenantForeignKey {
 }
 
 const indexOn = (table: string, { name, columns, where }: TenantIndex, unique = false): string =>
-  `CREATE ${unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${name} ON ${table}(tenant_id, ${columns})${where ? ` WHERE ${where}` : ""}`;
+  `CREATE ${unique ? "UNIQUE " : ""}INDEX ${name} ON ${table}(tenant_id, ${columns})${where ? ` WHERE ${where}` : ""}`;
 
-function tenantTableStatements({ table, primaryKey, unique = [], replacesOrgId }: TenantTable): string[] {
+function typedTableStatements({ table, primaryKey, unique = [], replacesOrgId }: TenantTable): string[] {
   return [
-    `SELECT qm_tenant_column('${table}')`,
+    tenantColumn(table),
     ...(replacesOrgId
       ? [
-          `DO $qm_one_org$ BEGIN
-             IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '${table}'::regclass AND attname = 'org_id') THEN
-               DELETE FROM ${table} WHERE org_id IS DISTINCT FROM
-                 (SELECT org_id FROM ${table} GROUP BY org_id ORDER BY count(*) DESC, org_id LIMIT 1);
-             END IF;
-           END $qm_one_org$`,
-          `ALTER TABLE ${table} DROP COLUMN IF EXISTS org_id`,
+          `DELETE FROM ${table} WHERE org_id IS DISTINCT FROM
+             (SELECT org_id FROM ${table} GROUP BY org_id ORDER BY count(*) DESC, org_id LIMIT 1)`,
+          `ALTER TABLE ${table} DROP COLUMN org_id`,
         ]
       : []),
     ...(primaryKey === undefined
@@ -186,7 +117,7 @@ export function tenantTables(
       `SET LOCAL lock_timeout = '5s'`,
       ...before,
       ...foreignKeys.map(({ table, name }) => `ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${name}`),
-      ...tables.flatMap(tenantTableStatements),
+      ...tables.flatMap(typedTableStatements),
       ...foreignKeys.map(
         ({ table, name, columns, references, onDelete }) =>
           `ALTER TABLE ${table} ADD CONSTRAINT ${name} FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${onDelete ? ` ON DELETE ${onDelete}` : ""}`,
@@ -195,116 +126,6 @@ export function tenantTables(
     ],
   };
 }
-
-const SPEND_TRIGGERS = [
-  `CREATE OR REPLACE FUNCTION invalidate_request_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_request_spend$
-   BEGIN
-     INSERT INTO session_spend_dirty(tenant_id, day)
-     SELECT DISTINCT tenant, floor(at::numeric / 86400000)::bigint
-       FROM (VALUES
-         (CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.tenant_id END,
-          CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.created_at END),
-         (CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.tenant_id END,
-          CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.created_at END)
-       ) changed(tenant, at) WHERE at IS NOT NULL
-     ON CONFLICT DO NOTHING;
-     RETURN NULL;
-   END $invalidate_request_spend$`,
-  `CREATE OR REPLACE FUNCTION invalidate_session_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_session_spend$
-   BEGIN
-     IF TG_OP = 'UPDATE' AND ROW(OLD.id, OLD.scope_id, OLD.origin, OLD.thread_ref, OLD.parent_session_id)
-          IS NOT DISTINCT FROM ROW(NEW.id, NEW.scope_id, NEW.origin, NEW.thread_ref, NEW.parent_session_id) THEN
-       RETURN NULL;
-     END IF;
-     INSERT INTO session_spend_dirty(tenant_id, session_id)
-     SELECT DISTINCT tenant, id FROM (VALUES (OLD.tenant_id, OLD.id), (NEW.tenant_id, NEW.id)) changed(tenant, id)
-      WHERE id IS NOT NULL;
-     RETURN NULL;
-   END $invalidate_session_spend$`,
-];
-
-const ITEM_SEARCH = [
-  `DO $qm_search_items$ BEGIN
-     EXECUTE format($create$
-       CREATE OR REPLACE FUNCTION qm_search_items(query tsquery) RETURNS TABLE(session_id text, seq bigint)
-         LANGUAGE sql STABLE SECURITY DEFINER SET search_path = %I, pg_temp
-         AS $body$ SELECT i.session_id, i.seq FROM items i WHERE i.tenant_id = qm_bound_tenant() AND i.search @@ query $body$
-     $create$, current_schema());
-   END $qm_search_items$`,
-  grantsWhereAllowed([
-    `'REVOKE ALL ON FUNCTION qm_search_items(tsquery) FROM PUBLIC'`,
-    `'GRANT EXECUTE ON FUNCTION qm_search_items(tsquery) TO qm_app, qm_reader'`,
-  ]),
-];
-
-export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
-  {
-    id: "sessions/store/0048-tenants",
-    statements: [
-      `SET LOCAL lock_timeout = '5s'`,
-      ...TENANT_FUNCTIONS,
-      `SELECT qm_tenant_column('items')`,
-      `SELECT qm_tenant_column('blobs')`,
-      ...tenantPolicies("items"),
-      ...tenantPolicies("blobs"),
-      `DO $qm_tenant_seed$ BEGIN
-         IF to_regclass('qm_tenant') IS NOT NULL THEN
-           INSERT INTO tenants(id, slug, name) SELECT id, 'main', 'Main' FROM qm_tenant
-            WHERE EXISTS (SELECT 1 FROM sessions) AND NOT EXISTS (SELECT 1 FROM tenants);
-         END IF;
-       END $qm_tenant_seed$`,
-      `DROP FUNCTION IF EXISTS qm_tenant_id()`,
-      `DROP TABLE IF EXISTS qm_tenant`,
-    ],
-  },
-  tenantTables(
-    "sessions/store/0049-tenant-sessions",
-    [
-      {
-        table: "sessions",
-        primaryKey: "id",
-        unique: [{ name: "sessions_thread_ref_key", columns: "thread_ref", constraint: true }],
-      },
-      { table: "participants", primaryKey: "session_id, principal_id" },
-      { table: "session_goals", primaryKey: "session_id" },
-      { table: "session_leases", primaryKey: "session_id" },
-      { table: "session_llm_requests", primaryKey: "id" },
-      { table: "session_pins", primaryKey: "id" },
-      { table: "session_spend_days", primaryKey: "day" },
-      {
-        table: "session_spend_dirty",
-        unique: [{ name: "session_spend_dirty_day_writer_key", columns: "day, writer", constraint: true }],
-      },
-      { table: "llm_prompt_envelopes", primaryKey: "hash" },
-    ],
-    {
-      foreignKeys: [
-        {
-          table: "session_goals",
-          name: "session_goals_session_id_fkey",
-          columns: "session_id",
-          references: "sessions(tenant_id, id)",
-          onDelete: "CASCADE",
-        },
-        {
-          table: "items",
-          name: "items_session_id_fkey",
-          columns: "session_id",
-          references: "sessions(tenant_id, id)",
-          onDelete: "CASCADE",
-        },
-      ],
-      after: [...SPEND_TRIGGERS, ...ITEM_SEARCH, `DROP TABLE IF EXISTS qm_settings`],
-    },
-  ),
-  {
-    id: "sessions/store/0050-agent-reply-index",
-    statements: [
-      `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_agent_reply
-         ON items(tenant_id, session_id, created_at DESC) WHERE kind = 'AgentMessage'`,
-    ],
-  },
-];
 
 export const FEATURE_FLAGS_MIGRATION: PgMigrationDefinition = {
   id: "tenants/0002-feature-flags",
@@ -318,7 +139,7 @@ export const FEATURE_FLAGS_MIGRATION: PgMigrationDefinition = {
        END IF;
      END $qm_flags$`,
     `CREATE TABLE IF NOT EXISTS feature_flags(
-       tenant_id UUID NOT NULL DEFAULT qm_bound_tenant() REFERENCES tenants ON DELETE CASCADE,
+       tenant_id UUID NOT NULL,
        feature_name TEXT NOT NULL,
        enabled_scopes TEXT[] NOT NULL DEFAULT '{}',
        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -327,9 +148,11 @@ export const FEATURE_FLAGS_MIGRATION: PgMigrationDefinition = {
      )`,
     `DO $qm_flags_copy$ BEGIN
        IF to_regclass('feature_flags_json') IS NOT NULL THEN
-         PERFORM qm_tenant_column('feature_flags_json');
+         IF EXISTS (SELECT 1 FROM feature_flags_json) AND (SELECT count(*) FROM tenants) <> 1 THEN
+           RAISE EXCEPTION 'Feature flags need a tenant, but this database has % tenants', (SELECT count(*) FROM tenants);
+         END IF;
          INSERT INTO feature_flags(tenant_id, feature_name, enabled_scopes, updated_at, updated_by)
-           SELECT tenant_id, id,
+           SELECT (SELECT id FROM tenants), id,
                   ARRAY(SELECT jsonb_array_elements_text(COALESCE(json->'enabledScopes', '[]'::jsonb))),
                   to_timestamp(COALESCE((json->>'updatedAt')::double precision, 0) / 1000),
                   COALESCE(json->>'updatedBy', '')
@@ -350,7 +173,7 @@ export const TENANT_SETTINGS_MIGRATION: PgMigrationDefinition = {
   statements: [
     `SET LOCAL lock_timeout = '5s'`,
     `CREATE TABLE tenant_settings(
-         tenant_id UUID PRIMARY KEY DEFAULT qm_bound_tenant() REFERENCES tenants ON DELETE CASCADE,
+         tenant_id UUID PRIMARY KEY,
          model_provider TEXT,
          pi_model TEXT,
          pi_detect_model TEXT,

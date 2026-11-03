@@ -52,6 +52,7 @@ export function createConfiguredMemoryService(opts: {
     providers[provider.id] = createMcpMemoryProvider({
       read: operation(provider.url, provider.read, provider.timeoutMs),
       ...(provider.write ? { write: operation(provider.url, provider.write, provider.timeoutMs) } : {}),
+      attestActor: provider.attestActor,
     });
   }
   return createRoutedMemoryService({

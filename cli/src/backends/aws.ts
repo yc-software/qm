@@ -381,7 +381,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
   const coreUrl = `http://core.${aws.networking.cloudMapNamespace}:8080`;
   const coreEnv = service === "core" ? virtualServiceEnv(config.services, config.env) : {};
   const env: Record<string, string> = {
-    ...serviceUrlEnv(service, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+    ...serviceUrlEnv(service, config.publicUrl, brandEnvOf(config)),
     ...(service === "core"
       ? {}
       : {
@@ -417,7 +417,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
   }
   if (service === "portal") {
     env.WEB_UI_UPSTREAM = `http://web-ui.${aws.networking.cloudMapNamespace}:8080`;
-    env.ADMIN_UPSTREAM = `http://web-ui.${aws.networking.cloudMapNamespace}:8080/admin`;
     env.PORTAL_XFF_TRUSTED_HOPS = "1";
   }
   if (config.services.includes("auth")) {
@@ -429,7 +428,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       }),
     );
   }
-  if (config.services.includes("portal") && (service === "web-ui" || service === "admin")) {
+  if (config.services.includes("portal") && service === "web-ui") {
     env.REQUIRE_SIGNED_PORTAL_IDENTITY = "1";
   }
   env[def.docker.portEnv] = String(def.docker.internalPort);
@@ -456,7 +455,7 @@ function workloadEnvironment(
       ...(plugin?.coreAccess === false
         ? {}
         : { CORE_API_URL: `http://core.${requireAws(config).networking.cloudMapNamespace}:8080` }),
-      ...serviceUrlEnv(workload, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+      ...serviceUrlEnv(workload, config.publicUrl, brandEnvOf(config)),
       ...plugin?.env,
       PORT: "8080",
     }).sort(([a], [b]) => a.localeCompare(b)),
@@ -1953,7 +1952,7 @@ function unchangedWebRouting(
         definition,
       ]).taskDefinition;
       const next = desired.find((item) => item.service === workload)!.task;
-      const keys = workload === "portal" ? ["WEB_UI_UPSTREAM", "ADMIN_UPSTREAM"] : ["ADMIN_ENABLED"];
+      const keys = workload === "portal" ? ["WEB_UI_UPSTREAM"] : [];
       const settings = (task: Record<string, unknown> | undefined): string[] | undefined => {
         const containers = task?.containerDefinitions as Array<Record<string, unknown>> | undefined;
         const matches = containers?.filter((container) => container.name === workload);
@@ -3557,11 +3556,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
         );
         affected.splice(affected.indexOf("core"), 1);
       }
-      for (const [component, host, marker, expected] of [
-        ["admin", "web-ui", "ADMIN_ENABLED", "1"],
-        ["auth", "portal", "AUTH_EMBEDDED", "1"],
-        ["admin", "portal", "ADMIN_UPSTREAM", serviceEnvironment(config, "portal").ADMIN_UPSTREAM],
-      ] as const) {
+      for (const [component, host, marker, expected] of [["auth", "portal", "AUTH_EMBEDDED", "1"]] as const) {
         if (!config.services.includes(component) || !workloads.includes(host)) continue;
         const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
           "ecs",

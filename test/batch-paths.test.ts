@@ -7,9 +7,6 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 for (const backend of ["memory", "postgres"] as const) {
   const skip = backend === "postgres" && !process.env.DATABASE_URL;

@@ -39,7 +39,7 @@ import {
   secretDestinations,
   secretsForService,
 } from "../secrets.ts";
-import { manifestRef } from "../manifest.ts";
+import { isPlaceholderRef, manifestRef } from "../manifest.ts";
 import { CONNECTIVITY_CODES, CoreUnreachableError, type DeploymentLayerTransport } from "../deployment-layer.ts";
 import { FLY_APP_NOT_FOUND, fly, secretNames, stageSecret } from "./fly-cli.ts";
 import { ensureFlyPostgres } from "./fly-postgres.ts";
@@ -51,7 +51,6 @@ const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: str
     appPrefix,
     deployAppPrefix,
     publicUrl: config.publicUrl,
-    hasPortal: config.services.includes("portal"),
     hasAuth: config.services.includes("auth"),
     ...(brand ? { brand } : {}),
     coreUrl: `http://${appPrefix}-core.internal:8080`,
@@ -622,7 +621,7 @@ function imageSourceFor(ctx: FlyCtx, opts: FlyUpOpts): ImageSource | undefined {
   return { kind: "manifest" };
 }
 
-const SAFE_AFTER_CORE = new Set<ServiceName>(["web-ui", "admin", "auth"]);
+const SAFE_AFTER_CORE = new Set<ServiceName>(["web-ui", "auth"]);
 
 export function flyDeployPhases(services: ServiceName[]): ServiceName[][] {
   const phases: ServiceName[][] = [];
@@ -824,14 +823,13 @@ function pluginTomlContent(
   flyOrg: string,
   deploymentId: string,
   publicUrl: string,
-  hasPortal: boolean,
   region: string,
   plugin: ResolvedPlugin,
   brand?: BrandEnv,
 ): string {
   const env: Record<string, string> = {
     ...(plugin.coreAccess === false ? {} : { CORE_API_URL: `http://${appPrefix}-core.internal:8080` }),
-    ...serviceUrlEnv(plugin.name, publicUrl, hasPortal, brand),
+    ...serviceUrlEnv(plugin.name, publicUrl, brand),
     PORT: "8080",
     ...plugin.env,
     [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(flyOrg, deploymentId, appPrefix),
@@ -857,7 +855,6 @@ export function derivedPluginTomlFor(config: QmConfig, plugin: ResolvedPlugin): 
     config.flyOrg ?? "",
     config.deploymentId,
     config.publicUrl,
-    config.services.includes("portal"),
     config.region ?? "",
     plugin,
     brandEnvOf(config),
@@ -874,7 +871,6 @@ function writePluginDerived(ctx: FlyCtx, plugin: ResolvedPlugin): string {
       ctx.flyOrg,
       ctx.deploymentId,
       ctx.config.publicUrl,
-      ctx.config.services.includes("portal"),
       ctx.region,
       plugin,
       brandEnvOf(ctx.config),
@@ -1534,7 +1530,7 @@ export async function flyCheckLive(
     if (firstParty.has(workload)) {
       const configured = config.imageOverrides[workload as ServiceName];
       const packaged = configured ? undefined : manifestRef(workload as ServiceName);
-      const expected = configured ?? (packaged?.includes("registry.invalid") ? undefined : packaged);
+      const expected = configured ?? (packaged && isPlaceholderRef(packaged) ? undefined : packaged);
       const expectedDigest = expected?.match(/@(?<digest>sha256:[a-f0-9]{64})$/)?.groups?.["digest"];
       let imageDetails: FlyImageDetail[] = [];
       if (expectedDigest && machines.some((machine) => !machine.config?.image?.includes("@sha256:"))) {
@@ -1582,7 +1578,6 @@ export async function flyCheckLive(
             ctx.flyOrg,
             ctx.deploymentId,
             config.publicUrl,
-            config.services.includes("portal"),
             ctx.region,
             plugin!,
             brandEnvOf(config),

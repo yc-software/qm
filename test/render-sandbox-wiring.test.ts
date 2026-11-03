@@ -4,8 +4,10 @@ import { buildApp } from "../src/wiring.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { TenantSettingMissingError } from "../src/tenants/settings.ts";
 import { testTenantSettings } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
 import { testConfig } from "./support/test-config.ts";
+
+const [TEST_TENANT] = testTenants();
 
 test("Render sandboxes can start without S3 storage configuration", async () => {
   const built = buildApp(
@@ -13,6 +15,7 @@ test("Render sandboxes can start without S3 storage configuration", async () => 
       workspaceStore: "postgres",
       snapshotStore: "local",
       s3Bucket: undefined,
+      renderSandbox: { image: `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}` },
     }),
     {
       tenantSettings: testTenantSettings({

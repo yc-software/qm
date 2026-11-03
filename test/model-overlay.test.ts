@@ -4,10 +4,9 @@ import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
-import { enterTenant } from "../src/tenants/context.ts";
 import type { Config } from "../src/config.ts";
 import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
@@ -356,7 +355,6 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
     });
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-  enterTenant(TEST_TENANT);
   setProviderBaseUrls(TEST_TENANT, { anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` });
   try {
     setModelOverlays([
@@ -498,7 +496,6 @@ test("model refresh is limited to dependent routes and admin repair survives sta
 test("overlay resolution preserves canonical personal endpoints and upstream builtin metadata", () => {
   setModelOverlays([validateModelOverlay(spec)]);
   const canonical = getRequiredModel(MODEL_ID, false).baseUrl;
-  enterTenant(TEST_TENANT);
   setProviderBaseUrls(TEST_TENANT, { openai: "http://127.0.0.1:19999/v1" });
   try {
     assert.equal(getRequiredModel(MODEL_ID).baseUrl, "http://127.0.0.1:19999/v1");
@@ -513,6 +510,8 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { wantsFastMode } from "../src/model/model-runtime.ts";
+
+const [TEST_TENANT] = testTenants();
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = testConfigStore("default-org");

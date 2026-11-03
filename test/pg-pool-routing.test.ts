@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createPgPool, configurePgPooling } from "../src/persistence/pg-pool.ts";
-import { randomUUID } from "node:crypto";
-import { withTenant } from "../src/tenants/context.ts";
 
 const direct = process.env.DATABASE_URL;
 const pooled = process.env.DATABASE_POOL_URL;
@@ -28,27 +26,6 @@ test("stores share the query pool and closing one does not close another", { ski
   } finally {
     await a.close();
     await b.close();
-  }
-});
-
-test("a tenant binding stays inside its own transaction on a shared pooled server connection", { skip }, async () => {
-  const a = createPgPool(direct!);
-  const tenants = [randomUUID(), randomUUID(), undefined];
-  const probe = "SELECT pg_backend_pid() AS pid, current_setting('qm.tenant_id', true) AS tenant";
-  try {
-    const seen = await Promise.all(
-      Array.from({ length: 30 }, (_, index) => {
-        const tenant = tenants[index % 3];
-        return tenant ? withTenant(tenant, () => a.q(probe)) : a.q(probe);
-      }),
-    );
-    assert.equal(new Set(seen.map((rows) => rows[0]!.pid)).size, 1);
-    assert.deepEqual(
-      seen.map((rows) => rows[0]!.tenant || undefined),
-      seen.map((_, index) => tenants[index % 3]),
-    );
-  } finally {
-    await a.close();
   }
 });
 

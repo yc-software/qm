@@ -121,22 +121,6 @@ services:
         memory: 512Mi
     env: {}
 
-  admin:
-    enabled: true
-    image: admin
-    type: web
-    port: 8080
-    replicas: 1
-    command: ["node", "src/index.ts"]
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        memory: 512Mi
-    env:
-      ADMIN_BASE_PATH: /admin
-
   portal:
     enabled: true
     image: portal

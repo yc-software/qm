@@ -368,6 +368,9 @@ test("actor attestation fails closed for malformed identities and injection conf
     );
     assert.equal(result.status, 403);
     assert.equal(cap.calls.length, 0);
+    const denial = result.json as { error: string; message: string };
+    assert.equal(denial.error, "invalid_actor");
+    assert.match(denial.message, /1 to 256 visible ASCII characters with POST \/v1\/admin\/principal-links/);
   }
   for (const injection of [{ actor: "yes" }, { header: "X-QM-Actor" }, { scheme: "Bearer\n" }]) {
     const cap = captureFetch();

@@ -1,11 +1,12 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
 
 const PREVIOUS_SCHEMA = "sessions/store/0046-spend-days-cron-rebuild";
 
-export const SESSION_SCHEMA: PgMigrationDefinition = {
+const SESSION_SCHEMA: PgMigrationDefinition = {
   id: "sessions/store/0047-base-schema",
   expectedChecksum: "09cc3da1e893709927f3a18d593d543289d9d92dc416c56f426e3a5d69957099",
   statements: [
@@ -288,3 +289,81 @@ END $base_schema$`,
     `DROP FUNCTION IF EXISTS safe_json(text)`,
   ],
 };
+
+const MESSAGE_SEARCH_INDEX: PgMigrationDefinition = {
+  id: "sessions/store/0048-message-search-index",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_message_search ON items USING gin (tenant_id, search)
+      WHERE kind IN ('UserMessage','SteeringMessage','AgentMessage') AND variant IS DISTINCT FROM 'files_delivered' AND text IS NOT NULL`,
+  ],
+};
+
+const DROP_ITEMS_SEARCH: PgMigrationDefinition = {
+  id: "sessions/store/0049-drop-items-search",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `DROP INDEX IF EXISTS items_search`],
+};
+
+const SPEND_TRIGGERS = [
+  `CREATE OR REPLACE FUNCTION invalidate_request_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_request_spend$
+   BEGIN
+     INSERT INTO session_spend_dirty(tenant_id, day)
+     SELECT DISTINCT tenant, floor(at::numeric / 86400000)::bigint
+       FROM (VALUES
+         (CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.tenant_id END,
+          CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.created_at END),
+         (CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.tenant_id END,
+          CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.created_at END)
+       ) changed(tenant, at) WHERE at IS NOT NULL
+     ON CONFLICT DO NOTHING;
+     RETURN NULL;
+   END $invalidate_request_spend$`,
+  `CREATE OR REPLACE FUNCTION invalidate_session_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_session_spend$
+   BEGIN
+     IF TG_OP = 'UPDATE' AND ROW(OLD.id, OLD.scope_id, OLD.origin, OLD.thread_ref, OLD.parent_session_id)
+          IS NOT DISTINCT FROM ROW(NEW.id, NEW.scope_id, NEW.origin, NEW.thread_ref, NEW.parent_session_id) THEN
+       RETURN NULL;
+     END IF;
+     INSERT INTO session_spend_dirty(tenant_id, session_id)
+     SELECT DISTINCT tenant, id FROM (VALUES (OLD.tenant_id, OLD.id), (NEW.tenant_id, NEW.id)) changed(tenant, id)
+      WHERE id IS NOT NULL;
+     RETURN NULL;
+   END $invalidate_session_spend$`,
+];
+
+const SESSION_TABLES = tenantTables(
+  "sessions/store/0051-tenant-sessions",
+  [
+    { table: "sessions", unique: [{ name: "sessions_thread_ref_key", columns: "thread_ref", constraint: true }] },
+    { table: "participants", primaryKey: "session_id, principal_id" },
+    { table: "session_goals", primaryKey: "session_id" },
+    { table: "session_leases", primaryKey: "session_id" },
+    { table: "session_llm_requests", primaryKey: "id" },
+    { table: "session_pins", primaryKey: "id" },
+    { table: "session_spend_days", primaryKey: "day" },
+    {
+      table: "session_spend_dirty",
+      unique: [{ name: "session_spend_dirty_day_writer_key", columns: "day, writer", constraint: true }],
+    },
+    { table: "llm_prompt_envelopes", primaryKey: "hash" },
+  ],
+  {
+    after: SPEND_TRIGGERS,
+  },
+);
+export const TENANT_BACKFILL: PgMigrationDefinition = {
+  id: "sessions/store/0050-tenant-backfill",
+  statements: [
+    `INSERT INTO tenants(id, slug, name)
+     SELECT id, id::text, id::text FROM qm_tenant
+     ON CONFLICT (id) DO NOTHING`,
+  ],
+};
+
+export const SESSION_MIGRATIONS = [
+  TENANCY_BASE,
+  SESSION_SCHEMA,
+  MESSAGE_SEARCH_INDEX,
+  DROP_ITEMS_SEARCH,
+  TENANT_BACKFILL,
+  SESSION_TABLES,
+];

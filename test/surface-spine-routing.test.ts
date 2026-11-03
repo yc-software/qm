@@ -72,9 +72,9 @@ test("spine ON: react/edit/delete route through the SAME reach chokepoint to the
     assert.equal(reactD.destination.target, `${target}500.5`, "reacted in the current conversation");
 
     await built.app.turn(mention("!edit 501.5 the corrected line", channel, "501.5"));
-    const editD = await pollFor(built.deliveries, (d) => d.destination.editRef);
-    assert.ok(editD, "edit enqueued an editRef delivery");
-    assert.equal(editD.destination.editRef, "501.5");
+    const editD = await pollFor(built.deliveries, (d) => d.destination.edit);
+    assert.ok(editD, "edit enqueued an edit delivery");
+    assert.deepEqual(editD.destination.edit, { messageTs: "501.5" });
     assert.equal(editD.text, "the corrected line", "the edit carries the new text");
 
     await built.app.turn(mention("!delete 502.5", channel, "502.5"));

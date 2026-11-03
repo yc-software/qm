@@ -5,9 +5,7 @@ import type { Pool } from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { bindTestTenant, seedTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { seedTestTenants } from "./support/tenant-seed.ts";
 
 const request: OrchestratorInput = {
   actor: { id: "retry-test", type: "internal" },
@@ -32,7 +30,7 @@ for (const backend of ["memory", "postgres"] as const) {
         await admin.query(`CREATE SCHEMA ${schema}`);
         const url = new URL(connectionString);
         url.searchParams.set("options", `-c search_path=${schema}`);
-        await seedTenant(url.toString());
+        await seedTestTenants(url.toString());
         connectionString = url.toString();
       }
       const runtime =
@@ -97,7 +95,7 @@ for (const backend of ["memory", "postgres"] as const) {
         await admin.query(`CREATE SCHEMA ${schema}`);
         const url = new URL(connectionString);
         url.searchParams.set("options", `-c search_path=${schema}`);
-        await seedTenant(url.toString());
+        await seedTestTenants(url.toString());
         connectionString = url.toString();
       }
       let { runs } =
@@ -168,7 +166,7 @@ test(
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(process.env.DATABASE_URL!);
     url.searchParams.set("options", `-c search_path=${schema}`);
-    await seedTenant(url.toString());
+    await seedTestTenants(url.toString());
     const runtime = createPostgresRunStore(url.toString());
     const pool = new pg.Pool({ connectionString: url.toString() });
     try {

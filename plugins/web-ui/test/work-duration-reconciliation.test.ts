@@ -139,9 +139,13 @@ test("live and completed work use whole seconds with minute rollover", () => {
       [7, "7s"],
       [57.239, "57s"],
       [59.999, "59s"],
-      [60, "1m 00s"],
-      [65.129, "1m 05s"],
-      [365, "6m 05s"],
+      [60, "1m 0s"],
+      [61, "1m 1s"],
+      [65.129, "1m 5s"],
+      [365, "6m 5s"],
+      [3599.9, "59m 59s"],
+      [3600, "1h 0m 0s"],
+      [3725, "1h 2m 5s"],
     ] as const)
       assert.equal(workedLabel(prefix, seconds), `${prefix} for ${duration}`);
   }

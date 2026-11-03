@@ -9,7 +9,7 @@ import {
   type TenantSettingsStoreOptions,
   type TenantSettingValues,
 } from "../../src/tenants/settings.ts";
-import { seedTenant, seedTestTenants } from "./tenant-seed.ts";
+import { seedTestTenants } from "./tenant-seed.ts";
 
 export const TEST_SETTINGS_KEY = "test-connector-key-distinct-from-ingress-auth";
 export const THIRD_TENANT = "00000000-0000-4000-8000-000000000003";
@@ -17,7 +17,13 @@ export const FOURTH_TENANT = "00000000-0000-4000-8000-000000000004";
 export const FIFTH_TENANT = "00000000-0000-4000-8000-000000000005";
 
 export async function seedSettingsTenants(url: string): Promise<void> {
-  for (const tenant of [THIRD_TENANT, FOURTH_TENANT, FIFTH_TENANT]) await seedTenant(url, tenant);
+  const pool = new pg.Pool({ connectionString: url, max: 1 });
+  try {
+    for (const tenant of [THIRD_TENANT, FOURTH_TENANT, FIFTH_TENANT])
+      await pool.query("INSERT INTO tenants(id, slug, name) VALUES ($1, $2, $2)", [tenant, tenant]);
+  } finally {
+    await pool.end();
+  }
 }
 
 export async function migrateSettings(url: string): Promise<void> {

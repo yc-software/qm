@@ -160,9 +160,8 @@ import { verificationUpstream } from "./support/model-verification-upstream.ts";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
 import type { ModelProvider } from "../src/model/model-credential-store.ts";
 import type { TenantSettingValues } from "../src/tenants/settings.ts";
-import { enterTenant } from "../src/tenants/context.ts";
 import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
@@ -329,7 +328,6 @@ test("Anthropic verification exercises ordinary and fast requests, and gateway u
 test("the streaming probe aborts a nonresponsive provider and never accepts an incomplete response", async () => {
   const upstream = await verificationUpstream();
   upstream.behavior.hang = true;
-  enterTenant(TEST_TENANT);
   setProviderBaseUrls(TEST_TENANT, { openai: upstream.url + "/v1" });
   try {
     const model = modelFromOverlay(parseModelOverlay(spec))!;
@@ -528,6 +526,8 @@ test("admin and gateway credential changes invalidate cached fingerprints", asyn
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { probeModel } from "../src/model/model-runtime.ts";
 import { testMap } from "./support/test-database.ts";
+
+const [TEST_TENANT] = testTenants();
 
 test("legacy fingerprint versions stay unavailable until a successful new verification", async () => {
   const { built } = await seededApp({ openai: "test-key" });

@@ -1,6 +1,5 @@
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
-import { enterTenant } from "../src/tenants/context.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -19,6 +18,8 @@ import {
   codexSubscriptionModelId,
   modelSupportsFastMode,
 } from "../src/model/pi-models.ts";
+
+const [TEST_TENANT] = testTenants();
 
 test("every selectable base model resolves against the pi-ai registry", () => {
   for (const m of SELECTABLE_BASE_MODELS) {
@@ -263,7 +264,6 @@ test("context token budget is half of each model's real input room", () => {
 test("personal models retain canonical endpoints when org endpoints are overridden", () => {
   const ids = ["claude-opus-5", "gpt-5.6-sol", "gpt-6-astra"];
   const canonical = new Map(ids.map((id) => [id, getRequiredModel(id).baseUrl]));
-  enterTenant(TEST_TENANT);
   setProviderBaseUrls(TEST_TENANT, {
     anthropic: "https://org.invalid/anthropic",
     openai: "https://org.invalid/openai",

@@ -1,37 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the base schema tests";
 
 async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
-  const parent = new pg.Pool({ connectionString: databaseUrl });
-  const name = `base_schema_${randomUUID().replaceAll("-", "")}`;
-  await parent.query(`CREATE DATABASE ${name}`);
-  const url = new URL(databaseUrl!);
-  url.pathname = `/${name}`;
-  const admin = new pg.Pool({ connectionString: url.toString() });
+  const url = testBareDatabaseUrl();
+  const admin = new pg.Pool({ connectionString: url });
   try {
-    await run(url.toString(), admin);
+    await run(url, admin);
   } finally {
     await admin.end();
-    await dropWhenIdle(parent, name);
-    await parent.end();
   }
-}
-
-async function dropWhenIdle(parent: pg.Pool, name: string): Promise<void> {
-  const idleBy = Date.now() + 5_000;
-  const sessions = "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1";
-  while ((await parent.query(sessions, [name])).rows[0].n > 0 && Date.now() < idleBy) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
 }
 
 async function migrate(url: string): Promise<void> {
@@ -39,19 +24,6 @@ async function migrate(url: string): Promise<void> {
   const runs = createPostgresRunStore(url);
   try {
     await migrateRegisteredPgSchemas(url);
-  } finally {
-    await runs.close();
-  }
-}
-
-async function migrateBase(url: string, admin: pg.Pool): Promise<void> {
-  createPostgresSessionStore(url);
-  const runs = createPostgresRunStore(url);
-  try {
-    await applyPgMigrations(
-      admin,
-      registeredPgMigrations(url).filter((m) => !/^0000-tenancy\/|-tenants$|^sessions\/store\/00(49|50)-/.test(m.id)),
-    );
   } finally {
     await runs.close();
   }
@@ -77,19 +49,29 @@ test("a fully migrated database skips the base schema and drops only the retired
       id TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
     await admin.query(`INSERT INTO qm_schema_migrations(id, checksum) VALUES
       ('sessions/store/0046-spend-days-cron-rebuild', 'x'), ('runs/store/0010-drop-turn-metrics', 'x')`);
+    createPostgresSessionStore(url);
+    await createPostgresRunStore(url).close();
+    const tenancy = registeredPgMigrations(url).filter((migration) => /^0000-tenancy\/|-tenan/.test(migration.id));
+    await admin.query("INSERT INTO qm_schema_migrations(id, checksum) SELECT * FROM unnest($1::text[], $2::text[])", [
+      tenancy.map((migration) => migration.id),
+      tenancy.map((migration) => migration.checksum),
+    ]);
     await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY)");
     await admin.query("CREATE TABLE runs(id TEXT PRIMARY KEY)");
-    await admin.query(`CREATE TABLE items(seq BIGINT, kind TEXT, target_seq BIGINT,
+    await admin.query("CREATE EXTENSION IF NOT EXISTS btree_gin");
+    await admin.query(`CREATE TABLE items(seq BIGINT, tenant_id TEXT, kind TEXT, variant TEXT, text TEXT,
+      search TSVECTOR, target_seq BIGINT,
       CONSTRAINT items_target_seq_kind CHECK (target_seq IS NULL OR kind = 'Retraction'))`);
     await admin.query("CREATE TABLE tool_calls(run_id TEXT)");
+    await admin.query("CREATE TABLE qm_tenant(id UUID PRIMARY KEY)");
     await admin.query("CREATE FUNCTION safe_json(t text) RETURNS json LANGUAGE sql AS 'SELECT t::json'");
-    await migrateBase(url, admin);
+    await migrate(url);
     const columns = await admin.query(
       "SELECT column_name FROM information_schema.columns WHERE table_name = 'items' ORDER BY ordinal_position",
     );
     assert.deepEqual(
       columns.rows.map((row) => row.column_name),
-      ["seq", "kind", "target_seq"],
+      ["seq", "tenant_id", "kind", "variant", "text", "search", "target_seq"],
     );
     assert.equal(await present(admin, "to_regclass('blobs') IS NULL"), true);
     assert.equal(await present(admin, "to_regclass('tool_calls') IS NULL"), true);

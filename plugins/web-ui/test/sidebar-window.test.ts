@@ -136,3 +136,42 @@ async function until(check: () => boolean, describe: () => unknown = () => ""): 
   for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.ok(check(), `condition never held ${String(describe())}`);
 }
+
+test("a long project shows five chats until Show more, and keeps the open chat visible", async () => {
+  const scopeId = "group:web-project-long";
+  const list = sessions(9).map((item): CoreSession => ({ ...item, scopeId, type: "group" }));
+  const opened = list[7]!;
+  const h = await harness({
+    path: `/s/${opened.id}`,
+    session: opened,
+    listSessions: list,
+    contexts: [
+      {
+        scopeId,
+        kind: "group",
+        name: "Launch",
+        sessionCount: 9,
+        lastActivityAt: null,
+        project: { id: "launch", name: "Launch", ownerId: "tester", memberIds: ["tester"], scopeId, members: [] },
+      },
+    ],
+  });
+  try {
+    await h.boot();
+    h.releaseSessions();
+    await h.sessionsReady();
+    const sidebar = document.querySelector("#sidebar-body")!;
+    const rows = () =>
+      [...sidebar.querySelectorAll<HTMLElement>(".recent-project-children .session-row")].map(
+        (row) => row.dataset.sessionId,
+      );
+    await until(() => rows().length === 6, rows);
+    assert.deepEqual(rows(), ["chat-0", "chat-1", "chat-2", "chat-3", "chat-4", "chat-7"]);
+    button(sidebar, "Show more").click();
+    assert.equal(rows().length, 9);
+    button(sidebar, "Show less").click();
+    assert.equal(rows().length, 6);
+  } finally {
+    await h.close();
+  }
+});

@@ -2,10 +2,8 @@ import "./run-availability.ts";
 import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
 import { createPostgresSessionStore, rowToSession } from "../src/sessions/postgres-session-store.ts";
-import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { scopeId, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
@@ -13,16 +11,8 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
-import {
-  bindTestTenant,
-  boundUrl,
-  seedTenant,
-  seedTestTenants,
-  TEST_TENANT,
-  testTenantsSeeded,
-} from "./support/tenant.ts";
-
-bindTestTenant();
+import { seedTestTenants } from "./support/tenant-seed.ts";
+import { tenantBoundUrl } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
@@ -30,8 +20,7 @@ const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres st
 before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
-  await testTenantsSeeded();
-  const p = new pg.Pool({ connectionString: URL });
+  const p = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   await p.query("DROP SCHEMA public CASCADE");
   await p.query("CREATE SCHEMA public");
   await p.end();
@@ -82,11 +71,11 @@ test("pg participant presence checks seek into the visible history window", { sk
   const owner = `window-${randomUUID()}`;
   const session = await store.getOrCreateByThread(owner, "channel", scopeId("channel", owner));
   const pg = (await import("pg")).default;
-  const raw = createPgPool(URL!);
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   try {
     await raw.query(
       `INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at)
-       SELECT '${TEST_TENANT}', $1, n, 'UserMessage', '{"text":"window fixture"}', to_timestamp(n * 10 / 1000.0)
+       SELECT qm_tenant_id(), $1, n, 'UserMessage', '{"text":"window fixture"}', to_timestamp(n * 10 / 1000.0)
          FROM generate_series(0, 3999) n`,
       [session.id],
     );
@@ -135,7 +124,7 @@ test("pg participant presence checks seek into the visible history window", { sk
       if (window.fromSeq === null ? window.toSeq !== null : window.toSeq === null && window.to !== null) continue;
       for (const query of captured) {
         const result = await raw.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${query.text}`, query.values);
-        const rejected = rejectedEntries((result.rows[0]!["QUERY PLAN"] as { Plan: any }[])[0]!.Plan);
+        const rejected = rejectedEntries(result.rows[0]["QUERY PLAN"][0].Plan);
         assert.ok(
           rejected < 32,
           `presence check rejected ${rejected} historical entries for ${JSON.stringify(window)}`,
@@ -144,7 +133,7 @@ test("pg participant presence checks seek into the visible history window", { sk
     }
   } finally {
     t.mock.restoreAll();
-    await raw.close();
+    await raw.end();
   }
 });
 
@@ -186,7 +175,7 @@ test("pg saved spend refreshes changed days and preserves live attribution", { s
   let at = base + 123;
   const store = createPostgresSessionStore(URL!, { now: () => at });
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   const scope = scopeId("personal", `saved-${randomUUID()}`);
   const session = await store.getOrCreateByThread(scope, "dm", scope);
   const range = { from: base, to: base + 2 * day };
@@ -256,7 +245,7 @@ test("pg spend refresh keeps concurrent writes pending and failures preserve the
   const range = { from: base, to: base + 86_400_000 };
   const store = createPostgresSessionStore(URL!, { now: () => base + 123 });
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   const scope = scopeId("personal", `race-${randomUUID()}`);
   const session = await store.getOrCreateByThread(scope, "dm", scope);
   const bill = () =>
@@ -267,21 +256,19 @@ test("pg spend refresh keeps concurrent writes pending and failures preserve the
       scopeLabel: scope,
       usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1, costUsd: 1 },
     });
-  const ready = (pg.Query.prototype as any).handleReadyForQuery;
+  const query = pg.Client.prototype.query;
   const wallClock = Date.now;
   let duringRollup: (() => Promise<unknown>) | undefined;
-  (pg.Query.prototype as any).handleReadyForQuery = function (this: any, ...args: any[]): any {
-    if (duringRollup && this.text?.startsWith("WITH RECURSIVE ancestry")) {
+  pg.Client.prototype.query = function (...args: any[]): any {
+    if (duringRollup && typeof args[0] === "string" && args[0].startsWith("WITH RECURSIVE ancestry")) {
       const hook = duringRollup;
-      const callback = this.callback;
       duringRollup = undefined;
-      this.callback = (error: unknown, result: unknown) =>
-        void hook().then(
-          () => callback(error, result),
-          (failure: unknown) => callback(failure),
-        );
+      return Promise.resolve(Reflect.apply(query, this, args)).then(async (result) => {
+        await hook();
+        return result;
+      });
     }
-    return Reflect.apply(ready, this, args);
+    return Reflect.apply(query, this, args);
   };
   try {
     await bill();
@@ -330,7 +317,7 @@ test("pg spend refresh keeps concurrent writes pending and failures preserve the
       0,
     );
   } finally {
-    (pg.Query.prototype as any).handleReadyForQuery = ready;
+    pg.Client.prototype.query = query;
     Date.now = wallClock;
     await raw.end();
   }
@@ -341,12 +328,12 @@ test(
   { skip },
   async (t) => {
     const pg = (await import("pg")).default;
-    const admin = new pg.Pool({ connectionString: boundUrl(URL!) });
+    const admin = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
     const schema = `spend_order_${randomUUID().replaceAll("-", "")}`;
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new globalThis.URL(URL!);
     url.searchParams.set("options", `-c search_path=${schema}`);
-    await seedTenant(url.toString());
+    await seedTestTenants(url.toString());
     const day = 86_400_000;
     const base = Date.UTC(2025, 5, 1);
     let clock = base + 3 * day;
@@ -359,7 +346,7 @@ test(
         return at;
       },
     });
-    const raw = new pg.Pool({ connectionString: boundUrl(url.toString()) });
+    const raw = new pg.Pool({ connectionString: tenantBoundUrl(url.toString()) });
     const scope = scopeId("personal", "spend-order");
     const session = await store.getOrCreateByThread("spend-order", "dm", scope);
     const bill = async (offset: number) => {
@@ -421,7 +408,7 @@ test(
     const range = { from: base, to: base + 86_400_000 };
     const store = createPostgresSessionStore(URL!, { now: () => at });
     const pg = (await import("pg")).default;
-    const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+    const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
     const editor = await raw.connect();
     const scope = scopeId("personal", `commit-${randomUUID()}`);
     const session = await store.getOrCreateByThread(scope, "dm", scope);
@@ -467,7 +454,7 @@ test("pg spend rollup handles unusual usage rows and later writes", { skip }, as
   const store = createPostgresSessionStore(URL!, { now: () => at });
   const session = await store.getOrCreateByThread("spend-index", "dm", scopeId("personal", "USPENDINDEX"));
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   const usage = { input: 10, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 19, costUsd: 0.5 };
   const wideModel = Array.from({ length: 100 }, () => randomUUID()).join("");
   const wideUsage = { ...usage, legacyDetail: wideModel };
@@ -566,12 +553,12 @@ test("pg spend ancestry only visits sessions with usage inside the requested ran
     usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, costUsd: 1 },
   });
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
-  const execute = pg.Pool.prototype.query;
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
+  const execute = pg.Client.prototype.query;
   let query = "";
-  t.mock.method(pg.Pool.prototype, "query", function (this: InstanceType<typeof pg.Pool>, ...args: unknown[]) {
-    const text = (args[0] as { text?: string } | undefined)?.text ?? args[0];
-    if (typeof text === "string" && text.startsWith("WITH RECURSIVE")) query = text;
+  t.mock.method(pg.Client.prototype, "query", function (this: InstanceType<typeof pg.Client>, ...args: unknown[]) {
+    const text = typeof args[0] === "string" ? args[0] : (args[0] as { text?: string } | undefined)?.text;
+    if (text?.startsWith("WITH RECURSIVE")) query = text;
     return Reflect.apply(execute, this, args);
   });
   try {
@@ -607,78 +594,6 @@ test("pg session store: a bare failed acquire means the session is gone, not a l
   const reacquired = await s.acquireLease(session.id, "turn");
   assert.ok(reacquired.lease, "a released lease is immediately reacquirable");
   await s.releaseLease(reacquired.lease!);
-});
-
-test("pg session store: replay windows count usable payloads, not metadata-only screens", { skip }, async () => {
-  let now = Date.now();
-  const store = createPostgresSessionStore(URL!, { now: () => now });
-  const scope = scopeId("personal", "screen-window");
-  const session = await store.getOrCreateByThread("screen-window", "dm", scope);
-  const record = (promptEnvelope: unknown, step = SECURITY_SCREEN_STEP) =>
-    store.recordLlmRequest(session.id, {
-      turnSeq: step === SECURITY_SCREEN_STEP ? null : 1,
-      step,
-      model: "screen-test",
-      scopeLabel: scope,
-      promptEnvelope,
-      usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10, costUsd: 0.01 },
-    });
-  const envelope = (content: unknown) => ({ messages: [{ role: "user", content }] });
-
-  const unusable = [
-    undefined,
-    null,
-    { system: "Claude configuration only" },
-    { threadStart: { model: "Codex" } },
-    { system: "OpenCode configuration without messages" },
-    { messages: [] },
-    { messages: { role: "user", content: "not an array" } },
-    { messages: [null] },
-    { messages: [{ role: "assistant", content: "not a user payload" }] },
-    { messages: [...envelope("one").messages, ...envelope("two").messages] },
-    envelope(42),
-    envelope(null),
-    envelope(["not string content"]),
-    envelope(""),
-    envelope(" \t\r\n\u00a0\u2003\ufeff "),
-  ];
-  for (const payload of unusable) await record(payload);
-  for (let i = 0; i < 205; i++) await record({ system: "metadata only" });
-  assert.deepEqual(await store.listScreenSamples(2), []);
-  now -= 2;
-  const oldest = await record(envelope("  older usable payload  "));
-  now++;
-  const newest = await record(envelope("newer usable payload"));
-  now += 2;
-  await record(envelope("ordinary turn, not a screening"), 0);
-  const before = await store.listLlmRequests(session.id);
-
-  assert.deepEqual(
-    (await store.listScreenSamples(2)).map((sample) => sample.id),
-    [newest.id, oldest.id],
-  );
-  assert.deepEqual(
-    (await store.listScreenSamples(1)).map((sample) => sample.id),
-    [newest.id],
-  );
-  assert.deepEqual(
-    (await store.listScreenSamples(1000)).map((sample) => sample.payload),
-    ["newer usable payload", "older usable payload"],
-  );
-  assert.deepEqual(await store.listScreenSamples(0), []);
-  assert.deepEqual(await store.listScreenSamples(-1), []);
-  assert.equal((await store.listScreenSamples(1.9)).length, 1);
-  assert.deepEqual(await store.listLlmRequests(session.id), before);
-  assert.equal(before.length, unusable.length + 208);
-
-  const tied = [await record(envelope("tied A")), await record(envelope("tied B"))];
-  assert.deepEqual(
-    (await store.listScreenSamples(2)).map((sample) => sample.id),
-    tied
-      .map((row) => row.id)
-      .sort()
-      .reverse(),
-  );
 });
 
 test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibility window", { skip }, async () => {
@@ -812,7 +727,7 @@ test("pg lease: a lock taken by an older instance still blocks, and reports what
   assert.ok((await s.acquireLease(session.id, "turn")).lease);
 
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   try {
     await raw.query("UPDATE session_leases SET holder = NULL, acquired_at = NULL WHERE session_id = $1", [session.id]);
   } finally {
@@ -1058,7 +973,7 @@ test("pg session origin columns are written at insert", { skip }, async () => {
   for (const threadRef of Object.keys(shapes)) ids.push((await s.getOrCreateByThread(threadRef, "channel", team)).id);
 
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   const q = async (text: string, params?: unknown[]) =>
     (await raw.query(text, params)).rows as Record<string, unknown>[];
   const columns = async () =>
@@ -1134,7 +1049,7 @@ test("pg scopeSessionSummaries: keyset cursor pages stitch into the full listing
   assert.equal(page3.length, 1, "final partial page");
 
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   try {
     await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = $1", [
       all[2]!.id,
@@ -1195,7 +1110,7 @@ test("pg scopeSessionSummaries: previews are stored on append and match the JS e
   assert.equal(rows.find((r) => r.id === nontext.id)!.firstMessage, "", "a non-string text field has no preview");
 
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   try {
     const stored = await raw.query(
       "SELECT id, first_user_preview, last_user_preview FROM sessions WHERE id = ANY($1) ORDER BY thread_ref",
@@ -1269,7 +1184,7 @@ test(
       await s.releaseLease(lease!);
     }
     const pg = (await import("pg")).default;
-    const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+    const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
     try {
       await raw.query("UPDATE sessions SET first_user_preview = NULL, last_user_preview = NULL WHERE id = ANY($1)", [
         [titled.id, bare.id],
@@ -1365,7 +1280,7 @@ test("pg scopeSessionSummaries: the listing plan is an index walk with no per-ro
   });
   t.mock.restoreAll();
   assert.equal(captured.length, 3);
-  const raw = await new pg.Pool({ connectionString: boundUrl(URL!) }).connect();
+  const raw = await new pg.Pool({ connectionString: tenantBoundUrl(URL!) }).connect();
   try {
     await raw.query("BEGIN");
     await raw.query("SET LOCAL enable_seqscan = off");
@@ -1393,7 +1308,7 @@ test("pg sessions table indexes scoped activity pages", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   await s.scanAll();
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   try {
     const result = await raw.query("SELECT indexname, indexdef FROM pg_indexes WHERE indexname = ANY($1::text[])", [
       ["sessions_by_scope", "sessions_by_scope_activity", "sessions_by_activity"],
@@ -1466,7 +1381,7 @@ test("pg store startup never rewrites or waits on session rows", { skip }, async
   }
   const [held, writing, ...idle] = ids as [string, string, ...string[]];
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   const holder = await raw.connect();
   let open = false;
   const within = <T>(p: Promise<T>, what: string): Promise<T> =>
@@ -1518,7 +1433,7 @@ test("no plpgsql exception handler is marked parallel-safe anywhere in the schem
   const seed = createPostgresSessionStore(URL!);
   await seed.scanAll();
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   try {
     const offenders = await raw.query(PARALLEL_EXCEPTION_QUERY);
     assert.deepEqual(offenders.rows, [], "plpgsql EXCEPTION handlers marked PARALLEL SAFE");
@@ -1651,10 +1566,10 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   assert.equal(((await s.getEntries(a.id))[0]!.payload as { text?: string }).text, "ab", "null byte stripped at write");
 
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   try {
     await raw.query(
-      `INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES ('${TEST_TENANT}',$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))`,
+      "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
       [a.id, 1, { text: "xy" }, Date.now()],
     );
     await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = $1", [a.id]);
@@ -1690,7 +1605,7 @@ test(
     await s.releaseLease(lease!);
 
     const pg = (await import("pg")).default;
-    const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+    const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
     try {
       await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = ANY($1)", [
         [a.id, b.id],
@@ -1719,7 +1634,7 @@ test(
       assert.equal(legacy.lastActivity, entries[entries.length - 1]!.createdAt, "last-activity = newest entry");
 
       await raw.query(
-        `INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES ('${TEST_TENANT}',$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))`,
+        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
         [a.id, 4, { text: "from the old instance" }, Date.now()],
       );
       const { lease: lease2 } = await s2.acquireLease(a.id);
@@ -1730,7 +1645,7 @@ test(
       assert.equal(healed.turns, 3, "seq/messages mismatch triggers a full turns recount");
 
       await raw.query(
-        `INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES ('${TEST_TENANT}',$1,0,'UserMessage',$2,to_timestamp($3 / 1000.0)), ('${TEST_TENANT}',$1,1,'AgentMessage',$4,to_timestamp($5 / 1000.0))`,
+        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,0,'UserMessage',$2,to_timestamp($3 / 1000.0)), (qm_tenant_id(),$1,1,'AgentMessage',$4,to_timestamp($5 / 1000.0))",
         [b.id, { text: "drained turn" }, Date.now(), { text: "reply" }, Date.now() + 1],
       );
       await raw.query("UPDATE sessions SET messages = 0, turns = 0 WHERE id = $1", [b.id]);
@@ -1960,7 +1875,7 @@ test("pg run store: duplicate enqueue never updates a protected run owner", { sk
   const first = createPostgresRunStore(URL!);
   const sibling = createPostgresRunStore(URL!);
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   const key = `protected-${randomUUID()}`;
   let runId: string | undefined;
   try {
@@ -2010,7 +1925,7 @@ test("pg run store: duplicate enqueue never updates a protected run owner", { sk
 test("pg run store: enqueue retries when a conflicting key is released before lookup", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   const key = `released-${randomUUID()}`;
   try {
     const original = await runs.enqueue({ sessionId: key, request: turn("original"), dedupKey: key });
@@ -2211,7 +2126,7 @@ test("pg run store: reaper parks over-age runs, requeues young ones, and audits 
 test("pg run store: one-running-per-session holds under concurrent claims (unique index)", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   try {
     const r1 = (await runs.enqueue({ sessionId: "sRace", request: turn("a") })).run;
     const r2 = (await runs.enqueue({ sessionId: "sRace", request: turn("b") })).run;
@@ -2257,7 +2172,7 @@ test(
       // tie-break BEHIND created_at, so a scrambled backfill can only ever decide between rows
       // sharing a millisecond — simulate the worst backfill and prove created_at still rules.
       const pg = (await import("pg")).default;
-      const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+      const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
       try {
         const early = (await runs.enqueue({ sessionId: "sBackfill", request: turn("early") })).run;
         await new Promise((r) => setTimeout(r, 5));
@@ -2304,7 +2219,7 @@ test("pg run store: withdraw and claim cannot both win the same queued run", { s
 test("pg run store indexes newest active run by session", { skip }, async () => {
   const { close } = createPostgresRunStore(URL!);
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   try {
     const result = await raw.query(
       "SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_runs_session_active_created'",
@@ -2462,6 +2377,39 @@ test("pg search: full-text over entries with prefix match, window ACL, and type 
   assert.deepEqual(await s.searchEntries("USRCH", "memo missing"), [], "every term must match");
 });
 
+test("pg search: own chats and side chats only, no subagents or automations", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "UOWN");
+  const write = async (threadRef: string, text: string, surface?: string): Promise<string> => {
+    const sess = await s.getOrCreateByThread(threadRef, "dm", scope, undefined, surface);
+    await s.addParticipant(sess.id, "UOWN", undefined, { includeHistory: true });
+    const { lease } = await s.acquireLease(sess.id);
+    await s.append(lease!, { type: "user", payload: { text }, scopeLabel: scope });
+    await s.releaseLease(lease!);
+    await s.updateTitle(sess.id, "Ownchat harbor");
+    return sess.id;
+  };
+  const chat = await write("own-chat", "ownchat harbor plans");
+  const child = await write("own-child", "ownchat harbor from a subagent");
+  await s.setParentSession(child, chat);
+  await write("own-cron", "ownchat harbor from a cron", "cron");
+  const side = await write("own-side", "ownchat harbor in a side chat");
+  await s.updateForkProvenance(side, {
+    forkedFrom: { sessionId: chat },
+    forkBoundarySeq: 1,
+    sideChat: { entrySeq: 1, quote: "plans", occurrence: 0, expanded: false },
+  });
+
+  assert.deepEqual(
+    (await s.searchEntries("UOWN", "ownchat harbor")).map((h) => h.sessionId).sort(),
+    [chat, side].sort(),
+  );
+  assert.deepEqual(
+    (await s.searchSessionTitles("UOWN", "ownchat harbor")).map((row) => row.id).sort(),
+    [chat, side].sort(),
+  );
+});
+
 test("pg search: participation windows filter global matches before the result limit", { skip }, async () => {
   let at = Date.now();
   const s = createPostgresSessionStore(URL!, { now: () => at });
@@ -2566,7 +2514,7 @@ test(
       "the stale holder cannot append after the discard",
     );
     const pg = (await import("pg")).default;
-    const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+    const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
     const leftovers = await raw.query(
       "SELECT (SELECT COUNT(*) FROM items WHERE session_id = $1) AS e, (SELECT COUNT(*) FROM session_leases WHERE session_id = $1) AS l",
       [sess.id],
@@ -2593,7 +2541,7 @@ test("pg deleteSession: racing a fresh lease acquisition never orphans entries",
     }
   }
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   const leftovers = await raw.query(
     "SELECT COUNT(*) AS n FROM session_leases l WHERE NOT EXISTS (SELECT 1 FROM sessions ss WHERE ss.id = l.session_id)",
   );
@@ -2639,7 +2587,7 @@ test("pg deleteSessionIfEmpty: a held lease or landed entries refuse the discard
   assert.equal(await s.get(empty.id), null);
 
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   const orphans = await raw.query(
     "SELECT (SELECT COUNT(*) FROM items WHERE session_id = $1) AS e, (SELECT COUNT(*) FROM session_leases WHERE session_id = $1) AS l",
     [empty.id],
@@ -2681,7 +2629,7 @@ test(
     const session = await store.getOrCreateByThread("search-atomic", "dm", scopeId("personal", "UATOMIC"));
     await store.addParticipant(session.id, "UATOMIC", undefined, { includeHistory: true });
     const pg = (await import("pg")).default;
-    const pool = new pg.Pool({ connectionString: boundUrl(URL!) });
+    const pool = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
     const lease = (await store.acquireLease(session.id)).lease!;
     try {
       const entry = await store.append(lease, {
@@ -2863,7 +2811,7 @@ test(
     const store = createPostgresSessionStore(URL!);
     await store.countSessions();
     const pg = (await import("pg")).default;
-    const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+    const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
     try {
       const { rows } = await raw.query(
         `SELECT spend_usage_json(t) AS j FROM (VALUES ('not json'), ('{"costUsd":"abc"}'), ('{"costUsd":0.5,"input":1}'), (NULL)) v(t)`,
@@ -2916,7 +2864,7 @@ test("pg late joiners start after any stored sequence gap", { skip }, async () =
   await store.append(lease, { type: "user", payload: { text: "before" }, scopeLabel: scope });
   await store.releaseLease(lease);
   const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const pool = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   await pool.query("UPDATE sessions SET messages = messages + 3 WHERE id = $1", [session.id]);
   await pool.end();
   await store.addParticipant(session.id, "gap-late");
@@ -2931,7 +2879,7 @@ test("pg LLM capture retention drops old prompt envelopes and keeps request rows
   let at = Date.UTC(2025, 0, 1);
   const store = createPostgresSessionStore(URL!, { now: () => at });
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: boundUrl(URL!) });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   const tag = randomUUID();
   const scope = scopeId("personal", `retention-${tag}`);
   const session = await store.getOrCreateByThread(`retention-${tag}`, "dm", scope);

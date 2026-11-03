@@ -291,7 +291,7 @@ test("secretEnv for a service the config does not enable is ignored", () => {
 });
 
 test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a portal identity", () => {
-  const config = makeConfig({ services: ["core", "web-ui", "admin", "portal"] });
+  const config = makeConfig({ services: ["core", "web-ui", "portal"] });
   const secret = secretByName(config, "PORTAL_IDENTITY_SECRET");
   assert.deepEqual(
     [...secretDestinations(secret).keys()].sort(),
@@ -305,7 +305,7 @@ test("the invitation-email pair reaches core as optional secrets on every topolo
     const alone = secretByName(makeConfig(), name);
     assert.equal(alone.required, false);
     assert.deepEqual([...secretDestinations(alone).keys()], ["core"]);
-    assert.match(alone.description, /admin Users tab or by chatting with QM/);
+    assert.match(alone.description, /Users settings page or by chatting with QM/);
     assert.match(renderEnvExample(makeConfig()), new RegExp(`^# ${name}=  # optional$`, "m"));
 
     const broker = makeConfig({

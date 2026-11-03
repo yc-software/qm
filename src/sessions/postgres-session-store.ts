@@ -26,7 +26,6 @@ import type {
   NewEntry,
   NewLlmRequest,
   ParticipantWindow,
-  ScreenSample,
   SessionOrigin,
   SessionOriginFilter,
   SessionPage,
@@ -37,8 +36,7 @@ import type {
   StoreOptions,
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
-import { SESSION_SCHEMA, SPEND_INDEXABLE } from "./session-schema.ts";
-import { TENANT, TENANT_MIGRATIONS as TENANCY } from "../tenants/migrations.ts";
+import { SESSION_MIGRATIONS, SPEND_INDEXABLE } from "./session-schema.ts";
 import {
   cronIdOf,
   promptEnvelopeBody,
@@ -60,7 +58,6 @@ import {
   USER_ITEM_KINDS,
   USER_KINDS,
 } from "./items.ts";
-import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
 const LLM_CAPTURE_PURGE_BATCH = 100;
 const ENVELOPE_TOUCH_MS = 24 * 60 * 60_000;
@@ -168,10 +165,13 @@ function rowToEntry(r: Record<string, unknown>): SessionEntry {
 
 const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ts.scope_id AS scope_label, ${msOf("i.created_at")} AS created_at`;
 const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
+const TENANT = "qm_tenant_id()";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
 const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
+const OWN_CHAT = (s: string): string =>
+  `${s}.parent_session_id IS NULL AND (${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
 
 const tsOf = (ms: string): string => `to_timestamp((${ms})::double precision / 1000)`;
 
@@ -291,9 +291,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     const params: unknown[] = [principalId];
     const where: string[] = [
       "p.principal_id = $1",
-      "s.parent_session_id IS NULL",
+      OWN_CHAT("s"),
       "(s.side_chat IS NULL OR s.side_chat->>'expanded' = 'true')",
-      `(s.surface IS NULL OR s.surface NOT IN ${AUTOMATION_SURFACES})`,
       HAS_CONTENT,
     ];
     const param = (value: unknown): string => {
@@ -337,7 +336,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       `WITH RECURSIVE tree(id, root_id, thread_ref) AS (
          SELECT id, parent_session_id, thread_ref FROM sessions WHERE parent_session_id = ANY($1::text[])
          UNION
-         SELECT s.id, t.root_id, s.thread_ref FROM sessions s JOIN tree t ON s.parent_session_id = t.id
+         SELECT c.id, t.root_id, c.thread_ref FROM tree t
+           CROSS JOIN LATERAL (SELECT id, thread_ref FROM sessions WHERE parent_session_id = t.id OFFSET 0) c
        )
        SELECT id, root_id, thread_ref FROM tree`,
       [[...rootIds]],
@@ -404,7 +404,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
-  const { pool, q, query } = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, SESSION_SCHEMA, ...TENANCY]);
+  const { pool, q, query } = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS]);
 
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
@@ -870,43 +870,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToLlmRequest);
     },
 
-    async listScreenSamples(limit): Promise<ScreenSample[]> {
-      const wanted = Math.max(0, Math.trunc(limit));
-      const pageSize = Math.max(wanted, 100);
-      const samples: ScreenSample[] = [];
-      let beforeAt: number | null = null;
-      let beforeId: string | null = null;
-      while (samples.length < wanted) {
-        const rows = await q(
-          `SELECT r.id, r.session_id, r.scope_label, r.created_at, r.model, e.body AS prompt_body
-             FROM session_llm_requests r JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash
-            WHERE r.step = $1
-              AND ($3::bigint IS NULL OR (r.created_at, r.id) < ($3::bigint, $4::text))
-            ORDER BY r.created_at DESC, r.id DESC
-            LIMIT $2`,
-          [SECURITY_SCREEN_STEP, pageSize, beforeAt, beforeId],
-        );
-        for (const r of rows) {
-          const payload = screenPayloadFromEnvelope(JSON.parse(r.prompt_body as string));
-          if (!payload) continue;
-          samples.push({
-            id: r.id as string,
-            sessionId: r.session_id as string,
-            scopeLabel: r.scope_label as ScopeId,
-            createdAt: Number(r.created_at),
-            model: r.model as string,
-            payload,
-          });
-          if (samples.length === wanted) return samples;
-        }
-        if (rows.length < pageSize) break;
-        const last = rows.at(-1)!;
-        beforeAt = Number(last.created_at);
-        beforeId = last.id as string;
-      }
-      return samples;
-    },
-
     async purgeLlmCaptures(cutoff, opts) {
       const deadline = opts?.deadline ?? Infinity;
       let envelopes = 0;
@@ -1125,7 +1088,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       if (needle.length < 2) return [];
       const like = `%${needle.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       const rows = await q(
-        participantSessionsSql(" AND COALESCE(p.title, s.title) ILIKE $2") +
+        participantSessionsSql(` AND ${OWN_CHAT("s")} AND COALESCE(p.title, s.title) ILIKE $2`) +
           " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $3",
         [principalId, like, Math.max(1, Math.min(Math.floor(limit), 100))],
         { timeoutMs: SEARCH_TIMEOUT_MS },
@@ -1142,11 +1105,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                      THEN i.body ->> 'name' END AS author,
                 i.text, ${msOf("i.created_at")} AS created_at,
                 s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
-           FROM qm_search_items(to_tsquery('simple', $2)) hit
-           JOIN items i ON i.tenant_id = ${TENANT} AND i.session_id = hit.session_id AND i.seq = hit.seq
+           FROM items i
            JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $1
-           JOIN sessions s ON s.id = i.session_id
-          WHERE ${SEARCHABLE_ITEM("i")}
+           JOIN sessions s ON s.id = i.session_id AND ${OWN_CHAT("s")}
+          WHERE i.tenant_id = ${TENANT} AND i.search @@ to_tsquery('simple', $2)
+            AND ${SEARCHABLE_ITEM("i")}
             AND ${withinParticipantWindow("i", "p")}
           ORDER BY i.created_at DESC, i.session_id, i.seq DESC
           LIMIT $3`,
@@ -1347,11 +1310,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           `WITH RECURSIVE affected(id) AS (
              SELECT unnest($1::text[])
              UNION
-             SELECT s.id FROM sessions s JOIN affected a ON s.parent_session_id = a.id
+             SELECT c.id FROM affected a
+               CROSS JOIN LATERAL (SELECT id FROM sessions WHERE parent_session_id = a.id OFFSET 0) c
            )
            INSERT INTO session_spend_dirty(day)
-           SELECT DISTINCT floor(r.created_at::numeric / 86400000)::bigint
-             FROM session_llm_requests r JOIN affected a ON a.id = r.session_id WHERE r.usage_json IS NOT NULL
+           SELECT DISTINCT d.day FROM affected a
+             CROSS JOIN LATERAL (
+               SELECT floor(created_at::numeric / 86400000)::bigint AS day FROM session_llm_requests
+                WHERE session_id = a.id AND usage_json IS NOT NULL OFFSET 0
+             ) d
            ON CONFLICT DO NOTHING`,
           [changed.rows.map((r) => r.session_id)],
         );

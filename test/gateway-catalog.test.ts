@@ -19,8 +19,10 @@ import { setCustomProviders, validateCustomProviderSpec } from "../src/model/cus
 import { testConfigStore } from "./support/test-database.ts";
 import { parseModelGateway, parseTenantSettings } from "../src/tenants/settings-parse.ts";
 import { defaultModelFor } from "../src/model/tenant-models.ts";
-import { enterTenant, withTenant } from "../src/tenants/context.ts";
-import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { testTenants } from "./support/test-tenants.ts";
+
+const [, OTHER_TENANT] = testTenants();
 
 const config = {
   url: "https://gateway.example/prefix/v1",
@@ -68,7 +70,6 @@ function fixture(models = [group()], aliases = {}) {
     },
   };
 }
-enterTenant(TEST_TENANT);
 afterEach(() => setGatewayModels([]));
 
 test("gateway configuration no longer requires a model list", () => {

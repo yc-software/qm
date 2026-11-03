@@ -4,15 +4,11 @@ import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
-import { instanceTenant } from "../tenants/instance.ts";
-import { enterTenant } from "../tenants/context.ts";
 
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 await built.tenantSettings.refreshAll();
-const tenant = await instanceTenant(config);
-if (tenant) enterTenant(tenant);
 await built.sandboxResources.initialize();
 await built.config.hydrate?.();
 await built.identity.refresh();

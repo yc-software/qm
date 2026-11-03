@@ -45,7 +45,11 @@ function deployment(t: TestContext, portal = false) {
     renderScaffold.renderConfig("acme", "anthropic", "resend", { repo: "https://github.com/acme/qm", branch: "main" }),
   ) as Record<string, any>;
   raw.render.workspaceId = "tea-acme";
-  raw.services = portal ? ["core", "web-ui", "portal", "auth", "admin"] : ["core", "web-ui"];
+  raw.services = portal ? ["core", "web-ui", "portal", "auth"] : ["core", "web-ui"];
+  raw.sandbox = {
+    ...raw.sandbox,
+    baseImage: `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`,
+  };
   raw.env = {
     ...(portal ? { auth: { ...raw.env.auth, AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" } } : {}),
     core: { ...raw.env.core },
@@ -1656,7 +1660,6 @@ test("Render connects a private web UI to the public portal and copies shared au
   assert.equal(core.PUBLIC_API_URL, "https://acme-core-assigned.onrender.com");
   assert.equal(c.services.get("srv-acme-web-ui")!.type, "private_service");
   assert.equal(portal.WEB_UI_UPSTREAM, "http://acme-web-ui-assigned:8080");
-  assert.equal(portal.ADMIN_UPSTREAM, "http://acme-web-ui-assigned:8080/admin");
   assert.equal(d.ctx.config.publicUrl, "https://acme-portal-assigned.onrender.com");
   assert.ok(portal.AUTH_CLIENT_SECRET);
   assert.equal(portal.OIDC_CLIENT_SECRET, undefined, "the portal's OIDC client secret is a tenant setting");

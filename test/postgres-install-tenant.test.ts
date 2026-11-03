@@ -132,7 +132,7 @@ test("a dev instance writes its settings to the main tenant beside an older one,
       [
         "/v1/install/tenant",
         "/v1/tenant-settings",
-        "/v1/admin/scopes/org:default-org/feature-flags",
+        "/v1/admin/scopes/tenant/feature-flags",
         "/v1/admin/model-providers/anthropic",
       ],
     );

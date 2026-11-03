@@ -537,6 +537,27 @@ test("streaming Mermaid keeps source and preserves the component on completion",
   block.remove();
 });
 
+test("draft fences become copyable cards that keep the same element while streaming", async () => {
+  const block = new StableMarkdown();
+  block.isStreaming = true;
+  block.content = "Here's a draft:\n\n```draft\nHi team, quick question about";
+  document.body.append(block);
+  await block.updateComplete;
+  const card = block.querySelector("qm-draft")!;
+  await (card as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+  assert.equal(block.querySelectorAll("code-block").length, 0);
+  block.content += " **main**.\n\nThanks!\n```\n\n```js\nconst x = 1\n```";
+  block.isStreaming = false;
+  await block.updateComplete;
+  assert.equal(block.querySelector("qm-draft"), card);
+  await (card as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+  const copy = card.querySelector("copy-button") as unknown as { text: string };
+  assert.equal(copy.text, "Hi team, quick question about **main**.\n\nThanks!");
+  assert.equal(card.querySelector(".draft-card-body")?.textContent, copy.text);
+  assert.equal(block.querySelectorAll("code-block").length, 1);
+  block.remove();
+});
+
 test("Mermaid image metadata is rejected before rendering can fetch a URL", async () => {
   const { renderMermaid } = await import("../src/mermaid-block.ts");
   for (const metadata of [

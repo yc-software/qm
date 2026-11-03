@@ -10,7 +10,9 @@ import { resolveModel } from "../src/model/pi-models.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { parseTenantSettings } from "../src/tenants/settings-parse.ts";
 import { testTenantSettings } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenants } from "./support/test-tenants.ts";
+
+const [TEST_TENANT] = testTenants();
 
 const OTHER_TENANT = "00000000-0000-4000-8000-000000000002";
 

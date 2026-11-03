@@ -180,6 +180,7 @@ export function tenantSandboxClients(settings: () => Promise<TenantSettings>) {
         make: (apiKey, workspaceId) => make(apiKey!, workspaceId!),
         methods: {
           create: true,
+          importImage: true,
           get: true,
           terminate: true,
           runScript: true,
