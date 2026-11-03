@@ -32,7 +32,11 @@ function createDatabaseSync(request: { template?: string }): string {
   const { worker, signal, port } = databaseWorker;
   Atomics.store(signal, 0, 0);
   worker.postMessage(request);
-  if (Atomics.wait(signal, 0, 0, 120_000) === "timed-out") throw new Error("Timed out creating a test database");
+  const deadline = Date.now() + 120_000;
+  while (Atomics.load(signal, 0) === 0) {
+    if (Atomics.wait(signal, 0, 0, Math.max(0, deadline - Date.now())) === "timed-out")
+      throw new Error("Timed out creating a test database");
+  }
   const reply = receiveMessageOnPort(port)?.message as { ok: boolean; name?: string; message?: string } | undefined;
   if (!reply?.ok || !reply.name) throw new Error(`Could not create a test database: ${reply?.message ?? "no reply"}`);
   return reply.name;

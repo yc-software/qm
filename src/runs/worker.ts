@@ -19,10 +19,12 @@ import {
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
-import { traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
+import type { SessionStore } from "../sessions/session-store.ts";
+import { FLUSH_MS, traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
+  sessions: Pick<SessionStore, "getByThread" | "fenceTurnLease">;
   orchestrator: Orchestrator;
   leaseTtlMs: number;
   heartbeatIntervalMs?: number;
@@ -30,6 +32,14 @@ export interface ProcessDeps {
 }
 
 export const LEASE_LOST_CONSECUTIVE = 3;
+
+export const SHUTDOWN_SETTLE_MS = 5_000;
+
+const SHUTDOWN_HANDBACK_MS = 3_000;
+
+export const SHUTDOWN_RELEASE_MS = SHUTDOWN_SETTLE_MS + SHUTDOWN_HANDBACK_MS;
+
+export const SHUTDOWN_EXIT_MS = SHUTDOWN_RELEASE_MS + SHUTDOWN_HANDBACK_MS + FLUSH_MS;
 
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 
@@ -66,7 +76,18 @@ async function attemptRun(
   if (token === null) throw new Error(`processRun called with an unleased run ${run.id}`);
   const intervalMs = deps.heartbeatIntervalMs ?? Math.max(1_000, Math.floor(deps.leaseTtlMs / 3));
   const cancel = new AbortController();
-  const onShutdown = (): void => cancel.abort();
+  let stranded = false;
+  let strandTimer: ReturnType<typeof setTimeout> | undefined;
+  const strand = Promise.withResolvers<TurnResult>();
+  const shutdown = opts?.shutdown;
+  const onShutdown = (): void => {
+    cancel.abort();
+    if (!shutdown || handbackStop(shutdown).kind !== "shutdown") return;
+    strandTimer = setTimeout(() => {
+      stranded = true;
+      strand.resolve({ status: "queued", sessionId: run.sessionId, runId: run.id });
+    }, SHUTDOWN_SETTLE_MS);
+  };
   if (opts?.shutdown?.aborted) onShutdown();
   else opts?.shutdown?.addEventListener("abort", onShutdown, { once: true });
   let started = false;
@@ -105,7 +126,7 @@ async function attemptRun(
     if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
     if (run.request.swarm && countedClaims(run) > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
     started = true;
-    const result = await deps.orchestrator.handleTurn({
+    const turn = deps.orchestrator.handleTurn({
       ...run.request,
       origin: resolveTurnOrigin(run.request),
       runId: run.id,
@@ -118,6 +139,10 @@ async function attemptRun(
       ...(opts?.shutdown ? { shutdown: opts.shutdown } : {}),
       ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
     });
+    const result = await Promise.race([turn, strand.promise]);
+    clearTimeout(strandTimer);
+    shutdown?.removeEventListener("abort", onShutdown);
+    if (stranded) turn.catch((e: unknown) => swallow(`worker: stranded run=${run.id} failed after hand-back`, e));
     stopBeat();
     if (opts?.shutdown?.aborted) return result;
     if (!(await deps.runs.complete(run.id, token, result))) {
@@ -146,12 +171,35 @@ async function attemptRun(
     throw err;
   } finally {
     stopBeat();
+    clearTimeout(strandTimer);
     opts?.shutdown?.removeEventListener("abort", onShutdown);
     if (opts?.shutdown?.aborted)
-      await deps.runs
-        .releaseLease(run.id, token, started ? handbackStop(opts.shutdown) : undefined)
-        .catch((e) => swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e));
+      await handBack(deps, run, token, started ? handbackStop(opts.shutdown) : undefined, stranded).catch((e) =>
+        swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e),
+      );
   }
+}
+
+async function handBack(
+  deps: ProcessDeps,
+  run: Run,
+  token: string,
+  stop: RunStop | undefined,
+  stranded: boolean,
+): Promise<void> {
+  if (!stranded) {
+    await deps.runs.releaseLease(run.id, token, stop);
+    return;
+  }
+  const exited = Date.now() + SHUTDOWN_EXIT_MS;
+  if (!(await deps.runs.heartbeat(run.id, token, deps.leaseTtlMs))) {
+    console.warn(`[worker] run ${run.id} ignored shutdown and is no longer held here; leaving it to its owner`);
+    return;
+  }
+  console.warn(`[worker] run ${run.id} ignored shutdown; handing it back to resume after this process exits`);
+  const session = await deps.sessions.getByThread(run.sessionId);
+  if (session) await deps.sessions.fenceTurnLease(session.id, exited);
+  await deps.runs.releaseLease(run.id, token, stop, exited);
 }
 
 export interface WorkerDeps extends ProcessDeps {
