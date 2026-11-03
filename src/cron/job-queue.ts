@@ -1,5 +1,5 @@
-import { PgBoss } from "pg-boss";
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { getConstructionPlans, PgBoss } from "pg-boss";
+import { createPgPool, type PgMigrationDefinition, type PgPool } from "../persistence/pg-pool.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export interface CronFireJob {
@@ -25,6 +25,19 @@ const UNHEALTHY_AFTER_ERROR_MS = 30_000;
 
 const FIRE_QUEUE = "cron-fire";
 
+export function pgBossSchemaMigration(schema = "pgboss"): PgMigrationDefinition {
+  const plans = getConstructionPlans(schema).trim();
+  if (!plans.startsWith("BEGIN;") || !plans.endsWith("COMMIT;") || plans.includes("$pgboss_plan$"))
+    throw new Error("pg-boss construction plans changed shape; review the cron queue schema migration");
+  const body = plans.slice("BEGIN;".length, -"COMMIT;".length);
+  return {
+    id: `cron-queue/${schema}/0001-install`,
+    statements: [
+      `DO $pgboss_install$ BEGIN IF to_regclass('${schema}.version') IS NULL THEN EXECUTE $pgboss_plan$${body}$pgboss_plan$; END IF; END $pgboss_install$`,
+    ],
+  };
+}
+
 export function createPgBossCronQueue(
   databaseUrl: string,
   schema: string = "pgboss",
@@ -33,6 +46,7 @@ export function createPgBossCronQueue(
   let pg: PgPool | null = null;
   const boss = new PgBoss({
     schema,
+    migrate: false,
     db: {
       executeSql: async (text, values) => {
         if (!pg) throw new Error("Cron queue database is closed");

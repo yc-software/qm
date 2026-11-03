@@ -157,7 +157,7 @@ import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environ
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { crossTenantLoop, inTenantOf } from "./tenants/claim.ts";
-import { createPgBossCronQueue } from "./cron/job-queue.ts";
+import { createPgBossCronQueue, pgBossSchemaMigration } from "./cron/job-queue.ts";
 import { createWebhookStore } from "./webhooks/webhook-store.ts";
 import { createPostgresWebhookRows } from "./webhooks/webhook-table.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
@@ -739,7 +739,12 @@ export function buildApp(
 
   const s3 = config.s3Endpoint ? s3Client(config.s3Region, { endpoint: config.s3Endpoint }) : undefined;
   const s3Override = s3 ? { _client: s3 } : {};
-  registerPgMigrations(databaseUrl, [...RENDER_WORKSPACE_MIGRATIONS, ...FILE_UPLOAD_MIGRATIONS, ...BUDGET_MIGRATIONS]);
+  registerPgMigrations(databaseUrl, [
+    ...RENDER_WORKSPACE_MIGRATIONS,
+    ...FILE_UPLOAD_MIGRATIONS,
+    ...BUDGET_MIGRATIONS,
+    pgBossSchemaMigration(),
+  ]);
   const workspace =
     config.workspaceStore === "postgres"
       ? createRenderWorkspaceStore(config.dataDir, databaseUrl)
@@ -2577,7 +2582,6 @@ export function buildApp(
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
     deleteCron: (id) => app.deleteCron(id),
-    requireQueueStart: Boolean(config.backgroundDeploymentId),
     advisoryLock,
     crons,
     deliveries,

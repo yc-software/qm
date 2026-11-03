@@ -11,7 +11,7 @@ import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { inTenantOf, type Claimed } from "../tenants/claim.ts";
+import { crossTenantLoop, inTenantOf, type Claimed } from "../tenants/claim.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { compileMonitorPattern } from "./monitor-broker.ts";
@@ -318,13 +318,13 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     }
   }
 
-  const tick = async (nowArg?: number): Promise<void> => {
+  const tick = crossTenantLoop(async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
     const observed = epoch;
     const work = () => leaderLease.hold(TICK_LEASE_KEY, () => pollAll(t, observed));
     if (deps.admittedWork) await deps.admittedWork.run(work);
     else await work();
-  };
+  });
 
   const sweeper = createSweeper(() => tick().catch(reportFailureAs("monitor: tick", undefined)), 10_000, {
     label: "monitor",
