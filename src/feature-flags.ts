@@ -1,8 +1,8 @@
 import { createPgPool } from "./persistence/pg-pool.ts";
 import { typedTableMigration } from "./persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "./tenants/migrations.ts";
-import { orgId as configOrgId } from "./config.ts";
-import { scopeId, type ScopeId } from "./types.ts";
+import { type ScopeId } from "./types.ts";
+import { tenantRootScope } from "./tenants/context.ts";
 
 export const FEATURES = {
   app_annotations: {
@@ -100,7 +100,7 @@ export function createPostgresFeatureFlagStore(
       const rows = await q(
         `SELECT 1 FROM feature_flags
           WHERE tenant_id = ${TENANT} AND feature_name = $1 AND enabled_scopes && ARRAY[$2, $3]::text[]`,
-        [featureName, scopeId("org", configOrgId()), scope],
+        [featureName, tenantRootScope(), scope],
       );
       return rows.length > 0;
     },
@@ -108,7 +108,7 @@ export function createPostgresFeatureFlagStore(
       const rows = await q(
         `SELECT feature_name FROM feature_flags
           WHERE tenant_id = ${TENANT} AND feature_name = ANY($1) AND enabled_scopes && ARRAY[$2, $3]::text[]`,
-        [FEATURE_NAMES, scopeId("org", configOrgId()), scope],
+        [FEATURE_NAMES, tenantRootScope(), scope],
       );
       return new Set(rows.map((row) => row.feature_name as FeatureName));
     },

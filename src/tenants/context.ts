@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { uuidSchema } from "../util/ids.ts";
+import { scopeId, type ScopeId } from "../types.ts";
 
 const TENANT_ID = uuidSchema.lowercase();
 
@@ -37,4 +38,8 @@ export function currentTenant(): string {
   const id = binding.getStore();
   if (id === undefined) throw new Error("No tenant is bound to this work");
   return id;
+}
+
+export function tenantRootScope(): ScopeId {
+  return scopeId("org", currentTenant());
 }
