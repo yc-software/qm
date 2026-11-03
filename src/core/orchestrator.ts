@@ -3138,7 +3138,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               Object.assign(body, swarmEntryProvenance);
               delete body.speakerId;
               if (humanInput && !syntheticPrompt && !continuation && !steered && !overheard) body.speakerId = actor.id;
-              if (actor.displayName?.trim() && typeof body.name !== "string") body.name = actor.displayName.trim();
+              const ownWords = !steered || !entry.author || samePerson(entry.author, actor.id);
+              if (ownWords && actor.displayName?.trim() && typeof body.name !== "string")
+                body.name = actor.displayName.trim();
               if (
                 input.displayText?.trim() &&
                 (entry.text ?? "") === pgTextSafe(input.text) &&
