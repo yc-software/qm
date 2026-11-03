@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { afterEach, beforeEach } from "node:test";
+import { after, afterEach, beforeEach } from "node:test";
 import { MessageChannel, receiveMessageOnPort, Worker, type MessagePort } from "node:worker_threads";
 import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-grant-store.ts";
 import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "../../src/admin/admin-grant-store.ts";
@@ -39,19 +39,40 @@ function startDatabaseWorker(): NonNullable<typeof databaseWorker> {
   return databaseWorker;
 }
 
-let createdInTest: string[] | undefined;
-const openInTest: Array<{ close(): Promise<void> }> = [];
-beforeEach(() => {
-  createdInTest = [];
+type TestFrame = { ends: Array<() => Promise<void>>; databases: string[] };
+const openTests: TestFrame[] = [];
+let endedTests: TestFrame[] = [];
+
+async function finishEndedTests(): Promise<void> {
+  const frames = endedTests;
+  endedTests = [];
+  await Promise.all(frames.flatMap((frame) => frame.ends).map((end) => end()));
+  const databases = frames.flatMap((frame) => frame.databases);
+  if (!databases.length) return;
+  restoreFileOwner();
+  const { worker } = startDatabaseWorker();
+  const released = new Promise((resolve) => worker.once("message", resolve));
+  worker.postMessage({ release: databases });
+  await released;
+}
+
+beforeEach(async () => {
+  if (!openTests.length) await finishEndedTests();
+  openTests.push({ ends: [], databases: [] });
 });
-afterEach(async () => {
-  await Promise.all(openInTest.splice(0).map((store) => store.close()));
-  if (createdInTest?.length) startDatabaseWorker().worker.postMessage({ release: createdInTest });
-  createdInTest = undefined;
+afterEach(() => {
+  const frame = openTests.pop();
+  if (frame) endedTests.push(frame);
 });
+after(finishEndedTests);
+
+export function atTestEnd(end: () => Promise<void>): boolean {
+  openTests.at(-1)?.ends.push(end);
+  return openTests.length > 0;
+}
 
 function closedAfterTest<S extends { close(): Promise<void> }>(store: S): S {
-  if (createdInTest) openInTest.push(store);
+  atTestEnd(() => store.close());
   return store;
 }
 
@@ -66,7 +87,7 @@ function createDatabaseSync(request: { template?: string }, scope: "test" | "fil
   }
   const reply = receiveMessageOnPort(port)?.message as { ok: boolean; name?: string; message?: string } | undefined;
   if (!reply?.ok || !reply.name) throw new Error(`Could not create a test database: ${reply?.message ?? "no reply"}`);
-  if (scope === "test") createdInTest?.push(reply.name);
+  if (scope === "test") openTests.at(-1)?.databases.push(reply.name);
   return reply.name;
 }
 

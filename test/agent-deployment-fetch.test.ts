@@ -8,6 +8,7 @@ import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../sr
 import { scopeId } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "agent-deployment-fetch-secret".repeat(2);
 
@@ -19,14 +20,16 @@ describe("agent deployment fetch", () => {
   let downPort: number;
 
   const capFor = (actorId: string) =>
-    mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scopeId("personal", actorId),
-        aud: CONTROL_PLANE_AUD,
-        exp: Date.now() + CAPABILITY_TTL_MS,
-      },
-      SECRET,
+    inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId,
+          scopeId: scopeId("personal", actorId),
+          aud: CONTROL_PLANE_AUD,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+        },
+        SECRET,
+      ),
     );
 
   const get = async (path: string, actorId?: string) =>

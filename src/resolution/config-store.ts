@@ -491,7 +491,7 @@ export function createConfigStore(
           for (const revisions of legacySoulHistory.values()) revisions.sort((a, b) => b.version - a.version);
           for (const revisions of soulHistory.values()) revisions.sort((a, b) => b.version - a.version);
           for (const r of await baseModelStore.all()) baseModels.set(r.scopeId, r);
-          await Promise.all(allSettings.map((setting) => setting.hydrate()));
+          for (const setting of allSettings) await setting.hydrate();
         })();
       }
       return hydrated;

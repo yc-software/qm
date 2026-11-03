@@ -243,6 +243,7 @@ async function gatewayApp(
     );
   const built = buildApp(config);
   t.after(() => built.runtime.stop());
+  await built.startup();
   return { config, built, seen, sent };
 }
 

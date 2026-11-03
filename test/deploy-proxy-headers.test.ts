@@ -30,7 +30,7 @@ test("/d/ proxy attaches the endpoint's proxyHeaders — the internal path authe
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const res = await fetch(`${base}/d/some-id/`);
+    const res = await fetch(`${base}/d/some-id/`, { headers: testTenantHeaders() });
     assert.equal(res.status, 200);
     assert.equal(await res.text(), "upstream-ok");
     assert.equal(seenCookie, "dpl_access=tok");
@@ -73,10 +73,15 @@ test("/d/ proxy multiplexes concurrent requests over one HTTP/2 session", async 
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     const eventsAbort = new AbortController();
-    const events = await fetch(`${base}/d/some-id/events`, { signal: eventsAbort.signal });
+    const events = await fetch(`${base}/d/some-id/events`, {
+      signal: eventsAbort.signal,
+      headers: testTenantHeaders(),
+    });
     const eventsReader = events.body!.getReader();
     assert.match(Buffer.from((await eventsReader.read()).value!).toString(), /data: ready/);
-    const responses = await Promise.all(Array.from({ length: 16 }, (_, i) => fetch(`${base}/d/some-id/request-${i}`)));
+    const responses = await Promise.all(
+      Array.from({ length: 16 }, (_, i) => fetch(`${base}/d/some-id/request-${i}`, { headers: testTenantHeaders() })),
+    );
     assert.deepEqual(
       responses.map((response) => response.status),
       Array(16).fill(200),
@@ -89,7 +94,7 @@ test("/d/ proxy multiplexes concurrent requests over one HTTP/2 session", async 
     assert.deepEqual([...seenAuth], ["vm-token"]);
     eventsAbort.abort();
     await eventsReader.closed.catch(() => undefined);
-    const afterAbort = await fetch(`${base}/d/some-id/after-abort`);
+    const afterAbort = await fetch(`${base}/d/some-id/after-abort`, { headers: testTenantHeaders() });
     assert.equal(await afterAbort.text(), "/after-abort");
     assert.equal(sessionCount, 1, "aborting one SSE stream keeps the shared session alive");
   } finally {
@@ -122,15 +127,15 @@ test("/d/ proxy retires a GOAWAY session even while an SSE stream is open", asyn
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
   try {
-    const events = await fetch(`${base}/d/some-id/events`);
+    const events = await fetch(`${base}/d/some-id/events`, { headers: testTenantHeaders() });
     const reader = events.body!.getReader();
     assert.match(Buffer.from((await reader.read()).value!).toString(), /data: ready/);
-    const slow = fetch(`${base}/d/some-id/slow`);
+    const slow = fetch(`${base}/d/some-id/slow`, { headers: testTenantHeaders() });
     await slowStart;
     sessions[0]!.goaway();
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const replacement = await fetch(`${base}/d/some-id/after-goaway`);
+    const replacement = await fetch(`${base}/d/some-id/after-goaway`, { headers: testTenantHeaders() });
     assert.equal(await replacement.text(), "replacement-ok");
     assert.equal(await (await slow).text(), "slow-ok", "GOAWAY drains an accepted request instead of truncating it");
     assert.equal(sessions.length, 2);
@@ -195,13 +200,13 @@ test("/d/ proxy retries a GOAWAY-refused GET once but never replays a POST body"
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
   try {
-    assert.equal((await fetch(`${base}/d/some-id/warm`)).status, 200);
-    const retried = await fetch(`${base}/d/some-id/retry-get`);
+    assert.equal((await fetch(`${base}/d/some-id/warm`, { headers: testTenantHeaders() })).status, 200);
+    const retried = await fetch(`${base}/d/some-id/retry-get`, { headers: testTenantHeaders() });
     assert.equal(retried.status, 200);
     assert.equal(await retried.text(), "ok");
     assert.equal(getHits, 2);
 
-    const streamed = await fetch(`${base}/d/some-id/retry-stream`);
+    const streamed = await fetch(`${base}/d/some-id/retry-stream`, { headers: testTenantHeaders() });
     assert.equal(
       await streamed.text(),
       "first\nsecond\n",
@@ -209,11 +214,15 @@ test("/d/ proxy retries a GOAWAY-refused GET once but never replays a POST body"
     );
     assert.equal(streamHits, 2);
 
-    const mutation = await fetch(`${base}/d/some-id/no-retry-post`, { method: "POST", body: "must-not-replay" });
+    const mutation = await fetch(`${base}/d/some-id/no-retry-post`, {
+      method: "POST",
+      body: "must-not-replay",
+      headers: testTenantHeaders(),
+    });
     assert.equal(mutation.status, 502);
     assert.equal(postHits, 1);
 
-    const recovered = await fetch(`${base}/d/some-id/dead-session`);
+    const recovered = await fetch(`${base}/d/some-id/dead-session`, { headers: testTenantHeaders() });
     assert.equal(recovered.status, 200);
     assert.equal(deadHits, 2, "a safe request retries once after the shared session dies");
   } finally {
@@ -259,13 +268,16 @@ test("/d/ proxy keeps the shared HTTP/2 session when one request has invalid hea
 
   try {
     const eventsAbort = new AbortController();
-    const events = await fetch(`${base}/d/some-id/events`, { signal: eventsAbort.signal });
+    const events = await fetch(`${base}/d/some-id/events`, {
+      signal: eventsAbort.signal,
+      headers: testTenantHeaders(),
+    });
     const reader = events.body!.getReader();
     assert.match(Buffer.from((await reader.read()).value!).toString(), /data: ready/);
     invalidHeaders = true;
-    assert.equal((await fetch(`${base}/d/some-id/invalid`)).status, 502);
+    assert.equal((await fetch(`${base}/d/some-id/invalid`, { headers: testTenantHeaders() })).status, 502);
     invalidHeaders = false;
-    assert.equal((await fetch(`${base}/d/some-id/healthy`)).status, 200);
+    assert.equal((await fetch(`${base}/d/some-id/healthy`, { headers: testTenantHeaders() })).status, 200);
     assert.equal(sessionCount, 1, "a request-local construction error does not kill unrelated streams");
     eventsAbort.abort();
     await reader.closed.catch(() => undefined);
@@ -298,7 +310,7 @@ test("/d/ proxy never retries after an HTTP/2 timeout has committed a 504", asyn
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
   try {
-    const response = await fetch(`${base}/d/some-id/timeout`);
+    const response = await fetch(`${base}/d/some-id/timeout`, { headers: testTenantHeaders() });
     assert.equal(response.status, 504);
     await new Promise((resolve) => setTimeout(resolve, 80));
     assert.equal(hits, 1);
@@ -330,12 +342,15 @@ test("/d/ proxy resets the downstream response when an HTTP/2 body is truncated"
 
   try {
     const outcome = await new Promise<{ body: string; aborted: boolean }>((resolve, reject) => {
-      const request = httpRequest({ host: "localhost", port, path: "/d/some-id/truncated" }, (response) => {
-        const chunks: Buffer[] = [];
-        response.on("data", (chunk) => chunks.push(chunk as Buffer));
-        response.on("aborted", () => resolve({ body: Buffer.concat(chunks).toString(), aborted: true }));
-        response.on("end", () => resolve({ body: Buffer.concat(chunks).toString(), aborted: false }));
-      });
+      const request = httpRequest(
+        { host: "localhost", port, path: "/d/some-id/truncated", headers: testTenantHeaders() },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk) => chunks.push(chunk as Buffer));
+          response.on("aborted", () => resolve({ body: Buffer.concat(chunks).toString(), aborted: true }));
+          response.on("end", () => resolve({ body: Buffer.concat(chunks).toString(), aborted: false }));
+        },
+      );
       request.on("error", reject);
       request.end();
     });
@@ -361,7 +376,7 @@ test("/d/ proxy returns 504 instead of hanging when the deployment accepts but n
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const res = await fetch(`${base}/d/some-id/`);
+    const res = await fetch(`${base}/d/some-id/`, { headers: testTenantHeaders() });
     assert.equal(res.status, 504);
     assert.equal(((await res.json()) as { error?: string }).error, "gateway_timeout");
   } finally {
@@ -384,7 +399,7 @@ test("/d/ proxy sends no extra headers when the endpoint declares none", async (
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const res = await fetch(`${base}/d/some-id/`);
+    const res = await fetch(`${base}/d/some-id/`, { headers: testTenantHeaders() });
     assert.equal(res.status, 200);
     assert.equal(seenCookie, undefined);
   } finally {
@@ -482,7 +497,7 @@ test("/d/ proxy forwards the client's content-type and body with an explicit con
     const payload = JSON.stringify({ fund: "Fund I", as_of: "2026-03-31" });
     const res = await fetch(`${base}/d/some-id/api/query`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), "content-type": "application/json" },
       body: payload,
     });
     assert.equal(res.status, 200);
@@ -524,7 +539,7 @@ test("/d/ proxy buffers a chunked client body into an explicit content-length up
           port,
           path: "/d/some-id/api/query",
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { ...testTenantHeaders(), "content-type": "application/json" },
         },
         (rs) => {
           rs.resume();
@@ -567,6 +582,7 @@ test("/d/ proxy forwards client cookies but scrubs the dpl_access gate token, an
   try {
     const res = await fetch(`${base}/d/some-id/`, {
       headers: {
+        ...testTenantHeaders(),
         cookie: "theme=dark; dpl_access=secret-gate-token; session=abc",
         "x-aws-proxy-auth": "spoofed",
         "x-portal-identity": "gateway-bearer",
@@ -604,7 +620,7 @@ test("/d/ proxy strips headers the client names in its own Connection header (dy
           port,
           path: "/d/some-id/",
           method: "GET",
-          headers: { connection: "x-hop-secret", "x-hop-secret": "leak", "x-keep": "kept" },
+          headers: { ...testTenantHeaders(), connection: "x-hop-secret", "x-hop-secret": "leak", "x-keep": "kept" },
         },
         (rs) => {
           rs.resume();
@@ -641,7 +657,7 @@ test("/d/ proxy strips fixed and Connection-named hop-by-hop response headers", 
   const port = (server.address() as AddressInfo).port;
   try {
     const headers = await new Promise<Record<string, string | string[] | undefined>>((resolve, reject) => {
-      const rq = httpRequest({ host: "localhost", port, path: "/d/some-id/" }, (rs) => {
+      const rq = httpRequest({ host: "localhost", port, path: "/d/some-id/", headers: testTenantHeaders() }, (rs) => {
         rs.resume();
         rs.on("end", () => resolve(rs.headers));
       });
@@ -671,7 +687,7 @@ test("/d/ proxy scrubs the dpl_access gate cookie even with stray whitespace aro
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     const res = await fetch(`${base}/d/some-id/`, {
-      headers: { cookie: "theme=dark; dpl_access = sneaky-gate-token; session=abc" },
+      headers: { ...testTenantHeaders(), cookie: "theme=dark; dpl_access = sneaky-gate-token; session=abc" },
     });
     assert.equal(res.status, 200);
     assert.equal(seenCookie, "theme=dark; session=abc");
