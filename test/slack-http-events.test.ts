@@ -8,10 +8,12 @@ import { testTenants } from "./support/test-tenants.ts";
 const [TEST_TENANT] = testTenants();
 import { boundTenant } from "../src/tenants/context.ts";
 
-const tenantFor = async (body: Record<string, unknown>) =>
-  body.type === "url_verification" || (body.team_id ?? (body.team as { id?: string } | undefined)?.id) === "T1"
+const tenantFor = async (body: Record<string, unknown>) => {
+  if (body.team_id === "T_DOWN") throw new Error("database unavailable");
+  return body.type === "url_verification" || (body.team_id ?? (body.team as { id?: string } | undefined)?.id) === "T1"
     ? TEST_TENANT
     : null;
+};
 import { normalizeSlackApiUrl, slackPluginConfigFromEnv } from "../src/slack/index.ts";
 
 const SECRET = "test-signing-secret";
@@ -113,6 +115,21 @@ test("a signed envelope from a workspace outside the tenant is refused before th
       assert.equal(processed, 0);
     },
   );
+});
+
+test("a failed tenant lookup answers 503 so Slack retries, and the app never runs", async () => {
+  let processed = 0;
+  await withReceiver(
+    async () => {
+      processed++;
+    },
+    async (post) => {
+      const res = await post({ ...messageEnvelope, team_id: "T_DOWN" });
+      assert.equal(res.status, 503);
+      assert.deepEqual(await res.json(), { error: "tenant_unavailable" });
+    },
+  );
+  assert.equal(processed, 0);
 });
 
 test("the app runs inside the tenant its verified workspace resolves to", async () => {

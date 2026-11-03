@@ -276,6 +276,37 @@ test("a Socket Mode envelope from a workspace outside the tenant is acknowledged
   assert.equal(acks, 2);
 });
 
+test("a Socket Mode envelope whose tenant lookup fails is left unacknowledged for Slack to redeliver", async () => {
+  let processed = 0;
+  let looked!: () => void;
+  const lookedUp = new Promise<void>((resolve) => {
+    looked = resolve;
+  });
+  const receiver = createDeferredAckReceiver({
+    appToken: "xapp-test",
+    tenantFor: async () => {
+      looked();
+      throw new Error("database unavailable");
+    },
+  }) as ReturnType<typeof createDeferredAckReceiver> & { client: SocketModeClient };
+  receiver.init?.({
+    processEvent: async () => {
+      processed++;
+    },
+  } as unknown as BoltApp);
+  let acks = 0;
+  receiver.client.emit("slack_event", {
+    body: { type: "event_callback", team_id: "TA", event: { type: "reaction_added" } },
+    ack: async () => {
+      acks++;
+    },
+  });
+  await lookedUp;
+  await tick(10);
+  assert.equal(acks, 0);
+  assert.equal(processed, 0);
+});
+
 test("a failed rebuild keeps the previous installation running and retries with backoff", async () => {
   const { core } = fakeCore([]);
   let version = "v1";

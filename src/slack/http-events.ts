@@ -71,7 +71,13 @@ export function createHttpEventsReceiver(opts: HttpEventsReceiverOptions): Recei
       return respond(res, 400, { error: "invalid_json" });
     }
     if (body.type === "url_verification") return respond(res, 200, { challenge: body.challenge });
-    const tenant = await opts.tenantFor(body).catch(() => null);
+    let tenant: string | null;
+    try {
+      tenant = await opts.tenantFor(body);
+    } catch (error) {
+      console.error(`[slack-plugin] could not resolve the tenant for ${describeEnvelope(body)}:`, errMessage(error));
+      return respond(res, 503, { error: "tenant_unavailable" });
+    }
     if (!tenant) return respond(res, 403, { error: "unknown_team" });
     await withTenant(tenant, () => dispatch(req, res, body));
   }

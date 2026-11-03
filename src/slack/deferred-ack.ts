@@ -147,7 +147,16 @@ export function createDeferredAckReceiver(opts: DeferredAckReceiverOptions): Rec
       retry_num?: number;
       retry_reason?: string;
     }) => {
-      const tenant = await opts.tenantFor(args.body).catch(() => null);
+      let tenant: string | null;
+      try {
+        tenant = await opts.tenantFor(args.body);
+      } catch (error) {
+        console.error(
+          `[slack-plugin] could not resolve the tenant for ${describeEnvelope(args.body)}; Slack will redeliver it:`,
+          errMessage(error),
+        );
+        return;
+      }
       if (!tenant) {
         console.warn(`[slack-plugin] refused ${describeEnvelope(args.body)} from a workspace outside this tenant`);
         await args.ack();
