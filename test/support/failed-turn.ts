@@ -8,12 +8,13 @@ export async function failedTurnError(
 ): Promise<string> {
   const result = await built.app.turn(request);
   assert.equal(result.status, "failed", JSON.stringify(result));
-  const run = await built.runs.latestForThread(request.conversation.threadRef);
+  const threadRef = request.conversation.threadRef;
+  const run = (await built.runs.list({ threadRef })).find((candidate) => candidate.sessionId === threadRef);
   const logged = (await built.errors.list()).filter(
     (e) =>
       e.category === "turn" &&
       ((result.sessionId !== undefined && e.sessionId === result.sessionId) ||
-        (run !== null && e.message.startsWith(`run ${run.id}:`))),
+        (run !== undefined && e.message.startsWith(`run ${run.id}:`))),
   );
   return [result.reason ?? "", ...logged.map((e) => e.message)].join("\n");
 }
