@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const actor = { externalId: "U1" };
 function dm(text: string): TurnRequest {
@@ -25,7 +26,7 @@ function dm(text: string): TurnRequest {
 
 async function settled(built: ReturnType<typeof buildApp>, runId: string) {
   for (let i = 0; i < 300; i++) {
-    const run = await built.runs.get(runId);
+    const run = await inTestTenant(() => built.runs.get(runId));
     if (run && (run.status === "done" || run.status === "failed")) return run;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -36,22 +37,22 @@ test("a run's tool entries are read from the session, bounded by its turn and it
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-tools-")) }));
   built.runtime.start();
   try {
-    await selectDefaultSandbox(built, "U1", "personal:U1");
-    const first = await built.app.turn(dm("!run echo hi"));
+    await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
+    const first = await inTestTenant(() => built.app.turn(dm("!run echo hi")));
     const run = await settled(built, first.runId!);
-    const second = await built.app.turn(dm("plain follow-up"));
+    const second = await inTestTenant(() => built.app.turn(dm("plain follow-up")));
     await settled(built, second.runId!);
     const owner = run.request.actor.id;
-    const entries = await built.app.getRunToolEntries(first.runId!, owner);
+    const entries = await inTestTenant(() => built.app.getRunToolEntries(first.runId!, owner));
     assert.deepEqual(
       entries.map((e) => e.type),
       ["tool_call", "tool_result"],
     );
     assert.equal((entries[0]!.payload as { command?: string }).command, "echo hi");
     assert.ok(entries.every((e) => e.seq > run.turnUserSeq!));
-    assert.deepEqual(await built.app.getRunToolEntries(second.runId!, owner), []);
-    assert.deepEqual(await built.app.getRunToolEntries(first.runId!, "internal:someone-else"), []);
-    assert.deepEqual(await built.app.getRunToolEntries("missing-run", owner), []);
+    assert.deepEqual(await inTestTenant(() => built.app.getRunToolEntries(second.runId!, owner)), []);
+    assert.deepEqual(await inTestTenant(() => built.app.getRunToolEntries(first.runId!, "internal:someone-else")), []);
+    assert.deepEqual(await inTestTenant(() => built.app.getRunToolEntries("missing-run", owner)), []);
   } finally {
     await built.runtime.stop();
   }
@@ -61,42 +62,50 @@ test("a run's tool entries include rounds after a mid-run goal prompt and stop a
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-tools-goal-")) }));
   built.runtime.start();
   try {
-    await selectDefaultSandbox(built, "U1", "personal:U1");
-    const first = await built.app.turn(dm("!run echo hi"));
+    await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
+    const first = await inTestTenant(() => built.app.turn(dm("!run echo hi")));
     const run = await settled(built, first.runId!);
-    const session = (await built.sessions.getByThread(run.sessionId))!;
-    const { lease } = await built.sessions.acquireLease(session.id);
+    const session = (await inTestTenant(() => built.sessions.getByThread(run.sessionId)))!;
+    const { lease } = await inTestTenant(() => built.sessions.acquireLease(session.id));
     const scopeLabel = session.scopeId;
-    await built.sessions.append(lease!, {
-      type: "user",
-      payload: {
-        text: "[goal] The active goal is not marked complete. Continue working toward it.",
-        hidden: true,
-        runId: run.id,
-      },
-      scopeLabel,
-    });
-    const call = await built.sessions.append(lease!, {
-      type: "tool_call",
-      payload: { tool: "execute", command: "make test", callId: "goal-round" },
-      scopeLabel,
-    });
-    await built.sessions.append(lease!, {
-      type: "tool_result",
-      payload: { tool: "execute", callId: "goal-round", isError: false, result: "ok" },
-      scopeLabel,
-    });
-    await built.sessions.releaseLease(lease!);
-    const second = await built.app.turn(dm("!run echo again"));
+    await inTestTenant(() =>
+      built.sessions.append(lease!, {
+        type: "user",
+        payload: {
+          text: "[goal] The active goal is not marked complete. Continue working toward it.",
+          hidden: true,
+          runId: run.id,
+        },
+        scopeLabel,
+      }),
+    );
+    const call = await inTestTenant(() =>
+      built.sessions.append(lease!, {
+        type: "tool_call",
+        payload: { tool: "execute", command: "make test", callId: "goal-round" },
+        scopeLabel,
+      }),
+    );
+    await inTestTenant(() =>
+      built.sessions.append(lease!, {
+        type: "tool_result",
+        payload: { tool: "execute", callId: "goal-round", isError: false, result: "ok" },
+        scopeLabel,
+      }),
+    );
+    await inTestTenant(() => built.sessions.releaseLease(lease!));
+    const second = await inTestTenant(() => built.app.turn(dm("!run echo again")));
     await settled(built, second.runId!);
     const owner = run.request.actor.id;
     const callIds = (entries: Array<{ payload: unknown }>) =>
       entries.map((e) => (e.payload as { callId?: string }).callId);
-    const all = await built.app.getRunToolEntries(run.id, owner);
+    const all = await inTestTenant(() => built.app.getRunToolEntries(run.id, owner));
     assert.equal(all.length, 4);
     assert.deepEqual(callIds(all.slice(2)), ["goal-round", "goal-round"]);
-    assert.deepEqual(callIds(await built.app.getRunToolEntries(run.id, owner, call.seq)), ["goal-round"]);
-    const next = await built.app.getRunToolEntries(second.runId!, owner);
+    assert.deepEqual(callIds(await inTestTenant(() => built.app.getRunToolEntries(run.id, owner, call.seq))), [
+      "goal-round",
+    ]);
+    const next = await inTestTenant(() => built.app.getRunToolEntries(second.runId!, owner));
     assert.equal(next.length, 2);
     assert.ok(next.every((e) => (e.payload as { callId?: string }).callId !== "goal-round"));
   } finally {
@@ -114,11 +123,13 @@ test("each tool entry nudges the run stream once it is durable", async () => {
     return appended;
   };
   try {
-    await selectDefaultSandbox(built, "U1", "personal:U1");
-    const turn = await built.app.turn(dm("!run echo hi"));
-    const unsubscribe = built.app.subscribeRun(turn.runId!, (event) => {
-      if (event.kind === "refresh") log.push("refresh");
-    });
+    await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
+    const turn = await inTestTenant(() => built.app.turn(dm("!run echo hi")));
+    const unsubscribe = inTestTenant(() =>
+      built.app.subscribeRun(turn.runId!, (event) => {
+        if (event.kind === "refresh") log.push("refresh");
+      }),
+    );
     built.runtime.start();
     await settled(built, turn.runId!);
     unsubscribe();

@@ -13,31 +13,33 @@ import { assertLateJoinerScopes, assertLeanListing } from "./support/participant
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
-test("listed sessions leave out spawn metadata; scopes count only sessions with content", async () => {
-  await assertLeanListing(createPostgresSessionStore(testDatabaseUrl()), "mem");
-});
+test("listed sessions leave out spawn metadata; scopes count only sessions with content", () =>
+  inTestTenant(() => assertLeanListing(createPostgresSessionStore(testDatabaseUrl()), "mem")));
 
-test("participantScopes leaves out sessions whose content predates the participant", async () => {
-  await assertLateJoinerScopes(createPostgresSessionStore(testDatabaseUrl()), "mem");
-});
+test("participantScopes leaves out sessions whose content predates the participant", () =>
+  inTestTenant(() => assertLateJoinerScopes(createPostgresSessionStore(testDatabaseUrl()), "mem")));
 
 test("GET /v1/sessions rows carry no spawn metadata, client tools or entry flag", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "lean-list-")) }));
-  const child = await built.sessions.getOrCreateByThread("subagent:root:2", "dm", "personal:U1", undefined, "web", [
-    { name: "screenshot", description: "Take a screenshot", inputSchema: { type: "object" } },
-  ]);
-  await built.sessions.setSpawnMeta(child.id, {
-    surface: "web",
-    conversation: { kind: "dm", threadRef: "web:U1:root", audience: [] },
-    actor: { id: "U1", type: "internal" },
-  } as unknown as SpawnMeta);
-  await built.sessions.addParticipant(child.id, "U1", "Research task");
+  const child = await inTestTenant(async () => {
+    const child = await built.sessions.getOrCreateByThread("subagent:root:2", "dm", "personal:U1", undefined, "web", [
+      { name: "screenshot", description: "Take a screenshot", inputSchema: { type: "object" } },
+    ]);
+    await built.sessions.setSpawnMeta(child.id, {
+      surface: "web",
+      conversation: { kind: "dm", threadRef: "web:U1:root", audience: [] },
+      actor: { id: "U1", type: "internal" },
+    } as unknown as SpawnMeta);
+    await built.sessions.addParticipant(child.id, "U1", "Research task");
+    return child;
+  });
   const server = createInsecureTestServer(built.app);
   server.listen(0);
   try {
     const port = (server.address() as AddressInfo).port;
-    const res = await fetch(`http://localhost:${port}/v1/sessions?principalId=U1`);
+    const res = await fetch(`http://localhost:${port}/v1/sessions?principalId=U1`, { headers: testTenantHeaders() });
     assert.equal(res.status, 200);
     const body = (await res.json()) as { sessions: Record<string, unknown>[] };
     const row = body.sessions.find((session) => session.id === child.id);
