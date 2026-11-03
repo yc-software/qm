@@ -187,7 +187,9 @@ test(
       assert.equal((await runs.claim("w1", 60_000))?.id, a.id);
       const b = (await withTenant(B, () => runs.enqueue({ sessionId: "shared", request: turn("b"), maxAttempts: 1 })))
         .run;
-      const available = new Promise<boolean>((resolve) => runs.subscribeAvailable(() => resolve(true), { pollMs: 5 }));
+      const subscribe = runs.subscribeAvailable;
+      assert.ok(subscribe);
+      const available = new Promise<boolean>((resolve) => subscribe(() => resolve(true), { pollMs: 5 }));
       assert.equal(await Promise.race([available, delay(2_000, false)]), true);
       const claimed = await runs.claim("w2", 60_000);
       assert.deepEqual([claimed?.id, claimed?.tenantId], [b.id, B]);
