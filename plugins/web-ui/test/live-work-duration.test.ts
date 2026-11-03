@@ -46,3 +46,23 @@ test("approval waits keep their recorded duration", (t) => {
   assert.equal(host.textContent, "8s");
   render(nothing, host);
 });
+
+test("the live label keeps its seconds in a two-digit slot without changing the text", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 109_000 });
+  const work: WorkBlock = { status: "working", startedAt: 100_000, activity: [] };
+  const host = document.createElement("div");
+  render(html`${liveWorkDuration(work)}`, host);
+  const seconds = () => host.querySelector(".work-elapsed-seconds")?.textContent;
+  assert.equal(host.textContent, "9s");
+  assert.equal(seconds(), "9");
+  t.mock.timers.tick(1000);
+  assert.equal(host.textContent, "10s");
+  assert.equal(seconds(), "10");
+  t.mock.timers.tick(59_000);
+  assert.equal(host.textContent, "1m 9s");
+  assert.equal(seconds(), "9");
+  t.mock.timers.tick(3_600_000);
+  assert.equal(host.textContent, "1h 1m 9s");
+  assert.equal(seconds(), "9");
+  render(nothing, host);
+});
