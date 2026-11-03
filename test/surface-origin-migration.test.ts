@@ -11,6 +11,7 @@ import { createPgPool } from "../src/persistence/pg-pool.ts";
 import {
   SETTLED_CANDIDATES_MIGRATION,
   SETTLED_ORIGIN_MIGRATION,
+  TURN_ORIGIN_MIGRATION,
   rewriteSurfaceOrigins,
 } from "../src/surfaces/origin-migration.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
@@ -193,10 +194,30 @@ test(
           JSON.stringify({ id: "d1", [field]: { ...oldDestination, slackPolicyNamespace: "ns" } }),
         ]);
 
-      await admin.query("DELETE FROM qm_schema_migrations WHERE id = $1", [SETTLED_CANDIDATES_MIGRATION.id]);
+      await admin.query("DELETE FROM qm_schema_migrations WHERE id = ANY($1)", [
+        [SETTLED_CANDIDATES_MIGRATION.id, TURN_ORIGIN_MIGRATION.id],
+      ]);
       const beforeBoot = await snapshot(admin);
       await migrate(url);
       assert.deepEqual(await snapshot(admin), beforeBoot);
+      const previousReleaseShape = (extra: Record<string, unknown>) => {
+        const { origin: _typed, ...legacy } = request(extra);
+        return legacy;
+      };
+      await admin.query("INSERT INTO approvals (id, json) VALUES ('a-overlap', $1)", [
+        JSON.stringify({
+          command: "security-screen",
+          request: previousReleaseShape({
+            triggered: true,
+            securityScreenData: "d",
+            triggerDestination: oldDestination,
+          }),
+        }),
+      ]);
+      await admin.query(
+        "INSERT INTO run_signals (run_id, kind, payload, created_at) VALUES ('pending', 'steer', $1, 2)",
+        [JSON.stringify({ kind: "steer", request: previousReleaseShape({ unprompted: true, entryTs: "9" }) })],
+      );
       await admin.query("UPDATE surface_origin_settled_collected SET collected_at = $1", [now - 72 * 3_600_000]);
       await run("settled-after-boot", "s7", "done", 4, request({ slackSource: internalSource }), now - 48 * 3_600_000);
       await rewrite(url);
@@ -248,6 +269,13 @@ test(
       );
       assert.deepEqual(deliveries.undelivered, newDestination);
       assert.deepEqual(deliveries.delivered, oldDestination);
+      assert.deepEqual(signals[2].payload.request.origin, { kind: "ambient", entryTs: "9" });
+      const overlapApproval = (await admin.query("SELECT json FROM approvals WHERE id = 'a-overlap'")).rows[0].json;
+      assert.deepEqual(overlapApproval.request.origin, {
+        kind: "automation",
+        screenData: "d",
+        destination: newDestination,
+      });
       const approval = (await admin.query("SELECT json FROM approvals WHERE id = 'a1'")).rows[0].json;
       assert.deepEqual(approval.request.surfaceOrigin, internalOrigin);
       assert.equal("slackSource" in approval.request, false);
