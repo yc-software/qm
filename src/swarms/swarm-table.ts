@@ -7,7 +7,7 @@ import { jsonbStringify } from "../util/text.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import type { SwarmStorage } from "./swarm-store.ts";
 
-export type TenantSwarmStorage = SwarmStorage & { tenantId: string };
+type TenantSwarmStorage = SwarmStorage & { tenantId: string };
 
 export interface SwarmRows {
   get(id: string): Promise<SwarmStorage | null>;
@@ -20,7 +20,7 @@ export interface SwarmRows {
   close?(): Promise<void>;
 }
 
-export const SWARMS_MIGRATION = typedTableMigration({
+const SWARMS_MIGRATION = typedTableMigration({
   table: "swarms",
   columns: [
     "id TEXT NOT NULL",

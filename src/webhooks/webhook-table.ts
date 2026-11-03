@@ -12,7 +12,7 @@ export interface WebhookEvent {
   payload: string;
 }
 
-export const WEBHOOK_EVENTS_KEPT = 50;
+const WEBHOOK_EVENTS_KEPT = 50;
 
 export type TenantWebhook = Webhook & { tenantId: string };
 
@@ -78,7 +78,7 @@ function rowToWebhook(r: Record<string, unknown>): Webhook {
   return webhook;
 }
 
-export const WEBHOOKS_MIGRATION = typedTableMigration({
+const WEBHOOKS_MIGRATION = typedTableMigration({
   table: "webhooks",
   columns: [
     "id TEXT NOT NULL",
@@ -121,7 +121,7 @@ export const WEBHOOKS_MIGRATION = typedTableMigration({
   ],
 });
 
-export const WEBHOOK_EVENTS_MIGRATION = tenantTables(
+const WEBHOOK_EVENTS_MIGRATION = tenantTables(
   "tenancy/webhook_events/0001-typed",
   [{ table: "webhook_events", primaryKey: "webhook_id, delivery_id" }],
   {

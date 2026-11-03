@@ -21,7 +21,7 @@ export interface SuggestedActivityProfile extends ManagedCronClaim {
   dismissed?: DismissedActivity[];
 }
 
-export const SUGGESTED_ACTIVITY_PROFILES_MIGRATION = typedTableMigration({
+const SUGGESTED_ACTIVITY_PROFILES_MIGRATION = typedTableMigration({
   table: "suggested_activity_profiles",
   columns: [
     "principal_id TEXT NOT NULL",

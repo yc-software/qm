@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
-import { createPgPool, configurePgPooling } from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, configurePgPooling, createPgPool, definePgMigration } from "../src/persistence/pg-pool.ts";
 
 const direct = process.env.DATABASE_URL;
 const pooled = process.env.DATABASE_POOL_URL;
@@ -116,8 +116,9 @@ test(
   "cron queue shares transaction pooling and stopping it preserves other stores",
   { skip, timeout: 30_000 },
   async () => {
-    const { createPgBossCronQueue } = await import("../src/cron/job-queue.ts");
+    const { createPgBossCronQueue, pgBossSchemaMigration } = await import("../src/cron/job-queue.ts");
     const store = createPgPool(direct!);
+    await applyPgMigrations(await store.sessionPool(), [definePgMigration(pgBossSchemaMigration("pooled_cron_test"))]);
     const queue = createPgBossCronQueue(direct!, "pooled_cron_test");
     let fired = false;
     try {

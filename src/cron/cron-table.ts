@@ -98,7 +98,7 @@ const jsonText = (field: string) => `json->>'${field}'`;
 const jsonEpoch = (field: string) => `(json->>'${field}')::numeric::bigint`;
 const jsonObject = (field: string) => `NULLIF(json->'${field}', 'null'::jsonb)`;
 
-export const CRONS_MIGRATION = typedTableMigration({
+const CRONS_MIGRATION = typedTableMigration({
   table: "crons",
   columns: [
     "id TEXT NOT NULL",

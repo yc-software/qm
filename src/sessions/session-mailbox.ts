@@ -23,7 +23,7 @@ export interface SessionMailbox {
   close?(): Promise<void>;
 }
 
-export const SESSION_MAILBOX_MIGRATION = typedTableMigration({
+const SESSION_MAILBOX_MIGRATION = typedTableMigration({
   table: "session_mailbox",
   columns: [
     "id TEXT NOT NULL",

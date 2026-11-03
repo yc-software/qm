@@ -83,7 +83,7 @@ function rowToMonitor(r: Record<string, unknown>): Monitor {
   return monitor;
 }
 
-export const MONITORS_MIGRATION = typedTableMigration({
+const MONITORS_MIGRATION = typedTableMigration({
   table: "monitors",
   columns: [
     "id TEXT NOT NULL",

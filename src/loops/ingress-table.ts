@@ -5,7 +5,7 @@ import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
 
-export type TenantIngress = LoopIngress & { tenantId: string };
+type TenantIngress = LoopIngress & { tenantId: string };
 
 export interface IngressSourceRows {
   get(id: string): Promise<LoopIngress | null>;

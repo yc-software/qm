@@ -5,7 +5,7 @@ import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 
 export type MemoryTidyProfile = ManagedCronClaim;
 
-export const MEMORY_TIDY_PROFILES_MIGRATION = typedTableMigration({
+const MEMORY_TIDY_PROFILES_MIGRATION = typedTableMigration({
   table: "memory_tidy_profiles",
   columns: ["scope_id TEXT NOT NULL", "cron_id TEXT", "arming BOOLEAN NOT NULL DEFAULT false"],
   primaryKey: ["scope_id"],
