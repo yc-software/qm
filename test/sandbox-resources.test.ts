@@ -1,7 +1,6 @@
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSandboxResources, type SandboxResource, type SandboxDefault } from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
@@ -16,7 +15,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
 import { withoutTenant } from "../src/tenants/context.ts";
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
@@ -94,30 +93,33 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
   return { records, defaults, routes, resources, router, provisioned, layers, backend, options, marker, upgrade };
 }
 
-test("blank sandbox identities coexist and default changes never copy files or redirect existing handles", async () => {
-  const { resources, router, layers } = fixture();
-  const old = await router.provision(layers);
-  await router.writeFile(old, "secret", "old disk");
-  const first = await resources.create("alice", "personal:alice", "local", "build");
-  const second = await resources.create("alice", "personal:alice", "local", "analysis");
-  const a = await router.provision(layers, { sandboxId: first.id });
-  const b = await router.provision(layers, { sandboxId: second.id });
-  assert.notEqual(a.id, b.id);
-  assert.equal(await router.readFile(a, "secret"), null);
-  await router.writeFile(a, "output", "A");
-  await resources.setDefault("alice", "personal:alice", first.id);
-  assert.equal((await router.provision(layers)).id, a.id);
-  await resources.setDefault("alice", "personal:alice", second.id);
-  assert.equal((await router.provision(layers)).id, b.id);
-  assert.equal((await router.run(a, "pwd")).stdout, a.id);
-  assert.equal(await router.readFile(a, "output"), "A");
-  assert.equal(await router.readFile(b, "output"), null);
-  assert.equal(await router.readFile(old, "secret"), "old disk");
-  assert.equal(a.scopeId, "personal:alice");
-  assert.equal(a.resourceId, first.id);
-});
+tenantTest(
+  "blank sandbox identities coexist and default changes never copy files or redirect existing handles",
+  async () => {
+    const { resources, router, layers } = fixture();
+    const old = await router.provision(layers);
+    await router.writeFile(old, "secret", "old disk");
+    const first = await resources.create("alice", "personal:alice", "local", "build");
+    const second = await resources.create("alice", "personal:alice", "local", "analysis");
+    const a = await router.provision(layers, { sandboxId: first.id });
+    const b = await router.provision(layers, { sandboxId: second.id });
+    assert.notEqual(a.id, b.id);
+    assert.equal(await router.readFile(a, "secret"), null);
+    await router.writeFile(a, "output", "A");
+    await resources.setDefault("alice", "personal:alice", first.id);
+    assert.equal((await router.provision(layers)).id, a.id);
+    await resources.setDefault("alice", "personal:alice", second.id);
+    assert.equal((await router.provision(layers)).id, b.id);
+    assert.equal((await router.run(a, "pwd")).stdout, a.id);
+    assert.equal(await router.readFile(a, "output"), "A");
+    assert.equal(await router.readFile(b, "output"), null);
+    assert.equal(await router.readFile(old, "secret"), "old disk");
+    assert.equal(a.scopeId, "personal:alice");
+    assert.equal(a.resourceId, first.id);
+  },
+);
 
-test("provisioning a running computer does not wait behind a long-running command on it", async () => {
+tenantTest("provisioning a running computer does not wait behind a long-running command on it", async () => {
   const { resources, router, layers } = fixture();
   const handle = await router.provision(layers);
   const command = Promise.withResolvers<void>();
@@ -128,7 +130,7 @@ test("provisioning a running computer does not wait behind a long-running comman
   await running;
 });
 
-test("a command on a computer reads its inventory record once", async () => {
+tenantTest("a command on a computer reads its inventory record once", async () => {
   const { records, router, layers } = fixture();
   const handle = await router.provision(layers);
   let reads = 0;
@@ -141,7 +143,7 @@ test("a command on a computer reads its inventory record once", async () => {
   assert.equal(reads, 1);
 });
 
-test("explicit sandbox profiles follow selected storage rather than the parent's default provider", async () => {
+tenantTest("explicit sandbox profiles follow selected storage rather than the parent's default provider", async () => {
   const { backend, options } = fixture();
   const modal: Sandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };
   const backends = { local: backend, modal };
@@ -158,7 +160,7 @@ test("explicit sandbox profiles follow selected storage rather than the parent's
   assert.equal((await router.profileFor!("personal:alice")).backend, "local");
 });
 
-test("unset defaults remain unset durably while explicit execution remains usable", async () => {
+tenantTest("unset defaults remain unset durably while explicit execution remains usable", async () => {
   const { resources, router, layers, defaults } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", null);
@@ -175,7 +177,7 @@ test("unset defaults remain unset durably while explicit execution remains usabl
   assert.equal(await resources.resolve("personal:new"), null);
 });
 
-test("legacy adoption is deterministic and reconnects the existing backing identity", async () => {
+tenantTest("legacy adoption is deterministic and reconnects the existing backing identity", async () => {
   const { resources, router, layers, records, backend } = fixture();
   const old = await backend.provision(layers);
   await backend.writeFile(old, "file", "keep");
@@ -190,18 +192,21 @@ test("legacy adoption is deterministic and reconnects the existing backing ident
   assert.equal(await router.readFile(adopted, "file"), "keep");
 });
 
-test("scope ACL protects inventory and target access and prevents cross-scope default credential relocation", async () => {
-  const { resources } = fixture();
-  const record = await resources.create("alice", "personal:alice", "local");
-  await assert.rejects(resources.access("bob", record.id), /permission/);
-  await assert.rejects(resources.list("bob", "personal:alice"), /permission/);
-  await assert.rejects(resources.create("bob", "personal:alice", "local"), /permission/);
-  await assert.rejects(resources.setDefault("bob", "personal:alice", record.id), /permission/);
-  await assert.rejects(resources.setDefault("admin", "personal:bob", record.id), /belong to this scope/);
-  assert.equal((await resources.access("admin", record.id)).id, record.id);
-});
+tenantTest(
+  "scope ACL protects inventory and target access and prevents cross-scope default credential relocation",
+  async () => {
+    const { resources } = fixture();
+    const record = await resources.create("alice", "personal:alice", "local");
+    await assert.rejects(resources.access("bob", record.id), /permission/);
+    await assert.rejects(resources.list("bob", "personal:alice"), /permission/);
+    await assert.rejects(resources.create("bob", "personal:alice", "local"), /permission/);
+    await assert.rejects(resources.setDefault("bob", "personal:alice", record.id), /permission/);
+    await assert.rejects(resources.setDefault("admin", "personal:bob", record.id), /belong to this scope/);
+    assert.equal((await resources.access("admin", record.id)).id, record.id);
+  },
+);
 
-test("status and restart resolve the selected backing machine rather than legacy scope", async () => {
+tenantTest("status and restart resolve the selected backing machine rather than legacy scope", async () => {
   const { resources, router, provisioned } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", record.id);
@@ -210,7 +215,7 @@ test("status and restart resolve the selected backing machine rather than legacy
   assert.deepEqual(provisioned, [record.backingScopeId, `restart:${record.backingScopeId}`]);
 });
 
-test("listing an untouched scope never invents a legacy machine", async () => {
+tenantTest("listing an untouched scope never invents a legacy machine", async () => {
   const { resources, provisioned } = fixture(undefined, []);
   assert.deepEqual(await resources.list("alice", "personal:alice"), {
     sandboxes: [],
@@ -223,44 +228,47 @@ test("listing an untouched scope never invents a legacy machine", async () => {
   await assert.rejects(resources.create("alice", "personal:alice", "toString"), /unavailable/);
 });
 
-test("turn default changes invalidate cached provisioning while explicit calls dedupe and cleanup each computer once", async () => {
-  const { resources, router, layers, backend } = fixture();
-  const released: string[] = [];
-  backend.teardown = async (handle) => {
-    released.push(handle.id);
-  };
-  const a = await resources.create("alice", "personal:alice", "local");
-  const b = await resources.create("alice", "personal:alice", "local");
-  await resources.setDefault("alice", "personal:alice", a.id);
-  const turn = createTurnSandboxes({
-    deps: { sandbox: router, sandboxResources: resources },
-    input: { origin: { kind: "user" } },
-    actor: { id: "alice", type: "internal" },
-    session: { id: "s" },
-    resolution: { layers },
-    scopeId: "personal:alice",
-    memoryScopeId: "personal:alice",
-    transferId: "t",
-    turnSessionDir: "turn/s",
-    turnFilesDir: "turn/s/t",
-    connectorEnv: { AGENT_API_TOKEN: "scope-token" },
-    visibleSkills: [],
-    visibleSkillsForTurn: async () => [],
-    perf: { credsMs: 0 },
-  } as unknown as TurnSandboxContext);
-  const old = await turn.provision();
-  await resources.setDefault("alice", "personal:alice", b.id);
-  turn.invalidateProvision();
-  const next = await turn.provision();
-  assert.notEqual(old.id, next.id);
-  assert.equal((await router.run(old, "still old")).stdout, old.id);
-  const [x, y] = await Promise.all([turn.provisionResource(a.id), turn.provisionResource(a.id)]);
-  assert.equal(x, y);
-  await turn.reclaimBox();
-  assert.deepEqual(released.sort(), [a.backingScopeId, b.backingScopeId].sort());
-});
+tenantTest(
+  "turn default changes invalidate cached provisioning while explicit calls dedupe and cleanup each computer once",
+  async () => {
+    const { resources, router, layers, backend } = fixture();
+    const released: string[] = [];
+    backend.teardown = async (handle) => {
+      released.push(handle.id);
+    };
+    const a = await resources.create("alice", "personal:alice", "local");
+    const b = await resources.create("alice", "personal:alice", "local");
+    await resources.setDefault("alice", "personal:alice", a.id);
+    const turn = createTurnSandboxes({
+      deps: { sandbox: router, sandboxResources: resources },
+      input: { origin: { kind: "user" } },
+      actor: { id: "alice", type: "internal" },
+      session: { id: "s" },
+      resolution: { layers },
+      scopeId: "personal:alice",
+      memoryScopeId: "personal:alice",
+      transferId: "t",
+      turnSessionDir: "turn/s",
+      turnFilesDir: "turn/s/t",
+      connectorEnv: { AGENT_API_TOKEN: "scope-token" },
+      visibleSkills: [],
+      visibleSkillsForTurn: async () => [],
+      perf: { credsMs: 0 },
+    } as unknown as TurnSandboxContext);
+    const old = await turn.provision();
+    await resources.setDefault("alice", "personal:alice", b.id);
+    turn.invalidateProvision();
+    const next = await turn.provision();
+    assert.notEqual(old.id, next.id);
+    assert.equal((await router.run(old, "still old")).stdout, old.id);
+    const [x, y] = await Promise.all([turn.provisionResource(a.id), turn.provisionResource(a.id)]);
+    assert.equal(x, y);
+    await turn.reclaimBox();
+    assert.deepEqual(released.sort(), [a.backingScopeId, b.backingScopeId].sort());
+  },
+);
 
-test("retirement refuses the default, waits for an active command, and prevents future execution", async () => {
+tenantTest("retirement refuses the default, waits for an active command, and prevents future execution", async () => {
   const { resources, router, backend, layers } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", record.id);
@@ -295,100 +303,106 @@ test("retirement refuses the default, waits for an active command, and prevents 
   await assert.rejects(resources.setDefault("alice", "personal:alice", record.id), /retired/);
 });
 
-test("every handle operation rejects retirement before reaching a backend that could revive the machine", async () => {
-  let backendCalls = 0;
-  const hit = async (): Promise<never> => {
-    backendCalls++;
-    throw new Error("backend reached");
-  };
-  const { resources, router, layers } = fixture((backend) => {
-    backend.profile.processSessions = true;
-    backend.startProcess = hit;
-    backend.readProcess = hit;
-    backend.writeStdin = hit;
-    backend.signalProcess = hit;
-    backend.listProcesses = async () => [];
-    backend.exportFiles = hit;
-    backend.stageIn = hit;
-    backend.stageOut = hit;
-    backend.importFiles = hit;
-  });
-  const record = await resources.create("alice", "personal:alice", "local");
-  const handle = await router.provision(layers, { sandboxId: record.id });
-  await resources.retire("alice", record.id);
-  const operations: Array<() => Promise<unknown>> = [
-    () => router.run(handle, "work"),
-    () => router.readFile(handle, "file"),
-    () => router.readFileBytes(handle, "file"),
-    () => router.writeFile(handle, "file", "data"),
-    () => router.writeFileBytes(handle, "file", new Uint8Array()),
-    () => router.listDir(handle, "."),
-    () => router.removeDir(handle, "dir"),
-    () => router.teardown(handle),
-    () => router.startProcess!(handle, "work"),
-    () => router.readProcess!(handle, "process"),
-    () => router.writeStdin!(handle, "process", "input"),
-    () => router.signalProcess!(handle, "process", "TERM"),
-    () => router.listProcesses!(handle),
-    () => router.exportFiles!(handle),
-    () => router.stageIn!(handle, "file", "blob"),
-    () => router.stageOut!(handle, "file"),
-    () => router.importFiles!(handle, []),
-    () => resources.status("alice", record.id),
-    () => resources.restart("alice", record.id),
-  ];
-  for (const operation of operations) await assert.rejects(operation(), /retired/);
-  assert.equal(backendCalls, 0);
-});
+tenantTest(
+  "every handle operation rejects retirement before reaching a backend that could revive the machine",
+  async () => {
+    let backendCalls = 0;
+    const hit = async (): Promise<never> => {
+      backendCalls++;
+      throw new Error("backend reached");
+    };
+    const { resources, router, layers } = fixture((backend) => {
+      backend.profile.processSessions = true;
+      backend.startProcess = hit;
+      backend.readProcess = hit;
+      backend.writeStdin = hit;
+      backend.signalProcess = hit;
+      backend.listProcesses = async () => [];
+      backend.exportFiles = hit;
+      backend.stageIn = hit;
+      backend.stageOut = hit;
+      backend.importFiles = hit;
+    });
+    const record = await resources.create("alice", "personal:alice", "local");
+    const handle = await router.provision(layers, { sandboxId: record.id });
+    await resources.retire("alice", record.id);
+    const operations: Array<() => Promise<unknown>> = [
+      () => router.run(handle, "work"),
+      () => router.readFile(handle, "file"),
+      () => router.readFileBytes(handle, "file"),
+      () => router.writeFile(handle, "file", "data"),
+      () => router.writeFileBytes(handle, "file", new Uint8Array()),
+      () => router.listDir(handle, "."),
+      () => router.removeDir(handle, "dir"),
+      () => router.teardown(handle),
+      () => router.startProcess!(handle, "work"),
+      () => router.readProcess!(handle, "process"),
+      () => router.writeStdin!(handle, "process", "input"),
+      () => router.signalProcess!(handle, "process", "TERM"),
+      () => router.listProcesses!(handle),
+      () => router.exportFiles!(handle),
+      () => router.stageIn!(handle, "file", "blob"),
+      () => router.stageOut!(handle, "file"),
+      () => router.importFiles!(handle, []),
+      () => resources.status("alice", record.id),
+      () => resources.restart("alice", record.id),
+    ];
+    for (const operation of operations) await assert.rejects(operation(), /retired/);
+    assert.equal(backendCalls, 0);
+  },
+);
 
 for (const fail of [false, true])
-  test(`retirement waits for outstanding creation ${fail ? "failure" : "success"} and remains terminal`, async () => {
-    const { resources, records, backend } = fixture();
-    const provision = backend.provision;
-    let release!: () => void;
-    let entered!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const started = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    let first = true;
-    backend.provision = async (layers, options) => {
-      if (first) {
-        first = false;
-        entered();
-        await gate;
-        if (fail) throw new Error("create failed");
-      }
-      return provision(layers, options);
-    };
-    const creating = resources.create("alice", "personal:alice", "local");
-    const completed = creating.then(
-      () => undefined,
-      (error) => {
-        assert.match(String(error), /create failed/);
-      },
-    );
-    await started;
-    const record = (await records.all())[0]!;
-    let retired = false;
-    const retiring = resources.retire("alice", record.id).then(() => {
-      retired = true;
-    });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(retired, false);
-    assert.equal((await records.get(record.id))?.state, "provisioning");
-    release();
-    await Promise.all([completed, retiring]);
-    assert.equal((await records.get(record.id))?.state, "retired");
-    await assert.rejects(
-      resources.use(record.id, async () => {}),
-      /retired/,
-    );
-  });
+  tenantTest(
+    `retirement waits for outstanding creation ${fail ? "failure" : "success"} and remains terminal`,
+    async () => {
+      const { resources, records, backend } = fixture();
+      const provision = backend.provision;
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let first = true;
+      backend.provision = async (layers, options) => {
+        if (first) {
+          first = false;
+          entered();
+          await gate;
+          if (fail) throw new Error("create failed");
+        }
+        return provision(layers, options);
+      };
+      const creating = resources.create("alice", "personal:alice", "local");
+      const completed = creating.then(
+        () => undefined,
+        (error) => {
+          assert.match(String(error), /create failed/);
+        },
+      );
+      await started;
+      const record = (await records.all())[0]!;
+      let retired = false;
+      const retiring = resources.retire("alice", record.id).then(() => {
+        retired = true;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(retired, false);
+      assert.equal((await records.get(record.id))?.state, "provisioning");
+      release();
+      await Promise.all([completed, retiring]);
+      assert.equal((await records.get(record.id))?.state, "retired");
+      await assert.rejects(
+        resources.use(record.id, async () => {}),
+        /retired/,
+      );
+    },
+  );
 
-test("activation preserves routes, cold identities and explicit nulls without calling a provider", async () => {
+tenantTest("activation preserves routes, cold identities and explicit nulls without calling a provider", async () => {
   const { options, records, defaults, routes, marker, provisioned, upgrade } = fixture(undefined, []);
   await routes.put("personal:routed", { backend: "modal" });
   await defaults.put("personal:unset", { sandboxId: null });
@@ -439,7 +453,7 @@ test("activation preserves routes, cold identities and explicit nulls without ca
   assert.equal((await restarted.resolve("personal:routed"))?.id, routed?.id);
 });
 
-test("activation retries partial durable writes without losing defaults or creating machines", async () => {
+tenantTest("activation retries partial durable writes without losing defaults or creating machines", async () => {
   const { options, defaults, marker, records, provisioned } = fixture(undefined, ["personal:first", "personal:second"]);
   const put = defaults.putIfAbsent;
   let fail = true;
@@ -461,7 +475,7 @@ test("activation retries partial durable writes without losing defaults or creat
   assert.deepEqual(provisioned, []);
 });
 
-test("boot activation freezes legacy scope adoption before a new session arrives", async () => {
+tenantTest("boot activation freezes legacy scope adoption before a new session arrives", async () => {
   const known = ["personal:old"];
   const { options, defaults, provisioned } = fixture(undefined, known);
   const resources = createSandboxResources(options);
@@ -473,7 +487,7 @@ test("boot activation freezes legacy scope adoption before a new session arrives
   assert.deepEqual(provisioned, []);
 });
 
-test("retirement deletes an inferred missing computer without provisioning, status or restore", async () => {
+tenantTest("retirement deletes an inferred missing computer without provisioning, status or restore", async () => {
   const { resources, backend, provisioned } = fixture();
   await resources.initialize();
   const record = await resources.resolve("personal:alice");
@@ -495,7 +509,7 @@ test("retirement deletes an inferred missing computer without provisioning, stat
   assert.deepEqual(provisioned, []);
 });
 
-test("unsupported retirement is hidden and refuses before inventory mutation", async () => {
+tenantTest("unsupported retirement is hidden and refuses before inventory mutation", async () => {
   const { resources, records } = fixture((backend) => {
     delete backend.destroyScope;
   });
@@ -508,7 +522,7 @@ test("unsupported retirement is hidden and refuses before inventory mutation", a
   assert.deepEqual(await records.get(record.id), before);
 });
 
-test("failed retirement stays unroutable and retries cleanup by backing scope after a core restart", async () => {
+tenantTest("failed retirement stays unroutable and retries cleanup by backing scope after a core restart", async () => {
   const { resources, backend, records, options } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   backend.destroyScope = async () => {
@@ -536,7 +550,7 @@ test("failed retirement stays unroutable and retries cleanup by backing scope af
   assert.equal((await records.get(record.id))?.error, undefined);
 });
 
-test("a pending retirement without an error remains retryable after a crash", async () => {
+tenantTest("a pending retirement without an error remains retryable after a crash", async () => {
   const { resources, records, options, backend } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await records.put(record.id, { ...record, state: "retired", cleanupPending: true });
@@ -549,7 +563,7 @@ test("a pending retirement without an error remains retryable after a crash", as
   assert.equal((await records.get(record.id))?.cleanupPending, false);
 });
 
-test("retirement preserves core live-work and owning-scope guards before direct deletion", async () => {
+tenantTest("retirement preserves core live-work and owning-scope guards before direct deletion", async () => {
   const { resources, records, options, backend } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   let destroyed = false;
@@ -568,7 +582,7 @@ test("retirement preserves core live-work and owning-scope guards before direct 
   assert.equal((await records.get(record.id))?.state, "ready");
 });
 
-test("retirement waits for background startup to commit its live registry row", async () => {
+tenantTest("retirement waits for background startup to commit its live registry row", async () => {
   const { options, backend, layers } = fixture((sandbox) => {
     sandbox.profile.processSessions = true;
     sandbox.startProcess = async () => ({ processId: "job" });
@@ -614,7 +628,7 @@ test("retirement waits for background startup to commit its live registry row", 
   assert.equal((await inTestTenant(() => registry.get("job")))?.sandboxId, record.id);
 });
 
-test("failed background registration kills its process and releases the resource lock", async () => {
+tenantTest("failed background registration kills its process and releases the resource lock", async () => {
   const { resources, router, backend, layers } = fixture((sandbox) => {
     sandbox.profile.processSessions = true;
     sandbox.startProcess = async () => ({ processId: "unregistered" });
@@ -644,7 +658,7 @@ test("failed background registration kills its process and releases the resource
   assert.equal((await resources.get(record.id)).cleanupPending, false);
 });
 
-test("resource activation honors scope defaults and preserves explicit legacy provider routes", async () => {
+tenantTest("resource activation honors scope defaults and preserves explicit legacy provider routes", async () => {
   const { options, routes, backend, upgrade } = fixture(undefined, [
     "personal:alice",
     "channel:room",
@@ -675,7 +689,7 @@ for (const [kind, waiting] of [
   ["sprites", "command"],
   ["sprites", "checkpoint"],
 ] as const) {
-  test(`${kind} ${waiting} allows other tools while restart waits`, { timeout: 10000 }, async () => {
+  tenantTest(`${kind} ${waiting} allows other tools while restart waits`, { timeout: 10000 }, async () => {
     const { options, backend, layers } = fixture();
     const resources = createSandboxResources({ ...options, backends: { [kind]: backend }, defaultBackend: kind });
     const router = createSandboxRouter({ backends: { [kind]: backend }, defaultBackend: kind, resources });
@@ -727,7 +741,7 @@ for (const [kind, waiting] of [
   });
 }
 
-test("Modal provisioning and destructive cleanup wait for active operations", { timeout: 10000 }, async () => {
+tenantTest("Modal provisioning and destructive cleanup wait for active operations", { timeout: 10000 }, async () => {
   const { options, backend, layers } = fixture();
   const resources = createSandboxResources({ ...options, backends: { modal: backend }, defaultBackend: "modal" });
   const router = createSandboxRouter({ backends: { modal: backend }, defaultBackend: "modal", resources });
@@ -765,7 +779,7 @@ test("Modal provisioning and destructive cleanup wait for active operations", { 
   assert.equal(destroyed, true);
 });
 
-test("concurrent commands on one Sprites computer run together", { timeout: 10000 }, async () => {
+tenantTest("concurrent commands on one Sprites computer run together", { timeout: 10000 }, async () => {
   const { options, backend, layers } = fixture();
   const resources = createSandboxResources({ ...options, backends: { sprites: backend }, defaultBackend: "sprites" });
   const router = createSandboxRouter({ backends: { sprites: backend }, defaultBackend: "sprites", resources });
@@ -789,7 +803,7 @@ test("concurrent commands on one Sprites computer run together", { timeout: 1000
   assert.equal(peak, 3);
 });
 
-test("parking teardown waits for active commands on the computer", { timeout: 10000 }, async () => {
+tenantTest("parking teardown waits for active commands on the computer", { timeout: 10000 }, async () => {
   const { options, backend, layers } = fixture();
   const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
   const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
@@ -820,7 +834,7 @@ test("parking teardown waits for active commands on the computer", { timeout: 10
   assert.equal(parked, true);
 });
 
-test("a verified live turn can create only its own new scope computer without directory mutations", async () => {
+tenantTest("a verified live turn can create only its own new scope computer without directory mutations", async () => {
   const { resources, router } = fixture(undefined, []);
   const scope = "channel:external-slack:T1:policy:C1";
   await resources.initialize();
@@ -841,7 +855,7 @@ test("a verified live turn can create only its own new scope computer without di
   await assert.rejects(turn.setDefault("alice", scope, computer.id), /permission/);
 });
 
-test("legacy import refuses an unavailable selected provider before writing any adoption state", async () => {
+tenantTest("legacy import refuses an unavailable selected provider before writing any adoption state", async () => {
   const { options, upgrade, records, defaults, marker } = fixture();
   const resources = createSandboxResources({ ...options, upgrade: upgrade({ availableBackends: [] }) });
   await assert.rejects(resources.initialize(), /personal:alice: backend local is not configured/);
@@ -852,17 +866,20 @@ test("legacy import refuses an unavailable selected provider before writing any 
   assert.ok((await defaults.get("personal:alice"))?.sandboxId);
 });
 
-test("legacy import does not validate obsolete provider choices after explicit selection or clearing", async () => {
-  const { options, upgrade, defaults, marker } = fixture(undefined, ["personal:cleared", "personal:selected"]);
-  await defaults.put("personal:cleared", { sandboxId: null });
-  await defaults.put("personal:selected", { sandboxId: "newer-computer" });
-  await createSandboxResources({ ...options, upgrade: upgrade({ availableBackends: [] }) }).initialize();
-  assert.deepEqual(await defaults.get("personal:cleared"), { sandboxId: null });
-  assert.deepEqual(await defaults.get("personal:selected"), { sandboxId: "newer-computer" });
-  assert.ok(await marker.get("explicit-defaults"));
-});
+tenantTest(
+  "legacy import does not validate obsolete provider choices after explicit selection or clearing",
+  async () => {
+    const { options, upgrade, defaults, marker } = fixture(undefined, ["personal:cleared", "personal:selected"]);
+    await defaults.put("personal:cleared", { sandboxId: null });
+    await defaults.put("personal:selected", { sandboxId: "newer-computer" });
+    await createSandboxResources({ ...options, upgrade: upgrade({ availableBackends: [] }) }).initialize();
+    assert.deepEqual(await defaults.get("personal:cleared"), { sandboxId: null });
+    assert.deepEqual(await defaults.get("personal:selected"), { sandboxId: "newer-computer" });
+    assert.ok(await marker.get("explicit-defaults"));
+  },
+);
 
-test("a computer stays held until its last live run releases it, and ended runs stop counting", async () => {
+tenantTest("a computer stays held until its last live run releases it, and ended runs stop counting", async () => {
   const { resources } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.hold(record.id, "a");
@@ -878,7 +895,7 @@ test("a computer stays held until its last live run releases it, and ended runs 
   assert.equal(listed?.holders, undefined);
 });
 
-test("two concurrent turns on one parking computer: only the last turn to finish parks it", async () => {
+tenantTest("two concurrent turns on one parking computer: only the last turn to finish parks it", async () => {
   const { options, backend, layers } = fixture();
   const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
   const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
@@ -924,7 +941,7 @@ test("two concurrent turns on one parking computer: only the last turn to finish
   assert.deepEqual((await resources.get(record.id)).holders, []);
 });
 
-test("same-name skills from distinct sources keep their materialized assets separate", async () => {
+tenantTest("same-name skills from distinct sources keep their materialized assets separate", async () => {
   const { resources, router, layers } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", record.id);
@@ -965,7 +982,7 @@ test("same-name skills from distinct sources keep their materialized assets sepa
   assert.equal(await router.readFile(handle, `${b.dir!.replace("/workspace/", "")}/value.py`), "personal:alice");
 });
 
-test("a job computer is invisible and untargetable for everyone, and only the job sweep retires it", async () => {
+tenantTest("a job computer is invisible and untargetable for everyone, and only the job sweep retires it", async () => {
   const { resources, router, layers } = fixture();
   const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
   assert.ok(!(await resources.list("alice", "personal:alice")).sandboxes.some((s) => s.id === job.id));
@@ -988,45 +1005,51 @@ test("a job computer is invisible and untargetable for everyone, and only the jo
   await assert.rejects(router.provision(layers, { sandboxId: job.id }), /sandbox not found/);
 });
 
-test("retiring a job computer is skipped when its state moved on, and its backing scope is marked as a job's", async () => {
-  const { resources } = fixture();
-  const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
-  assert.ok(job.backingScopeId.startsWith("job-"));
-  await resources.retireJobComputer(job.id, "provisioning");
-  assert.deepEqual(
-    (await resources.jobComputers()).map((s) => s.id),
-    [job.id],
-    "a box that became ready since the sweep looked is left alone",
-  );
-  await resources.retireJobComputer(job.id, "ready");
-  assert.deepEqual(await resources.jobComputers(), []);
-  const room = await resources.create("alice", "personal:alice", "local", "room");
-  assert.ok(room.backingScopeId.startsWith("sandbox-"));
-});
+tenantTest(
+  "retiring a job computer is skipped when its state moved on, and its backing scope is marked as a job's",
+  async () => {
+    const { resources } = fixture();
+    const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
+    assert.ok(job.backingScopeId.startsWith("job-"));
+    await resources.retireJobComputer(job.id, "provisioning");
+    assert.deepEqual(
+      (await resources.jobComputers()).map((s) => s.id),
+      [job.id],
+      "a box that became ready since the sweep looked is left alone",
+    );
+    await resources.retireJobComputer(job.id, "ready");
+    assert.deepEqual(await resources.jobComputers(), []);
+    const room = await resources.create("alice", "personal:alice", "local", "room");
+    assert.ok(room.backingScopeId.startsWith("sandbox-"));
+  },
+);
 
-test("a job computer whose destroy fails keeps its record for retry, and is refused where it cannot be retired", async () => {
-  let failures = 1;
-  const { resources } = fixture((backend) => {
-    const destroy = backend.destroyScope!.bind(backend);
-    backend.destroyScope = async (id) => {
-      if (failures-- > 0) throw new Error("provider unavailable");
-      await destroy(id);
-    };
-  });
-  const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
-  await assert.rejects(resources.retireJobComputer(job.id, "ready"), /provider unavailable/);
-  assert.deepEqual(
-    (await resources.jobComputers()).map((s) => [s.id, s.state, Boolean(s.error)]),
-    [[job.id, "retired", true]],
-  );
-  await resources.retireJobComputer(job.id, (await resources.get(job.id)).state);
-  assert.deepEqual(await resources.jobComputers(), []);
-  await assert.rejects(resources.get(job.id), /sandbox not found/);
-  const { resources: cannotRetire } = fixture((backend) => {
-    delete backend.destroyScope;
-  });
-  await assert.rejects(
-    cannotRetire.create("alice", "personal:alice", "local", "background job", undefined, true),
-    /need a computer that local can retire/,
-  );
-});
+tenantTest(
+  "a job computer whose destroy fails keeps its record for retry, and is refused where it cannot be retired",
+  async () => {
+    let failures = 1;
+    const { resources } = fixture((backend) => {
+      const destroy = backend.destroyScope!.bind(backend);
+      backend.destroyScope = async (id) => {
+        if (failures-- > 0) throw new Error("provider unavailable");
+        await destroy(id);
+      };
+    });
+    const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
+    await assert.rejects(resources.retireJobComputer(job.id, "ready"), /provider unavailable/);
+    assert.deepEqual(
+      (await resources.jobComputers()).map((s) => [s.id, s.state, Boolean(s.error)]),
+      [[job.id, "retired", true]],
+    );
+    await resources.retireJobComputer(job.id, (await resources.get(job.id)).state);
+    assert.deepEqual(await resources.jobComputers(), []);
+    await assert.rejects(resources.get(job.id), /sandbox not found/);
+    const { resources: cannotRetire } = fixture((backend) => {
+      delete backend.destroyScope;
+    });
+    await assert.rejects(
+      cannotRetire.create("alice", "personal:alice", "local", "background job", undefined, true),
+      /need a computer that local can retire/,
+    );
+  },
+);

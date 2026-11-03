@@ -1,6 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test, describe, it, before, after } from "node:test";
+import { describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,7 +31,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantIt, tenantTest } from "./support/test-tenants.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
@@ -54,210 +54,204 @@ const GH = {
   accountLabel: "AliceBell",
 };
 
-test("save → list returns metadata only (no secret material), and re-save upserts the same slot", () =>
-  inTestTenant(async () => {
-    const k = kc();
-    const meta = await k.save(GH);
-    assert.equal(meta.envKey, "GITHUB_TOKEN");
-    assert.ok(!("secretEnc" in meta), "metadata view must not carry the encrypted secret");
-    assert.ok(!JSON.stringify(meta).includes("ghp_secret"));
+tenantTest("save → list returns metadata only (no secret material), and re-save upserts the same slot", async () => {
+  const k = kc();
+  const meta = await k.save(GH);
+  assert.equal(meta.envKey, "GITHUB_TOKEN");
+  assert.ok(!("secretEnc" in meta), "metadata view must not carry the encrypted secret");
+  assert.ok(!JSON.stringify(meta).includes("ghp_secret"));
 
-    const again = await k.save({ ...GH, secret: "ghp_rotated" });
-    assert.equal(again.id, meta.id, "same owner+service+envKey is one record");
-    assert.notEqual(again.fingerprint, meta.fingerprint, "rotation changes the fingerprint");
-    assert.equal((await k.listByOwner("U1")).length, 1);
-    assert.deepEqual(await k.listByOwner("U9"), []);
-  }));
+  const again = await k.save({ ...GH, secret: "ghp_rotated" });
+  assert.equal(again.id, meta.id, "same owner+service+envKey is one record");
+  assert.notEqual(again.fingerprint, meta.fingerprint, "rotation changes the fingerprint");
+  assert.equal((await k.listByOwner("U1")).length, 1);
+  assert.deepEqual(await k.listByOwner("U9"), []);
+});
 
-test("listAllMetadata returns person-facing metadata only", () =>
-  inTestTenant(async () => {
-    const k = kc();
-    const meta = await k.save(GH);
-    await k.setConnectorToken("github.com", "U1", { accessToken: "gho_managed" });
-    await k.setServiceCredential(scopeId("org", "default-org"), {
-      slug: "serp",
-      name: "SERP",
-      secret: "s3",
-      host: "api.serper.dev",
-    });
+tenantTest("listAllMetadata returns person-facing metadata only", async () => {
+  const k = kc();
+  const meta = await k.save(GH);
+  await k.setConnectorToken("github.com", "U1", { accessToken: "gho_managed" });
+  await k.setServiceCredential(scopeId("org", "default-org"), {
+    slug: "serp",
+    name: "SERP",
+    secret: "s3",
+    host: "api.serper.dev",
+  });
 
-    const all = await k.listAllMetadata();
-    assert.deepEqual(
-      all.map((c) => c.id),
-      [meta.id],
-    );
-    assert.ok(!JSON.stringify(all).includes("ghp_secret"));
-    assert.ok(!JSON.stringify(all).includes("gho_managed"));
-    assert.ok(!JSON.stringify(all).includes("s3"));
-  }));
+  const all = await k.listAllMetadata();
+  assert.deepEqual(
+    all.map((c) => c.id),
+    [meta.id],
+  );
+  assert.ok(!JSON.stringify(all).includes("ghp_secret"));
+  assert.ok(!JSON.stringify(all).includes("gho_managed"));
+  assert.ok(!JSON.stringify(all).includes("s3"));
+});
 
-test("listing and per-owner reads use the store's projected select and never a full all() scan", () =>
-  inTestTenant(async () => {
-    type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
-    const backing = testMap<Rec>();
-    const calls: string[] = [];
-    const creds: DurableMap<Rec> = {
-      ...backing,
-      async all() {
-        calls.push("all");
-        return backing.all();
-      },
-      async select<K extends Extract<keyof Rec, string> = never>(query: DurableMapSelect<Rec, K>) {
-        calls.push(`select:${(query.omit ?? []).join(",") || "full"}:${query.where ? "byOwner" : "unfiltered"}`);
-        return backing.select(query);
-      },
-    };
-    const k = createKeychain({
-      lock: testAdvisoryLock(),
-      creds,
-      grants: testMap(),
-      asks: testMap(),
-      key: KEY,
-    });
-    const org = scopeId("org", "default-org");
-    await k.save({ ...GH, ownerId: "Alice@X.com" });
-    await k.save(GH);
-    await k.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "ya29.u1" });
-    await k.setServiceCredential(org, { slug: "stripe", name: "Stripe", secret: "sk_live", host: "api.stripe.com" });
+tenantTest("listing and per-owner reads use the store's projected select and never a full all() scan", async () => {
+  type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
+  const backing = testMap<Rec>();
+  const calls: string[] = [];
+  const creds: DurableMap<Rec> = {
+    ...backing,
+    async all() {
+      calls.push("all");
+      return backing.all();
+    },
+    async select<K extends Extract<keyof Rec, string> = never>(query: DurableMapSelect<Rec, K>) {
+      calls.push(`select:${(query.omit ?? []).join(",") || "full"}:${query.where ? "byOwner" : "unfiltered"}`);
+      return backing.select(query);
+    },
+  };
+  const k = createKeychain({
+    lock: testAdvisoryLock(),
+    creds,
+    grants: testMap(),
+    asks: testMap(),
+    key: KEY,
+  });
+  const org = scopeId("org", "default-org");
+  await k.save({ ...GH, ownerId: "Alice@X.com" });
+  await k.save(GH);
+  await k.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "ya29.u1" });
+  await k.setServiceCredential(org, { slug: "stripe", name: "Stripe", secret: "sk_live", host: "api.stripe.com" });
 
-    const mine = await k.listByOwner("alice@x.COM");
-    assert.equal(mine.length, 1, "owner matching stays samePerson-compatible across email casing");
-    assert.ok(mine.every((c) => !("secretEnc" in c)));
+  const mine = await k.listByOwner("alice@x.COM");
+  assert.equal(mine.length, 1, "owner matching stays samePerson-compatible across email casing");
+  assert.ok(mine.every((c) => !("secretEnc" in c)));
 
-    const all = await k.listAllMetadata();
-    assert.deepEqual(all.map((c) => c.ownerId).sort(), ["Alice@X.com", "U1"]);
-    assert.ok(all.every((c) => !("secretEnc" in c)));
+  const all = await k.listAllMetadata();
+  assert.deepEqual(all.map((c) => c.ownerId).sort(), ["Alice@X.com", "U1"]);
+  assert.ok(all.every((c) => !("secretEnc" in c)));
 
-    const grouped = await k.listByOwners(["ALICE@x.com", "U1"]);
-    assert.equal(grouped.get("ALICE@x.com")!.length, 1);
-    assert.equal(grouped.get("U1")!.length, 1);
+  const grouped = await k.listByOwners(["ALICE@x.com", "U1"]);
+  assert.equal(grouped.get("ALICE@x.com")!.length, 1);
+  assert.equal(grouped.get("U1")!.length, 1);
 
-    const connectors = await k.listConnectorsByOwners(["U1"]);
-    assert.equal(connectors.get("U1")!.length, 1);
+  const connectors = await k.listConnectorsByOwners(["U1"]);
+  assert.equal(connectors.get("U1")!.length, 1);
 
-    const services = await k.listServiceCredentials(org);
-    assert.equal(services.length, 1);
-    assert.equal(services[0]!.hasSecret, true, "hasSecret still sees the stored secret");
+  const services = await k.listServiceCredentials(org);
+  assert.equal(services.length, 1);
+  assert.equal(services[0]!.hasSecret, true, "hasSecret still sees the stored secret");
 
-    const own = await k.materializeOwn("U1");
-    assert.deepEqual(
-      own.flatMap((m) => m.env),
-      [{ key: "GITHUB_TOKEN", value: "ghp_secret" }],
-    );
-    await k.materializeOwnFiles("U1");
+  const own = await k.materializeOwn("U1");
+  assert.deepEqual(
+    own.flatMap((m) => m.env),
+    [{ key: "GITHUB_TOKEN", value: "ghp_secret" }],
+  );
+  await k.materializeOwnFiles("U1");
 
-    assert.ok(!calls.includes("all"), `no listing path may scan the whole table (calls: ${calls.join(" ")})`);
-    assert.ok(calls.includes("select:secretEnc:byOwner"));
-    assert.ok(calls.includes("select:secretEnc:unfiltered"), "listAllMetadata projects the secret away");
-  }));
+  assert.ok(!calls.includes("all"), `no listing path may scan the whole table (calls: ${calls.join(" ")})`);
+  assert.ok(calls.includes("select:secretEnc:byOwner"));
+  assert.ok(calls.includes("select:secretEnc:unfiltered"), "listAllMetadata projects the secret away");
+});
 
-test("envKey defaults from the service name (github → GITHUB_TOKEN)", () =>
-  inTestTenant(async () => {
-    const k = kc();
-    const meta = await k.save({ ownerId: "U1", service: "GitHub", secret: "x" });
-    assert.equal(meta.envKey, "GITHUB_TOKEN");
-    assert.equal(meta.service, "github");
-  }));
+tenantTest("envKey defaults from the service name (github → GITHUB_TOKEN)", async () => {
+  const k = kc();
+  const meta = await k.save({ ownerId: "U1", service: "GitHub", secret: "x" });
+  assert.equal(meta.envKey, "GITHUB_TOKEN");
+  assert.equal(meta.service, "github");
+});
 
-test("only the owner can grant; materialize is scope-checked; once-grants are consumed", () =>
-  inTestTenant(async () => {
-    const k = kc();
-    const cred = await k.save(GH);
+tenantTest("only the owner can grant; materialize is scope-checked; once-grants are consumed", async () => {
+  const k = kc();
+  const cred = await k.save(GH);
 
-    await assert.rejects(
-      k.createGrant({
-        credentialId: cred.id,
-        ownerId: "U2",
-        audienceScopeId: "channel:C1",
-        mode: "once",
-        purpose: "go ahead",
-      }),
-      (e: KeychainError) => e.status === 403,
-      "a non-owner actor must not be able to mint a grant",
-    );
-
-    const grant = await k.createGrant({
+  await assert.rejects(
+    k.createGrant({
       credentialId: cred.id,
-      ownerId: "U1",
+      ownerId: "U2",
       audienceScopeId: "channel:C1",
       mode: "once",
-      purpose: "use my gh to clone the repo",
-    });
+      purpose: "go ahead",
+    }),
+    (e: KeychainError) => e.status === 403,
+    "a non-owner actor must not be able to mint a grant",
+  );
 
-    await assert.rejects(
-      materializeGrant(k, grant.id, "channel:OTHER", "U2"),
-      (e: KeychainError) => e.status === 403,
-      "grant is audience-bound",
-    );
+  const grant = await k.createGrant({
+    credentialId: cred.id,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "once",
+    purpose: "use my gh to clone the repo",
+  });
 
-    const m = await materializeGrant(k, grant.id, "channel:C1", "U2");
-    assert.equal(m.kind, "env");
-    assert.ok(
-      m.kind === "env" && m.env.length === 1 && m.env[0]!.value === "ghp_secret" && m.env[0]!.key === "GITHUB_TOKEN",
-    );
-    assert.equal(m.purpose, "use my gh to clone the repo");
+  await assert.rejects(
+    materializeGrant(k, grant.id, "channel:OTHER", "U2"),
+    (e: KeychainError) => e.status === 403,
+    "grant is audience-bound",
+  );
 
-    await assert.rejects(
-      materializeGrant(k, grant.id, "channel:C1", "U2"),
-      (e: KeychainError) => e.status === 410,
-      "a once-grant is single-use",
-    );
-  }));
+  const m = await materializeGrant(k, grant.id, "channel:C1", "U2");
+  assert.equal(m.kind, "env");
+  assert.ok(
+    m.kind === "env" && m.env.length === 1 && m.env[0]!.value === "ghp_secret" && m.env[0]!.key === "GITHUB_TOKEN",
+  );
+  assert.equal(m.purpose, "use my gh to clone the repo");
 
-test("concurrent materialization consumes a once grant exactly once", () =>
-  inTestTenant(async () => {
-    const k = kc();
-    const cred = await k.save(GH);
-    const grant = await k.createGrant({
-      credentialId: cred.id,
-      ownerId: "U1",
-      audienceScopeId: "channel:C1",
-      mode: "once",
-      purpose: "single use",
-    });
-    const results = await Promise.allSettled([
-      materializeGrant(k, grant.id, "channel:C1", "U2"),
-      materializeGrant(k, grant.id, "channel:C1", "U2"),
-      materializeGrant(k, grant.id, "channel:C1", "U3"),
-    ]);
-    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
-    assert.equal(
-      results.filter(
-        (result) =>
-          result.status === "rejected" && result.reason instanceof KeychainError && result.reason.status === 410,
-      ).length,
-      2,
-    );
-  }));
+  await assert.rejects(
+    materializeGrant(k, grant.id, "channel:C1", "U2"),
+    (e: KeychainError) => e.status === 410,
+    "a once-grant is single-use",
+  );
+});
 
-test("legacy retry grants remain consumed and invalidate prepared uses", () =>
-  inTestTenant(async () => {
-    const grants = testMap<KeychainGrant>();
-    const k = createKeychain({
-      lock: testAdvisoryLock(),
-      creds: testMap(),
-      grants,
-      asks: testMap(),
-      key: KEY,
-    });
-    const credential = await k.save(GH);
-    const grant = await k.createGrant({
-      credentialId: credential.id,
-      ownerId: "U1",
-      audienceScopeId: "channel:C1",
-      mode: "once",
-      purpose: "one use",
-    });
-    const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
-    await grants.put(grant.id, { ...grant, status: "active", usedAt: Date.now(), usedBy: "U2" });
-    assert.equal((await k.grantsForScope("channel:C1")).length, 0);
-    for (const actor of ["U2", "U3"])
-      await assert.rejects(materializeGrant(k, grant.id, "channel:C1", actor), (e: KeychainError) => e.status === 410);
-    await assert.rejects(prepared.commit(), (e: KeychainError) => e.status === 410);
-  }));
+tenantTest("concurrent materialization consumes a once grant exactly once", async () => {
+  const k = kc();
+  const cred = await k.save(GH);
+  const grant = await k.createGrant({
+    credentialId: cred.id,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "once",
+    purpose: "single use",
+  });
+  const results = await Promise.allSettled([
+    materializeGrant(k, grant.id, "channel:C1", "U2"),
+    materializeGrant(k, grant.id, "channel:C1", "U2"),
+    materializeGrant(k, grant.id, "channel:C1", "U3"),
+  ]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(
+    results.filter(
+      (result) =>
+        result.status === "rejected" && result.reason instanceof KeychainError && result.reason.status === 410,
+    ).length,
+    2,
+  );
+});
 
-test("materializeOwnById: the owner's own credential needs no grant — scope, ownership, expiry, and connectors enforced", () =>
-  inTestTenant(async () => {
+tenantTest("legacy retry grants remain consumed and invalidate prepared uses", async () => {
+  const grants = testMap<KeychainGrant>();
+  const k = createKeychain({
+    lock: testAdvisoryLock(),
+    creds: testMap(),
+    grants,
+    asks: testMap(),
+    key: KEY,
+  });
+  const credential = await k.save(GH);
+  const grant = await k.createGrant({
+    credentialId: credential.id,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "once",
+    purpose: "one use",
+  });
+  const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+  await grants.put(grant.id, { ...grant, status: "active", usedAt: Date.now(), usedBy: "U2" });
+  assert.equal((await k.grantsForScope("channel:C1")).length, 0);
+  for (const actor of ["U2", "U3"])
+    await assert.rejects(materializeGrant(k, grant.id, "channel:C1", actor), (e: KeychainError) => e.status === 410);
+  await assert.rejects(prepared.commit(), (e: KeychainError) => e.status === 410);
+});
+
+tenantTest(
+  "materializeOwnById: the owner's own credential needs no grant — scope, ownership, expiry, and connectors enforced",
+  async () => {
     const k = kc();
     const cred = await k.save(GH);
     const own = await k.materializeOwnById("U1", cred.id, "personal:U1");
@@ -297,36 +291,36 @@ test("materializeOwnById: the owner's own credential needs no grant — scope, o
     assert.ok(
       conn.kind === "env" && conn.env[0]!.key === envKey("gmail.googleapis.com") && conn.env[0]!.value === "ya29.own",
     );
-  }));
+  },
+);
 
-test("a grant row pointing at a broker credential cannot materialize (defense in depth)", () =>
-  inTestTenant(async () => {
-    const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
-    const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
-    const k = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
-    const ORG = scopeId("org", "default-org");
-    await k.setServiceCredential(ORG, { slug: "serp", name: "SERP", secret: "s3", host: "api.serper.dev" });
-    const broker = (await creds.all()).find((c) => c.kind === "broker")!;
-    await grants.put("g-broker", {
-      id: "g-broker",
-      credentialId: broker.id,
-      ownerId: ORG,
-      audienceScopeId: scopeId("channel", "C1"),
-      mode: "once",
-      purpose: "x",
-      status: "active",
-      createdAt: Date.now(),
-    });
-    await assert.rejects(
-      materializeGrant(k, "g-broker", scopeId("channel", "C1"), "U2"),
-      (e: KeychainError) => e.status === 403,
-    );
-    await assert.rejects(
-      k.materializeOwnById(ORG, broker.id, `personal:${ORG}`),
-      (e: KeychainError) => e.status === 403,
-      "own-use refuses broker records too",
-    );
-  }));
+tenantTest("a grant row pointing at a broker credential cannot materialize (defense in depth)", async () => {
+  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
+  const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
+  const k = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
+  const ORG = scopeId("org", "default-org");
+  await k.setServiceCredential(ORG, { slug: "serp", name: "SERP", secret: "s3", host: "api.serper.dev" });
+  const broker = (await creds.all()).find((c) => c.kind === "broker")!;
+  await grants.put("g-broker", {
+    id: "g-broker",
+    credentialId: broker.id,
+    ownerId: ORG,
+    audienceScopeId: scopeId("channel", "C1"),
+    mode: "once",
+    purpose: "x",
+    status: "active",
+    createdAt: Date.now(),
+  });
+  await assert.rejects(
+    materializeGrant(k, "g-broker", scopeId("channel", "C1"), "U2"),
+    (e: KeychainError) => e.status === 403,
+  );
+  await assert.rejects(
+    k.materializeOwnById(ORG, broker.id, `personal:${ORG}`),
+    (e: KeychainError) => e.status === 403,
+    "own-use refuses broker records too",
+  );
+});
 
 describe("connectors are grantable like any keychain record", () => {
   const GMAIL = "gmail.googleapis.com";
@@ -345,27 +339,27 @@ describe("connectors are grantable like any keychain record", () => {
   const cidOf = async (k: Keychain, owner: string, host = GMAIL) =>
     (await k.listConnectorsByOwners([owner])).get(owner)!.find((c) => c.host === host)!.credentialId;
 
-  it("listConnectorsByOwners returns metadata only (never the token), grouped by requested owner", () =>
-    inTestTenant(async () => {
-      const k = kc();
-      await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
-      await k.setConnectorToken("slack.com", "alex@x", { accessToken: "xoxp.alex" });
-      await k.setConnectorToken(GMAIL, "carol@x", { accessToken: "ya29.carol", expiresAt: Date.now() + 3_600_000 });
-      const map = await k.listConnectorsByOwners(["alex@x"]);
-      assert.equal(map.has("carol@x"), false, "only the owners asked for");
-      const alex = map.get("alex@x")!;
-      assert.equal(alex.length, 2);
-      assert.equal(alex.find((c) => c.host === GMAIL)!.connected, true);
-      assert.equal(JSON.stringify(alex).includes("ya29"), false, "no access token in discovery metadata");
-      assert.equal(
-        (await k.listByOwners(["alex@x"])).get("alex@x"),
-        undefined,
-        "connectors stay out of the regular keychain listing",
-      );
-    }));
+  tenantIt("listConnectorsByOwners returns metadata only (never the token), grouped by requested owner", async () => {
+    const k = kc();
+    await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
+    await k.setConnectorToken("slack.com", "alex@x", { accessToken: "xoxp.alex" });
+    await k.setConnectorToken(GMAIL, "carol@x", { accessToken: "ya29.carol", expiresAt: Date.now() + 3_600_000 });
+    const map = await k.listConnectorsByOwners(["alex@x"]);
+    assert.equal(map.has("carol@x"), false, "only the owners asked for");
+    const alex = map.get("alex@x")!;
+    assert.equal(alex.length, 2);
+    assert.equal(alex.find((c) => c.host === GMAIL)!.connected, true);
+    assert.equal(JSON.stringify(alex).includes("ya29"), false, "no access token in discovery metadata");
+    assert.equal(
+      (await k.listByOwners(["alex@x"])).get("alex@x"),
+      undefined,
+      "connectors stay out of the regular keychain listing",
+    );
+  });
 
-  it("only the owner can grant a connector; materialize hands back the token under the host env var; once is consumed", () =>
-    inTestTenant(async () => {
+  tenantIt(
+    "only the owner can grant a connector; materialize hands back the token under the host env var; once is consumed",
+    async () => {
       const k = kc();
       await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
       const cid = await cidOf(k, "alex@x");
@@ -388,10 +382,12 @@ describe("connectors are grantable like any keychain record", () => {
         { key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.alex" },
       ]);
       await assert.rejects(materializeGrant(k, grant.id, G1, "carol@x"), (e: KeychainError) => e.status === 410);
-    }));
+    },
+  );
 
-  it("an expired connector token is refreshed on materialize; with no refresh it 410s for reconnect", () =>
-    inTestTenant(async () => {
+  tenantIt(
+    "an expired connector token is refreshed on materialize; with no refresh it 410s for reconnect",
+    async () => {
       const past = Date.now() - 10_000;
       const k = kcWithRefresh("ya29.fresh");
       await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.stale", refreshToken: "rt", expiresAt: past });
@@ -419,133 +415,131 @@ describe("connectors are grantable like any keychain record", () => {
         purpose: "p",
       });
       await assert.rejects(materializeGrant(k2, g2.id, G1, "carol@x"), (e: KeychainError) => e.status === 410);
-    }));
+    },
+  );
 
-  it("a still-valid token within the refresh margin is refreshed; one with ample life is reused", () =>
-    inTestTenant(async () => {
-      const k = kcWithRefresh("ya29.fresh");
-      await k.setConnectorToken(GMAIL, "alex@x", {
-        accessToken: "ya29.aging",
-        refreshToken: "rt",
-        expiresAt: Date.now() + 5 * 60_000,
-      });
-      const g = await k.createGrant({
-        credentialId: await cidOf(k, "alex@x"),
-        ownerId: "alex@x",
-        audienceScopeId: G1,
-        mode: "standing",
-        purpose: "p",
-      });
-      const m = await materializeGrant(k, g.id, G1, "member@example.com");
-      assert.deepEqual(m.kind === "env" ? m.env : null, [
-        { key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.fresh" },
-      ]);
+  tenantIt("a still-valid token within the refresh margin is refreshed; one with ample life is reused", async () => {
+    const k = kcWithRefresh("ya29.fresh");
+    await k.setConnectorToken(GMAIL, "alex@x", {
+      accessToken: "ya29.aging",
+      refreshToken: "rt",
+      expiresAt: Date.now() + 5 * 60_000,
+    });
+    const g = await k.createGrant({
+      credentialId: await cidOf(k, "alex@x"),
+      ownerId: "alex@x",
+      audienceScopeId: G1,
+      mode: "standing",
+      purpose: "p",
+    });
+    const m = await materializeGrant(k, g.id, G1, "member@example.com");
+    assert.deepEqual(m.kind === "env" ? m.env : null, [
+      { key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.fresh" },
+    ]);
 
-      const k2 = kcWithRefresh("ya29.fresh");
-      await k2.setConnectorToken(GMAIL, "bob@x", {
-        accessToken: "ya29.plenty",
-        refreshToken: "rt",
-        expiresAt: Date.now() + 30 * 60_000,
-      });
-      const g2 = await k2.createGrant({
-        credentialId: await cidOf(k2, "bob@x"),
-        ownerId: "bob@x",
-        audienceScopeId: G1,
-        mode: "standing",
-        purpose: "p",
-      });
-      const m2 = await materializeGrant(k2, g2.id, G1, "member@example.com");
-      assert.deepEqual(m2.kind === "env" ? m2.env : null, [
-        { key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.plenty" },
-      ]);
-    }));
+    const k2 = kcWithRefresh("ya29.fresh");
+    await k2.setConnectorToken(GMAIL, "bob@x", {
+      accessToken: "ya29.plenty",
+      refreshToken: "rt",
+      expiresAt: Date.now() + 30 * 60_000,
+    });
+    const g2 = await k2.createGrant({
+      credentialId: await cidOf(k2, "bob@x"),
+      ownerId: "bob@x",
+      audienceScopeId: G1,
+      mode: "standing",
+      purpose: "p",
+    });
+    const m2 = await materializeGrant(k2, g2.id, G1, "member@example.com");
+    assert.deepEqual(m2.kind === "env" ? m2.env : null, [
+      { key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.plenty" },
+    ]);
+  });
 
-  it("a standing connector grant auto-injects the host token; a once grant does not", () =>
-    inTestTenant(async () => {
-      const k = kc();
-      await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
-      await k.createGrant({
-        credentialId: await cidOf(k, "alex@x"),
-        ownerId: "alex@x",
-        audienceScopeId: G1,
-        mode: "standing",
-        purpose: "ongoing",
-      });
-      const injected = await k.materializeStanding(G1);
-      assert.deepEqual(
-        injected.map((m) => m.env),
-        [[{ key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.alex" }]],
-      );
+  tenantIt("a standing connector grant auto-injects the host token; a once grant does not", async () => {
+    const k = kc();
+    await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
+    await k.createGrant({
+      credentialId: await cidOf(k, "alex@x"),
+      ownerId: "alex@x",
+      audienceScopeId: G1,
+      mode: "standing",
+      purpose: "ongoing",
+    });
+    const injected = await k.materializeStanding(G1);
+    assert.deepEqual(
+      injected.map((m) => m.env),
+      [[{ key: "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", value: "ya29.alex" }]],
+    );
 
-      const k2 = kc();
-      await k2.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
-      await k2.createGrant({
-        credentialId: await cidOf(k2, "alex@x"),
-        ownerId: "alex@x",
-        audienceScopeId: G1,
-        mode: "once",
-        purpose: "p",
-      });
-      assert.equal((await k2.materializeStanding(G1)).length, 0);
-    }));
+    const k2 = kc();
+    await k2.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
+    await k2.createGrant({
+      credentialId: await cidOf(k2, "alex@x"),
+      ownerId: "alex@x",
+      audienceScopeId: G1,
+      mode: "once",
+      purpose: "p",
+    });
+    assert.equal((await k2.materializeStanding(G1)).length, 0);
+  });
 
-  it("the manifest leaves a participant's ungranted connected apps out", () =>
-    inTestTenant(async () => {
-      const k = kc();
-      await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
-      const connectorsByOwner = await k.listConnectorsByOwners(["alex@x"]);
-      const md = renderKeychainManifest({
-        scopeId: G1,
-        conversationKind: "group",
-        actorId: "carol@x",
-        members: [{ id: "alex@x", displayName: "Alex" }, { id: "carol@x" }],
-        entriesByOwner: new Map(),
-        connectorsByOwner,
-        scopeGrants: [],
-      });
-      assert.doesNotMatch(md, /Alex|gmail|[a-f0-9]{16}/);
-    }));
+  tenantIt("the manifest leaves a participant's ungranted connected apps out", async () => {
+    const k = kc();
+    await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
+    const connectorsByOwner = await k.listConnectorsByOwners(["alex@x"]);
+    const md = renderKeychainManifest({
+      scopeId: G1,
+      conversationKind: "group",
+      actorId: "carol@x",
+      members: [{ id: "alex@x", displayName: "Alex" }, { id: "carol@x" }],
+      entriesByOwner: new Map(),
+      connectorsByOwner,
+      scopeGrants: [],
+    });
+    assert.doesNotMatch(md, /Alex|gmail|[a-f0-9]{16}/);
+  });
 });
 
-test("standing grants are reusable, revocable, and die with the credential", () =>
-  inTestTenant(async () => {
-    const k = kc();
-    const cred = await k.save(GH);
-    const grant = await k.createGrant({
-      credentialId: cred.id,
-      ownerId: "U1",
-      audienceScopeId: "channel:C1",
-      mode: "standing",
-      purpose: "gh in this channel for qm PRs",
-    });
+tenantTest("standing grants are reusable, revocable, and die with the credential", async () => {
+  const k = kc();
+  const cred = await k.save(GH);
+  const grant = await k.createGrant({
+    credentialId: cred.id,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "standing",
+    purpose: "gh in this channel for qm PRs",
+  });
 
-    assert.equal((await k.materializeStanding("channel:C1")).length, 1);
-    assert.equal((await k.materializeStanding("channel:C2")).length, 0);
-    await materializeGrant(k, grant.id, "channel:C1", "U2");
-    await materializeGrant(k, grant.id, "channel:C1", "U3");
+  assert.equal((await k.materializeStanding("channel:C1")).length, 1);
+  assert.equal((await k.materializeStanding("channel:C2")).length, 0);
+  await materializeGrant(k, grant.id, "channel:C1", "U2");
+  await materializeGrant(k, grant.id, "channel:C1", "U3");
 
-    assert.equal(await k.revokeGrant("U2", grant.id), false, "only the owner can revoke");
-    assert.equal(await k.revokeGrant("U1", grant.id), true);
-    assert.equal((await k.materializeStanding("channel:C1")).length, 0);
-    await assert.rejects(materializeGrant(k, grant.id, "channel:C1", "U2"), (e: KeychainError) => e.status === 410);
+  assert.equal(await k.revokeGrant("U2", grant.id), false, "only the owner can revoke");
+  assert.equal(await k.revokeGrant("U1", grant.id), true);
+  assert.equal((await k.materializeStanding("channel:C1")).length, 0);
+  await assert.rejects(materializeGrant(k, grant.id, "channel:C1", "U2"), (e: KeychainError) => e.status === 410);
 
-    const grant2 = await k.createGrant({
-      credentialId: cred.id,
-      ownerId: "U1",
-      audienceScopeId: "channel:C1",
-      mode: "standing",
-      purpose: "again",
-    });
-    await k.remove("U1", cred.id);
-    assert.equal(
-      (await k.listGrants({ ownerId: "U1" })).find((g) => g.id === grant2.id)?.status,
-      "revoked",
-      "deleting a credential revokes its grants",
-    );
-  }));
+  const grant2 = await k.createGrant({
+    credentialId: cred.id,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "standing",
+    purpose: "again",
+  });
+  await k.remove("U1", cred.id);
+  assert.equal(
+    (await k.listGrants({ ownerId: "U1" })).find((g) => g.id === grant2.id)?.status,
+    "revoked",
+    "deleting a credential revokes its grants",
+  );
+});
 
-test("grantConnectorToScope opens a connector to a channel, is idempotent, and no-ops with no connector", () =>
-  inTestTenant(async () => {
+tenantTest(
+  "grantConnectorToScope opens a connector to a channel, is idempotent, and no-ops with no connector",
+  async () => {
     const k = kc();
     assert.equal(
       await k.grantConnectorToScope({
@@ -583,10 +577,12 @@ test("grantConnectorToScope opens a connector to a channel, is idempotent, and n
       1,
       "no duplicate grant rows",
     );
-  }));
+  },
+);
 
-test("file bundles: one item per service, materialize to a /tmp script with env pointers, never the home volume", () =>
-  inTestTenant(async () => {
+tenantTest(
+  "file bundles: one item per service, materialize to a /tmp script with env pointers, never the home volume",
+  async () => {
     const k = kc();
     const b64 = (s: string) => Buffer.from(s).toString("base64");
     const cred = await k.save({
@@ -629,9 +625,10 @@ test("file bundles: one item per service, materialize to a /tmp script with env 
     });
     const m = await materializeGrant(k, grant.id, "channel:C1", "U2");
     assert.equal(m.kind, "file");
-  }));
+  },
+);
 
-test("file credentials point CLIs at their staged home", () => {
+tenantTest("file credentials point CLIs at their staged home", () => {
   const b64 = (value: string) => Buffer.from(value).toString("base64");
   const env = fileCredentialEnvironment(
     [
@@ -661,114 +658,108 @@ test("file credentials point CLIs at their staged home", () => {
   });
 });
 
-test("standing file grants are not auto-injected, but remain re-fetchable by use", () =>
-  inTestTenant(async () => {
-    const k = kc();
-    const b64 = (s: string) => Buffer.from(s).toString("base64");
-    const cred = await k.save({
-      ownerId: "U1",
-      service: "glab",
-      files: [
-        {
-          path: ".config/glab-cli/config.yml",
-          contentBase64: b64("hosts:\n  gitlab.com:\n    token: glpat_standing\n"),
-        },
-      ],
-    });
-    const grant = await k.createGrant({
-      credentialId: cred.id,
-      ownerId: "U1",
-      audienceScopeId: "channel:C1",
-      mode: "standing",
-      purpose: "use my glab here",
-    });
+tenantTest("standing file grants are not auto-injected, but remain re-fetchable by use", async () => {
+  const k = kc();
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+  const cred = await k.save({
+    ownerId: "U1",
+    service: "glab",
+    files: [
+      { path: ".config/glab-cli/config.yml", contentBase64: b64("hosts:\n  gitlab.com:\n    token: glpat_standing\n") },
+    ],
+  });
+  const grant = await k.createGrant({
+    credentialId: cred.id,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "standing",
+    purpose: "use my glab here",
+  });
 
-    assert.deepEqual(
-      await k.materializeStanding("channel:C1"),
-      [],
-      "standing file grants are not injected into provision env",
-    );
-    const first = await materializeGrant(k, grant.id, "channel:C1", "U2");
-    const second = await materializeGrant(k, grant.id, "channel:C1", "U2");
-    assert.equal(first.kind, "file");
-    assert.equal(second.kind, "file", "standing file grants stay reusable for explicit re-fetches");
-  }));
+  assert.deepEqual(
+    await k.materializeStanding("channel:C1"),
+    [],
+    "standing file grants are not injected into provision env",
+  );
+  const first = await materializeGrant(k, grant.id, "channel:C1", "U2");
+  const second = await materializeGrant(k, grant.id, "channel:C1", "U2");
+  assert.equal(first.kind, "file");
+  assert.equal(second.kind, "file", "standing file grants stay reusable for explicit re-fetches");
+});
 
-test("materializeOwn round-trips the owner's env creds; expired creds are skipped", () =>
-  inTestTenant(async () => {
-    const k = kc();
-    await k.save(GH);
-    await k.save({ ownerId: "U1", service: "npm", secret: "npm_x", envKey: "NPM_TOKEN", expiresAt: Date.now() - 1 });
-    const own = await k.materializeOwn("U1");
-    assert.deepEqual(
-      own.map((m) => m.env[0]!.key),
-      ["GITHUB_TOKEN"],
-      "expired creds never materialize",
-    );
-    assert.equal(own[0]!.env[0]!.value, "ghp_secret");
-  }));
+tenantTest("materializeOwn round-trips the owner's env creds; expired creds are skipped", async () => {
+  const k = kc();
+  await k.save(GH);
+  await k.save({ ownerId: "U1", service: "npm", secret: "npm_x", envKey: "NPM_TOKEN", expiresAt: Date.now() - 1 });
+  const own = await k.materializeOwn("U1");
+  assert.deepEqual(
+    own.map((m) => m.env[0]!.key),
+    ["GITHUB_TOKEN"],
+    "expired creds never materialize",
+  );
+  assert.equal(own[0]!.env[0]!.value, "ghp_secret");
+});
 
-test("materializeOwn skips a row that doesn't decrypt under the current key instead of throwing", () =>
-  inTestTenant(async () => {
-    const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
-    const OTHER = deriveConnectorKey("a-different-master-key");
-    const writer = createKeychain({
-      lock: testAdvisoryLock(),
-      creds,
-      grants: testMap(),
-      asks: testMap(),
-      key: OTHER,
-    });
-    await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
+tenantTest("materializeOwn skips a row that doesn't decrypt under the current key instead of throwing", async () => {
+  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
+  const OTHER = deriveConnectorKey("a-different-master-key");
+  const writer = createKeychain({
+    lock: testAdvisoryLock(),
+    creds,
+    grants: testMap(),
+    asks: testMap(),
+    key: OTHER,
+  });
+  await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
-    const reader = createKeychain({
-      lock: testAdvisoryLock(),
-      creds,
-      grants: testMap(),
-      asks: testMap(),
-      key: KEY,
-    });
-    await reader.save(GH);
+  const reader = createKeychain({
+    lock: testAdvisoryLock(),
+    creds,
+    grants: testMap(),
+    asks: testMap(),
+    key: KEY,
+  });
+  await reader.save(GH);
 
-    const own = await reader.materializeOwn("U1");
-    assert.deepEqual(
-      own.map((m) => m.env[0]!.key),
-      ["GITHUB_TOKEN"],
-      "good row still materializes; undecryptable one is skipped",
-    );
-  }));
+  const own = await reader.materializeOwn("U1");
+  assert.deepEqual(
+    own.map((m) => m.env[0]!.key),
+    ["GITHUB_TOKEN"],
+    "good row still materializes; undecryptable one is skipped",
+  );
+});
 
-test("single-grant materialize surfaces a 422 (not a raw crypto 500) when the row doesn't decrypt", () =>
-  inTestTenant(async () => {
-    const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
-    const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
-    const OTHER = deriveConnectorKey("a-different-master-key");
-    const writer = createKeychain({
-      lock: testAdvisoryLock(),
-      creds,
-      grants,
-      asks: testMap(),
-      key: OTHER,
-    });
-    const cred = await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
+tenantTest("single-grant materialize surfaces a 422 (not a raw crypto 500) when the row doesn't decrypt", async () => {
+  const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
+  const grants = testMap<import("../src/credentials/keychain.ts").KeychainGrant>();
+  const OTHER = deriveConnectorKey("a-different-master-key");
+  const writer = createKeychain({
+    lock: testAdvisoryLock(),
+    creds,
+    grants,
+    asks: testMap(),
+    key: OTHER,
+  });
+  const cred = await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
-    const reader = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
-    const grant = await reader.createGrant({
-      credentialId: cred.id,
-      ownerId: "U1",
-      audienceScopeId: "channel:C1",
-      mode: "standing",
-      purpose: "use it",
-    });
-    await assert.rejects(
-      materializeGrant(reader, grant.id, "channel:C1", "U2"),
-      (e: KeychainError) => e.status === 422,
-      "an undecryptable row yields a clean 422, not a crash",
-    );
-  }));
+  const reader = createKeychain({ lock: testAdvisoryLock(), creds, grants, asks: testMap(), key: KEY });
+  const grant = await reader.createGrant({
+    credentialId: cred.id,
+    ownerId: "U1",
+    audienceScopeId: "channel:C1",
+    mode: "standing",
+    purpose: "use it",
+  });
+  await assert.rejects(
+    materializeGrant(reader, grant.id, "channel:C1", "U2"),
+    (e: KeychainError) => e.status === 422,
+    "an undecryptable row yields a clean 422, not a crash",
+  );
+});
 
-test("multi-input login: each field becomes its own env var, values never in metadata, materializes in order", () =>
-  inTestTenant(async () => {
+tenantTest(
+  "multi-input login: each field becomes its own env var, values never in metadata, materializes in order",
+  async () => {
     const k = kc();
     const meta = await k.save({
       ownerId: "U1",
@@ -793,77 +784,78 @@ test("multi-input login: each field becomes its own env var, values never in met
       { key: "DOORDASH_EMAIL", value: "alice@acme.co", secret: false },
       { key: "DOORDASH_PASSWORD", value: "hunter2", secret: true },
     ]);
-  }));
+  },
+);
 
-test("multi-input login: re-save upserts the same slot, and unique/non-empty fields are enforced", () =>
-  inTestTenant(async () => {
-    const k = kc();
-    const f = [
-      { envKey: "DB_USER", value: "admin", secret: false },
-      { envKey: "DB_PASS", value: "pw" },
-    ];
-    const a = await k.save({ ownerId: "U1", service: "db", fields: f });
-    const b = await k.save({
+tenantTest("multi-input login: re-save upserts the same slot, and unique/non-empty fields are enforced", async () => {
+  const k = kc();
+  const f = [
+    { envKey: "DB_USER", value: "admin", secret: false },
+    { envKey: "DB_PASS", value: "pw" },
+  ];
+  const a = await k.save({ ownerId: "U1", service: "db", fields: f });
+  const b = await k.save({
+    ownerId: "U1",
+    service: "db",
+    fields: [
+      { envKey: "DB_USER", value: "root", secret: false },
+      { envKey: "DB_PASS", value: "pw2" },
+    ],
+  });
+  assert.equal(a.id, b.id, "same owner+service+field-set is one record");
+  const c = await k.save({
+    ownerId: "U1",
+    service: "db",
+    fields: [
+      { envKey: "DB_PASS", value: "pw3" },
+      { envKey: "DB_USER", value: "root", secret: false },
+    ],
+  });
+  assert.equal(c.id, a.id, "field order does not change the slot identity");
+  assert.equal((await k.listByOwner("U1")).length, 1);
+
+  await assert.rejects(
+    k.save({
       ownerId: "U1",
-      service: "db",
+      service: "x",
       fields: [
-        { envKey: "DB_USER", value: "root", secret: false },
-        { envKey: "DB_PASS", value: "pw2" },
+        { envKey: "A", value: "1" },
+        { envKey: "A", value: "2" },
       ],
-    });
-    assert.equal(a.id, b.id, "same owner+service+field-set is one record");
-    const c = await k.save({
-      ownerId: "U1",
-      service: "db",
-      fields: [
-        { envKey: "DB_PASS", value: "pw3" },
-        { envKey: "DB_USER", value: "root", secret: false },
-      ],
-    });
-    assert.equal(c.id, a.id, "field order does not change the slot identity");
-    assert.equal((await k.listByOwner("U1")).length, 1);
+    }),
+    (e: KeychainError) => e.status === 400,
+    "duplicate envKeys rejected",
+  );
+  await assert.rejects(
+    k.save({ ownerId: "U1", service: "x", fields: [{ envKey: "A", value: " " }] }),
+    (e: KeychainError) => e.status === 400,
+    "empty value rejected",
+  );
+  await assert.rejects(
+    k.save({ ownerId: "U1", service: "x", fields: [{ envKey: "not a key", value: "1" }] }),
+    (e: KeychainError) => e.status === 400,
+    "non-env-var envKey rejected",
+  );
+  await assert.rejects(
+    k.save({ ownerId: "U1", service: "x", secret: "s", envKey: "not a key" }),
+    (e: KeychainError) => e.status === 400,
+    "a bad single envKey is rejected too",
+  );
+  await assert.rejects(
+    k.save({ ownerId: "U1", service: "x", secret: "s", envKey: "AGENT_API_URL" }),
+    (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
+    "a single envKey in the reserved AGENT_* namespace is rejected",
+  );
+  await assert.rejects(
+    k.save({ ownerId: "U1", service: "x", fields: [{ envKey: "AGENT_API_TOKEN", value: "t" }] }),
+    (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
+    "a field envKey in the reserved AGENT_* namespace is rejected",
+  );
+});
 
-    await assert.rejects(
-      k.save({
-        ownerId: "U1",
-        service: "x",
-        fields: [
-          { envKey: "A", value: "1" },
-          { envKey: "A", value: "2" },
-        ],
-      }),
-      (e: KeychainError) => e.status === 400,
-      "duplicate envKeys rejected",
-    );
-    await assert.rejects(
-      k.save({ ownerId: "U1", service: "x", fields: [{ envKey: "A", value: " " }] }),
-      (e: KeychainError) => e.status === 400,
-      "empty value rejected",
-    );
-    await assert.rejects(
-      k.save({ ownerId: "U1", service: "x", fields: [{ envKey: "not a key", value: "1" }] }),
-      (e: KeychainError) => e.status === 400,
-      "non-env-var envKey rejected",
-    );
-    await assert.rejects(
-      k.save({ ownerId: "U1", service: "x", secret: "s", envKey: "not a key" }),
-      (e: KeychainError) => e.status === 400,
-      "a bad single envKey is rejected too",
-    );
-    await assert.rejects(
-      k.save({ ownerId: "U1", service: "x", secret: "s", envKey: "AGENT_API_URL" }),
-      (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
-      "a single envKey in the reserved AGENT_* namespace is rejected",
-    );
-    await assert.rejects(
-      k.save({ ownerId: "U1", service: "x", fields: [{ envKey: "AGENT_API_TOKEN", value: "t" }] }),
-      (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
-      "a field envKey in the reserved AGENT_* namespace is rejected",
-    );
-  }));
-
-test("back-compat: a legacy record carrying a plaintext username still materializes the paired env var", () =>
-  inTestTenant(async () => {
+tenantTest(
+  "back-compat: a legacy record carrying a plaintext username still materializes the paired env var",
+  async () => {
     const creds = testMap<import("../src/credentials/keychain.ts").KeychainCredential>();
     const k = createKeychain({
       lock: testAdvisoryLock(),
@@ -884,10 +876,12 @@ test("back-compat: a legacy record carrying a plaintext username still materiali
       { key: "ACME_PORTAL_PASSWORD", value: "hunter2" },
       { key: "ACME_PORTAL_USERNAME", value: "alice@acme.co", secret: false },
     ]);
-  }));
+  },
+);
 
-test("manifest: explains itself in a bare channel, lists credentials + protocol when present, flags standing grants", () =>
-  inTestTenant(async () => {
+tenantTest(
+  "manifest: explains itself in a bare channel, lists credentials + protocol when present, flags standing grants",
+  async () => {
     const empty = renderKeychainManifest({
       scopeId: "channel:C1",
       conversationKind: "channel",
@@ -964,77 +958,77 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     });
     assert.match(login, /`DOORDASH_EMAIL` \+ `DOORDASH_PASSWORD`/);
     assert.ok(!block.includes("ghp_secret"), "the manifest is metadata-only");
-  }));
+  },
+);
 
-test("manifest: own credentials need no grant but require explicit execution requests", () =>
-  inTestTenant(async () => {
-    const k = kc();
-    await k.save(GH);
-    await k.save({ ownerId: "U1", service: "npm", secret: "npm_x", envKey: "NPM_TOKEN", expiresAt: Date.now() - 1 });
-    await k.save({
+tenantTest("manifest: own credentials need no grant but require explicit execution requests", async () => {
+  const k = kc();
+  await k.save(GH);
+  await k.save({ ownerId: "U1", service: "npm", secret: "npm_x", envKey: "NPM_TOKEN", expiresAt: Date.now() - 1 });
+  await k.save({
+    ownerId: "U1",
+    service: "file-login",
+    files: [{ path: ".qa/token", contentBase64: Buffer.from("file-secret").toString("base64") }],
+  });
+  const entries = await k.listByOwner("U1");
+  const own = renderKeychainManifest({
+    scopeId: "personal:U1",
+    conversationKind: "dm",
+    actorId: "U1",
+    members: [{ id: "U1", displayName: "Alice" }],
+    entriesByOwner: new Map([["U1", entries]]),
+    scopeGrants: [],
+    execution: entries.map((c) => ({
+      credentialId: c.id,
       ownerId: "U1",
-      service: "file-login",
-      files: [{ path: ".qa/token", contentBase64: Buffer.from("file-secret").toString("base64") }],
-    });
-    const entries = await k.listByOwner("U1");
-    const own = renderKeychainManifest({
+      handle: credentialHandle(c),
+      description: "",
+    })),
+  });
+  assert.match(own, /^### Alice\n/m);
+  assert.match(own, /`file-login:[a-f0-9]+` — file-login; files in \$HOME/);
+  assert.match(own, /`npm:[a-f0-9]+` — npm; expired$/m);
+  assert.doesNotMatch(own, /request-access|grant/);
+  assert.equal(
+    renderKeychainManifest({
       scopeId: "personal:U1",
       conversationKind: "dm",
       actorId: "U1",
-      members: [{ id: "U1", displayName: "Alice" }],
+      scopeGrants: [],
+      members: [{ id: "U1" }],
       entriesByOwner: new Map([["U1", entries]]),
-      scopeGrants: [],
-      execution: entries.map((c) => ({
-        credentialId: c.id,
-        ownerId: "U1",
-        handle: credentialHandle(c),
-        description: "",
-      })),
-    });
-    assert.match(own, /^### Alice\n/m);
-    assert.match(own, /`file-login:[a-f0-9]+` — file-login; files in \$HOME/);
-    assert.match(own, /`npm:[a-f0-9]+` — npm; expired$/m);
-    assert.doesNotMatch(own, /request-access|grant/);
-    assert.equal(
-      renderKeychainManifest({
-        scopeId: "personal:U1",
-        conversationKind: "dm",
-        actorId: "U1",
-        scopeGrants: [],
-        members: [{ id: "U1" }],
-        entriesByOwner: new Map([["U1", entries]]),
-      }),
-      renderKeychainManifest({
-        scopeId: "personal:U1",
-        conversationKind: "dm",
-        actorId: "U1",
-        scopeGrants: [],
-        members: [{ id: "U1" }],
-        entriesByOwner: new Map(),
-      }),
-      "own credentials without an execution handle are not listed",
-    );
-
-    const other = renderKeychainManifest({
-      scopeId: "personal:U2",
+    }),
+    renderKeychainManifest({
+      scopeId: "personal:U1",
       conversationKind: "dm",
-      actorId: "U2",
-      members: [{ id: "U2" }, { id: "U1", displayName: "Alice" }],
-      entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
-      scopeGrants: [],
-    });
-    assert.doesNotMatch(other, /Alice|npm|request-access/);
-
-    const channel = renderKeychainManifest({
-      scopeId: "channel:C1",
-      conversationKind: "channel",
       actorId: "U1",
-      members: [{ id: "U1", displayName: "Alice" }],
-      entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
       scopeGrants: [],
-    });
-    assert.doesNotMatch(channel, /Alice|npm|request-access/);
-  }));
+      members: [{ id: "U1" }],
+      entriesByOwner: new Map(),
+    }),
+    "own credentials without an execution handle are not listed",
+  );
+
+  const other = renderKeychainManifest({
+    scopeId: "personal:U2",
+    conversationKind: "dm",
+    actorId: "U2",
+    members: [{ id: "U2" }, { id: "U1", displayName: "Alice" }],
+    entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
+    scopeGrants: [],
+  });
+  assert.doesNotMatch(other, /Alice|npm|request-access/);
+
+  const channel = renderKeychainManifest({
+    scopeId: "channel:C1",
+    conversationKind: "channel",
+    actorId: "U1",
+    members: [{ id: "U1", displayName: "Alice" }],
+    entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
+    scopeGrants: [],
+  });
+  assert.doesNotMatch(channel, /Alice|npm|request-access/);
+});
 
 const SECRET = "keychain-route-secret".repeat(3);
 
@@ -1114,99 +1108,95 @@ describe("/v1/keychain routes (capability-authed)", () => {
     purpose: string,
   ) => inTestTenant(() => built.keychain!.createGrant({ credentialId, ownerId, audienceScopeId, mode, purpose }));
 
-  it("saves to the TOKEN's actor and lists only the caller's own credentials", () =>
-    inTestTenant(async () => {
-      const res = await post(
+  tenantIt("saves to the TOKEN's actor and lists only the caller's own credentials", async () => {
+    const res = await post(
+      "/v1/keychain/credentials",
+      { service: "github", secret: "ghp_u1", envKey: "GITHUB_TOKEN", accountLabel: "AliceBell" },
+      await capFor("U1"),
+    );
+    assert.equal(res.status, 200);
+    const { credential } = (await res.json()) as any;
+    assert.equal(credential.ownerId, "U1");
+    assert.equal(credential.credentialHandle, credentialHandle(credential));
+    assert.ok(!JSON.stringify(credential).includes("ghp_u1"));
+
+    const mine = (await (await get("/v1/keychain/credentials", await capFor("U1"))).json()) as any;
+    assert.equal(mine.credentials.length, 1);
+    assert.equal(mine.credentials[0].credentialHandle, credential.credentialHandle);
+    assert.ok(!JSON.stringify(mine).includes("ghp_u1"));
+    const other = (await (await get("/v1/keychain/credentials", await capFor("U2"))).json()) as any;
+    assert.deepEqual(other.credentials, []);
+  });
+
+  tenantIt("env grants expose the credential's execution handle; committing a once grant consumes it", async () => {
+    const owner = "HANDLE_OWNER";
+    const cap = await capFor(owner, scopeId("personal", owner), { liveActor: true });
+    const saved = (await (
+      await post(
         "/v1/keychain/credentials",
-        { service: "github", secret: "ghp_u1", envKey: "GITHUB_TOKEN", accountLabel: "AliceBell" },
-        await capFor("U1"),
-      );
-      assert.equal(res.status, 200);
-      const { credential } = (await res.json()) as any;
-      assert.equal(credential.ownerId, "U1");
-      assert.equal(credential.credentialHandle, credentialHandle(credential));
-      assert.ok(!JSON.stringify(credential).includes("ghp_u1"));
+        { service: "handle-test", envKey: "HANDLE_TOKEN", secret: "synthetic-handle-secret" },
+        cap,
+      )
+    ).json()) as any;
+    const metadata = (await (await get("/v1/keychain/credentials", cap)).json()) as any;
+    assert.equal(saved.credential.credentialHandle, metadata.credentials[0].credentialHandle);
+    assert.ok(!JSON.stringify([saved, metadata]).includes("synthetic-handle-secret"));
+    const grant = await grantHere(saved.credential.id, owner, scopeId("personal", owner), "once", "use the handle");
+    const current = (await built.keychain!.grantsForScope(scopeId("personal", owner))).find(
+      ({ grant: g }) => g.id === grant.id,
+    );
+    assert.equal(current?.credential.credentialHandle, saved.credential.credentialHandle);
+    const prepared = await built.keychain!.prepareMaterialize(grant.id, scopeId("personal", owner), owner);
+    assert.equal(prepared.materialized.kind, "env");
+    await prepared.commit();
+    const claimed = (await built.keychain!.getGrant(grant.id))!;
+    assert.equal(claimed.status, "used");
+    assert.ok(claimed.usedAt !== undefined);
+    await assert.rejects(prepared.commit(), (e: KeychainError) => e.status === 410);
+  });
 
-      const mine = (await (await get("/v1/keychain/credentials", await capFor("U1"))).json()) as any;
-      assert.equal(mine.credentials.length, 1);
-      assert.equal(mine.credentials[0].credentialHandle, credential.credentialHandle);
-      assert.ok(!JSON.stringify(mine).includes("ghp_u1"));
-      const other = (await (await get("/v1/keychain/credentials", await capFor("U2"))).json()) as any;
-      assert.deepEqual(other.credentials, []);
-    }));
+  tenantIt("a participant's granted connector is materialized under the host env var", async () => {
+    const GROUP = scopeId("group", "G_CONN");
+    await built.keychain!.setConnectorToken("gmail.googleapis.com", "alex@conn", {
+      accessToken: "ya29.alex",
+      expiresAt: Date.now() + 3_600_000,
+    });
+    const cid = (await built.keychain!.listConnectorsByOwners(["alex@conn"])).get("alex@conn")![0]!.credentialId;
 
-  it("env grants expose the credential's execution handle; committing a once grant consumes it", () =>
-    inTestTenant(async () => {
-      const owner = "HANDLE_OWNER";
-      const cap = await capFor(owner, scopeId("personal", owner), { liveActor: true });
-      const saved = (await (
-        await post(
-          "/v1/keychain/credentials",
-          { service: "handle-test", envKey: "HANDLE_TOKEN", secret: "synthetic-handle-secret" },
-          cap,
-        )
-      ).json()) as any;
-      const metadata = (await (await get("/v1/keychain/credentials", cap)).json()) as any;
-      assert.equal(saved.credential.credentialHandle, metadata.credentials[0].credentialHandle);
-      assert.ok(!JSON.stringify([saved, metadata]).includes("synthetic-handle-secret"));
-      const grant = await grantHere(saved.credential.id, owner, scopeId("personal", owner), "once", "use the handle");
-      const current = (await built.keychain!.grantsForScope(scopeId("personal", owner))).find(
-        ({ grant: g }) => g.id === grant.id,
-      );
-      assert.equal(current?.credential.credentialHandle, saved.credential.credentialHandle);
-      const prepared = await built.keychain!.prepareMaterialize(grant.id, scopeId("personal", owner), owner);
-      assert.equal(prepared.materialized.kind, "env");
-      await prepared.commit();
-      const claimed = (await built.keychain!.getGrant(grant.id))!;
-      assert.equal(claimed.status, "used");
-      assert.ok(claimed.usedAt !== undefined);
-      await assert.rejects(prepared.commit(), (e: KeychainError) => e.status === 410);
-    }));
+    const grant = await grantHere(cid, "alex@conn", GROUP, "once", "check my signature emails");
+    assert.equal((await built.keychain!.getGrant(grant.id))?.status, "active");
+    const prepared = await built.keychain!.prepareMaterialize(grant.id, GROUP, "carol@conn");
+    assert.equal(prepared.materialized.kind, "env");
+    if (prepared.materialized.kind === "env") assert.equal(prepared.materialized.env[0]?.value, "ya29.alex");
+  });
 
-  it("a participant's granted connector is materialized under the host env var", () =>
-    inTestTenant(async () => {
-      const GROUP = scopeId("group", "G_CONN");
-      await built.keychain!.setConnectorToken("gmail.googleapis.com", "alex@conn", {
-        accessToken: "ya29.alex",
-        expiresAt: Date.now() + 3_600_000,
-      });
-      const cid = (await built.keychain!.listConnectorsByOwners(["alex@conn"])).get("alex@conn")![0]!.credentialId;
+  tenantIt("normalizes keychain credential expiry seconds to milliseconds before storing", async () => {
+    const expiresAt = Math.floor((Date.now() + 3_600_000) / 1000);
+    const res = await post(
+      "/v1/keychain/credentials",
+      { service: "npm-seconds", secret: "npm_seconds", envKey: "NPM_SECONDS", expiresAt },
+      await capFor("U_SECONDS"),
+    );
+    assert.equal(res.status, 200);
+    const { credential } = (await res.json()) as any;
+    assert.equal(credential.expiresAt, expiresAt * 1000);
 
-      const grant = await grantHere(cid, "alex@conn", GROUP, "once", "check my signature emails");
-      assert.equal((await built.keychain!.getGrant(grant.id))?.status, "active");
-      const prepared = await built.keychain!.prepareMaterialize(grant.id, GROUP, "carol@conn");
-      assert.equal(prepared.materialized.kind, "env");
-      if (prepared.materialized.kind === "env") assert.equal(prepared.materialized.env[0]?.value, "ya29.alex");
-    }));
+    const grant = await grantHere(credential.id, "U_SECONDS", "channel:C_SECONDS", "once", "seconds check");
+    await built.keychain!.prepareMaterialize(grant.id, "channel:C_SECONDS", "U_SECONDS");
+  });
 
-  it("normalizes keychain credential expiry seconds to milliseconds before storing", () =>
-    inTestTenant(async () => {
-      const expiresAt = Math.floor((Date.now() + 3_600_000) / 1000);
-      const res = await post(
-        "/v1/keychain/credentials",
-        { service: "npm-seconds", secret: "npm_seconds", envKey: "NPM_SECONDS", expiresAt },
-        await capFor("U_SECONDS"),
-      );
-      assert.equal(res.status, 200);
-      const { credential } = (await res.json()) as any;
-      assert.equal(credential.expiresAt, expiresAt * 1000);
+  tenantIt("rejects invalid keychain credential expiry at the route boundary", async () => {
+    const badCred = await post(
+      "/v1/keychain/credentials",
+      { service: "bad-exp", secret: "x", expiresAt: "not-a-date" },
+      await capFor("U_BAD_EXP"),
+    );
+    assert.equal(badCred.status, 400);
+  });
 
-      const grant = await grantHere(credential.id, "U_SECONDS", "channel:C_SECONDS", "once", "seconds check");
-      await built.keychain!.prepareMaterialize(grant.id, "channel:C_SECONDS", "U_SECONDS");
-    }));
-
-  it("rejects invalid keychain credential expiry at the route boundary", () =>
-    inTestTenant(async () => {
-      const badCred = await post(
-        "/v1/keychain/credentials",
-        { service: "bad-exp", secret: "x", expiresAt: "not-a-date" },
-        await capFor("U_BAD_EXP"),
-      );
-      assert.equal(badCred.status, 400);
-    }));
-
-  it("saves a multi-field login via fields[], and rejects a malformed fields[] rather than storing a partial one", () =>
-    inTestTenant(async () => {
+  tenantIt(
+    "saves a multi-field login via fields[], and rejects a malformed fields[] rather than storing a partial one",
+    async () => {
       const ok = await post(
         "/v1/keychain/credentials",
         {
@@ -1231,36 +1221,35 @@ describe("/v1/keychain routes (capability-authed)", () => {
         await capFor("U_FIELDS"),
       );
       assert.equal(bad.status, 400, "a malformed field rejects the whole request");
-    }));
+    },
+  );
 
-  it("rejects keychain calls without a capability token (no source-auth fallback identity)", () =>
-    inTestTenant(async () => {
-      const res = await fetch(`${base}/v1/keychain/credentials`, { method: "GET" });
-      assert.notEqual(res.status, 200);
-    }));
+  tenantIt("rejects keychain calls without a capability token (no source-auth fallback identity)", async () => {
+    const res = await fetch(`${base}/v1/keychain/credentials`, { method: "GET" });
+    assert.notEqual(res.status, 200);
+  });
 
-  it("one-time grants materialize only in their scope, once", () =>
-    inTestTenant(async () => {
-      const credential = await built.keychain!.save({
-        ownerId: "OWNER",
-        service: "github",
-        secret: "ghp_grant",
-        envKey: "GH_GRANT",
-      });
-      const grant = await grantHere(credential.id, "OWNER", "channel:C7", "once", "clone the repo");
-      await assert.rejects(
-        built.keychain!.prepareMaterialize(grant.id, "channel:OTHER", "U3"),
-        (e: KeychainError) => e.status === 403,
-      );
-      const prepared = await built.keychain!.prepareMaterialize(grant.id, "channel:C7", "U3");
-      await prepared.commit();
-      await assert.rejects(
-        built.keychain!.prepareMaterialize(grant.id, "channel:C7", "U3"),
-        (e: KeychainError) => e.status === 410,
-      );
-    }));
+  tenantIt("one-time grants materialize only in their scope, once", async () => {
+    const credential = await built.keychain!.save({
+      ownerId: "OWNER",
+      service: "github",
+      secret: "ghp_grant",
+      envKey: "GH_GRANT",
+    });
+    const grant = await grantHere(credential.id, "OWNER", "channel:C7", "once", "clone the repo");
+    await assert.rejects(
+      built.keychain!.prepareMaterialize(grant.id, "channel:OTHER", "U3"),
+      (e: KeychainError) => e.status === 403,
+    );
+    const prepared = await built.keychain!.prepareMaterialize(grant.id, "channel:C7", "U3");
+    await prepared.commit();
+    await assert.rejects(
+      built.keychain!.prepareMaterialize(grant.id, "channel:C7", "U3"),
+      (e: KeychainError) => e.status === 410,
+    );
+  });
 
-  it("overview returns metadata and grants without querying usage history or exposing secrets", async (t) => {
+  tenantIt("overview returns metadata and grants without querying usage history or exposing secrets", async (t) => {
     const owner = "OVERVIEW_OWNER";
     const { credential } = (await (
       await post(
@@ -1285,47 +1274,45 @@ describe("/v1/keychain routes (capability-authed)", () => {
     assert.ok(!JSON.stringify(body).includes("never-return-this"));
   });
 
-  it("overview resolves grant scope ids to human-readable names when known", () =>
-    inTestTenant(async () => {
-      const owner = "SCOPENAME_OWNER";
-      const { credential } = (await (
-        await post(
-          "/v1/keychain/credentials",
-          { service: "scopenames", secret: "shh", envKey: "SCOPENAME_TOKEN" },
-          await capFor(owner),
-        )
-      ).json()) as any;
-      await inTestTenant(() =>
-        built.sessions.getOrCreateByThread("slack:C_NAMED:1", "channel", "channel:C_NAMED", "pilot-portal"),
-      );
-      await grantHere(credential.id, owner, "channel:C_NAMED", "standing", "named channel work");
-      await grantHere(credential.id, owner, "channel:C_MYSTERY", "standing", "unnamed channel work");
-      const body = (await (await get("/v1/keychain/overview", await capFor(owner))).json()) as any;
-      assert.equal(body.scopeNames["channel:C_NAMED"], "#pilot-portal");
-      assert.equal(body.scopeNames["channel:C_MYSTERY"], undefined);
-    }));
+  tenantIt("overview resolves grant scope ids to human-readable names when known", async () => {
+    const owner = "SCOPENAME_OWNER";
+    const { credential } = (await (
+      await post(
+        "/v1/keychain/credentials",
+        { service: "scopenames", secret: "shh", envKey: "SCOPENAME_TOKEN" },
+        await capFor(owner),
+      )
+    ).json()) as any;
+    await inTestTenant(() =>
+      built.sessions.getOrCreateByThread("slack:C_NAMED:1", "channel", "channel:C_NAMED", "pilot-portal"),
+    );
+    await grantHere(credential.id, owner, "channel:C_NAMED", "standing", "named channel work");
+    await grantHere(credential.id, owner, "channel:C_MYSTERY", "standing", "unnamed channel work");
+    const body = (await (await get("/v1/keychain/overview", await capFor(owner))).json()) as any;
+    assert.equal(body.scopeNames["channel:C_NAMED"], "#pilot-portal");
+    assert.equal(body.scopeNames["channel:C_MYSTERY"], undefined);
+  });
 
-  it("overview includes safe connector metadata so its grants remain visible and revocable", () =>
-    inTestTenant(async () => {
-      const owner = "CONNECTOR_OVERVIEW_OWNER";
-      await built.keychain!.setConnectorToken("gmail.googleapis.com", owner, {
-        accessToken: "never-return-this-connector",
-      });
-      const connector = (await built.keychain!.listConnectorsByOwners([owner])).get(owner)![0]!;
-      const grant = await built.keychain!.grantConnectorToScope({
-        host: connector.host,
-        principalId: owner,
-        audienceScopeId: "channel:C_CONNECTOR_OVERVIEW",
-        purpose: "read mail here",
-      });
+  tenantIt("overview includes safe connector metadata so its grants remain visible and revocable", async () => {
+    const owner = "CONNECTOR_OVERVIEW_OWNER";
+    await built.keychain!.setConnectorToken("gmail.googleapis.com", owner, {
+      accessToken: "never-return-this-connector",
+    });
+    const connector = (await built.keychain!.listConnectorsByOwners([owner])).get(owner)![0]!;
+    const grant = await built.keychain!.grantConnectorToScope({
+      host: connector.host,
+      principalId: owner,
+      audienceScopeId: "channel:C_CONNECTOR_OVERVIEW",
+      purpose: "read mail here",
+    });
 
-      const overview = await get("/v1/keychain/overview", await capFor(owner));
-      assert.equal(overview.status, 200);
-      const body = (await overview.json()) as any;
-      assert.equal(body.connectorCredentials[0].credentialId, connector.credentialId);
-      assert.equal(body.grants.find((entry: any) => entry.id === grant!.id)?.status, "active");
-      assert.ok(!JSON.stringify(body).includes("never-return-this-connector"));
-    }));
+    const overview = await get("/v1/keychain/overview", await capFor(owner));
+    assert.equal(overview.status, 200);
+    const body = (await overview.json()) as any;
+    assert.equal(body.connectorCredentials[0].credentialId, connector.credentialId);
+    assert.equal(body.grants.find((entry: any) => entry.id === grant!.id)?.status, "active");
+    assert.ok(!JSON.stringify(body).includes("never-return-this-connector"));
+  });
 });
 
 function channelTurn(
@@ -1348,121 +1335,114 @@ function execScriptsMention(needle: string, since = 0): boolean {
     .some((script) => script.includes(needle));
 }
 
-test("turn e2e: prompt lists exact handles and keychain env credentials are never ambient", () =>
-  inTestTenant(async () => {
-    const built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "kc-e2e-")),
-        signingSecret: SECRET,
-        apiBaseUrl: "http://core.test",
-      }),
-    );
-    await inTestTenant(() => built.identity.ready());
-    assert.ok(built.keychain, "buildApp with a signing secret wires the keychain");
-    built.keychain.materializeOwn = async () => {
-      throw new Error("eager owner materialization is forbidden");
-    };
-    built.keychain.materializeStanding = async () => {
-      throw new Error("eager standing materialization is forbidden");
-    };
-    const resolved: string[] = [];
-    const materializeOwnById = built.keychain.materializeOwnById.bind(built.keychain);
-    built.keychain.materializeOwnById = async (...args) => {
-      resolved.push(args[1]);
-      return materializeOwnById(...args);
-    };
-    const cred = await built.keychain!.save({
-      ownerId: "U_OWNER",
-      service: "github",
-      secret: "ghp_e2e",
-      envKey: "GITHUB_TOKEN",
-      accountLabel: "AliceBell",
-    });
+tenantTest("turn e2e: prompt lists exact handles and keychain env credentials are never ambient", async () => {
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "kc-e2e-")),
+      signingSecret: SECRET,
+      apiBaseUrl: "http://core.test",
+    }),
+  );
+  await inTestTenant(() => built.identity.ready());
+  assert.ok(built.keychain, "buildApp with a signing secret wires the keychain");
+  built.keychain.materializeOwn = async () => {
+    throw new Error("eager owner materialization is forbidden");
+  };
+  built.keychain.materializeStanding = async () => {
+    throw new Error("eager standing materialization is forbidden");
+  };
+  const resolved: string[] = [];
+  const materializeOwnById = built.keychain.materializeOwnById.bind(built.keychain);
+  built.keychain.materializeOwnById = async (...args) => {
+    resolved.push(args[1]);
+    return materializeOwnById(...args);
+  };
+  const cred = await built.keychain!.save({
+    ownerId: "U_OWNER",
+    service: "github",
+    secret: "ghp_e2e",
+    envKey: "GITHUB_TOKEN",
+    accountLabel: "AliceBell",
+  });
 
-    const audience = [{ externalId: "U_ASKER" }, { externalId: "U_OWNER", displayName: "Alice" }];
-    const sys = await inTestTenant(() => built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience)));
-    assert.equal(sys.status, "ok");
-    assert.match(sys.reply ?? "", /## Credentials/);
-    assert.doesNotMatch(sys.reply ?? "", /### Alice|github \(AliceBell\)|request-access` skill:/);
-    assert.ok(!(sys.reply ?? "").includes("ghp_e2e"), "prompt never carries the secret");
-    await inTestTenant(() => selectDefaultSandbox(built, "U_ASKER", "channel:C1"));
+  const audience = [{ externalId: "U_ASKER" }, { externalId: "U_OWNER", displayName: "Alice" }];
+  const sys = await inTestTenant(() => built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience)));
+  assert.equal(sys.status, "ok");
+  assert.match(sys.reply ?? "", /## Credentials/);
+  assert.doesNotMatch(sys.reply ?? "", /### Alice|github \(AliceBell\)|request-access` skill:/);
+  assert.ok(!(sys.reply ?? "").includes("ghp_e2e"), "prompt never carries the secret");
+  await inTestTenant(() => selectDefaultSandbox(built, "U_ASKER", "channel:C1"));
 
-    let mark = fakeSprites.execScripts().length;
-    assert.equal(
-      (await inTestTenant(() => built.app.turn(channelTurn("!run true", "U_ASKER", audience)))).status,
-      "ok",
-    );
-    assert.ok(!execScriptsMention("ghp_e2e", mark), "no grant → no secret in the channel sandbox");
+  let mark = fakeSprites.execScripts().length;
+  assert.equal((await inTestTenant(() => built.app.turn(channelTurn("!run true", "U_ASKER", audience)))).status, "ok");
+  assert.ok(!execScriptsMention("ghp_e2e", mark), "no grant → no secret in the channel sandbox");
 
-    await built.keychain!.createGrant({
-      credentialId: cred.id,
-      ownerId: "U_OWNER",
-      audienceScopeId: "channel:C1",
-      mode: "standing",
-      purpose: "use my gh here for repo work",
-    });
-    const sys2 = await inTestTenant(() => built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience)));
-    assert.match(sys2.reply ?? "", new RegExp(`\`github:${cred.id}\` — github \\(AliceBell\\); env \`GITHUB_TOKEN\``));
-    assert.doesNotMatch(sys2.reply ?? "", /use my gh here for repo work|Not granted here/);
+  await built.keychain!.createGrant({
+    credentialId: cred.id,
+    ownerId: "U_OWNER",
+    audienceScopeId: "channel:C1",
+    mode: "standing",
+    purpose: "use my gh here for repo work",
+  });
+  const sys2 = await inTestTenant(() => built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience)));
+  assert.match(sys2.reply ?? "", new RegExp(`\`github:${cred.id}\` — github \\(AliceBell\\); env \`GITHUB_TOKEN\``));
+  assert.doesNotMatch(sys2.reply ?? "", /use my gh here for repo work|Not granted here/);
 
-    mark = fakeSprites.execScripts().length;
-    assert.equal(
-      (await inTestTenant(() => built.app.turn(channelTurn("!run true", "U_ASKER", audience)))).status,
-      "ok",
-    );
-    assert.ok(!execScriptsMention("export GITHUB_TOKEN=", mark), "standing grants are not ambient");
-    assert.ok(!execScriptsMention("ghp_e2e", mark), "an unrequested command never receives the secret");
-    const unchanged = await inTestTenant(() => built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience)));
-    const system = (reply?: string) => (reply ?? "").split("<environment>")[0];
-    assert.equal(system(unchanged.reply), system(sys2.reply));
+  mark = fakeSprites.execScripts().length;
+  assert.equal((await inTestTenant(() => built.app.turn(channelTurn("!run true", "U_ASKER", audience)))).status, "ok");
+  assert.ok(!execScriptsMention("export GITHUB_TOKEN=", mark), "standing grants are not ambient");
+  assert.ok(!execScriptsMention("ghp_e2e", mark), "an unrequested command never receives the secret");
+  const unchanged = await inTestTenant(() => built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience)));
+  const system = (reply?: string) => (reply ?? "").split("<environment>")[0];
+  assert.equal(system(unchanged.reply), system(sys2.reply));
 
-    await inTestTenant(() => selectDefaultSandbox(built, "U_OWNER", "personal:U_OWNER"));
-    mark = fakeSprites.execScripts().length;
-    const dm: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U_OWNER" },
-      conversation: { kind: "dm", threadRef: "dm:U_OWNER", audience: [{ externalId: "U_OWNER" }] },
-      origin: { kind: "human" },
-      text: "!run true",
-    } as TurnRequest;
-    assert.equal((await inTestTenant(() => built.app.turn(dm))).status, "ok");
-    assert.ok(!execScriptsMention("ghp_e2e", mark), "unrequested secrets are never materialized");
-    const selected = await inTestTenant(() =>
-      built.app.turn({
-        ...dm,
-        text: `!execute ${JSON.stringify({ command: 'test "$GITHUB_TOKEN" = ghp_e2e && echo selected', credentials: [credentialHandle(cred)] })}`,
-      }),
-    );
-    assert.equal(selected.reply, "selected");
-    assert.deepEqual(resolved, [cred.id]);
-  }));
+  await inTestTenant(() => selectDefaultSandbox(built, "U_OWNER", "personal:U_OWNER"));
+  mark = fakeSprites.execScripts().length;
+  const dm: TurnRequest = {
+    surface: "test",
+    actor: { externalId: "U_OWNER" },
+    conversation: { kind: "dm", threadRef: "dm:U_OWNER", audience: [{ externalId: "U_OWNER" }] },
+    origin: { kind: "human" },
+    text: "!run true",
+  } as TurnRequest;
+  assert.equal((await inTestTenant(() => built.app.turn(dm))).status, "ok");
+  assert.ok(!execScriptsMention("ghp_e2e", mark), "unrequested secrets are never materialized");
+  const selected = await inTestTenant(() =>
+    built.app.turn({
+      ...dm,
+      text: `!execute ${JSON.stringify({ command: 'test "$GITHUB_TOKEN" = ghp_e2e && echo selected', credentials: [credentialHandle(cred)] })}`,
+    }),
+  );
+  assert.equal(selected.reply, "selected");
+  assert.deepEqual(resolved, [cred.id]);
+});
 
-test("prepared grants reject credential rotation without consuming a single use", () =>
-  inTestTenant(async () => {
-    const k = kc();
-    const credential = await k.save(GH);
-    const grant = await k.createGrant({
-      credentialId: credential.id,
-      ownerId: GH.ownerId,
-      audienceScopeId: "channel:C1",
-      mode: "once",
-      purpose: "rotation regression",
-    });
-    const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
-    await k.save({ ...GH, secret: "rotated-execution-token" });
-    await assert.rejects(prepared.commit(), /credential changed/);
-    assert.equal((await k.getGrant(grant.id))?.status, "active");
-    const fresh = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
-    assert.equal(fresh.materialized.kind, "env");
-    if (fresh.materialized.kind === "env") assert.equal(fresh.materialized.env[0]?.value, "rotated-execution-token");
-    await fresh.commit();
-    const committed = (await k.getGrant(grant.id))!;
-    assert.equal(committed.status, "used");
-    assert.equal(committed.usedBy, "U2", "only the committed materialization claims the once grant");
-  }));
+tenantTest("prepared grants reject credential rotation without consuming a single use", async () => {
+  const k = kc();
+  const credential = await k.save(GH);
+  const grant = await k.createGrant({
+    credentialId: credential.id,
+    ownerId: GH.ownerId,
+    audienceScopeId: "channel:C1",
+    mode: "once",
+    purpose: "rotation regression",
+  });
+  const prepared = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+  await k.save({ ...GH, secret: "rotated-execution-token" });
+  await assert.rejects(prepared.commit(), /credential changed/);
+  assert.equal((await k.getGrant(grant.id))?.status, "active");
+  const fresh = await k.prepareMaterialize(grant.id, "channel:C1", "U2");
+  assert.equal(fresh.materialized.kind, "env");
+  if (fresh.materialized.kind === "env") assert.equal(fresh.materialized.env[0]?.value, "rotated-execution-token");
+  await fresh.commit();
+  const committed = (await k.getGrant(grant.id))!;
+  assert.equal(committed.status, "used");
+  assert.equal(committed.usedBy, "U2", "only the committed materialization claims the once grant");
+});
 
-test("connector refresh during preparation binds the refreshed version and later rotation invalidates it", () =>
-  inTestTenant(async () => {
+tenantTest(
+  "connector refresh during preparation binds the refreshed version and later rotation invalidates it",
+  async () => {
     let refreshes = 0;
     const k = createKeychain({
       lock: testAdvisoryLock(),
@@ -1497,10 +1477,12 @@ test("connector refresh during preparation binds the refreshed version and later
     });
     await assert.rejects(prepared.commit(), /credential changed/);
     await (await k.prepareMaterialize(grant.id, "channel:C1", "U2")).commit();
-  }));
+  },
+);
 
-test("Composio keys remain backend-only across all materialization paths including multi-field records", () =>
-  inTestTenant(async () => {
+tenantTest(
+  "Composio keys remain backend-only across all materialization paths including multi-field records",
+  async () => {
     for (const input of [
       { secret: "project-key", envKey: "COMPOSIO_API_KEY" },
       {
@@ -1528,145 +1510,145 @@ test("Composio keys remain backend-only across all materialization paths includi
       assert.equal(await k.composioKey("U1", c.id), "project-key");
       assert.equal(await k.composioKey("U2", c.id), null);
     }
-  }));
+  },
+);
 
-test("manifest timestamps stay stable until credentials and pending asks actually expire", () =>
-  inTestTenant(async () => {
-    let now = Date.parse("2030-01-01T00:00:00Z");
-    const k = createKeychain({
-      lock: testAdvisoryLock(),
-      creds: testMap(),
-      grants: testMap(),
-      asks: testMap(),
-      key: KEY,
-      now: () => now,
+tenantTest("manifest timestamps stay stable until credentials and pending asks actually expire", async () => {
+  let now = Date.parse("2030-01-01T00:00:00Z");
+  const k = createKeychain({
+    lock: testAdvisoryLock(),
+    creds: testMap(),
+    grants: testMap(),
+    asks: testMap(),
+    key: KEY,
+    now: () => now,
+  });
+  const expiresAt = now + 50 * 3_600_000;
+  const credential = await k.save({ ...GH, expiresAt });
+  const { ask } = await k.createAsk({
+    credentialId: credential.id,
+    requesterId: "U2",
+    requesterScopeId: "channel:C1",
+    purpose: "test access",
+  });
+  const manifest = async () =>
+    renderKeychainManifest(
+      {
+        scopeId: "personal:U1",
+        conversationKind: "dm",
+        actorId: "U1",
+        members: [{ id: "U1" }],
+        entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
+        scopeGrants: [],
+        execution: [
+          { credentialId: credential.id, ownerId: "U1", handle: credentialHandle(credential), description: "" },
+        ],
+      },
+      now,
+    );
+  const events = async (since: number) =>
+    askResolutionEvents(await k.listAsks({ requesterScopeId: "channel:C1" }), since, () => "U1", k.getCredential);
+  const first = await manifest();
+  for (const advance of [61_000, 3 * 3_600_000]) {
+    now += advance;
+    assert.equal(await manifest(), first);
+    assert.equal(await events(ask.createdAt), "");
+  }
+  assert.doesNotMatch(first, /expires at|\d{4}-\d{2}-\d{2}T|approval card/);
+  now = ask.expiresAt;
+  assert.equal(await events(ask.createdAt), "");
+  now++;
+  assert.equal(await events(ask.createdAt), "Access request to U1 for `github` was expired.");
+  assert.equal(await events(now), "");
+  await assert.rejects(
+    k.approveAsk({ askId: ask.id, ownerId: "U1", mode: "once", purpose: "test access" }),
+    (e: KeychainError) => e.status === 410,
+  );
+  now = expiresAt;
+  assert.doesNotMatch(await manifest(), /; expired/);
+  await k.materializeOwnById("U1", credential.id, "personal:U1");
+  now++;
+  assert.match(await manifest(), /; expired/);
+  await assert.rejects(
+    k.materializeOwnById("U1", credential.id, "personal:U1"),
+    (e: KeychainError) => e.status === 410,
+  );
+});
+
+tenantTest("manifest inventories are canonical across discovery order without mutating inputs", async () => {
+  const k = kc();
+  for (const ownerId of ["U2", "U1"]) {
+    await k.save({ ...GH, ownerId });
+    await k.save({
+      ownerId,
+      service: "files",
+      files: [
+        { path: ".config/z", contentBase64: "eg==" },
+        { path: ".config/a", contentBase64: "YQ==" },
+      ],
     });
-    const expiresAt = now + 50 * 3_600_000;
-    const credential = await k.save({ ...GH, expiresAt });
-    const { ask } = await k.createAsk({
+    await k.save({
+      ownerId,
+      service: "custom",
+      fields: [
+        { envKey: "Z_KEY", value: "z" },
+        { envKey: "A_KEY", value: "a" },
+      ],
+    });
+    await k.setConnectorToken("github.com", ownerId, { accessToken: "token" });
+    await k.setConnectorToken("gmail.googleapis.com", ownerId, { accessToken: "token" });
+  }
+  for (const credential of await k.listByOwner("U1")) {
+    await k.createAsk({
       credentialId: credential.id,
       requesterId: "U2",
       requesterScopeId: "channel:C1",
-      purpose: "test access",
+      purpose: "access",
     });
-    const manifest = async () =>
-      renderKeychainManifest(
-        {
-          scopeId: "personal:U1",
-          conversationKind: "dm",
-          actorId: "U1",
-          members: [{ id: "U1" }],
-          entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
-          scopeGrants: [],
-          execution: [
-            { credentialId: credential.id, ownerId: "U1", handle: credentialHandle(credential), description: "" },
-          ],
-        },
-        now,
-      );
-    const events = async (since: number) =>
-      askResolutionEvents(await k.listAsks({ requesterScopeId: "channel:C1" }), since, () => "U1", k.getCredential);
-    const first = await manifest();
-    for (const advance of [61_000, 3 * 3_600_000]) {
-      now += advance;
-      assert.equal(await manifest(), first);
-      assert.equal(await events(ask.createdAt), "");
+  }
+  const input: Parameters<typeof renderKeychainManifest>[0] = {
+    scopeId: "personal:U1",
+    conversationKind: "dm",
+    actorId: "U1",
+    members: [{ id: "U2" }, { id: "U1" }],
+    entriesByOwner: await k.listByOwners(["U2", "U1"]),
+    connectorsByOwner: await k.listConnectorsByOwners(["U2", "U1"]),
+    scopeGrants: [],
+    execution: ["z", "a"].map((id) => ({
+      credentialId: id,
+      ownerId: "U1",
+      handle: `${id}:${id}`,
+      description: id,
+      scope: "scoped",
+    })),
+    detectedByOwner: new Map([
+      ["U1", ["zsh", "aws"]],
+      ["U2", ["gcloud", "aws"]],
+    ]),
+  };
+  const before = structuredClone(input);
+  const first = renderKeychainManifest(input, 1000);
+  const reversed = structuredClone(input);
+  reversed.members.reverse();
+  reversed.execution!.reverse();
+  for (const entries of reversed.entriesByOwner.values()) {
+    entries.reverse();
+    for (const entry of entries) {
+      entry.fields?.reverse();
+      entry.targets?.reverse();
     }
-    assert.doesNotMatch(first, /expires at|\d{4}-\d{2}-\d{2}T|approval card/);
-    now = ask.expiresAt;
-    assert.equal(await events(ask.createdAt), "");
-    now++;
-    assert.equal(await events(ask.createdAt), "Access request to U1 for `github` was expired.");
-    assert.equal(await events(now), "");
-    await assert.rejects(
-      k.approveAsk({ askId: ask.id, ownerId: "U1", mode: "once", purpose: "test access" }),
-      (e: KeychainError) => e.status === 410,
-    );
-    now = expiresAt;
-    assert.doesNotMatch(await manifest(), /; expired/);
-    await k.materializeOwnById("U1", credential.id, "personal:U1");
-    now++;
-    assert.match(await manifest(), /; expired/);
-    await assert.rejects(
-      k.materializeOwnById("U1", credential.id, "personal:U1"),
-      (e: KeychainError) => e.status === 410,
-    );
-  }));
+  }
+  for (const entries of reversed.connectorsByOwner!.values()) entries.reverse();
+  for (const entries of reversed.detectedByOwner!.values()) entries.reverse();
+  assert.equal(renderKeychainManifest(reversed, 1000), first);
+  assert.deepEqual(input, before);
+  reversed.connectorsByOwner!.get("U1")![0]!.needsReconnect = true;
+  assert.notEqual(renderKeychainManifest(reversed, 1000), first);
+});
 
-test("manifest inventories are canonical across discovery order without mutating inputs", () =>
-  inTestTenant(async () => {
-    const k = kc();
-    for (const ownerId of ["U2", "U1"]) {
-      await k.save({ ...GH, ownerId });
-      await k.save({
-        ownerId,
-        service: "files",
-        files: [
-          { path: ".config/z", contentBase64: "eg==" },
-          { path: ".config/a", contentBase64: "YQ==" },
-        ],
-      });
-      await k.save({
-        ownerId,
-        service: "custom",
-        fields: [
-          { envKey: "Z_KEY", value: "z" },
-          { envKey: "A_KEY", value: "a" },
-        ],
-      });
-      await k.setConnectorToken("github.com", ownerId, { accessToken: "token" });
-      await k.setConnectorToken("gmail.googleapis.com", ownerId, { accessToken: "token" });
-    }
-    for (const credential of await k.listByOwner("U1")) {
-      await k.createAsk({
-        credentialId: credential.id,
-        requesterId: "U2",
-        requesterScopeId: "channel:C1",
-        purpose: "access",
-      });
-    }
-    const input: Parameters<typeof renderKeychainManifest>[0] = {
-      scopeId: "personal:U1",
-      conversationKind: "dm",
-      actorId: "U1",
-      members: [{ id: "U2" }, { id: "U1" }],
-      entriesByOwner: await k.listByOwners(["U2", "U1"]),
-      connectorsByOwner: await k.listConnectorsByOwners(["U2", "U1"]),
-      scopeGrants: [],
-      execution: ["z", "a"].map((id) => ({
-        credentialId: id,
-        ownerId: "U1",
-        handle: `${id}:${id}`,
-        description: id,
-        scope: "scoped",
-      })),
-      detectedByOwner: new Map([
-        ["U1", ["zsh", "aws"]],
-        ["U2", ["gcloud", "aws"]],
-      ]),
-    };
-    const before = structuredClone(input);
-    const first = renderKeychainManifest(input, 1000);
-    const reversed = structuredClone(input);
-    reversed.members.reverse();
-    reversed.execution!.reverse();
-    for (const entries of reversed.entriesByOwner.values()) {
-      entries.reverse();
-      for (const entry of entries) {
-        entry.fields?.reverse();
-        entry.targets?.reverse();
-      }
-    }
-    for (const entries of reversed.connectorsByOwner!.values()) entries.reverse();
-    for (const entries of reversed.detectedByOwner!.values()) entries.reverse();
-    assert.equal(renderKeychainManifest(reversed, 1000), first);
-    assert.deepEqual(input, before);
-    reversed.connectorsByOwner!.get("U1")![0]!.needsReconnect = true;
-    assert.notEqual(renderKeychainManifest(reversed, 1000), first);
-  }));
-
-test("manifest merges credential representations without conflating login identities or execution scopes", () =>
-  inTestTenant(async () => {
+tenantTest(
+  "manifest merges credential representations without conflating login identities or execution scopes",
+  async () => {
     const k = kc();
     const ownerId = "ALICE@example.com";
     await k.setConnectorToken("gmail.googleapis.com", ownerId, { accessToken: "private-token", expiresAt: 5000 });
@@ -1736,74 +1718,73 @@ test("manifest merges credential representations without conflating login identi
     for (const secret of ["private-token", "first-secret", "second-secret"]) assert.ok(!rendered.includes(secret));
     input.execution!.reverse();
     assert.equal(renderKeychainManifest(input, 1000), rendered);
-  }));
+  },
+);
 
-test("granted connector keeps account and refresh semantics when owner is absent from roster", () =>
-  inTestTenant(async () => {
-    const k = kc(() => 1000);
-    await k.setConnectorToken("gmail.googleapis.com", "U_OWNER", {
-      accessToken: "old-token",
-      refreshToken: "refresh-token",
-      expiresAt: 900,
-      accountType: "company",
-    });
-    const connector = (await k.listConnectorsByOwners(["U_OWNER"])).get("U_OWNER")![0]!;
-    const credential = (await k.getCredential(connector.credentialId))!;
-    const grant = await k.createGrant({
-      ownerId: "U_OWNER",
-      credentialId: credential.id,
-      audienceScopeId: "channel:C1",
-      mode: "standing",
-      purpose: "mail",
-    });
-    const rendered = renderKeychainManifest(
-      {
-        scopeId: "channel:C1",
-        conversationKind: "channel",
-        actorId: "U_ACTOR",
-        members: [{ id: "U_ACTOR" }],
-        entriesByOwner: new Map(),
-        scopeGrants: [{ grant, credential }],
-        execution: [
-          { handle: credentialHandle(credential), ownerId: "U_OWNER", credentialId: credential.id, description: "" },
-        ],
-      },
-      1000,
-    );
-    assert.match(rendered, /### U_OWNER\n- `[^`]+` — Google \(company\); env `VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`$/);
-    assert.doesNotMatch(rendered, /expired|Not granted|refresh-token|old-token/);
-  }));
-
-test("a connector whose refresh was rejected shows the provider's error, not just expired", () =>
-  inTestTenant(() => {
-    const rendered = renderKeychainManifest({
-      scopeId: "personal:U1",
-      conversationKind: "dm",
-      actorId: "U1",
-      members: [{ id: "U1" }],
+tenantTest("granted connector keeps account and refresh semantics when owner is absent from roster", async () => {
+  const k = kc(() => 1000);
+  await k.setConnectorToken("gmail.googleapis.com", "U_OWNER", {
+    accessToken: "old-token",
+    refreshToken: "refresh-token",
+    expiresAt: 900,
+    accountType: "company",
+  });
+  const connector = (await k.listConnectorsByOwners(["U_OWNER"])).get("U_OWNER")![0]!;
+  const credential = (await k.getCredential(connector.credentialId))!;
+  const grant = await k.createGrant({
+    ownerId: "U_OWNER",
+    credentialId: credential.id,
+    audienceScopeId: "channel:C1",
+    mode: "standing",
+    purpose: "mail",
+  });
+  const rendered = renderKeychainManifest(
+    {
+      scopeId: "channel:C1",
+      conversationKind: "channel",
+      actorId: "U_ACTOR",
+      members: [{ id: "U_ACTOR" }],
       entriesByOwner: new Map(),
-      connectorsByOwner: new Map([
-        [
-          "U1",
-          [
-            {
-              credentialId: "c1",
-              ownerId: "U1",
-              host: "gmail.googleapis.com",
-              connected: true,
-              needsReconnect: true,
-              refreshError: "invalid_grant",
-            },
-          ],
-        ],
-      ]),
-      scopeGrants: [],
+      scopeGrants: [{ grant, credential }],
       execution: [
-        { handle: "connector:gmail.googleapis.com:default", ownerId: "U1", credentialId: "c1", description: "" },
+        { handle: credentialHandle(credential), ownerId: "U_OWNER", credentialId: credential.id, description: "" },
       ],
-    });
-    assert.match(
-      rendered,
-      /`connector:gmail\.googleapis\.com:default` — .*; expired \(refresh failed: invalid_grant\)$/m,
-    );
-  }));
+    },
+    1000,
+  );
+  assert.match(rendered, /### U_OWNER\n- `[^`]+` — Google \(company\); env `VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`$/);
+  assert.doesNotMatch(rendered, /expired|Not granted|refresh-token|old-token/);
+});
+
+tenantTest("a connector whose refresh was rejected shows the provider's error, not just expired", () => {
+  const rendered = renderKeychainManifest({
+    scopeId: "personal:U1",
+    conversationKind: "dm",
+    actorId: "U1",
+    members: [{ id: "U1" }],
+    entriesByOwner: new Map(),
+    connectorsByOwner: new Map([
+      [
+        "U1",
+        [
+          {
+            credentialId: "c1",
+            ownerId: "U1",
+            host: "gmail.googleapis.com",
+            connected: true,
+            needsReconnect: true,
+            refreshError: "invalid_grant",
+          },
+        ],
+      ],
+    ]),
+    scopeGrants: [],
+    execution: [
+      { handle: "connector:gmail.googleapis.com:default", ownerId: "U1", credentialId: "c1", description: "" },
+    ],
+  });
+  assert.match(
+    rendered,
+    /`connector:gmail\.googleapis\.com:default` — .*; expired \(refresh failed: invalid_grant\)$/m,
+  );
+});

@@ -10,16 +10,14 @@ import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
+import { tenantReady } from "../src/tenants/context.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 // Full application/tool/materializer path, with deterministic model commands and
 // the repo's host-backed Sprites transport. This does not test VM isolation.
 async function fixture(t: TestContext, config: Partial<Config> = {}) {
   const built = buildApp(testConfig({ memoryCapture: "off", ...config }));
-  await inTestTenant(() => built.identity.ready());
-  await built.config.hydrate?.();
-  await built.identity.refresh();
-  await built.deploymentLayerStore.hydrate();
+  await inTestTenant(() => tenantReady());
   t.after(async () => {
     built.scheduler.stop();
     await built.runtime.stop();
