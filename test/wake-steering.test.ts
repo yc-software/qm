@@ -212,8 +212,8 @@ test("spine ON: the steer signal carries the message's real surface ts (so the a
 
 test("an un-mentioned bare 'stop' from the person who started the run stops it", async () => {
   const built = freshApp();
-  const channel = "C17";
-  const root = "1700.7";
+  const channel = "C18";
+  const root = "1800.8";
   const first = await built.app.turn(mention("@bot do a long thing", channel, root));
   const liveRunId = first.runId!;
   assert.ok(await built.runs.claimById(liveRunId, "worker", 30_000));

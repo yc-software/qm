@@ -1,7 +1,7 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { requestedRuntimeError, userRuntimeConfigBody, validateWebTurnModelOptions } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
-import { isSubagentThreadRef, sessionTreeRunCount, stopSessionTree } from "../sessions/session-syscalls.ts";
+import { isSubagentThreadRef, sessionTreeRuns, stopSessionTree } from "../sessions/session-syscalls.ts";
 import { isUserItem } from "../sessions/items.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
@@ -11,7 +11,7 @@ import {
   liveTurnOf,
   mayMeetLiveTurn,
   routeIncoming,
-  stopsLiveWork,
+  isHalt,
   type Incoming,
   type LiveTurn,
 } from "../wake/route-incoming.ts";
@@ -111,7 +111,7 @@ export function createTurnMethods(
   async function liveTurnsFor(
     threadRef: string,
     ambientRef: string | undefined,
-    descendantsCount: boolean,
+    halting: boolean,
   ): Promise<Array<{ run?: Run; turn: LiveTurn }>> {
     const live: Array<{ run?: Run; turn: LiveTurn }> = [];
     const own = await deps.runs.activeForThread(threadRef);
@@ -120,10 +120,11 @@ export function createTurnMethods(
       const worker = await deps.runs.activeForThread(ambientRef);
       if (worker && !isTerminal(worker.status)) live.push({ run: worker, turn: liveTurnOf(worker, true) });
     }
-    if (live.length || !descendantsCount) return live;
+    if (live.length || !halting) return live;
     const root = await deps.sessions.getByThread(threadRef);
-    if (root && (await sessionTreeRunCount(deps.sessions, deps.runs, root)) > 0)
-      live.push({ turn: { kind: "descendants" } });
+    const descendants = root ? await sessionTreeRuns(deps.sessions, deps.runs, root) : [];
+    if (descendants.length)
+      live.push({ turn: { kind: "descendants", actorIds: descendants.map((run) => run.request.actor.id) } });
     return live;
   }
   async function stopThreadTree(threadRef: string, run?: Run): Promise<boolean> {
@@ -462,7 +463,11 @@ export function createTurnMethods(
           spineRouted && origin.kind === "human" && origin.messageTs
             ? `${req.surface}:${conversation.channelRef ?? conversation.threadRef}:ambient:${origin.messageTs}`
             : undefined;
-        const candidates = await liveTurnsFor(conversation.threadRef, ambientRef, stopsLiveWork(incoming));
+        const candidates = await liveTurnsFor(
+          conversation.threadRef,
+          ambientRef,
+          isHalt(incoming.text, incoming.selfHandle),
+        );
         if (redeliveryKey && candidates.some(({ run }) => run?.dedupKey === redeliveryKey)) return { status: "silent" };
         const prefs = { midTurn: req.midTurn ?? "steer" } as const;
         const routes = candidates.map((candidate) => ({
@@ -484,6 +489,7 @@ export function createTurnMethods(
           if (!stopped) console.error(`[turn] stop in ${conversation.threadRef} found no live work to stop`);
           return { status: "silent", steered: true, stopped };
         }
+        if (route.kind === "drop") return { status: "refused", reason: "empty message" };
         if (live?.run && route.kind !== "turn") {
           const sealed = await sealedByApproval();
           if (sealed) return sealed;

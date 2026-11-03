@@ -32,7 +32,7 @@ export type LiveTurn =
       dedupKey?: string | null;
       handlesThisMessage: boolean;
     }
-  | { kind: "descendants" };
+  | { kind: "descendants"; actorIds: string[] };
 
 export interface IncomingPrefs {
   midTurn: "steer" | "queue";
@@ -77,9 +77,16 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
   if (!live) return { kind: "turn", reason: "nothing-live" };
   if (live.kind === "run" && message.dedupKey && message.dedupKey === live.dedupKey)
     return { kind: "turn", reason: "duplicate" };
-  if (stopsLiveWork(message, live.kind === "run" && samePerson(message.actorId, live.actorId)))
+  const starters = live.kind === "run" ? [live.actorId] : live.actorIds;
+  if (
+    stopsLiveWork(
+      message,
+      starters.some((id) => samePerson(message.actorId, id)),
+    )
+  )
     return { kind: "abort" };
   if (live.kind === "descendants") return { kind: "turn", reason: "nothing-live" };
+  if (!message.text.trim() && !message.hasFiles) return { kind: "drop", reason: "empty" };
   const sameAccount =
     message.modelAccount === undefined ||
     (message.modelAccount === live.modelAccount &&
@@ -90,6 +97,5 @@ export function routeIncoming(message: Incoming, live: LiveTurn | null, prefs: I
     if (live.origin === "ambient" && message.origin === "human") return { kind: "turn", reason: "unprompted-live" };
     if (prefs.midTurn === "queue") return { kind: "turn", reason: "queue-preference" };
   }
-  if (!message.text.trim() && !message.hasFiles) return { kind: "drop", reason: "empty" };
   return { kind: "steer" };
 }
