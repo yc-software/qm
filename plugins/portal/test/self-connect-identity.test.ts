@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { deriveKey, seal } from "../src/session.ts";
 import { PORTAL_IDENTITY_HEADER, verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 const identitySecret = "self-connect-portal-identity-secret-32+";
 const core = createServer((req, res) => {
@@ -28,6 +29,7 @@ Object.assign(process.env, {
   CORE_API_URL: `http://127.0.0.1:${(core.address() as AddressInfo).port}`,
 });
 const { server } = await import("../src/index.ts");
+setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 test.after(() => {

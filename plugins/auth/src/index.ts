@@ -12,6 +12,7 @@ import { createBrandingCache } from "../../chassis/src/branding.ts";
 import { mailerFor } from "./email.ts";
 import { loadSigningKey } from "./keys.ts";
 import { TokenSigner } from "./tokens.ts";
+import { inResolvedTenant } from "../../chassis/src/resolve-tenant.ts";
 import { createAuthHandler } from "./server.ts";
 
 const PORT = portFromEnv(8099);
@@ -55,7 +56,7 @@ export async function startServer(
     },
   });
   const server = createServer((req, res) => {
-    void handle(req, res).catch((err: unknown) => {
+    void inResolvedTenant(req, res, () => handle(req, res)).catch((err: unknown) => {
       reportBackendError(err);
       console.error("[auth] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
       if (!res.headersSent) json(res, 500, { error: "internal_error" });

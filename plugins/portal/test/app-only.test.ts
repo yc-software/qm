@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { deriveKey, open, seal, readCookie } from "../src/session.ts";
 import { coreEmailAdmission, coreEmailAllowed } from "../../chassis/src/external-members.ts";
+import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 const secret = "app-only-session-test-secret";
 const origin = "http://portal.test";
@@ -72,6 +73,7 @@ Object.assign(process.env, {
   PORTAL_SESSION_RENEW_AFTER_S: "1",
 });
 const { server } = await import("../src/index.ts");
+setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 test.after(() => {

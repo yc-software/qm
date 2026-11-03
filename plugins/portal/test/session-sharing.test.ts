@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 const calls: Array<{ url: string; cookie: unknown; identity: unknown; encoding: unknown }> = [];
 const upstream = createServer((req, res) => {
@@ -20,6 +21,7 @@ process.env.CORE_SIGNING_SECRET = "share-test-core-secret";
 process.env.WEB_UI_UPSTREAM = `http://localhost:${(upstream.address() as AddressInfo).port}`;
 process.env.PORTAL_LOCAL_AUTH_BYPASS = "0";
 const { server } = await import("../src/index.ts");
+setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 await new Promise<void>((resolve) => server.listen(0, resolve));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 test.after(() => {

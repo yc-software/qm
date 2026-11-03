@@ -11,6 +11,7 @@ import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
 import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
+import { inResolvedTenant } from "../../chassis/src/resolve-tenant.ts";
 import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
@@ -919,7 +920,8 @@ const server = createServer((req, res) => {
         Math.round(performance.now() - startedAt),
       );
   });
-  void handle(req, res).catch((err: unknown) => {
+  const served = isAppHost(req) ? handle(req, res) : inResolvedTenant(req, res, () => handle(req, res));
+  void served.catch((err: unknown) => {
     errorLogged = true;
     reportBackendError(err);
     console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
@@ -927,6 +929,13 @@ const server = createServer((req, res) => {
     else res.end();
   });
 });
+
+function isAppHost(req: IncomingMessage): boolean {
+  if (!APPS_DOMAIN) return false;
+  const host = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
+  const apps = APPS_DOMAIN.toLowerCase();
+  return host === apps || host.endsWith(`.${apps}`);
+}
 
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const method = req.method ?? "GET";
@@ -939,10 +948,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
 
-  const requestHost = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
-  const appSuffix = APPS_DOMAIN ? `.${APPS_DOMAIN.toLowerCase()}` : undefined;
-  if (appSuffix && (requestHost.endsWith(appSuffix) || requestHost === APPS_DOMAIN?.toLowerCase())) {
-    const label = requestHost.slice(0, -appSuffix.length);
+  if (isAppHost(req)) {
+    const requestHost = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
+    const label = requestHost.slice(0, -`.${APPS_DOMAIN}`.length);
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return json(res, 404, { error: "not_found" });
     return proxyToAppHost(req, res, CORE, clientIpOf(req));
   }

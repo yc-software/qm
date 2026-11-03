@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 const seen: Array<{ url: string; method: string; headers: Record<string, unknown>; body: string }> = [];
 const broker = createServer((req: IncomingMessage, res) => {
@@ -48,6 +49,7 @@ process.env.CORE_API_URL = surfaceUrl;
 process.env.AUTH_BROKER_UPSTREAM = brokerUrl;
 
 const { server, brokerRouteFor, clientIpOf, isPrivateNetworkUrl } = await import("../src/index.ts");
+setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 

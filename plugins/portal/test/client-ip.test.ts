@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import type { IncomingMessage } from "node:http";
+import { setTenantResolver } from "../../chassis/src/resolve-tenant.ts";
 
 process.env.PORTAL_PUBLIC_URL = "https://agent.example.test";
 process.env.PORTAL_SESSION_SECRET = "client-ip-test-portal-secret";
@@ -9,6 +10,7 @@ process.env.CORE_SIGNING_SECRET = "client-ip-test-core-secret";
 process.env.PORTAL_XFF_TRUSTED_HOPS = "2";
 
 const { clientIpOf } = await import("../src/index.ts");
+setTenantResolver(async () => "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93");
 
 const req = (headers: Record<string, string>): IncomingMessage =>
   ({ headers, socket: { remoteAddress: "10.0.0.1" } }) as unknown as IncomingMessage;
