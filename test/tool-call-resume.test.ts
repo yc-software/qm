@@ -12,7 +12,7 @@ import { createResolutionService } from "../src/resolution/resolution-service.ts
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
-import { bridgedTools, resumeInterruptedToolCall } from "../src/agent/turn-support.ts";
+import { bridgedTools, emitEntry, resumeInterruptedToolCall } from "../src/agent/turn-support.ts";
 import type { ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -26,6 +26,7 @@ import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { entryFromItem, itemFromEntry, storedItem } from "../src/sessions/items.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -60,9 +61,10 @@ function turnFor(
     tools,
     scopeLabel: personal,
     orgScopeId: scopeId("org", ORG),
-    emit: async (entry) => {
-      sink.push({ type: entry.type, payload: entry.payload });
-      return { ...entry, sessionId: "s1", seq: seq++, parentSeq: null, createdAt: 1000 + seq } as SessionEntry;
+    emit: async (item) => {
+      const stored = storedItem(item, { sessionId: "s1", seq: seq++, createdAt: 1000 + seq });
+      sink.push(entryFromItem(stored, personal));
+      return stored;
     },
     recordModelCall: () => {},
     ...(call ? { resumeToolCall: call } : {}),
@@ -95,7 +97,8 @@ test("resumeInterruptedToolCall re-runs the recorded input exactly once and reco
     sink,
     tools,
   );
-  const ref: ToolContextRef = { current: tools, emit: turn.emit, scopeLabel: personal, orgScopeId: turn.orgScopeId };
+  const emit: ToolContextRef["emit"] = (entry) => emitEntry(turn, entry);
+  const ref: ToolContextRef = { current: tools, emit, scopeLabel: personal, orgScopeId: turn.orgScopeId };
 
   const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
 
@@ -123,7 +126,7 @@ test("resumeInterruptedToolCall re-runs the recorded input exactly once and reco
       timestamp: 0,
     },
   );
-  assert.equal(ref.emit, turn.emit, "the emit hook is restored after the re-run");
+  assert.equal(ref.emit, emit, "the emit hook is restored after the re-run");
 });
 
 test("resumeInterruptedToolCall does nothing without a call to resume", async () => {
@@ -131,7 +134,7 @@ test("resumeInterruptedToolCall does nothing without a call to resume", async ()
   const sink: Array<{ type: string; payload: unknown }> = [];
   const tools = historyToolContext(queries);
   const idle = turnFor([danglingCall], undefined, sink, tools);
-  const ref: ToolContextRef = { current: tools, emit: idle.emit, scopeLabel: personal };
+  const ref: ToolContextRef = { current: tools, emit: (entry) => emitEntry(idle, entry), scopeLabel: personal };
   assert.equal(await resumeInterruptedToolCall(idle, ref, bridgedTools(ref, {})), null);
   assert.deepEqual(queries, []);
   assert.deepEqual(sink, []);
@@ -142,7 +145,7 @@ test("when the tool is unavailable on the retried turn the call is closed as int
   const sink: Array<{ type: string; payload: unknown }> = [];
   const tools = historyToolContext(queries);
   const missing = turnFor([danglingCall], { callId: "c-x", tool: "no_such_tool", input: {} }, sink, tools);
-  const ref: ToolContextRef = { current: tools, emit: missing.emit, scopeLabel: personal };
+  const ref: ToolContextRef = { current: tools, emit: (entry) => emitEntry(missing, entry), scopeLabel: personal };
   const resumed = await resumeInterruptedToolCall(missing, ref, bridgedTools(ref, {}));
   assert.ok(resumed);
   assert.equal(resumed.message.isError, true);
@@ -166,7 +169,7 @@ test("a cancelled turn does not re-run anything and closes the call as interrupt
     tools,
   );
   turn.cancel = AbortSignal.abort();
-  const ref: ToolContextRef = { current: tools, emit: turn.emit, scopeLabel: personal };
+  const ref: ToolContextRef = { current: tools, emit: (entry) => emitEntry(turn, entry), scopeLabel: personal };
   const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
   assert.equal(resumed?.message.isError, true);
   assert.deepEqual(queries, []);
@@ -187,7 +190,7 @@ test("a tool that throws during the re-run still records an error result so the 
     sink,
     tools,
   );
-  const ref: ToolContextRef = { current: tools, emit: turn.emit, scopeLabel: personal };
+  const ref: ToolContextRef = { current: tools, emit: (entry) => emitEntry(turn, entry), scopeLabel: personal };
   const resumed = await resumeInterruptedToolCall(turn, ref, bridgedTools(ref, {}));
   assert.ok(resumed);
   assert.equal(resumed.message.isError, true);
@@ -233,14 +236,16 @@ function buildScenario() {
       });
       if (turn.resumeToolCall) {
         await turn.emit({
-          type: "tool_result",
-          payload: { tool: "history", callId: turn.resumeToolCall.callId, isError: false, result: "- found it" },
-          scopeLabel: turn.scopeLabel,
+          kind: "ToolResult",
+          tool: "history",
+          callId: turn.resumeToolCall.callId,
+          isError: false,
+          text: "- found it",
         });
       }
-      await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+      await turn.emit({ kind: "UserMessage", text: turn.input });
       const reply = "we kept the Q2 budget flat";
-      await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+      await turn.emit({ kind: "AgentMessage", text: reply });
       return { reply, modelCalls: 1 };
     },
     async screenSecurity() {
@@ -292,8 +297,8 @@ async function seedDeadAttempt(
 ): Promise<{ sessionId: string; userSeq: number }> {
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", personal);
   const writer = { sessionId: session.id };
-  const user = await sessions.append(writer, { type: "user", payload: { text: ASK }, scopeLabel: personal });
-  await sessions.append(writer, { type: "tool_call", payload: callPayload, scopeLabel: personal });
+  const user = await sessions.append(writer, { kind: "UserMessage", text: ASK });
+  await sessions.append(writer, itemFromEntry({ type: "tool_call", payload: callPayload }));
   return { sessionId: session.id, userSeq: user.seq };
 }
 
@@ -316,9 +321,11 @@ test("a retry whose dangling call was marked retry-safe re-runs it silently inst
   assert.deepEqual(turn.resumeToolCall, { callId: "c-budget", tool: "history", input: { query: "budget" } });
   assert.equal(turn.continueTurn, true, "the agent continues the recorded turn instead of re-sending the request");
 
-  const entries = await sessions.getEntries(sessionId);
-  const types = entries.map((e) => e.type);
-  assert.deepEqual(types, ["user", "tool_call", "tool_result", "user", "assistant"]);
+  const items = await sessions.getItems(sessionId);
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ["UserMessage", "ToolCall", "ToolResult", "UserMessage", "AgentMessage"],
+  );
 });
 
 for (const [label, payload] of [
@@ -337,16 +344,16 @@ for (const [label, payload] of [
     const turn = received[0]!;
     assert.equal(turn.resumeToolCall, undefined);
     assert.equal(turn.continueTurn, true, "the agent continues the recorded turn instead of re-sending the request");
-    const entries = await sessions.getEntries(sessionId);
+    const items = await sessions.getItems(sessionId);
     assert.deepEqual(
-      entries.map((e) => e.type),
-      ["user", "tool_call", "tool_result", "user", "assistant"],
+      items.map((item) => item.kind),
+      ["UserMessage", "ToolCall", "ToolResult", "UserMessage", "AgentMessage"],
       "nothing is re-run; the call gets a recorded result",
     );
-    const result = entries[2]!.payload as { callId?: string; isError?: boolean; result?: string };
+    const result = items[2]!;
     assert.equal(result.callId, "c-budget");
     assert.equal(result.isError, true);
-    assert.match(result.result ?? "", /^\[system\] This call was interrupted; its outcome wasn't recorded\./);
+    assert.match(result.text ?? "", /^\[system\] This call was interrupted; its outcome wasn't recorded\./);
     assert.ok(turn.historyTypes.includes("tool_result"), "the model sees the recorded result");
   });
 }

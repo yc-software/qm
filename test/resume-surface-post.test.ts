@@ -23,6 +23,7 @@ import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { itemFromEntry } from "../src/sessions/items.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
@@ -93,7 +94,7 @@ test("a resumed turn whose dead attempt already posted does not post its closing
   const agent: Agent = {
     ...base,
     runTurn: async (turn) => {
-      await turn.emit({ type: "assistant", payload: { text: "Done, it printed ok." }, scopeLabel: turn.scopeLabel });
+      await turn.emit({ kind: "AgentMessage", text: "Done, it printed ok." });
       return { reply: "Done, it printed ok." };
     },
   };
@@ -105,7 +106,7 @@ test("a resumed turn whose dead attempt already posted does not post its closing
     ["tool_call", { tool: "slack", action: "post", callId: "p1", text: "Output: ok" }],
     ["tool_result", { tool: "slack", action: "post", callId: "p1", ok: true, result: "[sent]" }],
   ] as const)
-    await sessions.append(writer, { type, payload, scopeLabel: "channel:C1" });
+    await sessions.append(writer, itemFromEntry({ type, payload }));
   const orch = buildOrchestrator(agent, sessions, deliveries);
   const result = await orch.handleTurn({
     surface: "slack",

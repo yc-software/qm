@@ -208,14 +208,14 @@ test("reapExpired fences the dead attempt before it requeues, so a zombie can ne
     false,
     "the dead attempt is fenced, so a zombie cannot revive the run",
   );
-  const entry = (text: string) => ({ type: "assistant" as const, payload: { text }, scopeLabel: "personal:U1" });
+  const entry = (text: string) => ({ kind: "AgentMessage" as const, text });
   await sessions.append({ sessionId: session.id, turnId: r.id, runLeaseToken: replacement.leaseToken }, entry("live"));
   await assert.rejects(
     sessions.append({ sessionId: session.id, turnId: r.id, runLeaseToken: claimed!.leaseToken! }, entry("zombie")),
     /no longer holds its claim/,
   );
   assert.deepEqual(
-    (await sessions.getEntries(session.id)).map((e) => (e.payload as { text: string }).text),
+    (await sessions.getItems(session.id)).map((item) => item.text),
     ["live"],
   );
 });
@@ -263,7 +263,7 @@ test("shutdown cancels before handback and holds the run until the turn unwinds"
       started();
       await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
       await cleanup;
-      await sessions.append(writer, { type: "system", payload: { kind: "checkpoint" }, scopeLabel: "personal:U1" });
+      await sessions.append(writer, { kind: "Stop" });
       return { status: "silent" as const, stopped: true };
     },
   } as unknown as Orchestrator;
@@ -312,9 +312,7 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
         started.resolve();
         await gate.promise;
         const writer = { sessionId: session.id, turnId: input.runId!, runLeaseToken: input.runLeaseToken! };
-        await sessions
-          .append(writer, { type: "system", payload: { kind: "checkpoint" }, scopeLabel: "personal:U1" })
-          .then(lateWrite.resolve, lateWrite.reject);
+        await sessions.append(writer, { kind: "Stop" }).then(lateWrite.resolve, lateWrite.reject);
         return { status: "ok" as const, reply: "stale" };
       }
       return { status: "ok" as const, reply: "resumed" };
@@ -360,7 +358,7 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
     "the resume waited for the old process exit",
   );
   assert.equal(
-    (await sessions.getEntries(session.id)).some((entry) => (entry.payload as { kind?: string }).kind === "checkpoint"),
+    (await sessions.getItems(session.id)).some((item) => item.kind === "Stop"),
     false,
     "the handed-back attempt cannot write to the conversation",
   );
@@ -427,12 +425,12 @@ test("shutdown mid-turn through the agent leaves no stop marker, and the resumed
   });
   const entriesNow = async () => {
     const session = await built.sessions.getByThread(threadRef);
-    return session ? built.sessions.getEntries(session.id) : [];
+    return session ? built.sessions.getItems(session.id) : [];
   };
   built.runtime.start();
   try {
     const deadline = Date.now() + 5_000;
-    while (!(await entriesNow()).some((entry) => entry.type === "tool_result")) {
+    while (!(await entriesNow()).some((entry) => entry.kind === "ToolResult")) {
       if (Date.now() > deadline) throw new Error("the first attempt never recorded its tool work");
       await sleep(10);
     }
@@ -444,7 +442,7 @@ test("shutdown mid-turn through the agent leaves no stop marker, and the resumed
     assert.equal(handedBack.leaseToken, null);
     const interrupted = await entriesNow();
     assert.deepEqual(
-      interrupted.filter((entry) => entry.type === "assistant"),
+      interrupted.filter((entry) => entry.kind === "AgentMessage"),
       [],
       "the shutdown-cancelled attempt must not close the turn",
     );
@@ -453,9 +451,9 @@ test("shutdown mid-turn through the agent leaves no stop marker, and the resumed
     assert.equal(done.status, "done");
     assert.equal(done.attempts, 2);
     assert.equal(done.result?.reply, "finished after resume");
-    const replies = (await entriesNow()).filter((entry) => entry.type === "assistant");
+    const replies = (await entriesNow()).filter((entry) => entry.kind === "AgentMessage");
     assert.deepEqual(
-      replies.map((entry) => (entry.payload as { text: string }).text),
+      replies.map((entry) => entry.text),
       ["finished after resume"],
     );
   } finally {
@@ -935,7 +933,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
   const append = built.sessions.append.bind(built.sessions);
   let first = true;
   built.sessions.append = async (writer, entry) => {
-    if (first && entry.type === "user") {
+    if (first && entry.kind === "UserMessage") {
       first = false;
       blocked.resolve();
       await gate.promise;

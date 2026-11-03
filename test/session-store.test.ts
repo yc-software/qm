@@ -28,17 +28,17 @@ test("attributedTurns applies each window's [validFrom,validTo) and excludes ove
   await store.addParticipant(s.id, "U1");
   const writer = { sessionId: s.id };
   nowRef.v = t0 + 1000;
-  const early = await store.append(writer, { type: "user", payload: { text: "early, U1 only" }, scopeLabel: scope });
+  const early = await store.append(writer, { kind: "UserMessage", text: "early, U1 only" });
   nowRef.v = t0 + 2000;
   await store.addParticipant(s.id, "U2");
   nowRef.v = t0 + 3000;
-  await store.append(writer, { type: "user", payload: { overheard: true, text: "chatter" }, scopeLabel: scope });
+  await store.append(writer, { kind: "UserMessage", text: "chatter", body: { overheard: true } });
   nowRef.v = t0 + 4000;
-  const mid = await store.append(writer, { type: "user", payload: { text: "both here" }, scopeLabel: scope });
+  const mid = await store.append(writer, { kind: "UserMessage", text: "both here" });
   nowRef.v = t0 + 5000;
   await store.removeParticipant(s.id, "U2");
   nowRef.v = t0 + 6000;
-  const late = await store.append(writer, { type: "user", payload: { text: "U1 only again" }, scopeLabel: scope });
+  const late = await store.append(writer, { kind: "UserMessage", text: "U1 only again" });
 
   const rows = await store.attributedTurns();
   const u1 = rows.filter((r) => r.principalId === "U1" && r.sessionId === s.id);
@@ -103,11 +103,10 @@ test(`monotonic seq`, async () => {
 
   const writer = { sessionId: s.id };
 
-  const e0 = await store.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: s.scopeId });
-  const e1 = await store.append(writer, { type: "assistant", payload: { text: "yo" }, scopeLabel: s.scopeId });
+  const e0 = await store.append(writer, { kind: "UserMessage", text: "hi" });
+  const e1 = await store.append(writer, { kind: "AgentMessage", text: "yo" });
   assert.equal(e0.seq, 0);
   assert.equal(e1.seq, 1);
-  assert.equal(e1.parentSeq, 0);
 });
 
 test(`getByThread is a pure lookup (null on miss, never creates)`, async () => {
@@ -141,7 +140,7 @@ test(`scopeActivity counts conversations, cron fires and other background per sc
   await store.getOrCreateByThread("agent:main:webhook:wh1", "dm", scope);
   await store.getOrCreateByThread("dm:D9", "dm", scopeId("personal", "U9"));
   const writer = { sessionId: dm.id };
-  await store.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+  await store.append(writer, { kind: "UserMessage", text: "hi" });
 
   const rows = new Map((await store.scopeActivity()).map((r) => [r.scopeId, r]));
   assert.deepEqual([rows.get(scope)?.conversations, rows.get(scope)?.crons, rows.get(scope)?.background], [1, 2, 1]);
@@ -155,16 +154,18 @@ test(`overheard catch-up entries are NOT counted as turns or as the first/last m
   await store.addParticipant(s.id, "U1");
   const writer = { sessionId: s.id };
   await store.append(writer, {
-    type: "user",
-    payload: { overheard: true, ts: "1", name: "Alice", text: "overheard chatter" },
-    scopeLabel: scope,
+    kind: "UserMessage",
+    externalId: "1",
+    text: "overheard chatter",
+    body: { overheard: true, name: "Alice" },
   });
-  await store.append(writer, { type: "user", payload: { text: "the real question" }, scopeLabel: scope });
-  await store.append(writer, { type: "assistant", payload: { text: "answer" }, scopeLabel: scope });
+  await store.append(writer, { kind: "UserMessage", text: "the real question" });
+  await store.append(writer, { kind: "AgentMessage", text: "answer" });
   await store.append(writer, {
-    type: "user",
-    payload: { overheard: true, ts: "2", name: "Bob", text: "more chatter" },
-    scopeLabel: scope,
+    kind: "UserMessage",
+    externalId: "2",
+    text: "more chatter",
+    body: { overheard: true, name: "Bob" },
   });
 
   const rows = await store.scopeSessionSummaries(scope, false, { limit: 500 });
@@ -189,10 +190,8 @@ test(`scopeSessionSummaries paginates newest-activity-first`, async () => {
   const a = await store.getOrCreateByThread("dm:A", "dm", scope);
   const b = await store.getOrCreateByThread("dm:B", "dm", scope);
   await store.getOrCreateByThread("dm:C", "dm", scope);
-  const la = { sessionId: a.id };
-  await store.append(la, { type: "user", payload: { text: "a" }, scopeLabel: scope });
-  const lb = { sessionId: b.id };
-  await store.append(lb, { type: "user", payload: { text: "b" }, scopeLabel: scope });
+  await store.append({ sessionId: a.id }, { kind: "UserMessage", text: "a" });
+  await store.append({ sessionId: b.id }, { kind: "UserMessage", text: "b" });
 
   const page1 = await store.scopeSessionSummaries(scope, false, { limit: 2 });
   assert.equal(page1.length, 2);
@@ -389,7 +388,7 @@ test(`recordLlmRequest is a per-session diagnostics sidecar, apart from the entr
     "transport (model id + headers) round-trips",
   );
 
-  assert.equal((await store.getEntries(s.id)).length, 0, "captured requests are not session entries");
+  assert.equal((await store.getItems(s.id)).length, 0, "captured requests are not session entries");
   assert.equal((await store.listLlmRequests("nope")).length, 0, "unknown session → empty");
 });
 
@@ -446,9 +445,9 @@ test(`attributedTurns credits only user entries inside a participant's window, p
   await store.addParticipant(a.id, "U1");
   await store.addParticipant(b.id, "U1");
   const writer = { sessionId: a.id };
-  const u0 = await store.append(writer, { type: "user", payload: { text: "1" }, scopeLabel: scope });
-  await store.append(writer, { type: "assistant", payload: { text: "ack" }, scopeLabel: scope });
-  const u1 = await store.append(writer, { type: "user", payload: { text: "2" }, scopeLabel: scope });
+  const u0 = await store.append(writer, { kind: "UserMessage", text: "1" });
+  await store.append(writer, { kind: "AgentMessage", text: "ack" });
+  const u1 = await store.append(writer, { kind: "UserMessage", text: "2" });
 
   const rows = await store.attributedTurns();
   const forA = rows.filter((r) => r.sessionId === a.id);
@@ -523,13 +522,13 @@ test(`deleteSession hard-removes the session and its rows`, async () => {
   await store.addParticipant(s.id, "U1");
   await store.addParticipant(keep.id, "U1");
   const writer = { sessionId: s.id };
-  await store.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+  await store.append(writer, { kind: "UserMessage", text: "hi" });
 
   await store.deleteSession(s.id);
 
   assert.equal(await store.get(s.id), null, "session gone");
   assert.equal(await store.getByThread("t1"), null, "thread index cleared");
-  assert.equal((await store.getEntries(s.id)).length, 0, "entries gone");
+  assert.equal((await store.getItems(s.id)).length, 0, "entries gone");
   assert.equal(
     (await store.listByParticipant("U1")).some((x) => x.id === s.id),
     false,
@@ -541,16 +540,13 @@ test(`deleteSession hard-removes the session and its rows`, async () => {
     "other sessions untouched",
   );
   await assert.rejects(
-    store.append(writer, { type: "user", payload: { text: "late" }, scopeLabel: scope }),
+    store.append(writer, { kind: "UserMessage", text: "late" }),
     /foreign key/,
     "no append lands on a deleted session",
   );
   const reborn = await store.getOrCreateByThread("t1", "dm", scope);
   assert.notEqual(reborn.id, s.id, "the thread gets a fresh session");
-  const fresh = await store.append(
-    { sessionId: reborn.id },
-    { type: "user", payload: { text: "hi" }, scopeLabel: scope },
-  );
+  const fresh = await store.append({ sessionId: reborn.id }, { kind: "UserMessage", text: "hi" });
   assert.equal(fresh.seq, 0, "the fresh session takes appends");
 });
 
@@ -561,10 +557,10 @@ test(`listByParticipant sets lastActivityAt to the most recent user message`, as
   const s = await store.getOrCreateByThread("dm:D1", "dm", scope);
   await store.addParticipant(s.id, "U1");
   const writer = { sessionId: s.id };
-  await store.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
-  const lastUser = await store.append(writer, { type: "user", payload: { text: "still here" }, scopeLabel: scope });
-  await store.append(writer, { type: "assistant", payload: { text: "yo" }, scopeLabel: scope });
-  await store.append(writer, { type: "tool_call", payload: { tool: "execute", callId: "c1" }, scopeLabel: scope });
+  await store.append(writer, { kind: "UserMessage", text: "hi" });
+  const lastUser = await store.append(writer, { kind: "UserMessage", text: "still here" });
+  await store.append(writer, { kind: "AgentMessage", text: "yo" });
+  await store.append(writer, { kind: "ToolCall", tool: "execute", callId: "c1" });
 
   const row = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
   assert.equal(
@@ -594,7 +590,7 @@ test(`listByParticipant reports whether the transcript has any entries`, async (
   assert.equal((await store.listByParticipant("U1")).find((x) => x.id === s.id)?.hasEntries, false, "no entries yet");
 
   const writer = { sessionId: s.id };
-  await store.append(writer, { type: "system", payload: { kind: "wake", text: "note" }, scopeLabel: scope });
+  await store.append(writer, { kind: "Wake", wakeCause: "system", body: { text: "note" } });
 
   assert.equal(
     (await store.listByParticipant("U1")).find((x) => x.id === s.id)?.hasEntries,
@@ -610,7 +606,7 @@ test(`tenure windows remain exact when every event shares a timestamp`, async ()
   const s = await store.getOrCreateByThread("dm:D1", "dm", scope);
   await store.addParticipant(s.id, "U1");
   const writer = { sessionId: s.id };
-  await store.append(writer, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+  await store.append(writer, { kind: "UserMessage", text: "hi" });
 
   await store.removeParticipant(s.id, "U1");
   await store.addParticipant(s.id, "U1");
@@ -620,7 +616,7 @@ test(`tenure windows remain exact when every event shares a timestamp`, async ()
     "old entries fall outside the new tenure",
   );
 
-  await store.append(writer, { type: "user", payload: { text: "welcome back" }, scopeLabel: scope });
+  await store.append(writer, { kind: "UserMessage", text: "welcome back" });
   assert.equal(
     (await store.listByParticipant("U1")).find((x) => x.id === s.id)?.hasEntries,
     true,
@@ -707,9 +703,9 @@ test(`addParticipant can initialize a private title without resetting an active 
   assert.equal((await store.listByParticipant("U1"))[0]?.title, "");
 
   const writer = { sessionId: session.id };
-  await store.append(writer, { type: "user", payload: { text: "visible" }, scopeLabel: scope });
+  await store.append(writer, { kind: "UserMessage", text: "visible" });
   await store.addParticipant(session.id, "U1", "My project chat");
-  assert.equal((await store.visibleEntries(session.id, "U1")).length, 1);
+  assert.equal((await store.visibleItems(session.id, "U1")).length, 1);
   assert.equal((await store.listByParticipant("U1"))[0]?.title, "My project chat");
 });
 
@@ -720,7 +716,7 @@ test(`keyset cursor pages stitch into the full listing and skip nothing`, async 
   for (let i = 0; i < 5; i++) {
     const s = await store.getOrCreateByThread(`dm:K${i}`, "dm", scope);
     const writer = { sessionId: s.id };
-    await store.append(writer, { type: "user", payload: { text: `m${i}` }, scopeLabel: scope });
+    await store.append(writer, { kind: "UserMessage", text: `m${i}` });
   }
   const all = await store.scopeSessionSummaries(scope, false, { limit: 10 });
   const page1 = await store.scopeSessionSummaries(scope, false, { limit: 2 });
@@ -747,12 +743,12 @@ test("getEntry returns exactly the requested seq and nothing else", async () => 
   const scope = scopeId("personal", "U1");
   const s = await store.getOrCreateByThread("dm:point-fetch", "dm", scope);
   const writer = { sessionId: s.id };
-  const first = await store.append(writer, { type: "user", payload: { text: "one" }, scopeLabel: scope });
-  const second = await store.append(writer, { type: "assistant", payload: { text: "two" }, scopeLabel: scope });
-  assert.deepEqual(await store.getEntry(s.id, first.seq), first);
-  assert.deepEqual(await store.getEntry(s.id, second.seq), second);
-  assert.equal(await store.getEntry(s.id, second.seq + 1), undefined);
-  assert.equal(await store.getEntry("missing", 0), undefined);
+  const first = await store.append(writer, { kind: "UserMessage", text: "one" });
+  const second = await store.append(writer, { kind: "AgentMessage", text: "two" });
+  assert.deepEqual(await store.getItem(s.id, first.seq), first);
+  assert.deepEqual(await store.getItem(s.id, second.seq), second);
+  assert.equal(await store.getItem(s.id, second.seq + 1), undefined);
+  assert.equal(await store.getItem("missing", 0), undefined);
 });
 
 test("cronIdOf and sessionOrigin agree on which threadRefs are crons", () => {
@@ -811,13 +807,13 @@ test("deleteSessionIfEmpty refuses after entries land, and a discarded session t
   const store = createPostgresSessionStore(testDatabaseUrl());
   const scope = scopeId("personal", "U1");
   const s = await store.getOrCreateByThread("web:U1:seed", "dm", scope);
-  await store.append({ sessionId: s.id }, { type: "user", payload: { text: "seed" }, scopeLabel: scope });
+  await store.append({ sessionId: s.id }, { kind: "UserMessage", text: "seed" });
   assert.equal(await store.deleteSessionIfEmpty(s.id), false, "entries block the discard");
   const empty = await store.getOrCreateByThread("web:U1:seed2", "dm", scope);
   assert.equal(await store.deleteSessionIfEmpty(empty.id), true, "an empty session is discarded");
   assert.equal(await store.get(empty.id), null);
   await assert.rejects(
-    store.append({ sessionId: empty.id }, { type: "user", payload: {}, scopeLabel: scope }),
+    store.append({ sessionId: empty.id }, { kind: "UserMessage" }),
     /foreign key/,
     "a late writer cannot append after the discard",
   );

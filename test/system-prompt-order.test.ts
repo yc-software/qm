@@ -46,6 +46,7 @@ import {
 } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -1356,8 +1357,8 @@ for (const surfaceTools of [false, true]) {
       ...base,
       runTurn: async (turn) => {
         seen.push(turn);
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-        await turn.emit({ type: "assistant", payload: { text: "ok" }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "UserMessage", text: turn.input });
+        await turn.emit({ kind: "AgentMessage", text: "ok" });
         return { reply: "ok" };
       },
     };
@@ -1377,10 +1378,10 @@ for (const surfaceTools of [false, true]) {
     assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
     assert.match(seen[2]!.environment!, /GAMMA_MARKER/);
     assert.match(seen[2]!.environment!, /\nU1: 1 earlier fact was consolidated or removed/);
-    const entries = await sessions.getEntries(first.sessionId!);
-    const users = entries.filter((entry) => entry.type === "user");
-    assert.match(JSON.stringify(users[0]!.payload), /memoryRecall/);
-    assert.doesNotMatch(JSON.stringify(users[1]!.payload), /ALPHA_MARKER|BETA_MARKER/);
+    const items = await sessions.getItems(first.sessionId!);
+    const users = items.filter((item) => USER_ITEM_KINDS.includes(item.kind));
+    assert.match(JSON.stringify(users[0]!.body), /memoryRecall/);
+    assert.doesNotMatch(JSON.stringify(users[1]), /ALPHA_MARKER|BETA_MARKER/);
   });
 }
 
@@ -1398,7 +1399,7 @@ test("scheduled-work changes update the next turn's system block without rewriti
   const input = dm("dm:U1:snapshot-cache", "hello");
   const first = await orchestrator.handleTurn(input);
   assert.equal(first.status, "ok");
-  const originalHistory = await sessions.getEntries(first.sessionId!);
+  const originalItems = await sessions.getItems(first.sessionId!);
   const cron = await crons.create({
     owner: actor.id,
     createdBy: actor.id,
@@ -1422,8 +1423,11 @@ test("scheduled-work changes update the next turn's system block without rewriti
   assert.equal(seen[2]!.systemPrompt, seen[0]!.systemPrompt);
   assert.match(seen[3]!.systemPrompt, /Scheduled-work status is unavailable/);
   assert.doesNotMatch(seen[1]!.systemPrompt, /Other Linux|8 vCPU|\/new\/workspace/);
-  assert.deepEqual(seen[1]!.history, originalHistory);
-  assert.deepEqual((await sessions.getEntries(first.sessionId!)).slice(0, originalHistory.length), originalHistory);
+  assert.deepEqual(
+    seen[1]!.history,
+    originalItems.map((item) => entryFromItem(item, seen[1]!.session.scopeId)),
+  );
+  assert.deepEqual((await sessions.getItems(first.sessionId!)).slice(0, originalItems.length), originalItems);
 });
 
 for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as const) {

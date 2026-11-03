@@ -13,7 +13,7 @@ import { createResolutionService } from "../src/resolution/resolution-service.ts
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
-import { turnToolOptions } from "../src/agent/turn-support.ts";
+import { emitEntry, turnToolOptions } from "../src/agent/turn-support.ts";
 import { createAgentTools, type AgentToolsOptions } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -97,9 +97,9 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       const ref = {
         current: turn.tools,
         scopeLabel: turn.scopeLabel,
-        emit: async (entry: Parameters<typeof turn.emit>[0]) => {
+        emit: async (entry: Parameters<typeof emitEntry>[1]) => {
           if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
-          return turn.emit(entry);
+          return emitEntry(turn, entry);
         },
         screenToolResult: turn.screenToolResult,
         pendingApprovals: [],
