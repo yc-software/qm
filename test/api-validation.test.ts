@@ -20,7 +20,7 @@ function start(): { base: string; close: () => Promise<void> } {
 }
 
 const post = (base: string, path: string, body: string) =>
-  fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body });
+  fetch(base + path, { method: "POST", headers: { ...testTenantHeaders(), "content-type": "application/json" }, body });
 
 test("malformed request bodies are 400", async () => {
   const s = start();
@@ -45,8 +45,8 @@ test("unknown resources are 404, not silent 200 or 500", async () => {
       (await fetch(`${s.base}/v1/sessions/nope?viewer=someone`, { headers: testTenantHeaders() })).status,
       404,
     );
-    assert.equal((await fetch(`${s.base}/v1/sessions/nope`)).status, 400);
-    assert.equal((await fetch(`${s.base}/v1/unknown-route`)).status, 404);
+    assert.equal((await fetch(`${s.base}/v1/sessions/nope`, { headers: testTenantHeaders() })).status, 400);
+    assert.equal((await fetch(`${s.base}/v1/unknown-route`, { headers: testTenantHeaders() })).status, 404);
   } finally {
     await s.close();
   }
