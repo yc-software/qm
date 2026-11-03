@@ -138,6 +138,7 @@ export default tseslint.config(
   {
     files: slackBoundaryFiles,
     ignores: slackBoundaryExempt,
+    linterOptions: { noInlineConfig: true },
     plugins: { qm: { rules: { "slack-boundary": slackBoundary } } },
     rules: { "qm/slack-boundary": "error" },
   },
