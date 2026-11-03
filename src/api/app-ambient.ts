@@ -1,5 +1,6 @@
 import type { ActorAssertion, TurnRequest } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
+import { perTenant } from "../tenants/context.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
@@ -38,7 +39,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       .catch((e) => swallow("ambient: mark handled", e));
   }
 
-  const ambientSelf = new Map<string, { name?: string; mentionId?: string }>();
+  const ambientSelf = perTenant(() => new Map<string, { name?: string; mentionId?: string }>());
   const recordJudgment = (j: Parameters<AmbientJudgmentStore["record"]>[0]): void => {
     void deps.ambientJudgments?.record(j).catch(reportFailureAs("ambient: record judgment", undefined));
   };
@@ -111,7 +112,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       await advanceCursor();
       return { act: false };
     }
-    const self = ambientSelf.get(`${orgIdOf()}:${surface}`);
+    const self = ambientSelf().get(surface);
     const forJudge = delta.filter((m) => !m.mentionsSelf);
     if (forJudge.length < delta.length)
       recordJudgment({

@@ -1,5 +1,6 @@
 import type { GoalRecord } from "../agent/goal.ts";
 import type { TurnRuntime } from "../types.ts";
+import { perTenant } from "../tenants/context.ts";
 
 export interface GoalView {
   objective: string;
@@ -96,14 +97,14 @@ function makeEntry(partial: Partial<Entry> = {}): Entry {
 export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
   const maxChars = Math.max(2, opts.maxChars ?? DEFAULT_MAX_CHARS);
   const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
-  const runs = new Map<string, Entry>();
-  const listeners = new Map<string, Set<TurnStreamListener>>();
+  const runs = perTenant(() => new Map<string, Entry>());
+  const listeners = perTenant(() => new Map<string, Set<TurnStreamListener>>());
 
   const ensure = (runId: string): Entry => {
-    let entry = runs.get(runId);
+    let entry = runs().get(runId);
     if (!entry) {
       entry = makeEntry();
-      runs.set(runId, entry);
+      runs().set(runId, entry);
     }
     return entry;
   };
@@ -119,18 +120,18 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
 
   return {
     begin(runId) {
-      const entry = runs.get(runId);
+      const entry = runs().get(runId);
       if (entry) {
         entry.replying = true;
         entry.reasoning = [];
         if (entry.timer) clearTimeout(entry.timer);
         entry.timer = null;
-      } else runs.set(runId, makeEntry());
+      } else runs().set(runId, makeEntry());
       opts.onChange?.(runId);
     },
 
     replying(runId) {
-      return runs.get(runId)?.replying ?? false;
+      return runs().get(runId)?.replying ?? false;
     },
 
     publish(runId, delta) {
@@ -147,7 +148,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     },
 
     publishBlockStart(runId) {
-      const entry = runs.get(runId);
+      const entry = runs().get(runId);
       if (!entry) return;
       if (entry.firstBlock) entry.firstBlockOpen = false;
       if (!entry.text || entry.text.endsWith(BLOCK_JOIN)) return;
@@ -169,12 +170,12 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     },
 
     settleReasoning(runId, step, index) {
-      const entry = runs.get(runId);
+      const entry = runs().get(runId);
       if (entry) entry.reasoning = entry.reasoning.filter((b) => b.step !== step || b.index !== index);
     },
 
     reasoning(runId) {
-      return (runs.get(runId)?.reasoning ?? []).map((b) => ({ ...b }));
+      return (runs().get(runId)?.reasoning ?? []).map((b) => ({ ...b }));
     },
 
     noteToolCall(runId) {
@@ -183,7 +184,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       entry.firstBlockOpen = false;
       entry.firstBlockClosed = entry.firstBlock.trim().length > 0;
       if (entry.firstBlockClosed) {
-        for (const l of listeners.get(runId) ?? []) l.onFirstBlock?.(entry.firstBlock);
+        for (const l of listeners().get(runId) ?? []) l.onFirstBlock?.(entry.firstBlock);
       }
     },
 
@@ -192,7 +193,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     },
 
     goal(runId) {
-      return runs.get(runId)?.goal ?? null;
+      return runs().get(runId)?.goal ?? null;
     },
 
     noteRuntime(runId, runtime) {
@@ -201,11 +202,11 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     },
 
     runtime(runId) {
-      return runs.get(runId)?.runtime ?? null;
+      return runs().get(runId)?.runtime ?? null;
     },
 
     firstBlock(runId) {
-      const entry = runs.get(runId);
+      const entry = runs().get(runId);
       if (!entry || !entry.firstBlock.trim()) return null;
       return { text: entry.firstBlock, closed: entry.firstBlockClosed };
     },
@@ -214,53 +215,53 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       const entry = ensure(runId);
       if (entry.surfacePosted) return;
       entry.surfacePosted = true;
-      for (const l of listeners.get(runId) ?? []) l.onSurfacePosted?.();
+      for (const l of listeners().get(runId) ?? []) l.onSurfacePosted?.();
     },
 
     surfacePosted(runId) {
-      return runs.get(runId)?.surfacePosted ?? false;
+      return runs().get(runId)?.surfacePosted ?? false;
     },
 
     snapshot(runId) {
-      const text = runs.get(runId)?.text;
+      const text = runs().get(runId)?.text;
       return text ? text : null;
     },
 
     startOffset(runId) {
-      const entry = runs.get(runId);
+      const entry = runs().get(runId);
       return entry ? entry.totalChars - entry.text.length : 0;
     },
 
     markReplyDone(runId) {
-      const entry = runs.get(runId);
+      const entry = runs().get(runId);
       if (entry) entry.replyDone = true;
-      else runs.set(runId, makeEntry({ replyDone: true }));
+      else runs().set(runId, makeEntry({ replyDone: true }));
       opts.onChange?.(runId);
     },
 
     isReplyDone(runId) {
-      return runs.get(runId)?.replyDone ?? false;
+      return runs().get(runId)?.replyDone ?? false;
     },
 
     end(runId) {
-      const entry = runs.get(runId);
+      const entry = runs().get(runId);
       if (!entry) return;
       if (entry.timer) return;
-      const timer = setTimeout(() => runs.delete(runId), graceMs);
+      const timer = setTimeout(() => runs().delete(runId), graceMs);
       timer.unref?.();
       entry.timer = timer;
     },
 
     subscribe(runId, listener) {
-      let set = listeners.get(runId);
+      let set = listeners().get(runId);
       if (!set) {
         set = new Set();
-        listeners.set(runId, set);
+        listeners().set(runId, set);
       }
       set.add(listener);
       return () => {
         set.delete(listener);
-        if (set.size === 0 && listeners.get(runId) === set) listeners.delete(runId);
+        if (set.size === 0 && listeners().get(runId) === set) listeners().delete(runId);
       };
     },
   };

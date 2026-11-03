@@ -1,10 +1,18 @@
 import type { EventBus } from "../util/event-bus.ts";
+import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
+import { tenantScopedBus } from "../tenants/bus.ts";
+import type { TurnStream } from "./turn-stream.ts";
 
-export type RunStreamEvent =
+export function createRunStreamBus(databaseUrl: string): EventBus<RunStreamEvent> {
+  return tenantScopedBus(createPostgresNotifyBus<RunStreamEvent>(databaseUrl, "run_stream", "run-stream"));
+}
+
+export type RunStreamEvent = { tenant?: string } & (
   | { runId: string; kind: "delta"; offset: number; text: string; startOffset: number }
   | { runId: string; kind: "reasoning"; step: string; index: number; offset: number; text: string }
   | { runId: string; kind: "sync"; offset: number; reasoning?: Record<string, number> }
-  | { runId: string; kind: "refresh" };
+  | { runId: string; kind: "refresh" }
+);
 
 export function emitRunText(
   bus: EventBus<RunStreamEvent>,
@@ -26,6 +34,26 @@ export function emitRunReasoning(
 ): void {
   for (const [at, chunk] of notifyChunks(text))
     bus.emit({ runId, kind: "reasoning", step: block.step, index: block.index, offset: offset + at, text: chunk });
+}
+
+export function serveRunStreamSync(
+  bus: EventBus<RunStreamEvent>,
+  stream: Pick<TurnStream, "snapshot" | "startOffset" | "reasoning">,
+): () => void {
+  return bus.subscribe(
+    (event) => {
+      if (event.kind !== "sync") return;
+      const text = stream.snapshot(event.runId);
+      const startOffset = stream.startOffset(event.runId);
+      const offset = Math.max(event.offset, startOffset);
+      if (text) emitRunText(bus, event.runId, text.slice(offset - startOffset), offset, startOffset);
+      for (const block of stream.reasoning(event.runId)) {
+        const sent = event.reasoning?.[reasoningKey(block)] ?? 0;
+        if (block.text.length > sent) emitRunReasoning(bus, event.runId, block, block.text.slice(sent), sent);
+      }
+    },
+    { allTenants: true },
+  );
 }
 
 export function reasoningKey(block: { step: string; index: number }): string {
