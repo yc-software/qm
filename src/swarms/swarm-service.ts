@@ -180,6 +180,7 @@ function matchesDispatch(input: OrchestratorInput, expected: OrchestratorInput):
     finalAttempt: true,
     cancel: true,
     shutdown: true,
+    park: true,
     runStartedAt: true,
     resumeCause: true,
   };

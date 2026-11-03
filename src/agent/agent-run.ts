@@ -1117,7 +1117,10 @@ export function createAgent(opts?: AgentOptions): Agent {
             : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
         entry.ref.llmCapture = captureRequests && turn.recordLlmRequest ? [] : undefined;
         entry.ref.modelCalls = 0;
-        entry.ref.onModelRequest = turn.onModelRequest;
+        entry.ref.onModelRequest = () => {
+          turn.onModelRequest?.();
+          if (turn.park?.requested()) turn.park.now();
+        };
         turn.recordModelCall({
           model: effectiveModel,
           inputTokens:

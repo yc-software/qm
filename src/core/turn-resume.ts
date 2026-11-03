@@ -23,9 +23,10 @@ export function findTrailingPartialTurn(items: readonly Item[], runId: string | 
   let workEntries = 0;
   for (let i = items.length - 1; i >= 0; i--) {
     const e = items[i]!;
+    if (e.turnId !== null && e.turnId !== runId) continue;
     if (e.kind === "Stop") return null;
     if (isAgentReply(e)) {
-      const start = items.slice(0, i).findLast(isTurnStart);
+      const start = items.slice(0, i).findLast((x) => isTurnStart(x) && (x.turnId === null || x.turnId === runId));
       if (!start || !differentTurn(e, start)) return null;
       continue;
     }
@@ -40,6 +41,13 @@ export function findTrailingPartialTurn(items: readonly Item[], runId: string | 
   return null;
 }
 
+export function overtaken(items: readonly Item[], partial: PartialTurn, runId: string | undefined): boolean {
+  return items.some(
+    (e) =>
+      e.seq > partial.userSeq && e.kind === "UserMessage" && !isOverheard(e) && e.turnId !== null && e.turnId !== runId,
+  );
+}
+
 export interface RecordedTurn extends PartialTurn {
   answer?: { seq: number; text: string };
 }
@@ -51,7 +59,7 @@ export function turnAtSeq(items: readonly Item[], userSeq: number): RecordedTurn
   let answer: RecordedTurn["answer"];
   for (let i = start + 1; i < items.length; i++) {
     const e = items[i]!;
-    if (e.kind !== "UserMessage" && e.kind !== "SteeringMessage" && differentTurn(e, items[start]!)) continue;
+    if (differentTurn(e, items[start]!)) continue;
     if (isAgentReply(e)) {
       answer = { seq: e.seq, text: (e.text ?? "").trim() };
       continue;
