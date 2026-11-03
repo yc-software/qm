@@ -487,11 +487,15 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
   }
   async function pool(): Promise<Pool> {
     ready();
-    return (queryPoolP ??= retainPool(queryUrl, "query"));
+    const instance = await (queryPoolP ??= retainPool(queryUrl, "query"));
+    ready();
+    return instance;
   }
   async function sessionPool(): Promise<Pool> {
     ready();
-    return (sessionPoolP ??= retainPool(connectionString, "session"));
+    const instance = await (sessionPoolP ??= retainPool(connectionString, "session"));
+    ready();
+    return instance;
   }
   async function query(
     text: string,

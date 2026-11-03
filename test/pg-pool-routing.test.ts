@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
-import { createPgPool, configurePgPooling } from "../src/persistence/pg-pool.ts";
+import { createPgPool, configurePgPooling, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 
 const direct = process.env.DATABASE_URL;
 const pooled = process.env.DATABASE_POOL_URL;
@@ -77,6 +77,7 @@ test("one session slot can hold a lock while a transaction uses the query pool",
   const lock = createPostgresAdvisoryLock(a);
   const map = createPostgresMap<{ n: number }>(a, "pgbouncer_lock_write_test");
   try {
+    await migrateRegisteredPgSchemas(direct!);
     await lock.withLock("pgbouncer-write", async () => {
       await map.put("one", { n: 42 });
       assert.deepEqual(await map.get("one"), { n: 42 });
