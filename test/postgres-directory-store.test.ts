@@ -278,7 +278,7 @@ test(
 );
 
 test(
-  "pg directory: listChannelsFor returns public ∪ private-member, ordered by name (§10 reach roster)",
+  "pg directory: listChannelsFor returns public ∪ private-member, ordered by name",
   { skip },
   async () => {
     const store = createPostgresDirectoryStore(URL!);
