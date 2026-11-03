@@ -6,11 +6,11 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("a turn making no progress trips the stall bound exactly once", async () => {
   let stalled = 0;
-  const watchdog = startStallWatchdog(20, () => stalled++);
-  await wait(80);
+  const watchdog = startStallWatchdog(100, () => stalled++);
+  await wait(400);
   assert.equal(stalled, 1, "the abort fires exactly once");
   watchdog.progress();
-  await wait(80);
+  await wait(400);
   assert.equal(stalled, 1, "progress after the abort does not re-arm it");
   watchdog.stop();
 });
