@@ -77,6 +77,7 @@ export interface ReadMessagesOpts extends SurfaceKey {
   at?: string;
   sub?: string | null;
   timestamps?: string[];
+  tsSuffix?: string;
   oldestFirst?: boolean;
   channelHistory?: boolean;
   limit?: number;

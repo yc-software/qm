@@ -83,6 +83,8 @@ export function createPartnerChatInbound(deps: {
     const author = bot ? partnerChatPrincipal(listed, false) : humans[members.indexOf(listed)]!;
     const thread = event.thread_id ?? undefined;
     const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
+    if (bot && (await findMessage(cache, container, message.id, { self: true })))
+      return { status: 200, body: { ok: true, ignored: "own_message" } };
     const ts = partnerChatTs(message.created_at, message.id);
     const addressed =
       event.type === "message.created" &&
@@ -163,12 +165,9 @@ export function createPartnerChatInbound(deps: {
       limit: CONTEXT_SCAN,
       noFallback: true,
     });
-    const before = replies[0]?.ts ?? query.before;
     const root =
-      ref.thread && replies.length < CONTEXT_SCAN
-        ? await findMessage(cache, container, ref.thread, before ? { before } : {})
-        : undefined;
-    const scan = root ? [root, ...replies] : replies;
+      ref.thread && replies.length < CONTEXT_SCAN ? await findMessage(cache, container, ref.thread) : undefined;
+    const scan = root && (!query.before || root.ts < query.before) ? [root, ...replies] : replies;
     return buildContextWindow(
       scan.map((m) => ({
         ts: m.ts,

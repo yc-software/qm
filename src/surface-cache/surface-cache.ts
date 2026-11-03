@@ -318,6 +318,11 @@ export function createPostgresSurfaceCache(
         args.push(opts.timestamps);
         conds.push(`ts = ANY($${args.length}::text[])`);
       }
+      if (opts.tsSuffix !== undefined) {
+        if (!opts.tsSuffix) throw new RangeError("tsSuffix must not be empty");
+        args.push(opts.tsSuffix);
+        conds.push(`right(ts, char_length($${args.length}::text)) = $${args.length}`);
+      }
       if (opts.channelHistory) conds.push("(sub IS NULL OR broadcast = TRUE)");
       if (opts.sub === null) conds.push("sub IS NULL");
       else if (opts.sub !== undefined) {

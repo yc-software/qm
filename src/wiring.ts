@@ -2456,7 +2456,7 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
-  const partnerChatLiveReply = config.partnerChat ? createPartnerChatLiveReply({ deliveries }) : null;
+  const partnerChatLiveReply = config.partnerChat ? createPartnerChatLiveReply({ deliveries, surfaces }) : null;
   if (partnerChatLiveReply) runs.onTerminal((run) => partnerChatLiveReply.settle(run));
   const partnerChatInbound =
     config.partnerChat && partnerChatLiveReply

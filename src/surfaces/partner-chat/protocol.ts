@@ -82,25 +82,19 @@ export function partnerChatMessageId(ref: string): string {
   return dot < 0 ? ref : ref.slice(dot + 1).replace(/^0+(?=.)/, "");
 }
 
-const MESSAGE_SCAN_PAGE = 500;
-
 export async function findMessage(
   cache: Pick<SurfaceCache, "readMessages">,
   container: string,
   messageId: string,
-  opts: { self?: true; before?: string } = {},
+  opts: { self?: true } = {},
 ): Promise<CachedMessage | undefined> {
-  let before = opts.before;
-  for (;;) {
-    const page = await cache.readMessages(container, {
-      surface: "partner-chat",
-      ...(opts.self ? { self: true } : {}),
-      ...(before ? { before } : {}),
-      limit: MESSAGE_SCAN_PAGE,
-      noFallback: true,
-    });
-    const hit = page.find((m) => partnerChatMessageId(m.ts) === messageId);
-    if (hit || page.length < MESSAGE_SCAN_PAGE) return hit;
-    before = page[0]!.ts;
-  }
+  if (!/^\d+$/.test(messageId)) return undefined;
+  const [hit] = await cache.readMessages(container, {
+    surface: "partner-chat",
+    tsSuffix: `.${messageId.padStart(MESSAGE_ID_WIDTH, "0")}`,
+    ...(opts.self ? { self: true } : {}),
+    limit: 1,
+    noFallback: true,
+  });
+  return hit;
 }
