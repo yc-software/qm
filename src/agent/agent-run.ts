@@ -1160,7 +1160,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             const text = textFromContent((message as { content?: unknown }).content);
             const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
             const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
-            if (steerWake.signal.aborted && !entry.agentSession.getSteeringMessages().length) {
+            if (steerWake.signal.aborted && !entry.agentSession.agent.hasQueuedMessages()) {
               steerWake = new AbortController();
               entry.ref.steered = steerWake.signal;
             }

@@ -5,7 +5,7 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type, type TSchema } from "typebox";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { NeedsApproval, CommandDenied } from "../../tools/primitives.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, swallow } from "../../util/errors.ts";
 import { withAbort } from "../../util/async.ts";
 import { computerVerdict } from "../../sandbox/sandbox.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
@@ -453,8 +453,12 @@ export function computerTools(kit: ToolKit) {
                 ...(waitSeconds !== undefined ? { waitSeconds } : {}),
               });
             const steered = ref.steered;
-            const r = await withAbort(() => poll(params.wait_seconds), steered).catch(async (error: unknown) => {
-              if (!steered?.aborted) throw error;
+            const waiting = poll(steered?.aborted ? undefined : params.wait_seconds);
+            void waiting.catch((error: unknown) => {
+              if (steered?.aborted) swallow("background: poll left behind for a steer", error);
+            });
+            const r = await withAbort(() => waiting, steered).catch(async (error: unknown) => {
+              if (error !== steered?.reason) throw error;
               return poll();
             });
             const { chunks: _chunks, ...pollMeta } = r;
