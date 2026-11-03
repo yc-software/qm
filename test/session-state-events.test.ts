@@ -12,7 +12,8 @@ import type { TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-state-"));
@@ -32,9 +33,9 @@ function record(bus: { subscribe(cb: (e: SessionStateEvent) => void): () => void
   return got;
 }
 
-function parseFrame(data: string): SessionStateEvent | null {
+function parseFrame(data: string): (SessionStateEvent & { tenantId?: string }) | null {
   try {
-    return JSON.parse(data) as SessionStateEvent;
+    return JSON.parse(data) as SessionStateEvent & { tenantId?: string };
   } catch {
     return null;
   }
@@ -182,7 +183,7 @@ test("a shed event for an unknown thread still reaches subscribers, just without
   assert.equal(event.participantsShed, undefined);
 });
 
-test("GET /v1/session-state/events streams transitions as SSE frames", async () => {
+test("GET /v1/session-state/events streams every tenant's transitions as SSE frames tagged with their tenant", async () => {
   const built = freshApp();
   built.runtime.start();
   const core = createInsecureTestServer(built.app, { webhookReceiver: built.webhookReceiver });
@@ -190,17 +191,18 @@ test("GET /v1/session-state/events streams transitions as SSE frames", async () 
   const base = `http://localhost:${(core.address() as AddressInfo).port}`;
   try {
     const res = await fetch(`${base}/v1/session-state/events`, {
-      headers: testTenantHeaders(),
       signal: AbortSignal.timeout(15_000),
     });
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") ?? "", /text\/event-stream/);
 
-    await inTestTenant(() => built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:sse")));
+    const [a, b] = testTenants();
+    await withTenant(a, () => built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:sse")));
+    await withTenant(b, () => built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U2:sse")));
 
     const reader = res.body!.getReader();
     let buf = "";
-    const frames: SessionStateEvent[] = [];
+    const frames: Array<SessionStateEvent & { tenantId?: string }> = [];
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
       const { value, done } = await reader.read();
@@ -213,16 +215,26 @@ test("GET /v1/session-state/events streams transitions as SSE frames", async () 
           ?.slice("data: ".length);
         if (!data) continue;
         const ev = parseFrame(data);
-        if (ev && ev.threadRef === "web:U1:sse" && ev.state !== "metadata" && !frames.some((f) => f.state === ev.state))
+        if (
+          ev &&
+          ev.threadRef?.endsWith(":sse") &&
+          ev.state !== "metadata" &&
+          !frames.some((f) => f.threadRef === ev.threadRef && f.state === ev.state)
+        )
           frames.push(ev);
       }
-      if (frames.some((f) => f.state === "awaiting_approval")) break;
+      if (frames.filter((f) => f.state === "awaiting_approval").length === 2) break;
     }
     await reader.cancel().catch(() => {});
-    assert.deepEqual(
-      frames.map((f) => f.state),
-      ["working", "awaiting_approval"],
-    );
+    const seen = (thread: string) => frames.filter((f) => f.threadRef === thread).map((f) => [f.state, f.tenantId]);
+    assert.deepEqual(seen("web:U1:sse"), [
+      ["working", a],
+      ["awaiting_approval", a],
+    ]);
+    assert.deepEqual(seen("web:U2:sse"), [
+      ["working", b],
+      ["awaiting_approval", b],
+    ]);
   } finally {
     await new Promise<void>((r) => core.close(() => r()));
     await built.runtime.stop();

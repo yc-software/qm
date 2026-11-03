@@ -554,9 +554,7 @@ async function pollWebDeliveries(): Promise<unknown> {
   let failure: unknown;
   for (const d of pending) {
     const target = d.destination?.target ?? "";
-    const conns = [...(deliveryClients.get(ownerOfWebThread(target) ?? "") ?? [])].filter(
-      (res) => clientTenants.get(res) === d.tenantId,
-    );
+    const conns = tenantClients(ownerOfWebThread(target) ?? "", d.tenantId);
     if (conns.length) {
       for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
     } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
@@ -578,13 +576,14 @@ const SSE_HEARTBEAT_MS = 15_000;
 const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
 
 interface SessionStateFrame {
+  tenantId?: string;
   threadRef?: string;
   state?: string;
   participants?: string[];
   [k: string]: unknown;
 }
 
-function forwardSessionState(frame: SessionStateFrame): void {
+export function forwardSessionState(frame: SessionStateFrame): void {
   const threadRef = typeof frame.threadRef === "string" ? frame.threadRef : "";
   if (!threadRef) return;
   const targets = new Set<string>(
@@ -594,10 +593,12 @@ function forwardSessionState(frame: SessionStateFrame): void {
     const owner = ownerOfWebThread(threadRef);
     if (owner) targets.add(owner);
   }
-  const { participants: _participants, ...visible } = frame;
-  for (const user of targets) {
-    for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "session_state", visible);
-  }
+  const { participants: _participants, tenantId, ...visible } = frame;
+  for (const user of targets) for (const res of tenantClients(user, tenantId)) sseEvent(res, "session_state", visible);
+}
+
+function tenantClients(user: string, tenant: string | undefined): ServerResponse[] {
+  return [...(deliveryClients.get(user) ?? [])].filter((res) => clientTenants.get(res) === tenant);
 }
 
 async function consumeCoreFeed(
@@ -667,7 +668,7 @@ function runInboxFeed(): Promise<void> {
   return consumeCoreFeed(
     "/v1/loop-items/events",
     "loop_item",
-    (data) => void forwardInboxItem(data as { loopId?: string; itemId?: string; op?: string }),
+    (data) => void forwardInboxItem(data as InboxItemFrame),
     resyncInbox,
   );
 }
@@ -676,13 +677,20 @@ function resyncInbox(): void {
   for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
 }
 
-async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: string }): Promise<void> {
-  if (!ev.loopId || !ev.itemId || !deliveryClients.size) return;
-  const r = await coreFetch(
-    "POST",
-    "/v1/inbox/viewers",
-    JSON.stringify({ loopId: ev.loopId, candidates: [...deliveryClients.keys()] }),
-  ).catch(() => null);
+interface InboxItemFrame {
+  tenantId?: string;
+  loopId?: string;
+  itemId?: string;
+  op?: string;
+}
+
+export async function forwardInboxItem(ev: InboxItemFrame): Promise<void> {
+  const { tenantId } = ev;
+  if (!ev.loopId || !ev.itemId || !tenantId) return;
+  const candidates = [...deliveryClients.keys()].filter((user) => tenantClients(user, tenantId).length);
+  if (!candidates.length) return;
+  const body = JSON.stringify({ loopId: ev.loopId, candidates });
+  const r = await withTenant(tenantId, () => coreFetch("POST", "/v1/inbox/viewers", body)).catch(() => null);
   if (r?.status === 404) return;
   let viewers: string[] | undefined;
   try {
@@ -692,7 +700,7 @@ async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: str
   }
   if (!viewers) return resyncInbox();
   const frame = { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" };
-  for (const user of viewers) for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "inbox_item", frame);
+  for (const user of viewers) for (const res of tenantClients(user, tenantId)) sseEvent(res, "inbox_item", frame);
 }
 
 async function coreFetch(
