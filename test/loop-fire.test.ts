@@ -19,6 +19,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fakeIdentity() {
@@ -362,11 +363,13 @@ test("the scheduler sweep detects a stale loop that has never fired", async () =
 
 test("a stale-loop ping is withheld from a group DM its owner has left", async () => {
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
-  await directory.replace([
-    { principalId: "josh", displayName: "Josh", type: "internal" },
-    { principalId: "U2", displayName: "Bob", type: "internal" },
-  ]);
-  await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }]);
+  await inTestTenant(async () => {
+    await directory.replace([
+      { principalId: "josh", displayName: "Josh", type: "internal" },
+      { principalId: "U2", displayName: "Bob", type: "internal" },
+    ]);
+    await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }]);
+  });
   const s = service(HAPPY, { directory });
   const loop = await makeLoop(s.loops, {
     governor: { staleFireMs: 1_000 },
