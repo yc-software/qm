@@ -10,8 +10,8 @@ const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres de
 beforeEach(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations, decision_rules, decision_providers CASCADE");
+  const p = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
+  await p.query("TRUNCATE decision_rules, decision_providers");
   await p.end();
 });
 

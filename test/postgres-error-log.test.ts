@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { scopeId } from "../src/types.ts";
@@ -6,15 +6,6 @@ import { tenantBoundUrl, inTestTenant } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres error-log tests";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS error_events CASCADE");
-  await p.end();
-});
 
 test("pg error log: persists events, filters by scope, newest-first, shape-only", { skip }, (t) =>
   inTestTenant(async () => {

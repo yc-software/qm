@@ -1,23 +1,12 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { testTenants, inTestTenant } from "./support/test-tenants.ts";
+import { testTenants, inTestTenant, tenantBoundUrl } from "./support/test-tenants.ts";
 
 const [TEST_TENANT] = testTenants();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres directory-store tests";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query(
-    "DROP TABLE IF EXISTS directory_members, directory_channels, directory_channel_members, directory_groups, directory_group_members, directory_sync, directory_meta CASCADE",
-  );
-  await p.end();
-});
 
 const seed = async (store: ReturnType<typeof createPostgresDirectoryStore>) => {
   await store.replace([
@@ -171,7 +160,7 @@ test("pg directory: replace is a full per-org swap and skips an unchanged roster
     ]);
     assert.equal((await store.list()).length, 2);
 
-    const direct = (await freshPg(URL!)).query;
+    const direct = (await freshPg(tenantBoundUrl(URL!))).query;
     const t0 = await direct("SELECT updated_at FROM directory_sync WHERE tenant_id = $1", [TEST_TENANT]);
     await store.replace([
       { principalId: "U-b", displayName: "Bob", type: "internal" },
@@ -271,7 +260,7 @@ test("pg directory: group-DM resolve-by-set + membership gate; a change re-write
     );
     assert.deepEqual(await store.listGroupsFor("U-sam"), ["G-1"]);
 
-    const direct = (await freshPg(URL!)).query;
+    const direct = (await freshPg(tenantBoundUrl(URL!))).query;
     const t0 = await direct("SELECT groups_hash FROM directory_sync WHERE tenant_id = $1", [TEST_TENANT]);
     await store.replaceGroups([
       { groupId: "G-2", principalId: "U-carol" },
@@ -517,7 +506,7 @@ test("pg live channel observations survive older snapshots but yield to later re
     const store = createPostgresDirectoryStore(URL!);
     await store.replaceChannels([], [], Date.now());
     const pg = (await import("pg")).default;
-    const pool = new pg.Pool({ connectionString: URL! });
+    const pool = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
     await pool.query("UPDATE directory_sync SET channels_synced_at = NULL, channels_hash = NULL");
     await pool.end();
     await directoryObservationCases(store);

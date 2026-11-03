@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresCredentialUsageSink } from "../src/admin/postgres-credential-usage-sink.ts";
 import { scopeId } from "../src/types.ts";
@@ -7,16 +7,6 @@ import { tenantBoundUrl, inTestTenant } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres credential-usage tests";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS credential_usage CASCADE");
-  await p.query("DROP TABLE IF EXISTS credential_daily_calls CASCADE");
-  await p.end();
-});
 
 test("pg credential-usage sink: persists broker calls, filters by scope/slug/since, newest-first", { skip }, (t) =>
   inTestTenant(async () => {
@@ -79,7 +69,9 @@ test("pg credential-usage sink: sparse and absent credentials use an ordered ind
       await p.query(`INSERT INTO credential_usage(ts, slug, host, status, scope_label, principal_id)
       SELECT n, 'unrelated-' || n, 'example.com', 'ok', 'personal:other', 'other'
       FROM generate_series(1, 20000) n`);
-      await p.query("ANALYZE credential_usage");
+      const owner = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
+      await owner.query("ANALYZE credential_usage");
+      await owner.end();
       for (const slug of ["serp", "missing-credential"]) {
         const result = await p.query(
           "EXPLAIN (ANALYZE, FORMAT JSON) SELECT ts, slug, host, status, upstream_status, scope_label, principal_id FROM credential_usage WHERE slug = $1 ORDER BY ts DESC, id DESC LIMIT 20",
