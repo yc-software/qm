@@ -3,7 +3,10 @@ import test from "node:test";
 import { createPostgresExternalMemberStore, type ExternalMember } from "../src/identity/external-members.ts";
 import { createPostgresDeactivationStore } from "../src/identity/identity-service.ts";
 import { createPostgresPrincipalLinkStore, createPrincipalLinkService } from "../src/identity/principal-links.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPgPool, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { buildApp } from "../src/wiring.ts";
+import { stopAtEnd } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
@@ -206,3 +209,27 @@ test(
     });
   },
 );
+
+test("the app registers every approval, artifact and identity table under the default config", { skip }, async () => {
+  const config = testConfig();
+  stopAtEnd(buildApp(config));
+  const ids = new Set(registeredPgMigrations(config.databaseUrl!).map((migration) => migration.id));
+  for (const table of [
+    "ambient_cursors",
+    "approval_grants",
+    "approvals",
+    "context_requests",
+    "deactivated_principals",
+    "external_members",
+    "feature_flags",
+    "idempotency",
+    "principal_links",
+    "projects",
+    "session_shares",
+    "skill_bundles",
+    "skill_packs",
+    "skills",
+    "web_ui_state",
+  ])
+    assert.ok(ids.has(`tenancy/${table}/0001-typed`), table);
+});
