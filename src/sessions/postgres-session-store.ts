@@ -1,3 +1,4 @@
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
 import { likeContains } from "../persistence/like.ts";
@@ -526,7 +527,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           ]);
           s.slackBinding = facts.slackBinding;
         }
-        if (facts?.context && JSON.stringify(s.spawnMeta) !== JSON.stringify(facts.context)) {
+        if (facts?.context && canonicalJson(s.spawnMeta) !== canonicalJson(facts.context)) {
           await q("UPDATE sessions SET spawn_meta = $2 WHERE id = $1", [s.id, JSON.stringify(facts.context)]);
           s.spawnMeta = facts.context;
         }
