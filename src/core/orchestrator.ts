@@ -2620,8 +2620,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               )
             : undefined;
         if (cronScript) audit({ action: "cron.script", resource: conversation.threadRef, detail: cronScript.audit });
-        if (cronScript?.handled && input.cronScript?.mode === "live")
-          return { status: "silent", sessionId: session.id, scriptVerdict: cronScript.verdict };
+        if (cronScript?.handled) return { status: "silent", sessionId: session.id, scriptVerdict: cronScript.verdict };
 
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(input.attachments, (await turnWindow()).items);

@@ -10,7 +10,6 @@ import { isObj } from "./shared.ts";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
 import { canAdministerCron } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
-import type { CronScriptRequest } from "../../cron/script.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
 function defaultTimezoneFor(capability: CapabilityClaims | null): string {
@@ -26,7 +25,6 @@ function isCreateCron(b: unknown): b is CreateCronInput {
     userScheduleFromBody(b.schedule) !== null &&
     (typeof b.action === "string" || typeof (b as { message?: unknown }).message === "string") &&
     (b as { unattendedGrants?: unknown }).unattendedGrants === undefined &&
-    (b as { script?: unknown }).script === undefined &&
     typeof b.ownerScopeId === "string" &&
     typeof b.owner === "string" &&
     typeof b.createdBy === "string" &&
@@ -51,7 +49,6 @@ type CapabilityCronBody = {
   unfurlLinks?: unknown;
   unattendedGrants?: unknown;
   session?: unknown;
-  script?: unknown;
 };
 
 function taskText(b: CapabilityCronBody): string | undefined {
@@ -111,7 +108,6 @@ function isCronPatch(b: unknown): b is {
   unfurlLinks?: boolean;
   unattendedGrants?: string[];
   session?: boolean;
-  script?: CronScriptRequest | null;
 } {
   if (!isObj(b) || !isCronRuntime(b.runtime)) return false;
   if (!hasCronPatchFields(b)) return true;
@@ -136,7 +132,6 @@ function isCronPatch(b: unknown): b is {
     return false;
   if (hasSchedule && userScheduleFromBody(b.schedule) === null) return false;
   if (b.session !== undefined && typeof b.session !== "boolean") return false;
-  if (b.script !== undefined && b.script !== null && !isObj(b.script)) return false;
   return true;
 }
 
@@ -151,8 +146,7 @@ function hasCronPatchFields(b: Record<string, unknown>): boolean {
     b.archived !== undefined ||
     b.unfurlLinks !== undefined ||
     b.unattendedGrants !== undefined ||
-    b.session !== undefined ||
-    b.script !== undefined
+    b.session !== undefined
   );
 }
 
@@ -174,8 +168,12 @@ const CRON_ERROR_STATUS: Record<string, number> = {
   already_running: 409,
 };
 
+const CRON_SCRIPT_TOOL_ONLY = "set a cron's script with the cron tool, which runs it once first";
+
 async function createCron(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
+  if (isObj(body) && body.script !== undefined)
+    return sendJson(res, 400, { error: "bad_request", message: CRON_SCRIPT_TOOL_ONLY });
   if (capability) {
     const b = body as CapabilityCronBody;
     if (
@@ -198,8 +196,6 @@ async function createCron(ctx: ApiCtx): Promise<void> {
       });
     }
     if (!isCronRuntime(b.runtime)) return sendJson(res, 400, { error: "bad_request", message: "invalid cron runtime" });
-    if (b.script !== undefined && !isObj(b.script))
-      return sendJson(res, 400, { error: "bad_request", message: "script must be an object" });
     const result = await ctx.deps.control.createCron(
       {
         schedule,
@@ -217,7 +213,6 @@ async function createCron(ctx: ApiCtx): Promise<void> {
         ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
         ...(Array.isArray(b.unattendedGrants) ? { unattendedGrants: b.unattendedGrants } : {}),
         ...(typeof b.session === "boolean" ? { session: b.session } : {}),
-        ...(isObj(b.script) ? { script: b.script as unknown as CronScriptRequest } : {}),
       },
       capability,
     );
@@ -350,11 +345,13 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
 }
 
 const CRON_PATCH_BAD_REQUEST =
-  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), unattendedGrants (string[]), session (boolean), and/or script (object or null)";
+  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), unattendedGrants (string[]), and/or session (boolean)";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
   const { res, app, url, pathname, method, body, capability } = ctx;
   const id = decodeURIComponent(pathname.slice("/v1/crons/".length));
+  if (method === "PATCH" && isObj(body) && body.script !== undefined)
+    return sendJson(res, 400, { error: "bad_request", message: CRON_SCRIPT_TOOL_ONLY });
   if (capability) {
     if (method === "GET") {
       const r = await ctx.deps.control.getCron(id, capability);
@@ -387,7 +384,6 @@ async function cronById(ctx: ApiCtx): Promise<void> {
         ...(body.unfurlLinks !== undefined ? { unfurlLinks: body.unfurlLinks } : {}),
         ...(body.unattendedGrants !== undefined ? { unattendedGrants: body.unattendedGrants } : {}),
         ...(body.session !== undefined ? { session: body.session } : {}),
-        ...(body.script !== undefined ? { script: body.script } : {}),
       },
       capability,
     );
@@ -415,8 +411,6 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     });
   }
   if (!isCronPatch(body)) return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_BAD_REQUEST });
-  if (body.script !== undefined)
-    return sendJson(res, 403, { error: "forbidden", message: "only the cron's owner can change its script" });
   if (!hasCronPatchFields(body)) {
     return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_NOTHING_TO_CHANGE });
   }

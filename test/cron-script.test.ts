@@ -14,6 +14,8 @@ import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { isUserItem } from "../src/sessions/items.ts";
+import { createToolContext } from "../src/tools/primitives.ts";
+import type { ExecResult, Sandbox } from "../src/sandbox/sandbox.ts";
 
 const OWNER = "U1";
 const HOME = scopeId("personal", OWNER);
@@ -53,7 +55,7 @@ async function fireOnce(script: CronScriptRequest) {
 }
 
 test("a live script that exits 0 handles the fire without waking the agent", async () => {
-  const { fire, llmCalls } = await fireOnce({ command: "echo checked 40 rows; echo posted 3 rows", mode: "live" });
+  const { fire, llmCalls } = await fireOnce({ command: "echo checked 40 rows; echo posted 3 rows" });
   assert.equal(fire.status, "silent");
   assert.equal(fire.note, "handled by script: posted 3 rows");
   assert.equal(fire.reply, undefined);
@@ -61,7 +63,7 @@ test("a live script that exits 0 handles the fire without waking the agent", asy
 });
 
 test("a live script that exits non-zero escalates to the agent with its output", async () => {
-  const { fire, llmCalls, prompt } = await fireOnce({ command: "echo row 7 has no owner; exit 1", mode: "live" });
+  const { fire, llmCalls, prompt } = await fireOnce({ command: "echo row 7 has no owner; exit 1" });
   assert.equal(fire.status, "ok");
   assert.equal(fire.note, "escalated (exit 1): row 7 has no owner");
   assert.match(prompt, /exit 1/);
@@ -70,25 +72,13 @@ test("a live script that exits non-zero escalates to the agent with its output",
 });
 
 test("a live script that cannot run escalates instead of hiding the fire", async () => {
-  const { fire, prompt } = await fireOnce({ command: "echo hi", mode: "live", credentials: ["no-such-credential"] });
+  const { fire, prompt } = await fireOnce({ command: "echo hi", credentials: ["no-such-credential"] });
   assert.equal(fire.status, "ok");
   assert.match(fire.note ?? "", /^escalated \(could not run: .+\)$/);
   assert.match(prompt, /could not run: /);
 });
 
-test("a shadow script logs its verdict while the agent still runs the fire unchanged", async () => {
-  const handled = await fireOnce({ command: "echo nothing new" });
-  assert.equal(handled.fire.status, "ok");
-  assert.equal(handled.fire.note, "shadow: script would have handled it: nothing new");
-  assert.doesNotMatch(handled.prompt, /nothing new/);
-  assert.ok(handled.llmCalls > 0);
-
-  const escalated = await fireOnce({ command: "echo 2 candidates >&2; exit 3", mode: "shadow" });
-  assert.equal(escalated.fire.note, "shadow: script would have escalated (exit 3): 2 candidates");
-  assert.doesNotMatch(escalated.prompt, /2 candidates/);
-});
-
-test("a script needs a task cron, defaults to shadow, and is removed by patch null or a switch to text", async () => {
+test("a script needs a task cron and is removed by patch null or a switch to text", async () => {
   const { control } = await setup();
   const relay = await control.createCron(
     { schedule: { everyMs: 3_600_000 }, text: "standup!", script: { command: "true" } },
@@ -96,22 +86,12 @@ test("a script needs a task cron, defaults to shadow, and is removed by patch nu
   );
   assert.deepEqual(relay, { ok: false, code: "bad_request", message: "script needs a cron with a task for the agent" });
 
-  const badMode = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "check", script: { command: "true", mode: "on" as "live" } },
-    claims(),
-  );
-  assert.equal(badMode.ok ? "" : badMode.message, 'script.mode must be "shadow" or "live"');
-
   const created = await control.createCron(
     { schedule: { everyMs: 3_600_000 }, action: "check", script: { command: "./check.sh", credentials: ["gh"] } },
     claims(),
   );
   assert.ok(created.ok);
-  assert.deepEqual(created.cron.script, { command: "./check.sh", mode: "shadow", credentials: ["gh"] });
-
-  const live = await control.patchCron(created.cron.id, { script: { command: "./check.sh", mode: "live" } }, claims());
-  assert.ok(live.ok);
-  assert.deepEqual(live.cron.script, { command: "./check.sh", mode: "live" });
+  assert.deepEqual(created.cron.script, { command: "./check.sh", credentials: ["gh"] });
 
   const removed = await control.patchCron(created.cron.id, { script: null }, claims());
   assert.ok(removed.ok);
@@ -121,4 +101,72 @@ test("a script needs a task cron, defaults to shadow, and is removed by patch nu
   const relayed = await control.patchCron(created.cron.id, { text: "standup!" }, claims());
   assert.ok(relayed.ok);
   assert.equal(relayed.cron.script, undefined);
+});
+
+test("setting a script runs it once first and keeps it only when that run exits 0 or 1", async () => {
+  const { built, control } = await setup();
+  const ctx = createToolContext({
+    sandbox: {} as unknown as Sandbox,
+    provision: async () => ({ id: "h", rootDir: "/workspace" }),
+    layers: [{ scopeId: HOME, mountPath: "", mode: "rw" }],
+    commandPolicy: () => ({ mode: "denylist", rules: [] }),
+    authorizeCommand: () => false,
+    grantedHandles: [],
+    workspace: {} as never,
+    deploy: {} as never,
+    acl: {} as never,
+    createdBy: OWNER,
+    control,
+    controlClaims: claims(),
+  });
+  const ran: Array<{ command: string; credentials?: string[]; sandboxId?: string }> = [];
+  const outcomes: Record<string, ExecResult | Error> = {
+    "./quiet.sh": { stdout: "nothing new\n", stderr: "", code: 0, timedOut: false },
+    "./found.sh": { stdout: "row 7\n", stderr: "", code: 1, timedOut: false },
+    "./typo.sh": { stdout: "", stderr: "./typo.sh: not found\n", code: 127, timedOut: false },
+    "./slow.sh": { stdout: "still going\n", stderr: "", code: 124, timedOut: true },
+    "./denied.sh": new Error("unknown credential handle: gh"),
+  };
+  const tools = {
+    ...ctx,
+    execute: async (command: string, opts?: { credentials?: string[]; sandboxId?: string }) => {
+      ran.push({ command, ...opts });
+      const outcome = outcomes[command]!;
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    },
+  };
+  const create = (command: string) =>
+    tools.cronCreate({
+      schedule: { everyMs: 3_600_000 },
+      action: "check",
+      script: { command, credentials: ["gh"], sandboxId: "sb-1" },
+    });
+
+  const quiet = await create("./quiet.sh");
+  assert.ok(!("unavailable" in quiet) && quiet.ok);
+  assert.deepEqual(ran[0], { command: "./quiet.sh", credentials: ["gh"], sandboxId: "sb-1" });
+  const found = await create("./found.sh");
+  assert.ok(!("unavailable" in found) && found.ok);
+
+  const refusal = async (command: string) => {
+    const r = await create(command);
+    assert.ok(!("unavailable" in r) && !r.ok);
+    return r.message;
+  };
+  assert.equal(
+    await refusal("./typo.sh"),
+    "script not set: its trial run exited 127; a cron script must exit 0 (handled) or 1 (wake the agent). Output:\n./typo.sh: not found",
+  );
+  assert.match(await refusal("./slow.sh"), /trial run timed out;.*\nstill going$/s);
+  assert.match(await refusal("./denied.sh"), /trial run failed: unknown credential handle: gh;/);
+
+  const patched = await tools.cronPatch(quiet.cron.id, { script: { command: "./typo.sh" } });
+  assert.ok(!("unavailable" in patched) && !patched.ok);
+  assert.deepEqual((await built.app.getCron(quiet.cron.id))?.script, {
+    command: "./quiet.sh",
+    credentials: ["gh"],
+    sandboxId: "sb-1",
+  });
+  assert.equal((await built.app.listCrons()).length, 2);
 });

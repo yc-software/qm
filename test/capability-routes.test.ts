@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
+import { createControlService } from "../src/api/control-service.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -763,16 +764,30 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(patched.status, 200);
     assert.equal(((await patched.json()) as any).cron.owner, "U1");
     assert.equal((await post(`/v1/crons/${cron.id}/disable`, {}, teammate)).status, 200);
-    const script = { command: "./standup.sh", mode: "live" };
-    assert.equal((await patch(`/v1/crons/${cron.id}`, { script }, teammate)).status, 403);
-    const scripted = await patch(
+    const channelClaims = (actorId: string): CapabilityClaims => ({
+      actorId,
+      scopeId: scopeId("channel", "C"),
+      destination: { type: ROOT.type, target: ROOT.target, audienceScopeId: ROOT.audienceScopeId },
+      destinations: [THREAD, ROOT],
+      defaultDestinationKey: ROOT.key,
+      members: MEMBERS,
+      exp: Date.now() + CAPABILITY_TTL_MS,
+    });
+    const control = createControlService(built.app, built.scheduler, built.admin);
+    const script = { command: "./standup.sh" };
+    const byTeammate = await control.patchCron(cron.id, { script }, channelClaims("U2"));
+    assert.equal(byTeammate.ok ? "" : byTeammate.code, "forbidden");
+    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"));
+    assert.deepEqual(byOwner.ok && byOwner.cron.script, script);
+    const removed = await control.patchCron(cron.id, { script: null }, channelClaims("U2"));
+    assert.equal(removed.ok ? "" : removed.code, "forbidden");
+    const overHttp = await patch(
       `/v1/crons/${cron.id}`,
       { script },
       { "x-agent-capability": await capChannelMembers("U1") },
     );
-    assert.equal(scripted.status, 200);
-    assert.deepEqual(((await scripted.json()) as any).cron.script, script);
-    assert.equal((await patch(`/v1/crons/${cron.id}`, { script: null }, teammate)).status, 403);
+    assert.equal(overHttp.status, 400);
+    assert.match(((await overHttp.json()) as any).message, /cron tool/);
   });
 
   it("a channel cron is readable by a member but never administrable by them (your boss's channel cron stays out of your DM's control)", async () => {

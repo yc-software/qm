@@ -34,7 +34,6 @@ export interface CronFireLogEntry {
 
 export interface CronScript {
   command: string;
-  mode: "shadow" | "live";
   credentials?: string[];
   sandboxId?: string;
 }

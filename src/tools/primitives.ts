@@ -1,3 +1,4 @@
+import { cronScriptFrom, trialCronScript, type CronScriptRequest } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
 import { parkedOutputKey, type ToolOutputStore } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
@@ -632,6 +633,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   };
 
   const runId = deps.runId;
+
+  async function trialScript(
+    req: CronScriptRequest | null | undefined,
+    cron: Parameters<typeof cronScriptFrom>[1],
+    tools: Pick<ToolContext, "execute">,
+  ): Promise<{ ok: false; code: "bad_request"; message: string } | undefined> {
+    const script = req ? cronScriptFrom(req, cron) : undefined;
+    if (!script || typeof script === "string") return undefined;
+    const refused = await trialCronScript(script, (command, opts) => tools.execute(command, opts), deps.toolOutput);
+    return refused === undefined ? undefined : { ok: false, code: "bad_request", message: refused };
+  }
 
   function controlOp<R>(
     run: (control: ControlService, claims: CapabilityClaims) => Promise<R>,
@@ -1272,11 +1284,17 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.monitorBroker!.unwatch(monitorId);
     },
 
-    cronCreate: (req) => controlOp((c, cl) => c.createCron(req, cl)),
+    async cronCreate(req) {
+      return (await trialScript(req.script, req, this)) ?? (await controlOp((c, cl) => c.createCron(req, cl)));
+    },
     cronList: () => controlOp((c, cl) => c.listCrons(cl)),
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
-    cronPatch: (id, req) => controlOp((c, cl) => c.patchCron(id, req, cl)),
+    async cronPatch(id, req) {
+      return (
+        (await trialScript(req.script, { action: "" }, this)) ?? (await controlOp((c, cl) => c.patchCron(id, req, cl)))
+      );
+    },
     cronNote: (id, note) => controlOp((c, cl) => c.noteCron(id, note, cl)),
     cronDelete: (id) => controlOp((c, cl) => c.deleteCron(id, cl)),
     cronSetEnabled: (id, enabled) => controlOp((c, cl) => c.setCronEnabled(id, enabled, cl)),

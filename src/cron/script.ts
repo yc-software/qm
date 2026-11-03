@@ -14,7 +14,6 @@ import { randomBytes } from "node:crypto";
 
 export interface CronScriptRequest {
   command: string;
-  mode?: CronScript["mode"];
   credentials?: string[];
   sandboxId?: string;
 }
@@ -26,8 +25,6 @@ export function cronScriptFrom(
   if (cron.action === undefined || cron.message !== undefined || cron.text !== undefined || cron.loopId)
     return "script needs a cron with a task for the agent";
   if (typeof req.command !== "string" || !req.command.trim()) return "script.command must be a command";
-  if (req.mode !== undefined && req.mode !== "shadow" && req.mode !== "live")
-    return 'script.mode must be "shadow" or "live"';
   if (
     req.credentials !== undefined &&
     !(Array.isArray(req.credentials) && req.credentials.every((c) => typeof c === "string"))
@@ -37,7 +34,6 @@ export function cronScriptFrom(
     return "script.sandboxId must be a sandbox id";
   return {
     command: req.command,
-    mode: req.mode ?? "shadow",
     ...(req.credentials?.length ? { credentials: req.credentials } : {}),
     ...(req.sandboxId ? { sandboxId: req.sandboxId } : {}),
   };
@@ -84,43 +80,15 @@ export async function runCronScript(
     if (deps.screening === "enforce") return "The script's output was withheld by the security screen.";
     return `${unscreenedNotice("cron script output")}\n${output}`;
   };
-  let result: ExecResult | undefined;
-  let failure: string | undefined;
-  try {
-    result = await execute(script.command, {
-      ...(script.credentials?.length ? { credentials: script.credentials } : {}),
-      ...(script.sandboxId ? { sandboxId: script.sandboxId } : {}),
-      ...(signal ? { signal } : {}),
-    });
-  } catch (e) {
-    if (signal?.aborted) throw e;
-    failure = errMessage(e);
-  }
+  const { result, exit } = await runOnce(script, execute, signal);
   const handled = result !== undefined && result.code === 0 && !result.timedOut;
-  let exit = `exit ${result?.code}`;
-  if (failure !== undefined) exit = `could not run: ${failure}`;
-  else if (result?.timedOut) exit = "timed out";
   const summary = result ? (lastLine(result.stdout) ?? lastLine(result.stderr)) : undefined;
-  const live = script.mode === "live";
-  const verdict = handled
-    ? `${live ? "handled by script" : "shadow: script would have handled it"}${summary ? `: ${summary}` : ""}`
-    : `${live ? "escalated" : "shadow: script would have escalated"} (${exit})${summary ? `: ${summary}` : ""}`;
-  const audit = JSON.stringify({ command: script.command, mode: script.mode, verdict });
-  if (handled || !live) return { handled, verdict, audit };
-  const output = result
-    ? [result.stdout, result.stderr]
-        .filter((s) => s.trim())
-        .join("\n")
-        .trim()
-    : "";
+  const verdict = `${handled ? "handled by script" : `escalated (${exit})`}${summary ? `: ${summary}` : ""}`;
+  const audit = JSON.stringify({ command: script.command, verdict });
+  if (handled) return { handled, verdict, audit };
+  const output = outputOf(result);
   const fence = randomBytes(6).toString("hex");
-  const shown = output
-    ? (cutToInline(
-        output,
-        await inlineTokensOf(deps.toolOutput),
-        " To read all of it, rerun the script with its output redirected to a file",
-      )?.text ?? capResultText(output))
-    : "";
+  const shown = output ? await fit(output, deps.toolOutput) : "";
   return {
     handled,
     verdict,
@@ -134,4 +102,51 @@ export async function runCronScript(
       "[End cron script]",
     ].join("\n"),
   };
+}
+
+async function runOnce(
+  script: CronScript,
+  execute: Execute,
+  signal?: AbortSignal,
+): Promise<{ result?: ExecResult; exit: string; error?: string }> {
+  try {
+    const result = await execute(script.command, {
+      ...(script.credentials?.length ? { credentials: script.credentials } : {}),
+      ...(script.sandboxId ? { sandboxId: script.sandboxId } : {}),
+      ...(signal ? { signal } : {}),
+    });
+    return { result, exit: result.timedOut ? "timed out" : `exit ${result.code}` };
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    const error = errMessage(e);
+    return { exit: `could not run: ${error}`, error };
+  }
+}
+
+function outputOf(result: ExecResult | undefined): string {
+  return result
+    ? [result.stdout, result.stderr]
+        .filter((s) => s.trim())
+        .join("\n")
+        .trim()
+    : "";
+}
+
+async function fit(output: string, toolOutput: Pick<ToolOutputStore, "inlineTokens"> | undefined): Promise<string> {
+  return (
+    cutToInline(output, await inlineTokensOf(toolOutput), " Redirect the script's output to a file to keep all of it")
+      ?.text ?? capResultText(output)
+  );
+}
+
+export async function trialCronScript(
+  script: CronScript,
+  execute: Execute,
+  toolOutput?: Pick<ToolOutputStore, "inlineTokens">,
+): Promise<string | undefined> {
+  const { result, error } = await runOnce(script, execute);
+  if (result && !result.timedOut && (result.code === 0 || result.code === 1)) return undefined;
+  const output = outputOf(result);
+  const outcome = !result ? `failed: ${error}` : result.timedOut ? "timed out" : `exited ${result.code}`;
+  return `script not set: its trial run ${outcome}; a cron script must exit 0 (handled) or 1 (wake the agent)${output ? `. Output:\n${await fit(output, toolOutput)}` : ""}`;
 }
