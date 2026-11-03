@@ -452,6 +452,33 @@ test("a bare stop stops a conversation's subagents even when its own turn is idl
   assert.equal((await built.runs.list()).filter((r) => r.sessionId === "dm:D-TREE").length, 0, "no turn for the stop");
 });
 
+test("the starter's un-mentioned bare stop reaches a conversation's subagents when its own turn is idle", async () => {
+  const built = freshApp();
+  const channel = "C19";
+  const rootTs = "1900.9";
+  const threadRef = `ch:${channel}:${rootTs}`;
+  const root = await built.sessions.getOrCreateByThread(threadRef, "channel", "personal:U1");
+  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:starter-child", "dm", "personal:U1");
+  await built.sessions.setParentSession(child.id, root.id);
+  const { run: childRun } = await built.runs.enqueue({
+    sessionId: child.threadRef,
+    request: {
+      actor: { id: "U1", type: "internal" },
+      conversation: { kind: "dm", threadRef: child.threadRef, audience: [{ id: "U1", type: "internal" }] },
+      text: "background work",
+      origin: { kind: "direct" },
+    },
+  });
+  assert.ok(await built.runs.claimById(childRun.id, "worker", 30_000));
+
+  const starter = await built.app.turn({ ...overheard("stop", channel, rootTs), actor });
+  assert.equal(starter.stopped, true);
+  assert.deepEqual(
+    (await built.signals.takePending(childRun.id)).map((signal) => signal.kind),
+    ["abort"],
+  );
+});
+
 test("a same-key REDELIVERY of a live keyed turn never steers — it dedupes to the existing run", async () => {
   const built = freshApp();
   const channel = "C17";
