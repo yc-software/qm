@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput, type OrchestratorDeps } from "../src/core/orchestrator.ts";
@@ -8,7 +7,6 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { type OrgBranding } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -83,7 +81,6 @@ async function buildOrchestrator(
 
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "pm-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const deploy = createDeployService({
     ...singleProcessDeps(),
@@ -107,7 +104,6 @@ async function buildOrchestrator(
     featureFlags: opts.featureFlags,
     resolution,
     sessions: createPostgresSessionStore(testDatabaseUrl()),
-    workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     auditLog,

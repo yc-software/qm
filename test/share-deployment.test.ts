@@ -425,14 +425,11 @@ function toolCtx(deploy: DeployService): ToolContext {
   return createToolContext({
     sandbox: appSandbox(),
     provision: async () => ({}) as SandboxHandle,
-    layers: [
-      { scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" },
-      { scopeId: scopeId("org", "default-org"), mountPath: "global", mode: "ro" },
-    ],
+    writableScopeId: scopeId("personal", "U1"),
+    readOnlyScopeIds: [scopeId("org", "default-org")],
     commandPolicy: () => ({}) as never,
     authorizeCommand: () => false,
     grantedHandles: [],
-    workspace: {} as never,
     deploy,
     acl: {} as never,
     createdBy: "U1",

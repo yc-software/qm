@@ -15,7 +15,6 @@ import {
   ManagedAgentsHitlRejectedError,
 } from "../src/sandbox/managed-agents-client.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import type { HomeSnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
@@ -29,11 +28,10 @@ import { testMap } from "./support/test-database.ts";
 let fake: FakeManagedAgents;
 let sandbox: Sandbox;
 const scope = scopeId("personal", "tester");
-const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 const scopeName = (): string => sandboxScopeName("qmt", scope);
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
-  return createManagedAgentsSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "managed-agents-ws-"))), {
+  return createManagedAgentsSandbox({
     snapshots: createMemorySnapshotStore(),
     store: testMap(),
     client: fake.client,
@@ -50,7 +48,7 @@ beforeEach(() => {
 after(() => fake?.cleanup());
 
 test("provision runs commands with env and cwd", async () => {
-  const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
+  const h = await sandbox.provision(scope, { env: { MY_VAR: "v1" } });
   assert.equal(h.coldStart, true);
   const r = await sandbox.run(h, "pwd; echo VAR=$MY_VAR");
   assert.equal(r.code, 0);
@@ -59,15 +57,15 @@ test("provision runs commands with env and cwd", async () => {
 });
 
 test("one session per scope is reused across provisions", async () => {
-  const first = await sandbox.provision(layers);
+  const first = await sandbox.provision(scope);
   await sandbox.teardown(first, { keepWarm: true });
-  const second = await sandbox.provision(layers);
+  const second = await sandbox.provision(scope);
   assert.equal(second.coldStart, false);
   assert.equal(fake.createdCount(scopeName()), 1);
 });
 
 test("the session is named after the scope so an operator can find it", async () => {
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   const current = fake.current(scopeName());
   assert.ok(current, "expected a session registered under the scope name");
   assert.ok(scopeName().length <= 64, "Managed Agents caps session names at 64 characters");
@@ -77,7 +75,7 @@ test("the session is named after the scope so an operator can find it", async ()
 test("teardown captures a provider checkpoint before pausing", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.run(h, "echo hi > kept.txt");
   await sandbox.teardown(h);
   const calls = fake.checkpointCalls();
@@ -101,7 +99,7 @@ test("restart rolls a paused session back to its checkpoint without resuming the
       if (e.code === "checkpoint_restored") restored.push(e.code);
     },
   });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   const before = await store.get(scope);
   assert.ok(before?.checkpointId);
@@ -119,7 +117,7 @@ test("restart rolls a paused session back to its checkpoint without resuming the
   assert.equal(fake.guestDisconnects().length, disconnects);
   assert.equal(fake.createdCount(scopeName()), 1);
   assert.deepEqual(restored, ["checkpoint_restored"]);
-  const again = await sandbox.provision(layers);
+  const again = await sandbox.provision(scope);
   assert.equal(again.coldStart, false);
   assert.equal(fake.current(scopeName())?.sandboxId, after?.sandboxId);
 });
@@ -127,7 +125,7 @@ test("restart rolls a paused session back to its checkpoint without resuming the
 test("restart drops a warm guest's port-forward before rolling back", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.teardown(h, { keepWarm: true });
   const disconnects = fake.guestDisconnects().length;
   await sandbox.restartComputer!(scope);
@@ -137,7 +135,7 @@ test("restart drops a warm guest's port-forward before rolling back", async () =
 });
 
 test("restart without a checkpoint does not call rollback", async () => {
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   await assert.rejects(() => sandbox.restartComputer!(scope), /no checkpoint to restore/);
   assert.equal(fake.rollbackCalls().length, 0);
 });
@@ -145,14 +143,14 @@ test("restart without a checkpoint does not call rollback", async () => {
 test("a failed rollback keeps the stored sandbox and the same session", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   const before = await store.get(scope);
   fake.failNextRollback(scopeName());
   await assert.rejects(() => sandbox.restartComputer!(scope), /rollback/);
   assert.equal((await store.get(scope))?.sandboxId, before?.sandboxId);
   assert.equal(fake.rollbackCalls().length, 0);
-  const again = await sandbox.provision(layers);
+  const again = await sandbox.provision(scope);
   assert.equal(again.coldStart, false);
   assert.equal(fake.createdCount(scopeName()), 1);
 });
@@ -160,7 +158,7 @@ test("a failed rollback keeps the stored sandbox and the same session", async ()
 test("a checkpoint failure is recorded and the session still pauses", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   fake.failNextCheckpoint(scopeName());
   await sandbox.teardown(h);
   assert.equal(fake.checkpointCalls().length, 0);
@@ -171,9 +169,9 @@ test("a checkpoint failure is recorded and the session still pauses", async () =
 });
 
 test("checkpoint capture is throttled across a pause and resume", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
-  const again = await sandbox.provision(layers);
+  const again = await sandbox.provision(scope);
   await sandbox.teardown(again);
   assert.equal(fake.checkpointCalls().length, 1);
 });
@@ -181,10 +179,10 @@ test("checkpoint capture is throttled across a pause and resume", async () => {
 test("a newer checkpoint replaces the previous one", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
   sandbox = make({ store, snapshotIntervalMs: -1 });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   const first = (await store.get(scope))?.checkpointId;
-  const again = await sandbox.provision(layers);
+  const again = await sandbox.provision(scope);
   await sandbox.teardown(again);
   const second = (await store.get(scope))?.checkpointId;
   assert.ok(first);
@@ -197,18 +195,18 @@ test("a newer checkpoint replaces the previous one", async () => {
 test("a failed checkpoint delete is remembered and retried without another capture", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
   const fast = make({ store, snapshotIntervalMs: -1 });
-  const h = await fast.provision(layers);
+  const h = await fast.provision(scope);
   await fast.teardown(h);
   const first = (await store.get(scope))?.checkpointId;
   assert.ok(first);
   fake.failNextCheckpointDelete(scopeName());
-  const again = await fast.provision(layers);
+  const again = await fast.provision(scope);
   await fast.teardown(again);
   assert.deepEqual((await store.get(scope))?.pendingCheckpointDeletes, [first]);
   assert.deepEqual(fake.deletedCheckpoints(), []);
 
   const slow = make({ store });
-  const resumed = await slow.provision(layers);
+  const resumed = await slow.provision(scope);
   const captures = fake.checkpointCalls().length;
   await slow.teardown(resumed, { homeUnchanged: true });
   assert.equal(fake.checkpointCalls().length, captures);
@@ -227,22 +225,22 @@ test("a failed home snapshot retries without recapturing the checkpoint", async 
     },
   };
   sandbox = make({ snapshots });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
-  const again = await sandbox.provision(layers);
+  const again = await sandbox.provision(scope);
   await sandbox.teardown(again);
   assert.equal(fake.checkpointCalls().length, 1);
   assert.equal(uploads.length, 2);
 });
 
 test("teardown pauses the session and the next provision resumes it", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.run(h, "echo hi > kept.txt");
   await sandbox.teardown(h);
   assert.deepEqual(fake.pauseCalls().length, 1);
   assert.equal(fake.current(scopeName())?.state, "paused");
 
-  const again = await sandbox.provision(layers);
+  const again = await sandbox.provision(scope);
   assert.equal(fake.resumeCalls().length, 1);
   const r = await sandbox.run(again, "cat kept.txt");
   assert.match(r.stdout, /hi/);
@@ -250,7 +248,7 @@ test("teardown pauses the session and the next provision resumes it", async () =
 });
 
 test("keepWarm teardown leaves the session running for background work", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.teardown(h, { keepWarm: true });
   assert.equal(fake.pauseCalls().length, 0);
   assert.equal(fake.current(scopeName())?.state, "ready");
@@ -259,26 +257,26 @@ test("keepWarm teardown leaves the session running for background work", async (
 test("a lost session is re-adopted by name when the durable record is gone", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   const before = fake.current(scopeName());
   await store.delete(scope);
 
-  const again = await sandbox.provision(layers);
+  const again = await sandbox.provision(scope);
   assert.equal(again.coldStart, false);
   assert.equal(fake.createdCount(scopeName()), 1);
   assert.equal(fake.current(scopeName())?.sessionId, before?.sessionId);
 });
 
 test("a destroyed session is replaced on the next provision", async () => {
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   fake.destroy(scopeName());
-  const again = await sandbox.provision(layers);
+  const again = await sandbox.provision(scope);
   assert.ok(again.id);
   assert.equal(fake.createdCount(scopeName()), 2);
 });
 
 test("destroying a scope disconnects the live guest rather than only deleting the session", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.run(h, "true");
   const live = fake.current(scopeName());
   assert.ok(live, "expected a live session before destroying the scope");
@@ -288,13 +286,13 @@ test("destroying a scope disconnects the live guest rather than only deleting th
 });
 
 test("a command lost mid-flight is surfaced rather than silently retried", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   fake.loseNextCommand(scopeName());
   await assert.rejects(() => sandbox.run(h, "echo nope"), /was lost while a command was running/);
 });
 
 test("a Managed Agents approval rejection names the permissions fix", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   fake.rejectNextCommand(scopeName());
   await assert.rejects(() => sandbox.run(h, "echo nope"), ManagedAgentsHitlRejectedError);
   await assert.rejects(() => {
@@ -304,7 +302,7 @@ test("a Managed Agents approval rejection names the permissions fix", async () =
 });
 
 test("files round trip through the data plane", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.writeFile(h, "notes/a.txt", "hello managed agents");
   assert.equal(await sandbox.readFile(h, "notes/a.txt"), "hello managed agents");
   assert.equal(await sandbox.readFile(h, "notes/missing.txt"), null);
@@ -313,14 +311,14 @@ test("files round trip through the data plane", async () => {
 test("destroy removes the session and its durable record", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.teardown(h, { destroy: true });
   assert.equal(await store.get(scope), null);
   assert.equal(fake.current(scopeName()), null);
 });
 
 test("computerStatus reports a paused machine without waking it", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   const status = await sandbox.computerStatus!(scope);
   assert.equal(status.provisioned, true);
@@ -330,7 +328,7 @@ test("computerStatus reports a paused machine without waking it", async () => {
 });
 
 test("computerStatus probes a running machine", async () => {
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   const status = await sandbox.computerStatus!(scope);
   assert.equal(status.provisioned, true);
   assert.equal(status.guestResponsive, true);
@@ -345,8 +343,8 @@ test("computerStatus on an unprovisioned scope reports nothing provisioned", asy
 test("scratch sandboxes are reference counted and never persisted", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
-  const a = await sandbox.provision(layers, { scratch: { key: "k1" } });
-  const b = await sandbox.provision(layers, { scratch: { key: "k1" } });
+  const a = await sandbox.provision(scope, { scratch: { key: "k1" } });
+  const b = await sandbox.provision(scope, { scratch: { key: "k1" } });
   assert.equal(a.id, b.id);
   assert.equal(a.scratch, true);
   await sandbox.teardown(a);
@@ -396,7 +394,7 @@ const awsCredential = (value: string) => ({
 });
 
 test("the guest refuses a transfer outside the workspace, the way the platform does", async () => {
-  await sandbox.provision(layers);
+  await sandbox.provision(scope);
   const current = fake.current(scopeName());
   assert.ok(current);
   const session = await fake.client.connect(current!.sessionId);
@@ -408,7 +406,7 @@ const relayLeftovers = async (h: Awaited<ReturnType<Sandbox["provision"]>>): Pro
   (await sandbox.run(h, "ls -a /workspace | grep -c '^.qm-transfer' || true")).stdout.trim();
 
 test("per-command credential files outside the workspace stage through the transfer relay", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const prepared = await prepareExecutionFiles(sandbox, h, [awsCredential("key=abc")]);
   const read = await sandbox.run(h, `cat ${prepared.env.HOME}/.aws/credentials`);
   assert.equal(read.code, 0);
@@ -418,7 +416,7 @@ test("per-command credential files outside the workspace stage through the trans
 });
 
 test("an upload through the relay clears relay files a crash left behind", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.run(h, "touch -d '3 hours ago' /workspace/.qm-transfer.stale");
   const prepared = await prepareExecutionFiles(sandbox, h, [awsCredential("key=sweep")]);
   await prepared.finish();
@@ -426,7 +424,7 @@ test("an upload through the relay clears relay files a crash left behind", async
 });
 
 test("exporting the computer reads its archive through the transfer relay", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.writeFile(h, "notes/export-me.txt", "exported");
   const entries = await sandbox.exportFiles!(h, { include: ["workspace"] });
   const found = entries.find((e) => e.path.endsWith("export-me.txt"));
@@ -438,7 +436,7 @@ test("exporting the computer reads its archive through the transfer relay", asyn
 test("process sessions stream output through the data plane exec path", async () => {
   assert.ok(supportsProcessSessions(sandbox));
   if (!supportsProcessSessions(sandbox)) return;
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const { processId } = await sandbox.startProcess(h, "echo one; echo two");
   const { output, status } = await pollProcess(sandbox, h, processId, { deadlineMs: 5_000, waitMs: 100 });
   assert.equal(status.state, "exited");
@@ -451,7 +449,7 @@ test("layer tools install outside /workspace by staging inside it", async () => 
   sandbox = make({
     layerToolFiles: () => [{ to: target, content: "#!/bin/sh\necho ok\n", mode: "755" }],
   });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const r = await sandbox.run(h, `${target}`);
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.stdout.trim(), "ok");

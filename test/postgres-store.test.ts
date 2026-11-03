@@ -1727,11 +1727,11 @@ test("pg run store: enqueue dedup, atomic one-per-session claim, fencing, reaper
     const r1 = (await runs.enqueue({ sessionId: "sA", request: turn("1") })).run;
     await runs.enqueue({ sessionId: "sA", request: turn("2") });
     const rB = (await runs.enqueue({ sessionId: "sB", request: turn("b") })).run;
-    const first = await runs.claim("w1", 5_000);
+    const first = (await runs.claim("w1", 5_000))[0] ?? null;
     assert.equal(first?.id, r1.id, "oldest pending claimed first");
-    const second = await runs.claim("w2", 5_000);
+    const second = (await runs.claim("w2", 5_000))[0] ?? null;
     assert.equal(second?.id, rB.id, "sA already running → skip its 2nd, take sB");
-    assert.equal(await runs.claim("w3", 5_000), null, "nothing else eligible");
+    assert.equal((await runs.claim("w3", 5_000))[0] ?? null, null, "nothing else eligible");
 
     assert.equal(
       await runs.complete(first!.id, "wrong", { status: "ok" } as TurnResult),
@@ -1846,27 +1846,6 @@ test("pg run store: enqueue retries when a conflicting key is released before lo
     await raw.end();
     await close();
   }
-});
-
-test("pg run store: waitFor survives a transient poll failure without an unhandled rejection", { skip }, async () => {
-  const { runs, close } = createPostgresRunStore(URL!);
-  let unhandled: unknown;
-  const onUnhandledRejection = (err: unknown): void => {
-    unhandled = err;
-  };
-  process.once("unhandledRejection", onUnhandledRejection);
-  try {
-    const r = (await runs.enqueue({ sessionId: "sWaitFor", request: turn("x") })).run;
-    const pending = runs.waitFor(r.id, 800);
-    // Kill the pool mid-poll: the next getRun() tick will reject, exercising the
-    // catch path instead of leaking an unhandled rejection out of setInterval.
-    await new Promise((res) => setTimeout(res, 50));
-    await close();
-    await assert.rejects(pending, /did not finish within 800ms/, "still settles via its own timeout, not a crash");
-  } finally {
-    process.removeListener("unhandledRejection", onUnhandledRejection);
-  }
-  assert.equal(unhandled, undefined, "a transient poll failure must not escape as an unhandled rejection");
 });
 
 test(
@@ -2028,8 +2007,8 @@ test("pg run store: one-running-per-session holds under concurrent claims (uniqu
     );
     assert.equal(await runs.claimById(r2.id, "w2", 60_000), null, "claimById refuses while a sibling runs");
 
-    const claims = await Promise.all(Array.from({ length: 8 }, (_, i) => runs.claim(`race-${i}`, 60_000)));
-    const raceClaims = claims.filter((run) => run?.sessionId === "sRace");
+    const claims = await Promise.all(Array.from({ length: 8 }, (_, i) => runs.claim(`race-${i}`, 60_000, 8)));
+    const raceClaims = claims.flat().filter((run) => run.sessionId === "sRace");
     assert.equal(raceClaims.length, 0, "concurrent claims never double-run a session");
     assert.equal((await runs.get(r2.id))?.status, "pending", "the queued sibling stays queued");
   } finally {
@@ -2054,7 +2033,7 @@ test(
         expected,
         "the queue reads back in send order even when created_at ties",
       );
-      const claimed = await runs.claim("wSeq", 60_000);
+      const claimed = (await runs.claim("wSeq", 60_000))[0] ?? null;
       assert.equal(claimed?.id, expected[0], "the worker claims exactly the head the queue displays");
 
       // Rows that predate the seq column get backfilled in heap order, not send order. seq is a

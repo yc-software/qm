@@ -597,12 +597,16 @@ test("web's queued second run waits for the lock: not claimable until the live r
     "both runs are on the queue before any is claimed",
   );
 
-  const live = await built.runs.claim("w1", 30_000);
+  const live = (await built.runs.claim("w1", 30_000))[0] ?? null;
   assert.ok(live && queued.includes(live.id), "one of the two queued runs is claimed");
-  assert.equal(await built.runs.claim("w2", 30_000), null, "the other must NOT be claimable while it runs");
+  assert.equal(
+    (await built.runs.claim("w2", 30_000))[0] ?? null,
+    null,
+    "the other must NOT be claimable while it runs",
+  );
 
   await built.runs.complete(live!.id, live!.leaseToken!, { status: "ok", reply: "done" });
-  const next = await built.runs.claim("w3", 30_000);
+  const next = (await built.runs.claim("w3", 30_000))[0] ?? null;
   assert.equal(
     next?.id,
     queued.find((id) => id !== live!.id),
@@ -675,7 +679,7 @@ test("a queued web turn runs on its own — the sender's client need never come 
   const queued = await built.app.turn(web("the queued one", threadRef));
 
   await built.runs.complete(live!.id, live!.leaseToken!, { status: "ok", reply: "done" });
-  const next = await built.runs.claim("w2", 30_000);
+  const next = (await built.runs.claim("w2", 30_000))[0] ?? null;
   assert.equal(next?.id, queued.runId, "the queued turn is claimed by a worker, with no client involved");
   assert.equal(next?.request.text, "the queued one");
 });
@@ -705,7 +709,7 @@ test("orphan replay: a steer unconsumed at run completion replays as a fresh tur
     ...mention("@bot why did you do it wrong?", channel, root),
     origin: { kind: "human", messageTs: "900.010" },
   });
-  const claimed = await built.runs.claim("w1", 30_000);
+  const claimed = (await built.runs.claim("w1", 30_000))[0] ?? null;
   assert.equal(claimed?.id, liveRunId);
   await built.runs.complete(liveRunId, claimed!.leaseToken!, { status: "silent" });
 
@@ -763,7 +767,7 @@ test("signalRun: a steer already terminal at send is refused up front", async ()
   const root = "1100.1";
   const first = await built.app.turn(mention("@bot go", channel, root));
   const liveRunId = first.runId!;
-  const claimed = await built.runs.claim("w1", 30_000);
+  const claimed = (await built.runs.claim("w1", 30_000))[0] ?? null;
   await built.runs.complete(liveRunId, claimed!.leaseToken!, { status: "ok", reply: "done" });
 
   const refused = await built.app.signalRun(liveRunId, { kind: "steer", text: "too late" });
@@ -776,7 +780,7 @@ function completeOnSend(built: ReturnType<typeof freshApp>, sanitize = false): v
   const origSend = built.signals.send.bind(built.signals);
   built.signals.send = async (runId, signal) => {
     const sent = await origSend(runId, sanitize ? JSON.parse(jsonbStringify(signal)) : signal);
-    const claimed = await built.runs.claim("w1", 30_000);
+    const claimed = (await built.runs.claim("w1", 30_000))[0] ?? null;
     if (claimed) await built.runs.complete(claimed.id, claimed.leaseToken!, { status: "silent" });
     return sent;
   };

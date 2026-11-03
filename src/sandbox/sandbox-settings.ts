@@ -512,8 +512,6 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
   if (sandboxBackend === "render" && !env.RENDER_WORKSPACE_ID?.trim())
     throw new Error("Render providers require RENDER_WORKSPACE_ID");
-  if (sandboxBackend === "render" && env.WORKSPACE_STORE !== "postgres")
-    throw new Error("SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres");
   if (sandboxBackend === "render" && !env.RENDER_SANDBOX_IMAGE?.trim())
     throw new Error("SANDBOX_BACKEND=render requires RENDER_SANDBOX_IMAGE");
   const renderSandboxEnabled =

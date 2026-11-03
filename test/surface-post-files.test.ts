@@ -387,6 +387,7 @@ test("surface edit rewrites a Slack message in place and refuses outside Slack i
     const queued: Array<{ destination: Record<string, unknown>; text: string }> = [];
     const tools = createSurfaceToolDeps({
       deps: {
+        surfaces: testSurfaces(),
         deliveries: {
           enqueue: async (d: { destination: Record<string, unknown>; text: string }) => {
             queued.push(d);

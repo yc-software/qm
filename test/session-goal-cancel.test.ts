@@ -97,7 +97,7 @@ for (const status of ["active", "paused"] as const) {
     const ref = `web:U1:running-${status}`;
     const session = await sessionWithGoal(built, ref, status);
     await built.runs.enqueue({ sessionId: ref, request: runRequest() });
-    const run = await built.runs.claim("w1", 60_000);
+    const run = (await built.runs.claim("w1", 60_000))[0] ?? null;
     assert.equal(run?.sessionId, ref);
     const writer = { sessionId: session.id };
 
@@ -135,7 +135,7 @@ test("cancelling with no open goal touches nothing", async () => {
   const session = await built.sessions.getOrCreateByThread(ref, "dm", "personal:U1");
   await built.sessions.addParticipant(session.id, "U1");
   await built.runs.enqueue({ sessionId: ref, request: runRequest() });
-  const run = await built.runs.claim("w1", 60_000);
+  const run = (await built.runs.claim("w1", 60_000))[0] ?? null;
   assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), {
     cancelled: false,
     reason: "no_open_goal",

@@ -42,9 +42,7 @@ describe("POST /v1/reach with files", () => {
     });
 
   const seedFile = async (actorId: string, relPath: string, data: string) => {
-    const handle = await built.sandbox.provision([
-      { scopeId: scopeId("personal", actorId), mountPath: "", mode: "rw" },
-    ]);
+    const handle = await built.sandbox.provision(scopeId("personal", actorId));
     await built.sandbox.writeFile(handle, relPath, data);
     await built.sandbox.teardown(handle, { keepWarm: true });
   };
@@ -193,10 +191,7 @@ describe("POST /v1/reach with files", () => {
 
   it("reads workspace paths from an explicitly named sandbox_id instead of the default", async () => {
     const extra = await secondSandbox("U-carol");
-    const handle = await built.sandbox.provision(
-      [{ scopeId: scopeId("personal", "U-carol"), mountPath: "", mode: "rw" }],
-      { sandboxId: extra.id },
-    );
+    const handle = await built.sandbox.provision(scopeId("personal", "U-carol"), { sandboxId: extra.id });
     await built.sandbox.writeFile(handle, "only-here.md", "second box\n");
     await built.sandbox.teardown(handle, { keepWarm: true });
     const viaDefault = await post(

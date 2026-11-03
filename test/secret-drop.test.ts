@@ -249,7 +249,6 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       keychain: built.keychain,
       secretDrops: built.secretDrops,
       deliveries: built.deliveries,
-      workspace: built.workspace,
       auditLog: built.auditLog,
       runs: built.runs,
       signals: built.signals,
@@ -666,7 +665,6 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
       keychain: built.keychain,
       secretDrops: built.secretDrops,
       deliveries: built.deliveries,
-      workspace: built.workspace,
       auditLog: built.auditLog,
       fireDropResolution: async (drop) => {
         fires.push(drop);

@@ -1,5 +1,5 @@
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../src/config.ts";
@@ -19,8 +19,6 @@ const built = buildApp({
   dataDir: DATA,
 });
 await built.config.setSoul(scopeId("personal", "USOUL"), "When you reply, always end with the exact token --AGENT-X.");
-mkdirSync(join(DATA, "workspaces", "org__acme"), { recursive: true });
-writeFileSync(join(DATA, "workspaces", "org__acme", "announce.txt"), "GLOBAL-ANNOUNCE-OK: org-wide announcement.\n");
 
 const server = createInsecureTestServer(built.app);
 await new Promise<void>((r) => server.listen(0, r));
@@ -196,43 +194,6 @@ const cases: Case[] = [
         ? (await built.app.getSession(r.json.sessionId))?.session.scopeId === "channel:C1"
         : false;
       return { ok: /channel-ok/i.test(reply(r)) && okScope, detail: `${reply(r)} | scope ok=${okScope}` };
-    },
-  },
-  {
-    name: "global file is READ-ONLY (saving to global/ is refused)",
-    run: async () => {
-      const r = await post(
-        dm(
-          U1,
-          "Use the execute tool to run exactly: echo x > global/blocked.txt — then tell me whether it succeeded or failed.",
-          "c-gwrite",
-        ),
-      );
-      const t = reply(r);
-      return {
-        ok:
-          /fail|denied|permission|read-only|read only|cannot|can't|unable/i.test(t) &&
-          !/saved|created successfully|succeeded/i.test(t),
-        detail: t,
-      };
-    },
-  },
-  {
-    name: "global file is readable from a DM",
-    run: async () => {
-      const r = await post(
-        dm(U1, "Use files action read to read announce.txt and tell me its exact contents.", "c-gread-dm"),
-      );
-      return { ok: /GLOBAL-ANNOUNCE-OK/.test(reply(r)), detail: reply(r) };
-    },
-  },
-  {
-    name: "global file is readable from a channel (org visible everywhere)",
-    run: async () => {
-      const r = await post(
-        channel(U1, "Use files action read to read announce.txt and tell me its exact contents.", "ch4:t1", "C4", [U1]),
-      );
-      return { ok: /GLOBAL-ANNOUNCE-OK/.test(reply(r)), detail: reply(r) };
     },
   },
   {

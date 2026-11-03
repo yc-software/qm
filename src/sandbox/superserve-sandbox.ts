@@ -1,8 +1,6 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
-import type { WorkspaceLayer } from "../types.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -10,7 +8,6 @@ import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { materializeRoLayers } from "./ro-layers.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import {
@@ -47,8 +44,6 @@ import type {
 
 const DEFAULT_HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
-const RO_LAYERS_TAR = ".ro-layers.tar";
-const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const DEFAULT_IDLE_PAUSE_SEC = 15 * 60;
 const DEFAULT_KEEP_WARM_SEC = 3600;
 const DEFAULT_RETENTION_SEC = 30 * 24 * 3600;
@@ -134,7 +129,7 @@ const pinnedSandbox = new AsyncLocalStorage<string>();
 const isConflict = (err: unknown): boolean =>
   typeof err === "object" && err !== null && (err as { statusCode?: unknown }).statusCode === 409;
 
-export function createSuperserveSandbox(workspace: WorkspaceStore, opts: SuperserveSandboxOptions): Sandbox {
+export function createSuperserveSandbox(opts: SuperserveSandboxOptions): Sandbox {
   const client = opts.client;
   const prefix = opts.namePrefix ?? "qm";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
@@ -547,11 +542,9 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
     ...guardHandleOps(execFileOps),
     ...(blobStaging ? guardHandleOps(blobStaging) : {}),
 
-    async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
+    async provision(scope: string, provOpts?: ProvisionOptions): Promise<SandboxHandle> {
       return pinnedSandbox.exit(async () => {
         const scratch = provOpts?.scratch;
-        const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
-        const scope = writable?.scopeId ?? "default";
         let pendingHandle: SandboxHandle | undefined;
         const provisionAndPrepare = async (): Promise<SandboxHandle> => {
           let name: string;
@@ -586,17 +579,6 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
             const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, PREP_TIMEOUT_SEC);
             if (prep.code !== 0)
               throw new Error(`superserve provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
-            await materializeRoLayers(
-              workspace,
-              layers,
-              handle,
-              {
-                readFile: (h, rel) => sandbox.readFile(h, rel),
-                writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
-                exec: (script, t) => execRaw(name, script, t),
-              },
-              { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "superserve" },
-            );
             if (installLayerTools)
               await installLayerTools({
                 exec: (script, t) => execRaw(name, script, t),

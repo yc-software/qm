@@ -2,8 +2,7 @@ import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { inspect } from "node:util";
 import {
@@ -13,7 +12,6 @@ import {
   spritesErrorDetail,
 } from "../src/sandbox/sprites-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { execFailureDetail, supportsProcessSessions, supportsBlobStaging } from "../src/sandbox/sandbox.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { sleep } from "../src/util/async.ts";
@@ -28,10 +26,9 @@ import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 let fake: FakeSprites;
 let sandbox: Sandbox;
 const scope = scopeId("personal", "tester");
-const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
-  return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-ws-"))), {
+  return createSpritesSandbox({
     initializationStore: testMap(),
     advisoryLock: testAdvisoryLock(),
     token: FAKE_SPRITES_TOKEN,
@@ -55,7 +52,7 @@ beforeEach(() => {
 after(() => fake?.cleanup());
 
 test("provision runs commands with env and cwd", async () => {
-  const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
+  const h = await sandbox.provision(scope, { env: { MY_VAR: "v1" } });
   assert.equal(h.coldStart, true);
   const r = await sandbox.run(h, "pwd; echo VAR=$MY_VAR");
   assert.equal(r.code, 0);
@@ -64,7 +61,7 @@ test("provision runs commands with env and cwd", async () => {
 });
 
 test("streams and exit codes are exact", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const r = await sandbox.run(h, "echo out; echo err >&2; exit 3");
   assert.equal(r.code, 3);
   assert.equal(r.stdout.trim(), "out");
@@ -72,7 +69,7 @@ test("streams and exit codes are exact", async () => {
 });
 
 test("commands run over the WebSocket exec endpoint with the script in the stream, never the URL", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const huge = `echo start; : ${"x".repeat(1024 * 1024)}; echo end`;
   const r = await sandbox.run(h, huge);
   assert.equal(r.code, 0);
@@ -91,7 +88,7 @@ test("commands run over the WebSocket exec endpoint with the script in the strea
 });
 
 test("file roundtrip incl. large binary and missing file goes through the filesystem API", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.writeFile(h, "a/b.txt", "hello\n");
   assert.equal(await sandbox.readFile(h, "a/b.txt"), "hello\n");
   assert.equal(await sandbox.readFile(h, "nope.txt"), null);
@@ -106,7 +103,7 @@ test("file roundtrip incl. large binary and missing file goes through the filesy
 });
 
 test("a file write lands on a temp path and is renamed into place, never streamed into the target", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.writeFile(h, "cfg.txt", "value\n");
   assert.equal(await sandbox.readFile(h, "cfg.txt"), "value\n");
   const write = fake.calls.find((c) => c.method === "PUT" && c.path.includes("cfg.txt"));
@@ -122,7 +119,7 @@ test("a file write lands on a temp path and is renamed into place, never streame
 test("process sessions capability works end to end and holds the sprite awake with a Tasks heartbeat", async () => {
   assert.ok(supportsProcessSessions(sandbox));
   if (!supportsProcessSessions(sandbox)) return;
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const { processId } = await sandbox.startProcess(h, "echo one; echo two");
   const { output, status } = await pollProcess(sandbox, h, processId, { deadlineMs: 5_000, waitMs: 100 });
   assert.equal(status.state, "exited");
@@ -150,7 +147,7 @@ test("the keepalive script stops renewing once the process has recorded an exit 
 
 test("background processes inherit the force-through proxy env", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
-  const h = await s.provision(layers, { egressToken: await proxyToken() });
+  const h = await s.provision(scope, { egressToken: await proxyToken() });
   assert.ok(supportsProcessSessions(s));
   if (!supportsProcessSessions(s)) return;
   const { processId } = await s.startProcess(h, "echo PROXY=$HTTPS_PROXY");
@@ -196,7 +193,7 @@ test("scope names fit the 63-char provider limit for long prefixes, scratch incl
 
 test("no egress force-through without a proxy url: no policy, no proxy env", async () => {
   assert.equal(sandbox.profile.egressEnforcement, "none");
-  const h = await sandbox.provision(layers, { egressToken: "ignored" });
+  const h = await sandbox.provision(scope, { egressToken: "ignored" });
   assert.equal(fake.policy(h.id), null);
   assert.equal(h.env?.HTTPS_PROXY, undefined);
 });
@@ -214,7 +211,7 @@ test("force-through pins the platform policy and injects proxy env", async () =>
     },
     "secret",
   );
-  const h = await s.provision(layers, { egressToken: token });
+  const h = await s.provision(scope, { egressToken: token });
   const pol = fake.policy(h.id);
   assert.deepEqual(pol, [{ domain: "proxy.example.com", action: "allow" }]);
   assert.equal(new URL(h.env!.HTTPS_PROXY!).hostname, "proxy.example.com");
@@ -232,7 +229,7 @@ test("proxy migration keeps both hosts reachable across cutover and rollback", a
     [oldUrl, newUrl],
   ]) {
     const s = make({ egressProxyUrl: primary, egressProxyAdditionalUrls: [additional, primary] });
-    const h = await s.provision(layers, { egressToken: token });
+    const h = await s.provision(scope, { egressToken: token });
     assert.deepEqual(fake.policy(h.id), [
       { domain: "new.example.com", action: "allow" },
       { domain: "old.example.com", action: "allow" },
@@ -247,7 +244,7 @@ test("proxy migration rejects mismatched provider policy and invalid configurati
     egressProxyAdditionalUrls: ["https://old.example.com"],
   });
   fake.breakPolicyReadback(sandboxScopeName("qmt", scope));
-  await assert.rejects(s.provision(layers, { egressToken: await proxyToken() }), /readback mismatch/);
+  await assert.rejects(s.provision(scope, { egressToken: await proxyToken() }), /readback mismatch/);
   assert.throws(() => make({ egressProxyAdditionalUrls: ["https://old.example.com"] }), /require a primary/);
   assert.throws(
     () => make({ egressProxyUrl: "https://new.example.com", egressProxyAdditionalUrls: ["file:///tmp/x"] }),
@@ -257,7 +254,7 @@ test("proxy migration rejects mismatched provider policy and invalid configurati
 
 test("force-through strips agent-supplied proxy vars", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
-  const h = await s.provision(layers, {
+  const h = await s.provision(scope, {
     egressToken: await proxyToken(),
     env: { HTTPS_PROXY: "http://evil:1", FOO: "keep" },
   });
@@ -267,7 +264,7 @@ test("force-through strips agent-supplied proxy vars", async () => {
 
 test("force-through makes git send proxy credentials up front, keeping turn git config", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
-  const h = await s.provision(layers, {
+  const h = await s.provision(scope, {
     egressToken: await proxyToken(),
     env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "Turn User" },
   });
@@ -281,7 +278,7 @@ test("force-through makes git send proxy credentials up front, keeping turn git 
 });
 
 test("git proxy auth from the proxy env stays off when egress is not forced", async () => {
-  const h = await sandbox.provision(layers, { egressToken: "ignored" });
+  const h = await sandbox.provision(scope, { egressToken: "ignored" });
   const r = await sandbox.run(h, 'echo "${GIT_HTTP_PROXY_AUTHMETHOD:-unset}"');
   assert.equal(r.stdout.trim(), "unset");
 });
@@ -289,17 +286,17 @@ test("git proxy auth from the proxy env stays off when egress is not forced", as
 test("force-through fails closed if the policy readback doesn't bind", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   fake.breakPolicyReadback(sandboxScopeName("qmt", scope));
-  await assert.rejects(s.provision(layers, { egressToken: await proxyToken() }), /readback mismatch/);
+  await assert.rejects(s.provision(scope, { egressToken: await proxyToken() }), /readback mismatch/);
 });
 
 test("a recreated sprite gets the egress policy re-pinned, never served from a stale cache", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   const token = await proxyToken();
-  const a = await s.provision(layers, { scratch: { key: "job-pol" }, egressToken: token });
+  const a = await s.provision(scope, { scratch: { key: "job-pol" }, egressToken: token });
   assert.deepEqual(fake.policy(a.id), [{ domain: "proxy.example.com", action: "allow" }]);
   await s.teardown(a);
   assert.equal(fake.policy(a.id), null, "the sprite and its platform policy are gone after release");
-  const b = await s.provision(layers, { scratch: { key: "job-pol" }, egressToken: token });
+  const b = await s.provision(scope, { scratch: { key: "job-pol" }, egressToken: token });
   assert.equal(b.id, a.id);
   assert.deepEqual(fake.policy(b.id), [{ domain: "proxy.example.com", action: "allow" }]);
 });
@@ -308,17 +305,17 @@ test("a failed egress setup releases the scratch lease instead of wedging the ke
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   fake.breakPolicyReadback(sandboxScopeName("qmt-scratch", "job-egress"));
   await assert.rejects(
-    s.provision(layers, { scratch: { key: "job-egress" }, egressToken: await proxyToken() }),
+    s.provision(scope, { scratch: { key: "job-egress" }, egressToken: await proxyToken() }),
     /readback mismatch/,
   );
-  const retry = await s.provision(layers, { scratch: { key: "job-egress" } });
+  const retry = await s.provision(scope, { scratch: { key: "job-egress" } });
   assert.equal(retry.scratch, true);
   assert.equal(retry.coldStart, true, "the failed provision released its lease and the box was recreated");
 });
 
 test("scratch sprites are ephemeral and shared leases survive until the last release", async () => {
-  const a = await sandbox.provision(layers, { scratch: { key: "job-1" } });
-  const b = await sandbox.provision(layers, { scratch: { key: "job-1" } });
+  const a = await sandbox.provision(scope, { scratch: { key: "job-1" } });
+  const b = await sandbox.provision(scope, { scratch: { key: "job-1" } });
   assert.equal(a.scratch, true);
   assert.equal(a.id, b.id);
   assert.equal(a.coldStart, true);
@@ -331,7 +328,7 @@ test("scratch sprites are ephemeral and shared leases survive until the last rel
 });
 
 test("teardown checkpoints a changed home, throttles repeats, and destroy deletes the sprite", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   assert.deepEqual(fake.checkpoints(h.id), ["v1"], "a turn that may have changed the home ends in a checkpoint");
   await sandbox.teardown(h);
@@ -343,7 +340,7 @@ test("teardown checkpoints a changed home, throttles repeats, and destroy delete
 
 test("an unchanged home is not checkpointed once its state is known", async () => {
   const s = make({ checkpointIntervalMs: 1 });
-  const h = await s.provision(layers);
+  const h = await s.provision(scope);
   await s.teardown(h, { homeUnchanged: true });
   assert.deepEqual(fake.checkpoints(h.id), ["v1"], "a sprite this core has not checkpointed yet is saved once");
   await sleep(5);
@@ -359,7 +356,7 @@ test("an unchanged home is not checkpointed once its state is known", async () =
 test("a checkpoint failure is reported and never fails the teardown", async () => {
   const events: Array<{ code: string }> = [];
   const s = make({ onError: (e: { code: string }) => events.push(e) });
-  const h = await s.provision(layers);
+  const h = await s.provision(scope);
   fake.fail502(h.id);
   fake.unhealthy(h.id, "checkpoint store offline");
   await s.teardown(h);
@@ -367,7 +364,7 @@ test("a checkpoint failure is reported and never fails the teardown", async () =
 });
 
 test("computerStatus reports checkpoint recovery and a healthy machine whose shell has stopped answering", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const fresh = await sandbox.computerStatus!(scope);
   assert.equal(fresh.machine, "healthy");
   assert.equal(fresh.provisioned, true);
@@ -387,7 +384,7 @@ test("computerStatus reports checkpoint recovery and a healthy machine whose she
 test("computerStatus names a faulted check and an unprovisioned scope", async () => {
   const none = await sandbox.computerStatus!(scope);
   assert.deepEqual(none, { machine: "no sprite provisioned yet", provisioned: false, guestResponsive: false });
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   fake.unhealthy(h.id, "disk unreachable");
   const s = await sandbox.computerStatus!(scope);
   assert.equal(s.machine, "unhealthy (disk unreachable)");
@@ -395,7 +392,7 @@ test("computerStatus names a faulted check and an unprovisioned scope", async ()
 });
 
 test("restartComputer reboots the scope's sprite and heals a wedged exec channel", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   fake.fail502(h.id);
   await assert.rejects(sandbox.run(h, "echo back"), /WebSocket error/);
 
@@ -410,7 +407,7 @@ test("restartComputer reboots the scope's sprite and heals a wedged exec channel
 test("a refused restart on a faulted sprite restores the latest checkpoint", async () => {
   const events: Array<{ code: string; message: string }> = [];
   const s = make({ onError: (e: { code: string; message: string }) => events.push(e) });
-  const h = await s.provision(layers);
+  const h = await s.provision(scope);
   await s.writeFile(h, "keep.txt", "before\n");
   await s.teardown(h);
   await s.writeFile(h, "keep.txt", "after\n");
@@ -429,15 +426,14 @@ test("a refused restart on a faulted sprite restores the latest checkpoint", asy
 });
 
 test("a refused restart with a healthy check restores nothing and surfaces the refusal", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   fake.refuseRestart(h.id);
   await assert.rejects(sandbox.restartComputer!(scope), /http 502.*reports no fault/s);
-  assert.equal(await sandbox.readFile(h, ".ro-layers.manifest"), null);
 });
 
 test("a refused restart with no checkpoint to fall back on names all three failures", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   fake.refuseRestart(h.id);
   fake.unhealthy(h.id, "boot loop");
   await assert.rejects(sandbox.restartComputer!(scope), /http 502.*boot loop.*no checkpoint to restore/s);
@@ -446,7 +442,7 @@ test("a refused restart with no checkpoint to fall back on names all three failu
 for (const submitted of [false, true]) {
   for (const closeOnly of [false, true]) {
     test(`exec failures report submission state without replay or private details (submitted=${submitted}, closeOnly=${closeOnly})`, async (t) => {
-      const h = await sandbox.provision(layers);
+      const h = await sandbox.provision(scope);
       if (closeOnly) {
         const dispatch = EventTarget.prototype.dispatchEvent;
         t.mock.method(EventTarget.prototype, "dispatchEvent", function (this: EventTarget, event: Event) {
@@ -474,7 +470,7 @@ for (const submitted of [false, true]) {
 }
 
 test("exec diagnostics keep the provider's transport reason but not its URL or raw cause", async (t) => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   let reason = "";
   t.mock.method(SpriteCommand.prototype, "start", async () => {
     throw new Error(`WebSocket error: ${reason} (url: wss://example.invalid/TypeError?token=example-secret)`, {
@@ -492,7 +488,7 @@ test("exec diagnostics keep the provider's transport reason but not its URL or r
 });
 
 test("exec results carry io pressure when the guest exposes it, and omit it when it can't be read", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const bare = await sandbox.run(h, "echo ok");
   assert.equal(bare.pressure, undefined);
 
@@ -505,7 +501,7 @@ test("exec results carry io pressure when the guest exposes it, and omit it when
 test("sustained io pressure is reported once per episode, then re-arms after it clears", async () => {
   const events: Array<{ code: string }> = [];
   const s = make({ onError: (e: { code: string }) => events.push(e) });
-  const h = await s.provision(layers);
+  const h = await s.provision(scope);
 
   fake.setPressure(h.id, { full10: 90, full60: 88, load1: 25 });
   await s.run(h, "echo a");
@@ -524,7 +520,7 @@ test("sustained io pressure is reported once per episode, then re-arms after it 
 });
 
 test("computerStatus carries guest pressure alongside the health check", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
   const s = await sandbox.computerStatus!(scope);
   assert.equal(s.machine, "healthy");
@@ -533,7 +529,7 @@ test("computerStatus carries guest pressure alongside the health check", async (
 });
 
 test("a garbled pressure read never costs the caller a completed command's result", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
   writeFileSync(join(fake.homeDir(h.id), ".proc-loadavg"), "");
   const r = await sandbox.run(h, "echo survived");
@@ -543,13 +539,13 @@ test("a garbled pressure read never costs the caller a completed command's resul
 });
 
 test("concurrent restart calls for one sprite collapse into sequential requests", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await Promise.all([sandbox.restartComputer!(scope), sandbox.restartComputer!(scope)]);
   assert.deepEqual(fake.restarts(), [h.id, h.id], "serialized, one request per call, never interleaved forcing");
 });
 
 test("commands cannot swallow the script from stdin", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   const r = await sandbox.run(h, "cat; echo after-cat");
   assert.equal(r.code, 0);
   assert.equal(r.stdout.trim(), "after-cat");
@@ -557,7 +553,7 @@ test("commands cannot swallow the script from stdin", async () => {
 
 test("a creation rate limit surfaces the provider's code and retry hint", async () => {
   fake.rateLimitCreate(42);
-  await assert.rejects(sandbox.provision(layers), (e: Error) => {
+  await assert.rejects(sandbox.provision(scope), (e: Error) => {
     assert.match(e.message, /sprites create /);
     assert.match(e.message, /sprite_creation_rate_limited/);
     assert.match(e.message, /retry after: 42s/);
@@ -565,7 +561,7 @@ test("a creation rate limit surfaces the provider's code and retry hint", async 
     assert.ok(e.cause instanceof APIError);
     return true;
   });
-  const created = await sandbox.provision(layers);
+  const created = await sandbox.provision(scope);
   assert.equal(created.coldStart, true, "the next attempt creates normally");
   assert.ok(
     fake.calls.some((c) => c.method === "POST" && c.path === "/v1/sprites"),
@@ -587,7 +583,7 @@ test("a configured memory limit is applied as a resources policy and advertised 
   const s = make({ memoryMb: 4096 });
   assert.equal(s.profile.spec?.memoryMb, 4096);
   assert.equal(s.profile.spec?.cpus, 8);
-  const h = await s.provision(layers);
+  const h = await s.provision(scope);
   assert.deepEqual(fake.resources(h.id), { limitMB: 4096 });
   assert.equal(sandbox.profile.spec?.memoryMb, undefined, "no knob, no claim");
   assert.equal(fake.resources(sandboxScopeName("qmt", scope))?.limitMB, 4096);
@@ -601,7 +597,7 @@ test("the profile is honest about the base release and what survives sleep", () 
 });
 
 test("exportFiles tars workspace + home over the exec channel (the publish fast path)", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.run(
     h,
     [
@@ -622,7 +618,7 @@ test("exportFiles tars workspace + home over the exec channel (the publish fast 
 });
 
 test("exportFiles keepContentCaches ships cache-named build output (publish parity)", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   await sandbox.run(h, "mkdir -p site/.cache && printf real > site/.cache/bundle.js");
   const got = await sandbox.exportFiles!(h, {
     include: ["workspace"],
@@ -655,7 +651,7 @@ test("stageOut posts to core's blob endpoint by streaming, never by buffering in
     capabilitySecret: "blob-secret",
     apiBaseUrl: "http://core.internal:8080",
   });
-  const h = await sb.provision(layers);
+  const h = await sb.provision(scope);
   await assert.rejects(() => sb.stageOut!(h, "artifacts/big.bin"), /sprites stageOut/);
 
   const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs"))!;
@@ -672,7 +668,7 @@ test("stageIn pulls a blob into the guest atomically (temp then mv)", async () =
     capabilitySecret: "blob-secret",
     apiBaseUrl: "http://core.internal:8080",
   });
-  const h = await sb.provision(layers);
+  const h = await sb.provision(scope);
   await assert.rejects(() => sb.stageIn!(h, "inbox/big.bin", "f".repeat(32)), /sprites stageIn/);
 
   const script = fake.execScripts().find((s: string) => s.includes("/v1/blobs/"))!;
@@ -695,7 +691,7 @@ test("a prep failure that writes nothing still names its cause", () => {
 test("destroying a scope exports the home to the snapshot store first and a replacement hydrates from it", async () => {
   const snapshots = createMemorySnapshotStore();
   const s = make({ snapshots });
-  const h = await s.provision(layers);
+  const h = await s.provision(scope);
   await s.run(h, 'printf survivor > "$HOME/notes.txt"');
   assert.equal(await snapshots.open(scope), null);
 
@@ -704,7 +700,7 @@ test("destroying a scope exports the home to the snapshot store first and a repl
   const stored = await snapshots.open(scope);
   assert.ok(stored && stored.size > 0, "but its home was exported before deletion");
 
-  const again = await s.provision(layers);
+  const again = await s.provision(scope);
   assert.equal(again.coldStart, false, "the replacement is hydrated, not cold");
   const back = await s.run(again, 'cat "$HOME/notes.txt"');
   assert.equal(back.stdout, "survivor");
@@ -716,8 +712,7 @@ test("a job computer's home is never snapshotted, on teardown or destroy", async
   const snapshots = createMemorySnapshotStore();
   const s = make({ snapshots });
   const jobScope = "job-1234";
-  const jobLayers = [{ scopeId: jobScope, mode: "rw" as const, mountPath: "" }];
-  const h = await s.provision(jobLayers);
+  const h = await s.provision(jobScope);
   await s.run(h, 'printf secret > "$HOME/notes.txt"');
   await s.teardown(h, { keepWarm: true });
   await s.destroyScope!(jobScope);
@@ -727,7 +722,7 @@ test("a job computer's home is never snapshotted, on teardown or destroy", async
 test("a failed export refuses to destroy the sprite", async () => {
   const snapshots = createMemorySnapshotStore();
   const s = make({ snapshots });
-  const h = await s.provision(layers);
+  const h = await s.provision(scope);
   fake.fail502(h.id);
   await assert.rejects(s.destroyScope!(scope), /WebSocket error/);
   assert.ok(fake.names().includes(h.id), "an irreversible delete never follows a lost export");
@@ -744,7 +739,7 @@ test("without a snapshot store a destroy is a single delete that tolerates a mis
 });
 
 test("control-plane reads retry 429 with Retry-After while exec is never retried", async () => {
-  const h = await sandbox.provision(layers);
+  const h = await sandbox.provision(scope);
   fake.failNext(429, { headers: { "retry-after": "0" }, match: (c) => c.path.endsWith("/check") });
   const status = await sandbox.computerStatus!(scope);
   assert.equal(status.provisioned, true);
@@ -807,7 +802,7 @@ test("control calls retry the SDK's lost-connection error and stop at a programm
 
 for (const outcome of ["healthy", "unknown", "403", "503"]) {
   test(`refused restart with ${outcome} health observation never rolls back newer files`, async () => {
-    const h = await sandbox.provision(layers);
+    const h = await sandbox.provision(scope);
     await sandbox.writeFile(h, "ledger", "old");
     await sandbox.teardown(h);
     await sandbox.writeFile(h, "ledger", "new");
@@ -838,22 +833,22 @@ test("failed hydration and failed deletion remain pending across adapters withou
   };
   const options = { snapshots: wrapped, initializationStore, advisoryLock };
   const a = make(options);
-  const h = await a.provision(layers);
+  const h = await a.provision(scope);
   await a.writeFile(h, "ledger", "saved");
   await a.destroyScope!(scope);
   failOpen = true;
   fake.refuseDelete(403);
-  await assert.rejects(a.provision(layers), /snapshot unavailable/);
+  await assert.rejects(a.provision(scope), /snapshot unavailable/);
   assert.deepEqual(await initializationStore.get(h.id), { pending: true });
   const b = make(options);
   await assert.rejects(b.persistHomeSnapshot!(scope), /initialization is incomplete/);
   await assert.rejects(b.restartComputer!(scope), /initialization is incomplete/);
   const before = opens;
-  await assert.rejects(b.provision(layers), /snapshot unavailable/);
+  await assert.rejects(b.provision(scope), /snapshot unavailable/);
   assert.equal(opens, before + 1);
   failOpen = false;
   fake.refuseDelete();
-  const restored = await make(options).provision(layers);
+  const restored = await make(options).provision(scope);
   assert.equal(await b.readFile(restored, "ledger"), "saved");
   assert.equal(await initializationStore.get(h.id), null);
 });
@@ -861,7 +856,7 @@ test("failed hydration and failed deletion remain pending across adapters withou
 test("scratch allocation is deleted when resource initialization fails", async () => {
   const box = make({ memoryMb: 4096 });
   fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
-  await assert.rejects(box.provision(layers, { scratch: { key: "partial-allocation" } }));
+  await assert.rejects(box.provision(scope, { scratch: { key: "partial-allocation" } }));
   assert.ok(!fake.names().some((name) => name.includes("scratch")));
 });
 
@@ -870,7 +865,7 @@ test("failed scratch initialization and deletion retain a safe retryable identit
   fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
   fake.failNext(400, { match: (call) => call.method === "DELETE" });
   let pending: import("../src/sandbox/sandbox.ts").SandboxHandle | undefined;
-  await assert.rejects(box.provision(layers, { scratch: { key: "failed-rollback" } }), (error: Error) => {
+  await assert.rejects(box.provision(scope, { scratch: { key: "failed-rollback" } }), (error: Error) => {
     assert.ok(error instanceof SandboxProvisionCleanupError);
     pending = error.handle;
     assert.equal(pending.backend, "sprites");

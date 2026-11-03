@@ -1047,7 +1047,6 @@ describe("/v1/keychain routes (capability-authed)", () => {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       keychain: built.keychain,
-      workspace: built.workspace,
       auditLog: built.auditLog,
       credentialUsage: built.credentialUsage,
       sessions: built.sessions,
