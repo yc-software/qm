@@ -1,6 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
+import pg from "pg";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
@@ -37,8 +38,8 @@ const window = `from=${iso(today - DAY)}&to=${iso(today + DAY)}`;
 
 function fixture(options: { sessions?: SessionStore | null } = {}) {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
-  const sessions =
-    options.sessions === null ? undefined : (options.sessions ?? createPostgresSessionStore(testDatabaseUrl()));
+  const url = testDatabaseUrl();
+  const sessions = options.sessions === null ? undefined : (options.sessions ?? createPostgresSessionStore(url));
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
@@ -53,7 +54,7 @@ function fixture(options: { sessions?: SessionStore | null } = {}) {
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const get = (path: string, headers: Record<string, string> = { authorization: `Bearer ${exportToken}` }) =>
     fetch(base + path, { headers });
-  return { built, sessions, get, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+  return { built, sessions, url, get, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
 }
 
 test("spend export: missing, wrong, admin-identity and source-signed requests are refused before any spend read", async () => {
@@ -95,7 +96,7 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
   }
 });
 
-test("spend export: an offline-minted token needs aud, actorId, scopeId and exp, and no tenant", async () => {
+test("spend export: an offline-minted token needs aud, actorId, scopeId and exp, with or without the install tenant", async () => {
   const s = fixture();
   const handoff = {
     orgId: "default-org",
@@ -104,17 +105,23 @@ test("spend export: an offline-minted token needs aud, actorId, scopeId and exp,
     aud: SPEND_EXPORT_AUD,
     exp: Date.now() + DAY,
   };
-  const status = async (claims: Record<string, unknown>) =>
-    (
-      await s.get(`/v1/spend/export?${window}`, {
-        authorization: `Bearer ${await mintSignedPayload(claims, capabilitySecret)}`,
-      })
-    ).status;
+  const exportWith = async (claims: Record<string, unknown>) => {
+    const res = await s.get(`/v1/spend/export?${window}`, {
+      authorization: `Bearer ${await mintSignedPayload(claims, capabilitySecret)}`,
+    });
+    return { status: res.status, rows: res.status === 200 ? ((await res.json()) as { rows: unknown[] }).rows : null };
+  };
   try {
-    assert.equal(await status(handoff), 200);
+    await bill(s.sessions!, "dm:carol:t1", "dm", scopeId("personal", "carol"), { costUsd: 1 }, "claude-opus-5");
+    const pool = new pg.Pool({ connectionString: s.url, max: 1 });
+    const install = (await pool.query<{ id: string }>("SELECT id::text AS id FROM qm_tenant")).rows[0]!.id;
+    await pool.end();
+    const untenanted = await exportWith(handoff);
+    assert.equal(untenanted.status, 200);
+    assert.deepEqual(await exportWith({ ...handoff, tenant: install }), untenanted);
     for (const claim of ["aud", "actorId", "scopeId", "exp"] as const) {
       const { [claim]: _dropped, ...without } = handoff;
-      assert.notEqual(await status(without), 200, `without ${claim}`);
+      assert.notEqual((await exportWith({ ...without, tenant: install })).status, 200, `without ${claim}`);
     }
   } finally {
     await s.close();
