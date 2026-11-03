@@ -22,6 +22,7 @@ END $qm_bound_tenant$`,
 export const SOLE_TENANT: PgMigrationDefinition = {
   id: "0000-tenancy/sole-tenant",
   statements: [
+    `SET LOCAL check_function_bodies = off`,
     `CREATE OR REPLACE FUNCTION qm_sole_tenant(OUT sole uuid, OUT tenants bigint)
        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $qm_sole_tenant$
        SELECT CASE WHEN count(*) = 1 THEN min(id::text)::uuid END, count(*) FROM tenants
@@ -49,12 +50,27 @@ END $qm_bound_tenant$`,
   ],
 };
 
-export const TENANCY: readonly PgMigrationDefinition[] = [TENANCY_BASE, SOLE_TENANT, UNBOUND_SOLE_TENANT];
+const SOLE_TENANT_SEARCH_PATH: PgMigrationDefinition = {
+  id: "0000-tenancy/sole-tenant-search-path",
+  statements: [
+    `DO $sole_tenant_path$
+BEGIN
+  EXECUTE format('ALTER FUNCTION qm_sole_tenant() SET search_path = pg_catalog, %I, pg_temp', current_schema());
+END $sole_tenant_path$`,
+  ],
+};
+
+export const TENANCY: readonly PgMigrationDefinition[] = [
+  TENANCY_BASE,
+  SOLE_TENANT,
+  UNBOUND_SOLE_TENANT,
+  SOLE_TENANT_SEARCH_PATH,
+];
 
 export function tenantPolicies(table: string): string[] {
   return [
     `ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()`,
-    `ALTER TABLE ${table} ADD CONSTRAINT ${table}_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)`,
+    `ALTER TABLE ${table} ADD CONSTRAINT ${table}_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) NOT VALID`,
     `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
     `CREATE POLICY tenant_isolation ON ${table}
        USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())`,
@@ -124,7 +140,7 @@ export function tenantTables(
       ...tables.flatMap(typedTableStatements),
       ...foreignKeys.map(
         ({ table, name, columns, references, onDelete }) =>
-          `ALTER TABLE ${table} ADD CONSTRAINT ${name} FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${onDelete ? ` ON DELETE ${onDelete}` : ""}`,
+          `ALTER TABLE ${table} ADD CONSTRAINT ${name} FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${onDelete ? ` ON DELETE ${onDelete}` : ""} NOT VALID`,
       ),
       ...after,
     ],
@@ -156,6 +172,7 @@ export const TENANT_HOSTS: PgMigrationDefinition = {
   id: "0001-tenancy/hosts-and-settings",
   statements: [
     `SET LOCAL lock_timeout = '5s'`,
+    `SET LOCAL check_function_bodies = off`,
     `CREATE TABLE IF NOT EXISTS tenant_hosts(
       host TEXT PRIMARY KEY CHECK (host = lower(host) AND host <> ''),
       tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -172,5 +189,16 @@ export const TENANT_HOSTS: PgMigrationDefinition = {
       LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $qm_tenant_settings$
       SELECT settings FROM tenants WHERE id = qm_bound_tenant()
     $qm_tenant_settings$`,
+  ],
+};
+
+export const TENANT_HOSTS_SEARCH_PATH: PgMigrationDefinition = {
+  id: "0001-tenancy/hosts-search-path",
+  statements: [
+    `DO $hosts_path$
+BEGIN
+  EXECUTE format('ALTER FUNCTION qm_host_tenant(text) SET search_path = pg_catalog, %I, pg_temp', current_schema());
+  EXECUTE format('ALTER FUNCTION qm_tenant_settings() SET search_path = pg_catalog, %I, pg_temp', current_schema());
+END $hosts_path$`,
   ],
 };

@@ -72,7 +72,7 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
       statements: [
         `ALTER TABLE app_page_views DROP CONSTRAINT IF EXISTS app_page_views_deployment_id_fkey`,
         `ALTER TABLE app_page_views ADD CONSTRAINT app_page_views_deployment_id_fkey
-           FOREIGN KEY (tenant_id, deployment_id) REFERENCES deployments(tenant_id, id)`,
+           FOREIGN KEY (tenant_id, deployment_id) REFERENCES deployments(tenant_id, id) NOT VALID`,
       ],
     },
   ]);

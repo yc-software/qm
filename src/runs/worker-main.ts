@@ -3,12 +3,15 @@ import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
 import { useOwnerDatabase } from "../tenants/owner-pool.ts";
-import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
+import { createPgPool, migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
+import { watchTenants } from "../tenants/work-tenant.ts";
+import { reportFailureAs } from "../util/errors.ts";
 
 const config = loadConfig();
 useOwnerDatabase(config.databaseOwnerUrl);
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+if (config.databaseUrl) watchTenants(createPgPool(config.databaseUrl), reportFailureAs("tenant watch", undefined));
 await built.tenancy.refreshSettings();
 built.tenancy.keepSettingsFresh();
 if (!config.backgroundDeploymentId) await built.rewriteSurfaceOrigins();

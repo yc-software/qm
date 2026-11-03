@@ -1904,6 +1904,7 @@ export function buildApp(
       cronChanged.notify?.(id);
     },
   };
+  for (const table of ["sprites_initialization", "sandbox_resource_rollout", "sandbox_routing"]) artifactMap(table);
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
   pgArtifactMap.pool.registerMigration(SETTLED_CANDIDATES_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);

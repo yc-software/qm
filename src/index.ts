@@ -12,13 +12,15 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { useOwnerDatabase } from "./tenants/owner-pool.ts";
-import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { createPgPool, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { watchTenants } from "./tenants/work-tenant.ts";
 
 const config = loadConfig();
 useOwnerDatabase(config.databaseOwnerUrl);
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+if (config.databaseUrl) watchTenants(createPgPool(config.databaseUrl), reportFailureAs("tenant watch", undefined));
 await built.tenancy.refreshSettings();
 built.tenancy.keepSettingsFresh();
 if (!config.backgroundDeploymentId) await built.rewriteSurfaceOrigins();
