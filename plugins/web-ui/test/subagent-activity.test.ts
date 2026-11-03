@@ -125,3 +125,16 @@ test("peek shows the latest tool steps and message", () => {
     { kind: "tool", text: "github" },
   ]);
 });
+
+test("a working subagent's clock starts at its current run, not its creation", () => {
+  const rows = subagentRows(
+    [
+      row("root"),
+      row("a", "root", { working: true, workingSince: 50_000 }),
+      row("b", "root", { workingSince: 50_000 }),
+    ],
+    "root",
+  );
+  assert.equal(rows[0]!.startedAt, 50_000);
+  assert.equal(rows[1]!.startedAt, 1_000);
+});
