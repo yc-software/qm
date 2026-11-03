@@ -268,11 +268,10 @@ type SettingsView = keyof typeof SETTINGS_RESOURCES;
 async function scopeServiceCredentials(deps: ApiCtx["deps"], targetScope: string) {
   const [credentials, grants] = await Promise.all([
     deps.serviceCreds?.listServiceCredentials(targetScope) ?? [],
-    deps.acl?.list() ?? [],
+    deps.acl?.find({ ownerScopeId: targetScope, kind: "service-cred" }) ?? [],
   ]);
   const grantees = new Map<string, string[]>();
   for (const grant of grants) {
-    if (grant.ownerScopeId !== targetScope) continue;
     const scopes = grantees.get(grant.ref) ?? [];
     scopes.push(grant.granteeScopeId);
     grantees.set(grant.ref, scopes);
