@@ -1,5 +1,6 @@
 import type { BaseCtx, Route } from "./route.ts";
 import { verifyOrReject } from "../http.ts";
+import { boundTenant } from "../../tenants/context.ts";
 
 const HEARTBEAT_MS = 25_000;
 
@@ -25,10 +26,11 @@ async function streamLoopItemEvents(ctx: BaseCtx): Promise<void> {
     connection: "keep-alive",
     "x-accel-buffering": "no",
   });
+  const sole = (await ctx.deps.tenancy?.soleTenant()) ?? undefined;
   res.write(": open\n\n");
   const unsubscribe = app.subscribeLedgerEvents(
     (event) => {
-      res.write(`event: loop_item\ndata: ${JSON.stringify(event)}\n\n`);
+      res.write(`event: loop_item\ndata: ${JSON.stringify({ ...event, tenantId: boundTenant() ?? sole })}\n\n`);
     },
     { onResync: () => res.write("event: loop_item_resync\ndata: {}\n\n") },
   );
@@ -41,5 +43,5 @@ async function streamLoopItemEvents(ctx: BaseCtx): Promise<void> {
 }
 
 export const loopItemEventsRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "GET", path: "/v1/loop-items/events", auth: "source", handle: streamLoopItemEvents },
+  { method: "GET", path: "/v1/loop-items/events", auth: "source", tenant: "none", handle: streamLoopItemEvents },
 ];
