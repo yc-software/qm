@@ -152,14 +152,11 @@ function buildOrchestrator(
 
 function liveTurnProbe() {
   const busyThreads = new Set<string>();
-  const runChecks: string[] = [];
   const runs = {
-    inFlightForThread: async (threadRef: string) => {
-      runChecks.push(threadRef);
-      return busyThreads.has(threadRef) ? [{ id: "another-run", status: "running" }] : [];
-    },
+    inFlightForThread: async (threadRef: string) =>
+      busyThreads.has(threadRef) ? [{ id: "another-run", status: "running" }] : [],
   } as unknown as RunStore;
-  return { runs, busyThreads, runChecks };
+  return { runs, busyThreads };
 }
 
 async function seed(sessions: SessionStore, entries: Array<Partial<SessionEntry>>): Promise<string> {
