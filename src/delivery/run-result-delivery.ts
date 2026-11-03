@@ -4,12 +4,11 @@ import { waitForNoRunningRun, type Run, type RunStore } from "../runs/run-store.
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
-import { standaloneFailureText, unfinishedTurnText, userFacingFailureClause } from "../core/failure-copy.ts";
+import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
-import type { SurfaceRegistry } from "../surfaces/registry.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -33,11 +32,7 @@ export function replyEditNote(retracted: readonly string[] | undefined): string 
   return retracted?.length ? `Edited after a reply check: ${[...new Set(retracted)].join(", ")}` : undefined;
 }
 
-export function runResultDelivery(
-  run: Run,
-  surfaces: SurfaceRegistry,
-  adminUrlFor?: AdminUrlFor,
-): RunResultDelivery | null {
+export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
@@ -76,7 +71,7 @@ export function runResultDelivery(
       : {}),
   });
   if (
-    surfaces.get(surface)?.capabilities.liveReplies === true &&
+    surface === "slack" &&
     run.result?.status === "refused" &&
     (run.result.refusalKind === "security_quarantine" || run.result.refusalKind === "model_budget") &&
     run.request.addressed
@@ -89,7 +84,7 @@ export function runResultDelivery(
     const clause = userFacingFailureClause(run.result ?? { status: "failed" });
     const adminUrl = run.result?.sessionId ? adminUrlFor?.(run.result.sessionId) : undefined;
     const detail = adminUrl ? ` — full error: ${adminUrl}` : "";
-    return { destination, text: unfinishedTurnText(`${clause}${detail}`), provenance, idempotencyKey };
+    return { destination, text: `⚠️ I couldn't finish that turn: ${clause}${detail}`, provenance, idempotencyKey };
   }
   if (run.result?.status === "ok" && (run.result.reply || run.result.attachments?.length)) {
     const editNote = replyEditNote(run.result.retracted);
@@ -144,7 +139,6 @@ export interface RunResultRecovery {
 export function wireRunResultDeliveries(
   runs: Pick<RunStore, "onTerminal" | "terminalFinished" | "inFlightForThread">,
   deliveries: Pick<DeliveryStore, "enqueue" | "existingKeys">,
-  surfaces: SurfaceRegistry,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
 ): RunResultRecovery {
@@ -154,7 +148,7 @@ export function wireRunResultDeliveries(
         reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
       );
     }
-    const delivery = runResultDelivery(run, surfaces, adminUrlFor);
+    const delivery = runResultDelivery(run, adminUrlFor);
     if (!delivery) return false;
     await deliveries.enqueue(delivery);
     return true;

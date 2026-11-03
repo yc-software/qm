@@ -170,7 +170,6 @@ test("a registered surface supplies its own label, prompt hints and mention synt
       liveReplies: false,
       nativeActor: false,
       externalParticipants: false,
-      edits: false,
     },
     promptHints: {
       mentionSyntax: "Mention people as @handle.",

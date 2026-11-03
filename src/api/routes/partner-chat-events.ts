@@ -1,3 +1,4 @@
+import { SIGNATURE_HEADER, TIMESTAMP_HEADER } from "../../surfaces/partner-chat/protocol.ts";
 import { headerValue, PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
 import type { BaseCtx, Route } from "./route.ts";
 
@@ -15,8 +16,8 @@ async function partnerChatEvents(ctx: BaseCtx): Promise<void> {
     throw e;
   }
   const out = await deps.partnerChatEvents(
-    headerValue(req, "x-qm-timestamp"),
-    headerValue(req, "x-qm-signature"),
+    headerValue(req, TIMESTAMP_HEADER),
+    headerValue(req, SIGNATURE_HEADER),
     rawBody,
   );
   return sendJson(res, out.status, out.body);

@@ -42,7 +42,6 @@ import type { RuntimeChoice } from "../agent/agent.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
-import type { SurfaceRegistry } from "../surfaces/registry.ts";
 
 interface SlackRunHooks {
   onReplying?(): void;
@@ -153,7 +152,6 @@ export interface SlackCoreClientDeps {
   deliveries: DeliveryStore;
   errors?: ErrorLog;
   runs: RunStore;
-  surfaces: SurfaceRegistry;
   turnStream: TurnStream;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
   ackPicks?: AckEmojiPickStore;

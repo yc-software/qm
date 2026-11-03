@@ -27,9 +27,6 @@ import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { testSurfaces } from "./support/single-process.ts";
-
-const surfaces = testSurfaces();
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
 const scope: ScopeId = scopeId("personal", "U1");
@@ -1684,7 +1681,7 @@ for (const surface of ["slack", "web"] as const) {
     test(`${surface}: ${nested ? "nested child" : "child"} results stay internal while files and parent replies deliver once`, async () => {
       const r = await rig();
       const deliveries = createDeliveryStore();
-      wireRunResultDeliveries(r.runs, deliveries, surfaces);
+      wireRunResultDeliveries(r.runs, deliveries);
       const request: OrchestratorInput = {
         surface,
         actor,
@@ -1723,7 +1720,7 @@ for (const surface of ["slack", "web"] as const) {
       );
       const completed = (await r.runs.get(queued.id))!;
       assert.equal(
-        runResultDelivery(JSON.parse(JSON.stringify(completed)), surfaces),
+        runResultDelivery(JSON.parse(JSON.stringify(completed))),
         null,
         "serialized terminal runs remain internal",
       );

@@ -25,7 +25,6 @@ export function createPartnerChatInbound(deps: {
   app: InboundApp;
   surfaceCache: Pick<SurfaceCache, "readMessages">;
   isInternalEmail: (email: string) => Promise<boolean>;
-  followReply: (runId: string, destination: Destination) => void;
   unansweredReply: (result: TurnResult, destination: Destination, idempotencyKey: string) => void;
   now?: () => number;
 }) {
@@ -157,8 +156,7 @@ export function createPartnerChatInbound(deps: {
       target: replyTarget,
       account: { id: event.account, workspace: event.account },
     };
-    if (queued.runId && !queued.steered) deps.followReply(queued.runId, destination);
-    else if (!queued.runId)
+    if (!queued.runId)
       deps.unansweredReply(queued, destination, `notice:${SURFACE}:${event.account}:${chat.id}:${message.id}`);
     return { status: 200, body: { ok: true } };
   }

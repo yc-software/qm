@@ -1146,8 +1146,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, [
       "content-type",
       "content-length",
-      "x-qm-timestamp",
-      "x-qm-signature",
+      "x-agent-app-request-timestamp",
+      "x-agent-app-signature",
     ]);
   }
 

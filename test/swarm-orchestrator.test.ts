@@ -17,9 +17,6 @@ import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { AddressInfo } from "node:net";
 import type { TurnRequest } from "../src/types.ts";
 import { isUserItem } from "../src/sessions/items.ts";
-import { testSurfaces } from "./support/single-process.ts";
-
-const surfaces = testSurfaces();
 
 const screenedPayloads: string[] = [];
 let exerciseTurn: ((turn: AgentTurnInput) => Promise<void | { stopped: true }>) | undefined;
@@ -171,7 +168,7 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
       assert.match(shown, /Swarm human message/);
       assert.match(shown, /automation/);
       assert.equal(await built.app.getSessionForViewer(view.session.id, "U2"), null);
-      assert.equal(runResultDelivery(run, surfaces), null);
+      assert.equal(runResultDelivery(run), null);
       const requests = await built.sessions.listLlmRequests(view.session.id);
       assert.ok(JSON.stringify(requests).includes("Swarm session identity"));
       assert.ok(JSON.stringify(requests).includes("untrusted metadata"));
@@ -338,7 +335,7 @@ test("HTTP root spawns three peers and receives their replies using real orchest
     const completed = await Promise.all(workers.map((run) => built.runs.waitFor(run.id, 15_000)));
     for (const run of completed) {
       assert.equal(run.result?.status, "ok", JSON.stringify(run.result));
-      assert.equal(runResultDelivery(run, surfaces), null);
+      assert.equal(runResultDelivery(run), null);
     }
     await built.app.swarms!.sweep();
     const replies = (await built.runs.list()).filter(
@@ -529,7 +526,7 @@ test("disabled swarms park queued notifications once without running the model o
     assert.equal(completed.attempts, 1);
     assert.equal(completed.result?.reason, "swarm service unavailable");
     assert.equal(swarmModelCalls, 0);
-    assert.equal(runResultDelivery(completed, surfaces), null);
+    assert.equal(runResultDelivery(completed), null);
     const items = await built.sessions.getItems(root.id);
     assert.ok(!items.some((item) => JSON.stringify(item).includes("turn_failure")));
     for (const [surface, threadRef] of [

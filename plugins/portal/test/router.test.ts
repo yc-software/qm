@@ -350,8 +350,8 @@ test("partner-chat events reach the core with only their body and signature head
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-qm-timestamp": "1793649600",
-      "x-qm-signature": "v1=abc",
+      "x-agent-app-request-timestamp": "1793649600",
+      "x-agent-app-signature": "v0=abc",
       authorization: "Bearer nope",
       cookie: sessionCookie("U1"),
       "x-extra": "1",
@@ -364,16 +364,20 @@ test("partner-chat events reach the core with only their body and signature head
   assert.equal(body.cookie, null);
   assert.deepEqual(
     Object.fromEntries(
-      ["content-type", "content-length", "x-qm-timestamp", "x-qm-signature", "authorization", "x-extra"].map((h) => [
-        h,
-        body.headers[h],
-      ]),
+      [
+        "content-type",
+        "content-length",
+        "x-agent-app-request-timestamp",
+        "x-agent-app-signature",
+        "authorization",
+        "x-extra",
+      ].map((h) => [h, body.headers[h]]),
     ),
     {
       "content-type": "application/json",
       "content-length": String(Buffer.byteLength(payload)),
-      "x-qm-timestamp": "1793649600",
-      "x-qm-signature": "v1=abc",
+      "x-agent-app-request-timestamp": "1793649600",
+      "x-agent-app-signature": "v0=abc",
       authorization: undefined,
       "x-extra": undefined,
     },

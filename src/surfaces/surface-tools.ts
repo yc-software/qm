@@ -301,12 +301,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
-      if (d.destination.type !== "group" && !deps.surfaces.get(d.destination.type)?.capabilities.edits)
-        return {
-          ok: false,
-          message:
-            "I can only edit a message in a channel, group DM, or this conversation on a surface that supports edits.",
-        };
+      if (d.destination.type !== "slack" && d.destination.type !== "group")
+        return { ok: false, message: "I can only edit a Slack message in a channel, group DM, or this conversation." };
       return enqueue(withEdit(d.destination, input.ref), input.text, seq);
     },
     delete: async (input: SurfaceDeleteInput) => {

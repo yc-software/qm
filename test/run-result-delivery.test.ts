@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createSlackSurface, slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
+import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import {
   runResultDelivery,
   wireRunResultDeliveries,
@@ -17,11 +17,6 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { holdThread, testRuns } from "./support/live-run.ts";
-import { testSurfaces } from "./support/single-process.ts";
-import { createSurfaceRegistry } from "../src/surfaces/registry.ts";
-import { createPartnerChatSurface } from "../src/surfaces/partner-chat/adapter.ts";
-
-const surfaces = testSurfaces();
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string, deliveryTarget?: string): OrchestratorInput => ({
@@ -59,7 +54,7 @@ function run(over: Partial<Run>): Run {
 }
 
 test("runResultDelivery maps ok-with-reply to a recovery delivery keyed by run", () => {
-  const d = runResultDelivery(run({}), surfaces);
+  const d = runResultDelivery(run({}));
   assert.deepEqual(d, {
     destination: { type: "slack", target: "C9:171.001" },
     text: "the reply",
@@ -76,7 +71,7 @@ test("runResultDelivery maps ok-with-reply to a recovery delivery keyed by run",
 
 test("runResultDelivery carries the reply's attachments so recovery can replay the files", () => {
   const atts = [{ name: "report.csv", mimetype: "text/csv", sizeBytes: 42, blobId: "blob-1" }];
-  const d = runResultDelivery(run({ result: { status: "ok", reply: "here's the file", attachments: atts } }), surfaces);
+  const d = runResultDelivery(run({ result: { status: "ok", reply: "here's the file", attachments: atts } }));
   assert.deepEqual(d?.attachments, atts);
   assert.equal(d?.text, "here's the file");
 });
@@ -91,7 +86,7 @@ test("runResultDelivery retains the Slack policy used for private admission", ()
       policyNamespace: "external-slack:TPARTNER:policy",
     }),
   };
-  assert.deepEqual(runResultDelivery(run({ request }), surfaces)?.destination, {
+  assert.deepEqual(runResultDelivery(run({ request }))?.destination, {
     type: "slack",
     target: "DPRIVATE",
     account: { id: "partner", workspace: "TPARTNER", policyNamespace: "external-slack:TPARTNER:policy" },
@@ -100,31 +95,31 @@ test("runResultDelivery retains the Slack policy used for private admission", ()
 
 test("runResultDelivery recovers an attachments-only reply (empty text, files still land)", () => {
   const atts = [{ name: "report.csv", mimetype: "text/csv", sizeBytes: 42, blobId: "blob-1" }];
-  const d = runResultDelivery(run({ result: { status: "ok", attachments: atts } }), surfaces);
+  const d = runResultDelivery(run({ result: { status: "ok", attachments: atts } }));
   assert.equal(d?.text, "");
   assert.deepEqual(d?.attachments, atts);
   assert.equal(d?.idempotencyKey, "run:r-1");
 });
 
 test("runResultDelivery does not recover a turn whose only output was file problems", () => {
-  const d = runResultDelivery(run({ result: { status: "ok", reply: "" } }), surfaces);
+  const d = runResultDelivery(run({ result: { status: "ok", reply: "" } }));
   assert.equal(d, null);
 });
 
 test("runResultDelivery sheds a surface-spine turn's text reply (the agent posted it via `post` — no double-post)", () => {
   const spine = run({ result: { status: "silent" } });
   spine.request = { ...spine.request, surfaceTools: true };
-  assert.equal(runResultDelivery(spine, surfaces), null, "no recovery copy — post already delivered the text");
+  assert.equal(runResultDelivery(spine), null, "no recovery copy — post already delivered the text");
   const okReply = run({ result: { status: "ok", reply: "leaked reply" } });
   okReply.request = { ...okReply.request, surfaceTools: true };
-  assert.equal(runResultDelivery(okReply, surfaces), null, "post owns the text — the turn reply is never re-posted");
+  assert.equal(runResultDelivery(okReply), null, "post owns the text — the turn reply is never re-posted");
 });
 
 test("runResultDelivery STILL recovers a surface-spine turn's file attachments (post is text-only)", () => {
   const atts = [{ name: "report.csv", mimetype: "text/csv", sizeBytes: 42, blobId: "blob-1" }];
   const spine = run({ result: { status: "ok", reply: "", attachments: atts } });
   spine.request = { ...spine.request, surfaceTools: true };
-  const d = runResultDelivery(spine, surfaces);
+  const d = runResultDelivery(spine);
   assert.deepEqual(d?.attachments, atts, "files ride the turn result, so they must not be shed");
   assert.equal(d?.text, "");
 });
@@ -132,19 +127,16 @@ test("runResultDelivery STILL recovers a surface-spine turn's file attachments (
 test("runResultDelivery still posts a surface-spine turn's FAILURE note", () => {
   const spine = run({ status: "failed", result: { status: "failed", reason: "boom" } });
   spine.request = { ...spine.request, surfaceTools: true };
-  assert.equal(
-    runResultDelivery(spine, surfaces)?.text,
-    "⚠️ I couldn't finish that turn: something went wrong on my end",
-  );
+  assert.equal(runResultDelivery(spine)?.text, "⚠️ I couldn't finish that turn: something went wrong on my end");
 });
 
 test("runResultDelivery recovers an addressed model-budget refusal with its explanation", () => {
   const reason = "This workspace has used up its model budget, so I can't run until it resets.";
   const spine = run({ result: { status: "refused", refusalKind: "model_budget", reason } });
   spine.request = { ...spine.request, surfaceTools: true, addressed: true };
-  assert.equal(runResultDelivery(spine, surfaces)?.text, reason);
+  assert.equal(runResultDelivery(spine)?.text, reason);
   spine.request = { ...spine.request, addressed: false, origin: { kind: "ambient" } };
-  assert.equal(runResultDelivery(spine, surfaces), null);
+  assert.equal(runResultDelivery(spine), null);
 });
 
 test("runResultDelivery recovers a security quarantine without exposing its internal reason", () => {
@@ -157,7 +149,6 @@ test("runResultDelivery recovers a security quarantine without exposing its inte
         reason: "internal screening details",
       },
     }),
-    surfaces,
   );
   assert.equal(d?.text, SECURITY_QUARANTINE_REFUSAL_TEXT);
   assert.doesNotMatch(d?.text ?? "", /internal screening details/);
@@ -166,23 +157,23 @@ test("runResultDelivery recovers a security quarantine without exposing its inte
 test("runResultDelivery keeps an unprompted quarantine silent — a replay has no live handler to suppress it", () => {
   const spine = run({ result: { status: "refused", refusalKind: "security_quarantine" } });
   spine.request = { ...spine.request, surfaceTools: true, origin: { kind: "ambient" } };
-  assert.equal(runResultDelivery(spine, surfaces), null);
+  assert.equal(runResultDelivery(spine), null);
 });
 
 test("runResultDelivery recovers security quarantine for an addressed surface-spine turn", () => {
   const spine = run({ result: { status: "refused", refusalKind: "security_quarantine" } });
   spine.request = { ...spine.request, surfaceTools: true, addressed: true };
-  assert.equal(runResultDelivery(spine, surfaces)?.text, SECURITY_QUARANTINE_REFUSAL_TEXT);
+  assert.equal(runResultDelivery(spine)?.text, SECURITY_QUARANTINE_REFUSAL_TEXT);
 });
 
 test("runResultDelivery keeps proactive ambient quarantine silent", () => {
   const ambient = run({ result: { status: "refused", refusalKind: "security_quarantine" } });
   ambient.request = { ...ambient.request, origin: { kind: "automation" }, surfaceTools: true };
-  assert.equal(runResultDelivery(ambient, surfaces), null);
+  assert.equal(runResultDelivery(ambient), null);
 });
 
 test("runResultDelivery carries the surface's edit checkpoint into the destination", () => {
-  const d = runResultDelivery(run({ deliveryState: { editRef: "171.002" } }), surfaces);
+  const d = runResultDelivery(run({ deliveryState: { editRef: "171.002" } }));
   assert.equal(d?.destination.editRef, "171.002");
 });
 
@@ -191,11 +182,7 @@ test("runResultDelivery links the admin error page when a resolver is wired", ()
     status: "failed",
     result: { status: "failed", sessionId: "b6f3f9e2-0000-4000-8000-000000000001", reason: "boom" },
   });
-  const d = runResultDelivery(
-    failed,
-    surfaces,
-    (sessionId) => `https://portal.example.com/admin/?session=${sessionId}`,
-  );
+  const d = runResultDelivery(failed, (sessionId) => `https://portal.example.com/admin/?session=${sessionId}`);
   assert.equal(
     d?.text,
     "⚠️ I couldn't finish that turn: something went wrong on my end — full error: https://portal.example.com/admin/?session=b6f3f9e2-0000-4000-8000-000000000001",
@@ -205,7 +192,6 @@ test("runResultDelivery links the admin error page when a resolver is wired", ()
 test("runResultDelivery turns a parked run into a visible failure note", () => {
   const d = runResultDelivery(
     run({ status: "failed", result: { status: "failed", reason: "lease expired (reaped)" } }),
-    surfaces,
   );
   assert.equal(d?.text, "⚠️ I couldn't finish that turn: something went wrong on my end");
   assert.doesNotMatch(d?.text ?? "", /lease expired/, "the internal failure reason never reaches the user");
@@ -215,34 +201,30 @@ test("runResultDelivery turns a parked run into a visible failure note", () => {
 test("runResultDelivery keeps unprompted failures quiet, like the live path", () => {
   const failed = run({ status: "failed", result: { status: "failed", reason: "boom" } });
   failed.request = { ...failed.request, origin: { kind: "ambient" } };
-  assert.equal(runResultDelivery(failed, surfaces), null, "no failure note where nobody addressed the agent");
-  assert.ok(runResultDelivery({ ...failed, request: { ...failed.request, sessionSenderId: "child" } }, surfaces));
+  assert.equal(runResultDelivery(failed), null, "no failure note where nobody addressed the agent");
+  assert.ok(runResultDelivery({ ...failed, request: { ...failed.request, sessionSenderId: "child" } }));
   const ok = run({});
   ok.request = { ...ok.request, origin: { kind: "ambient" } };
-  assert.equal(
-    runResultDelivery(ok, surfaces)?.text,
-    "the reply",
-    "an unprompted reply the agent chose to send still recovers",
-  );
+  assert.equal(runResultDelivery(ok)?.text, "the reply", "an unprompted reply the agent chose to send still recovers");
 });
 
 test("runResultDelivery skips terminal results that cannot be safely replayed", () => {
-  assert.equal(runResultDelivery(run({ request: turn("hi") }), surfaces), null);
-  assert.equal(runResultDelivery(run({ result: { status: "refused", reason: "not allowed" } }), surfaces), null);
+  assert.equal(runResultDelivery(run({ request: turn("hi") })), null);
+  assert.equal(runResultDelivery(run({ result: { status: "refused", reason: "not allowed" } })), null);
   for (const result of [
     { status: "pending_approval" } as TurnResult,
     { status: "react", reactions: ["thumbsup"] } as TurnResult,
     { status: "silent" } as TurnResult,
     { status: "ok" } as TurnResult,
   ]) {
-    assert.equal(runResultDelivery(run({ result }), surfaces), null, `skips ${result.status}`);
+    assert.equal(runResultDelivery(run({ result })), null, `skips ${result.status}`);
   }
 });
 
 test("wired stores: a completed turn lands in the outbox unless the live path acked it", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
-  wireRunResultDeliveries(runs, deliveries, surfaces);
+  wireRunResultDeliveries(runs, deliveries);
 
   const crashed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
   const c1 = (await runs.claim("w1", 5_000))[0] ?? null;
@@ -273,7 +255,7 @@ test("sweep enqueues the recovery delivery for a terminal run whose outbox row n
   const bypassed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
   const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.complete(bypassed.id, claimed?.leaseToken ?? "", { status: "ok", reply: "lost on the way out" });
-  const recovery = wireRunResultDeliveries(runs, deliveries, surfaces);
+  const recovery = wireRunResultDeliveries(runs, deliveries);
   assert.deepEqual(await deliveries.pending("slack"), [], "wired after the fact: nothing enqueued");
 
   assert.equal(await recovery.sweep(Date.now() + 120_000), 1);
@@ -288,7 +270,7 @@ test("sweep enqueues the recovery delivery for a terminal run whose outbox row n
 test("sweep leaves runs alone when their delivery already exists, was acked live, or is still inside the grace window", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
-  const recovery = wireRunResultDeliveries(runs, deliveries, surfaces);
+  const recovery = wireRunResultDeliveries(runs, deliveries);
   const finish = async (threadRef: string, reply: string): Promise<Run> => {
     const run = (await runs.enqueue({ sessionId: threadRef, request: turn(reply, "C9:171.001") })).run;
     const claimed = await runs.claimById(run.id, "w1", 5_000);
@@ -317,7 +299,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
   const fresh = await finish("sD", "just finished");
   await deliveries.ackByKey(`run:${fresh.id}`, Date.now());
   const bare = createDeliveryStore();
-  const bareRecovery = wireRunResultDeliveries(runs, bare, surfaces);
+  const bareRecovery = wireRunResultDeliveries(runs, bare);
   assert.equal(await bareRecovery.sweep(Date.now()), 0, "runs finished inside the grace window are not swept yet");
   assert.equal(await bareRecovery.sweep(Date.now() + 120_000), 3, "the same runs sweep once the grace window passes");
 });
@@ -325,7 +307,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
 test("sweep pages through terminal runs by (finishedAt, id) without skipping ties", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
-  const recovery = wireRunResultDeliveries(runs, deliveries, surfaces);
+  const recovery = wireRunResultDeliveries(runs, deliveries);
   const finished = new Set<string>();
   for (let i = 0; i < 205; i++) {
     const run = (await runs.enqueue({ sessionId: `s${i}`, request: turn(`r${i}`, "C9:171.001") })).run;
@@ -335,7 +317,7 @@ test("sweep pages through terminal runs by (finishedAt, id) without skipping tie
   }
   await new Promise((r) => setTimeout(r, 0));
   const swept = createDeliveryStore();
-  const sweptRecovery = wireRunResultDeliveries(runs, swept, surfaces);
+  const sweptRecovery = wireRunResultDeliveries(runs, swept);
   assert.equal(await sweptRecovery.sweep(Date.now() + 120_000), 205);
   assert.deepEqual(new Set((await swept.pending("slack")).map((d) => d.idempotencyKey)), finished);
   assert.equal(await recovery.sweep(Date.now() + 120_000), 0);
@@ -344,7 +326,7 @@ test("sweep pages through terminal runs by (finishedAt, id) without skipping tie
 test("wired stores: a parked run lands a durable, non-ackable failure note", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
-  wireRunResultDeliveries(runs, deliveries, surfaces);
+  wireRunResultDeliveries(runs, deliveries);
 
   const parked = (await runs.enqueue({ sessionId: "sP", request: turn("p", "C9:171.001"), maxAttempts: 1 })).run;
   const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
@@ -466,7 +448,7 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
   const { sessions, session } = await failureSessions();
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
-  wireRunResultDeliveries(runs, deliveries, surfaces, undefined, sessions);
+  wireRunResultDeliveries(runs, deliveries, undefined, sessions);
 
   const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
   const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
@@ -496,7 +478,6 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
 test("run result delivery identifies the exact source session for shared attachments", () => {
   const delivery = runResultDelivery(
     run({ result: { status: "ok", sessionId: "source-session", reply: "File ready", sourceAssistantEntrySeq: 7 } }),
-    surfaces,
   );
   assert.equal(delivery?.provenance.sourceSessionId, "source-session");
   assert.equal(delivery?.provenance.sourceAssistantEntrySeq, 7);
@@ -504,7 +485,7 @@ test("run result delivery identifies the exact source session for shared attachm
 
 test("private session turns cannot deliver even with a stale destination", () => {
   assert.equal(
-    runResultDelivery(run({ request: { ...turn("private", "C9:171.001"), privateSessionMessage: true } }), surfaces),
+    runResultDelivery(run({ request: { ...turn("private", "C9:171.001"), privateSessionMessage: true } })),
     null,
   );
 });
@@ -542,7 +523,6 @@ for (const surface of ["slack", "web"] as const) {
             },
             result,
           }),
-          surfaces,
         ),
         null,
       );
@@ -550,36 +530,10 @@ for (const surface of ["slack", "web"] as const) {
   }
 }
 
-test("runResultDelivery answers an addressed refusal on any live-reply surface, and only there", () => {
-  const withPartnerChat = createSurfaceRegistry({
-    surfaces: [
-      createSlackSurface({ deliveries: createDeliveryStore() }),
-      createPartnerChatSurface({ deliveries: createDeliveryStore(), surfaceCache: { readMessages: async () => [] } }),
-    ],
-  });
-  const reason = "This workspace has used up its model budget, so I can't run until it resets.";
-  const refused = (surface: string) =>
-    run({
-      request: { ...turn("hi", "partner-chat:7001:group:88:1002"), surface, addressed: true },
-      deliveryState: { editRef: "1793649600.00000000000000000042" },
-      result: { status: "refused", refusalKind: "model_budget", reason },
-    });
-  const d = runResultDelivery(refused("partner-chat"), withPartnerChat);
-  assert.equal(d?.text, reason);
-  assert.deepEqual(d?.destination, {
-    type: "partner-chat",
-    target: "partner-chat:7001:group:88:1002",
-    editRef: "1793649600.00000000000000000042",
-  });
-  assert.equal(runResultDelivery(refused("web"), withPartnerChat), null);
-  assert.equal(runResultDelivery(refused("cron"), withPartnerChat), null);
-});
-
 test("runResultDelivery notes a reply the reply check retracted and rewrote", () => {
   const d = runResultDelivery(
     run({ result: { status: "ok", reply: "the reply", retracted: ["em dash", "too long", "em dash"] } }),
-    surfaces,
   );
   assert.equal(d?.destination.editNote, "Edited after a reply check: em dash, too long");
-  assert.equal(runResultDelivery(run({}), surfaces)?.destination.editNote, undefined);
+  assert.equal(runResultDelivery(run({}))?.destination.editNote, undefined);
 });

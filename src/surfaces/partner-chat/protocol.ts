@@ -37,8 +37,15 @@ export interface PartnerChatRef {
   thread?: string;
 }
 
+export const TIMESTAMP_HEADER = "x-agent-app-request-timestamp";
+export const SIGNATURE_HEADER = "x-agent-app-signature";
+
 export function signPartnerChat(secret: string, timestamp: string, rawBody: string): string {
-  return `v1=${hmacHex(secret, `${timestamp}.${rawBody}`)}`;
+  return `v0=${hmacHex(secret, `v0:${timestamp}:${rawBody}`)}`;
+}
+
+export function partnerChatToken(secret: string, account: string): string {
+  return `${account}.${hmacHex(secret, `agent-app-token:${account}`)}`;
 }
 
 export function verifyPartnerChat(

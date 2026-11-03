@@ -5,19 +5,19 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
+import { createHmac } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { IngestEvent } from "../src/surface-cache/types.ts";
 import { partnerChatPrincipal, createPartnerChatSurface } from "../src/surfaces/partner-chat/adapter.ts";
 import { createPartnerChatDeliveries } from "../src/surfaces/partner-chat/outbound.ts";
-import { signPartnerChat } from "../src/surfaces/partner-chat/protocol.ts";
+import { partnerChatToken, signPartnerChat } from "../src/surfaces/partner-chat/protocol.ts";
 import { buildApp } from "./support/build-app.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { loadConfig } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
-import { createSurfaceRegistry } from "../src/surfaces/registry.ts";
 import { createPartnerChatLiveReply } from "../src/surfaces/partner-chat/live-reply.ts";
 import type { Run } from "../src/runs/run-store.ts";
 
@@ -27,12 +27,10 @@ const PROVENANCE = { trigger: "cron", surface: "partner-chat", fireKey: "f", sou
 interface Received {
   path: string;
   body: Record<string, unknown>;
-  timestamp: string;
-  signature: string;
-  raw: string;
+  authorization: string;
 }
 
-async function fakePartnerChat(status = 200, rejectEdits: string[] = []) {
+async function fakePartnerChat(status = 200) {
   const received: Received[] = [];
   const messages = new Map<string, { chat_id: unknown; thread_id: unknown; body: unknown }>();
   let next = 41;
@@ -40,24 +38,14 @@ async function fakePartnerChat(status = 200, rejectEdits: string[] = []) {
     let raw = "";
     req.on("data", (c) => (raw += c));
     req.on("end", () => {
+      const body = JSON.parse(raw) as Record<string, unknown>;
       received.push({
         path: req.url ?? "",
-        body: JSON.parse(raw) as Record<string, unknown>,
-        timestamp: String(req.headers["x-qm-timestamp"]),
-        signature: String(req.headers["x-qm-signature"]),
-        raw,
+        body,
+        authorization: String(req.headers.authorization),
       });
       const id = String(++next);
-      const body = received.at(-1)!.body;
-      const edited = /^\/qm_surface\/messages\/(\d+)\/update$/.exec(req.url ?? "")?.[1];
-      if (edited && rejectEdits.includes(edited)) {
-        res.writeHead(422, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "too old" }));
-        return;
-      }
-      if (status === 200 && edited && messages.has(edited)) messages.get(edited)!.body = body.body;
-      else if (status === 200 && !edited)
-        messages.set(id, { chat_id: body.chat_id, thread_id: body.thread_id, body: body.body });
+      if (status === 200) messages.set(id, { chat_id: body.chat_id, thread_id: body.thread_id, body: body.body });
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(status === 200 ? { message_id: id } : { error: "nope" }));
     });
@@ -166,7 +154,7 @@ test("an @-mention starts a turn whose reply lands in the chat once, even when t
       partnerChat.shown().map((m) => [m.chat_id, m.thread_id, m.body]),
       [["88", "1002", "on it"]],
     );
-    assert.ok(partnerChat.received.every((r) => r.signature === signPartnerChat(SECRET, r.timestamp, r.raw)));
+    assert.ok(partnerChat.received.every((r) => r.authorization === `Bearer ${partnerChatToken(SECRET, "7001")}`));
     const session = await built.sessions.getByThread(`${CONTAINER}:1002`);
     assert.equal(session?.surface, "partner-chat");
   } finally {
@@ -287,61 +275,24 @@ test("partner-chat conversation reads are answered from the mirror", async () =>
   }
 });
 
-const R1 = "00000000-0000-4000-8000-000000000001";
-
-function fakeRuns(initial: Record<string, { status?: string; target?: string; editRef?: string }>) {
-  const runs = new Map(Object.entries(initial));
-  const slots: Array<[string, unknown]> = [];
-  return {
-    slots,
-    runs: {
-      get: async (id: string) => {
-        const r = runs.get(id);
-        if (!r) return null;
-        return {
-          id,
-          status: r.status ?? "running",
-          request: { deliveryTarget: r.target ?? CONTAINER },
-          deliveryState: r.editRef === undefined ? null : { editRef: r.editRef },
-        } as unknown as Run;
-      },
-    },
-    setRunDeliveryState: async (id: string, state: { editRef?: string }) => {
-      slots.push([id, state]);
-      runs.set(id, { ...runs.get(id), ...(state.editRef !== undefined ? { editRef: state.editRef } : {}) });
-      return true;
-    },
-  };
-}
-
-test("partner-chat deliveries are signed, idempotent by key, and an acknowledged run is finished in place", async () => {
-  const partnerChat = await fakePartnerChat();
-  const deliveries = createDeliveryStore();
-  const fake = fakeRuns({ [R1]: {} });
-  const mirrored: IngestEvent[] = [];
+function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: IngestEvent[] = []) {
+  let serialized = 0;
   const outbound = createPartnerChatDeliveries({
-    url: `${partnerChat.url}/`,
+    url,
     secret: SECRET,
     deliveries,
-    app: {
-      setRunDeliveryState: fake.setRunDeliveryState,
-      ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }),
-    },
-    serialize: (fn) => fn(),
-    runs: fake.runs,
-    surfaceCache: {
-      readMessages: async (_container, opts) =>
-        mirrored
-          .filter((m) => !opts?.tsSuffix || m.ts.endsWith(opts.tsSuffix))
-          .map((m) => ({
-            container: m.container,
-            ts: m.ts,
-            text: m.text ?? "",
-            createdAt: m.createdAt ?? 0,
-            ...(m.sub ? { sub: m.sub } : {}),
-          })),
+    app: { ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }) },
+    serialize: async (fn) => {
+      serialized += 1;
+      return fn();
     },
   });
+  return { outbound, deliveries, mirrored, serialized: () => serialized };
+}
+
+test("partner-chat deliveries are signed posts mirrored as the agent's own, and edits are refused", async () => {
+  const partnerChat = await fakePartnerChat();
+  const { outbound, deliveries, mirrored, serialized } = outboundFor(`${partnerChat.url}/`);
   try {
     const surface = createPartnerChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } });
     await surface.post(
@@ -350,193 +301,76 @@ test("partner-chat deliveries are signed, idempotent by key, and an acknowledged
       "cron:fire-1",
     );
     await deliveries.enqueue({
-      destination: { type: "partner-chat", target: CONTAINER },
-      text: "Looking into it",
-      idempotencyKey: `ack:${R1}`,
+      destination: { type: "partner-chat", target: CONTAINER, editNote: "Edited after a reply check: em dash" },
+      text: "Here is the full answer",
+      idempotencyKey: "run:00000000-0000-4000-8000-000000000001",
     });
+    const refused = await Promise.all([
+      deliveries.enqueue({
+        destination: { type: "partner-chat", target: CONTAINER, editRef: "1793649600.00000000000000001021" },
+        text: "edited by ref",
+        idempotencyKey: "edit-by-ref",
+      }),
+      deliveries.enqueue({
+        destination: {
+          type: "partner-chat",
+          target: CONTAINER,
+          edit: { messageTs: "1793649600.00000000000000000043" },
+        },
+        text: "explicit edit",
+        idempotencyKey: "explicit-edit",
+      }),
+    ]);
     await outbound.drain();
     assert.deepEqual(
-      partnerChat.received.map((r) => [r.path, r.body, r.signature === signPartnerChat(SECRET, r.timestamp, r.raw)]),
+      partnerChat.received.map((r) => [
+        r.path,
+        r.body,
+        r.authorization === `Bearer ${partnerChatToken(SECRET, "7001")}`,
+      ]),
       [
         [
-          "/qm_surface/messages",
+          "/agent_app/messages",
           { client_message_id: "cron:fire-1", chat_id: "88", thread_id: "1009", body: "scheduled hello" },
           true,
         ],
-        ["/qm_surface/messages", { client_message_id: `ack:${R1}`, chat_id: "88", body: "Looking into it" }, true],
+        [
+          "/agent_app/messages",
+          {
+            client_message_id: "run:00000000-0000-4000-8000-000000000001",
+            chat_id: "88",
+            body: "Here is the full answer\n\nEdited after a reply check: em dash",
+          },
+          true,
+        ],
       ],
     );
-    assert.deepEqual(fake.slots, [[R1, { editRef: "43" }]]);
-    await deliveries.enqueue({
-      destination: {
-        type: "partner-chat",
-        target: CONTAINER,
-        editRef: "43",
-        editNote: "Edited after a reply check: em dash",
-      },
-      text: "Here is the full answer",
-      idempotencyKey: `post:${R1}:partner-chat:${CONTAINER}:0`,
-    });
-    await deliveries.enqueue({
-      destination: { type: "partner-chat", target: CONTAINER, editRef: "1793649600.00000000000000001021" },
-      text: "edited by ref",
-      idempotencyKey: `post:${R1}:partner-chat:${CONTAINER}:1`,
-    });
-    await outbound.drain();
+    for (const d of refused)
+      assert.equal(
+        (await deliveries.get(d.id))?.failedReason,
+        "partner-chat 400: only non-empty text posts are supported",
+      );
     assert.deepEqual(
-      partnerChat.received.slice(2).map((r) => [r.path, r.body]),
+      mirrored.map((m) => [m.ts.split(".")[1]!.replace(/^0+/, ""), m.sub, m.text, m.self]),
       [
-        ["/qm_surface/messages/43/update", { body: "Here is the full answer\n\nEdited after a reply check: em dash" }],
-        ["/qm_surface/messages/1021/update", { body: "edited by ref" }],
+        ["42", "1009", "scheduled hello", true],
+        ["43", null, "Here is the full answer\n\nEdited after a reply check: em dash", true],
       ],
     );
-    assert.deepEqual(fake.slots, [
-      [R1, { editRef: "43" }],
-      [R1, { editRef: "" }],
-    ]);
-    assert.deepEqual(
-      mirrored.map((m) => [m.ts.split(".")[1]!.replace(/^0+/, ""), m.sub, m.text, m.self, Boolean(m.editedAt)]),
-      [
-        ["42", "1009", "scheduled hello", true, false],
-        ["43", null, "Looking into it", true, false],
-        ["43", null, "Here is the full answer\n\nEdited after a reply check: em dash", true, true],
-      ],
-    );
+    assert.ok(serialized() > 0);
     assert.equal((await deliveries.pending("partner-chat")).length, 0);
   } finally {
     await partnerChat.close();
   }
 });
 
-test("a direct reply holds one placeholder that the reply replaces, or that settles when nothing does", async () => {
-  const id = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
-  const target = `${CONTAINER}:1002`;
-  const partnerChat = await fakePartnerChat(200, ["77"]);
-  let serialized = 0;
-  const deliveries = createDeliveryStore();
-  const fake = fakeRuns({
-    [id(2)]: { target },
-    [id(3)]: { target, editRef: "" },
-    [id(4)]: { target, status: "done" },
-    [id(5)]: { target, editRef: "99" },
-    [id(6)]: { target, editRef: "" },
-    [id(7)]: { target, editRef: "77" },
-  });
-  const outbound = createPartnerChatDeliveries({
-    url: partnerChat.url,
-    secret: SECRET,
-    deliveries,
-    app: { setRunDeliveryState: fake.setRunDeliveryState, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
-    runs: fake.runs,
-    surfaceCache: { readMessages: async () => [] },
-    serialize: async (fn) => {
-      serialized += 1;
-      return fn();
-    },
-  });
-  const send = (key: string, text: string, editRef?: string) =>
-    deliveries.enqueue({
-      destination: { type: "partner-chat", target, ...(editRef ? { editRef } : {}) },
-      text,
-      idempotencyKey: key,
-    });
-  try {
-    await send(`placeholder:${id(2)}`, "…");
-    await send(`post:${id(2)}:partner-chat:${target}:0`, "the answer");
-    await send(`placeholder:${id(3)}`, "…");
-    await send(`placeholder:${id(4)}`, "…");
-    await send(`settle:${id(5)}`, "✓");
-    await send(`settle:${id(6)}`, "✓");
-    await send(`run:${id(7)}`, "final reply", "77");
-    await outbound.drain();
-    assert.deepEqual(
-      partnerChat.received.map((r) => [r.path, r.body.body]),
-      [
-        ["/qm_surface/messages", "…"],
-        ["/qm_surface/messages/42/update", "the answer"],
-        ["/qm_surface/messages/99/update", "✓"],
-        ["/qm_surface/messages/77/update", "final reply"],
-        ["/qm_surface/messages", "final reply"],
-      ],
-    );
-    assert.deepEqual(fake.slots, [
-      [id(2), { editRef: "42" }],
-      [id(2), { editRef: "" }],
-      [id(5), { editRef: "" }],
-      [id(7), { editRef: "" }],
-    ]);
-    assert.ok(serialized > 0);
-    assert.equal((await deliveries.pending("partner-chat")).length, 0);
-  } finally {
-    await partnerChat.close();
-  }
-});
-
-test("a notice edits an open placeholder, is posted in the reply thread when none was posted or the reply already closed the slot, and a bare settle without one stays silent", async () => {
-  const id = (n: number) => `00000000-0000-4000-8000-00000000002${n}`;
-  const target = `${CONTAINER}:1002`;
-  const partnerChat = await fakePartnerChat();
-  const deliveries = createDeliveryStore();
-  const fake = fakeRuns({
-    [id(1)]: { target, status: "done", editRef: "99" },
-    [id(2)]: { target, status: "done" },
-    [id(3)]: { target, status: "done" },
-    [id(4)]: { target, status: "done", editRef: "" },
-  });
-  const outbound = createPartnerChatDeliveries({
-    url: partnerChat.url,
-    secret: SECRET,
-    deliveries,
-    app: { setRunDeliveryState: fake.setRunDeliveryState, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
-    runs: fake.runs,
-    surfaceCache: { readMessages: async () => [] },
-    serialize: (fn) => fn(),
-  });
-  const notice = "⚠️ I couldn't finish that turn: budget exceeded ($5.00 of $5); try again later";
-  const send = (key: string, text: string) =>
-    deliveries.enqueue({ destination: { type: "partner-chat", target }, text, idempotencyKey: key });
-  try {
-    await send(`notice:${id(1)}`, notice);
-    await send(`notice:${id(2)}`, notice);
-    await send(`placeholder:${id(2)}`, "…");
-    await send(`settle:${id(3)}`, "✓");
-    await send(`notice:${id(4)}`, notice);
-    await outbound.drain();
-    assert.deepEqual(
-      partnerChat.received.map((r) => [r.path, r.body.thread_id ?? null, r.body.body]),
-      [
-        ["/qm_surface/messages/99/update", null, notice],
-        ["/qm_surface/messages", "1002", notice],
-        ["/qm_surface/messages", "1002", notice],
-      ],
-    );
-    assert.deepEqual(fake.slots, [
-      [id(1), { editRef: "" }],
-      [id(2), { editRef: "" }],
-      [id(4), { editRef: "" }],
-    ]);
-    assert.equal((await deliveries.pending("partner-chat")).length, 0);
-  } finally {
-    await partnerChat.close();
-  }
-});
-
-test("partner-chat rejections fail the delivery while server errors leave it for retry", async () => {
-  for (const [status, failed] of [
-    [404, true],
-    [503, false],
+test("partner-chat rejections fail the delivery with the chat's reason while server errors leave it for retry", async () => {
+  for (const [status, failedReason] of [
+    [404, "partner-chat 404: nope"],
+    [503, null],
   ] as const) {
     const partnerChat = await fakePartnerChat(status);
-    const deliveries = createDeliveryStore();
-    const outbound = createPartnerChatDeliveries({
-      url: partnerChat.url,
-      secret: SECRET,
-      deliveries,
-      app: { setRunDeliveryState: async () => true, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
-      runs: { get: async () => null },
-      surfaceCache: { readMessages: async () => [] },
-      serialize: (fn) => fn(),
-    });
+    const { outbound, deliveries } = outboundFor(partnerChat.url);
     try {
       const d = await deliveries.enqueue({
         destination: { type: "partner-chat", target: CONTAINER },
@@ -545,7 +379,7 @@ test("partner-chat rejections fail the delivery while server errors leave it for
       });
       await outbound.drain();
       const after = await deliveries.get(d.id);
-      assert.equal(Boolean(after?.failedReason), failed, String(status));
+      assert.equal(after?.failedReason ?? null, failedReason, String(status));
       assert.equal(after?.deliveredAt, null);
     } finally {
       await partnerChat.close();
@@ -641,17 +475,12 @@ test("partner-chat config requires the url and secret together and validates pro
   );
 });
 
-test("a followed turn queues its placeholder after the delay, and a finished direct run settles its slot unless a run reply replaces it", async () => {
+test("a direct run that ends refused or waiting on an approval, or a message answered without a run, gets one notice in its reply thread", async () => {
   const deliveries = createDeliveryStore();
-  const surfaces = createSurfaceRegistry({
-    surfaces: [createPartnerChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } })],
-  });
-  const live = createPartnerChatLiveReply({ deliveries, surfaces, delayMs: 10 });
+  const live = createPartnerChatLiveReply({ deliveries });
   const destination = { type: "partner-chat", target: `${CONTAINER}:1002` };
-  live.follow(R1, destination);
-  await settle(async () => (await deliveries.pending("partner-chat")).length === 1);
   const id = (n: number) => `00000000-0000-4000-8000-00000000001${n}`;
-  const run = (n: number, opts: { editRef?: string; kind?: string; result?: Record<string, unknown> }) =>
+  const run = (n: number, opts: { kind?: string; result?: Record<string, unknown> }) =>
     ({
       id: id(n),
       sessionId: "s",
@@ -666,23 +495,16 @@ test("a followed turn queues its placeholder after the delay, and a finished dir
         conversation: { kind: "group", threadRef: destination.target, channelRef: CONTAINER, audience: [] },
         text: "hi",
       },
-      deliveryState: opts.editRef === undefined ? null : { editRef: opts.editRef },
       ...(opts.result ? { result: opts.result } : {}),
     }) as unknown as Run;
-  live.settle(run(1, { editRef: "" }));
-  live.settle(run(2, { editRef: "42", kind: "ambient" }));
-  live.settle(run(3, { editRef: "42", result: { status: "refused", refusalKind: "model_budget", reason: "spent" } }));
-  live.settle(run(4, { result: { status: "ok" } }));
+  live.settle(run(1, {}));
+  live.settle(run(2, { kind: "ambient", result: { status: "refused", reason: "spent" } }));
+  live.settle(run(4, { result: { status: "ok", reply: "done" } }));
   live.settle(
-    run(5, {
-      editRef: "42",
-      result: { status: "refused", reason: "project membership changed; retry from the current project" },
-    }),
+    run(5, { result: { status: "refused", reason: "project membership changed; retry from the current project" } }),
   );
-  live.settle(run(6, { editRef: "42", result: { status: "pending_approval" } }));
-  live.settle(
-    run(7, { editRef: "", result: { status: "pending_approval", reason: "Waiting on approval to run it." } }),
-  );
+  live.settle(run(6, { result: { status: "pending_approval" } }));
+  live.settle(run(7, { result: { status: "pending_approval", reason: "Waiting on approval to run it." } }));
   live.unanswered(
     {
       status: "pending_approval",
@@ -693,7 +515,7 @@ test("a followed turn queues its placeholder after the delay, and a finished dir
   );
   live.unanswered({ status: "refused", reason: "empty message" }, destination, "notice:m8");
   live.unanswered({ status: "silent" }, destination, "notice:m9");
-  await settle(async () => (await deliveries.pending("partner-chat")).length === 7);
+  await settle(async () => (await deliveries.pending("partner-chat")).length === 5);
   await new Promise((r) => setTimeout(r, 50));
   assert.deepEqual(
     (await deliveries.pending("partner-chat")).map((d) => [d.idempotencyKey, d.destination.target, d.text]).sort(),
@@ -707,8 +529,6 @@ test("a followed turn queues its placeholder after the delay, and a finished dir
       [`notice:${id(7)}`, destination.target, "Waiting on approval to run it."],
       ["notice:m7", destination.target, "This conversation is waiting for someone else to resolve a pending approval."],
       ["notice:m8", destination.target, "⚠️ I couldn't finish that turn: empty message"],
-      [`placeholder:${R1}`, destination.target, "…"],
-      [`settle:${id(4)}`, destination.target, "✓"],
     ],
   );
 });
@@ -725,86 +545,6 @@ async function agentSaid(built: Awaited<ReturnType<typeof partnerChatApp>>["buil
   });
   return said!;
 }
-
-test("the agent edits its own chat message in place and never reposts it", async () => {
-  const { built, partnerChat, deliver } = await partnerChatApp();
-  try {
-    await deliver(event({ body: "!post draft answer", mentions: true, eventId: "ev-e1", messageId: "1060" }));
-    await settle(async () => partnerChat.shown().some((m) => m.body === "draft answer"));
-    const posted = partnerChat.shown().find((m) => m.body === "draft answer")!;
-    let ts: string | undefined;
-    await settle(async () => {
-      const own = await built.surfaceCache.readMessages(CONTAINER, {
-        surface: "partner-chat",
-        self: true,
-        noFallback: true,
-      });
-      ts = own.find((m) => m.text === "draft answer")?.ts;
-      return ts !== undefined;
-    });
-    await deliver(
-      event({ body: `!edit ${ts} final answer`, mentions: true, eventId: "ev-e2", messageId: "1061", thread: "1060" }),
-    );
-    await settle(async () => partnerChat.shown().some((m) => m.body === "final answer"));
-    assert.ok(partnerChat.received.some((r) => r.path === `/qm_surface/messages/${posted.id}/update`));
-    assert.deepEqual(
-      partnerChat
-        .shown()
-        .filter((m) => m.body === "final answer")
-        .map((m) => m.id),
-      [posted.id],
-    );
-  } finally {
-    await partnerChat.close();
-  }
-});
-
-test("an explicit edit the chat refuses fails its delivery instead of posting, and an edit of the reply slot closes it", async () => {
-  const partnerChat = await fakePartnerChat(200, ["77"]);
-  const deliveries = createDeliveryStore();
-  const fake = fakeRuns({ [R1]: { target: `${CONTAINER}:1002`, editRef: "78" } });
-  const outbound = createPartnerChatDeliveries({
-    url: partnerChat.url,
-    secret: SECRET,
-    deliveries,
-    app: { setRunDeliveryState: fake.setRunDeliveryState, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
-    runs: fake.runs,
-    surfaceCache: { readMessages: async () => [] },
-    serialize: (fn) => fn(),
-  });
-  try {
-    const d = await deliveries.enqueue({
-      destination: {
-        type: "partner-chat",
-        target: `${CONTAINER}:1002`,
-        edit: { messageTs: "1793649600.00000000000000000077" },
-      },
-      text: "corrected",
-      idempotencyKey: `post:${R1}:partner-chat:${CONTAINER}:1002:1`,
-    });
-    await outbound.drain();
-    assert.deepEqual(
-      partnerChat.received.map((r) => r.path),
-      ["/qm_surface/messages/77/update"],
-    );
-    assert.ok((await deliveries.get(d.id))?.failedReason);
-    assert.deepEqual(fake.slots, []);
-    await deliveries.enqueue({
-      destination: {
-        type: "partner-chat",
-        target: `${CONTAINER}:1002`,
-        edit: { messageTs: "1793649600.00000000000000000078" },
-      },
-      text: "rewritten answer",
-      idempotencyKey: `post:${R1}:partner-chat:${CONTAINER}:1002:2`,
-    });
-    await outbound.drain();
-    assert.deepEqual(partnerChat.received.at(-1)?.path, "/qm_surface/messages/78/update");
-    assert.deepEqual(fake.slots, [[R1, { editRef: "" }]]);
-  } finally {
-    await partnerChat.close();
-  }
-});
 
 test("search inside a partner chat finds the chat's mirrored messages", async () => {
   const { built, partnerChat, deliver } = await partnerChatApp();
@@ -1012,4 +752,10 @@ test("a thread under one of the agent's older posts is still recognised as engag
   } finally {
     await partnerChat.close();
   }
+});
+
+test("partner-chat signatures and bearer tokens follow the agent-app scheme", () => {
+  const hmac = (data: string) => createHmac("sha256", SECRET).update(data).digest("hex");
+  assert.equal(signPartnerChat(SECRET, "1793649600", "{}"), `v0=${hmac("v0:1793649600:{}")}`);
+  assert.equal(partnerChatToken(SECRET, "7001"), `7001.${hmac("agent-app-token:7001")}`);
 });

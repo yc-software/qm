@@ -6,7 +6,6 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { testSurfaces } from "./support/single-process.ts";
 
 function setup() {
   const store = testMap<TaskAckState>();
@@ -156,11 +155,7 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
       } as OrchestratorInput,
     });
     await manager.move(client, run.id, "D1", "10.1");
-    const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), {
-      runs,
-      deliveries,
-      surfaces: testSurfaces(),
-    });
+    const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), { runs, deliveries });
     await restarted.reconcile(client);
     assert.equal((await store.get(run.id))?.finished, false);
     const claimed = await runs.claimById(run.id, "test", 10000);

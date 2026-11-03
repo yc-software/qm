@@ -15,9 +15,6 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { randomUUID } from "node:crypto";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { testSurfaces } from "./support/single-process.ts";
-
-const surfaces = testSurfaces();
 
 const THREAD = "web:alice@example.com:conv-1";
 const SCOPE = "personal:alice@example.com" as ScopeId;
@@ -278,7 +275,7 @@ async function terminalRun(
   duringTurn?: () => Promise<void>,
 ): Promise<string> {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  wireRunResultDeliveries(runs, deliveries, surfaces);
+  wireRunResultDeliveries(runs, deliveries);
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
   const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await duringTurn?.();
@@ -309,7 +306,7 @@ test("an onTerminal-recorded failure entry suppresses the web drain's duplicate 
   const { sessions, inner, deliveries } = wired();
   const session = await webSession(sessions);
   const runs = createPostgresRunStore(testDatabaseUrl()).runs;
-  wireRunResultDeliveries(runs, inner, surfaces, undefined, sessions);
+  wireRunResultDeliveries(runs, inner, undefined, sessions);
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
   const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.fail(run.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });

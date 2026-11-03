@@ -10,9 +10,6 @@ import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { testPgPool } from "./support/test-database.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { testSurfaces } from "./support/single-process.ts";
-
-const surfaces = testSurfaces();
 
 const sharedPool = testPgPool();
 
@@ -530,15 +527,12 @@ test("initial pool creates durable ordinary sessions with distinct blank Modal d
     assert.equal(run.request.deliveryTarget, undefined);
     assert.equal(run.request.origin.kind === "automation" && run.request.origin.useOwnerKeychain, undefined);
     assert.equal(
-      runResultDelivery(
-        {
-          ...run,
-          request: { ...run.request, surface: "slack", deliveryTarget: "dm" },
-          status: "done",
-          result: { status: "ok", reply: "agent-only" },
-        },
-        surfaces,
-      ),
+      runResultDelivery({
+        ...run,
+        request: { ...run.request, surface: "slack", deliveryTarget: "dm" },
+        status: "done",
+        result: { status: "ok", reply: "agent-only" },
+      }),
       null,
     );
   }
