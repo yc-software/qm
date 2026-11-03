@@ -87,6 +87,7 @@ describe("request ingress", () => {
     assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token }), TENANT_B);
     assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token, [TENANT_HEADER]: TENANT_B }), TENANT_B);
     assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token, [TENANT_HEADER]: TENANT_A }), 400);
+    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: "garbage", [TENANT_HEADER]: TENANT_A }), undefined);
   });
 
   it("binds the signed tenant header and refuses malformed ones", async () => {

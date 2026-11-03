@@ -35,12 +35,15 @@ async function claimedTenant(
   req: IncomingMessage,
   auth: Route["auth"] | undefined,
   capabilitySecret: string | undefined,
-): Promise<string | null> {
+): Promise<{ tenant?: string; refusal?: string }> {
   const header = tenantHeader(req);
+  if (header && !isTenantId(header)) return { refusal: "malformed tenant" };
   const token = capabilityToken(req, typeof auth === "object" && auth.bearer === true);
-  if (!token) return header || null;
-  const tenant = (await requestCapability(req, token, capabilitySecret))?.tenant ?? "";
-  return header && header !== tenant ? "" : tenant || null;
+  if (!token) return header ? { tenant: header } : {};
+  const claims = await requestCapability(req, token, capabilitySecret);
+  if (!claims) return {};
+  if (header && claims.tenant !== header) return { refusal: "tenant header conflicts with the capability token" };
+  return claims.tenant ? { tenant: claims.tenant } : {};
 }
 
 export async function withRequestTenant(
@@ -51,9 +54,9 @@ export async function withRequestTenant(
   next: () => Promise<void> | void,
 ): Promise<void> {
   if (route?.auth === "public") return next();
-  const tenant = await claimedTenant(req, route?.auth, capabilitySecret);
-  if (tenant !== null && !isTenantId(tenant)) {
-    sendJson(res, 400, { error: "bad_request", message: "conflicting or malformed tenant" });
+  const { tenant, refusal } = await claimedTenant(req, route?.auth, capabilitySecret);
+  if (refusal) {
+    sendJson(res, 400, { error: "bad_request", message: refusal });
     return void req.resume();
   }
   return tenant ? withTenant(tenant, next) : next();
