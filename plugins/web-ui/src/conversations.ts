@@ -3,7 +3,7 @@ import { createComposerSurface, type ComposerOptions } from "./composer";
 import { densityTierFor, type DensityTier } from "./density";
 import { subscribeDeliveries } from "./core-bridge";
 import { applySessionState } from "./session-list";
-import { refreshSessions, renderList, sessionsState } from "./sessions";
+import { refreshOpenTrees, refreshSessions, refreshTreesFor, renderList, sessionsState } from "./sessions";
 import { appState } from "./shell-state";
 import { handleUiSignal, releaseUiCanvas, resyncUiCanvas } from "./ui-canvas";
 import type { Conversation, ConvCtx, ConvHost } from "./conv-types";
@@ -87,6 +87,7 @@ export function ensureDeliveryStream(): void {
   subscribeDeliveries(
     (threadRef) => {
       void refreshSessions({ silent: true });
+      refreshTreesFor(threadRef);
       for (const conv of live) conv.onDelivery(threadRef);
     },
     (event) => {
@@ -96,6 +97,7 @@ export function ensureDeliveryStream(): void {
       }
       if (event.state === "metadata") {
         void refreshSessions({ silent: true });
+        refreshTreesFor(event.threadRef);
         return;
       }
       const { list, matched } = applySessionState(sessionsState.list, { ...event, state: event.state });
@@ -105,14 +107,17 @@ export function ensureDeliveryStream(): void {
         const parentId = list.find((session) => session.threadRef === event.threadRef)?.parentSessionId;
         if (event.state === "idle" || parentId) void refreshSessions({ silent: true });
         if (parentId) for (const conv of live) if (conv.state.sessionId === parentId) conv.redraw();
+        refreshTreesFor(event.threadRef);
       } else {
         void refreshSessions({ silent: true });
+        refreshTreesFor(event.threadRef);
       }
       if (event.state === "working") for (const conv of live) conv.resumeIfIdle();
       else for (const conv of live) conv.onDelivery(event.threadRef);
     },
     () => {
       void refreshSessions({ silent: true });
+      refreshOpenTrees();
       resyncUiCanvas([...live].map((conv) => conv.state.sessionId));
     },
     (event) => inboxItemHandler?.(event),
