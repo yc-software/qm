@@ -28,6 +28,10 @@ function webTranscriptNote(run: Run, surface: string, failed: boolean): Destinat
 
 export type AdminUrlFor = (sessionId: string) => string | undefined;
 
+export function replyEditNote(retracted: readonly string[] | undefined): string | undefined {
+  return retracted?.length ? `Edited after a reply check: ${[...new Set(retracted)].join(", ")}` : undefined;
+}
+
 export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
   const target = run.request.deliveryTarget;
@@ -79,8 +83,9 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
     return { destination, text: `⚠️ I couldn't finish that turn: ${clause}${detail}`, provenance, idempotencyKey };
   }
   if (run.result?.status === "ok" && (run.result.reply || run.result.attachments?.length)) {
+    const editNote = replyEditNote(run.result.retracted);
     return {
-      destination,
+      destination: editNote ? { ...destination, editNote } : destination,
       text: run.result.reply ?? "",
       ...(run.result.attachments?.length ? { attachments: run.result.attachments } : {}),
       provenance,

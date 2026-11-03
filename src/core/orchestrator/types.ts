@@ -200,6 +200,7 @@ export interface OrchestratorDeps {
   surfaceContext?: SurfaceContextPuller;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
+  replyCheck?: import("../../decisions/hooks.ts").ReplyCheckFactory;
   surfaceDebugFooter?: boolean;
 }
 

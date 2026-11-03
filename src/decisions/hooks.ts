@@ -1,3 +1,5 @@
+import { marked } from "marked";
+import type { ReplyVerdict } from "../agent/agent.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import {
   classifierKey,
@@ -33,6 +35,46 @@ export function turnStartState(turn: {
     "",
     "Latest message:",
     turn.input,
+  ].join("\n");
+}
+
+export function replyFacts(reply: string): string[] {
+  const blocks = marked.lexer(reply);
+  const paragraphs = blocks.filter((block) => block.type === "paragraph").length;
+  const tables = blocks.filter((block) => block.type === "table").length;
+  const emDashes = reply.split("\u2014").length - 1;
+  return [
+    `- paragraphs: ${paragraphs}`,
+    `- markdown tables: ${tables}`,
+    `- em dashes: ${emDashes}`,
+    `- characters: ${reply.length}`,
+  ];
+}
+
+export function turnEndState(turn: {
+  surfaceName?: string;
+  runtimePurpose?: string;
+  guidance?: string;
+  input: string;
+  reply: string;
+}): string {
+  const guidance = turn.guidance?.trim();
+  return [
+    "Turn context:",
+    `- surface: ${turn.surfaceName ?? "unknown"}`,
+    `- purpose: ${turn.runtimePurpose ?? "interactive"}`,
+    "",
+    "Guidance for this conversation:",
+    guidance || "(none)",
+    "",
+    "Latest message from the user:",
+    turn.input,
+    "",
+    "Measured in the draft reply:",
+    ...replyFacts(turn.reply),
+    "",
+    "Draft reply:",
+    turn.reply,
   ].join("\n");
 }
 
@@ -77,6 +119,39 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
       { ...turn, cancel: undefined },
     ).catch(swallowAs("decisions: observe-only rules", undefined));
     return run(rules.filter(awaited), hook, state, turn);
+  };
+}
+
+type ReplyCheck = (draft: string) => Promise<ReplyVerdict | undefined>;
+export type ReplyCheckFactory = (context: {
+  surfaceName?: string;
+  runtimePurpose?: string;
+  guidance: () => Promise<string>;
+  input: string;
+  turn: DecisionTurn;
+}) => Promise<{ enforce: boolean; check: ReplyCheck } | undefined>;
+
+export function createReplyCheck(
+  store: Pick<DecisionStore, "rules"> | undefined,
+  decide: ReturnType<typeof createDecisionHooks>,
+): ReplyCheckFactory {
+  return async (context) => {
+    const rules = (await store?.rules("turn_end")) ?? [];
+    if (!rules.length) return undefined;
+    const guidance = await context.guidance();
+    return {
+      enforce: rules.some((rule) => rule.mode === "enforce"),
+      check: async (draft) => {
+        const verdict = await decide("turn_end", turnEndState({ ...context, guidance, reply: draft }), context.turn);
+        return (verdict?.action === "retry" || verdict?.action === "prod") && verdict.message
+          ? {
+              action: verdict.action,
+              reason: verdict.option.replaceAll("_", " ").replaceAll("-", " "),
+              message: verdict.message,
+            }
+          : undefined;
+      },
+    };
   };
 }
 
