@@ -2103,6 +2103,7 @@ export function createChatSurface(
           <div class="system-note">${body}</div>
         </article>
       `;
+      if (note.note === "notice") return row(html`${note.content}`);
       if (note.note === "goal_cancelled")
         return row(html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`);
       const who = note.byAgent ? brandName() : (note.speaker ?? "The user");

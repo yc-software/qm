@@ -40,6 +40,10 @@ test("a fresh database gets the base schema without items.target_seq", { skip },
       "SELECT 1 FROM information_schema.columns WHERE table_name = 'items' AND column_name = 'target_seq'",
     );
     assert.equal(column.rowCount, 0);
+    assert.equal(
+      await present(admin, "pg_get_indexdef('session_llm_requests_session_spend_recovery'::regclass)"),
+      "CREATE INDEX session_llm_requests_session_spend_recovery ON public.session_llm_requests USING btree (session_id, created_at) WHERE (usage_json IS NOT NULL)",
+    );
   });
 });
 
@@ -56,6 +60,9 @@ test("a fully migrated database skips the base schema and drops only the retired
       search TSVECTOR, target_seq BIGINT,
       CONSTRAINT items_target_seq_kind CHECK (target_seq IS NULL OR kind = 'Retraction'))`);
     await admin.query("CREATE TABLE tool_calls(run_id TEXT)");
+    await admin.query("CREATE TABLE session_llm_requests(session_id TEXT, created_at BIGINT, usage_json TEXT)");
+    await admin.query(`CREATE INDEX session_llm_requests_session_spend_recovery
+      ON session_llm_requests(session_id, created_at) WHERE usage_json IS NOT NULL`);
     await admin.query("CREATE TABLE qm_tenant(id UUID PRIMARY KEY)");
     await admin.query("CREATE FUNCTION safe_json(t text) RETURNS json LANGUAGE sql AS 'SELECT t::json'");
     await migrate(url);
@@ -69,6 +76,13 @@ test("a fully migrated database skips the base schema and drops only the retired
     assert.equal(await present(admin, "to_regclass('blobs') IS NULL"), true);
     assert.equal(await present(admin, "to_regclass('tool_calls') IS NULL"), true);
     assert.equal(await present(admin, "to_regprocedure('safe_json(text)') IS NULL"), true);
+    assert.equal(
+      await present(
+        admin,
+        "EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id = 'sessions/store/0051-spend-recovery-index')",
+      ),
+      true,
+    );
   });
 });
 

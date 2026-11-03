@@ -68,17 +68,13 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
   if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });
-  const grants = (await deps.acl?.list()) ?? [];
+  const grants = (await deps.acl?.find({ granteeScopeIds: [`personal:${email}`], kind: "deploy" })) ?? [];
   const deployments = await app.listDeployments();
   const granted = deployments.filter(
     (d) =>
       d.status !== "archived" &&
       grants.some(
-        (g) =>
-          g.ownerScopeId === d.ownerScopeId &&
-          g.ref === encodeRef(deployRef(d.id)) &&
-          g.granteeScopeId === `personal:${email}` &&
-          g.permission === "read",
+        (g) => g.ownerScopeId === d.ownerScopeId && g.ref === encodeRef(deployRef(d.id)) && g.permission === "read",
       ),
   );
   const allowedOwners = await Promise.all(

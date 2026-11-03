@@ -312,10 +312,19 @@ export const TENANT_BACKFILL: PgMigrationDefinition = {
   ],
 };
 
+const SPEND_RECOVERY_INDEX: PgMigrationDefinition = {
+  id: "sessions/store/0051-spend-recovery-index",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_session_spend_recovery
+      ON session_llm_requests(session_id, created_at) WHERE usage_json IS NOT NULL`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,
   TENANT_BACKFILL,
+  SPEND_RECOVERY_INDEX,
 ];
