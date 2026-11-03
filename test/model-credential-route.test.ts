@@ -455,6 +455,43 @@ test("web turns refuse a model whose provider has no key", async () => {
   }
 });
 
+test("a provider that cannot be reached is reported apart from a rejected key", async () => {
+  let answer: () => Promise<Response> = async () => new Response(null, { status: 401 });
+  const srv = await start({}, () => answer());
+  try {
+    const save = async () => {
+      const response = await fetch(`${srv.base}/v1/admin/model-providers/anthropic`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify({ apiKey: "some-key" }),
+      });
+      return { status: response.status, body: (await response.json()) as { error: string; message: string } };
+    };
+    assert.deepEqual(await save(), {
+      status: 400,
+      body: { error: "invalid_api_key", message: "anthropic rejected this API key" },
+    });
+    answer = async () => {
+      throw new Error("getaddrinfo ENOTFOUND api.anthropic.com");
+    };
+    assert.deepEqual(await save(), {
+      status: 502,
+      body: {
+        error: "provider_unreachable",
+        message: "could not reach anthropic to check this API key: getaddrinfo ENOTFOUND api.anthropic.com",
+      },
+    });
+    answer = async () => new Response(null, { status: 503 });
+    assert.deepEqual(await save(), {
+      status: 502,
+      body: { error: "provider_unreachable", message: "anthropic could not check this API key: HTTP 503" },
+    });
+    assert.equal(await srv.built.modelCredentials.resolve("anthropic"), null);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("a rejected rotation preserves the prior key and disabling removes the stored key", async () => {
   let accepts = true;
   const srv = await start(
