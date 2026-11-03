@@ -32,7 +32,7 @@ test("updates are validated against the merged settings and empty values clear",
       store.update({ MODEL_GATEWAY_URL: "https://gw.example" }),
       /MODEL_GATEWAY_API_KEY is required/,
     );
-    await assert.rejects(store.update({ NOT_A_SETTING: "x" } as never), /NOT_A_SETTING is not a tenant setting/);
+    await assert.rejects(store.update({ NOT_A_SETTING: "x" } as never), /Not tenant settings: NOT_A_SETTING/);
     await store.update({ PI_MODEL: "model-a" });
     assert.equal((await store.get()).piModel, "model-a");
     await store.update({ PI_MODEL: "" });

@@ -58,15 +58,16 @@ test("tenant settings are written only with both the source signature and the op
       assert.equal((await srv.put({ tenant: SLUG, env: { PI_MODEL: "x" } }, credentials)).status, 401);
     }
     assert.equal((await srv.put({ tenant: SLUG, env: { PI_MODEL: "x" } }, { "x-signature": "invalid" })).status, 401);
-    const response = await srv.put({ tenant: SLUG, env: { PI_MODEL: "claude-opus-5-5", ANTHROPIC_API_KEY: "key-a" } });
+    const response = await srv.put({ tenant: SLUG, env: { PI_MODEL: "claude-opus-5-5", SPRITES_TOKEN: "token-a" } });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
       tenant: TEST_TENANT,
-      updated: ["PI_MODEL", "ANTHROPIC_API_KEY"],
+      updated: ["PI_MODEL", "SPRITES_TOKEN"],
     });
     await withTenant(TEST_TENANT, async () => {
-      assert.equal((await srv.built.tenantSettings.get()).piModel, "claude-opus-5-5");
-      assert.equal(await srv.built.modelCredentials.resolve("anthropic"), "key-a");
+      const settings = await srv.built.tenantSettings.get();
+      assert.equal(settings.piModel, "claude-opus-5-5");
+      assert.equal(settings.values.SPRITES_TOKEN, "token-a");
     });
   } finally {
     await srv.close();
@@ -76,19 +77,25 @@ test("tenant settings are written only with both the source signature and the op
 test("the settings route refuses operator keys and is unavailable without a distinct control secret", async () => {
   const srv = await fixture();
   try {
-    const refused = await srv.put({ tenant: SLUG, env: { DATABASE_URL: "postgres://x", PI_MODEL: "x" } });
-    assert.equal(refused.status, 400);
-    assert.deepEqual(await refused.json(), {
-      error: "not_tenant_settings",
-      message: "Not tenant settings: DATABASE_URL",
-    });
+    for (const key of [
+      "DATABASE_URL",
+      "ANTHROPIC_API_KEY",
+      "LOOPS_USERS",
+      "HARNESS_SECURITY_POSTURE",
+      "ORG_BRAND_ACCENT",
+    ]) {
+      const refused = await srv.put({ tenant: SLUG, env: { [key]: "x", PI_MODEL: "x" } });
+      assert.equal(refused.status, 400);
+      assert.deepEqual(await refused.json(), { error: "not_tenant_settings", message: `Not tenant settings: ${key}` });
+    }
+    await withTenant(TEST_TENANT, async () => assert.notEqual((await srv.built.tenantSettings.get()).piModel, "x"));
     const invalid = await srv.put({ tenant: SLUG, env: { SANDBOX_BACKEND: "nope" } });
     assert.equal(invalid.status, 400);
     assert.equal(((await invalid.json()) as { error: string }).error, "invalid_tenant_settings");
-    srv.built.featureFlags.setEnabled = async () => {
-      throw new Error("flag store unavailable");
+    srv.built.tenantSettings.update = async () => {
+      throw new Error("settings store unavailable");
     };
-    assert.equal((await srv.put({ tenant: SLUG, env: { LOOPS_USERS: "ada@example.com" } })).status, 500);
+    assert.equal((await srv.put({ tenant: SLUG, env: { PI_MODEL: "x" } })).status, 500);
   } finally {
     await srv.close();
   }

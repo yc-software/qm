@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { FIRST_PARTY_SECRET_SPECS } from "../cli/src/secrets.ts";
 import { isInvalidSecret as cliRejectsSecret } from "../cli/src/util.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "../src/deployment/secret-schema.ts";
-import { tenantImportKeys } from "../src/tenants/settings-import.ts";
+import { TENANT_SETTING_KEYS } from "../src/tenants/settings.ts";
 
 test("the standalone CLI and core agree on runtime-enforced core secret names", () => {
   const cli = new Set(
@@ -13,7 +13,15 @@ test("the standalone CLI and core agree on runtime-enforced core secret names", 
     ),
   );
   const runtime = new Set(CORE_SECRET_SPECS.map((secret) => secret.name));
-  const tenantOwned = new Set(tenantImportKeys());
+  const tenantOwned = new Set<string>([
+    ...TENANT_SETTING_KEYS,
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "LINEAR_OAUTH_CLIENT_SECRET",
+    "DROPBOX_OAUTH_CLIENT_SECRET",
+  ]);
   assert.deepEqual(
     [...runtime].sort(),
     [...cli].filter((name) => name !== "PUBLIC_API_URL" && (runtime.has(name) || !tenantOwned.has(name))).sort(),

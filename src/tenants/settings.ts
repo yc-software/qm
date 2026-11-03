@@ -84,7 +84,7 @@ const TENANT_SECRET_KEYS: ReadonlySet<TenantSettingKey> = new Set<TenantSettingK
   "OIDC_CLIENT_SECRET",
 ]);
 
-export function isTenantSettingKey(key: string): key is TenantSettingKey {
+function isTenantSettingKey(key: string): key is TenantSettingKey {
   return (TENANT_SETTING_KEYS as readonly string[]).includes(key);
 }
 
@@ -259,9 +259,9 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
     },
     async update(changes) {
       const tenant = currentTenant();
-      for (const key of Object.keys(changes)) {
-        if (!isTenantSettingKey(key)) throw new TenantSettingsInvalidError(`${key} is not a tenant setting`);
-      }
+      const unknown = Object.keys(changes).filter((key) => !isTenantSettingKey(key));
+      if (unknown.length)
+        throw new TenantSettingsInvalidError(`Not tenant settings: ${unknown.join(", ")}`, "not_tenant_settings");
       const normalized: TenantSettingChanges = {};
       for (const key of TENANT_SETTING_KEYS) {
         const change = changes[key];
