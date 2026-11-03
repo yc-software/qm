@@ -47,7 +47,6 @@ test("declaredVariables reads the scaffolded variables.tf", () => {
     "org_id",
     "account_id",
     "certificate_arn",
-    "core_public_hosts",
     "db_name",
     "db_username",
     "db_instance_class",
@@ -479,25 +478,6 @@ test("terraform derives account-scoped infrastructure coordinates", () => {
   );
 });
 
-test("GitHub environments remain compatible with AWS scaffolds created before the variable existed", () => {
-  const legacyDeclared = declared.filter((name) => name !== "github_environment");
-  const legacyConfig: QmConfig = {
-    ...config,
-    aws: { ...config.aws!, deployEnvironment: undefined },
-  };
-  const rendered = terraformVars(legacyConfig, "", legacyDeclared);
-  assert.doesNotMatch(rendered, /github_environment/);
-  assert.deepEqual(terraformVarsDrift(legacyConfig, rendered, legacyDeclared), []);
-  assert.throws(
-    () => terraformVars(config, rendered, legacyDeclared),
-    /AWS scaffold predates aws\.deployEnvironment[\s\S]*variables\.tf[\s\S]*main\.tf/,
-  );
-  assert.throws(
-    () => terraformVarsDrift(config, rendered, legacyDeclared),
-    /AWS scaffold predates aws\.deployEnvironment[\s\S]*variables\.tf[\s\S]*main\.tf/,
-  );
-});
-
 test("AWS Terraform renders valid reserved coordinates without an unused MicroVM image", () => {
   const selected: QmConfig = {
     ...config,
@@ -506,7 +486,7 @@ test("AWS Terraform renders valid reserved coordinates without an unused MicroVM
   const rendered = terraformVars(selected, "", declared);
   assert.match(rendered, /deploy_microvm_image\s*= "acme"/);
   assert.doesNotMatch(rendered, /undefined/);
-  assert.deepEqual(terraformVarsDrift(selected, rendered, declared), []);
+  assert.deepEqual(terraformVarsDrift(selected, rendered), []);
 });
 
 test("terraform derives the transfer lifecycle prefix from the same core S3 prefix as runtime", () => {
@@ -525,7 +505,6 @@ test("terraform derives the transfer lifecycle prefix from the same core S3 pref
     terraformVarsDrift(
       { ...config, env: { core: { AWS_DEPLOY_IMAGE: DEPLOY_IMAGE, S3_PREFIX: "core/" } } },
       unprefixed,
-      declared,
     ),
     ["transfer_lifecycle_prefix"],
   );
@@ -540,34 +519,16 @@ test("terraform owns secret containers but never creates operator-secret placeho
   assert.match(mainTf, /aws_secretsmanager_secret_version" "database/);
 });
 
-test("terraform derives split core host routing from the deployment config", () => {
-  const rendered = terraformVars(
-    {
-      ...config,
-      publicUrl: "https://agent.acme.example",
-      apiUrl: "https://api.agent.acme.example",
-      env: { core: { AWS_DEPLOY_IMAGE: DEPLOY_IMAGE, AWS_DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" } },
-    },
-    "",
-    declared,
-  );
-  assert.match(
-    rendered,
-    /core_public_hosts\s+= \[\s+"\*\.apps\.agent\.acme\.example",\s+"api\.agent\.acme\.example"\s+\]/,
-  );
-  assert.match(variablesTf, /length\(var\.core_public_hosts\) == 0 \|\| var\.certificate_arn != ""/);
-});
-
-test("an old scaffold fails closed instead of silently hiding a split core API behind the front door", () => {
-  assert.throws(
-    () =>
-      terraformVars(
-        { ...config, apiUrl: "https://api.agent.acme.example" },
-        "",
-        declared.filter((name) => name !== "core_public_hosts"),
-      ),
-    /predates split front-door\/core host routing/,
-  );
+test("terraform renders no core host routing for a separate apiUrl and apps domain and drops a stale host list", () => {
+  const selected: QmConfig = {
+    ...config,
+    apiUrl: "https://api.agent.acme.example",
+    env: { core: { AWS_DEPLOY_IMAGE: DEPLOY_IMAGE, AWS_DEPLOY_APPS_DOMAIN: "apps.agent.acme.example" } },
+  };
+  const stale = `${terraformVars(config, "", declared)}core_public_hosts   = [\n  "api.agent.acme.example"\n]\n`;
+  const rendered = terraformVars(selected, stale, declared);
+  assert.doesNotMatch(rendered, /core_public_hosts|api\.agent\.acme\.example|apps\.agent\.acme\.example/);
+  assert.deepEqual(terraformVarsDrift(selected, rendered), []);
 });
 
 test("AWS ALB exposure follows its listener transport", () => {
@@ -729,68 +690,18 @@ test("AWS ECS services use native blue-green rollouts with rollback signals and 
 
 test("drift check flags wrong derived values but never operator formatting", () => {
   const rendered = terraformVars(config, "", declared);
-  assert.deepEqual(terraformVarsDrift(config, rendered, declared), []);
+  assert.deepEqual(terraformVarsDrift(config, rendered), []);
   const reordered = `certificate_arn = "arn:x"\n# an operator comment\n${rendered}`;
-  assert.deepEqual(terraformVarsDrift(config, reordered, declared), [], "operator additions/formatting are not drift");
+  assert.deepEqual(terraformVarsDrift(config, reordered), [], "operator additions/formatting are not drift");
   const wrongCluster = rendered.replace('"acme-qm"', '"other-cluster"');
-  assert.deepEqual(terraformVarsDrift(config, wrongCluster, declared), ["cluster_name"]);
+  assert.deepEqual(terraformVarsDrift(config, wrongCluster), ["cluster_name"]);
   const wrongServices = rendered.replace('"cpu": 2048', '"cpu": 1024');
-  assert.deepEqual(terraformVarsDrift(config, wrongServices, declared), ["services"]);
-  assert.ok(terraformVarsDrift(config, "", declared).length >= 8, "an empty file drifts on every derived var");
+  assert.deepEqual(terraformVarsDrift(config, wrongServices), ["services"]);
+  assert.ok(terraformVarsDrift(config, "").length >= 8, "an empty file drifts on every derived var");
 });
 
 test("the deploy role lists tasks only within its cluster", () => {
   const listing = mainTf.match(/Sid\s*= "ListClusterTasks"([\s\S]*?)\n\s*\},\n/)?.[1] ?? "";
   assert.match(listing, /ecs:ListTasks/);
   assert.match(listing, /"ecs:cluster" = aws_ecs_cluster\.this\.arn/);
-});
-
-test("terraform routes the app wildcard through the front door when a shared ALB uses the same app domain", () => {
-  for (const key of ["AWS_DEPLOY_APPS_DOMAIN", "DEPLOY_APPS_DOMAIN"]) {
-    const rendered = terraformVars(
-      {
-        ...config,
-        apiUrl: "https://api.agent.acme.example",
-        aws: { ...config.aws!, sharedAlb: true },
-        env: { core: { [key]: "apps.agent.acme.example", PORTAL_APPS_DOMAIN: "APPS.AGENT.ACME.EXAMPLE." } },
-      },
-      "",
-      declared,
-    );
-    assert.match(rendered, /core_public_hosts\s+= \[\s+"api\.agent\.acme\.example"\s+\]/);
-    assert.doesNotMatch(rendered, /\*\.apps/);
-  }
-});
-
-test("terraform rejects a front-door app domain that differs from core's", () => {
-  assert.throws(
-    () =>
-      terraformVars(
-        {
-          ...config,
-          env: {
-            core: { DEPLOY_APPS_DOMAIN: "apps.agent.acme.example", PORTAL_APPS_DOMAIN: "other.agent.acme.example" },
-          },
-        },
-        "",
-        declared,
-      ),
-    /PORTAL_APPS_DOMAIN must equal the core apps domain/,
-  );
-});
-
-test("dedicated ALBs retain direct core app routing when the front door declares the same domain", () => {
-  const rendered = terraformVars(
-    {
-      ...config,
-      apiUrl: "https://api.agent.acme.example",
-      env: { core: { DEPLOY_APPS_DOMAIN: "apps.agent.acme.example", PORTAL_APPS_DOMAIN: "apps.agent.acme.example" } },
-    },
-    "",
-    declared,
-  );
-  assert.match(
-    rendered,
-    /core_public_hosts\s+= \[\s+"\*\.apps\.agent\.acme\.example",\s+"api\.agent\.acme\.example"\s+\]/,
-  );
 });

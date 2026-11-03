@@ -75,12 +75,7 @@ import {
 } from "../util.ts";
 import { doctorCommon } from "./doctor.ts";
 import { checkControlledLiveSession } from "../live-session.ts";
-import {
-  assertTerraformScaffoldSupportsConfig,
-  awsObjectStoreBucket,
-  declaredVariables,
-  terraformVarsDrift,
-} from "../terraform.ts";
+import { assertTerraformScaffoldSupportsConfig, awsObjectStoreBucket, terraformVarsDrift } from "../terraform.ts";
 import {
   currentDeploymentLayerState,
   deploymentLayerBody,
@@ -3947,17 +3942,14 @@ function assertCloudFrontLayerTarget(config: QmConfig, url: URL, target: string)
 interface AwsIngressRoute {
   service: string;
   paths: readonly string[];
-  hosts: readonly string[];
 }
 
 function awsIngressRoutes(config: QmConfig): ReadonlyMap<string, AwsIngressRoute> {
   const routes = new Map<string, AwsIngressRoute>();
   for (const [name, service] of Object.entries(requireAws(config).services)) {
-    if (service?.publicPaths?.length) routes.set(name, { service: name, paths: service.publicPaths, hosts: [] });
+    if (service?.publicPaths?.length) routes.set(name, { service: name, paths: service.publicPaths });
   }
-  const coreHosts = awsCoreHostnames(config);
-  if (coreHosts.length) routes.set("core", { service: "core", paths: [], hosts: coreHosts });
-  routes.set(CORE_PUBLIC_PORT_NAME, { service: "core", paths: ["/*"], hosts: [] });
+  routes.set(CORE_PUBLIC_PORT_NAME, { service: "core", paths: ["/*"] });
   return routes;
 }
 
@@ -3976,7 +3968,6 @@ export function assertAwsPublicRouting(
   const aws = requireAws(config);
   const routes = awsIngressRoutes(config);
   const ingress = [...routes.keys()];
-  const coreHosts = routes.get("core")?.hosts ?? [];
   const publicPaths = new Map(
     [...routes].flatMap(([name, route]) =>
       route.service === name && route.paths.length ? [[name, route.paths] as const] : [],
@@ -4042,7 +4033,7 @@ export function assertAwsPublicRouting(
   if (alternateTargets.size && alternateTargets.size !== ingress.length) {
     throw new Error("ALB cannot mix rolling and blue/green ingress services");
   }
-  if (aws.sharedAlb && (ingress.length !== 1 || alternateTargets.size !== 1)) {
+  if (aws.sharedAlb && (ingress.length !== 1 || alternateTargets.size !== 1 || awsCoreHostnames(config).length)) {
     throw new Error("shared ALB requires one blue/green core front-door ingress without additional public routes");
   }
   const defaults = listener.DefaultActions ?? [];
@@ -4197,15 +4188,8 @@ export function assertAwsPublicRouting(
       const condition = rule?.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
       const pathValues =
         condition?.Field === "path-pattern" ? (condition.PathPatternConfig?.Values ?? condition.Values ?? []) : [];
-      const hostValues =
-        condition?.Field === "host-header" ? (condition.HostHeaderConfig?.Values ?? condition.Values ?? []) : [];
-      const { paths: expectedPaths, hosts: expectedHosts } = routes.get(name)!;
-      if (
-        pathValues.length !== expectedPaths.length ||
-        expectedPaths.some((value) => !pathValues.includes(value)) ||
-        hostValues.length !== expectedHosts.length ||
-        expectedHosts.some((value) => !hostValues.map((host) => host.toLowerCase()).includes(value))
-      ) {
+      const expectedPaths = routes.get(name)!.paths;
+      if (pathValues.length !== expectedPaths.length || expectedPaths.some((value) => !pathValues.includes(value))) {
         throw new Error(`blue/green ALB rule for ${name} does not match its production route`);
       }
       targets.set(name, active[0].TargetGroupArn);
@@ -4213,28 +4197,7 @@ export function assertAwsPublicRouting(
     return targets;
   }
   nonDefault = nonDefault.filter((rule) => !pluginRules.has(rule));
-  if (!coreHosts.length && nonDefault.length)
-    throw new Error("ALB has non-default rules beyond the declared plugin routes");
-  if (coreHosts.length) {
-    const found: string[] = [];
-    for (const rule of nonDefault) {
-      const action = rule.Actions?.length === 1 ? rule.Actions[0] : undefined;
-      const condition = rule.Conditions?.length === 1 ? rule.Conditions[0] : undefined;
-      const values =
-        condition?.Field === "host-header" ? (condition.HostHeaderConfig?.Values ?? condition.Values ?? []) : [];
-      if (action?.Type !== "forward" || action.TargetGroupArn !== targets.get("core") || !values.length) {
-        throw new Error(
-          `ALB has a non-default rule that is not a single host-header forward to core (expected only ${coreHosts.join(", ")})`,
-        );
-      }
-      found.push(...values.map((value) => value.toLowerCase()));
-    }
-    if (found.length !== coreHosts.length || coreHosts.some((host) => !found.includes(host))) {
-      throw new Error(
-        `ALB host rules must route exactly ${coreHosts.join(", ")} to core (live: ${found.join(", ") || "none"})`,
-      );
-    }
-  }
+  if (nonDefault.length) throw new Error("ALB has non-default rules beyond the declared plugin routes");
   return targets;
 }
 
@@ -4384,9 +4347,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
     check("Terraform coordinates", () => {
       const path = tfvarsPath;
       const existing = readFileSync(path, "utf8");
-      const variablesPath = join(configDir, "infra", "variables.tf");
-      const declared = existsSync(variablesPath) ? declaredVariables(readFileSync(variablesPath, "utf8")) : [];
-      const drift = terraformVarsDrift(config, existing, declared);
+      const drift = terraformVarsDrift(config, existing);
       if (drift.length)
         throw new Error(`terraform.tfvars drift (${drift.join(", ")}); run \`qm infra render\` and commit the result`);
     });

@@ -211,8 +211,7 @@ namespace. Each of the one to five unique patterns must start with the plugin
 name and end in `/*`; broader catch-all paths and paths outside that namespace
 are rejected. The plugin must authenticate its requests.
 
-The AWS scaffold renders these paths before core host rules and portal catch-all
-rules. Deployment preflight verifies the exact paths, target-group attachments
+The AWS scaffold renders these paths before core's front-door catch-all rule. Deployment preflight verifies the exact paths, target-group attachments
 and listener precedence, including native blue/green weighted routing. Update
 vendored Terraform with the `public_paths` service attribute and
 `public_path_services` routing before enabling this setting.

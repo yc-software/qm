@@ -236,7 +236,7 @@ run "plaintext" {
 );
 
 test(
-  "AWS init plans core as the public front door with direct core host routes beside it",
+  "AWS init plans core as the only public front door",
   { skip: !terraformRequested && !terraformBin ? "Terraform is unavailable" : false },
   () => {
     assert.ok(terraformBin, `QM_TEST_TERRAFORM is not executable: ${process.env.QM_TEST_TERRAFORM}`);
@@ -279,25 +279,10 @@ run "front_door" {
     error_message = "core's front door is not guarded by rollback alarms"
   }
 }
-run "split_core_hosts" {
-  command = plan
-  variables {
-    certificate_arn   = "arn:aws:acm:us-west-2:123456789012:certificate/00000000-0000-0000-0000-000000000000"
-    core_public_hosts = ["api.door.example.com"]
-  }
-  assert {
-    condition = flatten([for c in aws_lb_listener_rule.production["core"].condition : [for h in c.host_header : h.values]]) == ["api.door.example.com"] && aws_lb_listener_rule.production["core"].priority < aws_lb_listener_rule.production["core-public"].priority
-    error_message = "split core hosts must route to core's API ahead of the front door"
-  }
-  assert {
-    condition = toset([for lb in aws_ecs_service.service["core"].load_balancer : lb.container_port]) == toset([8000, 8080]) && length(aws_ecs_service.service["core"].alarms[0].alarm_names) == 4
-    error_message = "core must serve both its API and front-door target groups"
-  }
-}
 `,
       );
       terraform(dir, terraformBin, ["init", "-backend=false"]);
-      assert.match(terraform(dir, terraformBin, ["test", "-verbose"]), /Success!.*2 passed, 0 failed/s);
+      assert.match(terraform(dir, terraformBin, ["test", "-verbose"]), /Success!.*1 passed, 0 failed/s);
     } finally {
       rmDir(dir);
     }

@@ -73,6 +73,7 @@ export async function startFrontDoor(
   env.CORE_ORG_ID = config.orgId;
   env.PORTAL_PUBLIC_URL = config.publicWebUrl ?? `http://localhost:${config.publicPort}`;
   env.WEB_UI_PUBLIC_URL ||= env.PORTAL_PUBLIC_URL;
+  if (config.deployAppsDomain) env.PORTAL_APPS_DOMAIN ||= config.deployAppsDomain;
   const web = (await import("../../plugins/web-ui/server/index.ts")) as WebSurface;
   const webServer = await web.startServer({
     port: 0,

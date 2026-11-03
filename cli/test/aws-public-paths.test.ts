@@ -26,7 +26,6 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
       orgId: "acme",
       target: "aws",
       publicUrl: "https://acme.example",
-      apiUrl: "https://api.acme.example",
       services: ["core"],
       env: { core: { AWS_DEPLOY_IMAGE: "acme-sandbox" } },
       plugins: [{ name: "hooks", image: "ghcr.io/acme/hooks:1" }],
@@ -46,7 +45,7 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
     }),
   );
   const frontDoor = `acme-core-${createHash("sha1").update("acme:core-public").digest("hex").slice(0, 6)}`;
-  const names = ["core", "core-public", "hooks"];
+  const names = ["core-public", "hooks"];
   const groupName = (name: string): string => (name === "core-public" ? frontDoor : name);
   const groups = names.flatMap((name) => [
     { TargetGroupArn: name, TargetGroupName: groupName(name) },
@@ -57,7 +56,7 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
     .map((name) => ({
       RuleArn: `${name}-rule`,
       IsDefault: false,
-      Priority: { hooks: priority, core: "11", "core-public": "50000" }[name],
+      Priority: name === "hooks" ? priority : "50000",
       Actions: [
         blueGreen
           ? {
@@ -72,9 +71,7 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
           : { Type: "forward", TargetGroupArn: name },
       ],
       Conditions: [
-        name === "core"
-          ? { Field: "host-header", HostHeaderConfig: { Values: ["api.acme.example"] } }
-          : { Field: "path-pattern", PathPatternConfig: { Values: name === "core-public" ? ["/*"] : ["/hooks/*"] } },
+        { Field: "path-pattern", PathPatternConfig: { Values: name === "core-public" ? ["/*"] : ["/hooks/*"] } },
       ],
     }));
   const responses = {
@@ -119,7 +116,7 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
       : {}),
   });
   const services = new Map([
-    ["core", { loadBalancers: [attachment("core"), attachment("core-public")] }],
+    ["core", { loadBalancers: [attachment("core-public")] }],
     ["hooks", { loadBalancers: [attachment("hooks")] }],
   ]);
   return {
@@ -139,20 +136,21 @@ for (const blueGreen of [false, true]) {
     try {
       const config = loadConfigAt(f.configPath).config;
       assert.equal(assertAwsPublicRouting(config, f.services).get("hooks"), "hooks");
-      assert.match(terraformVars(config, "", ["core_public_hosts"]), /"public_paths": \[\s*"\/hooks\/\*"/);
-    } finally {
-      f.close();
-    }
-  });
-  test(`public plugin cannot sit behind core ${blueGreen ? "blue/green" : "rolling"} routes`, () => {
-    const f = fixture(undefined, blueGreen, "15");
-    try {
-      assert.throws(() => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services), /must precede/);
+      assert.match(terraformVars(config), /"public_paths": \[\s*"\/hooks\/\*"/);
     } finally {
       f.close();
     }
   });
 }
+
+test("public plugin cannot sit behind core's blue/green front-door route", () => {
+  const f = fixture(undefined, true, "50001");
+  try {
+    assert.throws(() => assertAwsPublicRouting(loadConfigAt(f.configPath).config, f.services), /must precede/);
+  } finally {
+    f.close();
+  }
+});
 
 test("public plugin live routing cannot broaden declared paths", () => {
   const f = fixture(["/hooks/events/*"]);

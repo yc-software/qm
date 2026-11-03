@@ -1,4 +1,3 @@
-import { awsCoreHostnames } from "./aws-routing.ts";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -14,7 +13,6 @@ const DERIVED_VARS = new Set([
   "region",
   "cluster_name",
   "public_url",
-  "core_public_hosts",
   "cloud_map_namespace",
   "secrets_prefix",
   "github_oidc_provider_arn",
@@ -147,22 +145,10 @@ function managedTaskRoles(existing: string): Set<string> {
 
 function derivedValues(
   config: QmConfig,
-  declared: readonly string[],
   managedRoles = new Set<string>(),
 ): { strings: Record<string, string>; json: Record<string, unknown> } {
   if (!config.aws) throw new CliError("terraform rendering requires target aws and an aws block");
   const aws = config.aws;
-  if (aws.deployEnvironment && !declared.includes("github_environment")) {
-    throw new CliError(
-      "the vendored AWS scaffold predates aws.deployEnvironment; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
-    );
-  }
-  const corePublicHosts = awsCoreHostnames(config);
-  if (corePublicHosts.length && !declared.includes("core_public_hosts")) {
-    throw new CliError(
-      "the vendored AWS scaffold predates split front-door/core host routing; update infra/variables.tf and infra/main.tf from the current scaffold before configuring apiUrl or AWS_DEPLOY_APPS_DOMAIN",
-    );
-  }
   const services = Object.fromEntries(
     Object.entries(aws.services).map(([name, service]) => {
       const manageTaskRole =
@@ -198,18 +184,15 @@ function derivedValues(
       cloud_map_namespace: aws.networking.cloudMapNamespace,
       secrets_prefix: aws.secretsPrefix,
       github_oidc_provider_arn: `arn:aws:iam::${aws.accountId}:oidc-provider/token.actions.githubusercontent.com`,
-      ...(declared.includes("github_environment") ? { github_environment: aws.deployEnvironment ?? "" } : {}),
+      github_environment: aws.deployEnvironment ?? "",
       object_store_bucket: awsObjectStoreBucket(config),
       transfer_lifecycle_prefix: `${config.env.core?.S3_PREFIX ?? ""}transfer/`,
       deploy_microvm_image: config.env.core?.AWS_DEPLOY_IMAGE?.trim() || config.orgId,
       deploy_microvm_execution_role_arn:
         config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`,
-      ...(declared.includes("db_instance_class") && aws.dbInstanceClass
-        ? { db_instance_class: aws.dbInstanceClass }
-        : {}),
+      ...(aws.dbInstanceClass ? { db_instance_class: aws.dbInstanceClass } : {}),
     },
     json: {
-      ...(declared.includes("core_public_hosts") ? { core_public_hosts: [...new Set(corePublicHosts)].sort() } : {}),
       services,
       secret_names: secrets.map((secret) => secret.name),
     },
@@ -231,13 +214,13 @@ export function awsObjectStoreBucket(config: QmConfig): string {
 export function terraformVars(
   config: QmConfig,
   existing = "",
-  declared: string[] = [...Object.keys(OPERATOR_DEFAULTS), "github_environment"],
+  declared: string[] = Object.keys(OPERATOR_DEFAULTS),
 ): string {
   assertSafeAssumeRoleTransition(config, existing);
-  const { strings, json } = derivedValues(config, declared, managedTaskRoles(existing));
+  const { strings, json } = derivedValues(config, managedTaskRoles(existing));
   const line = (name: string, value: string): string => `${name.padEnd(19)} = ${value}`;
   const lines = Object.entries(strings).map(([name, value]) => line(name, JSON.stringify(value)));
-  if (!config.aws?.dbInstanceClass && declared.includes("db_instance_class")) {
+  if (!config.aws?.dbInstanceClass) {
     const preserved = hclAssignment(existing, "db_instance_class");
     if (preserved !== undefined) lines.push(preserved);
   }
@@ -252,15 +235,8 @@ export function terraformVars(
   return lines.join("\n");
 }
 
-export function terraformVarsDrift(
-  config: QmConfig,
-  existing: string,
-  declared: string[] = [
-    ...(hclAssignment(existing, "github_environment") === undefined ? [] : ["github_environment"]),
-    ...(hclAssignment(existing, "core_public_hosts") === undefined ? [] : ["core_public_hosts"]),
-  ],
-): string[] {
-  const { strings, json } = derivedValues(config, declared, managedTaskRoles(existing));
+export function terraformVarsDrift(config: QmConfig, existing: string): string[] {
+  const { strings, json } = derivedValues(config, managedTaskRoles(existing));
   const drift: string[] = [];
   for (const [name, value] of Object.entries(strings)) {
     if (hclString(existing, name) !== value) drift.push(name);

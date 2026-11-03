@@ -3,17 +3,6 @@ variable "account_id" { type = string }
 variable "region" { type = string }
 variable "cluster_name" { type = string }
 variable "public_url" { type = string }
-variable "core_public_hosts" {
-  type    = set(string)
-  default = []
-  validation {
-    condition = alltrue([
-      for host in var.core_public_hosts :
-      can(regex("^(\\*\\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", host))
-    ])
-    error_message = "core_public_hosts entries must be normalized DNS hostnames with an optional leading wildcard"
-  }
-}
 variable "cloud_map_namespace" { type = string }
 variable "secrets_prefix" { type = string }
 variable "github_repository" {
@@ -69,12 +58,6 @@ variable "certificate_arn" {
   validation {
     condition     = var.certificate_arn == "" || can(regex("^arn:(aws|aws-us-gov|aws-cn):acm:[a-z0-9-]+:[0-9]{12}:certificate/[0-9a-f-]+$", var.certificate_arn))
     error_message = "certificate_arn must be an ACM certificate ARN in the configured AWS partition"
-  }
-}
-check "split_core_hosts_require_direct_tls" {
-  assert {
-    condition     = length(var.core_public_hosts) == 0 || var.certificate_arn != ""
-    error_message = "core_public_hosts requires certificate_arn because split host routing uses the public HTTPS ALB instead of the default CloudFront hostname"
   }
 }
 variable "db_name" {

@@ -41,7 +41,8 @@ terraform -chdir=infra apply qm.tfplan
 ```
 
 Set `publicUrl`, `env.core.AWS_PUBLIC_ORIGIN_URL`, and `aws.deployRoleArn` from
-the Terraform outputs. Finish `npm exec qm -- setup .`, render again, and apply.
+the Terraform outputs. `apiUrl` goes through the front door on every target, so
+only the front door's pass-through paths reach core's API. Finish `npm exec qm -- setup .`, render again, and apply.
 
 ## Publish the agent computer and deploy
 
