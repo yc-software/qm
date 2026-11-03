@@ -5,6 +5,10 @@ import { createSandboxResourceStores } from "../src/sandbox/sandbox-resource-sto
 import type { SandboxResource } from "../src/sandbox/sandbox-resources.ts";
 import { DEPLOYMENT_LAYER, type StoredDeploymentLayer } from "../src/deployment/deployment-layer-store.ts";
 import { pgRows, type RowTable } from "../src/persistence/keyed-rows.ts";
+import { registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { buildApp } from "../src/wiring.ts";
+import { stopAtEnd } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
 
 const table =
   <T, K extends string>(spec: RowTable<T, K>) =>
@@ -130,4 +134,23 @@ test("the deployment layer row backfills and stays per tenant", { skip }, async 
     },
     (admin) => seedKeyValueTable(admin, "deployment_layer", { current: layer }),
   );
+});
+
+test("the app registers every compute and deploy table whichever backends it is configured for", { skip }, async () => {
+  const config = testConfig();
+  stopAtEnd(buildApp(config));
+  const ids = new Set(registeredPgMigrations(config.databaseUrl!).map((migration) => migration.id));
+  for (const table of [
+    "sprites_initialization",
+    "render_sandbox_bases",
+    "render_deploy_credentials",
+    "render_app_storage",
+    "aws_deploy_bodies",
+    "fly_peer_claims",
+    "fly_deploy_configs",
+    "fly_deploy_ports",
+    "porter_deploy_bodies",
+    "e2b_deploy_bodies",
+  ])
+    assert.ok(ids.has(`tenancy/${table}/0001-typed`), table);
 });
