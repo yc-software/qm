@@ -55,6 +55,39 @@ test("pausing holds delivery, resuming releases it, and stopping is terminal", a
   );
 });
 
+test("a paused worker's held notification does not keep the swarm in the outbox sweep", async () => {
+  const fixture = await swarmFixture();
+  const [worker] = await fixture.service.spawn(fixture.caller, { requestId: "one", text: "Work" });
+  await fixture.service.control(fixture.caller, { memberId: worker!.id, state: "paused" });
+  await fixture.service.sweep();
+  assert.equal((await fixture.store.get(fixture.root.id))!.messages[0]!.notifications[worker!.id]!.state, "pending");
+  assert.deepEqual(await fixture.store.pending(), []);
+  await fixture.service.control(fixture.caller, { memberId: worker!.id, state: "active" });
+  assert.deepEqual(
+    (await fixture.store.pending()).map((swarm) => swarm.id),
+    [fixture.root.id],
+  );
+});
+
+test("an expired swarm fails a paused worker's held notifications and keeps their run ids", async () => {
+  const fixture = await swarmFixture();
+  const [first, second] = await fixture.service.spawn(fixture.caller, { requestId: "pool", text: "Work", count: 2 });
+  await fixture.service.sweep();
+  const queued = (await fixture.store.get(fixture.root.id))!.messages[0]!.notifications[second!.id]!;
+  assert.equal(queued.state, "queued");
+  await fixture.service.control(fixture.caller, { memberId: second!.id, state: "paused" });
+  await fixture.service.send(fixture.caller, { requestId: "status", text: "Status?", audience: "all" });
+  await fixture.store.update(fixture.root.id, (swarm) => {
+    swarm.expiresAt = Date.now() - 1;
+  });
+  await fixture.service.sweep();
+  const swarm = (await fixture.store.get(fixture.root.id))!;
+  assert.deepEqual(swarm.messages[0]!.notifications[second!.id], { state: "failed", runId: queued.runId });
+  assert.equal(swarm.messages.at(-1)!.notifications[second!.id]!.state, "failed");
+  assert.equal(swarm.messages.at(-1)!.notifications[first!.id]!.state, "failed");
+  assert.deepEqual(await fixture.store.pending(), []);
+});
+
 test("a worker cannot control a sibling", async () => {
   const fixture = await swarmFixture();
   const [first, second] = await fixture.service.spawn(fixture.caller, { requestId: "pool", text: "Work", count: 2 });

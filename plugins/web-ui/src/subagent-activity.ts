@@ -61,14 +61,22 @@ export function subagentRows(list: readonly CoreSession[], rootId: string): Suba
       session,
       state,
       depth,
-      startedAt: session.createdAt,
+      startedAt: (live && session.workingSince) || session.createdAt,
       endedAt: live ? null : (session.lastActivityAt ?? session.createdAt),
     };
   });
 }
 
 export function visibleSubagents(rows: readonly SubagentRow[], acknowledged: ReadonlySet<string>): SubagentRow[] {
-  return rows.filter((row) => row.state !== "done" && !(row.state === "failed" && acknowledged.has(ackKey(row))));
+  const depths = new Map<string, number>();
+  const visible: SubagentRow[] = [];
+  for (const row of rows) {
+    const shown = row.state !== "done" && !(row.state === "failed" && acknowledged.has(ackKey(row)));
+    const depth = (depths.get(row.session.parentSessionId ?? "") ?? 0) + (shown ? 1 : 0);
+    depths.set(row.session.id, depth);
+    if (shown) visible.push(depth === row.depth ? row : { ...row, depth });
+  }
+  return visible;
 }
 
 export function ackKey(row: Pick<SubagentRow, "session" | "endedAt">): string {

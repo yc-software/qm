@@ -1,4 +1,5 @@
 import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
+import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { MAX_SCREEN_CHARS } from "../src/security/security-posture.ts";
@@ -15,6 +16,11 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
+import { createAgent } from "../src/agent/agent-run.ts";
+import { anthropicStream, contextHeaders, recordRequests } from "./support/gateway-stream.ts";
+import { settle } from "./support/settle.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { withModelRequestContext } from "../src/model/request-context.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -30,7 +36,6 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import {
   testConfigStore,
@@ -41,6 +46,7 @@ import {
 } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -127,7 +133,6 @@ function buildOrchestrator(
     files,
     sandbox: fakeSandbox(),
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 1000, windowMs: 60_000 }),
     agent: createMockAgent(),
     memory,
     deploy,
@@ -832,6 +837,150 @@ for (const location of [
   });
 }
 
+test("carried skill and steer screens tell the model gateway which session they serve", async (t) => {
+  const requests = recordRequests(t, '{"decision":"auto"}');
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const skill = await skills.create({
+    scopeId: scopeId("personal", actor.id),
+    createdBy: actor.id,
+    manifest: {
+      name: "carried-method",
+      description: "A method",
+      body: "Do work.",
+      requiredCapabilities: [],
+      files: [],
+    },
+  });
+  await skills.review(skill.id, actor.id, []);
+  await skills.publish(skill.id);
+  const agent = createMockAgent();
+  agent.screenSecurity = createAgent({
+    detectModelId: "claude-haiku-4-5",
+    modelGateway: {
+      url: "https://gateway.test",
+      apiKey: "k",
+      apiKeyHeader: "api-key",
+      models: { "claude-haiku-4-5": "m" },
+      actorKey: "test-actor-key",
+    },
+  }).screenSecurity;
+  const { orchestrator, config, sessions } = buildOrchestrator({
+    skills,
+    agent,
+    isCurrentSharedScopeMember: async () => true,
+  });
+  await config.setSharingPosture(scopeId("org", ORG), "open");
+  const conversation: Conversation = {
+    kind: "channel",
+    channelRef: "C1",
+    threadRef: "C1:carried-context",
+    audience: [actor],
+    publishMembers: [actor],
+  };
+  const result = await orchestrator.handleTurn({
+    surface: "test",
+    actor,
+    origin: { kind: "human" },
+    conversation,
+    text: "!skill carried-method",
+  });
+  assert.match(result.reply ?? "", /Do work/);
+  const turnContext = {
+    "x-qm-session-id": result.sessionId!,
+    "x-qm-actor": gatewayActorId(actor.id, "test-actor-key"),
+    "x-qm-scope": "channel:C1",
+    "x-qm-origin": "conversation",
+    "x-qm-purpose": "security_screen",
+  };
+  assert.deepEqual(
+    contextHeaders(requests.find((request) => request.body.includes("carried-method"))!.headers),
+    turnContext,
+  );
+
+  const steer = () =>
+    orchestrator.screenSecuritySteer({ payload: "[]", actor, conversation, sessionId: result.sessionId });
+  assert.equal(await steer(), "allow");
+  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), turnContext);
+  const cron = await sessions.getOrCreateByThread("agent:main:cron:nightly", "channel", scopeId("channel", "C1"));
+  await sessions.setParentSession(result.sessionId!, cron.id);
+  assert.equal(await steer(), "allow");
+  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { ...turnContext, "x-qm-origin": "cron" });
+  sessions.inheritedOrigin = () => Promise.reject(new Error("session store unavailable"));
+  assert.equal(await steer(), "allow");
+  const { "x-qm-origin": _unresolved, ...unresolvedOrigin } = turnContext;
+  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), unresolvedOrigin);
+});
+
+test("a steer delivered by notification is screened in the context of the turn it steers", async (t) => {
+  let release!: () => void;
+  const turnHeld = new Promise<void>((resolve) => (release = resolve));
+  let turnStarted!: () => void;
+  const started = new Promise<void>((resolve) => (turnStarted = resolve));
+  const screens: Array<Record<string, string>> = [];
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    release();
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    if (headers.get("x-qm-purpose") === "turn") {
+      turnStarted();
+      await turnHeld;
+    }
+    if (headers.get("x-qm-purpose") === "security_screen" && String(init?.body).includes("UPDATED_INBOX_SNAPSHOT"))
+      screens.push(contextHeaders(headers));
+    return new Response(anthropicStream('{"decision":"auto"}'), { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const { orchestrator } = buildOrchestrator({
+    agent: createAgent({
+      defaultModelId: "claude-haiku-4-5",
+      detectModelId: "claude-haiku-4-5",
+      modelGateway: {
+        url: "https://gateway.test",
+        apiKey: "k",
+        apiKeyHeader: "api-key",
+        models: { "claude-haiku-4-5": "m" },
+        actorKey: "test-actor-key",
+      },
+      signals,
+    }),
+  });
+  const thread = "web:alice:inbox";
+  const turn = orchestrator.handleTurn(dm(thread, "hello", { surface: "web", runId: "run-steered" }));
+  await started;
+  const steer = (ts: string) =>
+    signals.send("run-steered", {
+      kind: "steer",
+      text: "summarize again",
+      ts,
+      request: {
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: thread },
+        text: "summarize again",
+        conversationHeader: "UPDATED_INBOX_SNAPSHOT",
+      },
+    });
+  const sender = { sessionId: "session-sender", actorId: "U2", scopeId: "personal:U2", origin: "cron" as const };
+  await withModelRequestContext(sender, () => steer("1"));
+  await settle(async () => screens.length === 1);
+  await steer("2");
+  await settle(async () => screens.length === 2);
+  release();
+  const result = await turn;
+  assert.equal(result.status, "ok", result.reason);
+  const turnContext = {
+    "x-qm-session-id": result.sessionId!,
+    "x-qm-actor": gatewayActorId(actor.id, "test-actor-key"),
+    "x-qm-scope": `personal:${gatewayActorId(actor.id, "test-actor-key")}`,
+    "x-qm-origin": "conversation",
+    "x-qm-purpose": "security_screen",
+  };
+  assert.deepEqual(screens, [turnContext, turnContext]);
+});
+
 test("Open uses the exact skill snapshot that passed screening despite an in-flight source update", async () => {
   const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const owner = scopeId("personal", actor.id);
@@ -1208,8 +1357,8 @@ for (const surfaceTools of [false, true]) {
       ...base,
       runTurn: async (turn) => {
         seen.push(turn);
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-        await turn.emit({ type: "assistant", payload: { text: "ok" }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "UserMessage", text: turn.input });
+        await turn.emit({ kind: "AgentMessage", text: "ok" });
         return { reply: "ok" };
       },
     };
@@ -1229,10 +1378,10 @@ for (const surfaceTools of [false, true]) {
     assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
     assert.match(seen[2]!.environment!, /GAMMA_MARKER/);
     assert.match(seen[2]!.environment!, /\nU1: 1 earlier fact was consolidated or removed/);
-    const entries = await sessions.getEntries(first.sessionId!);
-    const users = entries.filter((entry) => entry.type === "user");
-    assert.match(JSON.stringify(users[0]!.payload), /memoryRecall/);
-    assert.doesNotMatch(JSON.stringify(users[1]!.payload), /ALPHA_MARKER|BETA_MARKER/);
+    const items = await sessions.getItems(first.sessionId!);
+    const users = items.filter((item) => USER_ITEM_KINDS.includes(item.kind));
+    assert.match(JSON.stringify(users[0]!.body), /memoryRecall/);
+    assert.doesNotMatch(JSON.stringify(users[1]), /ALPHA_MARKER|BETA_MARKER/);
   });
 }
 
@@ -1250,7 +1399,7 @@ test("scheduled-work changes update the next turn's system block without rewriti
   const input = dm("dm:U1:snapshot-cache", "hello");
   const first = await orchestrator.handleTurn(input);
   assert.equal(first.status, "ok");
-  const originalHistory = await sessions.getEntries(first.sessionId!);
+  const originalItems = await sessions.getItems(first.sessionId!);
   const cron = await crons.create({
     owner: actor.id,
     createdBy: actor.id,
@@ -1274,8 +1423,11 @@ test("scheduled-work changes update the next turn's system block without rewriti
   assert.equal(seen[2]!.systemPrompt, seen[0]!.systemPrompt);
   assert.match(seen[3]!.systemPrompt, /Scheduled-work status is unavailable/);
   assert.doesNotMatch(seen[1]!.systemPrompt, /Other Linux|8 vCPU|\/new\/workspace/);
-  assert.deepEqual(seen[1]!.history, originalHistory);
-  assert.deepEqual((await sessions.getEntries(first.sessionId!)).slice(0, originalHistory.length), originalHistory);
+  assert.deepEqual(
+    seen[1]!.history,
+    originalItems.map((item) => entryFromItem(item, seen[1]!.session.scopeId)),
+  );
+  assert.deepEqual((await sessions.getItems(first.sessionId!)).slice(0, originalItems.length), originalItems);
 });
 
 for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as const) {

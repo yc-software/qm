@@ -1,5 +1,4 @@
 import type { ReapEvent, RunStore } from "./run-store.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { ScopeId } from "../types.ts";
 import { createSweeper } from "../util/sweeper.ts";
@@ -23,13 +22,6 @@ export interface Reaper {
   sweep(): Promise<{ requeued: number; parked: number }>;
 }
 
-async function releaseStrandedSessionLeases(sessions: SessionStore, sessionIds: string[]): Promise<void> {
-  for (const threadRef of new Set(sessionIds)) {
-    const session = await sessions.getByThread(threadRef);
-    if (session) await sessions.forceReleaseLease(session.id);
-  }
-}
-
 export interface ReaperOptions {
   intervalMs: number;
   leaderLease: LeaderLease;
@@ -37,11 +29,11 @@ export interface ReaperOptions {
   errors?: ErrorLog;
 }
 
-export function createReaper(runs: RunStore, sessions: SessionStore, opts: ReaperOptions): Reaper {
+export function createReaper(runs: RunStore, opts: ReaperOptions): Reaper {
   const leaderLease = opts.leaderLease;
   const { errors } = opts;
   const reap = (): Promise<{ requeued: number; parked: number }> =>
-    runs.reapExpired((retiredSessionIds) => releaseStrandedSessionLeases(sessions, retiredSessionIds), {
+    runs.reapExpired({
       ...(opts.maxAgeMs !== undefined ? { maxAgeMs: opts.maxAgeMs } : {}),
       ...(errors ? { onReap: (e: ReapEvent) => recordReapEvent(errors, e) } : {}),
     });

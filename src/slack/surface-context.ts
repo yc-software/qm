@@ -17,6 +17,7 @@ import {
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { Directory } from "./directory.ts";
+import { slackMessageContent } from "./message-content.ts";
 import {
   type ConversationSerializer,
   RECENT_HISTORY_LIMIT,
@@ -61,7 +62,7 @@ export function createSurfaceContextFulfiller(deps: {
         .map((m) => ({
           ts: String(m?.ts ?? ""),
           name: String(m?.username || m?.user || "someone"),
-          text: String(m?.text ?? ""),
+          text: slackMessageContent(m ?? {}).text,
           ...(m?.user ? { authorId: String(m.user) } : {}),
         }))
         .filter((m) => m.ts);

@@ -8,6 +8,7 @@ import { createKeyedQueue } from "../util/async.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
+import type { SpendLimit } from "../ratelimit/spend-limits.ts";
 import {
   deriveConnectorKey,
   encryptSecret,
@@ -35,6 +36,7 @@ export interface PersistedSoulRevision {
   version: number;
   updatedAt: number;
   updatedBy?: string;
+  sessionId?: string;
 }
 type SoulSnapshot = PersistedSoul | null;
 type ScopedRow<K extends string, V> = { scopeId: ScopeId } & Record<K, V>;
@@ -91,8 +93,14 @@ export interface PersistedDeploymentIdentity {
 export interface ScopedConfigStore {
   refreshSecurity(ids: ScopeId[]): Promise<void>;
   getSoul(id: ScopeId): string | null;
-  setSoul(id: ScopeId, content: string, updatedBy?: string): Promise<number>;
-  setSoulIfVersion(id: ScopeId, expectedVersion: number, content: string, updatedBy?: string): Promise<number | null>;
+  setSoul(id: ScopeId, content: string, updatedBy?: string, sessionId?: string): Promise<number>;
+  setSoulIfVersion(
+    id: ScopeId,
+    expectedVersion: number,
+    content: string,
+    updatedBy?: string,
+    sessionId?: string,
+  ): Promise<number | null>;
   soulVersion(id: ScopeId): number;
   soulHistory(id: ScopeId): PersistedSoulRevision[];
   captureSoulSnapshot(id: ScopeId): Promise<SoulSnapshot>;
@@ -156,6 +164,8 @@ export interface ScopedConfigStore {
   getBranding(id: ScopeId): OrgBranding | null;
   setBranding(id: ScopeId, branding: OrgBranding | null): Promise<void>;
   getBrandingDurable(id: ScopeId): Promise<OrgBranding | null>;
+  getSpendLimitDurable(id: ScopeId): Promise<SpendLimit | null>;
+  setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
   getBrowseModel(id: ScopeId): string | null;
@@ -191,6 +201,7 @@ export interface ConfigStoreMaps {
   slackEmojiCatalog?: DurableMap<PersistedSlackEmojiCatalog>;
   branding?: DurableMap<ScopedRow<"branding", OrgBranding>>;
   browseMaxSteps?: DurableMap<ScopedRow<"steps", number>>;
+  spendLimits?: DurableMap<ScopedRow<"limit", SpendLimit>>;
   browseModels?: DurableMap<ScopedRow<"modelId", string>>;
   deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
 }
@@ -216,6 +227,7 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   slackEmojiCatalog: "slack_emoji_catalog",
   branding: "branding_configs",
   browseMaxSteps: "browse_max_steps_configs",
+  spendLimits: "spend_limit_configs",
   browseModels: "browse_model_configs",
   deploymentIdentity: "deployment_identity",
 };
@@ -308,6 +320,7 @@ export function createConfigStore(
     ackEmoji: field("ackEmoji", "names"),
     branding: field("branding", "branding"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
+    spendLimits: field("spendLimits", "limit"),
     browseModels: field("browseModels", "modelId"),
   } satisfies Partial<Record<SettingKey, unknown>>;
   const allSettings = Object.values(settings);
@@ -484,7 +497,7 @@ export function createConfigStore(
       return hydrated;
     },
     getSoul: (id) => souls.get(id)?.content ?? null,
-    setSoul(id, content, updatedBy) {
+    setSoul(id, content, updatedBy, sessionId) {
       return writeQueue(`soul:${id}`, async () => {
         const legacy = legacySoulHistory.get(id) ?? [];
         const append = (current: PersistedSoul): PersistedSoul => {
@@ -494,6 +507,7 @@ export function createConfigStore(
             version: current.version + 1,
             updatedAt: Date.now(),
             ...(updatedBy ? { updatedBy } : {}),
+            ...(sessionId ? { sessionId } : {}),
           };
           return {
             ...revision,
@@ -510,6 +524,7 @@ export function createConfigStore(
             version: baseVersion + 1,
             updatedAt: Date.now(),
             ...(updatedBy ? { updatedBy } : {}),
+            ...(sessionId ? { sessionId } : {}),
           };
           const mutationId = randomBytes(12).toString("hex");
           const candidate: PersistedSoul = { ...revision, history: [revision], mutationId };
@@ -522,7 +537,7 @@ export function createConfigStore(
         return saved.version;
       });
     },
-    async setSoulIfVersion(id, expectedVersion, content, updatedBy) {
+    async setSoulIfVersion(id, expectedVersion, content, updatedBy, sessionId) {
       return writeQueue(`soul:${id}`, async () => {
         const version = expectedVersion + 1;
         const revision: PersistedSoulRevision = {
@@ -531,6 +546,7 @@ export function createConfigStore(
           version,
           updatedAt: Date.now(),
           ...(updatedBy ? { updatedBy } : {}),
+          ...(sessionId ? { sessionId } : {}),
         };
         const legacyHistory = legacySoulHistory.get(id) ?? [];
         const mutationId = randomBytes(12).toString("hex");
@@ -726,6 +742,8 @@ export function createConfigStore(
     getBranding: (id) => settings.branding.get(id) ?? null,
     setBranding: (id, value) => settings.branding.set(id, value),
     getBrandingDurable: async (id) => (await settings.branding.durable(id)) ?? null,
+    getSpendLimitDurable: async (id) => (await settings.spendLimits.durable(id)) ?? null,
+    setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
     getBrowseModel: (id) => settings.browseModels.get(id) ?? null,

@@ -14,6 +14,7 @@ import {
   type SessionSummary,
 } from "../../../sessions/session-store.ts";
 import { createTranscriptSource } from "../../../sessions/transcript-source.ts";
+import { entryFromItem, isUserItem } from "../../../sessions/items.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
@@ -92,7 +93,7 @@ async function deliveryProvenanceSidecars(
               await createTranscriptSource(deps.sessions).forRender(sourceSession.id, {
                 sinceSeq: Math.min(...seqBounds),
               })
-            ).entries
+            ).items
           : [];
       const turnSeqsFor = (p: DeliveryProvenance): Set<number> => {
         const seqs = new Set<number>();
@@ -100,7 +101,7 @@ async function deliveryProvenanceSidecars(
         for (const e of sourceEntries) {
           if (e.seq < p.sourceUserSeq) continue;
           if (p.sourceAssistantEntrySeq !== undefined && e.seq > p.sourceAssistantEntrySeq) continue;
-          if (e.type === "user") seqs.add(e.seq);
+          if (isUserItem(e)) seqs.add(e.seq);
         }
         seqs.add(p.sourceUserSeq);
         return seqs;
@@ -261,7 +262,9 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
   const all = want >= TRANSCRIPT_LIMIT_MAX;
   const limit = Math.min(want, TRANSCRIPT_LIMIT_MAX);
   const raw = deps.sessions
-    ? (await createTranscriptSource(deps.sessions).forRender(id, all ? undefined : { limit: limit + 1 })).entries
+    ? (await createTranscriptSource(deps.sessions).forRender(id, all ? undefined : { limit: limit + 1 })).items.map(
+        (item) => entryFromItem(item, session.scopeId),
+      )
     : [];
   const hasMore = !all && raw.length > limit;
   const entries = await labelTranscriptEntries(app, deps, session, hasMore ? raw.slice(raw.length - limit) : raw);

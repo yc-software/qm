@@ -2,6 +2,7 @@ import type { SessionEntry } from "../types.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../reach/reach.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
+import { entryFromItem } from "../sessions/items.ts";
 
 const WEB_CONTEXT_MESSAGE_CHARS = 600;
 const WEB_CONTEXT_READ_CAP = 500;
@@ -87,12 +88,7 @@ export function webConversationWindow(
 export async function answerWebContextRequest(
   sessions: Pick<
     SessionStore,
-    | "sessionsByThreadRefs"
-    | "visibleEntries"
-    | "getEntries"
-    | "countEntriesBefore"
-    | "latestEntrySeq"
-    | "participantWindowsOf"
+    "sessionsByThreadRefs" | "visibleItems" | "getItems" | "countItemsBefore" | "participantWindowsOf"
   >,
   query: SurfaceContextQuery,
 ): Promise<{ result?: SurfaceContextResult; error?: string }> {
@@ -107,7 +103,8 @@ export async function answerWebContextRequest(
   const [session] = await sessions.sessionsByThreadRefs([target]);
   if (!session) return { error: "that conversation isn't readable on the web surface" };
   const viewer = query.viewer?.trim() || owner;
-  const { entries } = await createTranscriptSource(sessions).forViewer(session.id, viewer);
+  const { items } = await createTranscriptSource(sessions).forViewer(session.id, viewer);
   const root = target.slice(target.lastIndexOf(":") + 1);
+  const entries = items.map((item) => entryFromItem(item, session.scopeId));
   return { result: webConversationWindow(entries, owner, root, query) };
 }

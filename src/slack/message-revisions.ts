@@ -1,9 +1,11 @@
 import type { ScopeId, SessionEntry } from "../types.ts";
-import type { Lease, SessionStore } from "../sessions/session-store.ts";
+import type { SessionStore, SessionWriter } from "../sessions/session-store.ts";
+import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
 import { parseSlackThreadRef, slackThreadRefCandidates } from "./message-gating.ts";
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
 import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { sleep } from "../util/async.ts";
+import { entryFromItem, isAgentReply, isUserItem, itemFromEntry } from "../sessions/items.ts";
 
 export interface MessageRevisionPayload {
   kind: "message_revision";
@@ -21,10 +23,9 @@ interface MessageRevisionSource {
   text?: string;
 }
 
-export type RevisionSessions = Pick<
-  SessionStore,
-  "append" | "sessionsByThreadRefs" | "acquireLease" | "releaseLease" | "getEntries"
->;
+export type RevisionSessions = Pick<SessionStore, "append" | "sessionsByThreadRefs" | "getItems">;
+
+export type RevisionRuns = Pick<RunStore, "inFlightForThread">;
 
 interface RevisionSession {
   id: string;
@@ -113,16 +114,21 @@ function revisionToRecord(
   return { kind: "message_revision", action: "edited", ts: source.ts, text, ...named };
 }
 
+const sessionEntries = async (
+  sessions: Pick<SessionStore, "getItems">,
+  session: RevisionSession,
+): Promise<SessionEntry[]> => (await sessions.getItems(session.id)).map((item) => entryFromItem(item, session.scopeId));
+
 async function recordRevision(
   sessions: Pick<SessionStore, "append">,
-  lease: Lease,
+  writer: SessionWriter,
   session: RevisionSession,
   entries: readonly SessionEntry[],
   source: MessageRevisionSource,
 ): Promise<boolean> {
   const payload = revisionToRecord(entries, source);
   if (!payload) return false;
-  await sessions.append(lease, { type: "system", payload, scopeLabel: session.scopeId });
+  await sessions.append(writer, itemFromEntry({ type: "system", payload }));
   return true;
 }
 
@@ -135,26 +141,23 @@ const DEFAULT_IDLE_RETRY: IdleRetry = { attempts: 4, retryMs: 3_000 };
 
 async function recordWhenIdle(
   sessions: RevisionSessions,
-  session: RevisionSession,
+  runs: RevisionRuns,
+  session: RevisionSession & { threadRef: string },
   source: MessageRevisionSource,
   retry: IdleRetry,
 ): Promise<void> {
-  if (!revisionToRecord(await sessions.getEntries(session.id), source)) return;
+  if (!revisionToRecord(await sessionEntries(sessions, session), source)) return;
   for (let attempt = 0; attempt < retry.attempts; attempt++) {
     if (attempt > 0) await sleep(retry.retryMs, { unref: true });
-    const { lease } = await sessions.acquireLease(session.id, "backfill");
-    if (!lease) continue;
-    try {
-      await recordRevision(sessions, lease, session, await sessions.getEntries(session.id), source);
-      return;
-    } finally {
-      await sessions.releaseLease(lease);
-    }
+    if (await hasRunningRun(runs, session.threadRef)) continue;
+    await recordRevision(sessions, { sessionId: session.id }, session, await sessionEntries(sessions, session), source);
+    return;
   }
 }
 
 export async function recordMessageRevisions(
   sessions: RevisionSessions,
+  runs: RevisionRuns,
   events: readonly IngestEvent[],
   retry: IdleRetry = DEFAULT_IDLE_RETRY,
 ): Promise<void> {
@@ -162,21 +165,21 @@ export async function recordMessageRevisions(
     const refs = await sessions.sessionsByThreadRefs(
       slackThreadRefCandidates(event.container, event.ts, event.sub ?? undefined),
     );
-    for (const ref of refs) await recordWhenIdle(sessions, ref, event, retry);
+    for (const ref of refs) await recordWhenIdle(sessions, runs, ref, event, retry);
   }
 }
 
 const ANCHOR_WALK_BACK = 8;
 
 export async function revisionAnchorAt(
-  sessions: Pick<SessionStore, "latestEntrySeq" | "getEntry">,
+  sessions: Pick<SessionStore, "latestItemSeq" | "getItem">,
   sessionId: string,
 ): Promise<number | undefined> {
-  let seq = await sessions.latestEntrySeq(sessionId);
+  let seq = await sessions.latestItemSeq(sessionId);
   for (let steps = 0; seq >= 0 && steps < ANCHOR_WALK_BACK; steps++, seq--) {
-    const entry = await sessions.getEntry(sessionId, seq);
-    if (!entry) return undefined;
-    if (entry.type === "user" || entry.type === "assistant") return entry.createdAt;
+    const item = await sessions.getItem(sessionId, seq);
+    if (!item) return undefined;
+    if (isUserItem(item) || isAgentReply(item)) return item.createdAt;
   }
   return undefined;
 }
@@ -187,9 +190,9 @@ export function slackTsToMs(ts: string | undefined): number | undefined {
 }
 
 export async function reconcileMessageRevisions(opts: {
-  sessions: Pick<SessionStore, "append" | "getEntries">;
+  sessions: Pick<SessionStore, "append" | "getItems">;
   surfaceCache: Pick<SurfaceCache, "revisedSince">;
-  lease: Lease;
+  writer: SessionWriter;
   session: RevisionSession & { threadRef: string };
   anchorAt: number | undefined;
   fallbackSince: number;
@@ -200,10 +203,10 @@ export async function reconcileMessageRevisions(opts: {
   const since = Math.max(1, Math.min(opts.anchorAt ?? opts.fallbackSince, slackTsToMs(opts.triggerTs) ?? Infinity));
   const revised = await opts.surfaceCache.revisedSince(ref.container, since, ref.root ? { thread: ref.root } : {});
   if (!revised.length) return 0;
-  const entries = await opts.sessions.getEntries(opts.session.id);
+  const entries = await sessionEntries(opts.sessions, opts.session);
   let recorded = 0;
   for (const row of revised) {
-    if (await recordRevision(opts.sessions, opts.lease, opts.session, entries, row)) recorded++;
+    if (await recordRevision(opts.sessions, opts.writer, opts.session, entries, row)) recorded++;
   }
   return recorded;
 }

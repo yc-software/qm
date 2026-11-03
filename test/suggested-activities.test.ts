@@ -45,11 +45,7 @@ function fixture() {
         undefined,
         "cron",
       );
-      const acquired = await sessions.acquireLease(session.id);
-      assert.ok(acquired.lease);
-      if (!acquired.lease) throw new Error("lease unavailable");
-      await sessions.append(acquired.lease, { type: "assistant", scopeLabel: scope, payload: { text: output } });
-      await sessions.releaseLease(acquired.lease);
+      await sessions.append({ sessionId: session.id }, { kind: "AgentMessage", text: output });
       return { status: "ok", reply: output, sessionId: session.id };
     },
   });
@@ -246,14 +242,8 @@ test("fire results cannot point at another personal scope or an unrelated thread
     const original = (await f.crons.listFires(cron.id)).runs[0]!;
     const scope = scopeId("personal", foreignScope ? "bob" : "alice");
     const session = await f.sessions.getOrCreateByThread("other-thread", "dm", scope, undefined, "cron");
-    const { lease } = await f.sessions.acquireLease(session.id);
-    assert.ok(lease);
-    await f.sessions.append(lease, {
-      type: "assistant",
-      scopeLabel: scope,
-      payload: { text: JSON.stringify(activities) },
-    });
-    await f.sessions.releaseLease(lease);
+    const writer = { sessionId: session.id };
+    await f.sessions.append(writer, { kind: "AgentMessage", text: JSON.stringify(activities) });
     await f.crons.recordFire(cron.id, {
       ...original,
       firedAt: original.firedAt + 1000,

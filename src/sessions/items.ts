@@ -1,11 +1,14 @@
 import type { EntryType, ScopeId, SessionEntry } from "../types.ts";
+import { jsonbStringify } from "../util/text.ts";
+import type { NewEntry } from "./session-store.ts";
 import { isObj } from "../util/objects.ts";
 import { type ItemKind, WAKE_CAUSES } from "./items-schema.ts";
 
 type WakeCause = (typeof WAKE_CAUSES)[number];
 
-export interface ItemRow {
-  kind: ItemKind;
+type AgentMessageVariant = "narration" | "files_delivered";
+
+interface ItemColumns {
   turnId: string | null;
   author: string | null;
   callId: string | null;
@@ -15,7 +18,7 @@ export interface ItemRow {
   text: string | null;
   tool: string | null;
   step: number | null;
-  variant: string | null;
+  variant: AgentMessageVariant | null;
   isError: boolean | null;
   hidden: boolean | null;
   externalId: string | null;
@@ -24,6 +27,25 @@ export interface ItemRow {
   blobSha: string | null;
   body: Record<string, unknown>;
 }
+
+interface RequiredColumns {
+  ToolCall: { callId: string };
+  ToolResult: { callId: string };
+  Elicitation: { elicitId: string };
+  ElicitationResponse: { elicitId: string };
+  Wake: { wakeCause: WakeCause };
+  Error: { errorCode: string };
+}
+
+type KindColumns<K extends ItemKind> = K extends keyof RequiredColumns ? RequiredColumns[K] : unknown;
+
+export type Item<K extends ItemKind = ItemKind> = {
+  [P in K]: { kind: P; sessionId: string; seq: number; createdAt: number } & ItemColumns & KindColumns<P>;
+}[K];
+
+export type NewItem<K extends ItemKind = ItemKind> = {
+  [P in K]: { kind: P } & Partial<ItemColumns> & KindColumns<P>;
+}[K];
 
 export const ITEM_COLUMNS = [
   ["turn_id", "turnId", "uuid"],
@@ -45,11 +67,6 @@ export const ITEM_COLUMNS = [
   ["blob_sha", "blobSha", "text"],
   ["body", "body", "jsonb"],
 ] as const;
-
-export interface ItemContext {
-  turnId?: string | null;
-  author?: string | null;
-}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (value: unknown): string | null => (typeof value === "string" && value !== "" ? value : null);
@@ -89,7 +106,9 @@ const SYSTEM_KINDS: Record<string, ItemKind> = {
   goal_cancelled: "Wake",
 };
 
-export function itemFromEntry(type: EntryType, payload: unknown, context: ItemContext = {}): ItemRow {
+export function itemFromEntry(entry: Pick<NewEntry, "type" | "payload" | "author">): NewItem {
+  const type = entry.type;
+  const payload: unknown = JSON.parse(jsonbStringify(entry.payload ?? null));
   let raw: Record<string, unknown> = {};
   if (isObj(payload) && !Array.isArray(payload)) raw = payload;
   else if (typeof payload === "string") raw = { text: payload };
@@ -99,11 +118,11 @@ export function itemFromEntry(type: EntryType, payload: unknown, context: ItemCo
   if (type === "system") kind = SYSTEM_KINDS[String(raw.kind)];
   else if (type === "user" && raw.steered === true) kind = "SteeringMessage";
   if (!kind) throw new Error(`items: entry type ${type}/${String(raw.kind)} is not stored`);
-  const turnId = context.turnId ?? str(raw.runId);
-  const row: ItemRow = {
+  const turnId = str(raw.runId);
+  const row: Omit<Item, "sessionId" | "seq" | "createdAt"> = {
     kind,
     turnId: turnId && UUID.test(turnId) ? turnId.toLowerCase() : null,
-    author: AUTHORED_KINDS.has(kind) ? str(context.author) : null,
+    author: str(entry.author),
     callId: null,
     elicitId: null,
     wakeCause: null,
@@ -111,7 +130,9 @@ export function itemFromEntry(type: EntryType, payload: unknown, context: ItemCo
     text: null,
     tool: null,
     step: null,
-    variant: ({ text: "narration", delivery: "files_delivered" } as Partial<Record<EntryType, string>>)[type] ?? null,
+    variant:
+      ({ text: "narration", delivery: "files_delivered" } as Partial<Record<EntryType, AgentMessageVariant>>)[type] ??
+      null,
     isError: null,
     hidden: null,
     externalId: null,
@@ -171,7 +192,7 @@ export function itemFromEntry(type: EntryType, payload: unknown, context: ItemCo
   }
   take("securityTainted");
   if (type === "assistant" || kind === "Error") take("deliveryKey");
-  return row;
+  return row as NewItem;
 }
 
 const ENTRY_TYPES: Partial<Record<ItemKind, EntryType>> = {
@@ -185,9 +206,7 @@ const ENTRY_TYPES: Partial<Record<ItemKind, EntryType>> = {
   ElicitationResponse: "approval_resolved",
 };
 
-export function entryFromItem(
-  row: ItemRow & { sessionId: string; seq: number; scopeLabel: ScopeId; createdAt: number },
-): SessionEntry {
+export function entryFromItem(row: Item, scopeLabel: ScopeId): SessionEntry {
   const payload = { ...row.body };
   if (row.blobSha) payload.output = { ...(isObj(payload.output) ? payload.output : {}), blob: row.blobSha };
   const put = (key: string, value: unknown): void => {
@@ -232,13 +251,46 @@ export function entryFromItem(
     parentSeq: row.seq === 0 ? null : row.seq - 1,
     type,
     payload,
-    scopeLabel: row.scopeLabel,
+    scopeLabel,
     createdAt: row.createdAt,
   };
 }
 
+export function storedItem(
+  item: NewItem,
+  at: { sessionId: string; seq: number; createdAt: number; turnId?: string | undefined },
+): Item {
+  const turnId = at.turnId ?? item.turnId;
+  return {
+    sessionId: at.sessionId,
+    seq: at.seq,
+    createdAt: at.createdAt,
+    kind: item.kind,
+    turnId: turnId && UUID.test(turnId) ? turnId.toLowerCase() : null,
+    author: AUTHORED_KINDS.has(item.kind) ? str(item.author) : null,
+    callId: str(item.callId),
+    elicitId: str(item.elicitId),
+    wakeCause: item.wakeCause ?? null,
+    errorCode: str(item.errorCode),
+    text: str(item.text),
+    tool: str(item.tool),
+    step: item.step ?? null,
+    variant: item.variant ?? null,
+    isError: item.isError ?? null,
+    hidden: item.hidden ?? null,
+    externalId: str(item.externalId),
+    throughSeq: item.throughSeq ?? null,
+    approved: item.approved ?? null,
+    blobSha: str(item.blobSha),
+    body: item.body ?? {},
+  } as Item;
+}
+
 export const USER_ITEM_KINDS: readonly string[] = ["UserMessage", "SteeringMessage"];
 export const USER_KINDS = `(${USER_ITEM_KINDS.map((kind) => `'${kind}'`).join(", ")})`;
+export const isUserItem = (item: { kind: ItemKind }): boolean => USER_ITEM_KINDS.includes(item.kind);
+export const isAgentReply = (item: { kind: ItemKind; variant?: AgentMessageVariant | null }): boolean =>
+  item.kind === "AgentMessage" && !item.variant;
 export const AGENT_REPLY_ITEM = (col: string): string => `${col}.kind = 'AgentMessage'`;
 export const SEARCHABLE_ITEM = (col: string): string =>
   `(${col}.kind IN ('UserMessage','SteeringMessage','AgentMessage') AND ${col}.variant IS DISTINCT FROM 'files_delivered' AND ${col}.text IS NOT NULL)`;

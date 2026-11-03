@@ -1,4 +1,5 @@
-import { SCOPE_KINDS, type SessionEntry, type ScopeId } from "../types.ts";
+import type { Item } from "../sessions/items.ts";
+import { SCOPE_KINDS, type ScopeId } from "../types.ts";
 import { reportFailure } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
 import { disclosedMemory, type MemoryDisclosure } from "./disclosure.ts";
@@ -36,7 +37,7 @@ export function createRegistryMemoryService(opts: {
   defaultMemory: MemoryService;
   overlay?: MemoryProviderConfig;
   registry: Pick<MemoryRegistryStore, "current" | "overlayIds" | "key">;
-  sessionEntries?: (sessionId: string) => Promise<SessionEntry[]>;
+  sessionItems?: (sessionId: string) => Promise<Item[]>;
   memberFetch?: AddressFetch;
   onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
 }): MemoryService {
