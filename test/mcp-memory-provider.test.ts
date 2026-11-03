@@ -130,20 +130,20 @@ test("MCP recall reads structured facts as rows with a brain ref, the raw claim 
     {
       ref: "acme:4821",
       claim: "Dana prefers email",
-      text: "- (2026-11-01; preference) Dana prefers email",
+      text: "- Dana prefers email (2026-11-01; preference)",
       arm: "own",
     },
     {
       ref: "acme:17",
       claim: "Launch moved to Friday",
-      text: "- (2026-10-28; fact) Launch moved to Friday",
+      text: "- Launch moved to Friday (2026-10-28; fact)",
       arm: "ranked",
     },
-    { ref: "acme:9", claim: "No arm yet", text: "- (2026-10-20; fact) No arm yet" },
+    { ref: "acme:9", claim: "No arm yet", text: "- No arm yet (2026-10-20; fact)" },
   ]);
   assert.deepEqual(
     (await memory.query("personal:U1", "dana", 2)).map((row) => row.text),
-    ["acme:4821 (2026-11-01; preference) Dana prefers email", "acme:17 (2026-10-28; fact) Launch moved to Friday"],
+    ["acme:4821 Dana prefers email (2026-11-01; preference)", "acme:17 Launch moved to Friday (2026-10-28; fact)"],
   );
 });
 

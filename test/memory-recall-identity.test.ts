@@ -77,7 +77,7 @@ test("a full first-provider batch leaves room for a relevant hit from the next p
   const memory = routed(notebook, { acme: gbrain("acme", () => [{ id: "4821", text: "The launch moved to Friday" }]) });
   const hits = await searchAcrossScopes(memory, ["personal:a"], "launch", 20);
   assert.equal(hits.length, 20);
-  assert.equal(hits[1]?.fact, "acme:4821 (2026-10-30; fact) The launch moved to Friday");
+  assert.equal(hits[1]?.fact, "acme:4821 The launch moved to Friday (2026-10-30; fact)");
 });
 
 test("equal fact ids from two brains and the notebook stay separate copies, and only the notebook copy is withdrawn", async () => {
@@ -169,7 +169,7 @@ test("gbrain's own-recent facts no longer starve an older relevant fact once row
     );
   const marked = await render([...recent, relevant]);
   assert.ok(marked.length <= 6000);
-  assert.match(marked, /^- \(2026-10-30; fact\) recent chatter 0 x+\n- \(2026-10-30; fact\) Dana's board meeting/m);
+  assert.match(marked, /^- recent chatter 0 x+ \(2026-10-30; fact\)\n- Dana's board meeting/m);
   const unmarked = await render([...recent, relevant].map(({ arm: _arm, ...fact }) => fact));
   assert.match(unmarked, /recent chatter 0 /);
   assert.doesNotMatch(unmarked, /board meeting/);
@@ -200,8 +200,8 @@ test("a dual-written duplicate prints once as the notebook copy naming the brain
       "",
       "### personal:a · acme",
       "```untrusted-data",
-      "- (2026-10-30; fact) alpha brain one",
-      "- (2026-10-30; fact) alpha brain two",
+      "- alpha brain one (2026-10-30; fact)",
+      "- alpha brain two (2026-10-30; fact)",
       "```",
     ].join("\n"),
   );
@@ -251,7 +251,7 @@ test("brain refs keep the recall delta honest over twenty turns: new facts only,
     return delta;
   };
   const block = (...ids: number[]) =>
-    `### personal:a · acme\n\`\`\`untrusted-data\n${ids.map((i) => `- (2026-10-30; fact) brain fact ${i}`).join("\n")}\n\`\`\``;
+    `### personal:a · acme\n\`\`\`untrusted-data\n${ids.map((i) => `- brain fact ${i} (2026-10-30; fact)`).join("\n")}\n\`\`\``;
   const first = await turn();
   assert.ok(first.text.includes(block(0, 1, 2, 3, 4, 5)));
   assert.ok(

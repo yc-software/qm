@@ -49,7 +49,7 @@ function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
 
 const stamped = (fact: ProviderFact) => {
   const stamp = [fact.date, fact.kind].filter((part) => typeof part === "string" && part).join("; ");
-  return stamp ? `(${stamp}) ${fact.text}` : fact.text;
+  return stamp ? `${fact.text} (${stamp})` : fact.text;
 };
 
 export function createMcpMemoryProvider(opts: {
