@@ -86,6 +86,120 @@ const migration = (id: string, statements: string[]) => ({
   statements: [`SET LOCAL lock_timeout = '3s'`, ...HELPERS, ...statements, ...DROPS],
 });
 
+export const LEGACY_ORIGIN_KEYS = [
+  "triggered",
+  "unprompted",
+  "liveActor",
+  "triggerTs",
+  "entryTs",
+  "securityScreenData",
+  "triggerDestination",
+  "ownerKeychainUnion",
+] as const;
+const ORIGIN_HELPERS = [
+  `CREATE FUNCTION pg_temp.qm_truthy(v jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $f$
+      SELECT v IS NOT NULL AND v NOT IN ('null'::jsonb, 'false'::jsonb, '0'::jsonb, '""'::jsonb)
+    $f$`,
+  `CREATE FUNCTION pg_temp.qm_ts(v jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $f$
+      SELECT CASE WHEN jsonb_typeof(v) = 'string' AND v #>> '{}' <> '' THEN v END
+    $f$`,
+  `CREATE FUNCTION pg_temp.qm_origin_rank(o jsonb) RETURNS int LANGUAGE sql IMMUTABLE AS $f$
+      SELECT CASE o ->> 'kind' WHEN 'direct' THEN 0 WHEN 'human' THEN 1 WHEN 'ambient' THEN 2 WHEN 'automation' THEN 3 END
+    $f$`,
+  `CREATE FUNCTION pg_temp.qm_turn_origin_request(r jsonb) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $f$
+      DECLARE
+        typed jsonb;
+        legacy jsonb;
+        o jsonb;
+        sd jsonb;
+        v jsonb;
+      BEGIN
+        IF jsonb_typeof(r) IS DISTINCT FROM 'object' THEN RETURN r; END IF;
+        IF r -> 'triggered' = 'true' THEN
+          legacy := jsonb_strip_nulls(jsonb_build_object(
+            'kind', 'automation',
+            'destination', CASE WHEN pg_temp.qm_truthy(r -> 'triggerDestination') THEN r -> 'triggerDestination' END,
+            'useOwnerKeychain', CASE WHEN r -> 'ownerKeychainUnion' = 'true' THEN true END))
+            || CASE WHEN r ? 'securityScreenData' THEN jsonb_build_object('screenData', r -> 'securityScreenData') ELSE '{}'::jsonb END;
+        ELSIF r -> 'unprompted' = 'true' THEN
+          legacy := jsonb_strip_nulls(jsonb_build_object(
+            'kind', 'ambient',
+            'entryTs', pg_temp.qm_ts(r -> 'entryTs'),
+            'live', CASE WHEN r -> 'liveActor' = 'true' THEN true END));
+        ELSIF r -> 'liveActor' = 'true' THEN
+          legacy := jsonb_strip_nulls(jsonb_build_object(
+            'kind', 'human',
+            'messageTs', pg_temp.qm_ts(r -> 'triggerTs'),
+            'entryTs', pg_temp.qm_ts(r -> 'entryTs')));
+        ELSE
+          legacy := '{"kind": "direct"}'::jsonb;
+        END IF;
+        typed := CASE WHEN jsonb_typeof(r -> 'origin') = 'object' THEN r -> 'origin' END;
+        IF typed IS NULL THEN
+          o := legacy;
+        ELSIF legacy ->> 'kind' = 'direct' THEN
+          o := typed;
+        ELSIF pg_temp.qm_origin_rank(typed) IS DISTINCT FROM pg_temp.qm_origin_rank(legacy) THEN
+          o := CASE WHEN pg_temp.qm_origin_rank(typed) > pg_temp.qm_origin_rank(legacy) THEN typed ELSE legacy END;
+        ELSIF typed ->> 'kind' = 'automation' THEN
+          sd := CASE WHEN typed ? 'screenData' THEN typed -> 'screenData' END;
+          IF NOT typed ? 'screenData' THEN
+            sd := legacy -> 'screenData';
+          ELSIF legacy ? 'screenData' AND sd <> legacy -> 'screenData' THEN
+            sd := to_jsonb(format(E'Typed automation data:\n%s\n\nLegacy automation data:\n%s',
+              CASE WHEN jsonb_typeof(sd) = 'string' THEN sd #>> '{}' ELSE sd::text END,
+              CASE WHEN jsonb_typeof(legacy -> 'screenData') = 'string' THEN legacy #>> '{screenData}' ELSE (legacy -> 'screenData')::text END));
+          END IF;
+          v := COALESCE(NULLIF(typed -> 'destination', 'null'), legacy -> 'destination');
+          o := jsonb_build_object('kind', 'automation')
+            || CASE WHEN typed ? 'screenData' OR legacy ? 'screenData' THEN jsonb_build_object('screenData', sd) ELSE '{}'::jsonb END
+            || CASE WHEN pg_temp.qm_truthy(v) THEN jsonb_build_object('destination', v) ELSE '{}'::jsonb END
+            || CASE WHEN pg_temp.qm_truthy(typed -> 'useOwnerKeychain') OR pg_temp.qm_truthy(legacy -> 'useOwnerKeychain')
+                 THEN '{"useOwnerKeychain": true}'::jsonb ELSE '{}'::jsonb END;
+        ELSIF typed ->> 'kind' = 'human' THEN
+          v := COALESCE(NULLIF(typed -> 'messageTs', 'null'), legacy -> 'messageTs');
+          o := jsonb_build_object('kind', 'human')
+            || CASE WHEN pg_temp.qm_truthy(v) THEN jsonb_build_object('messageTs', v) ELSE '{}'::jsonb END;
+          v := COALESCE(NULLIF(typed -> 'entryTs', 'null'), legacy -> 'entryTs');
+          o := o || CASE WHEN pg_temp.qm_truthy(v) THEN jsonb_build_object('entryTs', v) ELSE '{}'::jsonb END;
+        ELSIF typed ->> 'kind' = 'ambient' THEN
+          v := COALESCE(NULLIF(typed -> 'entryTs', 'null'), legacy -> 'entryTs');
+          o := jsonb_build_object('kind', 'ambient')
+            || CASE WHEN pg_temp.qm_truthy(v) THEN jsonb_build_object('entryTs', v) ELSE '{}'::jsonb END
+            || CASE WHEN typed -> 'live' = 'true' OR legacy -> 'live' = 'true' THEN '{"live": true}'::jsonb ELSE '{}'::jsonb END;
+        ELSE
+          o := typed;
+        END IF;
+        IF jsonb_typeof(o -> 'destination') = 'object' THEN
+          o := jsonb_set(o, '{destination}', pg_temp.qm_surface_account(o -> 'destination'));
+        END IF;
+        RETURN (r - ${LEGACY_ORIGIN_KEYS.map((key) => `'${key}'`).join(" - ")}) || jsonb_build_object('origin', o);
+      END $f$`,
+  `CREATE FUNCTION pg_temp.qm_turn_origin_request_text(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
+      SELECT COALESCE(pg_temp.qm_turn_origin_request(pg_temp.qm_jsonb_or_null(t))::text, t)
+    $f$`,
+];
+const ORIGIN_DROPS = [
+  "DROP FUNCTION pg_temp.qm_turn_origin_request_text(text)",
+  "DROP FUNCTION pg_temp.qm_turn_origin_request(jsonb)",
+  "DROP FUNCTION pg_temp.qm_origin_rank(jsonb)",
+  "DROP FUNCTION pg_temp.qm_ts(jsonb)",
+  "DROP FUNCTION pg_temp.qm_truthy(jsonb)",
+];
+const originChanges = (json: string) => `pg_temp.qm_turn_origin_request(${json}) IS DISTINCT FROM ${json}`;
+const runOriginChanges = (alias: string) => originChanges(`pg_temp.qm_jsonb_or_null(${alias}.request)`);
+const originMigration = (id: string, statements: string[]) => ({
+  id,
+  statements: [
+    `SET LOCAL lock_timeout = '3s'`,
+    ...HELPERS,
+    ...ORIGIN_HELPERS,
+    ...statements,
+    ...ORIGIN_DROPS,
+    ...DROPS,
+  ],
+});
+
 const LIVE_ORIGIN_REWRITES = [
   migration("surface-origin-rewrite/live-runs-and-destinations", [
     ifTable(
@@ -175,6 +289,30 @@ export const SETTLED_ORIGIN_MIGRATION = {
   ]),
   expectedChecksum: "869952729700ecff8669586f8144812079290f6f0609397b5a3d1ad7674d56d0",
 };
+
+const rewriteRuns = (rows: string) =>
+  ifTable(
+    "runs",
+    `UPDATE runs r SET request = pg_temp.qm_turn_origin_request_text(r.request) WHERE ${rows} AND ${runOriginChanges("r")}`,
+  );
+
+export const TURN_ORIGIN_MIGRATION = originMigration("surfaces/0005-turn-origin-backfill", [
+  rewriteRuns("r.status NOT IN ('pending', 'running')"),
+  rewriteRuns("(r.status IN ('pending', 'running') OR r.finished_at >= (extract(epoch FROM now()) * 1000)::bigint)"),
+  ifTable(
+    "run_signals",
+    `UPDATE run_signals SET payload = payload
+       || CASE WHEN jsonb_typeof(payload -> 'request') = 'object' THEN jsonb_build_object('request', pg_temp.qm_turn_origin_request(payload -> 'request')) ELSE '{}'::jsonb END
+       || CASE WHEN jsonb_typeof(payload -> 'sessionRequest') = 'object' THEN jsonb_build_object('sessionRequest', pg_temp.qm_turn_origin_request(payload -> 'sessionRequest')) ELSE '{}'::jsonb END
+     WHERE consumed_at IS NULL AND jsonb_typeof(payload) = 'object'
+       AND (${originChanges("payload -> 'request'")} OR ${originChanges("payload -> 'sessionRequest'")})`,
+  ),
+  ifTable(
+    "approvals",
+    `UPDATE approvals SET json = jsonb_set(json, '{request}', pg_temp.qm_turn_origin_request(json -> 'request'))
+     WHERE jsonb_typeof(json -> 'request') = 'object' AND ${originChanges("json -> 'request'")}`,
+  ),
+]);
 
 export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
   const pool = await pg.pool();

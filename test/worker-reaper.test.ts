@@ -898,7 +898,7 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
           actor: { externalId: "U1" },
           conversation: { kind: "dm", threadRef: `excluded-${flag}-${status}` },
           text: "test message",
-          liveActor: true,
+          origin: { kind: "human" },
           async: true,
           [flag]: true,
         });

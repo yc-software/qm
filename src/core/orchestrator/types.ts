@@ -70,20 +70,7 @@ import type { SurfaceRegistry } from "../../surfaces/registry.ts";
 
 export interface OrchestratorInput extends Omit<
   TurnRequest,
-  | "surface"
-  | "actor"
-  | "conversation"
-  | "idempotencyKey"
-  | "spawned"
-  | "async"
-  | "triggerTs"
-  | "entryTs"
-  | "triggered"
-  | "securityScreenData"
-  | "triggerDestination"
-  | "ownerKeychainUnion"
-  | "unprompted"
-  | "liveActor"
+  "surface" | "actor" | "conversation" | "idempotencyKey" | "spawned" | "async"
 > {
   modelAccount?: ModelAccount;
   surface?: string;

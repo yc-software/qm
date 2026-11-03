@@ -2,7 +2,7 @@ import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import { isPersonAuthored, resolveTurnOrigin } from "../core/turn-origin.ts";
+import { isPersonAuthored } from "../core/turn-origin.ts";
 import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
 
 type RunStatus = "pending" | "running" | "done" | "failed";
@@ -19,7 +19,7 @@ export function withTraceCarrier(request: OrchestratorInput): OrchestratorInput 
 export function runPriority(request: OrchestratorInput, delegating: RunPriority | null): RunPriority {
   if (request.swarm || (request.delegatingRunId && delegating === null)) return 2;
   if (request.delegatingRunId) return delegating === 2 ? 2 : 1;
-  return isPersonAuthored(resolveTurnOrigin(request).kind) ? 0 : 2;
+  return isPersonAuthored(request.origin.kind) ? 0 : 2;
 }
 
 export interface ReapEvent {
