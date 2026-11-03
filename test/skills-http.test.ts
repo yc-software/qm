@@ -215,6 +215,33 @@ test("an archived skill can be restored by its manager", async () => {
   }
 });
 
+test("restoring an archived skill is a 409 when a live skill already has its name", async () => {
+  const srv = start();
+  try {
+    const home = scopeId("personal", "U1");
+    const old = await srv.skills.create({
+      scopeId: home,
+      manifest: { name: "recover-me", description: "old", requiredCapabilities: [], body: "# old" },
+      createdBy: "U1",
+    });
+    await srv.skills.archive(old.id);
+    await publish(srv.skills, home, "recover-me", "live");
+    const restored = await fetch(`${srv.base}/v1/skills/${old.id}/restore`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: "U1" }),
+    });
+    assert.equal(restored.status, 409);
+    const live = (await srv.skills.list()).filter(
+      (s) => s.scopeId === home && s.manifest.name === "recover-me" && s.status !== "archived",
+    );
+    assert.equal(live.length, 1);
+    assert.equal((await srv.skills.get(old.id))?.status, "archived");
+  } finally {
+    await srv.close();
+  }
+});
+
 test("an archived skill name can be reused for a replacement", async () => {
   const srv = start();
   try {

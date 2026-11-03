@@ -1,7 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import type { SkillManifest } from "../skills/skill-store.ts";
+import { foreignSkillCollision, type SkillManifest } from "../skills/skill-store.ts";
 import type { SkillPack, SkillPackStore } from "../skills/skill-pack-store.ts";
 import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { planIngest, importPack, collectSharedBundle, type ImportResult } from "../skills/ingest.ts";
@@ -288,16 +288,22 @@ export function createSkillMethods(
     async restoreOwnedSkill(id, principalId) {
       const skill = await deps.skills.get(id);
       if (!skill || skill.status !== "archived" || !(await canManageSkill(skill, principalId))) return null;
-      await deps.skills.review(id, principalId, skill.manifest.requiredCapabilities);
-      const restored = await deps.skills.publish(id);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId,
-        action: "skill_restore",
-        resource: id,
-        scopeLabel: skill.scopeId,
+      return deps.skills.withNameLock(skill.scopeId, skill.manifest.name, async () => {
+        const current = await deps.skills.get(id);
+        if (!current || current.status !== "archived") return null;
+        if (foreignSkillCollision(await deps.skills.list(), current.scopeId, current.manifest.name, (s) => s.id === id))
+          return "exists" as const;
+        await deps.skills.review(id, principalId, current.manifest.requiredCapabilities);
+        const restored = await deps.skills.publish(id);
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId,
+          action: "skill_restore",
+          resource: id,
+          scopeLabel: current.scopeId,
+        });
+        return restored;
       });
-      return restored;
     },
     listSkillPacks() {
       return deps.skillPacks ? deps.skillPacks.list() : Promise.resolve([]);
