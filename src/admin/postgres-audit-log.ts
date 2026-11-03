@@ -3,6 +3,7 @@ import type { ScopeId } from "../types.ts";
 import type { AuditEvent, AuditLog } from "../audit/audit-log.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { likeContains } from "../persistence/like.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 function rowToEvent(r: Record<string, unknown>): AuditEvent {
   return {
@@ -21,6 +22,7 @@ const MAX = 50000;
 
 export function createPostgresAuditLog(connectionString: string): AuditLog {
   const { q } = createPgPool(connectionString, [
+    ...TENANCY,
     {
       id: "admin/audit-log/0001",
       expectedChecksum: "542f2a64d2814b329f2c1ad2eb8ed2728e8044b78efa6343eafb5598bc83cb1d",
@@ -58,6 +60,15 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       id: "admin/audit-log/0002",
       statements: [`CREATE INDEX IF NOT EXISTS audit_log_by_action ON audit_log(action, at DESC)`],
     },
+    tenantTables("admin/audit-log/0003-tenants", [
+      {
+        table: "audit_log",
+        primaryKey: "id",
+        unique: [
+          { name: "audit_log_by_idempotency_key", columns: "idempotency_key", where: "idempotency_key IS NOT NULL" },
+        ],
+      },
+    ]),
   ]);
 
   const pendingWrites = new Set<Promise<void>>();

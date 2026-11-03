@@ -28,6 +28,7 @@ import { swallow } from "../util/errors.ts";
 import { withoutTenant } from "../tenants/context.ts";
 import { claimAcrossTenants, inTenantOf, rowTenant } from "../tenants/claim.ts";
 import { sleep } from "../util/async.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 const NOTIFY_SESSION_AVAILABLE =
   "pg_notify('qm_run_available', to_json(encode(sha256(convert_to(session_id, 'UTF8')), 'hex'))::text)";
@@ -80,6 +81,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
   const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
 
   const pg = createPgPool(connectionString, [
+    ...TENANCY,
     {
       id: "runs/store/0011-base-schema",
       expectedChecksum: "77ca2d1c3ec5253374c0eadbf47d91d53c6d2c3fc7232079b33006bc9233a24e",
@@ -132,6 +134,16 @@ END $base_schema$`,
         `DROP TABLE IF EXISTS tool_calls`,
       ],
     },
+    tenantTables("runs/store/0012-tenants", [
+      {
+        table: "runs",
+        primaryKey: "id",
+        unique: [
+          { name: "runs_idempotency_key_key", columns: "idempotency_key", constraint: true },
+          { name: "idx_runs_one_running_per_session", columns: "session_id", where: "status = 'running'" },
+        ],
+      },
+    ]),
   ]);
   const { query: q, close: closePool } = pg;
 
