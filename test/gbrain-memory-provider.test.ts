@@ -296,7 +296,33 @@ test("an attested gbrain write never speaks for anyone but the turn's member", a
     { mode: "explicit" },
     undefined,
   );
+  const system = await writeFacts(
+    memory,
+    "personal:U0ALICE",
+    ["Channel history was missing"],
+    "U0ALICE",
+    { mode: "explicit", actorId: "system:channel:C0ROOM" },
+    "run-2",
+  );
   assert.deepEqual(calls, []);
-  assert.deepEqual(notebookWrites, ["Onboarding: completed v1"]);
+  assert.deepEqual(notebookWrites, ["Onboarding: completed v1", "Channel history was missing"]);
   assert.deepEqual(gbrainOutcomes(outcomes), []);
+  assert.deepEqual(gbrainOutcomes(system.outcomes), []);
+});
+
+test("a gbrain write's provenance stays within the contract's limit for a long sign-in", async (t) => {
+  const { calls, memory } = await gbrain(t, () => committed(1, "8c1f7a0e-0000-5000-8000-000000000007"));
+  const scope = `personal:${"x".repeat(250)}@acme.example` as const;
+  const { outcomes } = await writeFacts(
+    memory,
+    scope,
+    ["Prefers aisle seats"],
+    "U0JORDAN",
+    { mode: "explicit", actorId: "U0JORDAN", conversationScopeId: scope },
+    "run-3",
+  );
+  assert.deepEqual(gbrainOutcomes(outcomes), ["committed"]);
+  assert.deepEqual(calls.flatMap(violations), []);
+  const [fact] = calls[0]!.args.facts as Array<{ provenance: string }>;
+  assert.equal(fact?.provenance, scope.slice(0, contract.memory_write.limits.provenance_chars));
 });

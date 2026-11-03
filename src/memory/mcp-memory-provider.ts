@@ -6,6 +6,9 @@ import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import { DENIED_CODES, reportEnvelope } from "./provider-outcome.ts";
 import type { McpMemoryOperationConfig } from "./provider-config.ts";
 
+// A factsArg write's provenance is the conversation's scope ID; gbrain's v1 contract caps it at 200 characters.
+const MAX_PROVENANCE_CHARS = 200;
+
 export type McpMemoryOperation = Omit<McpMemoryOperationConfig, "auth"> & { client: McpClient; timeoutMs: number };
 
 function resultText(result: CallToolResult): string {
@@ -56,7 +59,7 @@ export function createMcpMemoryProvider(opts: {
       const op = opts.write;
       if (!op) throw new Error("memory provider write is not configured");
       const actor = opts.attestActor ? context?.actorId : (context?.actorId ?? author);
-      const provenance = context?.conversationScopeId ?? scopeId;
+      const provenance = (context?.conversationScopeId ?? scopeId).slice(0, MAX_PROVENANCE_CHARS);
       const args: Record<string, unknown> = op.factsArg
         ? { [op.factsArg]: facts.map((fact) => ({ fact, provenance })) }
         : { [op.contentArg ?? "content"]: facts.join("\n") };

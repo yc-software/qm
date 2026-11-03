@@ -111,6 +111,8 @@ export function recallTools(kit: ToolKit) {
           case "add": {
             const texts = facts.map((fact) => fact.text).filter(Boolean);
             if (!texts.length) return fail("memory add requires `facts` (a non-empty list of {text}).");
+            if (texts.length > 20)
+              return fail("memory add takes at most 20 facts per call; add the rest in another call.");
             const written = await tc.memoryAdd(texts);
             if (written === null) return unavailable();
             const { added, outcomes, problems } = written;
