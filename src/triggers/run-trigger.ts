@@ -5,6 +5,7 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
+import { TransientTurnFailure } from "../core/turn-error.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../directory/directory-store.ts";
@@ -244,6 +245,16 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let userNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
+  const sendErrorNotice = async (reason: string): Promise<void> => {
+    if (!spec.errorNotice || !spec.destination || !deliverable) return;
+    await deps.deliveries.enqueue({
+      destination: spec.destination,
+      text: spec.errorNotice(reason),
+      idempotencyKey: `${spec.fireKey}:err`,
+      provenance: deliveryProvenance(spec, threadRef),
+      ...(spec.shadow ? { shadow: true } : {}),
+    });
+  };
   const ran = await deps.idempotency.once(spec.fireKey, async () => {
     await spec.onClaimed?.();
     if (spec.message !== undefined) {
@@ -296,6 +307,10 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
       idempotencyKey: spec.fireKey,
     });
+    if (res.status === "queued") {
+      await sendErrorNotice(userFacingFailureClause(res));
+      throw new TransientTurnFailure(`turn ${res.runId ?? ""} was still waiting to finish when this process shut down`);
+    }
     status = res.status;
     errorCode = res.errorCode;
     reply = res.reply;
@@ -343,15 +358,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(sessionId ? { sessionId } : {}),
   };
 
-  if (spec.errorNotice && spec.destination && deliverable && isTriggerFailure(outcome)) {
-    await deps.deliveries.enqueue({
-      destination: spec.destination,
-      text: spec.errorNotice(userNote ?? note ?? status!),
-      idempotencyKey: `${spec.fireKey}:err`,
-      provenance: deliveryProvenance(spec, threadRef),
-      ...(spec.shadow ? { shadow: true } : {}),
-    });
-  }
+  if (isTriggerFailure(outcome)) await sendErrorNotice(userNote ?? note ?? status!);
 
   return outcome;
 }

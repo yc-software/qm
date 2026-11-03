@@ -29,6 +29,10 @@ function webTranscriptNote(run: Run, surface: string, failed: boolean): Destinat
 
 export type AdminUrlFor = (sessionId: string) => string | undefined;
 
+export function replyEditNote(retracted: readonly string[] | undefined): string | undefined {
+  return retracted?.length ? `Edited after a reply check: ${[...new Set(retracted)].join(", ")}` : undefined;
+}
+
 export function runResultDelivery(
   run: Run,
   surfaces: SurfaceRegistry,
@@ -88,8 +92,9 @@ export function runResultDelivery(
     return { destination, text: unfinishedTurnText(`${clause}${detail}`), provenance, idempotencyKey };
   }
   if (run.result?.status === "ok" && (run.result.reply || run.result.attachments?.length)) {
+    const editNote = replyEditNote(run.result.retracted);
     return {
-      destination,
+      destination: editNote ? { ...destination, editNote } : destination,
       text: run.result.reply ?? "",
       ...(run.result.attachments?.length ? { attachments: run.result.attachments } : {}),
       provenance,

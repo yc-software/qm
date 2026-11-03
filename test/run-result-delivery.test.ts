@@ -291,7 +291,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
   const recovery = wireRunResultDeliveries(runs, deliveries, surfaces);
   const finish = async (threadRef: string, reply: string): Promise<Run> => {
     const run = (await runs.enqueue({ sessionId: threadRef, request: turn(reply, "C9:171.001") })).run;
-    const claimed = await runs.claimForSession(threadRef, "w1", 5_000);
+    const claimed = await runs.claimById(run.id, "w1", 5_000);
     await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply });
     return run;
   };
@@ -299,7 +299,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
   const live = await finish("sB", "delivered live");
   await deliveries.ackByKey(`run:${live.id}`, Date.now());
   const silent = (await runs.enqueue({ sessionId: "sC", request: turn("c", "C9:171.001") })).run;
-  await runs.complete(silent.id, (await runs.claimForSession("sC", "w1", 5_000))?.leaseToken ?? "", {
+  await runs.complete(silent.id, (await runs.claimById(silent.id, "w1", 5_000))?.leaseToken ?? "", {
     status: "silent",
   });
   await new Promise((r) => setTimeout(r, 0));
@@ -329,7 +329,7 @@ test("sweep pages through terminal runs by (finishedAt, id) without skipping tie
   const finished = new Set<string>();
   for (let i = 0; i < 205; i++) {
     const run = (await runs.enqueue({ sessionId: `s${i}`, request: turn(`r${i}`, "C9:171.001") })).run;
-    const claimed = await runs.claimForSession(`s${i}`, "w1", 5_000);
+    const claimed = await runs.claimById(run.id, "w1", 5_000);
     await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: `r${i}` });
     finished.add(`run:${run.id}`);
   }
@@ -573,4 +573,13 @@ test("runResultDelivery answers an addressed refusal on any live-reply surface, 
   });
   assert.equal(runResultDelivery(refused("web"), withPartnerChat), null);
   assert.equal(runResultDelivery(refused("cron"), withPartnerChat), null);
+});
+
+test("runResultDelivery notes a reply the reply check retracted and rewrote", () => {
+  const d = runResultDelivery(
+    run({ result: { status: "ok", reply: "the reply", retracted: ["em dash", "too long", "em dash"] } }),
+    surfaces,
+  );
+  assert.equal(d?.destination.editNote, "Edited after a reply check: em dash, too long");
+  assert.equal(runResultDelivery(run({}), surfaces)?.destination.editNote, undefined);
 });

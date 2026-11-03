@@ -308,7 +308,6 @@ export interface App {
     finishedAt: number | null;
   } | null>;
   getRunToolItems(runId: string, viewer?: string, afterSeq?: number): Promise<Item[]>;
-  stopConversation(threadRef: string, viewer?: string): Promise<boolean>;
   activeRunForThread(
     threadRef: string,
     viewer?: string,
@@ -324,7 +323,7 @@ export interface App {
     runId: string,
     signal: RunSignal,
     viewer?: string,
-  ): Promise<{ accepted: boolean; reason?: string; replayed?: boolean }>;
+  ): Promise<{ accepted: boolean; reason?: string; why?: string; queuedRunId?: string; replayed?: boolean }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;
   getSession(
     sessionId: string,
@@ -649,7 +648,6 @@ export interface AppDeps {
   sessions: SessionStore;
   orchestrator: Orchestrator;
   runs: RunStore;
-  leaseTtlMs: number;
   maxAttempts: number;
   runWaitMs?: number;
   turnStream?: TurnStream;

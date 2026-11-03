@@ -13,9 +13,10 @@ import {
   renderSubagentMail,
   SUBAGENT_TREE_RUN_CAP,
   requiresDelegation,
-  sessionTreeRunCount,
+  sessionTreeRuns,
   delegatedAuthorizationOrigin,
   stopSessionTree,
+  sessionContextOf,
 } from "../src/sessions/session-syscalls.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
@@ -63,7 +64,11 @@ async function rig(opts?: {
     ...(opts?.treeRunCap !== undefined ? { treeRunCap: opts.treeRunCap } : {}),
     ...(opts?.prepareRequest ? { prepareRequest: opts.prepareRequest } : {}),
   });
-  const room = await sessions.getOrCreateByThread("slack:dm:D1", "dm", scope, undefined, "slack");
+  const room = await recordContext(
+    sessions,
+    await sessions.getOrCreateByThread("slack:dm:D1", "dm", scope, undefined, "slack"),
+    { actor, conversation, surface: "slack", deliveryTarget: "D1", timezone: "America/Los_Angeles" },
+  );
   await sessions.updateTitle(room.id, "dm with alex");
   await sessions.addParticipant(room.id, actor.id);
   const binding = (session: Session) => ({
@@ -86,6 +91,24 @@ async function rig(opts?: {
     room,
     syscallsFor: (session) => factory.forTurn(binding(session)),
   };
+}
+
+async function recordContext(
+  sessions: SessionStore,
+  session: Session,
+  request: Pick<OrchestratorInput, "actor" | "conversation"> & Partial<OrchestratorInput>,
+): Promise<Session> {
+  return sessions.getOrCreateByThread(
+    session.threadRef,
+    session.type,
+    session.scopeId,
+    undefined,
+    undefined,
+    undefined,
+    {
+      context: sessionContextOf({ origin: { kind: "human" }, surface: "web", text: "", ...request }),
+    },
+  );
 }
 
 async function freshSession(sessions: SessionStore, id: string): Promise<Session> {
@@ -172,6 +195,7 @@ test("a wake cannot turn an ordinary session into a child or start its turn", as
   const r = await rig();
   const ordinary = await r.sessions.getOrCreateByThread("web:ordinary", "dm", scope, undefined, "web");
   await r.sessions.addParticipant(ordinary.id, actor.id);
+  await recordContext(r.sessions, ordinary, { actor, conversation, surface: "web" });
   await r.runs.enqueue({
     sessionId: ordinary.threadRef,
     request: { actor, conversation, surface: "web", origin: { kind: "human" }, text: "hello" },
@@ -534,16 +558,12 @@ test("adopting into a fresh web parent never delivers to the old parent's surfac
     ),
     /verified runtime context/,
   );
-  await r.runs.enqueue({
-    sessionId: destination.threadRef,
-    request: {
-      actor,
-      conversation: { ...conversation, threadRef: destination.threadRef },
-      origin: { kind: "direct" },
-      surface: "web",
-      deliveryTarget: destination.threadRef,
-      text: "hello",
-    },
+  await recordContext(r.sessions, destination, {
+    actor,
+    conversation: { ...conversation, threadRef: destination.threadRef },
+    origin: { kind: "direct" },
+    surface: "web",
+    deliveryTarget: destination.threadRef,
   });
   await deliverSubagentMail(
     { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, delegationEnabled: async () => true },
@@ -577,19 +597,18 @@ test("ordinary-session messages queue privately without steering an externally d
   const r = await rig();
   const target = await r.sessions.getOrCreateByThread("web:U1:peer", "dm", scope);
   await r.sessions.addParticipant(target.id, actor.id);
-  const { run } = await r.runs.enqueue({
-    sessionId: target.threadRef,
-    request: {
-      actor,
-      conversation: { ...conversation, threadRef: target.threadRef },
-      origin: { kind: "direct" },
-      surface: "slack",
-      deliveryTarget: "D-other",
-      deliveryCandidates: [{ target: "D-other", label: "DM" }],
-      surfaceTools: true,
-      text: "original task",
-    },
-  });
+  const original = {
+    actor,
+    conversation: { ...conversation, threadRef: target.threadRef },
+    origin: { kind: "direct" as const },
+    surface: "slack",
+    deliveryTarget: "D-other",
+    deliveryCandidates: [{ target: "D-other", label: "DM" }],
+    surfaceTools: true,
+    text: "original task",
+  };
+  await recordContext(r.sessions, target, original);
+  const { run } = await r.runs.enqueue({ sessionId: target.threadRef, request: original });
   await r.runs.claimById(run.id, "worker", 60_000);
   const result = await r.syscallsFor(r.room).write({ target: target.id, text: "an intermediate update" });
   assert.ok(result.ok);
@@ -1360,7 +1379,7 @@ test("completed children do not fill a working parent's run slots and consumed r
     await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: `result ${i}` });
     const finished = (await r.runs.get(run!.id))!;
     assert.equal(await deliverSubagentMail(deps, finished), false);
-    assert.equal(await sessionTreeRunCount(r.sessions, r.runs, r.room), 1);
+    assert.equal((await sessionTreeRuns(r.sessions, r.runs, r.room)).length, 1);
   }
   const pending = await r.runs.pendingReturns();
   assert.equal(pending.length, 12);
@@ -1377,7 +1396,7 @@ test("completed children do not fill a working parent's run slots and consumed r
     await r.runs.markReturned(run.id);
   }
   assert.deepEqual(await r.runs.pendingReturns(), []);
-  assert.equal(await sessionTreeRunCount(r.sessions, r.runs, r.room), 1);
+  assert.equal((await sessionTreeRuns(r.sessions, r.runs, r.room)).length, 1);
 });
 
 test("unread completions survive parent shutdown and share one pending wakeup", async () => {
@@ -1951,14 +1970,14 @@ for (const origin of [
     const opened = await childApi.open({ task: "inspect nested" });
     assert.ok(opened.ok);
     const child = (await r.sessions.get(opened.sessionId))!;
-    const nested = (await r.runs.latestForThread(child.threadRef))!;
+    const nested = (await r.runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run))!;
     assert.equal(nested.request.origin.kind, origin.kind);
     assert.equal("messageTs" in nested.request.origin, false);
     assert.equal("entryTs" in nested.request.origin, false);
     assert.equal(nested.request.delegatingRunId, r.run.id);
     assert.equal(nested.request.sessionSenderId, r.child.id);
     assert.ok((await childApi.write({ target: child.id, wake: true, text: "inspect again" })).ok);
-    const followup = (await r.runs.latestForThread(child.threadRef))!;
+    const followup = (await r.runs.list({ threadRef: child.threadRef, limit: 1 }).then(([run]) => run))!;
     assert.equal(followup.request.origin.kind, origin.kind);
     assert.equal(followup.request.delegatingRunId, r.run.id);
   });
@@ -1974,7 +1993,7 @@ test("detaching an ancestor revokes a descendant's delegated live authority", as
   const opened = await api.open({ task: "inspect nested" });
   assert.ok(opened.ok);
   const nested = (await r.sessions.get(opened.sessionId))!;
-  const run = (await r.runs.latestForThread(nested.threadRef))!;
+  const run = (await r.runs.list({ threadRef: nested.threadRef, limit: 1 }).then(([run]) => run))!;
   assert.equal((await delegatedAuthorizationOrigin(run.request, r))?.kind, "human");
   await r.sessions.setParentSession(r.child.id, null);
   assert.equal(await delegatedAuthorizationOrigin(run.request, r), undefined);

@@ -13,6 +13,7 @@ import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
+import { failedTurnError } from "./support/failed-turn.ts";
 
 const SECRET = "control-service-test";
 
@@ -1065,8 +1066,8 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
     return result;
   });
-  await assert.rejects(
-    built.app.turn({
+  assert.match(
+    await failedTurnError(built, {
       surface: "cron",
       origin: { kind: "automation" },
       actor: { externalId: "U1" },
