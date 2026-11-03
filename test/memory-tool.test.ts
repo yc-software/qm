@@ -275,7 +275,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   });
   assert.match(
     (await ctx.memoryRead(org)) ?? "",
-    /### org:default-org\n```untrusted-data\n#2 \(2026-05-31\) deploys are frozen in December/,
+    new RegExp(`### ${TEST_ROOT_SCOPE}\\n\`\`\`untrusted-data\\n#2 \\(2026-05-31\\) deploys are frozen in December`),
   );
   assert.equal(await ctx.memoryRead("personal:someone-else"), null);
   assert.equal(await ctx.memorySearch("deploys", 20, "personal:someone-else"), null);
