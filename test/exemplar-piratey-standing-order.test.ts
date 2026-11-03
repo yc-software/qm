@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -24,49 +25,51 @@ test("exemplar (piratey X-link): the worker gets the standing order verbatim and
   const built = buildApp(testConfig({ dataDir }));
   built.runtime.start();
   try {
-    const container = "C-pirate";
-    await built.app.setChannelPolicy(container, DIRECTIVE, "U-alice");
+    await inTestTenant(async () => {
+      const container = "C-pirate";
+      await built.app.setChannelPolicy(container, DIRECTIVE, "U-alice");
 
-    await built.app.ingestSurfaceEvents(
-      [
-        {
-          container,
-          ts: X_LINK_TS,
-          authorId: "U-alice",
-          authorName: "alice",
-          text: "<https://x.com/example/status/1234567890?s=20>",
-          createdAt: 1,
-        },
-      ],
-      "slack",
-      { name: "qm", mentionId: "UBOT" },
-    );
+      await built.app.ingestSurfaceEvents(
+        [
+          {
+            container,
+            ts: X_LINK_TS,
+            authorId: "U-alice",
+            authorName: "alice",
+            text: "<https://x.com/example/status/1234567890?s=20>",
+            createdAt: 1,
+          },
+        ],
+        "slack",
+        { name: "qm", mentionId: "UBOT" },
+      );
 
-    const deadline = Date.now() + 5_000;
-    let pending: any[] = [];
-    while (Date.now() < deadline && !pending.length) {
-      pending = (await built.deliveries.pending("slack")) as any[];
-      if (!pending.length) await sleep(50);
-    }
-    assert.equal(pending.length, 1, "exactly one pirate reply");
-    assert.equal(
-      pending[0].destination.target,
-      `${container}:${X_LINK_TS}`,
-      "threaded under the X link, not top-level",
-    );
-    assert.match(pending[0].text, /^Arrr/);
+      const deadline = Date.now() + 5_000;
+      let pending: any[] = [];
+      while (Date.now() < deadline && !pending.length) {
+        pending = (await built.deliveries.pending("slack")) as any[];
+        if (!pending.length) await sleep(50);
+      }
+      assert.equal(pending.length, 1, "exactly one pirate reply");
+      assert.equal(
+        pending[0].destination.target,
+        `${container}:${X_LINK_TS}`,
+        "threaded under the X link, not top-level",
+      );
+      assert.match(pending[0].text, /^Arrr/);
 
-    const workerSession = await built.sessions.getByThread(`slack:${container}:ambient:${X_LINK_TS}`);
-    assert.ok(workerSession, "the ambient worker ran as its own sub-conversation");
-    const entries = await built.sessions.getEntries(workerSession!.id);
-    const wake = entries.find(
-      (e: any) => e.type === "user" && String((e.payload as any)?.text ?? "").includes("<standing-orders"),
-    );
-    assert.ok(wake, "the wake carries a standing-orders element");
-    const text = String((wake!.payload as any).text);
-    for (const line of ["DON'T: respond piratey to messages without an X link", "(per alice, updated 2026-07-01)"]) {
-      assert.ok(text.includes(line), `standing order not verbatim in the wake: missing "${line}"`);
-    }
+      const workerSession = await built.sessions.getByThread(`slack:${container}:ambient:${X_LINK_TS}`);
+      assert.ok(workerSession, "the ambient worker ran as its own sub-conversation");
+      const entries = await built.sessions.getEntries(workerSession!.id);
+      const wake = entries.find(
+        (e: any) => e.type === "user" && String((e.payload as any)?.text ?? "").includes("<standing-orders"),
+      );
+      assert.ok(wake, "the wake carries a standing-orders element");
+      const text = String((wake!.payload as any).text);
+      for (const line of ["DON'T: respond piratey to messages without an X link", "(per alice, updated 2026-07-01)"]) {
+        assert.ok(text.includes(line), `standing order not verbatim in the wake: missing "${line}"`);
+      }
+    });
   } finally {
     await built.runtime.stop();
   }
