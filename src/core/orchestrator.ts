@@ -3225,7 +3225,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ? {
                     id: author,
                     ...(request.actor.displayName ? { name: request.actor.displayName } : {}),
-                    origin: request.origin ?? { kind: "direct" },
+                    origin: request.origin ?? { kind: "automation", screenData: text },
                     fromSession: isSessionTurn(request),
                   }
                 : {
