@@ -233,20 +233,30 @@ const LIVE_ORIGIN_REWRITES = [
 ];
 
 export const SESSION_PAGE = 2000;
+const oldBinding = "(jsonb_typeof(s.slack_binding) = 'object' AND s.slack_binding ? 'teamId')";
+const bindingAsSource = `CASE
+  WHEN ${oldBinding} THEN s.slack_binding
+  WHEN jsonb_typeof(s.slack_binding -> 'author') = 'object' THEN jsonb_strip_nulls(jsonb_build_object(
+    'accountId', s.slack_binding -> 'author' -> 'account', 'teamId', s.slack_binding -> 'workspace',
+    'userId', s.slack_binding -> 'author' -> 'id', 'externalPolicyNamespace', s.slack_binding -> 'policyNamespace',
+    'replyThreadTs', s.slack_binding -> 'replyThread'))
+END`;
 const SESSION_ORIGIN_PAGE = {
   id: "surface-origin-rewrite/spawn-meta",
   statement: `WITH page AS (
-     SELECT id FROM sessions WHERE id > $1 ORDER BY id LIMIT ${SESSION_PAGE}
+     SELECT s.id FROM sessions s WHERE s.id > $1 AND (${oldKeysIn("s.spawn_meta")} OR ${oldBinding})
+     ORDER BY s.id LIMIT ${SESSION_PAGE}
    ), rewritten AS (
      UPDATE sessions s SET
-       spawn_meta = CASE WHEN ${oldKeysIn("s.spawn_meta")} THEN COALESCE(pg_temp.qm_surface_request(
-         pg_temp.qm_jsonb_or_null(s.spawn_meta) || CASE
-           WHEN s.slack_binding ? 'teamId' AND s.spawn_meta LIKE '%"externalSlack"%' AND s.spawn_meta NOT LIKE '%"slackSource"%'
-           THEN jsonb_build_object('slackSource', s.slack_binding) ELSE '{}'::jsonb END)::text, s.spawn_meta) ELSE s.spawn_meta END,
-       slack_binding = CASE WHEN s.slack_binding ? 'teamId'
+       spawn_meta = CASE WHEN ${oldKeysIn("s.spawn_meta")} AND jsonb_typeof(pg_temp.qm_jsonb_or_null(s.spawn_meta)) = 'object'
+         THEN pg_temp.qm_surface_request(pg_temp.qm_jsonb_or_null(s.spawn_meta) || CASE
+           WHEN s.spawn_meta LIKE '%"externalSlack"%' AND s.spawn_meta NOT LIKE '%"slackSource"%' AND ${bindingAsSource} IS NOT NULL
+           THEN jsonb_build_object('slackSource', ${bindingAsSource}) ELSE '{}'::jsonb END)::text
+         ELSE s.spawn_meta END,
+       slack_binding = CASE WHEN ${oldBinding}
          THEN pg_temp.qm_surface_request(jsonb_build_object('slackSource', s.slack_binding)) -> 'surfaceOrigin'
          ELSE s.slack_binding END
-     FROM page WHERE s.id = page.id AND (${oldKeysIn("s.spawn_meta")} OR s.slack_binding ? 'teamId')
+     FROM page WHERE s.id = page.id
    )
    SELECT max(id) AS last FROM page`,
 };
@@ -372,6 +382,8 @@ async function rewriteSettledBatch(client: PoolClient): Promise<boolean> {
 const FRESH_WRITE_REWRITES = [OVERLAP_TURN_ORIGIN_REWRITE, ...LIVE_ORIGIN_REWRITES];
 
 async function rewriteSessionPage(client: PoolClient, after: string): Promise<string | null> {
+  const present = await client.query<{ present: boolean }>(`SELECT to_regclass('sessions') IS NOT NULL AS present`);
+  if (!present.rows[0]?.present) return null;
   for (const statement of [`SET LOCAL lock_timeout = '3s'`, ...HELPERS]) await client.query(statement);
   const last = (await client.query<{ last: string | null }>(SESSION_ORIGIN_PAGE.statement, [after])).rows[0]?.last;
   for (const statement of DROPS) await client.query(statement);

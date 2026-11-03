@@ -183,6 +183,10 @@ test(
         },
       );
       await bindSession("bound-internal", internalSource, { origin: { kind: "human" } });
+      await bindSession("bound-neutral", externalOrigin, {
+        externalSlack: { ...ids, ...access },
+        origin: { kind: "human" },
+      });
       await admin.query(
         `INSERT INTO sessions (id, type, scope_id, thread_ref, created_at, slack_binding)
          SELECT 'paged-' || lpad(g::text, 6, '0'), 'dm', 'org:o', 'paged-' || g, 1, $1::jsonb FROM generate_series(1, $2::int) g`,
@@ -301,6 +305,8 @@ test(
         slackSurfaceOrigin({ ...ids, policyNamespace: "external-slack:TPARTNER:x" }),
       );
       assert.deepEqual(boundExternal.spawnMeta, { surfaceOrigin: externalOrigin, origin: { kind: "human" } });
+      const boundNeutral = await bound("bound-neutral");
+      assert.deepEqual(boundNeutral.spawnMeta, { surfaceOrigin: externalOrigin, origin: { kind: "human" } });
       const boundInternal = await bound("bound-internal");
       assert.equal(
         (await admin.query("SELECT count(*)::int AS n FROM sessions WHERE slack_binding ? 'teamId'")).rows[0].n,
