@@ -34,6 +34,7 @@ import { ref } from "lit/directives/ref.js";
 import { guard } from "lit/directives/guard.js";
 import {
   Activity,
+  ArrowDown,
   Ban,
   BookOpen,
   Search,
@@ -44,6 +45,7 @@ import {
   ChevronRight,
   ChevronUp,
   Clock3,
+  Cog,
   Copy,
   FileImage,
   FileText,
@@ -378,7 +380,7 @@ export function createChatSurface(
     if (!speakerId) return undefined;
     const project = contextsState.list.find((c) => c.scopeId === chatState.scopeId)?.project;
     const member = project?.members.find((m) => m.principalId === speakerId);
-    if (member?.avatarUrl || !isReadOnlySlackView()) return member;
+    if (member?.avatarUrl) return member;
     return { principalId: speakerId, avatarUrl: speakerAvatar(speakerId) };
   }
 
@@ -1782,6 +1784,9 @@ export function createChatSurface(
               ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
               ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()} ${ctx.composer.composerForm(agent)}
               ${ctx.pane ? nothing : suggestions}
+              <button class="scroll-bottom-btn" type="button" aria-label="Scroll to bottom" @click=${scrollToBottom}>
+                ${icon(ArrowDown, 16)}
+              </button>
             </div>
           </div>
           ${sideChats.view()}
@@ -2634,7 +2639,9 @@ export function createChatSurface(
           aria-expanded=${String(bgPanel.open)}
           @click=${toggleBackgroundPanel}
         >
-          ${icon(Activity, 13)}<span class="bg-activity-label">${label ?? "Background activity"}</span>
+          ${icon((live ?? row)?.jobs ? Cog : Activity, 13)}<span class="bg-activity-label"
+            >${label ?? "Background activity"}</span
+          >
           <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
         </button>
         ${bgPanel.open ? backgroundPanelBody() : nothing}

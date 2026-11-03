@@ -1142,16 +1142,18 @@ function sessionActionItems(sessionId: string, panelId: string): SessionAction[]
 }
 
 function sessionActions(sessionId: string, panelId: string, cls: string): TemplateResult {
+  const header = cls === "split-group-session-action";
+  const base = header ? ["session-tool"] : ["icon-btn", "subtle"];
   return html`${sessionActionItems(sessionId, panelId).map(
     (a) =>
       html`<button
         type="button"
-        class=${["icon-btn", "subtle", cls, a.cls].filter(Boolean).join(" ")}
+        class=${[...base, cls, a.cls].filter(Boolean).join(" ")}
         ${tip(a.label)}
         aria-label=${a.aria ?? a.label}
         @click=${a.run}
       >
-        ${icon(a.glyph, 13)}
+        ${icon(a.glyph, header ? 15 : 13)}
       </button>`,
   )}`;
 }
@@ -1271,7 +1273,8 @@ class PaneTab implements ITabRenderer {
                     void openSession(parent);
                   }}
                 >
-                  ${sessionTitle(parent)}</button
+                  <span class="split-pane-parent-icon">${icon(ArrowUpLeft, 13)}</span
+                  ><span class="split-pane-parent-label">${sessionTitle(parent)}</span></button
                 ><span class="split-pane-crumb-sep">/</span>`
             : nothing
         }
