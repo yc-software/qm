@@ -3186,7 +3186,7 @@ test("a queued runtime change cannot mutate after cancellation while draining to
   const second = call(runtime, { action: "set", model: "Astra", lifetime: "scope" });
   controller.abort();
   release();
-  await Promise.all([first, second]);
+  await Promise.allSettled([first, second]);
   assert.equal(selected, false);
   assert.equal(ref.runtimeHandoff, undefined);
 });
@@ -3799,11 +3799,11 @@ test("a client tool times out with an error the model can act on", async () => {
 test("a client tool stops waiting when the turn is cancelled", async () => {
   const { emitted, cancel, ref } = clientToolRef();
   const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 60_000)] }).slice(-1);
-  const pending = call(tool, {}) as Promise<{ content: Array<{ text: string }> }>;
+  const pending = call(tool, {});
+  await new Promise((resolve) => setImmediate(resolve));
   cancel.abort();
-  const ret = await pending;
-  assert.match(ret.content[0]?.text ?? "", /cancelled/);
-  assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.cancelled, true);
+  await assert.rejects(pending, { name: "AbortError" });
+  assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.stopped, true);
 });
 
 test("context recovery drains in-flight effects, preserves an active goal, and blocks subsequent calls", async () => {
@@ -4086,8 +4086,16 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
     const emitted: Emitted[] = [];
     const shutdown = new AbortController();
     const cancel = new AbortController();
+    const context = fakeToolContext();
     const ref: ToolContextRef = {
-      current: fakeToolContext(),
+      current: {
+        ...context,
+        history: async (...args) => {
+          if (abort === "shutdown") shutdown.abort();
+          if (abort !== "none") cancel.abort();
+          return context.history(...args);
+        },
+      },
       emit: (e) => {
         emitted.push(e as Emitted);
       },
@@ -4096,9 +4104,7 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
       abortSignal: cancel.signal,
     };
     const history = createAgentTools(ref).find((t) => t.name === "history")!;
-    if (abort === "shutdown") shutdown.abort();
-    if (abort !== "none") cancel.abort();
-    await callWith(history, `call-${abort}`, { query: "budget", retrySafe });
+    await callWith(history, `call-${abort}`, { query: "budget", retrySafe }).catch(() => undefined);
     return emitted;
   };
   const strategy = (emitted: Emitted[]) => {

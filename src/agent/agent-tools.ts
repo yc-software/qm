@@ -214,7 +214,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   return active.map((tool) => {
     const wrapped = withRuntimeBarrier(
       withToolSpan(withToolApprovalGate(validateSandboxTool(tool, kit), kit), ref),
-      ref,
+      kit,
     );
     return clientNames.has(tool.name) ? wrapped : withRetrySafety(wrapped, retryMarks);
   });

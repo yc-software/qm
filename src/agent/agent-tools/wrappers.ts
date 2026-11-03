@@ -7,6 +7,7 @@ import { errMessage, reportFailure } from "../../util/errors.ts";
 import { redactCommand } from "../../sandbox/exec-process-session.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { isObj } from "../../util/objects.ts";
+import { withAbort } from "../../util/async.ts";
 import type { ToolContextRef } from "../agent-tools.ts";
 import type { ToolKit } from "./kit.ts";
 
@@ -64,6 +65,7 @@ export function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMa
 
 const RESOURCE_TOOL_NAMES = new Set(["sandbox", "background", "files", "apps", "skills", "goal", "cron", "admin"]);
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently", "tool_search", "mcp_call"]);
+const SELF_CANCELLING_TOOLS = new Set(["execute", "goal"]);
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
 const APPROVAL_ARGS_MAX_CHARS = 16_000;
@@ -200,7 +202,8 @@ export function withToolSpan(tool: ToolDefinition, ref: ToolContextRef): ToolDef
   } as ToolDefinition;
 }
 
-export function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
+export function withRuntimeBarrier(tool: ToolDefinition, kit: Pick<ToolKit, "ref" | "log">): ToolDefinition {
+  const { ref, log } = kit;
   return {
     ...tool,
     async execute(...args) {
@@ -234,10 +237,15 @@ export function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): T
         }
       }
       const inFlight = (ref.runtimeInFlight ??= new Set());
-      const result = Promise.resolve().then(() => tool.execute(...args));
+      const signal = SELF_CANCELLING_TOOLS.has(tool.name) ? undefined : ref.abortSignal;
+      const result = withAbort(() => tool.execute(...args), signal);
       inFlight.add(result);
       try {
         return await result;
+      } catch (error) {
+        if (signal?.aborted)
+          await log("tool_result", { tool: tool.name, callId: args[0], isError: true, result: errMessage(error) });
+        throw error;
       } finally {
         inFlight.delete(result);
       }

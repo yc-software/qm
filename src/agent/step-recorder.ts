@@ -74,6 +74,7 @@ export type StepRecorder = ReturnType<typeof createStepRecorder>;
 export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "scopeLabel" | "shutdown">, persist: Persist) {
   const calls = new Map<string, { step: ReplayStep; block: ToolCall }>();
   const called = new Set<string>();
+  const settled = new Set<string>();
   const executing = new Map<string, RecordedEntry>();
   let pending: { step: ReplayStep; parts: Positioned[] } | null = null;
   let last: ReplayStep | undefined;
@@ -89,6 +90,7 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "scopeLab
     const call = calls.get(callId);
     if (!call) return;
     calls.delete(callId);
+    settled.add(callId);
     if (!called.has(callId)) {
       const payload = { tool: call.block.name, callId };
       write({
@@ -116,6 +118,7 @@ export function createStepRecorder(turn: Pick<AgentTurnInput, "emit" | "scopeLab
     emit: async (entry: RecordedEntry): Promise<unknown> => {
       const payload = (entry.payload ?? {}) as Record<string, unknown>;
       const callId = typeof payload.callId === "string" ? payload.callId : "";
+      if (settled.has(callId)) return undefined;
       const call = calls.get(callId);
       if (call && entry.type === "tool_call") {
         called.add(callId);
