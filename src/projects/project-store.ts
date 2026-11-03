@@ -23,13 +23,14 @@ export interface Project {
   memberIds: string[];
   channelMemberIds?: string[];
   slackChannel?: ProjectSlackChannel;
+  icon?: string;
   createdAt: number;
   updatedAt: number;
 }
 
 type ProjectMutation =
   | { status: "ok"; project: Project; changed: boolean }
-  | { status: "not_found" | "forbidden" | "invalid_member" | "invalid_name" };
+  | { status: "not_found" | "forbidden" | "invalid_member" | "invalid_name" | "invalid_icon" };
 
 type ProjectMutationEffect = (result: Extract<ProjectMutation, { status: "ok" }>) => Promise<void>;
 
@@ -40,6 +41,7 @@ export interface ProjectStore {
   addMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   removeMember(id: string, actorId: string, memberId: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   rename(id: string, ownerId: string, name: string, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
+  setIcon(id: string, actorId: string, icon: string | null, effect?: ProjectMutationEffect): Promise<ProjectMutation>;
   setSlackChannel(
     id: string,
     actorId: string,
@@ -79,6 +81,21 @@ export function projectIdFromGroupRef(ref: string): string | null {
 
 export function isProjectGroupRef(ref: string): boolean {
   return ref.startsWith(PROJECT_GROUP_PREFIX);
+}
+
+const CUSTOM_EMOJI = /^:[a-z0-9_+'-]{1,100}:$/;
+const PICTOGRAPH = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
+
+/** A project icon is one Unicode emoji ("🚢") or a workspace custom emoji shortcode (":shipit:"). */
+export function validProjectIcon(value: unknown): value is string | null {
+  if (value === null) return true;
+  if (typeof value !== "string" || !value || value.length > 100) return false;
+  if (CUSTOM_EMOJI.test(value)) return true;
+  return (
+    value.length <= 32 &&
+    !/[\s\p{L}\p{N}]/u.test(value.replace(/[\u{E0061}-\u{E007A}]/gu, "")) &&
+    PICTOGRAPH.test(value)
+  );
 }
 
 function cleanName(name: string): string {
@@ -217,6 +234,33 @@ export function createProjectStore(
           if (project.name === clean) return project;
           changed = true;
           return { ...project, name: clean };
+        });
+        if (!updated) return { status: "not_found" };
+        if (outcome.status !== "ok") return { status: outcome.status };
+        const result = { status: "ok" as const, project: visible(updated), changed };
+        await effect?.(result);
+        return result;
+      });
+    },
+    async setIcon(id, actorId, icon, effect) {
+      if (!validProjectIcon(icon)) return { status: "invalid_icon" };
+      return withLock(id, async () => {
+        const outcome: { status: ProjectMutation["status"] } = { status: "not_found" };
+        let changed = false;
+        const updated = await backing.update(id, (project) => {
+          const isMember = effectiveMemberIds(project).some((member) => samePerson(member, actorId));
+          if (!isMember || !isActiveMember(project.ownerId) || !isActiveMember(actorId)) {
+            outcome.status = "forbidden";
+            return project;
+          }
+          outcome.status = "ok";
+          if ((project.icon ?? null) === icon) return project;
+          changed = true;
+          if (icon === null) {
+            const { icon: _dropped, ...rest } = project;
+            return rest;
+          }
+          return { ...project, icon };
         });
         if (!updated) return { status: "not_found" };
         if (outcome.status !== "ok") return { status: outcome.status };

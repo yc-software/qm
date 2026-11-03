@@ -171,7 +171,8 @@ const FAMILIES: AgentApiFamily[] = [
       {
         method: "PATCH",
         path: "/v1/projects/:id",
-        summary: "rename a project the asking person owns — body {name}",
+        summary:
+          "update a project — body {name} renames it (owner only); body {icon} sets its sidebar icon to one emoji or a :custom_emoji: shortcode, or null to clear (any member)",
       },
       {
         method: "POST",

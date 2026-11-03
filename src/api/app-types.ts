@@ -202,7 +202,16 @@ export type ProjectView = Project & {
 
 type ProjectViewMutation =
   | { status: "ok"; project: ProjectView; changed: boolean }
-  | { status: "not_found" | "forbidden" | "invalid_member" | "invalid_name" | "invalid_channel" | "channel_in_use" };
+  | {
+      status:
+        | "not_found"
+        | "forbidden"
+        | "invalid_member"
+        | "invalid_name"
+        | "invalid_icon"
+        | "invalid_channel"
+        | "channel_in_use";
+    };
 
 interface DeploymentGitUrl {
   url: string;
@@ -385,6 +394,7 @@ export interface App {
   removeProjectMember(id: string, principalId: string, memberId: string): Promise<ProjectViewMutation>;
   setProjectSlackChannel(id: string, principalId: string, channel: string | null): Promise<ProjectViewMutation>;
   renameProject(id: string, principalId: string, name: string): Promise<ProjectViewMutation>;
+  setProjectIcon(id: string, principalId: string, icon: string | null): Promise<ProjectViewMutation>;
   updateSession(
     sessionId: string,
     principalId: string,

@@ -31,7 +31,7 @@ import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
-import { groupDmTitle, loadScopeSessions, openSession, refreshSessions, sessionsState } from "./sessions";
+import { groupDmTitle, loadScopeSessions, openSession, refreshSessions, renderList, sessionsState } from "./sessions";
 import { activityOf, sidebarSessions, surfaceOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
 import type { CronView } from "./crons";
@@ -41,6 +41,7 @@ import { ambientPolicySection, loadAmbientPolicy, resetAmbientPolicy } from "./a
 import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
 import { channelHeaderSection, loadChannelHeader, resetChannelHeader } from "./channel-header";
 import { tip } from "./tooltip";
+import { onCustomEmojiLoaded, openProjectIconPicker, projectIconTpl } from "./project-icon";
 
 interface ScopeFile {
   id: string;
@@ -408,7 +409,7 @@ function contextRow(c: CoreContext): TemplateResult {
     .join(" · ");
   return html`
     <button class="context-row" type="button" ${tip(sub)} @click=${() => selectContext(c.scopeId)}>
-      <span class="context-glyph">${icon(glyph, 15)}</span>
+      <span class="context-glyph">${projectIconTpl(c.project?.icon, 17) ?? icon(glyph, 15)}</span>
       <span class="context-row-title" dir="auto">${title}</span>
       ${c.isPrivate ? html`<span class="context-lock" ${tip("Private channel")}>${icon(Lock, 12)}</span>` : nothing}
       <span class="context-row-meta">${meta}</span>
@@ -426,7 +427,20 @@ function detailTpl(c: CoreContext): TemplateResult {
         ${icon(ArrowLeft, 15)}<span>Projects</span>
       </button>
       <div class="context-detail-head">
-        <span class="context-glyph large">${icon(glyph, 22)}</span>
+        ${
+          c.project
+            ? html`<button
+                class="context-glyph large project-icon-trigger"
+                type="button"
+                aria-label=${c.project.icon ? "Change icon" : "Add icon"}
+                aria-haspopup="dialog"
+                ${tip(c.project.icon ? "Change icon" : "Add icon")}
+                @click=${(event: Event) => pickDetailIcon(event, c.scopeId)}
+              >
+                ${projectIconTpl(c.project.icon, 26) ?? icon(glyph, 22)}
+              </button>`
+            : html`<span class="context-glyph large">${icon(glyph, 22)}</span>`
+        }
         <div class="context-detail-titles">
           <h1 class="pane-title">
             ${title}
@@ -1105,6 +1119,45 @@ export async function renameProject(project: CoreProject, name: string): Promise
     if (appState.currentView === "contexts") drawContexts();
     return true;
   } catch {
+    return false;
+  }
+}
+
+function pickDetailIcon(event: Event, scopeId: string): void {
+  const anchor = event.currentTarget as HTMLElement;
+  const project = contextsState.list.find((context) => context.scopeId === scopeId)?.project;
+  if (!project) return;
+  openProjectIconPicker({
+    anchor,
+    current: project.icon,
+    onPick: async (value) => {
+      const latest = contextsState.list.find((context) => context.scopeId === scopeId)?.project;
+      if (!latest) return;
+      await setProjectIcon(latest, value);
+      renderList();
+    },
+  });
+}
+
+onCustomEmojiLoaded(() => {
+  if (appState.currentView === "contexts") drawContexts();
+});
+
+export async function setProjectIcon(project: CoreProject, value: string | null): Promise<boolean> {
+  try {
+    const updated = projectFromResponse(
+      await api(`/api/projects/${encodeURIComponent(project.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ icon: value }),
+      }),
+    );
+    if (!updated) return false;
+    upsertProject(updated);
+    if (appState.currentView === "contexts") drawContexts();
+    return true;
+  } catch (e) {
+    contextsNotice = errMessage(e, "Couldn't change the project icon.");
+    if (appState.currentView === "contexts") drawContexts();
     return false;
   }
 }

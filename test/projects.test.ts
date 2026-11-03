@@ -12,7 +12,12 @@ import { projectRoutes } from "../src/api/routes/projects.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
-import { createProjectStore, projectGroupRef, projectScopeId } from "../src/projects/project-store.ts";
+import {
+  createProjectStore,
+  projectGroupRef,
+  projectScopeId,
+  validProjectIcon,
+} from "../src/projects/project-store.ts";
 import {
   createCanManageScope,
   createCanReadScope,
@@ -106,6 +111,33 @@ test("ProjectStore rename is owner-only and cleans the name", async () => {
   );
   const same = await projects.rename(project.id, "owner", "After Hours");
   assert.ok(same.status === "ok" && !same.changed);
+});
+
+test("validProjectIcon accepts one emoji or a custom shortcode", () => {
+  for (const ok of ["🚢", "👩🏽‍💻", "🏳️‍🌈", "🇺🇸", "❤️", ":shipit:", ":rsi_fire:", ":+1:", null])
+    assert.ok(validProjectIcon(ok), `accepts ${String(ok)}`);
+  for (const bad of ["", "abc", "🚢 ship", ":Bad Name:", "shipit", "<img>", 42, "🚢".repeat(20)])
+    assert.ok(!validProjectIcon(bad), `rejects ${String(bad)}`);
+});
+
+test("ProjectStore icon is member-managed, validated, and not a roster change", async () => {
+  let at = 900;
+  const projects = createProjectStore(testMap(), { ...singleProcessDeps(), id: () => "ic", now: () => at++ });
+  const project = await projects.create({ name: "Iconic", ownerId: "owner" });
+  await projects.addMember(project.id, "owner", "member");
+  const groupRef = projectGroupRef(project.id);
+  const versionBefore = await projects.version(groupRef);
+  assert.equal((await projects.setIcon(project.id, "mallory", "🚢")).status, "forbidden");
+  assert.equal((await projects.setIcon("missing", "owner", "🚢")).status, "not_found");
+  assert.equal((await projects.setIcon(project.id, "owner", "not an emoji")).status, "invalid_icon");
+  const set = await projects.setIcon(project.id, "member", ":shipit:");
+  assert.ok(set.status === "ok" && set.changed && set.project.icon === ":shipit:");
+  assert.equal((await projects.get(project.id))?.icon, ":shipit:");
+  const same = await projects.setIcon(project.id, "owner", ":shipit:");
+  assert.ok(same.status === "ok" && !same.changed);
+  const cleared = await projects.setIcon(project.id, "owner", null);
+  assert.ok(cleared.status === "ok" && cleared.changed && !("icon" in cleared.project));
+  assert.equal(await projects.version(groupRef), versionBefore, "icon is not a roster change");
 });
 
 test("ProjectStore slack-channel link is member-managed and not a roster change", async () => {
