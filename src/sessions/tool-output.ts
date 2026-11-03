@@ -74,12 +74,18 @@ export function cutToolOutput(
   );
 }
 
+export async function inlineTokensOf(store: Pick<ToolOutputStore, "inlineTokens"> | undefined): Promise<number> {
+  return store
+    ? store.inlineTokens().catch(swallowAs("tool output: inline cap", DEFAULT_INLINE_TOKENS))
+    : DEFAULT_INLINE_TOKENS;
+}
+
 export async function parkIfOverCap(
   store: Pick<ToolOutputStore, "inlineTokens" | "save">,
   text: string,
   callId: string,
 ): Promise<{ text: string; output: ToolOutputRef } | null> {
-  const inlineTokens = await store.inlineTokens().catch(swallowAs("tool output: inline cap", DEFAULT_INLINE_TOKENS));
+  const inlineTokens = await inlineTokensOf(store);
   const cut = cutToolOutput(text, inlineTokens, callId);
   if (!cut) return null;
   const blob = await store.save(text).catch(swallowAs("tool output: park full text", null));

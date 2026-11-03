@@ -128,7 +128,6 @@ import { collectBlob } from "../persistence/blob-transfer.ts";
 import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
 import { runCronScript } from "../cron/script.ts";
-import { DEFAULT_INLINE_TOKENS } from "../sessions/tool-output.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
 import type { FileArtifact } from "../files/file-artifact-store.ts";
 import { artifactImageLoader } from "../agent/replay-images.ts";
@@ -2610,39 +2609,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 input.cronScript,
                 {
                   execute: (command, opts) => baseTools.execute(command, opts),
-                  screen: async (output) => {
-                    if (securityPolicy.screening === "off") return output;
-                    const verdict = await screenChunks(
-                      securityScreenChunks("tool_result:cron_script", output),
-                      classifyAs(
-                        { sessionId: session.id, hook: "tool_response", request: input.text, surface: "cron_script" },
-                        recordScreenRequest,
-                      ),
-                      { stopUnclean: true, signal: turnAbort.signal },
-                    );
-                    return cleanVerdict(verdict) || !enforceScreen
-                      ? output
-                      : "The script's output was withheld by the security screen.";
-                  },
-                  inlineTokens: async () =>
-                    (await deps.toolOutput
-                      ?.inlineTokens()
-                      .catch(swallowAs("orchestrator: cron script inline cap", DEFAULT_INLINE_TOKENS))) ??
-                    DEFAULT_INLINE_TOKENS,
+                  screening: securityPolicy.screening,
+                  classify: classifyAs(
+                    { sessionId: session.id, hook: "tool_response", request: input.text, surface: "cron_script" },
+                    recordScreenRequest,
+                  ),
+                  ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
                 },
                 turnAbort.signal,
               )
             : undefined;
-        if (cronScript)
-          audit({
-            action: "cron.script",
-            resource: conversation.threadRef,
-            detail: JSON.stringify({
-              command: input.cronScript!.command,
-              mode: input.cronScript!.mode,
-              verdict: cronScript.verdict,
-            }),
-          });
+        if (cronScript) audit({ action: "cron.script", resource: conversation.threadRef, detail: cronScript.audit });
         if (cronScript?.handled && input.cronScript?.mode === "live")
           return { status: "silent", sessionId: session.id, scriptVerdict: cronScript.verdict };
 
