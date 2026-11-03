@@ -1859,6 +1859,40 @@ test("pg run store: enqueue retries when a conflicting key is released before lo
   }
 });
 
+test(
+  "pg run store: pruneFinished deletes finished runs past the cutoff and keeps live and recent ones",
+  { skip },
+  async () => {
+    const { runs, close } = createPostgresRunStore(URL!);
+    const pg = (await import("pg")).default;
+    const raw = new pg.Pool({ connectionString: URL });
+    const prefix = `prune-${randomUUID()}`;
+    try {
+      await raw.query(
+        `INSERT INTO runs(id, session_id, status, request, created_at, finished_at)
+       SELECT $1 || ':old:' || i, $1 || ':old:' || i, CASE WHEN i % 2 = 0 THEN 'done' ELSE 'failed' END, $2, 1000, 1000
+       FROM generate_series(1, 1201) AS i`,
+        [prefix, JSON.stringify(turn("x"))],
+      );
+      const { run: recent } = await runs.enqueue({ sessionId: `${prefix}:recent`, request: turn("x") });
+      const lease = (await runs.claimById(recent.id, "w", 60_000))!.leaseToken!;
+      await runs.complete(recent.id, lease, { status: "ok", sessionId: `${prefix}:recent`, text: "y" });
+      const { run: running } = await runs.enqueue({ sessionId: `${prefix}:live`, request: turn("x") });
+      await runs.claimById(running.id, "w", 60_000);
+      const { run: pending } = await runs.enqueue({ sessionId: `${prefix}:live`, request: turn("x") });
+
+      assert.equal(await runs.pruneFinished(2000, { deadline: Date.now() + 60_000, stop: () => true }), 0);
+      assert.equal(await runs.pruneFinished(2000, { deadline: Date.now() + 60_000, stop: () => false }), 1201);
+      const { rows } = await raw.query("SELECT id FROM runs WHERE starts_with(session_id, $1)", [prefix]);
+      assert.deepEqual(rows.map((r) => r.id as string).sort(), [recent.id, running.id, pending.id].sort());
+    } finally {
+      await raw.query("DELETE FROM runs WHERE starts_with(session_id, $1)", [prefix]);
+      await raw.end();
+      await close();
+    }
+  },
+);
+
 test("pg run store: waitFor survives a transient poll failure without an unhandled rejection", { skip }, async () => {
   const { runs, close } = createPostgresRunStore(URL!);
   let unhandled: unknown;

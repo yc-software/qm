@@ -48,6 +48,7 @@ function rowToRun(r: Record<string, unknown>): Run {
 }
 
 const FENCE_HOLD_MS = 600_000;
+const PRUNE_BATCH = 500;
 const PREVIOUS_SCHEMA = "runs/store/0010-drop-turn-metrics";
 
 export function createPostgresRunStore(connectionString: string, opts?: { maxClaims?: number }): PostgresRuntime {
@@ -531,6 +532,22 @@ END $base_schema$`,
         });
       }
       return { requeued, parked };
+    },
+
+    async pruneFinished(cutoff, { deadline, stop }) {
+      let pruned = 0;
+      while (Date.now() < deadline && !stop()) {
+        const { rowCount } = await q(
+          `DELETE FROM runs WHERE id IN (
+             SELECT id FROM runs WHERE status IN ('done','failed') AND finished_at < $1
+             ORDER BY finished_at, id LIMIT $2 FOR UPDATE SKIP LOCKED
+           )`,
+          [cutoff, PRUNE_BATCH],
+        );
+        pruned += rowCount;
+        if (rowCount < PRUNE_BATCH) break;
+      }
+      return pruned;
     },
 
     waitFor(runId, timeoutMs = 60_000): Promise<Run> {

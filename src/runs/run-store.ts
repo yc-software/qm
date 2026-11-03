@@ -160,8 +160,12 @@ export interface RunStore {
 
   waitFor(runId: string, timeoutMs?: number): Promise<Run>;
 
+  pruneFinished(cutoff: number, opts: { deadline: number; stop: () => boolean }): Promise<number>;
+
   close?(): Promise<void>;
 }
+
+export const RUN_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
 const TERMINAL = new Set<Run["status"]>(["done", "failed"]);
 export function isTerminal(status: Run["status"]): boolean {

@@ -315,7 +315,7 @@ import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
-import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
+import { isTerminal, RUN_RETENTION_MS, type Run, type RunStore } from "./runs/run-store.ts";
 import { createRunPreemption, createWorker, SHUTDOWN_RELEASE_MS, type Worker } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
@@ -2722,30 +2722,38 @@ export function buildApp(
       })
     : null;
   const MONITOR_RETENTION_SWEEP_MS = 24 * 60 * 60_000;
-  const LLM_CAPTURE_SWEEP_MS = 5 * 60_000;
-  const LLM_CAPTURE_SWEEP_BUDGET_MS = 30_000;
+  const RETENTION_SWEEP_MS = 5 * 60_000;
+  const RETENTION_SWEEP_BUDGET_MS = 30_000;
   const spendSweeper = sessions.refreshSpendRollup
     ? createSweeper(() => leaderLease.hold("spend:refresh", () => sessions.refreshSpendRollup!()), 60_000, {
         label: "spend-refresh",
         immediate: true,
       })
     : null;
-  const llmCaptureSweeper = sessions.purgeLlmCaptures
-    ? createSweeper(
-        () =>
-          leaderLease.hold("llm-capture:retention", async (lost) => {
-            let leaseLost = false;
-            void lost.then(() => (leaseLost = true));
-            const purged = await sessions.purgeLlmCaptures!(Date.now() - LLM_CAPTURE_RETENTION_MS, {
-              deadline: Date.now() + LLM_CAPTURE_SWEEP_BUDGET_MS,
-              stop: () => leaseLost,
-            });
-            if (purged) console.log(`[llm-capture] purged ${purged} prompt envelope(s) past retention`);
-          }),
-        LLM_CAPTURE_SWEEP_MS,
-        { label: "llm-capture-retention" },
-      )
-    : null;
+  const purgeWithinBudget = (
+    lease: string,
+    retentionMs: number,
+    purge: (cutoff: number, opts: { deadline: number; stop: () => boolean }) => Promise<number>,
+  ) =>
+    leaderLease.hold(lease, async (lost) => {
+      let leaseLost = false;
+      void lost.then(() => (leaseLost = true));
+      const purged = await purge(Date.now() - retentionMs, {
+        deadline: Date.now() + RETENTION_SWEEP_BUDGET_MS,
+        stop: () => leaseLost,
+      });
+      if (purged) console.log(`[${lease}] purged ${purged} row(s) past retention`);
+    });
+  const retentionSweeper = createSweeper(
+    () =>
+      Promise.all([
+        sessions.purgeLlmCaptures &&
+          purgeWithinBudget("llm-capture:retention", LLM_CAPTURE_RETENTION_MS, sessions.purgeLlmCaptures),
+        purgeWithinBudget("runs:retention", RUN_RETENTION_MS, runs.pruneFinished),
+      ]),
+    RETENTION_SWEEP_MS,
+    { label: "retention" },
+  );
   const monitorRetentionSweeper = createSweeper(
     () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
     MONITOR_RETENTION_SWEEP_MS,
@@ -2821,7 +2829,7 @@ export function buildApp(
         .catch(swallowAs("wiring: monitor resume failed", undefined));
       monitorRetentionSweeper.start();
       spendSweeper?.start();
-      llmCaptureSweeper?.start();
+      retentionSweeper.start();
       semanticMemory.start();
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
@@ -2853,7 +2861,7 @@ export function buildApp(
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
       spendSweeper?.stop(),
-      llmCaptureSweeper?.stop(),
+      retentionSweeper.stop(),
       semanticMemory.stop(),
       skillSyncEngine.stop(),
       idleSweeper?.stop(),
