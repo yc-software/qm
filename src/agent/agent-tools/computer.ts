@@ -453,14 +453,17 @@ export function computerTools(kit: ToolKit) {
                 ...(waitSeconds !== undefined ? { waitSeconds } : {}),
               });
             const steered = ref.steered;
-            const waiting = poll(steered?.aborted ? undefined : params.wait_seconds);
-            void waiting.catch((error: unknown) => {
-              if (steered?.aborted) swallow("background: poll left behind for a steer", error);
-            });
-            const r = await withAbort(() => waiting, steered).catch(async (error: unknown) => {
-              if (error !== steered?.reason) throw error;
-              return poll();
-            });
+            const pollUntilSteered = () => {
+              const waiting = poll(params.wait_seconds);
+              void waiting.catch((error: unknown) => {
+                if (steered?.aborted) swallow("background: poll left behind for a steer", error);
+              });
+              return withAbort(() => waiting, steered).catch(async (error: unknown) => {
+                if (error !== steered?.reason) throw error;
+                return poll();
+              });
+            };
+            const r = steered?.aborted ? await poll() : await pollUntilSteered();
             const { chunks: _chunks, ...pollMeta } = r;
             return recordResult(
               callId,
