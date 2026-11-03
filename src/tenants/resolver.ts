@@ -1,4 +1,5 @@
 import type { PgPool } from "../persistence/pg-pool.ts";
+import { boundTenant, withTenant } from "./context.ts";
 
 export type TenantResolver = {
   forHost(host: string): Promise<string | null>;
@@ -28,4 +29,12 @@ export function singleTenantResolver(tenants: TenantList): TenantResolver {
     return all.length === 1 ? all[0]! : null;
   };
   return { forHost: onlyTenant, forSlackTeam: onlyTenant };
+}
+
+export async function inInstallTenant<T>(tenants: TenantList, work: () => T | Promise<T>): Promise<T> {
+  if (boundTenant()) return work();
+  const all = await tenants();
+  if (all.length !== 1)
+    throw new Error(`Background work runs in the install's only tenant, but this database has ${all.length} tenants`);
+  return withTenant(all[0]!, work);
 }

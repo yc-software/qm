@@ -164,6 +164,7 @@ export function createManagedSlack(opts: {
   }
 
   return {
+    authenticated,
     async setupStatus(): Promise<{ companyOwned: boolean; appReady: boolean; connected: boolean } | undefined> {
       const response = await (opts.fetchImpl ?? fetch)(new URL("/install/status", serviceUrl), {
         headers: { authorization: `Bearer ${opts.token}` },

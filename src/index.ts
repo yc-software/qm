@@ -12,7 +12,7 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackPluginConfigFromEnv } from "./slack/index.ts";
 import { createSlackRuntime } from "./slack/runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
-import { pgTenants, singleTenantResolver } from "./tenants/resolver.ts";
+import { singleTenantResolver } from "./tenants/resolver.ts";
 import { deriveConnectorKey } from "./connectors/connector-client-store.ts";
 
 const config = loadConfig();
@@ -28,7 +28,7 @@ const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLA
 let slackEnvironmentState: "absent" | "configured" | "partial" = "absent";
 if (slackConfig) slackEnvironmentState = "configured";
 else if (envSlackAttempted) slackEnvironmentState = "partial";
-const resolver = singleTenantResolver(pgTenants(built.slackTables.pool));
+const resolver = singleTenantResolver(built.tenants);
 const slackRuntime = createSlackRuntime({
   env: process.env,
   core: built.slackCore,
@@ -53,6 +53,7 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
 const server = createServer(built.app, {
   ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
   managedSlack,
+  tenants: resolver,
 });
 
 await built.config.hydrate?.();

@@ -3,6 +3,8 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 
+const TENANT = "00000000-0000-4000-8000-000000000001";
+
 const seen: Array<{
   path: string | undefined;
   authorization: string | undefined;
@@ -10,6 +12,7 @@ const seen: Array<{
   body: string;
 }> = [];
 const core = createServer(async (req, res) => {
+  if (req.url?.startsWith("/v1/tenants/for-host")) return void res.end(JSON.stringify({ tenant: TENANT }));
   let body = "";
   for await (const chunk of req) body += String(chunk);
   seen.push({ path: req.url, authorization: req.headers.authorization, cookie: req.headers.cookie, body });
