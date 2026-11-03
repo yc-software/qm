@@ -1305,7 +1305,7 @@ test("credential lists batch grants and finish without usage reads", async (t) =
       200,
     );
   }
-  const listGrants = t.mock.method(srv.built.acl, "list");
+  const listGrants = t.mock.method(srv.built.acl, "find");
   t.mock.method(srv.built.acl, "grantsFor", () => {
     throw new Error("per-credential grant read");
   });

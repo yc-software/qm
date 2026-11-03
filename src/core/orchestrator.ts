@@ -130,7 +130,7 @@ import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onbo
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
 import type { FileArtifact } from "../files/file-artifact-store.ts";
 import { artifactImageLoader } from "../agent/replay-images.ts";
-import { principalEntitledToScope } from "../resolution/context-filter.ts";
+import { entitledScopes, principalEntitledToScope } from "../resolution/context-filter.ts";
 import { openSessionItem, searchSessionItems } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { defaultPublishAudience } from "../resolution/publish-audience.ts";
@@ -1459,7 +1459,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               conversation.audience,
               scopeId,
               resolution.orgScopeId,
-              principalEntitledToScope,
+              entitledScopes,
             )
           ).map((g) => parseRef(g.ref).id),
         );
@@ -2436,7 +2436,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             conversation.audience,
             scopeId,
             resolution.orgScopeId,
-            principalEntitledToScope,
+            entitledScopes,
           );
           if (!fresh) readableHandles = handles;
           return handles.some(

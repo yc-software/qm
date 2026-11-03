@@ -4,7 +4,7 @@ import { composePolicy, defaultOrgPolicy } from "../policy/command-policy.ts";
 import type { ScopedConfigStore } from "./config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { audienceEgressFloor, audienceDeniedFloor } from "./audience-floor.ts";
-import { principalEntitledToScope } from "./context-filter.ts";
+import { entitledScopes } from "./context-filter.ts";
 import { resolveSecurityPolicy, type SecurityScreenMode } from "../security/security-posture.ts";
 
 export interface ResolutionService {
@@ -81,7 +81,7 @@ export function createResolutionService(
 
       const grantedHandles = external
         ? []
-        : await acl.handlesForAudience(conversation.audience, scope, orgScope, principalEntitledToScope);
+        : await acl.handlesForAudience(conversation.audience, scope, orgScope, entitledScopes);
 
       return {
         writableScopeId: scope,
