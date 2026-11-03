@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -7,9 +6,9 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
-import { testDatabaseUrl, pointOwnerAtSchema, restoreFileOwner } from "./support/test-database.ts";
-import { seedTestTenants } from "./support/tenant-seed.ts";
-import { tenantBoundUrl } from "./support/test-tenants.ts";
+import { ownerUrlOf, testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, tenantBoundUrl, tenantTest as test } from "./support/test-tenants.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -27,23 +26,10 @@ async function until(predicate: () => boolean): Promise<void> {
 }
 
 async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanup(): Promise<void> }> {
-  const admin = new pg.Pool({ connectionString: process.env.DATABASE_URL! });
-  const schema = `run_availability_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new URL(process.env.DATABASE_URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
-  url.searchParams.set("application_name", schema);
-  await seedTestTenants(url.toString());
-  pointOwnerAtSchema(schema);
-  return {
-    url: url.toString(),
-    admin,
-    async cleanup() {
-      restoreFileOwner();
-      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-      await admin.end();
-    },
-  };
+  const url = new URL(testDatabaseUrl());
+  url.searchParams.set("application_name", `run_availability_${randomUUID().replaceAll("-", "")}`);
+  const admin = new pg.Pool({ connectionString: ownerUrlOf(url.toString()) });
+  return { url: url.toString(), admin, cleanup: () => admin.end() };
 }
 
 for (const duringClaim of [false, true]) {
@@ -62,7 +48,7 @@ for (const duringClaim of [false, true]) {
       claims++;
       const result = await claim(...args);
       if (duringClaim && claims === 1) {
-        await runs.enqueue({ sessionId: "availability", request });
+        await inTestTenant(() => runs.enqueue({ sessionId: "availability", request }));
         bus.emit(null);
       }
       return result;
@@ -181,7 +167,7 @@ test(
       assert.ok(claimed);
       await sleep(5);
       before = notifications;
-      assert.equal((await writer.runs.reapExpired()).requeued, 1);
+      assert.equal((await withoutTenant(() => writer.runs.reapExpired())).requeued, 1);
       await until(() => notifications > before);
       await admin.query(
         "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND query='LISTEN qm_run_available' AND application_name=$1",
@@ -328,7 +314,7 @@ test(
   async () => {
     const { url, cleanup } = await isolatedPostgres();
     const runtime = createPostgresRunStore(url);
-    const pool = new pg.Pool({ connectionString: url });
+    const pool = new pg.Pool({ connectionString: tenantBoundUrl(url) });
     const holder = await pool.connect();
     try {
       const first = (await runtime.runs.enqueue({ sessionId: "ordered", request })).run;
@@ -337,9 +323,9 @@ test(
       await pool.query("UPDATE runs SET created_at = 1 WHERE session_id = 'ordered'");
       await holder.query("BEGIN");
       await holder.query("SELECT id FROM runs WHERE id = $1 FOR UPDATE", [first.id]);
-      const claimedOther = await runtime.runs.claim("other-worker", 5_000);
+      const claimedOther = await withoutTenant(() => runtime.runs.claim("other-worker", 5_000));
       assert.equal(claimedOther?.id, other.id, "a locked head blocks its siblings without blocking another session");
-      assert.equal(await runtime.runs.claim("waiting-worker", 5_000), null);
+      assert.equal(await withoutTenant(() => runtime.runs.claim("waiting-worker", 5_000)), null);
       assert.equal(await runtime.runs.claimById(second.id, "inline-worker", 5_000), null);
       assert.equal(await runtime.runs.claimForSession("ordered", "inline-worker", 5_000), null);
       await holder.query("ROLLBACK");

@@ -1,10 +1,10 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
-import { tenantBoundUrl } from "./support/test-tenants.ts";
+import { tenantBoundUrl, tenantTest as test } from "./support/test-tenants.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 const url = process.env.DATABASE_URL;
 
@@ -20,7 +20,7 @@ test("a 4500-fact scope fully drains 3072-dimensional recall in under one second
     await index.close();
   });
   await base.facts!(scope);
-  await index.missing(model, 1);
+  await withoutTenant(() => index.missing(model, 1));
   await client.query(
     `INSERT INTO memory_facts(scope_id, text, sensitivity, source_unknown, created_at, updated_at)
     SELECT $1, 'Large notebook fact ' || g, 'ordinary', false, g, g FROM generate_series(1,4500) g`,
