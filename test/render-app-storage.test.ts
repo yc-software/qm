@@ -15,7 +15,7 @@ import {
 } from "../src/deploy/render-app-storage.ts";
 import { createFakeRenderApi, type FakeRenderApiCall } from "./support/fake-render.ts";
 import { testRows } from "./support/test-database.ts";
-import { tenantTest, testTenants } from "./support/test-tenants.ts";
+import { testTenants, tenantTest as test } from "./support/test-tenants.ts";
 
 const [TEST_TENANT] = testTenants();
 
@@ -43,7 +43,7 @@ function fixture(handle: (call: FakeRenderApiCall) => unknown, extra: Partial<St
   return { store, api, opts, storage: createRenderAppStorage(opts), restart: () => createRenderAppStorage(opts) };
 }
 
-tenantTest("Render storage jobs retain command failures without logging credentials", async (t) => {
+test("Render storage jobs retain command failures without logging credentials", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "qm-render-storage-error-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await writeFile(
@@ -82,7 +82,7 @@ exit 0
   assert.equal(output.stderr.includes("test-root-password"), false);
 });
 
-tenantTest("Render storage policies constrain listing and writes to one app prefix", () => {
+test("Render storage policies constrain listing and writes to one app prefix", () => {
   const prefix = `app-data/${randomUUID()}/`;
   const policy = renderAppStoragePolicy("qm-storage", prefix);
   const statement = (action: string) => policy.Statement.find((item) => item.Action.includes(action))!;
@@ -92,7 +92,7 @@ tenantTest("Render storage policies constrain listing and writes to one app pref
     assert.throws(() => renderAppStoragePolicy("qm-storage", unsafe));
 });
 
-tenantTest("Render app storage keeps one set of credentials per app and only changes its MinIO service", async () => {
+test("Render app storage keeps one set of credentials per app and only changes its MinIO service", async () => {
   let jobs = 0;
   const f = fixture(
     ({ method, path }) => {
@@ -123,7 +123,7 @@ tenantTest("Render app storage keeps one set of credentials per app and only cha
   assert.notEqual(another.S3_PREFIX, first.S3_PREFIX);
 });
 
-tenantTest("Render app storage settings send S3 stream bytes without checksum trailers", async () => {
+test("Render app storage settings send S3 stream bytes without checksum trailers", async () => {
   const f = fixture(({ method }) => (method === "POST" ? { id: "job-test" } : { status: "succeeded" }), {
     endpoint: "https://minio.example.test",
   });
@@ -185,7 +185,7 @@ tenantTest("Render app storage settings send S3 stream bytes without checksum tr
   }
 });
 
-tenantTest("A failed Render storage job leaves the account disabled so a retry repairs it", async () => {
+test("A failed Render storage job leaves the account disabled so a retry repairs it", async () => {
   let outcome = "failed";
   let jobs = 0;
   const f = fixture(({ method }) => (method === "POST" ? { id: `job-${++jobs}` } : { status: outcome }));
@@ -200,7 +200,7 @@ tenantTest("A failed Render storage job leaves the account disabled so a retry r
   assert.equal(jobs, 2);
 });
 
-tenantTest("A canceled Render storage job names its status", async () => {
+test("A canceled Render storage job names its status", async () => {
   const f = fixture(({ method }) => (method === "POST" ? { id: "job-1" } : { status: "canceled" }));
   await assert.rejects(f.storage.ensure(randomUUID()), /job-1 canceled/);
 });

@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { createS3DurableByteStore } from "../src/files/durable-byte-store.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
-tenantTest("S3 fallback streams large parts and aborts on transfer failure", async () => {
+test("S3 fallback streams large parts and aborts on transfer failure", async () => {
   let fail = false;
   const calls: string[] = [];
   const received: Buffer[] = [];

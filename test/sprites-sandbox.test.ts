@@ -24,7 +24,7 @@ import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./supp
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { APIError, SpriteCommand } from "@fly/sprites";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { tenantTest, testTenants } from "./support/test-tenants.ts";
+import { testTenants, tenantTest as test } from "./support/test-tenants.ts";
 
 const TENANT8 = testTenants()[0].slice(0, 8);
 
@@ -57,7 +57,7 @@ beforeEach(() => {
 });
 after(() => fake?.cleanup());
 
-tenantTest("provision runs commands with env and cwd", async () => {
+test("provision runs commands with env and cwd", async () => {
   const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
   assert.equal(h.coldStart, true);
   const r = await sandbox.run(h, "pwd; echo VAR=$MY_VAR");
@@ -66,7 +66,7 @@ tenantTest("provision runs commands with env and cwd", async () => {
   assert.match(r.stdout, /VAR=v1/);
 });
 
-tenantTest("streams and exit codes are exact", async () => {
+test("streams and exit codes are exact", async () => {
   const h = await sandbox.provision(layers);
   const r = await sandbox.run(h, "echo out; echo err >&2; exit 3");
   assert.equal(r.code, 3);
@@ -74,7 +74,7 @@ tenantTest("streams and exit codes are exact", async () => {
   assert.equal(r.stderr.trim(), "err");
 });
 
-tenantTest("commands run over the WebSocket exec endpoint with the script in the stream, never the URL", async () => {
+test("commands run over the WebSocket exec endpoint with the script in the stream, never the URL", async () => {
   const h = await sandbox.provision(layers);
   const huge = `echo start; : ${"x".repeat(1024 * 1024)}; echo end`;
   const r = await sandbox.run(h, huge);
@@ -93,7 +93,7 @@ tenantTest("commands run over the WebSocket exec endpoint with the script in the
   );
 });
 
-tenantTest("file roundtrip incl. large binary and missing file goes through the filesystem API", async () => {
+test("file roundtrip incl. large binary and missing file goes through the filesystem API", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.writeFile(h, "a/b.txt", "hello\n");
   assert.equal(await sandbox.readFile(h, "a/b.txt"), "hello\n");
@@ -108,7 +108,7 @@ tenantTest("file roundtrip incl. large binary and missing file goes through the 
   assert.ok(!fake.execScripts().some((s) => /base64|dd if=/.test(s)), "bytes never round-trip through shell encoding");
 });
 
-tenantTest("a file write lands on a temp path and is renamed into place, never streamed into the target", async () => {
+test("a file write lands on a temp path and is renamed into place, never streamed into the target", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.writeFile(h, "cfg.txt", "value\n");
   assert.equal(await sandbox.readFile(h, "cfg.txt"), "value\n");
@@ -122,39 +122,36 @@ tenantTest("a file write lands on a temp path and is renamed into place, never s
   );
 });
 
-tenantTest(
-  "process sessions capability works end to end and holds the sprite awake with a Tasks heartbeat",
-  async () => {
-    assert.ok(supportsProcessSessions(sandbox));
-    if (!supportsProcessSessions(sandbox)) return;
-    const h = await sandbox.provision(layers);
-    const { processId } = await sandbox.startProcess(h, "echo one; echo two");
-    const { output, status } = await pollProcess(sandbox, h, processId, { deadlineMs: 5_000, waitMs: 100 });
-    assert.equal(status.state, "exited");
-    assert.match(output, /one/);
-    assert.match(output, /two/);
-    const keepalive = fake.execScripts().find((s) => s.includes("/.sprite/api.sock"));
-    assert.ok(keepalive, "a keepalive sidecar was launched next to the process");
-    assert.match(keepalive!, new RegExp(`/v1/tasks/qm-proc-${processId}`));
-    assert.match(keepalive!, /-X PUT/, "renews by upsert so the first call creates the task");
-    assert.match(keepalive!, /-X DELETE/, "and releases the hold when the process is gone");
-    const listed = await sandbox.listProcesses(h);
-    assert.deepEqual(
-      listed.map((p) => p.command),
-      ["echo one; echo two"],
-      "the sidecar is not a visible process session and the command stays readable",
-    );
-  },
-);
+test("process sessions capability works end to end and holds the sprite awake with a Tasks heartbeat", async () => {
+  assert.ok(supportsProcessSessions(sandbox));
+  if (!supportsProcessSessions(sandbox)) return;
+  const h = await sandbox.provision(layers);
+  const { processId } = await sandbox.startProcess(h, "echo one; echo two");
+  const { output, status } = await pollProcess(sandbox, h, processId, { deadlineMs: 5_000, waitMs: 100 });
+  assert.equal(status.state, "exited");
+  assert.match(output, /one/);
+  assert.match(output, /two/);
+  const keepalive = fake.execScripts().find((s) => s.includes("/.sprite/api.sock"));
+  assert.ok(keepalive, "a keepalive sidecar was launched next to the process");
+  assert.match(keepalive!, new RegExp(`/v1/tasks/qm-proc-${processId}`));
+  assert.match(keepalive!, /-X PUT/, "renews by upsert so the first call creates the task");
+  assert.match(keepalive!, /-X DELETE/, "and releases the hold when the process is gone");
+  const listed = await sandbox.listProcesses(h);
+  assert.deepEqual(
+    listed.map((p) => p.command),
+    ["echo one; echo two"],
+    "the sidecar is not a visible process session and the command stays readable",
+  );
+});
 
-tenantTest("the keepalive script stops renewing once the process has recorded an exit code", () => {
+test("the keepalive script stops renewing once the process has recorded an exit code", () => {
   const script = processKeepaliveScript("00000000-0000-0000-0000-000000000000");
   assert.match(script, /while \[ ! -f "\$P\/code" \]/);
   assert.match(script, /"expire":"5m"/);
   assert.match(script, /setsid/);
 });
 
-tenantTest("background processes inherit the force-through proxy env", async () => {
+test("background processes inherit the force-through proxy env", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   const h = await s.provision(layers, { egressToken: await proxyToken() });
   assert.ok(supportsProcessSessions(s));
@@ -172,13 +169,13 @@ tenantTest("background processes inherit the force-through proxy env", async () 
   assert.match(chunks, /PROXY=https?:\/\/[^ ]*proxy\.example\.com/);
 });
 
-tenantTest("scope name is stable and slugged", () => {
+test("scope name is stable and slugged", () => {
   const a = sandboxScopeName("qmt", "person:tester");
   assert.equal(a, sandboxScopeName("qmt", "person:tester"));
   assert.match(a, new RegExp(`^qmt-${TENANT8}-person-tester-[0-9a-f]{12}$`));
 });
 
-tenantTest("scope names fit the 63-char provider limit for long prefixes, scratch included", () => {
+test("scope names fit the 63-char provider limit for long prefixes, scratch included", () => {
   const scope = "person:someone.with.a.rather.long.address@example-company.com";
   const ids = [scope, "conversation:9f8e7d6c-5b4a-3210-fedc-ba9876543210", "owner:" + scope, ""];
   for (const prefix of ["qm", "qm-long-generic-fleet-tenant-prefix", "x".repeat(70) + "-"]) {
@@ -198,14 +195,14 @@ tenantTest("scope names fit the 63-char provider limit for long prefixes, scratc
   );
 });
 
-tenantTest("no egress force-through without a proxy url: no policy, no proxy env", async () => {
+test("no egress force-through without a proxy url: no policy, no proxy env", async () => {
   assert.equal(sandbox.profile.egressEnforcement, "none");
   const h = await sandbox.provision(layers, { egressToken: "ignored" });
   assert.equal(fake.policy(h.id), null);
   assert.equal(h.env?.HTTPS_PROXY, undefined);
 });
 
-tenantTest("force-through pins the platform policy and injects proxy env", async () => {
+test("force-through pins the platform policy and injects proxy env", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   assert.equal(s.profile.egressEnforcement, "domain");
   const token = await mintCapabilityToken(
@@ -226,7 +223,7 @@ tenantTest("force-through pins the platform policy and injects proxy env", async
   assert.equal(h.env?.NO_PROXY, "localhost,127.0.0.1,::1");
 });
 
-tenantTest("proxy migration keeps both hosts reachable across cutover and rollback", async () => {
+test("proxy migration keeps both hosts reachable across cutover and rollback", async () => {
   const token = await proxyToken();
   const oldUrl = "https://old.example.com";
   const newUrl = "https://new.example.com";
@@ -245,7 +242,7 @@ tenantTest("proxy migration keeps both hosts reachable across cutover and rollba
   }
 });
 
-tenantTest("proxy migration rejects mismatched provider policy and invalid configuration", async () => {
+test("proxy migration rejects mismatched provider policy and invalid configuration", async () => {
   const s = make({
     egressProxyUrl: "https://new.example.com",
     egressProxyAdditionalUrls: ["https://old.example.com"],
@@ -259,7 +256,7 @@ tenantTest("proxy migration rejects mismatched provider policy and invalid confi
   );
 });
 
-tenantTest("force-through strips agent-supplied proxy vars", async () => {
+test("force-through strips agent-supplied proxy vars", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   const h = await s.provision(layers, {
     egressToken: await proxyToken(),
@@ -269,7 +266,7 @@ tenantTest("force-through strips agent-supplied proxy vars", async () => {
   assert.equal(h.env?.FOO, "keep");
 });
 
-tenantTest("force-through makes git send proxy credentials up front, keeping turn git config", async () => {
+test("force-through makes git send proxy credentials up front, keeping turn git config", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   const h = await s.provision(layers, {
     egressToken: await proxyToken(),
@@ -284,19 +281,19 @@ tenantTest("force-through makes git send proxy credentials up front, keeping tur
   );
 });
 
-tenantTest("git proxy auth from the proxy env stays off when egress is not forced", async () => {
+test("git proxy auth from the proxy env stays off when egress is not forced", async () => {
   const h = await sandbox.provision(layers, { egressToken: "ignored" });
   const r = await sandbox.run(h, 'echo "${GIT_HTTP_PROXY_AUTHMETHOD:-unset}"');
   assert.equal(r.stdout.trim(), "unset");
 });
 
-tenantTest("force-through fails closed if the policy readback doesn't bind", async () => {
+test("force-through fails closed if the policy readback doesn't bind", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   fake.breakPolicyReadback(sandboxScopeName("qmt", scope));
   await assert.rejects(s.provision(layers, { egressToken: await proxyToken() }), /readback mismatch/);
 });
 
-tenantTest("a recreated sprite gets the egress policy re-pinned, never served from a stale cache", async () => {
+test("a recreated sprite gets the egress policy re-pinned, never served from a stale cache", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   const token = await proxyToken();
   const a = await s.provision(layers, { scratch: { key: "job-pol" }, egressToken: token });
@@ -308,7 +305,7 @@ tenantTest("a recreated sprite gets the egress policy re-pinned, never served fr
   assert.deepEqual(fake.policy(b.id), [{ domain: "proxy.example.com", action: "allow" }]);
 });
 
-tenantTest("a failed egress setup releases the scratch lease instead of wedging the key", async () => {
+test("a failed egress setup releases the scratch lease instead of wedging the key", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   fake.breakPolicyReadback(sandboxScopeName("qmt-scratch", "job-egress"));
   await assert.rejects(
@@ -320,7 +317,7 @@ tenantTest("a failed egress setup releases the scratch lease instead of wedging 
   assert.equal(retry.coldStart, true, "the failed provision released its lease and the box was recreated");
 });
 
-tenantTest("scratch sprites are ephemeral and shared leases survive until the last release", async () => {
+test("scratch sprites are ephemeral and shared leases survive until the last release", async () => {
   const a = await sandbox.provision(layers, { scratch: { key: "job-1" } });
   const b = await sandbox.provision(layers, { scratch: { key: "job-1" } });
   assert.equal(a.scratch, true);
@@ -334,7 +331,7 @@ tenantTest("scratch sprites are ephemeral and shared leases survive until the la
   assert.equal(fake.checkpoints(a.id).length, 0, "scratch boxes are never checkpointed");
 });
 
-tenantTest("teardown checkpoints a changed home, throttles repeats, and destroy deletes the sprite", async () => {
+test("teardown checkpoints a changed home, throttles repeats, and destroy deletes the sprite", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
   assert.deepEqual(fake.checkpoints(h.id), ["v1"], "a turn that may have changed the home ends in a checkpoint");
@@ -345,7 +342,7 @@ tenantTest("teardown checkpoints a changed home, throttles repeats, and destroy 
   assert.ok(!fake.names().includes(h.id));
 });
 
-tenantTest("a stored provider name addresses the existing sprite for provisioning, status and retirement", async () => {
+test("a stored provider name addresses the existing sprite for provisioning, status and retirement", async () => {
   sandbox.useStoredNames!(async (id) => (id === scope ? "qmt-legacy-name" : null));
   const h = await sandbox.provision(layers);
   assert.equal(h.id, "qmt-legacy-name");
@@ -355,7 +352,7 @@ tenantTest("a stored provider name addresses the existing sprite for provisionin
   assert.ok(!fake.names().includes("qmt-legacy-name"));
 });
 
-tenantTest("an unchanged home is not checkpointed once its state is known", async () => {
+test("an unchanged home is not checkpointed once its state is known", async () => {
   const s = make({ checkpointIntervalMs: 1 });
   const h = await s.provision(layers);
   await s.teardown(h, { homeUnchanged: true });
@@ -370,7 +367,7 @@ tenantTest("an unchanged home is not checkpointed once its state is known", asyn
   assert.deepEqual(fake.checkpoints(h.id), ["v1", "v2"]);
 });
 
-tenantTest("a checkpoint failure is reported and never fails the teardown", async () => {
+test("a checkpoint failure is reported and never fails the teardown", async () => {
   const events: Array<{ code: string }> = [];
   const s = make({ onError: (e: { code: string }) => events.push(e) });
   const h = await s.provision(layers);
@@ -380,28 +377,25 @@ tenantTest("a checkpoint failure is reported and never fails the teardown", asyn
   assert.ok(fake.checkpoints(h.id).length <= 1);
 });
 
-tenantTest(
-  "computerStatus reports checkpoint recovery and a healthy machine whose shell has stopped answering",
-  async () => {
-    const h = await sandbox.provision(layers);
-    const fresh = await sandbox.computerStatus!(scope);
-    assert.equal(fresh.machine, "healthy");
-    assert.equal(fresh.provisioned, true);
-    assert.equal(fresh.guestResponsive, true);
-    assert.equal(fresh.listed, undefined, "the list-view status is stale by design and is not surfaced");
-    assert.deepEqual(fresh.recovery, { strategy: "provider_snapshot", checkpointExpiresAtMs: null });
+test("computerStatus reports checkpoint recovery and a healthy machine whose shell has stopped answering", async () => {
+  const h = await sandbox.provision(layers);
+  const fresh = await sandbox.computerStatus!(scope);
+  assert.equal(fresh.machine, "healthy");
+  assert.equal(fresh.provisioned, true);
+  assert.equal(fresh.guestResponsive, true);
+  assert.equal(fresh.listed, undefined, "the list-view status is stale by design and is not surfaced");
+  assert.deepEqual(fresh.recovery, { strategy: "provider_snapshot", checkpointExpiresAtMs: null });
 
-    await sandbox.teardown(h);
-    fake.fail502(h.id);
-    const wedged = await sandbox.computerStatus!(scope);
-    assert.equal(wedged.machine, "healthy");
-    assert.equal(wedged.guestResponsive, false);
-    assert.equal(wedged.recovery?.checkpointId, "v1");
-    assert.equal(typeof wedged.recovery?.checkpointAtMs, "number");
-  },
-);
+  await sandbox.teardown(h);
+  fake.fail502(h.id);
+  const wedged = await sandbox.computerStatus!(scope);
+  assert.equal(wedged.machine, "healthy");
+  assert.equal(wedged.guestResponsive, false);
+  assert.equal(wedged.recovery?.checkpointId, "v1");
+  assert.equal(typeof wedged.recovery?.checkpointAtMs, "number");
+});
 
-tenantTest("computerStatus names a faulted check and an unprovisioned scope", async () => {
+test("computerStatus names a faulted check and an unprovisioned scope", async () => {
   const none = await sandbox.computerStatus!(scope);
   assert.deepEqual(none, { machine: "no sprite provisioned yet", provisioned: false, guestResponsive: false });
   const h = await sandbox.provision(layers);
@@ -411,7 +405,7 @@ tenantTest("computerStatus names a faulted check and an unprovisioned scope", as
   assert.equal(s.provisioned, true);
 });
 
-tenantTest("restartComputer reboots the scope's sprite and heals a wedged exec channel", async () => {
+test("restartComputer reboots the scope's sprite and heals a wedged exec channel", async () => {
   const h = await sandbox.provision(layers);
   fake.fail502(h.id);
   await assert.rejects(sandbox.run(h, "echo back"), /WebSocket error/);
@@ -424,7 +418,7 @@ tenantTest("restartComputer reboots the scope's sprite and heals a wedged exec c
   assert.equal(after.stdout.trim(), "back");
 });
 
-tenantTest("a refused restart on a faulted sprite restores the latest checkpoint", async () => {
+test("a refused restart on a faulted sprite restores the latest checkpoint", async () => {
   const events: Array<{ code: string; message: string }> = [];
   const s = make({ onError: (e: { code: string; message: string }) => events.push(e) });
   const h = await s.provision(layers);
@@ -445,7 +439,7 @@ tenantTest("a refused restart on a faulted sprite restores the latest checkpoint
   assert.match(restored!.message, /restored checkpoint v1/);
 });
 
-tenantTest("a refused restart with a healthy check restores nothing and surfaces the refusal", async () => {
+test("a refused restart with a healthy check restores nothing and surfaces the refusal", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
   fake.refuseRestart(h.id);
@@ -453,7 +447,7 @@ tenantTest("a refused restart with a healthy check restores nothing and surfaces
   assert.equal(await sandbox.readFile(h, ".ro-layers.manifest"), null);
 });
 
-tenantTest("a refused restart with no checkpoint to fall back on names all three failures", async () => {
+test("a refused restart with no checkpoint to fall back on names all three failures", async () => {
   const h = await sandbox.provision(layers);
   fake.refuseRestart(h.id);
   fake.unhealthy(h.id, "boot loop");
@@ -462,38 +456,35 @@ tenantTest("a refused restart with no checkpoint to fall back on names all three
 
 for (const submitted of [false, true]) {
   for (const closeOnly of [false, true]) {
-    tenantTest(
-      `exec failures report submission state without replay or private details (submitted=${submitted}, closeOnly=${closeOnly})`,
-      async (t) => {
-        const h = await sandbox.provision(layers);
-        if (closeOnly) {
-          const dispatch = EventTarget.prototype.dispatchEvent;
-          t.mock.method(EventTarget.prototype, "dispatchEvent", function (this: EventTarget, event: Event) {
-            return event.type === "error" || dispatch.call(this, event);
-          });
-        }
-        const before = fake.calls.filter((call) => call.method === "WS").length;
-        if (submitted) fake.stallAfterRun(h.id);
-        else fake.fail502(h.id);
-
-        await assert.rejects(sandbox.run(h, "echo entry >> /home/sprite/workspace/ledger"), (error: Error) => {
-          assert.match(
-            error.message,
-            submitted ? /script submission started; execution unknown/ : /script not submitted/,
-          );
-          for (const value of [h.id, fake.baseUrl.replace("https:", "wss:"), "cmd=", "echo entry"])
-            assert.ok(!inspect(error).includes(value));
-          return true;
+    test(`exec failures report submission state without replay or private details (submitted=${submitted}, closeOnly=${closeOnly})`, async (t) => {
+      const h = await sandbox.provision(layers);
+      if (closeOnly) {
+        const dispatch = EventTarget.prototype.dispatchEvent;
+        t.mock.method(EventTarget.prototype, "dispatchEvent", function (this: EventTarget, event: Event) {
+          return event.type === "error" || dispatch.call(this, event);
         });
+      }
+      const before = fake.calls.filter((call) => call.method === "WS").length;
+      if (submitted) fake.stallAfterRun(h.id);
+      else fake.fail502(h.id);
 
-        assert.equal(fake.calls.filter((call) => call.method === "WS").length, before + 1);
-        assert.equal(await sandbox.readFile(h, "ledger"), submitted ? "entry\n" : null);
-      },
-    );
+      await assert.rejects(sandbox.run(h, "echo entry >> /home/sprite/workspace/ledger"), (error: Error) => {
+        assert.match(
+          error.message,
+          submitted ? /script submission started; execution unknown/ : /script not submitted/,
+        );
+        for (const value of [h.id, fake.baseUrl.replace("https:", "wss:"), "cmd=", "echo entry"])
+          assert.ok(!inspect(error).includes(value));
+        return true;
+      });
+
+      assert.equal(fake.calls.filter((call) => call.method === "WS").length, before + 1);
+      assert.equal(await sandbox.readFile(h, "ledger"), submitted ? "entry\n" : null);
+    });
   }
 }
 
-tenantTest("exec diagnostics keep the provider's transport reason but not its URL or raw cause", async (t) => {
+test("exec diagnostics keep the provider's transport reason but not its URL or raw cause", async (t) => {
   const h = await sandbox.provision(layers);
   let reason = "";
   t.mock.method(SpriteCommand.prototype, "start", async () => {
@@ -511,7 +502,7 @@ tenantTest("exec diagnostics keep the provider's transport reason but not its UR
   }
 });
 
-tenantTest("exec results carry io pressure when the guest exposes it, and omit it when it can't be read", async () => {
+test("exec results carry io pressure when the guest exposes it, and omit it when it can't be read", async () => {
   const h = await sandbox.provision(layers);
   const bare = await sandbox.run(h, "echo ok");
   assert.equal(bare.pressure, undefined);
@@ -522,7 +513,7 @@ tenantTest("exec results carry io pressure when the guest exposes it, and omit i
   assert.deepEqual(r.pressure, { ioFull10: 85.17, ioFull60: 86.14, load1: 30.78 });
 });
 
-tenantTest("sustained io pressure is reported once per episode, then re-arms after it clears", async () => {
+test("sustained io pressure is reported once per episode, then re-arms after it clears", async () => {
   const events: Array<{ code: string }> = [];
   const s = make({ onError: (e: { code: string }) => events.push(e) });
   const h = await s.provision(layers);
@@ -543,7 +534,7 @@ tenantTest("sustained io pressure is reported once per episode, then re-arms aft
   assert.equal(events.filter((e) => e.code === "io_pressure_high").length, 2, "a new episode records again");
 });
 
-tenantTest("computerStatus carries guest pressure alongside the health check", async () => {
+test("computerStatus carries guest pressure alongside the health check", async () => {
   const h = await sandbox.provision(layers);
   fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
   const s = await sandbox.computerStatus!(scope);
@@ -552,7 +543,7 @@ tenantTest("computerStatus carries guest pressure alongside the health check", a
   assert.deepEqual(s.pressure, { ioFull10: 60, ioFull60: 55, load1: 8 });
 });
 
-tenantTest("a garbled pressure read never costs the caller a completed command's result", async () => {
+test("a garbled pressure read never costs the caller a completed command's result", async () => {
   const h = await sandbox.provision(layers);
   fake.setPressure(h.id, { full10: 60, full60: 55, load1: 8 });
   writeFileSync(join(fake.homeDir(h.id), ".proc-loadavg"), "");
@@ -562,20 +553,20 @@ tenantTest("a garbled pressure read never costs the caller a completed command's
   assert.equal(r.pressure, undefined, "partial telemetry is dropped, not surfaced or fatal");
 });
 
-tenantTest("concurrent restart calls for one sprite collapse into sequential requests", async () => {
+test("concurrent restart calls for one sprite collapse into sequential requests", async () => {
   const h = await sandbox.provision(layers);
   await Promise.all([sandbox.restartComputer!(scope), sandbox.restartComputer!(scope)]);
   assert.deepEqual(fake.restarts(), [h.id, h.id], "serialized, one request per call, never interleaved forcing");
 });
 
-tenantTest("commands cannot swallow the script from stdin", async () => {
+test("commands cannot swallow the script from stdin", async () => {
   const h = await sandbox.provision(layers);
   const r = await sandbox.run(h, "cat; echo after-cat");
   assert.equal(r.code, 0);
   assert.equal(r.stdout.trim(), "after-cat");
 });
 
-tenantTest("a creation rate limit surfaces the provider's code and retry hint", async () => {
+test("a creation rate limit surfaces the provider's code and retry hint", async () => {
   fake.rateLimitCreate(42);
   await assert.rejects(sandbox.provision(layers), (e: Error) => {
     assert.match(e.message, /sprites create /);
@@ -593,7 +584,7 @@ tenantTest("a creation rate limit surfaces the provider's code and retry hint", 
   );
 });
 
-tenantTest("spritesErrorDetail keeps plain errors as they are and enriches API errors", () => {
+test("spritesErrorDetail keeps plain errors as they are and enriches API errors", () => {
   assert.equal(spritesErrorDetail(new Error("boom")), "boom");
   const limited = new APIError("Too many", {
     statusCode: 429,
@@ -603,7 +594,7 @@ tenantTest("spritesErrorDetail keeps plain errors as they are and enriches API e
   assert.equal(spritesErrorDetail(limited), "Too many; http 429; concurrent_sprite_limit_exceeded; retry after 7s");
 });
 
-tenantTest("a configured memory limit is applied as a resources policy and advertised in the profile", async () => {
+test("a configured memory limit is applied as a resources policy and advertised in the profile", async () => {
   const s = make({ memoryMb: 4096 });
   assert.equal(s.profile.spec?.memoryMb, 4096);
   assert.equal(s.profile.spec?.cpus, 8);
@@ -613,14 +604,14 @@ tenantTest("a configured memory limit is applied as a resources policy and adver
   assert.equal(fake.resources(sandboxScopeName("qmt", scope))?.limitMB, 4096);
 });
 
-tenantTest("the profile is honest about the base release and what survives sleep", () => {
+test("the profile is honest about the base release and what survives sleep", () => {
   const os = sandbox.profile.spec?.os ?? "";
   assert.match(os, /Ubuntu \(25\.10 for newly created sprites/);
   assert.doesNotMatch(os, /LTS/);
   assert.match(os, /do not survive a cold wake/);
 });
 
-tenantTest("exportFiles tars workspace + home over the exec channel (the publish fast path)", async () => {
+test("exportFiles tars workspace + home over the exec channel (the publish fast path)", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.run(
     h,
@@ -641,7 +632,7 @@ tenantTest("exportFiles tars workspace + home over the exec channel (the publish
   assert.equal(Buffer.from(got.find((e) => e.path === "app/index.html")!.data).toString("utf8"), "hi");
 });
 
-tenantTest("exportFiles keepContentCaches ships cache-named build output (publish parity)", async () => {
+test("exportFiles keepContentCaches ships cache-named build output (publish parity)", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.run(h, "mkdir -p site/.cache && printf real > site/.cache/bundle.js");
   const got = await sandbox.exportFiles!(h, {
@@ -655,7 +646,7 @@ tenantTest("exportFiles keepContentCaches ships cache-named build output (publis
   );
 });
 
-tenantTest("blob staging is advertised only when the channel is actually wired", async () => {
+test("blob staging is advertised only when the channel is actually wired", async () => {
   assert.equal(
     supportsBlobStaging(make()),
     false,
@@ -669,7 +660,7 @@ tenantTest("blob staging is advertised only when the channel is actually wired",
   assert.equal(supportsBlobStaging(wired), true, "wired up, sprites can move bytes by reference");
 });
 
-tenantTest("stageOut posts to core's blob endpoint by streaming, never by buffering in the guest", async () => {
+test("stageOut posts to core's blob endpoint by streaming, never by buffering in the guest", async () => {
   const sb = make({
     blobTransfer: createMemoryBlobTransferStore(),
     capabilitySecret: "blob-secret",
@@ -686,7 +677,7 @@ tenantTest("stageOut posts to core's blob endpoint by streaming, never by buffer
   assert.match(script, /x-content-sha256/, "core verifies the upload end-to-end");
 });
 
-tenantTest("stageIn pulls a blob into the guest atomically (temp then mv)", async () => {
+test("stageIn pulls a blob into the guest atomically (temp then mv)", async () => {
   const sb = make({
     blobTransfer: createMemoryBlobTransferStore(),
     capabilitySecret: "blob-secret",
@@ -701,7 +692,7 @@ tenantTest("stageIn pulls a blob into the guest atomically (temp then mv)", asyn
   assert.match(script, /curl -fsS/, "-f so an HTTP error fails loudly instead of writing the error body");
 });
 
-tenantTest("a prep failure that writes nothing still names its cause", () => {
+test("a prep failure that writes nothing still names its cause", () => {
   assert.equal(
     execFailureDetail({ stdout: "", stderr: "", code: 124, timedOut: true }, 60),
     "timed out after 60s with no output",
@@ -712,30 +703,27 @@ tenantTest("a prep failure that writes nothing still names its cause", () => {
   assert.equal(execFailureDetail({ stdout: " out\n", stderr: "", code: 1, timedOut: false }, 60), "out");
 });
 
-tenantTest(
-  "destroying a scope exports the home to the snapshot store first and a replacement hydrates from it",
-  async () => {
-    const snapshots = createMemorySnapshotStore();
-    const s = make({ snapshots });
-    const h = await s.provision(layers);
-    await s.run(h, 'printf survivor > "$HOME/notes.txt"');
-    assert.equal(await snapshots.open(scope), null);
+test("destroying a scope exports the home to the snapshot store first and a replacement hydrates from it", async () => {
+  const snapshots = createMemorySnapshotStore();
+  const s = make({ snapshots });
+  const h = await s.provision(layers);
+  await s.run(h, 'printf survivor > "$HOME/notes.txt"');
+  assert.equal(await snapshots.open(scope), null);
 
-    await s.destroyScope!(scope);
-    assert.ok(!fake.names().includes(h.id), "the sprite is gone");
-    const stored = await snapshots.open(scope);
-    assert.ok(stored && stored.size > 0, "but its home was exported before deletion");
+  await s.destroyScope!(scope);
+  assert.ok(!fake.names().includes(h.id), "the sprite is gone");
+  const stored = await snapshots.open(scope);
+  assert.ok(stored && stored.size > 0, "but its home was exported before deletion");
 
-    const again = await s.provision(layers);
-    assert.equal(again.coldStart, false, "the replacement is hydrated, not cold");
-    const back = await s.run(again, 'cat "$HOME/notes.txt"');
-    assert.equal(back.stdout, "survivor");
-    assert.equal(typeof s.persistHomeSnapshot, "function", "explicit export is offered when a store is wired");
-    assert.equal(typeof make().persistHomeSnapshot, "undefined");
-  },
-);
+  const again = await s.provision(layers);
+  assert.equal(again.coldStart, false, "the replacement is hydrated, not cold");
+  const back = await s.run(again, 'cat "$HOME/notes.txt"');
+  assert.equal(back.stdout, "survivor");
+  assert.equal(typeof s.persistHomeSnapshot, "function", "explicit export is offered when a store is wired");
+  assert.equal(typeof make().persistHomeSnapshot, "undefined");
+});
 
-tenantTest("a job computer's home is never snapshotted, on teardown or destroy", async () => {
+test("a job computer's home is never snapshotted, on teardown or destroy", async () => {
   const snapshots = createMemorySnapshotStore();
   const s = make({ snapshots });
   const jobScope = "job-1234";
@@ -747,7 +735,7 @@ tenantTest("a job computer's home is never snapshotted, on teardown or destroy",
   assert.ok(!fake.names().includes(h.id), "the sprite is gone");
   assert.equal(await snapshots.open(jobScope), null);
 });
-tenantTest("a failed export refuses to destroy the sprite", async () => {
+test("a failed export refuses to destroy the sprite", async () => {
   const snapshots = createMemorySnapshotStore();
   const s = make({ snapshots });
   const h = await s.provision(layers);
@@ -756,7 +744,7 @@ tenantTest("a failed export refuses to destroy the sprite", async () => {
   assert.ok(fake.names().includes(h.id), "an irreversible delete never follows a lost export");
 });
 
-tenantTest("without a snapshot store a destroy is a single delete that tolerates a missing sprite", async () => {
+test("without a snapshot store a destroy is a single delete that tolerates a missing sprite", async () => {
   await sandbox.destroyScope!(scope);
   assert.deepEqual(
     fake.calls.map((c) => `${c.method} ${c.path}`),
@@ -766,7 +754,7 @@ tenantTest("without a snapshot store a destroy is a single delete that tolerates
   await assert.rejects(sandbox.destroyScope!(scope), /sprites delete .*http 503/);
 });
 
-tenantTest("control-plane reads retry 429 with Retry-After while exec is never retried", async () => {
+test("control-plane reads retry 429 with Retry-After while exec is never retried", async () => {
   const h = await sandbox.provision(layers);
   fake.failNext(429, { headers: { "retry-after": "0" }, match: (c) => c.path.endsWith("/check") });
   const status = await sandbox.computerStatus!(scope);
@@ -787,7 +775,7 @@ tenantTest("control-plane reads retry 429 with Retry-After while exec is never r
   await assert.rejects(sandbox.destroyScope!(scope), /sprites delete .*injected 503/);
 });
 
-tenantTest("control retries share an elapsed-time budget across backoff and SDK requests", async () => {
+test("control retries share an elapsed-time budget across backoff and SDK requests", async () => {
   let calls = 0;
   await assert.rejects(
     retrySpritesControl(async () => {
@@ -809,7 +797,7 @@ tenantTest("control retries share an elapsed-time budget across backoff and SDK 
   assert.equal(calls, 2);
 });
 
-tenantTest("control calls retry the SDK's lost-connection error and stop at a programming error", async () => {
+test("control calls retry the SDK's lost-connection error and stop at a programming error", async () => {
   let calls = 0;
   const result = await retrySpritesControl(async () => {
     if (calls++ === 0) throw new Error("Network error: fetch failed");
@@ -829,7 +817,7 @@ tenantTest("control calls retry the SDK's lost-connection error and stop at a pr
 });
 
 for (const outcome of ["healthy", "unknown", "403", "503"]) {
-  tenantTest(`refused restart with ${outcome} health observation never rolls back newer files`, async () => {
+  test(`refused restart with ${outcome} health observation never rolls back newer files`, async () => {
     const h = await sandbox.provision(layers);
     await sandbox.writeFile(h, "ledger", "old");
     await sandbox.teardown(h);
@@ -845,53 +833,50 @@ for (const outcome of ["healthy", "unknown", "403", "503"]) {
   });
 }
 
-tenantTest(
-  "failed hydration and failed deletion remain pending across adapters without overwriting the saved home",
-  async () => {
-    const snapshots = createMemorySnapshotStore();
-    const initializationStore = testMap<{ pending: boolean }>();
-    const advisoryLock = testAdvisoryLock();
-    let failOpen = false;
-    let opens = 0;
-    const wrapped = {
-      ...snapshots,
-      open: async (id: string) => {
-        opens++;
-        if (failOpen) throw new Error("snapshot unavailable");
-        return snapshots.open(id);
-      },
-    };
-    const options = { snapshots: wrapped, initializationStore, advisoryLock };
-    const a = make(options);
-    const h = await a.provision(layers);
-    await a.writeFile(h, "ledger", "saved");
-    await a.destroyScope!(scope);
-    failOpen = true;
-    fake.refuseDelete(403);
-    await assert.rejects(a.provision(layers), /snapshot unavailable/);
-    assert.deepEqual(await initializationStore.get(h.id), { pending: true });
-    const b = make(options);
-    await assert.rejects(b.persistHomeSnapshot!(scope), /initialization is incomplete/);
-    await assert.rejects(b.restartComputer!(scope), /initialization is incomplete/);
-    const before = opens;
-    await assert.rejects(b.provision(layers), /snapshot unavailable/);
-    assert.equal(opens, before + 1);
-    failOpen = false;
-    fake.refuseDelete();
-    const restored = await make(options).provision(layers);
-    assert.equal(await b.readFile(restored, "ledger"), "saved");
-    assert.equal(await initializationStore.get(h.id), null);
-  },
-);
+test("failed hydration and failed deletion remain pending across adapters without overwriting the saved home", async () => {
+  const snapshots = createMemorySnapshotStore();
+  const initializationStore = testMap<{ pending: boolean }>();
+  const advisoryLock = testAdvisoryLock();
+  let failOpen = false;
+  let opens = 0;
+  const wrapped = {
+    ...snapshots,
+    open: async (id: string) => {
+      opens++;
+      if (failOpen) throw new Error("snapshot unavailable");
+      return snapshots.open(id);
+    },
+  };
+  const options = { snapshots: wrapped, initializationStore, advisoryLock };
+  const a = make(options);
+  const h = await a.provision(layers);
+  await a.writeFile(h, "ledger", "saved");
+  await a.destroyScope!(scope);
+  failOpen = true;
+  fake.refuseDelete(403);
+  await assert.rejects(a.provision(layers), /snapshot unavailable/);
+  assert.deepEqual(await initializationStore.get(h.id), { pending: true });
+  const b = make(options);
+  await assert.rejects(b.persistHomeSnapshot!(scope), /initialization is incomplete/);
+  await assert.rejects(b.restartComputer!(scope), /initialization is incomplete/);
+  const before = opens;
+  await assert.rejects(b.provision(layers), /snapshot unavailable/);
+  assert.equal(opens, before + 1);
+  failOpen = false;
+  fake.refuseDelete();
+  const restored = await make(options).provision(layers);
+  assert.equal(await b.readFile(restored, "ledger"), "saved");
+  assert.equal(await initializationStore.get(h.id), null);
+});
 
-tenantTest("scratch allocation is deleted when resource initialization fails", async () => {
+test("scratch allocation is deleted when resource initialization fails", async () => {
   const box = make({ memoryMb: 4096 });
   fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
   await assert.rejects(box.provision(layers, { scratch: { key: "partial-allocation" } }));
   assert.ok(!fake.names().some((name) => name.includes("scratch")));
 });
 
-tenantTest("failed scratch initialization and deletion retain a safe retryable identity", async () => {
+test("failed scratch initialization and deletion retain a safe retryable identity", async () => {
   const box = make({ memoryMb: 4096 });
   fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
   fake.failNext(400, { match: (call) => call.method === "DELETE" });
