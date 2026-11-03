@@ -119,31 +119,35 @@ test("an open transaction refuses work for a different tenant until it has ended
   await withoutTenant(() =>
     withPgTransaction(app, async () => assert.throws(() => withTenant(a, () => 0), /already open/)),
   );
-  const outcomes: string[] = [];
-  let settled = false;
-  let spawned: Promise<string[]> | undefined;
-  const watch = (resolve: (seen: string[]) => void) => {
-    try {
-      withTenant(b, () => outcomes.push("bound"));
-    } catch {
-      outcomes.push("refused");
-    }
-    if (settled) resolve(outcomes);
-    else setImmediate(watch, resolve);
-  };
-  await assert.rejects(
-    withTenant(a, () =>
+  for (const fails of [false, true]) {
+    const outcomes: string[] = [];
+    let settled = false;
+    let spawned: Promise<string[]> | undefined;
+    const watch = (resolve: (seen: string[]) => void) => {
+      try {
+        withTenant(b, () => outcomes.push("bound"));
+      } catch {
+        outcomes.push("refused");
+      }
+      if (settled) resolve(outcomes);
+      else setImmediate(watch, resolve);
+    };
+    const transaction = withTenant(a, () =>
       withPgTransaction(app, async () => {
         spawned = new Promise(watch);
-        throw new Error("body failed");
+        if (fails) throw new Error("body failed");
       }),
-    ),
-    /body failed/,
-  );
-  settled = true;
-  const seen = await spawned!;
-  assert.equal(seen.pop(), "bound");
-  assert.deepEqual(new Set(seen), new Set(["refused"]));
+    );
+    try {
+      if (fails) await assert.rejects(transaction, /body failed/);
+      else await transaction;
+    } finally {
+      settled = true;
+    }
+    const seen = await spawned!;
+    assert.equal(seen.pop(), "bound");
+    assert.deepEqual(new Set(seen), new Set(["refused"]));
+  }
 });
 
 test("upgrading copies the existing tenant into tenants", { skip }, async () => {

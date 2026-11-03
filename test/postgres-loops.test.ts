@@ -292,9 +292,6 @@ test("outputs and ship grants keep their state machines on typed rows", { skip }
         (await outputs.expireOlderThan("L1", Date.now() + 1)).map((o) => o.id),
         [second.id],
       );
-      await outputs.rebindItem("I1", "L1", "L2");
-      assert.deepEqual((await outputs.byLoop("L2")).length, 2);
-      assert.deepEqual((await outputs.byItem("I1")).length, 2);
 
       const grants = store.grantStore;
       const grant = { id: "g1", loopId: "L2", shipAction: "send", actorId: ALICE, policyVersion: 1, createdAt: 1 };
@@ -396,10 +393,13 @@ test("ingress sources and deliveries queue per tenant and background claims span
         new Set([`${tenant}/s2`, `${otherTenant}/s9`]),
       );
       assert.equal(await owner.deliveries.pruneCompleted(60), 2);
-      const inbox = await owner.loopStore.inboxLoops();
       assert.deepEqual(
-        new Set(inbox.map((l) => `${l.tenantId}/${l.name}`)),
-        new Set([`${tenant}/Inbox`, `${otherTenant}/Other inbox`]),
+        (await withTenant(tenant, () => store.loopStore.inboxLoops())).map((l) => l.name),
+        ["Inbox"],
+      );
+      assert.deepEqual(
+        (await withTenant(otherTenant, () => store.loopStore.inboxLoops())).map((l) => l.name),
+        ["Other inbox"],
       );
       const stale = await owner.loopStore.staleGoverned(Date.now() + 10);
       assert.deepEqual(
@@ -407,8 +407,8 @@ test("ingress sources and deliveries queue per tenant and background claims span
         [[tenant, "Inbox"]],
       );
       await assert.rejects(
-        withoutTenant(() => store.sources.enabled()),
-        /No tenant is bound/,
+        withTenant(tenant, () => store.sources.enabled()),
+        /cannot run while a tenant is bound/,
       );
       await assert.rejects(
         withoutTenant(() => store.loopStore.inboxLoops()),

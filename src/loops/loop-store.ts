@@ -67,7 +67,7 @@ export interface LoopStore {
   byCron(cronId: string): Promise<Loop | null>;
   byOwner(owner: string, surface: string): Promise<Loop | null>;
   byScope(ownerScopeId: string, surface: string): Promise<Loop | null>;
-  inboxLoops(): Promise<TenantLoop[]>;
+  inboxLoops(): Promise<Loop[]>;
   staleGoverned(now: number): Promise<TenantLoop[]>;
   update(id: string, patch: LoopPatch): Promise<Loop | null>;
   editPlaybook(id: string, edit: PlaybookEdit): Promise<Loop | null>;

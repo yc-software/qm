@@ -16,7 +16,7 @@ export interface LoopRows {
   byScope(ownerScopeId: string, surface: string): Promise<Loop | null>;
   update(id: string, apply: (loop: Loop) => Loop): Promise<Loop | null>;
   delete(id: string): Promise<void>;
-  inboxLoops(): Promise<TenantLoop[]>;
+  inboxLoops(): Promise<Loop[]>;
   staleGoverned(now: number): Promise<TenantLoop[]>;
   close?(): Promise<void>;
 }
@@ -220,7 +220,7 @@ function fromRow(r: Row): Loop {
 const tenantRow = (r: Row): TenantLoop => ({ ...fromRow(r), tenantId: r.tenant_id as string });
 
 export function createPostgresLoopRows(connectionString: string): LoopRows {
-  const { q, query, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOPS_MIGRATION]);
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOPS_MIGRATION]);
   const first = async (where: string, values: unknown[]): Promise<Loop | null> => {
     const rows = await q(`${SELECT} WHERE ${MINE} AND ${where} ORDER BY id LIMIT 1`, values);
     return rows[0] ? fromRow(rows[0]) : null;
@@ -257,13 +257,11 @@ export function createPostgresLoopRows(connectionString: string): LoopRows {
       await q(`DELETE FROM loops WHERE ${MINE} AND id = $1`, [id]);
     },
     async inboxLoops() {
-      return (
-        await claimAcrossTenants({ query }, `${SELECT} WHERE ${INBOX} AND state <> 'archived' ORDER BY tenant_id, id`)
-      ).rows.map(tenantRow);
+      return (await q(`${SELECT} WHERE ${MINE} AND ${INBOX} AND state <> 'archived' ORDER BY id`)).map(fromRow);
     },
     async staleGoverned(now) {
       const { rows } = await claimAcrossTenants(
-        { query },
+        connectionString,
         `${SELECT} WHERE governor ? 'staleFireMs' AND state = 'enabled'
            AND $1 - COALESCE(last_fired_at, created_at) > (governor->>'staleFireMs')::numeric
          ORDER BY tenant_id, id`,

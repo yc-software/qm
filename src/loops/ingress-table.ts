@@ -220,7 +220,7 @@ function deliveryFromRow(r: Row): IngressDelivery {
 }
 
 export function createPostgresIngressSourceRows(connectionString: string): IngressSourceRows {
-  const { q, query, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOP_INGRESS_MIGRATION]);
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOP_INGRESS_MIGRATION]);
   return {
     async get(id) {
       const rows = await q(`${SELECT_SOURCE} WHERE ${MINE} AND id = $1`, [id]);
@@ -245,13 +245,13 @@ export function createPostgresIngressSourceRows(connectionString: string): Ingre
       });
     },
     async enabled() {
-      return (await claimAcrossTenants({ query }, `${SELECT_SOURCE} WHERE enabled ORDER BY tenant_id, id`)).rows.map(
-        tenantSource,
-      );
+      return (
+        await claimAcrossTenants(connectionString, `${SELECT_SOURCE} WHERE enabled ORDER BY tenant_id, id`)
+      ).rows.map(tenantSource);
     },
     async gmailWatching(email) {
       const { rows } = await claimAcrossTenants(
-        { query },
+        connectionString,
         `${SELECT_SOURCE} WHERE enabled AND kind = 'gmail' AND gmail_email = $1 ORDER BY tenant_id, id`,
         [email],
       );
@@ -262,7 +262,7 @@ export function createPostgresIngressSourceRows(connectionString: string): Ingre
 }
 
 export function createPostgresIngressDeliveryRows(connectionString: string): IngressDeliveryRows {
-  const { q, query, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOP_INGRESS_DELIVERIES_MIGRATION]);
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOP_INGRESS_DELIVERIES_MIGRATION]);
   return {
     async insertIfAbsent(delivery) {
       await q(
@@ -293,7 +293,9 @@ export function createPostgresIngressDeliveryRows(connectionString: string): Ing
     },
     async pruneCompleted(before) {
       return (
-        await claimAcrossTenants({ query }, `DELETE FROM loop_ingress_deliveries WHERE completed_at < $1`, [before])
+        await claimAcrossTenants(connectionString, `DELETE FROM loop_ingress_deliveries WHERE completed_at < $1`, [
+          before,
+        ])
       ).rowCount;
     },
     close,

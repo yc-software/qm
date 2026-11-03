@@ -25,6 +25,7 @@ if (positionals.length === 0) throw new Error("Pass the Postgres test files to r
 const files = positionals.toSorted((a, b) => statSync(b).size - statSync(a).size);
 
 const baseUrl = process.env.DATABASE_URL;
+const OWNER_DATABASE_HOOK = new URL("../test/support/owner-database.ts", import.meta.url).href;
 if (!baseUrl) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
 const runId = `qmt_${process.pid}_${randomBytes(4).toString("hex")}`;
 const tenantEnv = { QM_TEST_TENANT: randomUUID(), QM_TEST_OTHER_TENANT: randomUUID() };
@@ -96,6 +97,8 @@ function runFile(file, env) {
       process.execPath,
       [
         "--experimental-test-module-mocks",
+        "--import",
+        OWNER_DATABASE_HOOK,
         new URL("../test/support/tenant-bound-test.ts", import.meta.url).pathname,
         file,
       ],
@@ -124,6 +127,7 @@ async function runIsolated(file, index) {
     if (stopping) return { file, ok: false, ms: 0, output: "" };
     return await runFile(file, {
       DATABASE_URL: databaseUrl(name),
+      DATABASE_OWNER_URL: process.env.DATABASE_OWNER_URL ?? baseUrl,
       QM_TEST_TEMPLATE_DATABASE: templateName,
       QM_TEST_TENANTS_DATABASE: tenantsName,
     });

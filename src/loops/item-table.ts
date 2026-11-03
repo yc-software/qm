@@ -29,7 +29,6 @@ const LOOP_ITEMS_MIGRATION = typedTableMigration({
   columns: [
     "id TEXT NOT NULL",
     "loop_id TEXT NOT NULL",
-    "previous_loop_id TEXT",
     "source_key TEXT NOT NULL",
     "source_summary TEXT",
     "source TEXT",
@@ -61,7 +60,6 @@ const LOOP_ITEMS_MIGRATION = typedTableMigration({
   backfill: {
     id: "id",
     loop_id: "json->>'loopId'",
-    previous_loop_id: "json->>'previousLoopId'",
     source_key: "json->>'sourceKey'",
     source_summary: "json->>'sourceSummary'",
     source: "json->>'source'",
@@ -96,7 +94,6 @@ const LOOP_ITEMS_MIGRATION = typedTableMigration({
 const SUMMARY_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["id", "text"],
   ["loop_id", "text"],
-  ["previous_loop_id", "text"],
   ["source_key", "text"],
   ["source_summary", "text"],
   ["source", "text"],
@@ -144,7 +141,6 @@ function params(item: LoopItem): unknown[] {
   return [
     item.id,
     text(item.loopId),
-    text(item.previousLoopId),
     text(item.sourceKey),
     text(item.sourceSummary),
     text(item.source),
@@ -178,7 +174,6 @@ function fromRow(r: Row): LoopItem {
   return present<LoopItem>({
     id: r.id,
     loopId: r.loop_id,
-    previousLoopId: r.previous_loop_id,
     sourceKey: r.source_key,
     sourceSummary: r.source_summary,
     source: r.source,

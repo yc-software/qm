@@ -14,7 +14,6 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 const fact = "Prefers validating changes with before-and-after browser tests.";
 const filler = Array.from(
@@ -125,7 +124,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   await built.memory.capture("personal:U1", [fact, ...filler], Date.now());
   await built.memory.capture("personal:U2", [otherFact], Date.now());
   await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, ["org:default-org", "personal:U1"]);
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     memory: built.memory,
     capabilitySecret: TEST_CAPABILITY_SECRET,
   });
@@ -255,7 +254,7 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   await built.memory.capture(room, ["0.99 REMOTE_BEST", "0.72 REMOTE_NEAR"], Date.now());
   await built.memory.capture(denied, ["1 DENIED_NOTEBOOK"], Date.now());
   await seedVectors(built.memory, databaseUrl, "test", providerUrl, [personal, room]);
-  const server = createInsecureTestServer(TEST_TENANT, built.app);
+  const server = createInsecureTestServer(built.app);
   const base = await listen(server);
   t.after(() => close(server));
   const turn = async (text: string, thread: string) => {

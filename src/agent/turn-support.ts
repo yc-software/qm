@@ -14,7 +14,6 @@ import { errMessage, swallowAs } from "../util/errors.ts";
 import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 
 export interface ToolPlumbing {
-  reachExec?: boolean;
   controlTools?: boolean;
   sandboxResources?: boolean;
   execTimeoutMs?: number;
@@ -125,7 +124,6 @@ export function turnToolContext(turn: AgentTurnInput): ToolContextRef {
 
 export function turnToolOptions(opts: ToolPlumbing, turn?: AgentTurnInput): AgentToolsOptions {
   return {
-    reachExec: opts.reachExec,
     ...(turn?.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
     controlTools: opts.controlTools,
     sandboxResources: opts.sandboxResources,

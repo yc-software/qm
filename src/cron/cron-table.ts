@@ -162,7 +162,7 @@ export const CRONS_MIGRATION = typedTableMigration({
 });
 
 export function createPostgresCronRows(connectionString: string): CronRows & { close(): Promise<void> } {
-  const { q, query, pool, close } = createPgPool(connectionString, [TENANCY_BASE, CRONS_MIGRATION]);
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, CRONS_MIGRATION]);
   const many = async (sql: string, params: unknown[] = []) => (await q(sql, params)).map(rowToCron);
   return {
     close,
@@ -211,12 +211,15 @@ export function createPostgresCronRows(connectionString: string): CronRows & { c
     },
     async scheduled() {
       return (
-        await claimAcrossTenants({ query }, `${SELECT} WHERE enabled AND archived IS NOT TRUE ORDER BY tenant_id, id`)
+        await claimAcrossTenants(
+          connectionString,
+          `${SELECT} WHERE enabled AND archived IS NOT TRUE ORDER BY tenant_id, id`,
+        )
       ).rows.map(tenantRow);
     },
     async dueCandidates(now) {
       const { rows } = await claimAcrossTenants(
-        { query },
+        connectionString,
         `${SELECT} WHERE enabled AND archived IS NOT TRUE
            AND (next_fire_at IS NULL OR next_fire_at <= $1)
            AND (defer_until IS NULL OR defer_until <= $1)

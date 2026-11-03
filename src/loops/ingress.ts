@@ -111,8 +111,6 @@ export interface LoopIngressDeps {
   verifyGoogle?: typeof verifyGmailPush;
 }
 
-export const GMAIL_PUSH_ID = "gmail";
-
 export interface IngressSetup {
   kind: LoopIngress["kind"];
   secret?: string;
@@ -362,7 +360,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     ): Promise<{ status: number; body: string }> {
       if (Buffer.byteLength(request.rawBody) > 64_000)
         return { status: 413, body: "Event payload must be under 64 KB" };
-      if (id === GMAIL_PUSH_ID) {
+      if (id === "gmail") {
         const authorization = request.headers.authorization;
         if (
           !deps.gmailConfig ||

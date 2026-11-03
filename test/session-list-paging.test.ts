@@ -11,7 +11,6 @@ import { buildApp } from "../src/wiring.ts";
 import type { Principal, Session } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 type Page = { sessions: Session[]; pinned?: Session[]; nextCursor: string | null; hasArchived?: boolean };
 
@@ -22,7 +21,7 @@ async function withServer<T>(
   ) => Promise<T>,
 ): Promise<T> {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "paging-")) }));
-  const server = createInsecureTestServer(TEST_TENANT, built.app);
+  const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

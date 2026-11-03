@@ -4,12 +4,10 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import type { App, RedeployInput } from "../src/api/app.ts";
-import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
-import { PORTAL_IDENTITY_HEADER, mintPortalIdentity } from "../src/auth/portal-identity.ts";
+import { signRequest } from "../src/auth/source-auth.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "deploy-redeploy-route-secret".repeat(2);
 
@@ -20,14 +18,14 @@ describe("deployment redeploy route", () => {
 
   const post = async (path: string, body: unknown) => {
     const raw = JSON.stringify(body);
-    const identity = await mintPortalIdentity({ t: TEST_TENANT, p: "U1", exp: Date.now() + 60_000 }, SECRET);
+    const ts = Math.floor(Date.now() / 1000);
     return fetch(`${base}${path}`, {
       method: "POST",
-      headers: signedRequestHeaders(SECRET, "POST", path, raw, {
+      headers: {
         "content-type": "application/json",
-        [PORTAL_IDENTITY_HEADER]: identity,
-        ...TENANT_HEADERS,
-      }),
+        "x-timestamp": String(ts),
+        "x-signature": signRequest(SECRET, ts, `POST\n${path}\n${raw}`),
+      },
       body: raw,
     });
   };
@@ -70,7 +68,7 @@ describe("deployment redeploy route", () => {
     };
     const response = await post("/v1/deployments/envy/redeploy", body);
     assert.equal(response.status, 200);
-    assert.deepEqual(received, { ...body, actor: "U1" });
+    assert.deepEqual(received, body);
     const { deployment } = (await response.json()) as { deployment: { versions: Record<string, unknown>[] } };
     assert.deepEqual(Object.keys(deployment.versions[0]!), ["version", "createdAt"], "no snapshot paths or env");
   });

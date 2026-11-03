@@ -139,7 +139,7 @@ export const MONITORS_MIGRATION = typedTableMigration({
 });
 
 export function createPostgresMonitorRows(connectionString: string): MonitorRows & { close(): Promise<void> } {
-  const { q, query, pool, close } = createPgPool(connectionString, [TENANCY_BASE, MONITORS_MIGRATION]);
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, MONITORS_MIGRATION]);
   const many = async (sql: string, params: unknown[] = []) => (await q(sql, params)).map(rowToMonitor);
   return {
     close,
@@ -177,16 +177,18 @@ export function createPostgresMonitorRows(connectionString: string): MonitorRows
     },
     async enabled() {
       const { rows } = await claimAcrossTenants(
-        { query },
+        connectionString,
         `${SELECT} WHERE enabled ORDER BY created_at, tenant_id, id`,
       );
       return rows.map((r) => ({ ...rowToMonitor(r), tenantId: r.tenant_id as string }));
     },
     async deleteDisabledBefore(cutoff) {
       return (
-        await claimAcrossTenants({ query }, `DELETE FROM monitors WHERE NOT enabled AND ${LAST_ACTIVITY} <= $1`, [
-          cutoff,
-        ])
+        await claimAcrossTenants(
+          connectionString,
+          `DELETE FROM monitors WHERE NOT enabled AND ${LAST_ACTIVITY} <= $1`,
+          [cutoff],
+        )
       ).rowCount;
     },
   };

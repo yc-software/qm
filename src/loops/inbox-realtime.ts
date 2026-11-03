@@ -1,3 +1,5 @@
+import { boundTenant } from "../tenants/context.ts";
+import type { Loop } from "./types.ts";
 import type { LoopStore } from "./loop-store.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import { conversationEvent, type IngressEntry } from "./ingress.ts";
@@ -16,16 +18,16 @@ const LOOP_CACHE_TTL_MS = 60_000;
 export function createInboxRealtime(deps: InboxRealtimeDeps): {
   onConversationEvent(event: ConversationEvent): Promise<void>;
 } {
-  let cachedInboxLoops: Array<{ id: string; owner: string; tenantId: string }> = [];
-  let cacheAt = 0;
+  const cache = new Map<string | undefined, { at: number; loops: Loop[] }>();
 
-  async function inboxLoops(): Promise<typeof cachedInboxLoops> {
+  async function inboxLoops(): Promise<Loop[]> {
+    const tenant = boundTenant();
     const now = Date.now();
-    if (now - cacheAt > LOOP_CACHE_TTL_MS) {
-      cachedInboxLoops = (await deps.loops.inboxLoops()).map(({ id, owner, tenantId }) => ({ id, owner, tenantId }));
-      cacheAt = now;
-    }
-    return cachedInboxLoops;
+    const hit = cache.get(tenant);
+    if (hit && now - hit.at <= LOOP_CACHE_TTL_MS) return hit.loops;
+    const loops = await deps.loops.inboxLoops();
+    cache.set(tenant, { at: now, loops });
+    return loops;
   }
 
   return {

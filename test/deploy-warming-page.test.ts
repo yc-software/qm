@@ -4,7 +4,6 @@ import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;
@@ -18,7 +17,7 @@ test("/d/ proxy serves the warming page to a browser navigation when the deploym
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(TEST_TENANT, appWith({ host: "127.0.0.1", port: upstreamPort }), {
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), {
     deployDialTimeoutMs: 200,
   });
   server.listen(0);
@@ -46,7 +45,7 @@ test("/d/ proxy serves the warming page to a browser navigation when the deploym
   const upstreamPort = (upstream.address() as AddressInfo).port;
   await new Promise<void>((r) => upstream.close(() => r()));
 
-  const server = createInsecureTestServer(TEST_TENANT, appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -66,7 +65,7 @@ test("/d/ proxy keeps JSON gateway errors for non-document requests", async () =
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(TEST_TENANT, appWith({ host: "127.0.0.1", port: upstreamPort }), {
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), {
     deployDialTimeoutMs: 200,
   });
   server.listen(0);
@@ -99,7 +98,7 @@ test("a recently-healthy upstream keeps the full dial timeout for slow pages", a
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(TEST_TENANT, appWith({ host: "127.0.0.1", port: upstreamPort }), {
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), {
     deployDialTimeoutMs: 1000,
   });
   server.listen(0);

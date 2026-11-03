@@ -778,33 +778,6 @@ test("privileged loop config and manual fires use the cron live-owner-admin gate
   );
 });
 
-test("a legacy inbox sync cron cannot be re-enabled through an autonomous Loop patch", async () => {
-  const deps = services();
-  const { loop } = await deps.store.create({
-    owner: "josh",
-    createdBy: "josh",
-    ownerScopeId: scopeId("personal", "josh"),
-    ...CREATE,
-    surface: "inbox",
-    shipActions: [],
-  });
-  const cron = await deps.crons!.create({
-    owner: loop.owner,
-    createdBy: loop.owner,
-    ownerScopeId: loop.ownerScopeId,
-    schedule: { everyMs: 60_000 },
-    action: "Inbox sync v3.",
-    unattendedGrants: ["admin.sessions.read"],
-  });
-  await deps.store.update(loop.id, { cronId: cron.id, state: "paused" });
-  await deps.crons!.setEnabled(cron.id, false);
-  const refused = await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" }, "josh", "capability", false);
-  assert.equal(refused.status, 403);
-  assert.equal((await deps.crons!.get(cron.id))?.enabled, false);
-  assert.equal((await call(deps, "PATCH", `/v1/loops/${loop.id}`, { state: "enabled" })).status, 200);
-  assert.equal((await deps.crons!.get(cron.id))?.enabled, true);
-});
-
 test("loop icons can be set and reset by their owner, reject invalid input and retain authorization", async () => {
   const deps = services();
   const created = await call(deps, "POST", "/v1/loops", {
