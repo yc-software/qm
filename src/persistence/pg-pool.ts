@@ -397,15 +397,14 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
   for (const [databaseUrl, registered] of databases) {
     if (!registered?.size) continue;
     await migrationQueue(databaseUrl, async () => {
-      const pg = (await import("pg")).default;
-      const pool = guardedPool(new pg.Pool({ ...pgConnectionOptions(databaseUrl), max: 1 }));
+      const pool = await retainPool(databaseUrl, "migration");
       try {
         await applyPgMigrations(
           pool,
           [...registered.values()].sort((a, b) => a.id.localeCompare(b.id)),
         );
       } finally {
-        await pool.end();
+        await releasePool(databaseUrl, pool, "migration");
       }
     });
   }
