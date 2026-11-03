@@ -139,14 +139,14 @@ test("a backend killed mid-pipeline rejects and the pool replaces the connection
   const store = createPgPool(url!);
   try {
     const pid = (await store.q("SELECT pg_backend_pid() AS pid", [], { timeoutMs: 5000 }))[0]!.pid;
-    const sleeping = store.q("SELECT pg_sleep(5)", [], { timeoutMs: 10_000 });
+    const sleeping = assert.rejects(store.q("SELECT pg_sleep(5)", [], { timeoutMs: 10_000 }));
     for (let i = 0; i < 100; i++) {
       const { rows } = await pool!.query("SELECT state FROM pg_stat_activity WHERE pid = $1", [pid]);
       if (rows[0]?.state === "active") break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     await pool!.query("SELECT pg_terminate_backend($1)", [pid]);
-    await assert.rejects(sleeping);
+    await sleeping;
     const [next] = await store.q("SELECT pg_backend_pid() AS pid, current_setting('statement_timeout') AS t", [], {
       timeoutMs: 5000,
     });
