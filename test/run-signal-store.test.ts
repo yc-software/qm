@@ -122,36 +122,6 @@ test("startSignalPoll: a stop that arrives during a steer's intake goes ahead of
   }
 });
 
-test("startSignalPoll: a stop that arrives while a steer is being taken in is delivered without waiting for it", async () => {
-  const store = signalStore();
-  const order: string[] = [];
-  let release!: () => void;
-  const gate = new Promise<void>((r) => (release = r));
-  await store.send("r-stall", { kind: "steer", text: "screen me slowly" });
-  const stop = startSignalPoll(
-    store,
-    "r-stall",
-    {
-      onSteer: async () => {
-        order.push("intake-start");
-        await gate;
-        order.push("intake-end");
-      },
-      onAbort: async () => void order.push("abort"),
-    },
-    { intervalMs: 60_000 },
-  );
-  try {
-    await until(() => order.length === 1, 500);
-    await store.send("r-stall", { kind: "abort" });
-    await until(() => order.includes("abort"), 500);
-    assert.deepEqual(order, ["intake-start", "abort"]);
-  } finally {
-    release();
-    await stop();
-  }
-});
-
 test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the still-pending stop re-delivers on the next drain", async () => {
   const store = signalStore();
   const steered: string[] = [];

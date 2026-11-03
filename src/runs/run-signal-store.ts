@@ -106,14 +106,16 @@ export function startSignalPoll(
   let inFlight: Promise<void> = Promise.resolve();
   let stopDelivered = false;
   let stopCheck: Promise<void> = Promise.resolve();
-  const checkStop = async (): Promise<void> => {
-    if (stopDelivered) return;
-    const stop = (await signals.pending(runId)).find(({ signal }) => signal.kind === "abort");
-    if (stop?.signal.kind !== "abort") return;
-    await handlers.onAbort(stop.signal.reason);
-    stopDelivered = true;
+  const deliverStop = (known?: Awaited<ReturnType<RunSignalStore["pending"]>>): Promise<void> => {
+    const check = async (): Promise<void> => {
+      if (stopDelivered) return;
+      const stop = (known ?? (await signals.pending(runId))).find(({ signal }) => signal.kind === "abort");
+      if (stop?.signal.kind !== "abort") return;
+      await handlers.onAbort(stop.signal.reason);
+      stopDelivered = true;
+    };
+    return (stopCheck = stopCheck.then(check, check));
   };
-  const deliverStop = (): Promise<void> => (stopCheck = stopCheck.then(checkStop, checkStop));
   const drain = (forced = false): void => {
     if (!accepting && !forced) return;
     if (draining) {
@@ -125,10 +127,11 @@ export function startSignalPoll(
     stopDelivered = false;
     inFlight = (async () => {
       const pending = await signals.pending(runId);
+      await deliverStop(pending).catch((e: unknown) => opts?.onError?.(e));
       for (const { id, signal: s } of pending) {
+        if (s.kind === "abort" || s.kind === "client_result" || declined.has(id)) continue;
         try {
-          await deliverStop();
-          if (s.kind === "abort" || s.kind === "client_result" || declined.has(id)) continue;
+          await stopCheck.catch(() => undefined);
           if (s.text || s.request?.attachments?.length) {
             const delivered = await handlers.onSteer(s.text ?? "", s.ts, s.request, () =>
               signals.acknowledge(runId, id),

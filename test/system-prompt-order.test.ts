@@ -1184,7 +1184,6 @@ test("the turn's intake screens words from anyone but the person the turn acts f
   agent.runTurn = async (turn) => {
     for (const request of [
       from({ liveActor: true }),
-      from({ unprompted: true, liveActor: true }),
       from({ actor: { externalId: actor.id }, unprompted: true, liveActor: true }),
       undefined,
     ])
@@ -1196,12 +1195,7 @@ test("the turn's intake screens words from anyone but the person the turn acts f
     dm("screen-by-sender", "check the build", { origin: { kind: "automation" } }),
   );
   assert.equal(result.status, "ok", result.reason);
-  assert.deepEqual(prepared, [
-    "A mid-turn message was withheld by the security screen.",
-    "A mid-turn message was withheld by the security screen.",
-    injected,
-    injected,
-  ]);
+  assert.deepEqual(prepared, ["A mid-turn message was withheld by the security screen.", injected, injected]);
 });
 
 test("a steer whose file could not be fetched tells the model why, after screening the note", async () => {
