@@ -13,7 +13,7 @@ import { createBrowserSessionStore, type BrowserSessionStore } from "../src/conn
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testLinkTables } from "./support/typed-stores.ts";
+import { testLinkTables } from "./support/credential-stores.ts";
 
 const SECRET = "emoji-route-secret".repeat(3);
 const ACTOR = "U_E1";

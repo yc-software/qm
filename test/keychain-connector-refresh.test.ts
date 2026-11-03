@@ -4,7 +4,7 @@ import { createKeychain, type KeychainCredential, type OAuthRefresh } from "../s
 import type { KeychainCredentialRows, KeychainRows } from "../src/credentials/keychain-rows.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
-import { testKeychainRows } from "./support/typed-stores.ts";
+import { testKeychainRows } from "./support/credential-stores.ts";
 import { decryptSecret, deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 
 const KEY = deriveConnectorKey("keychain-refresh-test-key");

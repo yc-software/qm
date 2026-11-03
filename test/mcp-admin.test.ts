@@ -14,7 +14,7 @@ import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts"
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { discoverOAuth } from "../src/mcp/oauth-discovery.ts";
 import { errMessage } from "../src/util/errors.ts";
-import { testLinkTables } from "./support/typed-stores.ts";
+import { testLinkTables } from "./support/credential-stores.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 

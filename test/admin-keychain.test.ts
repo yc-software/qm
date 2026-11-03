@@ -13,7 +13,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
-import { testKeychainRows } from "./support/typed-stores.ts";
+import { testKeychainRows } from "./support/credential-stores.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-keychain-")) }));

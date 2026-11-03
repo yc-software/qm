@@ -11,7 +11,7 @@ import type { AddressInfo } from "node:net";
 import { settle } from "./support/settle.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
-import { testKeychainRows, testLinkTables } from "./support/typed-stores.ts";
+import { testKeychainRows, testLinkTables } from "./support/credential-stores.ts";
 import { installPrincipalLinks, UnattestableActor } from "../src/directory/person.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {

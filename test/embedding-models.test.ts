@@ -26,7 +26,7 @@ import {
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { testModelTables } from "./support/typed-stores.ts";
+import { testModelTables } from "./support/credential-stores.ts";
 
 const definition = {
   kind: "embedding",

@@ -11,7 +11,7 @@ import {
   withPublicOAuthClients,
 } from "../src/connectors/oauth.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
-import { testLinkTables } from "./support/typed-stores.ts";
+import { testLinkTables } from "./support/credential-stores.ts";
 
 const HOST = "mcp.example.com";
 

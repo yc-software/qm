@@ -215,7 +215,7 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 });
 
 import { createServer } from "node:http";
-import { testModelTables } from "./support/typed-stores.ts";
+import { testModelTables } from "./support/credential-stores.ts";
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

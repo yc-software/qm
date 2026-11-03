@@ -14,7 +14,7 @@ import { orgId } from "../src/config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { testKeychainRows, testLinkTables } from "./support/typed-stores.ts";
+import { testKeychainRows, testLinkTables } from "./support/credential-stores.ts";
 
 function fixture() {
   const keychain = createKeychain({

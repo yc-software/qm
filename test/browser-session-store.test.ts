@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createBrowserSessionStore } from "../src/connectors/browser-session-store.ts";
-import { testLinkTables } from "./support/typed-stores.ts";
+import { testLinkTables } from "./support/credential-stores.ts";
 
 const KEY = deriveConnectorKey(Buffer.alloc(32, 7));
 const STATE = JSON.stringify({ cookies: [{ name: "sid", value: "abc", domain: ".doordash.com" }] });

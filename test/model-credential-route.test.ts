@@ -14,7 +14,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { getRequiredModel, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
-import { testModelTables } from "./support/typed-stores.ts";
+import { testModelTables } from "./support/credential-stores.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 

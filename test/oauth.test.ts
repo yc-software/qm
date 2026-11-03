@@ -16,7 +16,7 @@ import {
 } from "../src/connectors/oauth.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { createOAuthFlowStore } from "../src/connectors/oauth-flow-store.ts";
-import { testLinkTables } from "./support/typed-stores.ts";
+import { testLinkTables } from "./support/credential-stores.ts";
 
 const env = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",

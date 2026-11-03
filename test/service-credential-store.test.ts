@@ -5,7 +5,7 @@ import { createKeychain, isValidCredentialSlug } from "../src/credentials/keycha
 import type { KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
-import { testKeychainRows } from "./support/typed-stores.ts";
+import { testKeychainRows } from "./support/credential-stores.ts";
 
 const ORG = scopeId("org", "default-org");
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");

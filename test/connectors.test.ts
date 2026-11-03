@@ -7,7 +7,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import type { KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
-import { testKeychainRows } from "./support/typed-stores.ts";
+import { testKeychainRows } from "./support/credential-stores.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
