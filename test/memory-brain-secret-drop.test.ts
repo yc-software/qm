@@ -25,7 +25,7 @@ const BRAIN = {
 
 async function setup(
   t: { after(fn: () => Promise<void>): void },
-  opts: { keychain?: boolean; fireDropResolution?: (drop: DropResolution) => Promise<void> } = {},
+  opts: { fireDropResolution?: (drop: DropResolution) => Promise<void> } = {},
 ) {
   const built = buildApp(testConfig({ signingSecret: SECRET }));
   const registry = built.memoryRegistry;
@@ -41,7 +41,7 @@ async function setup(
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
-    ...(opts.keychain === false ? {} : { keychain: built.keychain }),
+    keychain: built.keychain,
     secretDrops: built.secretDrops,
     deliveries: built.deliveries,
     workspace: built.workspace,
@@ -144,7 +144,7 @@ test("an org admin's brain link saves the client secret core-only, from a projec
   assert.doesNotMatch(rows, /brain-secret-/);
 });
 
-test("a brain link refuses non-admins, other drop fields, unknown and moved brains, and a demoted admin", async (t) => {
+test("a brain link refuses non-admins, other drop fields, unknown and moved brains, and a demoted admin, and stays usable after a refused save", async (t) => {
   const { built, change, mint, servedSecret } = await setup(t);
   const brainDrop = { memoryBrain: "acme-personal", purpose: "connect it" };
   assert.equal((await mint("U-member", brainDrop)).status, 403);
@@ -163,8 +163,12 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
   );
   const moved = await beforeMove.redeem("for-the-old-url");
   assert.equal(moved.status, 409);
+  assert.match(JSON.parse(moved.text).message, /changed after this link was made/);
   assert.doesNotMatch(moved.text, /for-the-old-url/);
   assert.equal(await servedSecret(), undefined);
+  await built.memoryRegistry.update((record) => putBrain(record, "acme-personal", { url: BRAIN.url }, change));
+  assert.equal((await beforeMove.redeem("after-the-move-back")).status, 200);
+  assert.equal(await servedSecret(), "after-the-move-back");
 
   const alice = { id: "admin-alice", type: "internal" as const };
   await built.admin.createGrant(alice, {
@@ -175,17 +179,15 @@ test("a brain link refuses non-admins, other drop fields, unknown and moved brai
   const carols = await mint("admin-carol", brainDrop);
   assert.equal(carols.status, 200);
   await built.admin.revokeGrant(alice, "admin-carol", scopeId("org", orgId()), "org_admin");
-  assert.equal((await carols.redeem("from-a-former-admin")).status, 403);
-  assert.equal(await servedSecret(), undefined);
-});
-
-test("a brain link works on a deployment without a keychain, where keychain drops stay unavailable", async (t) => {
-  const { mint, servedSecret } = await setup(t, { keychain: false });
-  const link = await mint("admin-alice", { memoryBrain: "acme-personal", purpose: "connect it" });
-  assert.equal(link.status, 200);
-  assert.equal((await link.redeem("no-keychain-secret")).status, 200);
-  assert.equal(await servedSecret(), "no-keychain-secret");
-  assert.equal((await mint("admin-alice", { service: "stripe", purpose: "p" })).status, 404);
+  const demoted = await carols.redeem("from-a-former-admin");
+  assert.equal(demoted.status, 403);
+  assert.match(JSON.parse(demoted.text).message, /no longer set this brain's secret/);
+  assert.equal(await servedSecret(), "after-the-move-back");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const rows = JSON.stringify(await built.auditLog.events());
+  assert.match(rows, /memory-registry\.brain\.secret\.refused/);
+  assert.match(rows, /acme-personal: brain acme-personal changed after this link was made/);
+  assert.doesNotMatch(rows, /for-the-old-url|from-a-former-admin/);
 });
 
 test("an unfilled brain link is never a pending sibling of a keychain drop in the same conversation", async (t) => {
