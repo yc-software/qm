@@ -143,7 +143,7 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
      --inactive                            deploy that candidate before this stack owns public DNS (AWS only)
      --build-concurrency <n>                concurrent AWS candidate image builds (default: 1)
      --restart <workloads>                  replace selected AWS tasks even when their definition is unchanged
-     --skip-drain-wait                      return once non-core AWS workloads serve healthy new tasks, before prior tasks stop
+     --skip-drain-wait                      return once rolling non-core AWS workloads serve healthy new tasks, before prior tasks stop
      --upgrade-minio                       upgrade MinIO to the source commit (Render only)
      --dry-run                             resolve the config + report the plan, change nothing
   plan                                     an alias for up --dry-run

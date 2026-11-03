@@ -254,6 +254,7 @@ function statefulAws(
     promotionAlreadyCurrent?: boolean;
     drainPolls?: number;
     taskHealth?: "HEALTHY" | "UNKNOWN";
+    priorTaskWanted?: boolean;
     inactiveDeploymentRunning?: number;
     primaryFailedTasks?: boolean;
     rolloutFailed?: boolean;
@@ -425,7 +426,7 @@ else if (a.includes("ecs describe-service-revisions")) {
 else if (a.includes("ecs list-tasks") && ${JSON.stringify(opts.taskHealth ?? null)}) {
   const name = after("--service-name");
   const prefix = "arn:aws:ecs:us-west-2:123456789012:task/rollout/" + name + "/";
-  const running = [...Array.from({ length: s.services[name].desiredCount }, (_, i) => prefix + "new-" + i), ...((s.serviceDrain?.[name] || 0) > 0 ? [prefix + "old-0"] : [])];
+  const running = [...Array.from({ length: s.services[name].desiredCount }, (_, i) => prefix + "new-" + i), ...((s.serviceDrain?.[name] || 0) > 0 && ${JSON.stringify(opts.priorTaskWanted ?? false)} ? [prefix + "old-0"] : [])];
   console.log(JSON.stringify({ taskArns: after("--desired-status") === "RUNNING" ? running : [] }));
 }
 else if (a.includes("ecs describe-tasks") && a.includes(":task/rollout/")) {
@@ -5151,6 +5152,13 @@ for (const mode of ["draining", "stale", "failed"] as const) {
 
 for (const scenario of [
   { name: "a healthy web UI returns before its prior tasks stop", workload: "web-ui", health: "HEALTHY", flag: true },
+  {
+    name: "a prior task ECS still wants running keeps the wait",
+    workload: "web-ui",
+    health: "HEALTHY",
+    flag: true,
+    priorTaskWanted: true,
+  },
   { name: "core still waits for its prior tasks to stop", workload: "core", health: "HEALTHY", flag: true },
   { name: "tasks without a health check still wait", workload: "web-ui", health: "UNKNOWN", flag: true },
   { name: "without the flag the web UI waits", workload: "web-ui", health: "HEALTHY", flag: false },
@@ -5160,7 +5168,12 @@ for (const scenario of [
     writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
     chmodSync(join(dir, "docker"), 0o755);
     const service = `acme-${scenario.workload}`;
-    const fake = statefulAws(dir, config, {}, { taskHealth: scenario.health });
+    const fake = statefulAws(
+      dir,
+      config,
+      {},
+      { taskHealth: scenario.health, priorTaskWanted: "priorTaskWanted" in scenario },
+    );
     const priorPath = process.env.PATH;
     process.env.PATH = `${dir}:${priorPath}`;
     const notes: string[] = [];
@@ -5184,7 +5197,11 @@ for (const scenario of [
       await awsUp(resized, dir, { yes: true, only: [scenario.workload], skipDrainWait: scenario.flag });
       console.log = priorLog;
       const after = JSON.parse(readFileSync(fake.state, "utf8"));
-      const early = scenario.workload !== "core" && scenario.health === "HEALTHY" && scenario.flag;
+      const early =
+        scenario.workload !== "core" &&
+        scenario.health === "HEALTHY" &&
+        scenario.flag &&
+        !("priorTaskWanted" in scenario);
       assert.equal(after.serviceDrain[service] > 0, early, "returns before prior tasks stop only when allowed");
       assert.equal(
         notes.some((line) => line.includes("not waiting for prior tasks to stop")),

@@ -1553,6 +1553,26 @@ interface RolloutTarget {
   healthyIsEnough?: boolean;
 }
 
+function servesBeforeDrain(
+  config: QmConfig,
+  workload: string,
+  want: RolloutTarget,
+  deploymentId: string | undefined,
+): boolean {
+  if (!want.healthyIsEnough || want.desiredCount < 1 || !deploymentId) return false;
+  let tasks: ReturnType<typeof runningServiceTasks>;
+  try {
+    tasks = runningServiceTasks(config, workload);
+  } catch (error) {
+    note(`could not read ${workload} task health (${errMessage(error)}); waiting for prior tasks to stop`);
+    return false;
+  }
+  return (
+    tasks.every((task) => task.startedBy === deploymentId) &&
+    tasks.filter((task) => task.lastStatus === "RUNNING" && task.healthStatus === "HEALTHY").length >= want.desiredCount
+  );
+}
+
 async function awaitServiceTargets(
   config: QmConfig,
   expected: Record<string, RolloutTarget>,
@@ -1566,20 +1586,12 @@ async function awaitServiceTargets(
   for (;;) {
     let states: ReadonlyMap<string, EcsServiceState>;
     let nativeStatuses: ReadonlyMap<string, string | undefined>;
-    let servingTasks: ReadonlyMap<string, ReturnType<typeof runningServiceTasks>>;
     try {
       states = describedServices(config, Object.keys(expected));
       nativeStatuses = new Map(
         Object.entries(expected).flatMap(([workload, want]) =>
           states.get(workload)?.deploymentConfiguration?.strategy === "BLUE_GREEN"
             ? [[workload, nativeBlueGreenStatus(config, workload, want.taskDefinition)] as const]
-            : [],
-        ),
-      );
-      servingTasks = new Map(
-        Object.entries(expected).flatMap(([workload, want]) =>
-          want.healthyIsEnough && want.desiredCount > 0
-            ? [[workload, runningServiceTasks(config, workload)] as const]
             : [],
         ),
       );
@@ -1663,17 +1675,7 @@ async function awaitServiceTargets(
         deployment.rolloutState !== "COMPLETED" ||
         (state.deployments ?? []).some((item) => item !== deployment && (item.runningCount ?? 0) > 0)
       ) {
-        const healthy = servingTasks
-          .get(workload)
-          ?.filter(
-            (task) =>
-              task.startedBy !== undefined &&
-              task.startedBy === deployment.id &&
-              task.taskDefinitionArn === want.taskDefinition &&
-              task.lastStatus === "RUNNING" &&
-              task.healthStatus === "HEALTHY",
-          );
-        if (healthy && healthy.length >= want.desiredCount) servingBeforeDrain.push(workload);
+        if (servesBeforeDrain(config, workload, want, deployment.id)) servingBeforeDrain.push(workload);
         else waiting.push(`${workload} (prior tasks are still stopping)`);
       }
     }
