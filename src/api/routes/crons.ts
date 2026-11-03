@@ -1,4 +1,5 @@
 import { isCronRuntime } from "../../cron/runtime.ts";
+import { CRON_SCRIPT_TOOL_ONLY } from "../../cron/script.ts";
 import type { Cron } from "../../triggers/types.ts";
 import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
@@ -170,6 +171,8 @@ const CRON_ERROR_STATUS: Record<string, number> = {
 
 async function createCron(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;
+  if (isObj(body) && body.script !== undefined)
+    return sendJson(res, 400, { error: "bad_request", message: CRON_SCRIPT_TOOL_ONLY });
   if (capability) {
     const b = body as CapabilityCronBody;
     if (
@@ -346,6 +349,8 @@ const CRON_PATCH_BAD_REQUEST =
 async function cronById(ctx: ApiCtx): Promise<void> {
   const { res, app, url, pathname, method, body, capability } = ctx;
   const id = decodeURIComponent(pathname.slice("/v1/crons/".length));
+  if (method === "PATCH" && isObj(body) && body.script !== undefined)
+    return sendJson(res, 400, { error: "bad_request", message: CRON_SCRIPT_TOOL_ONLY });
   if (capability) {
     if (method === "GET") {
       const r = await ctx.deps.control.getCron(id, capability);
