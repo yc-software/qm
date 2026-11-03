@@ -1279,6 +1279,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                       attachments: prepared?.attachments,
                       images: prepared?.images,
                       author: prepared?.author,
+                      authorName: prepared?.authorName,
                       acknowledge,
                     };
                     pendingSteers.push(steer);

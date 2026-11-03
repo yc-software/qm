@@ -33,7 +33,7 @@ export function senderLine(
 ): string {
   if (speaker.origin.kind === "automation" || speaker.fromSession) return "";
   if (turn.conversationKind === "dm" && samePerson(speaker.id, turn.ownerId)) return "";
-  return senderNote(speaker.name ?? nameOf(speaker.id) ?? speaker.id);
+  return senderNote([speaker.name, nameOf(speaker.id)].find((name) => name?.trim()) ?? speaker.id);
 }
 
 export function wordsToScreen(said: string, speaker: Speaker, ownerId: string): string | undefined {

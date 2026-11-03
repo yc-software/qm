@@ -3226,6 +3226,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     origin: { kind: "direct" },
                     fromSession: false,
                   };
+              const by = { author, ...(speaker.name?.trim() ? { authorName: speaker.name.trim() } : {}) };
               let said = [text.trim() ? speakerLine(speaker) : "", text].filter(Boolean).join("\n");
               const screened = [wordsToScreen(said, speaker, actor.id), ...(request?.inboundNotes ?? [])]
                 .filter(Boolean)
@@ -3242,7 +3243,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     text: screen
                       ? "A mid-turn message was withheld by the security screen."
                       : "A mid-turn message was withheld because the security screen could not check it.",
-                    author,
+                    ...by,
                     withheld: true,
                   };
                 if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;
@@ -3269,7 +3270,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
                 said = `${said}\n\n${allowed ? refreshedInbox : "Updated inbox context was withheld by the security screen."}`;
               }
-              if (!request?.attachments?.length && !request?.inboundNotes?.length) return { text: said, author };
+              if (!request?.attachments?.length && !request?.inboundNotes?.length) return { text: said, ...by };
               const intake = await takeIn(
                 {
                   text,
@@ -3287,7 +3288,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 attachments: intake.received.metas,
                 images: intake.received.images,
                 documents: steeredDocuments.documents,
-                author,
+                ...by,
               };
             },
             ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),

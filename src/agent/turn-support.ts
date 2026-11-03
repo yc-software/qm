@@ -45,6 +45,7 @@ export interface SteerIntake {
   attachments?: AgentTurnInput["attachments"];
   images?: AgentTurnInput["images"];
   author?: string;
+  authorName?: string;
   acknowledge?: () => Promise<void>;
 }
 
@@ -64,6 +65,7 @@ export async function recordSteerIntake(turn: AgentTurnInput, steer: SteerIntake
     text: steer.text,
     author: steer.author ?? null,
     body: {
+      ...(steer.authorName ? { name: steer.authorName } : {}),
       ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
       ...(steer.ts ? { ts: steer.ts } : {}),
       ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),

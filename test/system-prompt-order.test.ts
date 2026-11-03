@@ -1108,9 +1108,13 @@ test("read-only turns report steered files as unavailable without provisioning a
 
 test("the turn's intake names a steer's author the way it names a new message's sender, except the run owner", async () => {
   const agent = createMockAgent();
-  const prepared: string[] = [];
+  const prepared: Array<{ text: string; authorName?: string }> = [];
   agent.runTurn = async (turn) => {
-    for (const steerer of [{ externalId: "U2", displayName: "Paul" }, { externalId: actor.id }]) {
+    for (const steerer of [
+      { externalId: "U2", displayName: "Paul" },
+      { externalId: actor.id },
+      { externalId: "U3", displayName: "  " },
+    ]) {
       const steer = await turn.prepareSteer!("use my linear key", {
         surface: "slack",
         actor: steerer,
@@ -1118,14 +1122,18 @@ test("the turn's intake names a steer's author the way it names a new message's 
         text: "use my linear key",
         liveActor: true,
       });
-      prepared.push(steer.text);
+      prepared.push({ text: steer.text, ...(steer.authorName ? { authorName: steer.authorName } : {}) });
     }
     return { reply: "done" };
   };
   const { orchestrator } = buildOrchestrator({ agent });
   const result = await orchestrator.handleTurn(dm("steer-author", "hello"));
   assert.equal(result.status, "ok", result.reason);
-  assert.deepEqual(prepared, [`${senderNote("Paul")}\nuse my linear key`, "use my linear key"]);
+  assert.deepEqual(prepared.slice(0, 2), [
+    { text: `${senderNote("Paul")}\nuse my linear key`, authorName: "Paul" },
+    { text: "use my linear key" },
+  ]);
+  assert.notEqual(prepared[2]?.text, "use my linear key", "a blank display name still names the sender");
 });
 
 test("the turn's intake screens an unprompted mid-turn update with its author label before the model sees it", async () => {
