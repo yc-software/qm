@@ -694,6 +694,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return Number(rows[0]?.n ?? 0);
     },
 
+    async latestToolPurposes(turnIds) {
+      if (!turnIds.length) return new Map();
+      const rows = await q(
+        `SELECT DISTINCT ON (i.turn_id) i.turn_id::text AS turn_id, btrim(i.body->>'purpose') AS purpose FROM items i
+          WHERE i.tenant_id = ${TENANT} AND i.turn_id = ANY($1::uuid[]) AND i.kind = 'ToolCall'
+            AND btrim(i.body->>'purpose') <> ''
+          ORDER BY i.turn_id, i.seq DESC`,
+        [turnIds.map((id) => id.toLowerCase())],
+      );
+      return new Map(rows.map((r) => [r.turn_id as string, r.purpose as string]));
+    },
+
     async latestEntrySeq(sessionId): Promise<number> {
       const rows = await q(
         `SELECT COALESCE(MAX(seq), -1) AS n FROM items WHERE tenant_id = ${TENANT} AND session_id = $1`,

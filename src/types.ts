@@ -133,6 +133,8 @@ export interface Session {
   crons?: number;
   goal?: { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> };
   subagents?: { running: number; waiting: number };
+  workingSince?: number;
+  purpose?: string;
 }
 
 export type EntryType =
