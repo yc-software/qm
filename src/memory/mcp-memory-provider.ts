@@ -39,9 +39,11 @@ export function createMcpMemoryProvider(opts: {
     args: Record<string, unknown>,
     actorId: string | undefined,
     scopeId: string,
+    audienceScopeId: string | undefined,
   ) => {
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
-    if (opts.attestActor && !attestableAudience(actorId, scopeId)) throw new OutsideAudience("memory provider");
+    if (opts.attestActor && !(attestableAudience(actorId, scopeId) && attestableAudience(actorId, audienceScopeId)))
+      throw new OutsideAudience("memory provider");
     if (person) args[op.actorArg ?? "acting_user"] = person;
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
     const result = await withTimeout(() => op.client.callTool(op.tool, args, headers), op.timeoutMs, "memory provider");
@@ -55,7 +57,7 @@ export function createMcpMemoryProvider(opts: {
     if (op.scopeArg) args[op.scopeArg] = scopeId;
     const maxChars = context?.maxChars;
     if (maxChars && op.maxCharsArg) args[op.maxCharsArg] = maxChars;
-    const result = await call(op, args, context?.actorId, scopeId).catch((error: unknown) => {
+    const result = await call(op, args, context?.actorId, scopeId, context?.audienceScopeId).catch((error: unknown) => {
       throw error instanceof OutsideAudience ? new MemoryRecallWithheld(scopeId) : error;
     });
     const { code } = mcpEnvelope(result);
@@ -86,7 +88,7 @@ export function createMcpMemoryProvider(opts: {
       if (op.sourceArg) args[op.sourceArg] = context?.mode ?? "explicit";
       if (context?.idempotencyKey && op.idempotencyArg) args[op.idempotencyArg] = context.idempotencyKey;
       if (op.scopeArg) args[op.scopeArg] = scopeId;
-      const { code } = mcpEnvelope(await call(op, args, actor, scopeId));
+      const { code } = mcpEnvelope(await call(op, args, actor, scopeId, context?.audienceScopeId));
       if (code && DENIED_CODES.has(code))
         throw new McpCallError(`memory provider refused the write (${code})`, { code });
       return facts.length;

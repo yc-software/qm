@@ -33,6 +33,7 @@ export interface MemoryRecallContext extends MemoryOutcomeSink {
   query?: string;
   disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>;
   actorId?: string;
+  audienceScopeId?: ScopeId;
   sessionId?: string;
   maxChars?: number;
   autonomous?: boolean;
@@ -41,6 +42,7 @@ export interface MemoryRecallContext extends MemoryOutcomeSink {
 export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutcomeSink {
   mode: "explicit" | "automatic";
   actorId?: string;
+  audienceScopeId?: ScopeId;
   input?: string;
   reply?: string;
   autonomous?: boolean;

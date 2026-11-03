@@ -3,6 +3,7 @@ import { audit, authorizeAdmin, orgScope, requireScopedAdmin } from "../shared.t
 import { renderFacts } from "../../../memory/facts.ts";
 import { memoryFacts, parseEdits, parseFacts, parseIds } from "../surface.ts";
 import { type ApiCtx } from "../route.ts";
+import { personalScope } from "../../../types.ts";
 import { discoverScopes } from "./common.ts";
 
 export async function listMemoryScopes(ctx: ApiCtx): Promise<void> {
@@ -54,7 +55,10 @@ export async function adminMemory(ctx: ApiCtx): Promise<void> {
   if (method === "POST") {
     const facts = parseFacts(body);
     if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
-    await memory.capture(scope, facts, Date.now(), actor.id, { mode: "explicit" });
+    await memory.capture(scope, facts, Date.now(), actor.id, {
+      mode: "explicit",
+      audienceScopeId: personalScope(actor.id),
+    });
   } else if (method === "PATCH") {
     const edits = parseEdits(body);
     if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });

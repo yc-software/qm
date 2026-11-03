@@ -729,6 +729,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const resolution = await deps.resolution.resolve(conversation, actor, external);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
+      const automationDestination = input.origin.kind === "automation" ? input.origin.destination : undefined;
+      const audienceScopeId =
+        !automationDestination || automationDestination.audienceScopeId === scopeId ? scopeId : undefined;
       const audit = (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) =>
         deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
       const issueApproval = async (
@@ -1019,7 +1022,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
-      const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, scopeId) : undefined;
+      const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id, audienceScopeId) : undefined;
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       const rwLayer = resolution.layers.find((l) => l.mode === "rw");
@@ -1034,6 +1037,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         origin: authorizationOrigin,
         trustedLiveHuman: liveAuthorTurn,
         targetScope: scopeId,
+        ...(audienceScopeId ? { audienceScopeId } : {}),
         config: deps.config,
         sessions: deps.sessions,
         isCurrentSharedScopeMember,
@@ -1629,6 +1633,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(external ? { externalSlack: true as const } : {}),
         actorId: actor.id,
         scopeId,
+        ...(audienceScopeId ? { audienceScopeId } : {}),
         ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
         ...(conversation.publishMembers ? { members: conversation.publishMembers } : {}),
         ...(liveTurn ? { liveActor: true } : {}),
@@ -2705,7 +2710,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
           memoryScopeId,
           ...(memoryAccess ? { memoryAccess } : {}),
-          ...(!external && deps.mcp ? { mcp: deps.mcp, scopeId } : {}),
+          ...(!external && deps.mcp ? { mcp: deps.mcp } : {}),
+          ...(audienceScopeId ? { audienceScopeId } : {}),
           ...(input.surface === "slack" ? { actingSlackUserId: actor.id } : {}),
           ...(deps.deploymentLayer
             ? {
@@ -3728,6 +3734,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               await onTurnEnd({
                 scopeId: memoryScopeId,
                 conversationScopeId: scopeId,
+                ...(audienceScopeId ? { audienceScopeId } : {}),
                 inheritedFacts: captureDependencies(),
                 input: turnInput,
                 reply,

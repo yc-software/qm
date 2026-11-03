@@ -60,6 +60,7 @@ async function extractFacts(
 interface Burst extends MemoryCaptureMetadata {
   scopeId: ScopeId;
   actorId?: string;
+  audienceScopeId?: ScopeId;
   conversationScopeId: ScopeId;
   sessionId?: string;
   idempotencyKey?: string;
@@ -72,6 +73,7 @@ type TurnEndCtx = MemoryCaptureMetadata & {
   input: string;
   reply: string;
   actorId?: string;
+  audienceScopeId?: ScopeId;
   autonomous?: boolean;
   conversationScopeId?: ScopeId;
   sessionId?: string;
@@ -90,6 +92,7 @@ function createBurstBuffer(
     input,
     reply,
     actorId,
+    audienceScopeId,
     autonomous,
     conversationScopeId,
     sessionId,
@@ -103,6 +106,7 @@ function createBurstBuffer(
       turns: [{ input, reply }],
       ...(inheritedFacts !== undefined ? { inheritedFacts: structuredClone(inheritedFacts) } : {}),
       ...(actorId !== undefined ? { actorId } : {}),
+      ...(audienceScopeId !== undefined ? { audienceScopeId } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
     };
@@ -139,6 +143,7 @@ function burstCaptureContext(burst: Burst): MemoryCaptureContext {
     mode: "automatic",
     ...(burst.inheritedFacts !== undefined ? { inheritedFacts: burst.inheritedFacts } : {}),
     ...(burst.actorId ? { actorId: burst.actorId } : {}),
+    ...(burst.audienceScopeId ? { audienceScopeId: burst.audienceScopeId } : {}),
     conversationScopeId: burst.conversationScopeId,
     input: burst.turns.map((turn) => turn.input).join("\n\n"),
     reply: burst.turns.map((turn) => turn.reply).join("\n\n"),

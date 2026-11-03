@@ -209,7 +209,7 @@ export async function brokerCredentialCall(opts: {
   if (rec.injection?.actor && !actor) {
     return deny(403, "invalid_actor", `actor identity cannot be attested. ${UNATTESTABLE_ACTOR_FIX}`, rec.host);
   }
-  if (rec.injection?.actor && !attestableAudience(actor, claims.scopeId)) {
+  if (rec.injection?.actor && !attestableAudience(actor, claims.audienceScopeId)) {
     const refusal = new OutsideAudience("this credential");
     return deny(403, refusal.code, refusal.message, rec.host);
   }

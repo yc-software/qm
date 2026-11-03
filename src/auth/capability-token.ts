@@ -46,6 +46,7 @@ export interface CapabilityClaims {
   browserAccount?: "company" | "personal" | "openai" | "anthropic";
   aud?: string;
   scopeId: ScopeId;
+  audienceScopeId?: ScopeId;
   scopeVersion?: string;
   timezone?: string;
   destination?: Destination;

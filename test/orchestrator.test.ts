@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp as buildAppRaw } from "./support/build-app.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type Destination, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { loadConfig, type Config } from "../src/config.ts";
@@ -28,6 +28,10 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import type { Agent } from "../src/agent/agent.ts";
+import { brokerCredentialCall } from "../src/api/credential-broker.ts";
+import { principalDestination } from "../src/reach/reach.ts";
+import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
+import { startMcpTestServer } from "./support/mcp-test-server.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
@@ -529,6 +533,150 @@ test("an attested connector is offered and called only in the speaker's own DM, 
     "group:G1": ["wiki"],
   });
   assert.deepEqual(called, { "personal:U1": "sent", "channel:C1": "refused", "group:G1": "refused" });
+});
+
+test("a scheduled turn attests its owner only when the answer goes back to the owner alone", async (t) => {
+  const knowledge = await startMcpTestServer(t, {
+    tools: ["search_knowledge", "write_knowledge"].map((name) => ({ name, inputSchema: { type: "object" as const } })),
+    clients: { ro: "x", rw: "y" },
+  });
+  const memoryProviderConfig = parseMemoryProviderConfig(
+    JSON.stringify({
+      providers: [
+        {
+          id: "knowledge",
+          type: "mcp",
+          url: knowledge.url,
+          attestActor: true,
+          read: { tool: "search_knowledge", clientIdEnv: "RO_ID", clientSecretEnv: "RO_SECRET" },
+          write: { tool: "write_knowledge", clientIdEnv: "RW_ID", clientSecretEnv: "RW_SECRET" },
+        },
+      ],
+      routes: [
+        { provider: "default", scopes: ["personal"], capture: "automatic" },
+        { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false },
+      ],
+    }),
+    { RO_ID: "ro", RO_SECRET: "x", RW_ID: "rw", RW_SECRET: "y" },
+  );
+  let turn: { offered: string[]; called: string } | undefined;
+  const mock = createMockAgent();
+  const agent: Agent = {
+    ...mock,
+    runTurn: async (input) => {
+      turn = {
+        offered: (input.mcpTools ?? []).map((tool) => tool.name),
+        called: await input.tools.callMcpTool("records", { operation: "search" }).then(
+          () => "answered",
+          (e: Error) => (/answers only to them/.test(e.message) ? "refused" : "sent"),
+        ),
+      };
+      await input.tools.memoryAdd(["the launch moved to Friday"]);
+      await input.tools.execute("echo broker", { credentials: ["attested-api"] });
+      return mock.runTurn(input);
+    },
+  };
+  const config = testConfig({
+    dataDir: mkdtempSync(join(tmpdir(), "ap-")),
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
+    memoryProviderConfig,
+  });
+  config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
+  const { app, sandbox, serviceCreds, acl, deliveries, identity, mcpServers, mcpToolService } = buildApp(config, {
+    agent,
+  });
+  for (const [id, attestActor] of [
+    ["records", true],
+    ["wiki", false],
+  ] as const) {
+    await mcpServers.put({
+      id,
+      name: id,
+      url: `https://127.0.0.1:9/${id}/mcp`,
+      auth: "bearer",
+      bearerToken: "t",
+      credentialScope: "shared",
+      catalog: true,
+      ...(attestActor ? { attestActor } : {}),
+      readOnly: true,
+      enabled: true,
+      updatedAt: Date.now(),
+      updatedBy: "admin",
+    });
+  }
+  await mcpToolService.refresh();
+  const org = scopeId("org", "default-org");
+  await serviceCreds.setServiceCredential(org, {
+    slug: "attested-api",
+    name: "Attested API",
+    secret: "synthetic",
+    host: "api.example.com",
+    injection: { actor: true },
+  });
+  await grantCred(acl, org, "attested-api");
+  let credentialToken: string | undefined;
+  const run = sandbox.run.bind(sandbox);
+  sandbox.run = (handle, command, opts) => {
+    if (command === "echo broker") credentialToken = handle.env?.AGENT_CREDENTIAL_TOKEN;
+    return run(handle, command, opts);
+  };
+  const idempotency = createIdempotencyStore(testMap());
+  const fire = async (cron: string, destination: Destination, ownerScopeId = scopeId("personal", "U1")) => {
+    turn = undefined;
+    credentialToken = undefined;
+    const before = knowledge.requests.length;
+    const out = await runTrigger(
+      { deliveries, idempotency, identity, run: (req) => app.turn(req) },
+      {
+        owner: "U1",
+        ownerScopeId,
+        input: "how is the launch going?",
+        fireKey: `cron:${cron}:1`,
+        surface: "cron",
+        destination,
+      },
+    );
+    assert.equal(out.status, "ok", out.note);
+    const broker = await brokerCredentialCall({
+      claims: (await verifyCapabilityToken(credentialToken!, TEST_CAPABILITY_SECRET))!,
+      body: { credential: "attested-api", url: "https://api.example.com/v1/me" },
+      orgScopeId: org,
+      reader: serviceCreds,
+      fetchImpl: async () => ({ status: 200, text: async () => "{}" }),
+    });
+    return {
+      ...turn!,
+      broker: (broker.json as { error?: string }).error ?? broker.status,
+      memory: [
+        ...new Set(
+          knowledge.requests
+            .slice(before)
+            .filter((request) => request.rpc === "tools/call")
+            .map((request) => request.actor),
+        ),
+      ],
+    };
+  };
+  const refused = { offered: ["wiki"], called: "refused", broker: "private_only", memory: [] };
+  assert.deepEqual(
+    {
+      dmToTeammate: await fire("dm-to-teammate", principalDestination("U2", "U1")),
+      personalToChannel: await fire("personal-to-channel", {
+        type: "slack",
+        target: "C1",
+        audienceScopeId: scopeId("channel", "C1"),
+      }),
+      channelToOwner: await fire("channel-to-owner", principalDestination("U1", "U1"), scopeId("channel", "C1")),
+      dmToOwner: await fire("dm-to-owner", principalDestination("U1", "U1")),
+    },
+    {
+      dmToTeammate: refused,
+      personalToChannel: refused,
+      channelToOwner: refused,
+      dmToOwner: { offered: ["records", "wiki"], called: "sent", broker: 200, memory: ["U1"] },
+    },
+  );
 });
 
 test("execute runs in the sandbox via the primitive", async () => {
