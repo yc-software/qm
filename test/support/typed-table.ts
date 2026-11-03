@@ -37,7 +37,6 @@ export async function withTypedTableDb<S extends Closable>(
     await migrateRegisteredPgSchemas(url);
     await owner.close?.();
     await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [otherTenant]);
-    await admin.query(`GRANT CREATE ON SCHEMA public TO PUBLIC`);
     login = await createAppLogin(url);
     store = make(login.url);
     await fn({ store, admin, url: login.url, tenant, otherTenant });
