@@ -13,6 +13,7 @@ import { scopeId, type ConversationKind, type Principal } from "../src/types.ts"
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testConfigStore, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const ORG = "default-org";
 const orgScope = scopeId("org", ORG);
@@ -106,137 +107,144 @@ const channel = (
     ...extra,
   });
 
-test("D1: a channel publish is owned by personal:<initiator>, channel recorded as origin", async () => {
-  const { deploy, deployStore, acl } = svc();
-  const config = testConfigStore(ORG);
-  const r = await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
-    entrypoint: "node server.js",
-    name: "site",
-  });
-  const d = (await deployStore.getByName("site"))!;
-  assert.equal(d.ownerScopeId, scopeId("personal", "U1"), "owned by the initiator, not the channel");
-  assert.equal(d.createdInScope, scopeId("channel", "C1"), "channel recorded as origin metadata");
-  assert.deepEqual(r.audience, { kind: "members", channelRef: "C1" });
-});
+test("D1: a channel publish is owned by personal:<initiator>, channel recorded as origin", () =>
+  inTestTenant(async () => {
+    const { deploy, deployStore, acl } = svc();
+    const config = testConfigStore(ORG);
+    const r = await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
+      entrypoint: "node server.js",
+      name: "site",
+    });
+    const d = (await deployStore.getByName("site"))!;
+    assert.equal(d.ownerScopeId, scopeId("personal", "U1"), "owned by the initiator, not the channel");
+    assert.equal(d.createdInScope, scopeId("channel", "C1"), "channel recorded as origin metadata");
+    assert.deepEqual(r.audience, { kind: "members", channelRef: "C1" });
+  }));
 
-test("D1: owner always reaches their own app; canManage recognizes the owner acting from the channel", async () => {
-  const { deploy, deployStore, acl } = svc();
-  const config = testConfigStore(ORG);
-  await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
-    entrypoint: "node server.js",
-    name: "site",
-  });
-  const d = (await deployStore.getByName("site"))!;
-  assert.equal((await deploy.reachDeployment("site", "U1")).status, "ok");
-  const again = await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
-    entrypoint: "node server.js",
-    name: "site",
-  });
-  assert.equal(again.version, 2, "owner redeploys from the channel");
-  assert.equal((await deployStore.get(d.id))!.currentVersion, 2);
-});
+test("D1: owner always reaches their own app; canManage recognizes the owner acting from the channel", () =>
+  inTestTenant(async () => {
+    const { deploy, deployStore, acl } = svc();
+    const config = testConfigStore(ORG);
+    await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
+      entrypoint: "node server.js",
+      name: "site",
+    });
+    const d = (await deployStore.getByName("site"))!;
+    assert.equal((await deploy.reachDeployment("site", "U1")).status, "ok");
+    const again = await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
+      entrypoint: "node server.js",
+      name: "site",
+    });
+    assert.equal(again.version, 2, "owner redeploys from the channel");
+    assert.equal((await deployStore.get(d.id))!.currentVersion, 2);
+  }));
 
-test("D1: a member acting in the creation channel may manage the app (recover/re-share)", async () => {
-  const { deploy, deployStore, acl } = svc();
-  const config = testConfigStore(ORG);
-  await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
-    entrypoint: "node server.js",
-    name: "site",
-  });
-  const again = await channel(deploy, acl, config, "U2", "C1", { isPrivate: false }).publish({
-    entrypoint: "node server.js",
-    name: "site",
-  });
-  assert.equal(again.version, 2, "channel co-member redeploys the app created in their channel");
-  const renamed = await channel(deploy, acl, config, "U2", "C1").publish({ renameFrom: "site", name: "site-v2" });
-  assert.equal(renamed.name, "site-v2");
-  assert.equal(
-    (await deployStore.getByName("site-v2"))!.ownerScopeId,
-    scopeId("personal", "U1"),
-    "ownership unchanged",
-  );
-});
-
-test("Defect-2: acting in a different channel than the one the app was created in does not confer manage", async () => {
-  const { deploy, acl } = svc();
-  const config = testConfigStore(ORG);
-  await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
-    entrypoint: "node server.js",
-    name: "site",
-  });
-  await assert.rejects(
-    () =>
-      channel(deploy, acl, config, "U2", "C2", { isPrivate: false }).publish({
-        entrypoint: "node server.js",
-        name: "site",
-      }),
-    /name taken/,
-  );
-  await assert.rejects(
-    () => channel(deploy, acl, config, "U2", "C2").publish({ renameFrom: "site", name: "hijacked" }),
-    /not authorized/,
-  );
-});
-
-test("first publish grants channel read access but keeps group DMs private", async () => {
-  const { deploy, acl } = svc();
-  const config = testConfigStore(ORG);
-  const cases = [
-    channel(deploy, acl, config, "U1", "C1", { isPrivate: false }),
-    channel(deploy, acl, config, "U1", "C2", { isPrivate: true, members: [internal("U1"), internal("U2")] }),
-    ctxFor(deploy, acl, config, {
-      actor: "U1",
-      contextScope: scopeId("group", "G1"),
-      kind: "group",
-      members: [internal("U1"), internal("U2")],
-    }),
-  ];
-  for (const [i, ctx] of cases.entries()) {
-    const r = await ctx.publish({ entrypoint: "node server.js", name: `app-${i}` });
-    assert.equal(r.audience?.kind, i < 2 ? "members" : "owner");
-    assert.deepEqual(
-      await deploy.deploymentGrantees(`app-${i}`),
-      i < 2 ? [{ scope: scopeId("channel", `C${i + 1}`), permission: "read" }] : [],
+test("D1: a member acting in the creation channel may manage the app (recover/re-share)", () =>
+  inTestTenant(async () => {
+    const { deploy, deployStore, acl } = svc();
+    const config = testConfigStore(ORG);
+    await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
+      entrypoint: "node server.js",
+      name: "site",
+    });
+    const again = await channel(deploy, acl, config, "U2", "C1", { isPrivate: false }).publish({
+      entrypoint: "node server.js",
+      name: "site",
+    });
+    assert.equal(again.version, 2, "channel co-member redeploys the app created in their channel");
+    const renamed = await channel(deploy, acl, config, "U2", "C1").publish({ renameFrom: "site", name: "site-v2" });
+    assert.equal(renamed.name, "site-v2");
+    assert.equal(
+      (await deployStore.getByName("site-v2"))!.ownerScopeId,
+      scopeId("personal", "U1"),
+      "ownership unchanged",
     );
-    assert.equal((await deploy.getDeployment(`app-${i}`))?.public, undefined);
-    assert.notEqual((await deploy.reachDeployment(`app-${i}`, "U2")).status, "ok");
-  }
-});
+  }));
 
-test("publish refuses visibility inputs and points to the share action", async () => {
-  const { deploy, acl } = svc();
-  const config = testConfigStore(ORG);
-  const ctx = channel(deploy, acl, config, "U1", "C1", { isPrivate: false });
-  for (const extra of [
-    { public: true },
-    { public: false },
-    { share: [] },
-    { share: [{ scope: orgScope, permission: "read" as const }] },
-  ]) {
+test("Defect-2: acting in a different channel than the one the app was created in does not confer manage", () =>
+  inTestTenant(async () => {
+    const { deploy, acl } = svc();
+    const config = testConfigStore(ORG);
+    await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
+      entrypoint: "node server.js",
+      name: "site",
+    });
     await assert.rejects(
-      () => ctx.publish({ entrypoint: "node server.js", name: "site", ...extra }),
-      /apps action share/,
+      () =>
+        channel(deploy, acl, config, "U2", "C2", { isPrivate: false }).publish({
+          entrypoint: "node server.js",
+          name: "site",
+        }),
+      /name taken/,
     );
-  }
-  assert.equal(await deploy.getDeployment("site"), null);
-});
+    await assert.rejects(
+      () => channel(deploy, acl, config, "U2", "C2").publish({ renameFrom: "site", name: "hijacked" }),
+      /not authorized/,
+    );
+  }));
 
-test("sharing after publish grants access separately", async () => {
-  const { deploy, acl } = svc();
-  const config = testConfigStore(ORG);
-  await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
-    entrypoint: "node server.js",
-    name: "site",
-  });
-  await deploy.shareDeployment("site", scopeId("personal", "U2"), "read", { createdBy: "U1" });
-  assert.equal((await deploy.reachDeployment("site", "U2")).status, "ok");
-  const again = await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
-    entrypoint: "node server.js",
-    name: "site",
-  });
-  assert.equal(again.version, 2);
-  assert.deepEqual(await deploy.deploymentGrantees("site"), [
-    { scope: scopeId("channel", "C1"), permission: "read" },
-    { scope: scopeId("personal", "U2"), permission: "read" },
-  ]);
-});
+test("first publish grants channel read access but keeps group DMs private", () =>
+  inTestTenant(async () => {
+    const { deploy, acl } = svc();
+    const config = testConfigStore(ORG);
+    const cases = [
+      channel(deploy, acl, config, "U1", "C1", { isPrivate: false }),
+      channel(deploy, acl, config, "U1", "C2", { isPrivate: true, members: [internal("U1"), internal("U2")] }),
+      ctxFor(deploy, acl, config, {
+        actor: "U1",
+        contextScope: scopeId("group", "G1"),
+        kind: "group",
+        members: [internal("U1"), internal("U2")],
+      }),
+    ];
+    for (const [i, ctx] of cases.entries()) {
+      const r = await ctx.publish({ entrypoint: "node server.js", name: `app-${i}` });
+      assert.equal(r.audience?.kind, i < 2 ? "members" : "owner");
+      assert.deepEqual(
+        await deploy.deploymentGrantees(`app-${i}`),
+        i < 2 ? [{ scope: scopeId("channel", `C${i + 1}`), permission: "read" }] : [],
+      );
+      assert.equal((await deploy.getDeployment(`app-${i}`))?.public, undefined);
+      assert.notEqual((await deploy.reachDeployment(`app-${i}`, "U2")).status, "ok");
+    }
+  }));
+
+test("publish refuses visibility inputs and points to the share action", () =>
+  inTestTenant(async () => {
+    const { deploy, acl } = svc();
+    const config = testConfigStore(ORG);
+    const ctx = channel(deploy, acl, config, "U1", "C1", { isPrivate: false });
+    for (const extra of [
+      { public: true },
+      { public: false },
+      { share: [] },
+      { share: [{ scope: orgScope, permission: "read" as const }] },
+    ]) {
+      await assert.rejects(
+        () => ctx.publish({ entrypoint: "node server.js", name: "site", ...extra }),
+        /apps action share/,
+      );
+    }
+    assert.equal(await deploy.getDeployment("site"), null);
+  }));
+
+test("sharing after publish grants access separately", () =>
+  inTestTenant(async () => {
+    const { deploy, acl } = svc();
+    const config = testConfigStore(ORG);
+    await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
+      entrypoint: "node server.js",
+      name: "site",
+    });
+    await deploy.shareDeployment("site", scopeId("personal", "U2"), "read", { createdBy: "U1" });
+    assert.equal((await deploy.reachDeployment("site", "U2")).status, "ok");
+    const again = await channel(deploy, acl, config, "U1", "C1", { isPrivate: false }).publish({
+      entrypoint: "node server.js",
+      name: "site",
+    });
+    assert.equal(again.version, 2);
+    assert.deepEqual(await deploy.deploymentGrantees("site"), [
+      { scope: scopeId("channel", "C1"), permission: "read" },
+      { scope: scopeId("personal", "U2"), permission: "read" },
+    ]);
+  }));

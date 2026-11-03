@@ -7,7 +7,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { grantAppLogin } from "../src/tenants/logins.ts";
 import { applyPgMigrations, definePgMigration, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 import { createAppLogin, type AppLogin } from "./support/app-login.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenant table tests";
@@ -51,7 +51,9 @@ before(async () => {
   login = await createAppLogin(url);
   app = new pg.Pool({ connectionString: login.url });
   const store = createPostgresSessionStore(url);
-  const session = await store.getOrCreateByThread(`tables-${randomUUID()}`, "dm", scopeId("personal", "t"));
+  const session = await inTestTenant(() =>
+    store.getOrCreateByThread(`tables-${randomUUID()}`, "dm", scopeId("personal", "t")),
+  );
   await inTenant(app, a, async (c) => {
     await c.query(
       "INSERT INTO runs(id, session_id, status, request, idempotency_key, created_at) VALUES ('r1', $1, 'pending', '{}', 'k', 1)",
