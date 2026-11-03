@@ -440,7 +440,7 @@ interface SessionFactsFill extends Pick<SessionFacts, "slackBinding"> {
   spawnMeta?: SpawnMeta;
 }
 
-export type SessionFactsCursor = { createdAt: number; id: string } | "done";
+export type SessionFactsCursor = { id: string } | "done";
 
 export interface SessionStore {
   getOrCreateByThread(

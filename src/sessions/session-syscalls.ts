@@ -41,55 +41,58 @@ export function requiresDelegation(
 
 export async function delegatedAuthorizationOrigin(
   request: OrchestratorInput,
-  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "getByThread" | "getForParticipant"> },
+  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread" | "getForParticipant"> },
 ): Promise<OrchestratorInput["origin"] | undefined> {
+  if (
+    request.origin.kind === "automation" ||
+    request.readOnly ||
+    request.privateSessionMessage ||
+    request.swarm ||
+    !request.delegatingRunId ||
+    !request.sessionSenderId
+  )
+    return;
+  const source = await deps.runs.get(request.delegatingRunId);
+  const sender = await deps.sessions.getForParticipant(request.sessionSenderId, request.actor.id);
+  const child = await deps.sessions.getByThread(request.conversation.threadRef);
+  if (!source || !sender || !child) return;
+  const delegated =
+    isSubagentThreadRef(child.threadRef) &&
+    child.parentSessionId === sender.id &&
+    source.sessionId === sender.threadRef;
+  const continued =
+    isSubagentThreadRef(sender.threadRef) &&
+    sender.parentSessionId === child.id &&
+    source.sessionId === child.threadRef;
+  const started =
+    request.surface === "web" &&
+    !child.parentSessionId &&
+    !isSubagentThreadRef(child.threadRef) &&
+    source.sessionId === sender.threadRef;
+  if (!delegated && !continued && !started) return;
+  const parent = source.request;
+  if (!authorityReaches(parent, request, request, sender, child)) return;
+  if (!isSessionTurn(parent)) return humanAuthored(parent) ? parent.origin : undefined;
+  if (!delegated && !continued) return;
+  const holder = delegated ? child : sender;
+  const stamped = holder.spawnMeta;
+  if (!stamped?.authority || stamped.authority.kind !== request.origin.kind) return;
+  if (!(await stampedTreeIntact(deps.sessions, holder))) return;
+  const stamp = { actor: stamped.actor, conversation: stamped.conversation, origin: stamped.authority };
+  return authorityReaches(stamp, request, request, sender, child) && humanAuthored(stamp) ? stamp.origin : undefined;
+}
+
+async function stampedTreeIntact(sessions: Pick<SessionStore, "get">, holder: Session): Promise<boolean> {
   const seen = new Set<string>();
-  let current = request;
-  for (let depth = 0; depth < 32; depth++) {
-    if (
-      current.origin.kind === "automation" ||
-      current.readOnly ||
-      current.privateSessionMessage ||
-      current.swarm ||
-      !current.delegatingRunId ||
-      !current.sessionSenderId ||
-      seen.has(current.delegatingRunId)
-    )
-      return;
-    seen.add(current.delegatingRunId);
-    const source = await deps.runs.get(current.delegatingRunId);
-    const sender = await deps.sessions.getForParticipant(current.sessionSenderId, request.actor.id);
-    const child = await deps.sessions.getByThread(current.conversation.threadRef);
-    if (!source || !sender || !child) return;
-    const delegated =
-      isSubagentThreadRef(child.threadRef) &&
-      child.parentSessionId === sender.id &&
-      source.sessionId === sender.threadRef;
-    const continued =
-      isSubagentThreadRef(sender.threadRef) &&
-      sender.parentSessionId === child.id &&
-      source.sessionId === child.threadRef;
-    const started =
-      current.surface === "web" &&
-      !child.parentSessionId &&
-      !isSubagentThreadRef(child.threadRef) &&
-      source.sessionId === sender.threadRef;
-    if (!delegated && !continued && !started) return;
-    const parent = source.request;
-    if (!authorityReaches(parent, request, current, sender, child)) return;
-    if (!isSessionTurn(parent)) return humanAuthored(parent) ? parent.origin : undefined;
-    let subagent: Session | undefined;
-    if (delegated) subagent = child;
-    else if (continued) subagent = sender;
-    const stamped = subagent?.spawnMeta;
-    if (stamped?.authority) {
-      const stamp = { actor: stamped.actor, conversation: stamped.conversation, origin: stamped.authority };
-      return authorityReaches(stamp, request, current, sender, child) && humanAuthored(stamp)
-        ? stamp.origin
-        : undefined;
-    }
+  let current = holder;
+  while (isSubagentThreadRef(current.threadRef)) {
+    if (seen.has(current.id) || !current.spawnMeta?.authority || !current.parentSessionId) return false;
+    seen.add(current.id);
+    const parent = await sessions.get(current.parentSessionId);
+    if (!parent || parent.scopeId !== holder.scopeId) return false;
     current = parent;
   }
+  return true;
 }
 
 function authorityReaches(
@@ -126,6 +129,28 @@ function humanAuthored(parent: Pick<OrchestratorInput, "conversation" | "origin"
   );
 }
 
+export function ownsSessionContext(
+  threadRef: string,
+  input: Pick<OrchestratorInput, "sessionSenderId" | "delegatingRunId" | "privateSessionMessage" | "swarm">,
+): boolean {
+  return (
+    !isSessionTurn(input) &&
+    !input.privateSessionMessage &&
+    !input.swarm &&
+    !isSubagentThreadRef(threadRef) &&
+    !threadRef.startsWith("swarm:")
+  );
+}
+
+function storedContext(session: Session): SpawnMeta | undefined {
+  return (
+    session.spawnMeta && {
+      ...session.spawnMeta,
+      ...(session.slackBinding ? { slackSource: session.slackBinding } : {}),
+    }
+  );
+}
+
 export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
   const origin: TurnOrigin =
     input.origin.kind === "automation"
@@ -136,7 +161,6 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
     ...(input.deliveryCandidates ? { deliveryCandidates: input.deliveryCandidates } : {}),
     ...(input.unattendedGrants ? { unattendedGrants: [...input.unattendedGrants] } : {}),
-    ...(input.slackSource ? { slackSource: input.slackSource } : {}),
     ...(input.externalSlack ? { externalSlack: input.externalSlack } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(input.sessionParticipantIds ? { sessionParticipantIds: input.sessionParticipantIds } : {}),
@@ -726,28 +750,20 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               );
               const title = existing ? visibleTitle(existing) : input.name?.trim() || autoTitle(task);
               const meta: SpawnMeta = {
+                ...sessionContextOf({
+                  ...binding.request,
+                  surface: binding.request.surface ?? binding.session.surface ?? "web",
+                  origin: caller.origin,
+                  unattendedGrants: caller.unattendedGrants,
+                  readOnly: input.readOnly || binding.request.readOnly,
+                  model: input.model,
+                  thinkingLevel: input.thinkingLevel,
+                  fastMode: input.fastMode,
+                  text: "",
+                }),
                 origin: caller.origin,
-                ...(binding.request.surfaceTools ? { surfaceTools: true } : {}),
-                ...(binding.request.deliveryCandidates
-                  ? { deliveryCandidates: binding.request.deliveryCandidates }
-                  : {}),
-                ...(caller.unattendedGrants ? { unattendedGrants: [...caller.unattendedGrants] } : {}),
                 openFingerprint: fingerprint,
                 ...(binding.request.slackSource ? { slackSource: binding.request.slackSource } : {}),
-                ...(binding.request.externalSlack ? { externalSlack: binding.request.externalSlack } : {}),
-                ...(binding.request.scopeVersion ? { scopeVersion: binding.request.scopeVersion } : {}),
-                ...(binding.request.sessionParticipantIds
-                  ? { sessionParticipantIds: binding.request.sessionParticipantIds }
-                  : {}),
-                surface: binding.request.surface ?? binding.session.surface ?? "web",
-                conversation: binding.request.conversation,
-                actor: binding.request.actor,
-                ...(binding.request.deliveryTarget ? { deliveryTarget: binding.request.deliveryTarget } : {}),
-                ...(binding.request.timezone ? { timezone: binding.request.timezone } : {}),
-                ...(input.readOnly || binding.request.readOnly ? { readOnly: true } : {}),
-                ...(input.model ? { model: input.model } : {}),
-                ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
-                ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
                 ...(binding.authority ? { authority: binding.authority } : {}),
               };
               if (!existing?.spawnMeta) {
@@ -805,7 +821,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 return { ok: false, message: "you are not a participant in that session." };
               if (deps.authorize && !(await deps.authorize(target, caller.actor.id)))
                 return { ok: false, message: "you no longer have access to the target session" };
-              const meta = target.spawnMeta;
+              const meta = storedContext(target);
               if (!meta) return { ok: false, message: "the target has no verified runtime context yet" };
               const privateChild = isSubagentThreadRef(target.threadRef);
               const privateMessage = binding.request.privateSessionMessage === true || !privateChild;
@@ -1104,9 +1120,17 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
   const initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
-  if (run.request.delegatingRunId && !initiatingRun) throw new Error("the delegation's originating run is unavailable");
-  const initiatingContext = initiatingRun?.request ?? child.spawnMeta;
-  const currentContext = parent.spawnMeta;
+  const initiatingContext =
+    initiatingRun?.request ??
+    (run.request.delegatingRunId
+      ? {
+          ...child.spawnMeta,
+          actor: run.request.actor,
+          origin: { kind: "automation" as const },
+          unattendedGrants: undefined,
+        }
+      : child.spawnMeta);
+  const currentContext = storedContext(parent);
   const originalParent = parent.threadRef === initiatingContext.conversation.threadRef;
   if (!originalParent && !currentContext) throw new Error("the current parent has no verified runtime context yet");
   const meta = originalParent

@@ -293,7 +293,7 @@ import { createUserModelCredentialStore, type UserModelCredentialStore } from ".
 import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
-import { backfillSessionFacts } from "./sessions/session-facts-backfill.ts";
+import { pruneRunsAfterFactsBackfill } from "./sessions/session-facts-backfill.ts";
 import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
@@ -2752,8 +2752,8 @@ export function buildApp(
   const llmCaptureSweeper = sessions.purgeLlmCaptures
     ? retentionSweeper("llm-capture:retention", LLM_CAPTURE_RETENTION_MS, sessions.purgeLlmCaptures)
     : null;
-  const runRetentionSweeper = retentionSweeper("runs:retention", RUN_RETENTION_MS, async (cutoff, opts) =>
-    (await backfillSessionFacts({ sessions, runs }, opts)) ? runs.pruneFinished(cutoff, opts) : 0,
+  const runRetentionSweeper = retentionSweeper("runs:retention", RUN_RETENTION_MS, (cutoff, opts) =>
+    pruneRunsAfterFactsBackfill({ sessions, runs }, cutoff, opts),
   );
   const monitorRetentionSweeper = createSweeper(
     () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),

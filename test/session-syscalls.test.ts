@@ -1234,7 +1234,10 @@ test("no wake once the parent already consumed the completion", async () => {
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 });
 
-async function delegatedHumanRig(context: Partial<OrchestratorInput> = {}, authority?: OrchestratorInput["origin"]) {
+async function delegatedHumanRig(
+  context: Partial<OrchestratorInput> = {},
+  authority: OrchestratorInput["origin"] | undefined = { kind: "human" },
+) {
   const r = await rig();
   const parent = await r.runs.enqueue({
     sessionId: r.room.threadRef,
@@ -1299,6 +1302,66 @@ test("unrelated automated follow-ups cannot borrow earlier human authority", asy
   const next = (await r.runs.inFlightForThread(r.child.threadRef))[0]!;
   assert.equal(next.request.delegatingRunId, parent.run.id);
   assert.equal(await delegatedAuthorizationOrigin(next.request, r), undefined);
+});
+
+test("a return whose delegating run was pruned still reaches the parent, without inherited authority", async () => {
+  const r = await delegatedHumanRig();
+  const parentTurn = await r.runs.claimById(r.parent.id, "parent", 60_000);
+  await r.runs.complete(r.parent.id, parentTurn!.leaseToken!, { status: "ok", reply: "delegated" });
+  await r.runs.pruneFinished(Date.now() + 1, { deadline: Date.now() + 60_000, stop: () => false });
+  assert.equal(await r.runs.get(r.parent.id), null);
+  const claimed = await r.runs.claimById(r.run.id, "w1", 60_000);
+  await r.runs.complete(r.run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const finished = (await r.runs.get(r.run.id))!;
+  await deliverSubagentMail({ ...r, maxAttempts: 3, delegationEnabled: async () => true }, finished);
+  const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
+  assert.equal(wake.sessionId, r.room.threadRef);
+  assert.equal(wake.request.origin.kind, "automation");
+  assert.equal(wake.request.actor.id, actor.id);
+  assert.equal(await delegatedAuthorizationOrigin(wake.request, r), undefined);
+});
+
+test("a stamped subagent does not lend its human authority to an exchange a non-human turn started", async () => {
+  const r = await delegatedHumanRig();
+  for (const run of [r.parent, r.run]) {
+    const claimed = await r.runs.claimById(run.id, "w1", 60_000);
+    await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  }
+  const direct = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    request: { actor, conversation, surface: "web", origin: { kind: "direct" }, text: "api task" },
+  });
+  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: r.room,
+    scopeId: scope,
+    request: { ...direct.run.request, runId: direct.run.id },
+  });
+  assert.ok((await api.write({ target: r.child.id, text: "api follow-up", wake: true })).ok);
+  const next = (await r.runs.inFlightForThread(r.child.threadRef))[0]!;
+  assert.equal(next.request.origin.kind, "direct");
+  assert.equal(await delegatedAuthorizationOrigin(next.request, r), undefined);
+  const parentTurn = await r.runs.claimById(direct.run.id, "parent", 60_000);
+  await r.runs.complete(direct.run.id, parentTurn!.leaseToken!, { status: "silent" });
+  const returned = async (run: Run): Promise<Run> => {
+    const claimed = await r.runs.claimById(run.id, "w1", 60_000);
+    await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "answer" });
+    await deliverSubagentMail(
+      { ...r, maxAttempts: 3, delegationEnabled: async () => true },
+      (await r.runs.get(run.id))!,
+    );
+    return (await r.runs.getByDedupKey(`subagent-return:${run.id}`))!;
+  };
+  const firstReturn = await returned(next);
+  assert.equal(firstReturn.request.origin.kind, "direct");
+  await createSessionSyscalls({ ...r, maxAttempts: 3 })
+    .forTurn({ session: r.room, scopeId: scope, request: { ...firstReturn.request, runId: firstReturn.id } })
+    .write({ target: r.child.id, text: "one more", wake: true });
+  const again = (await r.runs.inFlightForThread(r.child.threadRef))[0]!;
+  const parentAgain = await r.runs.claimById(firstReturn.id, "parent", 60_000);
+  await r.runs.complete(firstReturn.id, parentAgain!.leaseToken!, { status: "silent" });
+  const secondReturn = await returned(again);
+  assert.equal(secondReturn.request.delegatingRunId, firstReturn.id);
+  assert.equal(await delegatedAuthorizationOrigin(secondReturn.request, r), undefined);
 });
 
 test("a later participant cannot change a completion's actor, rollout, destination, or grants", async () => {
@@ -2049,6 +2112,7 @@ test("detaching an ancestor revokes a descendant's delegated live authority", as
   const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
     session: r.child,
     scopeId: scope,
+    authority: { kind: "human" },
     request: { ...r.run.request, runId: r.run.id },
   });
   const opened = await api.open({ task: "inspect nested" });

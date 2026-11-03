@@ -646,10 +646,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async sessionsAfter(cursor, limit): Promise<Session[]> {
-      const rows = await q(
-        `SELECT * FROM sessions WHERE (created_at, id) > ($1, $2) ORDER BY created_at, id LIMIT $3`,
-        [cursor?.createdAt ?? -1, cursor?.id ?? "", limit],
-      );
+      const rows = await q("SELECT * FROM sessions WHERE id > $1 ORDER BY id LIMIT $2", [cursor?.id ?? "", limit]);
       return rows.map(rowToSession);
     },
 
@@ -657,7 +654,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       await q(
         `UPDATE sessions SET slack_binding = COALESCE(slack_binding, $2::jsonb), runtime = COALESCE(runtime, $3::jsonb),
            spawn_meta = COALESCE(spawn_meta, $4)
-         WHERE id = $1`,
+         WHERE id = $1 AND (($2::jsonb IS NOT NULL AND slack_binding IS NULL) OR ($3::jsonb IS NOT NULL AND runtime IS NULL)
+           OR ($4::text IS NOT NULL AND spawn_meta IS NULL))`,
         [
           sessionId,
           facts.slackBinding ? JSON.stringify(facts.slackBinding) : null,

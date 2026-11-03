@@ -380,7 +380,7 @@ END $base_schema$`,
         `SELECT current.* FROM unnest($1::text[]) AS threads(id)
          CROSS JOIN LATERAL (
            SELECT * FROM runs WHERE session_id = threads.id AND status IN ('pending', 'running')
-           ORDER BY status = 'running' DESC, created_at DESC, seq DESC LIMIT 1
+           ORDER BY status = 'running' DESC, created_at ASC, seq ASC LIMIT 1
          ) current`,
         [[...new Set(threadRefs)]],
       );

@@ -1,10 +1,16 @@
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { SessionStore } from "./session-store.ts";
-import { delegatedAuthorizationOrigin, isSubagentThreadRef, sessionContextOf } from "./session-syscalls.ts";
+import {
+  delegatedAuthorizationOrigin,
+  isSubagentThreadRef,
+  ownsSessionContext,
+  sessionContextOf,
+} from "./session-syscalls.ts";
 import type { Session } from "../types.ts";
 
 const BACKFILL_PAGE = 200;
+const BACKFILL_CONCURRENCY = 8;
 
 export type SessionFactsBackfillDeps = {
   sessions: Pick<
@@ -14,11 +20,20 @@ export type SessionFactsBackfillDeps = {
     | "sessionsAfter"
     | "fillFacts"
     | "setSpawnMeta"
+    | "get"
     | "getByThread"
     | "getForParticipant"
   >;
   runs: Pick<RunStore, "latestForThreads" | "getByDedupKey" | "get">;
 };
+
+export async function pruneRunsAfterFactsBackfill(
+  deps: SessionFactsBackfillDeps & { runs: Pick<RunStore, "pruneFinished"> },
+  cutoff: number,
+  opts: { deadline: number; stop: () => boolean },
+): Promise<number> {
+  return (await backfillSessionFacts(deps, opts)) ? deps.runs.pruneFinished(cutoff, opts) : 0;
+}
 
 export async function backfillSessionFacts(
   deps: SessionFactsBackfillDeps,
@@ -38,10 +53,15 @@ export async function backfillSessionFacts(
       deps.runs.latestForThreads(refs),
       deps.runs.latestForThreads(refs, { excludePrivateMessages: true }),
     ]);
-    for (const session of page)
-      await fillSession(deps, session, latest.get(session.threadRef), latestPublic.get(session.threadRef));
-    const last = page[page.length - 1]!;
-    cursor = { createdAt: last.createdAt, id: last.id };
+    for (let i = 0; i < page.length; i += BACKFILL_CONCURRENCY)
+      await Promise.all(
+        page
+          .slice(i, i + BACKFILL_CONCURRENCY)
+          .map((session) =>
+            fillSession(deps, session, latest.get(session.threadRef), latestPublic.get(session.threadRef)),
+          ),
+      );
+    cursor = { id: page[page.length - 1]!.id };
     await deps.sessions.saveSessionFactsCursor(cursor);
   }
   return false;
@@ -62,7 +82,7 @@ async function fillSession(
     if (authority) await deps.sessions.setSpawnMeta(session.id, { ...session.spawnMeta, authority });
   }
   const context =
-    latestPublic && !subagent && !session.threadRef.startsWith("swarm:")
+    latestPublic && ownsSessionContext(session.threadRef, latestPublic.request)
       ? sessionContextOf({ ...latestPublic.request, origin: resolveTurnOrigin(latestPublic.request) })
       : undefined;
   const slackBinding = latest?.request.slackSource;

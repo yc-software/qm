@@ -18,7 +18,7 @@ import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import {
   requiresDelegation,
   delegatedAuthorizationOrigin,
-  isSubagentThreadRef,
+  ownsSessionContext,
   sessionContextOf,
 } from "../sessions/session-syscalls.ts";
 import {
@@ -1206,9 +1206,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
         {
           ...(input.slackSource ? { slackBinding: input.slackSource } : {}),
-          ...(sessionTurn || input.privateSessionMessage || input.swarm || isSubagentThreadRef(conversation.threadRef)
-            ? {}
-            : { context: sessionContextOf(input) }),
+          ...(ownsSessionContext(conversation.threadRef, input) ? { context: sessionContextOf(input) } : {}),
         },
       );
       screenSession.id = session.id;
