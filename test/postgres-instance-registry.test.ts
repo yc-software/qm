@@ -4,6 +4,7 @@ import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
 import { createPgPool, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 import { settle } from "./support/settle.ts";
+import { createAppLogin } from "./support/app-login.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the instance-registry tests";
@@ -88,13 +89,13 @@ test(
   },
 );
 
-test("an instance beats through the app login, which cannot create tables", { skip }, async () => {
+test("an instance beats through the app login, which cannot create tables", { skip }, async (t) => {
   const owner = createPostgresMapFactory(URL!).pool;
   createPostgresInstanceRegistry(owner, { instanceId: "i-owner", buildSha: "sha-owner", startedAt: 1 });
   await migrateRegisteredPgSchemas(URL!);
-  const app = new globalThis.URL(URL!);
-  app.searchParams.set("options", "-c role=qm_app");
-  const registry = createPostgresInstanceRegistry(createPgPool(app.toString()), {
+  const login = await createAppLogin(URL!);
+  t.after(() => login.drop());
+  const registry = createPostgresInstanceRegistry(createPgPool(login.url), {
     instanceId: "i-app",
     buildSha: "sha-app",
     startedAt: 2,

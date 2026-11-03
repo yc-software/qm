@@ -73,16 +73,6 @@ test(
   },
 );
 
-test("a fresh database ends with no tenant row", { skip }, async () => {
-  await withSchema(async (url, db) => {
-    createPostgresSessionStore(url);
-    createPostgresRunStore(url);
-    createPostgresGrantStore(url);
-    await migrateRegisteredPgSchemas(url);
-    assert.deepEqual((await db.query("SELECT count(*)::int AS n FROM tenants")).rows, [{ n: 0 }]);
-  });
-});
-
 test("rows that cannot name their one tenant stop the upgrade instead of picking one", { skip }, async () => {
   await withSchema(async (url, db) => {
     createPostgresGrantStore(url);

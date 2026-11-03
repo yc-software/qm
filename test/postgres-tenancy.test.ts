@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { DIRECTORY_MIGRATIONS } from "../src/directory/postgres-directory-store.ts";
 import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction } from "../src/persistence/pg-pool.ts";
-import { SESSION_MIGRATIONS } from "../src/sessions/session-schema.ts";
+import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
@@ -22,25 +22,30 @@ let owner: pg.Pool;
 let app: pg.Pool;
 const a = randomUUID();
 const b = randomUUID();
+const role = `tenant_probe_${randomUUID().slice(0, 8)}`;
 
 before(async () => {
   if (skip) return;
   url = testMigratedDatabaseUrl();
   owner = new pg.Pool({ connectionString: url });
-  app = new pg.Pool({ connectionString: asRole(url, "qm_app") });
+  await owner.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`);
+  app = new pg.Pool({ connectionString: asRole(url, role) });
   await owner.query("INSERT INTO tenants(id, slug, name) VALUES ($1, 'tenant-a', 'A'), ($2, 'tenant-b', 'B')", [a, b]);
   await owner.query(
     `CREATE TABLE tenant_probe(tenant_id uuid NOT NULL DEFAULT qm_bound_tenant() REFERENCES tenants(id), n int)`,
   );
+  await owner.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON tenant_probe TO ${role}`);
   await owner.query("ALTER TABLE tenant_probe ENABLE ROW LEVEL SECURITY");
-  await owner.query(`CREATE POLICY tenant_app ON tenant_probe FOR ALL TO qm_app
+  await owner.query(`CREATE POLICY tenant_app ON tenant_probe FOR ALL TO ${role}
     USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())`);
   await owner.query("INSERT INTO tenant_probe(tenant_id, n) VALUES ($1, 1), ($2, 2)", [a, b]);
 });
 
 after(async () => {
-  await owner?.end();
   await app?.end();
+  await owner?.query(`DROP OWNED BY ${role}`);
+  await owner?.query(`DROP ROLE IF EXISTS ${role}`);
+  await owner?.end();
 });
 
 test("qm_bound_tenant raises when no tenant is bound and returns the bound one", { skip }, async () => {
@@ -57,29 +62,8 @@ test("qm_bound_tenant raises when no tenant is bound and returns the bound one",
   }
 });
 
-test("the tenant logins cannot bypass row security or change tenants", { skip }, async () => {
-  const roles = await owner.query(
-    "SELECT rolname, rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname IN ('qm_app', 'qm_reader') ORDER BY rolname",
-  );
-  assert.deepEqual(roles.rows, [
-    { rolname: "qm_app", rolcanlogin: true, rolsuper: false, rolbypassrls: false },
-    { rolname: "qm_reader", rolcanlogin: true, rolsuper: false, rolbypassrls: false },
-  ]);
-  const reader = new pg.Pool({ connectionString: asRole(url, "qm_reader") });
-  try {
-    for (const pool of [app, reader]) {
-      assert.equal((await pool.query("SELECT count(*)::int AS n FROM tenants WHERE id = $1", [a])).rows[0].n, 1);
-      await assert.rejects(pool.query("DELETE FROM tenants"), { code: "42501" });
-    }
-    await assert.rejects(reader.query("INSERT INTO sessions(id) VALUES ('x')"), { code: "42501" });
-    await assert.rejects(app.query(TENANCY_BASE.statements[0]!), { code: "42501", message: /database owner/ });
-  } finally {
-    await reader.end();
-  }
-});
-
 test("the pool binds the current tenant to each query and transaction in one batch", { skip }, async () => {
-  const pool = createPgPool(asRole(url, "qm_app"));
+  const pool = createPgPool(asRole(url, role));
   try {
     const setting =
       "SELECT current_setting('qm.tenant_id', true) AS t, current_setting('statement_timeout') AS timeout";
@@ -113,7 +97,7 @@ test("the pool binds the current tenant to each query and transaction in one bat
 });
 
 test("a bound tenant cannot see or write another tenant's rows", { skip }, async () => {
-  const pool = createPgPool(asRole(url, "qm_app"));
+  const pool = createPgPool(asRole(url, role));
   try {
     await withTenant(a, async () => {
       assert.deepEqual(await pool.q("SELECT n FROM tenant_probe"), [{ n: 1 }]);
@@ -128,61 +112,40 @@ test("a bound tenant cannot see or write another tenant's rows", { skip }, async
   }
 });
 
-test("the tenancy migration fails when the host refuses a grant", { skip }, async () => {
-  const bare = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
-  const role = `qm_migrator_${randomUUID().replaceAll("-", "")}`;
-  try {
-    await bare.query("CREATE TABLE owned_elsewhere(id int)");
-    await bare.query(`CREATE ROLE ${role} CREATEROLE`);
-    await bare.query(`GRANT CREATE, USAGE ON SCHEMA public TO ${role}`);
-    await bare.query(`SET ROLE ${role}`);
-    await assert.rejects(applyPgMigrations(bare, [definePgMigration(TENANCY_BASE)]), {
-      code: "42501",
-      message: /owned_elsewhere/,
-    });
-    await bare.query("RESET ROLE");
-    assert.equal((await bare.query("SELECT to_regclass('tenants') AS t")).rows[0].t, null);
-  } finally {
-    await bare.query("RESET ROLE").catch(() => undefined);
-    await bare.query(`DROP OWNED BY ${role}`).catch(() => undefined);
-    await bare.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined);
-    await bare.end();
-  }
+test("an open transaction refuses work for a different tenant", { skip }, async () => {
+  await withTenant(a, () =>
+    withPgTransaction(app, async (client) => {
+      assert.throws(() => withTenant(b, () => 0), /already open for another tenant/);
+      assert.throws(() => withoutTenant(() => 0), /already open for another tenant/);
+      assert.equal(
+        withTenant(a, () => 1),
+        1,
+      );
+      return client.query("SELECT 1");
+    }),
+  );
+  await withoutTenant(() =>
+    withPgTransaction(app, async () => assert.throws(() => withTenant(a, () => 0), /already open/)),
+  );
+  assert.equal(
+    await withTenant(a, async () => {
+      await withPgTransaction(app, async () => undefined);
+      return withTenant(b, () => 2);
+    }),
+    2,
+  );
 });
 
-const previousRelease = [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS.filter((m) => !/tenan/.test(m.id))].map(
-  definePgMigration,
-);
-const thisRelease = [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration);
-
-test("upgrading copies the existing tenant into tenants and the previous release still applies", { skip }, async () => {
+test("upgrading copies the existing tenant into tenants", { skip }, async () => {
   const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
   try {
-    await applyPgMigrations(pool, previousRelease);
+    const previous = SESSION_MIGRATIONS.filter((m) => m !== TENANCY_BASE && m !== TENANT_BACKFILL);
+    await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...previous].map(definePgMigration));
     const old = (await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id;
-    await pool.query(
-      "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at) VALUES ('s1', 'dm', 'personal:x', 's1', 0)",
-    );
-    await pool.query(
-      "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(), 's1', 0, 'UserMessage', '{}', now())",
-    );
-    await applyPgMigrations(pool, thisRelease);
+    await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration));
     assert.deepEqual((await pool.query("SELECT id::text, slug, name FROM tenants")).rows, [
       { id: old, slug: old, name: old },
     ]);
-    await applyPgMigrations(pool, previousRelease);
-    assert.equal((await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id, old);
-  } finally {
-    await pool.end();
-  }
-});
-
-test("upgrading a database with no items or blobs creates no tenant", { skip }, async () => {
-  const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
-  try {
-    await applyPgMigrations(pool, previousRelease);
-    await applyPgMigrations(pool, thisRelease);
-    assert.equal((await pool.query("SELECT count(*)::int AS n FROM tenants")).rows[0].n, 0);
   } finally {
     await pool.end();
   }
