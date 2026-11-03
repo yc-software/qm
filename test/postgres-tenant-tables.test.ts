@@ -5,6 +5,7 @@ import pg from "pg";
 import { scopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { grantAppLogin } from "../src/tenants/logins.ts";
+import { applyPgMigrations, definePgMigration, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { testTenants } from "./support/test-tenants.ts";
 import { createAppLogin, type AppLogin } from "./support/app-login.ts";
@@ -161,4 +162,10 @@ test("granting refuses a login that is missing or owns the tables", { skip }, as
   const named = new URL(url);
   named.username = self;
   await assert.rejects(grantAppLogin(owner, named.toString()), /owns the tables or bypasses row security/);
+});
+
+test("the app login verifies applied migrations and refuses to apply pending ones", { skip }, async () => {
+  await applyPgMigrations(app, registeredPgMigrations(url));
+  const pending = definePgMigration({ id: `zz-pending-${randomUUID()}`, statements: ["SELECT 1"] });
+  await assert.rejects(applyPgMigrations(app, [pending]), /cannot apply pending migrations zz-pending-/);
 });

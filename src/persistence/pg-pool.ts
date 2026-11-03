@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { ClientConfig, Pool, PoolClient, PoolConfig, QueryResult } from "pg";
+import type { ClientConfig, Pool, PoolClient, QueryResult } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
 import { boundTenant, pinTenant } from "../tenants/context.ts";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
@@ -22,14 +22,6 @@ let poolingConfig: PgPoolingConfig = {};
 
 export function configurePgPooling(config: PgPoolingConfig): void {
   if (config.poolUrl && !config.databaseUrl) throw new Error("DATABASE_POOL_URL requires DATABASE_URL");
-  for (const [name, value] of [
-    ["DATABASE_POOL_MAX", config.queryMax],
-    ["DATABASE_DIRECT_POOL_MAX", config.sessionMax],
-  ] as const) {
-    if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > 100)) {
-      throw new Error(`${name} must be an integer between 1 and 100`);
-    }
-  }
   poolingConfig = { ...config };
 }
 
@@ -45,22 +37,20 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     existing.users++;
     return existing.pool;
   }
-  const setting = kind === "query" ? "DATABASE_POOL_MAX" : "DATABASE_DIRECT_POOL_MAX";
-  const max = { query: poolingConfig.queryMax ?? 10, session: poolingConfig.sessionMax ?? 32, migration: 1 }[kind];
-  if (!Number.isInteger(max) || max < 1 || max > 100)
-    throw new Error(`${setting} must be an integer between 1 and 100`);
+  const max = { query: poolingConfig.queryMax ?? 20, session: poolingConfig.sessionMax ?? 64, migration: 1 }[kind];
   const connection = pgConnectionOptions(
     connectionString,
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
   );
-  const options: PoolConfig & { pipeline: boolean } = {
-    ...connection,
-    max,
-    connectionTimeoutMillis: 10_000,
-    allowExitOnIdle: true,
-    pipeline: kind === "query",
-  };
-  const pool = guardedPool(new pg.Pool(options));
+  const pool = guardedPool(
+    new pg.Pool({
+      ...connection,
+      max,
+      connectionTimeoutMillis: 10_000,
+      allowExitOnIdle: true,
+      pipeline: kind === "query",
+    }),
+  );
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }
@@ -150,15 +140,14 @@ async function pipelinedTransaction(
   settings: readonly PgSetting[],
   text: string,
   values: unknown[],
+  commitAfterResult: boolean,
 ): Promise<QueryResult> {
   if (!settings.length) return client.query({ text, values });
-  const [, , result] = await Promise.all([
-    client.query("BEGIN"),
-    client.query(settingsQuery(settings)),
-    client.query({ text, values }),
-    client.query("COMMIT"),
-  ]);
-  const status = (client as PoolClient & { getTransactionStatus(): string | null }).getTransactionStatus();
+  const prefix = [client.query("BEGIN"), client.query(settingsQuery(settings))];
+  const query = client.query({ text, values });
+  const [result] = await Promise.all([query, ...prefix, ...(commitAfterResult ? [] : [client.query("COMMIT")])]);
+  if (commitAfterResult) await client.query("COMMIT");
+  const status = client.getTransactionStatus();
   if (status !== "I") throw new Error(`pg-pool: pipelined query left its connection in transaction status ${status}`);
   return result;
 }
@@ -179,12 +168,16 @@ async function beginTransaction(client: PoolClient): Promise<void> {
   if (settings.length) await client.query(settingsQuery(settings));
 }
 
-export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+export function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  return pinTenant(() => runPgTransaction(pool, fn));
+}
+
+async function runPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   let rollbackError: Error | undefined;
   try {
     await beginTransaction(client);
-    const result = await pinTenant(() => fn(client));
+    const result = await fn(client);
     await client.query("COMMIT");
     return result;
   } catch (error) {
@@ -250,12 +243,48 @@ async function lockSchema(client: PoolClient, name: string): Promise<void> {
   }
 }
 
+async function pendingPgMigrations(client: PoolClient, migrations: readonly PgMigration[]): Promise<PgMigration[]> {
+  const ledger = await client.query<{ present: boolean }>(
+    `SELECT to_regclass('${PG_MIGRATIONS_TABLE}') IS NOT NULL AS present`,
+  );
+  if (!ledger.rows[0]?.present) return [...migrations];
+  const applied = new Map(
+    (
+      await client.query<{ id: string; checksum: string }>(
+        `SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = ANY($1)`,
+        [migrations.map((migration) => migration.id)],
+      )
+    ).rows.map((row) => [row.id, row.checksum]),
+  );
+  for (const migration of migrations) {
+    const checksum = applied.get(migration.id);
+    if (checksum !== undefined && checksum !== migration.checksum) {
+      throw new Error(
+        `pg-pool: migration ${migration.id} checksum mismatch (database=${checksum}, source=${migration.checksum})`,
+      );
+    }
+  }
+  return migrations.filter((migration) => !applied.has(migration.id));
+}
+
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
   if (!migrations.length) return;
   const client = await pool.connect();
   let discard: Error | undefined;
+  let locked = false;
   try {
+    const pending = await pendingPgMigrations(client, migrations);
+    if (!pending.length) return;
+    const creator = await client.query<{ login: string; creates: boolean }>(
+      "SELECT current_user AS login, has_schema_privilege(current_schema(), 'CREATE') AS creates",
+    );
+    if (!creator.rows[0]?.creates) {
+      throw new Error(
+        `pg-pool: ${creator.rows[0]?.login} cannot apply pending migrations ${pending.map((migration) => migration.id).join(", ")}; run migrations as the database owner first`,
+      );
+    }
     await lockSchema(client, "qm:schema-migrations");
+    locked = true;
     await client.query(
       `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
         id TEXT PRIMARY KEY,
@@ -263,19 +292,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
     );
-    for (const migration of migrations) {
-      const applied = await client.query<{ checksum: string }>(
-        `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
-        [migration.id],
-      );
-      if (applied.rows[0]) {
-        if (applied.rows[0].checksum !== migration.checksum) {
-          throw new Error(
-            `pg-pool: migration ${migration.id} checksum mismatch (database=${applied.rows[0].checksum}, source=${migration.checksum})`,
-          );
-        }
-        continue;
-      }
+    for (const migration of await pendingPgMigrations(client, migrations)) {
       if (migration.statements.some((statement) => concurrentIndexName(statement))) {
         if (migration.legacyId || !migration.statements.every((statement) => concurrentIndexName(statement))) {
           throw new Error(`pg-pool: concurrent index migration ${migration.id} must contain only concurrent indexes`);
@@ -336,9 +353,11 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       }
     }
   } finally {
-    await client
-      .query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))")
-      .catch(swallowAs("pg-pool: schema-migrations unlock", undefined));
+    if (locked) {
+      await client
+        .query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))")
+        .catch(swallowAs("pg-pool: schema-migrations unlock", undefined));
+    }
     client.release(discard);
   }
 }
@@ -423,15 +442,14 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
   for (const [databaseUrl, registered] of databases) {
     if (!registered?.size) continue;
     await migrationQueue(databaseUrl, async () => {
-      const pg = (await import("pg")).default;
-      const pool = guardedPool(new pg.Pool(pgConnectionOptions(databaseUrl)));
+      const pool = await retainPool(databaseUrl, "migration");
       try {
         await applyPgMigrations(
           pool,
           [...registered.values()].sort((a, b) => a.id.localeCompare(b.id)),
         );
       } finally {
-        await pool.end();
+        await releasePool(databaseUrl, pool, "migration");
       }
     });
   }
@@ -506,12 +524,13 @@ export function createPgPool(
     }
     let queryError: Error | undefined;
     try {
-      const res = await withAbort(() => pipelinedTransaction(client, settings, text, params), signal);
+      const res = await withAbort(() => pipelinedTransaction(client, settings, text, params, Boolean(signal)), signal);
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     } catch (error) {
       queryError = error instanceof Error ? error : new Error(String(error));
       throw error;
     } finally {
+      if (queryError && signal?.aborted) client.connection.stream.destroy();
       client.release(queryError);
     }
   }

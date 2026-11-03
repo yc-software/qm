@@ -7,9 +7,7 @@ export async function seedTestTenants(databaseUrl: string): Promise<void> {
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
   try {
     await applyPgMigrations(pool, [definePgMigration(TENANCY_BASE)]);
-    for (const [index, id] of testTenants().entries()) {
-      await pool.query("INSERT INTO tenants(id, slug, name) VALUES ($1, $2, $2)", [id, `test-${index}`]);
-    }
+    await pool.query("INSERT INTO tenants(id) SELECT unnest($1::uuid[])", [testTenants()]);
   } finally {
     await pool.end();
   }

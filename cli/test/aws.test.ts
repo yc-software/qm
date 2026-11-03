@@ -4966,7 +4966,16 @@ test("AWS renders adopted logGroup and stopTimeout pins; the defaults stay deriv
     (derived.logConfiguration as { options: Record<string, string> }).options["awslogs-group"],
     "/ecs/acme-core",
   );
-  assert.equal(derived.stopTimeout, undefined);
+  assert.equal(derived.stopTimeout, 60, "core waits out its 30 s drain plus 30 s to hand turns back");
+  assert.equal(renderTaskDefinition(config, "web-ui", image).containerDefinitions[0]!.stopTimeout, undefined);
+  const withDrain = (drain: string): QmConfig => ({
+    ...config,
+    env: { ...config.env, core: { ...config.env.core, SHUTDOWN_DRAIN_MS: drain } },
+  });
+  assert.equal(renderTaskDefinition(withDrain("90000"), "core", image).containerDefinitions[0]!.stopTimeout, 120);
+  assert.throws(() => renderTaskDefinition(withDrain("90001"), "core", image), /SHUTDOWN_DRAIN_MS=90001/);
+  assert.equal(renderTaskDefinition(withDrain(""), "core", image).containerDefinitions[0]!.stopTimeout, 60);
+  assert.throws(() => renderTaskDefinition(withDrain("soon"), "core", image), /SHUTDOWN_DRAIN_MS=soon/);
   const adopted: QmConfig = {
     ...config,
     aws: {
@@ -4983,6 +4992,8 @@ test("AWS renders adopted logGroup and stopTimeout pins; the defaults stay deriv
     "/ecs/legacy-core",
   );
   assert.equal(container.stopTimeout, 120);
+  const pinnedLongDrain: QmConfig = { ...adopted, env: withDrain("100000").env };
+  assert.equal(renderTaskDefinition(pinnedLongDrain, "core", image).containerDefinitions[0]!.stopTimeout, 120);
 });
 
 test("AWS doctor classifies an un-pushed secret store as pending, not drift", () => {

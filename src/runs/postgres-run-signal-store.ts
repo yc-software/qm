@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
@@ -151,12 +152,13 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
     },
 
     onSignal(runId, cb) {
+      const bound = AsyncLocalStorage.bind(cb);
       const set = listeners.get(runId) ?? new Set();
-      set.add(cb);
+      set.add(bound);
       listeners.set(runId, set);
       ensureListening();
       return () => {
-        set.delete(cb);
+        set.delete(bound);
         if (set.size === 0) listeners.delete(runId);
         if (listeners.size === 0) dropListenClient();
       };
