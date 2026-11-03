@@ -191,7 +191,7 @@ import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
-import { codexSubscriptionModelId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
+import { CODEX_SUBSCRIPTION_PROVIDER, personalModelId } from "../model/pi-models.ts";
 import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
 import { createSessionTitles } from "./session-title.ts";
 import {
@@ -3002,7 +3002,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? input.turnWallClockMs
             : (deps.defaultTurnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000);
         const servesModel = (requested: string, routed: string | undefined, keys: ProviderKeys | undefined) =>
-          (keys?.[CODEX_SUBSCRIPTION_PROVIDER] ? codexSubscriptionModelId(requested) : requested) === routed;
+          (keys ? personalModelId(requested, keys) : requested) === routed;
         const requestedModel = input.model ?? purposeDefault?.modelId;
         let { userProviderKeys, userModelOverride, personalAuth, authLabel } = await initialRuntimeAuth;
         if (

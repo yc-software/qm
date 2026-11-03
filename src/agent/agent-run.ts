@@ -62,12 +62,11 @@ import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   DEFAULT_AGENT_MODEL_ID,
   auxiliaryModelFor,
-  CODEX_SUBSCRIPTION_PROVIDER,
-  codexSubscriptionModelId,
   defaultModel,
   defaultInteractiveThinkingLevel,
   modelSupportsAdaptiveThinking,
   modelSupportsProviderDefault,
+  personalModelId,
   resolveModel,
   getRequiredModel,
   contextTokenBudgetForModel,
@@ -880,7 +879,10 @@ export function createAgent(opts?: AgentOptions): Agent {
   const modelGateway = opts?.modelGateway;
   const companyServedId = (id: string) => (opts?.companyModelId ? opts.companyModelId(id) : id);
   const requiredModel = (id: string, company = true) => getRequiredModel(company ? companyServedId(id) : id, company);
-  const routeFor = async (modelId: string, personalKeys?: ProviderKeys): Promise<ModelRoute> => {
+  const servedId = (id: string, personalKeys?: ProviderKeys) =>
+    personalKeys ? personalModelId(id, personalKeys) : companyServedId(id);
+  const routeFor = async (requestedId: string, personalKeys?: ProviderKeys): Promise<ModelRoute> => {
+    const modelId = personalKeys ? personalModelId(requestedId, personalKeys) : requestedId;
     const model = requiredModel(modelId, !personalKeys);
     const keys = personalKeys ?? (await resolveProviderKeys());
     const gateway = personalKeys ? undefined : modelGateway;
@@ -904,12 +906,10 @@ export function createAgent(opts?: AgentOptions): Agent {
   ): Promise<(ModelRoute & { runtime: RuntimeChoice }) | undefined> => {
     const runtime = opts?.resolveFallbackRuntime?.();
     if (!runtime) return undefined;
-    const modelId = providerKeys?.[CODEX_SUBSCRIPTION_PROVIDER]
-      ? codexSubscriptionModelId(runtime.modelId)
-      : runtime.modelId;
-    const served = providerKeys ? modelId : companyServedId(modelId);
-    if (fromModelIds.has(modelId) || fromModelIds.has(served) || !resolveModel(served, !providerKeys)) return undefined;
-    const route = servable(await routeFor(modelId, providerKeys));
+    const served = servedId(runtime.modelId, providerKeys);
+    if (fromModelIds.has(runtime.modelId) || fromModelIds.has(served) || !resolveModel(served, !providerKeys))
+      return undefined;
+    const route = servable(await routeFor(runtime.modelId, providerKeys));
     return route && { ...route, runtime };
   };
   const captureRequests = opts?.captureRequests ?? true;

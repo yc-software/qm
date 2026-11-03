@@ -67,10 +67,8 @@ async function withFetch<T>(
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
-    const body = JSON.parse(input instanceof Request ? await input.text() : String(init?.body ?? "{}")) as Record<
-      string,
-      unknown
-    >;
+    const raw = input instanceof Request ? await input.text() : init?.body;
+    const body = (typeof raw === "string" ? JSON.parse(raw) : {}) as Record<string, unknown>;
     calls.push({ host: new URL(url).host, model: body.model });
     return respond(url, body);
   }) as typeof globalThis.fetch;
@@ -147,6 +145,57 @@ test("an out-of-budget summary moves to the configured fallback on another accou
         calls.map((call) => call.host),
         ["gateway.example", "api.anthropic.com"],
       );
+    },
+  );
+});
+
+const CHATGPT_LOGIN = `x.${btoa(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }))}.y`;
+const PERSONAL_KEYS = { "openai-codex": CHATGPT_LOGIN, anthropic: "sk-personal" };
+
+test("a person with a ChatGPT login and an Anthropic key falls back to an Anthropic model on their key", async () => {
+  const agent = createAgent({
+    defaultModelId: "gpt-6-astra",
+    resolveFallbackRuntime: () => ({ modelId: "claude-opus-5" }),
+  });
+  await withFetch(
+    (_url, body) =>
+      body.model === "claude-sonnet-5"
+        ? errorReply(401, "authentication_error", "key revoked")
+        : anthropicReply("fallback summary"),
+    async (calls) => {
+      const text = await compact(agent, { runtime: { modelId: "claude-sonnet-5" }, providerKeys: PERSONAL_KEYS });
+      assert.match(text, /fallback summary/);
+      assert.deepEqual(calls, [
+        { host: "api.anthropic.com", model: "claude-sonnet-5" },
+        { host: "api.anthropic.com", model: "claude-opus-5" },
+      ]);
+    },
+  );
+});
+
+test("a person with a ChatGPT login falls back to an OpenAI model through that login", async () => {
+  const agent = createAgent({
+    defaultModelId: "gpt-6-astra",
+    resolveFallbackRuntime: () => ({ modelId: "gpt-6-astra" }),
+  });
+  await withFetch(
+    (url) =>
+      url.includes("chatgpt.com")
+        ? errorReply(500, "server_error", "subscription unavailable")
+        : errorReply(401, "authentication_error", "key revoked"),
+    async (calls) => {
+      const error = await compact(agent, {
+        runtime: { modelId: "claude-sonnet-5" },
+        providerKeys: PERSONAL_KEYS,
+      }).then(
+        () => assert.fail("both routes fail"),
+        (e: unknown) => e,
+      );
+      assert.ok(error instanceof ProviderTurnError);
+      assert.match(error.message, /the fallback codex\/gpt-6-astra \(billed to the person's own account\)/);
+      assert.deepEqual(calls[0], { host: "api.anthropic.com", model: "claude-sonnet-5" });
+      assert.ok(calls.slice(1).length > 0);
+      assert.ok(calls.slice(1).every((call) => call.host === "chatgpt.com"));
     },
   );
 });
