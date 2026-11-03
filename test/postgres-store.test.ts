@@ -1629,8 +1629,6 @@ test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both stee
     const privateRun = (
       await runs.enqueue({ sessionId: thread, request: { ...turn(unsafe), privateSessionMessage: true } })
     ).run;
-    assert.equal((await runs.latestForThread(thread))?.id, privateRun.id);
-    assert.equal((await runs.latestForThread(thread, { excludePrivateMessages: true }))?.id, first.id);
     assert.equal(await runs.editPendingText(first.id, `edit ${unsafe}`, unsafe), true);
     assert.equal(await runs.editPendingText(first.id, "stale", unsafe), false);
     assert.equal((await runs.get(first.id))?.request.displayText, `edit ${safe}`);
@@ -1678,12 +1676,12 @@ test("pg run store: terminalFinished lists finished runs by (finishedAt, id) up 
     for (const ref of ["a", "b", "c"]) {
       const thread = `${tag}-${ref}`;
       const run = (await runs.enqueue({ sessionId: thread, request: turn(ref) })).run;
-      const claimed = await runs.claimForSession(thread, "w", 5_000);
+      const claimed = await runs.claimById(run.id, "w", 5_000);
       await runs.complete(run.id, claimed?.leaseToken ?? "", { status: "ok", reply: ref });
       ids.push(run.id);
     }
     const open = (await runs.enqueue({ sessionId: `${tag}-open`, request: turn("open") })).run;
-    await runs.claimForSession(`${tag}-open`, "w", 5_000);
+    await runs.claimById(open.id, "w", 5_000);
     const far = Date.now() + 60_000;
     const started = (await runs.get(ids[0]!))!.startedAt! - 1;
     const listed = await runs.terminalFinished({ finishedAt: started, id: "" }, far, 10_000);

@@ -60,6 +60,10 @@ function relay(
     forwardCookies?: boolean;
   },
 ): void {
+  const headers = { ...target.headers };
+  const length = req.headers["content-length"];
+  if (length !== undefined) headers["content-length"] = length;
+  else if (req.headers["transfer-encoding"] !== undefined) headers["transfer-encoding"] = "chunked";
   const up = httpRequest(
     {
       protocol: target.protocol,
@@ -67,7 +71,7 @@ function relay(
       port: target.port,
       method: req.method,
       path: target.path,
-      headers: target.headers,
+      headers,
     },
     (upRes) => {
       const out: Record<string, string | string[]> = {};
@@ -159,7 +163,6 @@ export const FORWARD_WEBHOOK_HEADERS = [
 
 export const FORWARD_AGENT_API_HEADERS = [
   "content-type",
-  "content-length",
   "accept",
   "accept-encoding",
   "x-agent-capability",
@@ -167,13 +170,7 @@ export const FORWARD_AGENT_API_HEADERS = [
   "git-protocol",
 ];
 
-export const FORWARD_DEPLOYMENT_LAYER_HEADERS = [
-  "content-type",
-  "content-length",
-  "accept",
-  "x-timestamp",
-  "x-signature",
-];
+export const FORWARD_DEPLOYMENT_LAYER_HEADERS = ["content-type", "accept", "x-timestamp", "x-signature"];
 
 export const FORWARD_OAUTH_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
@@ -242,7 +239,7 @@ export function proxyToUpstream(
   });
 }
 
-export const FORWARD_BROKER_HEADERS = ["accept", "accept-language", "user-agent", "content-type", "content-length"];
+export const FORWARD_BROKER_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
 export function proxyToAppHost(req: IncomingMessage, res: ServerResponse, coreBase: string, clientIp?: string): void {
   const upstream = new URL(coreBase);

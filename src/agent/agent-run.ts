@@ -52,7 +52,7 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "default",
   "adaptive",
 ]);
-import type { ConversationTurn, ScopeId } from "../types.ts";
+import type { ConversationTurn } from "../types.ts";
 import { isAgentReply, isUserItem, type Item } from "../sessions/items.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
@@ -62,12 +62,11 @@ import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   DEFAULT_AGENT_MODEL_ID,
   auxiliaryModelFor,
-  auxiliaryModelForProvider,
   defaultModel,
   defaultInteractiveThinkingLevel,
   modelSupportsAdaptiveThinking,
   modelSupportsProviderDefault,
-  modelDisplayName,
+  personalModelId,
   resolveModel,
   getRequiredModel,
   contextTokenBudgetForModel,
@@ -78,6 +77,7 @@ import {
   type ModelGatewayTransportConfig,
   type ModelRequestPurpose,
 } from "../model/provider-endpoints.ts";
+import { modelBilling, routeLabel, type ModelRoute } from "../model/model-route.ts";
 import {
   type Agent,
   type CompactInput,
@@ -86,6 +86,9 @@ import {
   type TurnLlmRequestRecord,
   type AgentTurnInput,
   type AgentTurnResult,
+  REPLY_CHECK_LIMITS,
+  replyCheckPrompt,
+  type RuntimeChoice,
 } from "./agent.ts";
 import {
   coreToolOptions,
@@ -131,7 +134,7 @@ import {
 } from "./goal.ts";
 
 export interface AgentOptions {
-  modelId?: string | ((scope?: ScopeId) => string | undefined);
+  modelId?: string;
   defaultModelId?: string;
   resolveBaseModelId?: () => string | undefined;
   resolveFallbackRuntime?: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
@@ -528,7 +531,7 @@ function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | 
   return providerTurnError(failed, { contextWindow, lastInputTokens: lastInputTokens(session, failed) });
 }
 
-const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
+const FALLBACK_CODES = new Set(["refusal", "model_unavailable", "model_budget", "auth"]);
 const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
 
 function documentsDroppedNote(documents: readonly DocumentInput[]): string {
@@ -576,15 +579,22 @@ export function piTurnError(session: AssistantTextSession, thrown: unknown, mess
   return thrown instanceof Error ? thrown : new Error(String(thrown));
 }
 
-export const REFUSAL_FALLBACK_MODEL_IDS = ["claude-opus-5", "claude-sonnet-5"] as const;
+function fallbackFailed(failure: ProviderTurnError, fallback: ModelRoute, reason: string): ProviderTurnError {
+  return new ProviderTurnError(`${failure.message} — the fallback ${routeLabel(fallback)} also failed: ${reason}`, {
+    code: failure.code,
+    retryable: false,
+    status: failure.status,
+    raw: failure.raw,
+  });
+}
 
-export function refusalFallbackModelId(
-  fromId: string,
-  configuredId?: string,
-  usable: (id: string) => boolean = () => true,
-): string | undefined {
-  if (configuredId && configuredId !== fromId && usable(configuredId)) return configuredId;
-  return REFUSAL_FALLBACK_MODEL_IDS.find((id) => id !== fromId);
+function routeFailed(failure: ProviderTurnError, route: ModelRoute): ProviderTurnError {
+  return new ProviderTurnError(`${routeLabel(route)}: ${failure.message}`, {
+    code: failure.code,
+    retryable: failure.retryable,
+    status: failure.status,
+    raw: failure.raw,
+  });
 }
 
 export function refusalFallbackNote(fromModel: string, toModel: string, refusal: string): string {
@@ -852,22 +862,8 @@ export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: str
 }
 
 export function createAgent(opts?: AgentOptions): Agent {
-  const configuredModelId = opts?.modelId;
-  const resolveModelId = (scope?: ScopeId): string =>
-    resolveConfiguredModelId(
-      typeof configuredModelId === "function" ? configuredModelId(scope) : configuredModelId,
-      opts?.defaultModelId,
-    );
-  const auxiliaryModelId = (): string =>
-    auxiliaryModelFor(
-      resolveConfiguredModelId(
-        opts?.resolveBaseModelId?.() ?? (typeof configuredModelId === "string" ? configuredModelId : undefined),
-        opts?.defaultModelId,
-      ),
-    );
-  const detectModelId = (): string => opts?.detectModelId ?? auxiliaryModelId();
-  const titleModelId = (): string => opts?.titleModelId ?? auxiliaryModelId();
-  const judgeModelId = (): string => opts?.judgeModelId ?? auxiliaryModelId();
+  const baseModelId = (): string =>
+    resolveConfiguredModelId(opts?.resolveBaseModelId?.() ?? opts?.modelId, opts?.defaultModelId);
   const tempDirPrefix = opts?.tempDirPrefix ?? "pi";
   const configuredProviderKeys: ProviderKeys = opts?.resolveProviderKeys
     ? {}
@@ -883,8 +879,39 @@ export function createAgent(opts?: AgentOptions): Agent {
   const modelGateway = opts?.modelGateway;
   const companyServedId = (id: string) => (opts?.companyModelId ? opts.companyModelId(id) : id);
   const requiredModel = (id: string, company = true) => getRequiredModel(company ? companyServedId(id) : id, company);
-  const keyForModel = (keys: ProviderKeys, model: Model<Api>): string | undefined =>
-    modelGatewayRequest(modelGateway, model)?.apiKey ?? keys[String(model.provider)];
+  const servedId = (id: string, personalKeys?: ProviderKeys) =>
+    personalKeys ? personalModelId(id, personalKeys) : companyServedId(id);
+  const routeFor = async (requestedId: string, personalKeys?: ProviderKeys): Promise<ModelRoute> => {
+    const modelId = personalKeys ? personalModelId(requestedId, personalKeys) : requestedId;
+    const model = requiredModel(modelId, !personalKeys);
+    const keys = personalKeys ?? (await resolveProviderKeys());
+    const gateway = personalKeys ? undefined : modelGateway;
+    return {
+      modelId,
+      model,
+      keys,
+      ...(gateway ? { gateway } : {}),
+      billing: modelBilling(!!modelGatewayRequest(gateway, model), !!personalKeys),
+    };
+  };
+  const servable = (route: ModelRoute): ModelRoute | undefined =>
+    route.billing === "model_gateway" || route.keys[String(route.model.provider)] ? route : undefined;
+  const sessionRoute = (session: Pick<CompactInput, "runtime" | "providerKeys">) =>
+    routeFor(session.runtime?.modelId ?? baseModelId(), session.providerKeys);
+  const utilityRoute = async (modelId?: string) =>
+    servable(await routeFor(modelId ?? auxiliaryModelFor(baseModelId())));
+  const fallbackRoute = async (
+    fromModelIds: ReadonlySet<string>,
+    providerKeys?: ProviderKeys,
+  ): Promise<(ModelRoute & { runtime: RuntimeChoice }) | undefined> => {
+    const runtime = opts?.resolveFallbackRuntime?.();
+    if (!runtime) return undefined;
+    const served = servedId(runtime.modelId, providerKeys);
+    if (fromModelIds.has(runtime.modelId) || fromModelIds.has(served) || !resolveModel(served, !providerKeys))
+      return undefined;
+    const route = servable(await routeFor(runtime.modelId, providerKeys));
+    return route && { ...route, runtime };
+  };
   const captureRequests = opts?.captureRequests ?? true;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
@@ -897,6 +924,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       controlTools,
       ...(turn.surfaceTools ? { surfaceTools: true } : {}),
       ...(turn.surfaceName ? { surfaceName: turn.surfaceName } : {}),
+      ...(turn.surfacePrompt ? { surfacePrompt: turn.surfacePrompt } : {}),
       ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
       ...(turn.readOnly ? { readOnly: true } : {}),
       ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
@@ -912,19 +940,14 @@ export function createAgent(opts?: AgentOptions): Agent {
     systemPrompt: string,
     history: Item[],
     priorTurns: ConversationTurn[] | undefined,
-    turnProviderKeys: ProviderKeys | undefined,
+    route: ModelRoute,
     ref: TurnSession["ref"],
     tools: ToolDefinition[],
     loadImage: ReplayImageLoader | undefined,
   ): Promise<{ entry: TurnSession }> {
     const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
 
-    const modelRuntime = await buildModelRuntime(
-      turnProviderKeys ?? (await resolveProviderKeys()),
-      turnProviderKeys ? undefined : modelGateway,
-      "turn",
-      "long",
-    );
+    const modelRuntime = await buildModelRuntime(route.keys, route.gateway, "turn", "long");
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
       systemPrompt,
@@ -991,7 +1014,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             );
           }
           try {
-            const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
+            const gateway = modelGatewayRequest(route.gateway, model as Model<Api>);
             finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
           } catch (e) {
             swallow("pi: request byte budget", e);
@@ -1022,9 +1045,8 @@ export function createAgent(opts?: AgentOptions): Agent {
 
   const agent: Agent = {
     async runTurn(dispatched: AgentTurnInput): Promise<AgentTurnResult> {
-      const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId(dispatched.scopeLabel);
-      const baseModel = requiredModel(desiredModelId, !dispatched.providerKeys);
-      const turnModelGateway = dispatched.providerKeys ? undefined : modelGateway;
+      const route = await sessionRoute(dispatched);
+      const desiredModelId = route.modelId;
       const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
       const ref: TurnSession["ref"] = {
         current: dispatched.tools,
@@ -1051,12 +1073,12 @@ export function createAgent(opts?: AgentOptions): Agent {
       const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
       const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
       const { entry } = await createTurnSession(
-        withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
+        withRequestHeaders(route.model, route.billing !== "model_gateway", wantFast),
         turn.session.id,
         turn.systemPrompt,
         turn.history,
         turn.priorTurns,
-        turn.providerKeys,
+        route,
         ref,
         tools,
         turn.loadImage,
@@ -1115,7 +1137,10 @@ export function createAgent(opts?: AgentOptions): Agent {
             : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
         entry.ref.llmCapture = captureRequests && turn.recordLlmRequest ? [] : undefined;
         entry.ref.modelCalls = 0;
-        entry.ref.onModelRequest = turn.onModelRequest;
+        entry.ref.onModelRequest = () => {
+          turn.onModelRequest?.();
+          if (turn.park?.requested()) turn.park.now();
+        };
         turn.recordModelCall({
           model: effectiveModel,
           inputTokens:
@@ -1132,6 +1157,9 @@ export function createAgent(opts?: AgentOptions): Agent {
         let steerWake = new AbortController();
         entry.ref.steered = steerWake.signal;
         const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
+        const unrecordedPrompts = new Set<string>();
+        const retractedMessages = new Set<unknown>();
+        const checked = { retry: [] as string[], prod: [] as string[] };
         let persistError: Error | undefined;
         const persist = (write: () => Promise<unknown>): void => {
           thinkTail = thinkTail.then(async () => {
@@ -1156,6 +1184,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           else if (role === "user") {
             steps.flush();
             const text = textFromContent((message as { content?: unknown }).content);
+            if (unrecordedPrompts.delete(text)) return;
             const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
             const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
             if (steerWake.signal.aborted && !entry.agentSession.agent.hasQueuedMessages()) {
@@ -1262,6 +1291,7 @@ export function createAgent(opts?: AgentOptions): Agent {
                 {
                   onSteer: async (text, ts, request, acknowledge) => {
                     if (ts && steeredSeen.has(ts)) return;
+                    if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
                     const prepared = await turn.prepareSteer?.(text, request);
                     const prompt = prepared?.text ?? text;
                     if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
@@ -1272,6 +1302,8 @@ export function createAgent(opts?: AgentOptions): Agent {
                       attachments: prepared?.attachments,
                       images: prepared?.images,
                       author: prepared?.author,
+                      authorName: prepared?.authorName,
+                      withheld: prepared?.withheld,
                       acknowledge,
                     };
                     pendingSteers.push(steer);
@@ -1324,47 +1356,42 @@ export function createAgent(opts?: AgentOptions): Agent {
             abort: () => entry.agentSession.abort(),
           });
         const refusedModelIds = new Set<string>();
-        const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
+        let fallbackFailure: ProviderTurnError | undefined;
+        const attemptRefusalFallback = async (failure: ProviderTurnError): Promise<boolean> => {
           if (userAborted || turn.cancel?.aborted) return false;
           const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
-          if (fromId) refusedModelIds.add(fromId);
-          const configured = opts?.resolveFallbackRuntime?.();
-          const servedModelId = (id: string) => (turn.providerKeys ? id : companyServedId(id));
-          const fallbackId = fromId
-            ? refusalFallbackModelId(
-                fromId,
-                configured?.modelId,
-                (id) => !!resolveModel(servedModelId(id), !turn.providerKeys),
-              )
-            : undefined;
-          const fallback = fallbackId ? resolveModel(servedModelId(fallbackId), !turn.providerKeys) : undefined;
-          if (
-            !fallbackId ||
-            !fallback ||
-            refusedModelIds.has(fallbackId) ||
-            refusedModelIds.has(servedModelId(fallbackId))
-          )
-            return false;
-          if (!roomToReprompt()) return false;
+          if (!fromId) return false;
+          refusedModelIds.add(fromId);
+          const fallback = await fallbackRoute(refusedModelIds, turn.providerKeys);
+          if (!fallback || !roomToReprompt()) return false;
           console.error(
-            `[pi] provider refusal — retrying on fallback model ${fromId} -> ${fallbackId} session=${turn.session.id}: ${refusal}`,
+            `[pi] provider ${failure.code} — retrying on fallback model ${fromId} -> ${fallback.modelId} session=${turn.session.id}: ${failure.message}`,
           );
-          const custom = configured?.modelId === fallbackId ? configured : undefined;
-          const wantFast = wantsFastMode(custom?.fastMode ?? turn.runtime?.fastMode, fallbackId);
-          await entry.agentSession.setModel(
-            withRequestHeaders(fallback, !turnModelGateway?.models[fallbackId], wantFast),
-          );
-          entry.ref.fast = wantFast;
-          entry.ref.effortLevel =
-            custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
-          applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
-          dropFailedAssistant(entry.agentSession, messagesBefore);
-          const outcome = await reprompt(
-            refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal),
-          );
-          if (userAborted) return false;
-          if (outcome !== "ok") throw new NonRetryableTurnError(refusal);
-          return true;
+          try {
+            const wantFast = wantsFastMode(fallback.runtime.fastMode ?? turn.runtime?.fastMode, fallback.modelId);
+            await entry.agentSession.setModel(
+              withRequestHeaders(fallback.model, fallback.billing !== "model_gateway", wantFast),
+            );
+            entry.ref.fast = wantFast;
+            entry.ref.effortLevel =
+              fallback.runtime.effortLevel ??
+              turn.runtime?.effortLevel ??
+              defaultInteractiveThinkingLevel(fallback.model);
+            applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
+            dropFailedAssistant(entry.agentSession, messagesBefore);
+            const outcome = await reprompt(
+              refusalFallbackNote(routeLabel(route), routeLabel(fallback), failure.message),
+            );
+            if (userAborted) return false;
+            if (outcome !== "ok") throw new Error(`the retry ended ${outcome}`);
+            const failed = piAssistantFailure(messagesSince(entry.agentSession, messagesBefore));
+            if (failed) throw failed;
+            return true;
+          } catch (e) {
+            if (userAborted || turn.cancel?.aborted) return false;
+            fallbackFailure = fallbackFailed(failure, fallback, errMessage(e));
+            throw fallbackFailure;
+          }
         };
         let documentRejection: ProviderTurnError | undefined;
         let documentRetried = false;
@@ -1402,12 +1429,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           const failure =
             (retried ? null : thrown) ?? piAssistantFailure(messagesSince(entry.agentSession, messagesBefore));
           if (!(failure instanceof ProviderTurnError && FALLBACK_CODES.has(failure.code))) return retried;
-          try {
-            return await attemptRefusalFallback(failure.message);
-          } catch (e) {
-            swallow("pi: refusal fallback", e);
-            throw new NonRetryableTurnError(failure.message);
-          }
+          return attemptRefusalFallback(failure);
         };
         try {
           const images = turn.images?.length
@@ -1493,13 +1515,59 @@ export function createAgent(opts?: AgentOptions): Agent {
               }
             }
           }
+          const checkable = () =>
+            wallClock === "ok" &&
+            !userAborted &&
+            !turn.cancel?.aborted &&
+            !recoveryDead &&
+            !entry.ref.silentRequested &&
+            !entry.ref.runtimeHandoff &&
+            !entry.ref.pausedOnApproval &&
+            !entry.ref.pendingApprovals?.length &&
+            !endedOnPurpose(entry.ref) &&
+            roomToReprompt();
+          while (turn.checkReply && checkable()) {
+            const draft = (entry.agentSession.getLastAssistantText() ?? "").trim();
+            if (!draft) break;
+            const verdict = await turn.checkReply(draft).catch(swallowAs("pi: reply check", undefined));
+            if (!verdict || checked[verdict.action].length >= REPLY_CHECK_LIMITS[verdict.action] || !checkable()) break;
+            if (
+              verdict.action === "prod" &&
+              !(await Promise.resolve(turn.onInterimReply?.(draft) ?? false).catch(
+                swallowAs("pi: interim reply", false),
+              ))
+            )
+              break;
+            checked[verdict.action].push(verdict.reason);
+            console.error(
+              `[pi] reply check ${verdict.action === "prod" ? "prodded" : "retracted"} the reply session=${turn.session.id} reason=${verdict.reason} round=${checked.retry.length + checked.prod.length}`,
+            );
+            steps.mark(verdict);
+            await thinkTail;
+            if (persistError) throw persistError;
+            await turn.onTextBlockStart?.();
+            const prompt = replyCheckPrompt(verdict);
+            const before = entry.agentSession.agent.state.messages.length;
+            if (verdict.action === "retry") unrecordedPrompts.add(prompt);
+            wallClock = await reprompt(prompt);
+            if (verdict.action === "retry")
+              for (const m of entry.agentSession.agent.state.messages.slice(before - 1, before + 1))
+                retractedMessages.add(m);
+            if (wallClock === "ok" && !entry.ref.runtimeHandoff) await recoverFailedRound();
+          }
+          if (retractedMessages.size)
+            entry.agentSession.agent.state.messages = entry.agentSession.agent.state.messages.filter(
+              (m) => !retractedMessages.has(m),
+            );
         } catch (err) {
           if (persistError) throw persistError;
+          if (fallbackFailure) throw fallbackFailure;
           const cancelAbortRejection =
             turn.cancel?.aborted === true && (err as { name?: string } | null)?.name === "AbortError";
           if (!userAborted && !cancelAbortRejection) {
             const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
             const recovered = await recoverFailedRound(turnErr).catch(swallowAs("pi: failed-round recovery", false));
+            if (fallbackFailure) throw fallbackFailure;
             if (!recovered && !userAborted) throw turnErr;
           }
           wallClock = "ok";
@@ -1548,7 +1616,14 @@ export function createAgent(opts?: AgentOptions): Agent {
         };
         const result = (reply: string, extra: Partial<AgentTurnResult>): AgentTurnResult => {
           const cacheUsage = sumCacheUsage(callUsage);
-          return { reply, ...extra, modelCalls: entry.ref.modelCalls ?? 0, ...(cacheUsage ? { cacheUsage } : {}) };
+          return {
+            reply,
+            ...extra,
+            ...(checked.retry.length ? { retracted: checked.retry } : {}),
+            ...(checked.prod.length ? { prodded: checked.prod } : {}),
+            modelCalls: entry.ref.modelCalls ?? 0,
+            ...(cacheUsage ? { cacheUsage } : {}),
+          };
         };
         if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
           steps.flush();
@@ -1596,20 +1671,18 @@ export function createAgent(opts?: AgentOptions): Agent {
     },
 
     async shouldRespond(detect: DetectInput): Promise<DetectResult> {
-      const modelId = detectModelId();
-      const model = requiredModel(modelId);
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return { respond: true };
+      const route = await utilityRoute(opts?.detectModelId);
+      if (!route) return { respond: true };
       const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
       const prompt = renderDetectPrompt(detect);
       detect.recordModelCall({
-        model: modelId,
+        model: route.modelId,
         inputTokens: countTokens(detectSystemPrompt) + countTokens(prompt),
         entryCount: detect.history.length,
       });
       const out = (
-        (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, {
-          modelGateway,
+        (await oneShot("pi-detect", route.model, route.keys, detectSystemPrompt, prompt, {
+          modelGateway: route.gateway,
           purpose: "detect",
           ...(detect.recordLlmRequest ? { recordLlmRequest: detect.recordLlmRequest } : {}),
         })) ?? ""
@@ -1618,51 +1691,51 @@ export function createAgent(opts?: AgentOptions): Agent {
     },
 
     async compactHistory(input: CompactInput): Promise<string> {
-      const primaryId = resolveModelId();
-      const providerKeys = await resolveProviderKeys();
-      const runtime = await buildModelRuntime(providerKeys, modelGateway, "compaction");
-      const summarize = (compactModelId: string) =>
-        summarizeHistory(input.history, requiredModel(compactModelId), (summaryModel, context, options) => {
+      const summarize = async (route: ModelRoute) => {
+        const runtime = await buildModelRuntime(route.keys, route.gateway, "compaction");
+        return summarizeHistory(input.history, route.model, (summaryModel, context, options) => {
           input.recordModelCall({
-            model: compactModelId,
+            model: route.modelId,
             inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
             entryCount: input.history.length,
           });
           return runtime.streamSimple(summaryModel, context, options);
         });
+      };
+      const primary = servable(await sessionRoute(input));
+      if (!primary)
+        throw new Error(`no configured credential can serve ${input.runtime?.modelId ?? baseModelId()} for a summary`);
       try {
-        return await summarize(primaryId);
+        return await summarize(primary);
       } catch (error) {
-        const fallbackId = refusalFallbackModelId(
-          primaryId,
-          opts?.resolveFallbackRuntime?.()?.modelId,
-          (id) => !!resolveModel(companyServedId(id)),
-        );
-        if (
-          !(error instanceof ProviderTurnError) ||
-          error.code !== "refusal" ||
-          !fallbackId ||
-          !resolveModel(companyServedId(fallbackId)) ||
-          companyServedId(fallbackId) === companyServedId(primaryId)
-        )
-          throw error;
+        if (!(error instanceof ProviderTurnError)) throw error;
+        const failure = routeFailed(error, primary);
+        const fallback = FALLBACK_CODES.has(error.code)
+          ? await fallbackRoute(new Set([primary.modelId, primary.model.id]), input.providerKeys)
+          : undefined;
+        if (!fallback) throw failure;
         console.error(
-          `[pi] compaction failed on ${primaryId}; retrying on fallback model ${fallbackId}: ${error.message}`,
+          `[pi] compaction failed on ${primary.modelId}; retrying on fallback ${fallback.modelId}: ${error.message}`,
         );
-        return summarize(fallbackId);
+        try {
+          return await summarize(fallback);
+        } catch (fallbackError) {
+          throw fallbackFailed(failure, fallback, errMessage(fallbackError));
+        }
       }
     },
 
-    contextTokenBudget(scopeLabel?: string, model?: string): number | undefined {
-      const id = model && resolveModel(model) ? model : resolveModelId(scopeLabel as ScopeId | undefined);
-      return contextTokenBudgetForModel(id);
+    contextTokenBudget(model?: string): number | undefined {
+      return contextTokenBudgetForModel(model && resolveModel(model) ? model : baseModelId());
     },
 
     async oneShot(systemPrompt: string, prompt: string, purpose?: ModelRequestPurpose): Promise<string | undefined> {
-      const model = requiredModel(resolveModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
-      return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway, purpose });
+      const route = await utilityRoute();
+      if (!route) return undefined;
+      return oneShot("pi-oneshot", route.model, route.keys, systemPrompt, prompt, {
+        modelGateway: route.gateway,
+        purpose,
+      });
     },
 
     async judge(
@@ -1671,11 +1744,10 @@ export function createAgent(opts?: AgentOptions): Agent {
       signal?: AbortSignal,
       purpose: ModelRequestPurpose = "judge",
     ): Promise<string | undefined> {
-      const model = requiredModel(judgeModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
-      return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
-        modelGateway,
+      const route = await utilityRoute(opts?.judgeModelId);
+      if (!route) return undefined;
+      return oneShot("pi-judge", route.model, route.keys, systemPrompt, prompt, {
+        modelGateway: route.gateway,
         purpose,
         signal,
         thinkingLevel: "low",
@@ -1685,26 +1757,24 @@ export function createAgent(opts?: AgentOptions): Agent {
     async screenSecurity({ payload, signal, recordModelCall, recordLlmRequest }) {
       const systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT;
       try {
-        const modelId = detectModelId();
-        const model = requiredModel(modelId);
-        const providerKeys = await resolveProviderKeys();
-        if (!keyForModel(providerKeys, model)) return undefined;
+        const route = await utilityRoute(opts?.detectModelId);
+        if (!route) return undefined;
         recordModelCall({
-          model: modelId,
+          model: route.modelId,
           inputTokens: countTokens(systemPrompt) + countTokens(payload),
           entryCount: 1,
         });
         await recordLlmRequest?.({
           turnSeq: null,
           step: SECURITY_SCREEN_STEP,
-          model: modelId,
+          model: route.modelId,
           promptEnvelope: { system: systemPrompt, messages: [{ role: "user", content: payload }] },
           truncated: false,
         });
         return parseSecurityScreenVerdict(
-          await oneShot("pi-security-screen", model, providerKeys, systemPrompt, payload, {
+          await oneShot("pi-security-screen", route.model, route.keys, systemPrompt, payload, {
             signal,
-            modelGateway,
+            modelGateway: route.gateway,
             purpose: "security_screen",
           }),
         );
@@ -1716,15 +1786,12 @@ export function createAgent(opts?: AgentOptions): Agent {
 
     async pickAckEmoji(text: string, candidates: readonly string[]): Promise<string | undefined> {
       if (!text.trim() || candidates.length === 0) return undefined;
-      const ackModelId = auxiliaryModelForProvider("anthropic");
-      if (!ackModelId) return undefined;
-      const model = requiredModel(ackModelId);
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
+      const route = await utilityRoute();
+      if (!route) return undefined;
       const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-      const runtime = await buildModelRuntime(providerKeys, modelGateway, "ack_emoji");
+      const runtime = await buildModelRuntime(route.keys, route.gateway, "ack_emoji");
       const reply = await runtime.completeSimple(
-        model,
+        route.model,
         { systemPrompt: ACK_EMOJI_PROMPT, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
         { maxTokens: 64, signal: AbortSignal.timeout(2_000) },
       );
@@ -1737,21 +1804,23 @@ export function createAgent(opts?: AgentOptions): Agent {
 
     async generateTitle(transcript: string): Promise<string | undefined> {
       if (!transcript.trim()) return undefined;
-      const model = requiredModel(titleModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
-      const out = await oneShot("pi-title", model, providerKeys, TITLE_GENERATION_PROMPT, titleUserPrompt(transcript), {
-        modelGateway,
-        purpose: "title",
-      });
+      const route = await utilityRoute(opts?.titleModelId);
+      if (!route) return undefined;
+      const out = await oneShot(
+        "pi-title",
+        route.model,
+        route.keys,
+        TITLE_GENERATION_PROMPT,
+        titleUserPrompt(transcript),
+        { modelGateway: route.gateway, purpose: "title" },
+      );
       return sanitizeTitle(out);
     },
 
     async summarizeApproval(command: string, reason: string, purpose?: string): Promise<string | undefined> {
       if (!command.trim()) return undefined;
-      const model = requiredModel(titleModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
+      const route = await utilityRoute(opts?.titleModelId);
+      if (!route) return undefined;
       const prompt = [
         `Policy flagged this as: ${reason}`,
         purpose ? `Agent's stated purpose: ${purpose}` : "",
@@ -1760,8 +1829,8 @@ export function createAgent(opts?: AgentOptions): Agent {
         command.slice(0, 4000),
       ].join("\n");
       const out = (
-        await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, {
-          modelGateway,
+        await oneShot("pi-approval-summary", route.model, route.keys, APPROVAL_SUMMARY_PROMPT, prompt, {
+          modelGateway: route.gateway,
           purpose: "approval_summary",
         })
       )?.trim();

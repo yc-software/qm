@@ -3006,6 +3006,14 @@ qm-markdown .tok-in {
   display: block;
   min-width: 0;
 }
+.continuing-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--muted-foreground);
+  font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
+}
 .thinking-summary {
   display: flex;
   align-items: center;

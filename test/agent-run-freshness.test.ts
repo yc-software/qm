@@ -119,34 +119,35 @@ async function ackRequest(input: string | URL | Request, init?: RequestInit) {
   return { url, headers, body };
 }
 
-test("ack emoji keeps working on a non-Anthropic base model when an Anthropic key is present", async () => {
+test("ack emoji runs on the org's utility model, not a fixed provider", async () => {
   const agent = createAgent({
     defaultModelId: "gpt-5.6-sol",
-    resolveProviderKeys: async () => ({ anthropic: "sk-ant-test" }),
+    resolveProviderKeys: async () => ({ anthropic: "sk-ant-test", openai: "sk-openai-test" }),
   });
   const realFetch = globalThis.fetch;
-  const calls: Array<{ url: string; model: unknown; thinking: unknown }> = [];
+  const calls: Array<{ url: string; model: unknown }> = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const { url, body } = await ackRequest(input, init);
-    calls.push({ url, model: body.model, thinking: body.thinking });
-    return ackStream('{"emoji":"eyes"}');
+    calls.push({ url, model: body.model });
+    return new Response(JSON.stringify({ error: { type: "invalid_request_error", message: "stop here" } }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
   }) as typeof globalThis.fetch;
   try {
-    const picked = await agent.pickAckEmoji?.("ship it", ["eyes", "rocket"]);
-    assert.equal(picked, "eyes", "the pick still lands even though the base model is OpenAI");
-    assert.equal(calls.length, 1, "the Anthropic ack call was actually attempted");
-    assert.match(calls[0]!.url, /anthropic/, "it went to the Anthropic API");
-    assert.equal(calls[0]!.model, "claude-haiku-5-5", "it used the Anthropic auxiliary, not the OpenAI judge model");
-    assert.deepEqual(calls[0]!.thinking, { type: "disabled" }, "the 64-token pick never spends its budget thinking");
+    await assert.rejects(async () => agent.pickAckEmoji?.("ship it", ["eyes", "rocket"]), /stop here/);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0]!.url, /openai/);
+    assert.equal(calls[0]!.model, "gpt-5.6-luna");
   } finally {
     globalThis.fetch = realFetch;
   }
 });
 
-test("ack emoji stays home when the deployment has no Anthropic key at all", async () => {
+test("ack emoji stays home when no credential serves the utility model", async () => {
   const agent = createAgent({
     defaultModelId: "gpt-5.6-sol",
-    resolveProviderKeys: async () => ({ openai: "sk-openai-test" }),
+    resolveProviderKeys: async () => ({ anthropic: "sk-ant-test" }),
   });
   const realFetch = globalThis.fetch;
   let called = 0;
@@ -156,7 +157,7 @@ test("ack emoji stays home when the deployment has no Anthropic key at all", asy
   }) as typeof globalThis.fetch;
   try {
     assert.equal(await agent.pickAckEmoji?.("ship it", ["eyes"]), undefined);
-    assert.equal(called, 0, "no Anthropic call without an Anthropic key");
+    assert.equal(called, 0);
   } finally {
     globalThis.fetch = realFetch;
   }

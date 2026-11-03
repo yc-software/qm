@@ -1,4 +1,9 @@
-export interface CachedMessage {
+export interface SurfaceKey {
+  surface?: string;
+  account?: string;
+}
+
+export interface CachedMessage extends SurfaceKey {
   container: string;
   ts: string;
   sub?: string;
@@ -38,7 +43,7 @@ export interface ActiveThread {
   lastActivityAt: number;
 }
 
-export interface IngestEvent {
+export interface IngestEvent extends SurfaceKey {
   container: string;
   ts: string;
   sub?: string | null;
@@ -68,7 +73,7 @@ export interface ContainerSummary extends ContainerState {
   messageCount: number;
 }
 
-export interface ReadMessagesOpts {
+export interface ReadMessagesOpts extends SurfaceKey {
   at?: string;
   sub?: string | null;
   timestamps?: string[];
@@ -81,11 +86,11 @@ export interface ReadMessagesOpts {
   noFallback?: boolean;
 }
 
-interface RevisedSinceOpts {
+interface RevisedSinceOpts extends SurfaceKey {
   thread?: string;
 }
 
-export interface SearchOpts {
+export interface SearchOpts extends SurfaceKey {
   container?: string;
   limit?: number;
 }
@@ -94,14 +99,14 @@ export type LiveFallback = (container: string, opts: ReadMessagesOpts) => Promis
 
 export interface SurfaceCache {
   ingest(events: IngestEvent[]): Promise<{ upserted: number }>;
-  markHandled(container: string, ts: string): Promise<void>;
+  markHandled(container: string, ts: string, key?: SurfaceKey): Promise<void>;
   readMessages(container: string, opts?: ReadMessagesOpts): Promise<CachedMessage[]>;
   revisedSince(container: string, since: number, opts?: RevisedSinceOpts): Promise<CachedMessage[]>;
   search(query: string, opts?: SearchOpts): Promise<CachedMessage[]>;
-  activeThreads(opts?: { container?: string; limit?: number }): Promise<ActiveThread[]>;
-  members(container: string): Promise<string[]>;
-  isMember(container: string, principalId: string): Promise<boolean>;
-  containerState(container: string): Promise<ContainerState | null>;
-  listContainers(opts?: { limit?: number }): Promise<ContainerSummary[]>;
+  activeThreads(opts?: SurfaceKey & { container?: string; limit?: number }): Promise<ActiveThread[]>;
+  members(container: string, key?: SurfaceKey): Promise<string[]>;
+  isMember(container: string, principalId: string, key?: SurfaceKey): Promise<boolean>;
+  containerState(container: string, key?: SurfaceKey): Promise<ContainerState | null>;
+  listContainers(opts?: SurfaceKey & { limit?: number }): Promise<ContainerSummary[]>;
   close(): Promise<void>;
 }
