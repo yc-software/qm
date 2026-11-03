@@ -9,8 +9,8 @@ import type { KeychainAsk } from "../src/credentials/keychain.ts";
 import type { Destination, TurnRequest } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
-import { testCronRows } from "./support/typed-stores.ts";
+import { testMap } from "./support/test-database.ts";
+import { testCronRows, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 
 const recipient: Destination = {
   type: "principal",
@@ -20,7 +20,7 @@ const recipient: Destination = {
 };
 
 async function fixture() {
-  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",

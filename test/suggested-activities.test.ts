@@ -9,9 +9,9 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { testCronRows } from "./support/typed-stores.ts";
+import { testCronRows, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 import { testActivityProfiles } from "./support/typed-stores.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -26,8 +26,8 @@ function fixture() {
   let time = Date.now();
   let output = JSON.stringify(activities);
   const store = testActivityProfiles();
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const sessions = createPostgresSessionStore(testSharedDatabaseUrl());
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) });
   const deliveries = createDeliveryStore();
   const calls: TurnRequest[] = [];
   const settled: Promise<void>[] = [];

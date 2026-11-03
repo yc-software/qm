@@ -5,8 +5,7 @@ import type { BackgroundWatchArmedResult, BackgroundWatchResult } from "../src/m
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
-import { testMonitorRows } from "./support/typed-stores.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testMonitorRows, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 function test(name: string, fn: () => void | Promise<void>): void {
@@ -23,7 +22,7 @@ function armed(r: BackgroundWatchResult): BackgroundWatchArmedResult {
 
 async function agent(readOutputTail: ReadOutputTail = async () => ({ outputTail: "" })) {
   const store = createMonitorStore(testMonitorRows());
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
+  const registry = createPostgresProcessRegistry(testSharedDatabaseUrl());
   const rec = await registry.register({
     processId: "p-1",
     scopeId: SCOPE,

@@ -15,10 +15,10 @@ import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testConfigStore, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { testCronRows, testWebhookRows } from "./support/typed-stores.ts";
+import { testCronRows, testWebhookRows, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 function test(name: string, fn: () => void | Promise<void>): void {
@@ -44,12 +44,12 @@ const pubMembers = new Set([OWNER, PUB_MEMBER]);
 const groupMembers = new Set([OWNER, GROUP_MEMBER]);
 
 function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: AdvisoryLock } = {}) {
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const files = createPostgresFileArtifactStore(testSharedDatabaseUrl(), createMemoryDurableByteStore());
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) });
   const webhooks = createWebhookStore(testWebhookRows());
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const acl = createAclStore(createPostgresGrantStore(testSharedDatabaseUrl()));
   const config = overrides.config ?? testConfigStore(ORG);
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const auditLog = createPostgresAuditLog(testSharedDatabaseUrl());
   const identity = {
     classify: (id: string) => ({ id, type: "internal" }),
     isInternal: (p: { type: string }) => p.type === "internal",

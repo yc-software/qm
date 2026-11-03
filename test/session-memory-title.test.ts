@@ -8,10 +8,10 @@ import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { testSessionMailbox } from "./support/typed-stores.ts";
+import { testSessionMailbox, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };
@@ -29,9 +29,9 @@ interface Rig {
 }
 
 async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(testSharedDatabaseUrl());
+  const { runs } = createPostgresRunStore(testSharedDatabaseUrl());
+  const signals = createPostgresRunSignalStore(testSharedDatabaseUrl());
   const mailbox = testSessionMailbox();
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({

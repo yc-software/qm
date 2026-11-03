@@ -37,10 +37,10 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testCronRows } from "./support/typed-stores.ts";
+import { testCronRows, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
@@ -312,7 +312,7 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   const idStore = createIdempotencyStore(testMap<IdempotencyRecord>());
   const scheduler = createScheduler({
     ...singleProcessDeps(),
-    crons: createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    crons: createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) }),
     deliveries: createDeliveryStore(),
     idempotency: idStore,
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
@@ -623,7 +623,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       resume: (ask, grant) => built.fireAskResolution!(ask, grant),
     });
     server = createServer(built.app, {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      replayDedupe: createPostgresReplayDedupe(testSharedDatabaseUrl()),
       signingSecret: SECRET,
       keychain: built.keychain,
       keychainApprovals: approvals,

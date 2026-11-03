@@ -2,7 +2,7 @@ import type { Destination } from "../types.ts";
 import type { Webhook } from "../triggers/types.ts";
 import type { WebhookStore } from "./webhook-store.ts";
 import { getVerifier, type VerifierInput } from "./verifiers.ts";
-import { inTenantOf } from "../tenants/claim.ts";
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import { buildWebhookWakeEnvelope, capForEscaping } from "../wake/wake-envelope.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
@@ -148,10 +148,10 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
   }
 
   return {
-    async deliver(id, req) {
+    deliver: crossTenantLoop(async (id: string, req: { headers: VerifierInput["headers"]; rawBody: string }) => {
       const wh = await deps.webhooks.claim(id);
-      if (!wh?.enabled) return { status: 404 };
+      if (!wh?.enabled) return { status: 404 } as const;
       return inTenantOf(wh.tenantId, () => accept(wh, req));
-    },
+    }),
   };
 }

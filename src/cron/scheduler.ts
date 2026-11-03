@@ -14,7 +14,7 @@ import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { inTenantOf } from "../tenants/claim.ts";
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 import { boundTenant } from "../tenants/context.ts";
 import { recoverNextFireAt } from "./schedule.ts";
 import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
@@ -400,7 +400,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   };
 
-  const tick = async (nowArg?: number): Promise<void> => {
+  const tick = crossTenantLoop(async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
     const observed = epoch;
     await withWork(() =>
@@ -411,7 +411,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         await deps.sweepAsks?.(t).catch(reportFailureAs("scheduler: ask sweep", undefined));
       }),
     );
-  };
+  });
 
   const makeSweeper = () =>
     createSweeper(() => tick().catch(reportFailureAs("scheduler: tick", undefined)), 1000, {

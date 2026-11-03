@@ -220,11 +220,11 @@ test(
           ["L1", "L1"],
         );
         assert.equal((await ledger.queued("L1", 1)).length, 1);
-        const claimed = await ledger.claim("older-id");
+        const claimed = await ledger.claim(loopItemId("L1", "t1"));
         assert.equal(claimed?.status, "in_progress");
         assert.equal((await ledger.queued("L1")).length, 1);
         assert.equal(
-          (await ledger.queued("L1")).some((item) => item.id === "older-id"),
+          (await ledger.queued("L1")).some((item) => item.id === loopItemId("L1", "t1")),
           false,
         );
         const stats = await ledger.stats("L1", Date.now(), new Set());
@@ -234,7 +234,7 @@ test(
         assert.equal(await ledger.prune("L1", { maxItems: 10, retentionMs: 0 }), 1);
         assert.deepEqual(
           (await ledger.byLoop("L1")).map((item) => item.id),
-          ["older-id"],
+          [loopItemId("L1", "t1")],
         );
         await ledger.deleteByLoop("L1");
         assert.deepEqual(await ledger.byLoop("L1"), []);

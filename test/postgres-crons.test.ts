@@ -1,3 +1,4 @@
+import { useOwnerDatabase } from "../src/tenants/claim.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createCronStore } from "../src/cron/cron-store.ts";
@@ -103,6 +104,7 @@ test("due crons are claimed across tenants and each slot is claimed once", { ski
       const crons = createCronStore(rows, { fires: testCronFires() });
       const ownerRows = createPostgresCronRows(ownerUrl);
       const claims = createCronStore(ownerRows, { fires: testCronFires() });
+      useOwnerDatabase(ownerUrl);
       const first = Date.now() - HOUR;
       const a = await withTenant(tenant, () =>
         crons.create(input({ schedule: { everyMs: HOUR, firstFireAt: first } })),

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import { createHmac } from "node:crypto";
 import { conversationEvent, createLoopIngress, type LoopIngress, type IngressDelivery } from "../src/loops/ingress.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";

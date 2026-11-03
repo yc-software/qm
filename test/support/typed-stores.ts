@@ -12,18 +12,31 @@ import { createPostgresMemoryTidyProfiles } from "../../src/memory/tidy-profiles
 import { createPostgresSuggestedActivityProfiles } from "../../src/suggestions/activity-profiles.ts";
 import { createPostgresSwarmRows } from "../../src/swarms/swarm-table.ts";
 import { testDatabaseUrl } from "./test-database.ts";
+import { tenantBoundUrl } from "./test-tenants.ts";
+import { afterEach } from "node:test";
 
-export const testCronRows = () => createPostgresCronRows(testDatabaseUrl());
-export const testCronFires = () => createPostgresCronFireStore(testDatabaseUrl());
-export const testMonitorRows = () => createPostgresMonitorRows(testDatabaseUrl());
-export const testWebhookRows = () => createPostgresWebhookRows(testDatabaseUrl());
-export const testLoopRows = () => createPostgresLoopRows(testDatabaseUrl());
-export const testItemRows = () => createPostgresItemRows(testDatabaseUrl());
-export const testOutputRows = () => createPostgresOutputRows(testDatabaseUrl());
-export const testShipGrantRows = () => createPostgresShipGrantRows(testDatabaseUrl());
-export const testIngressSourceRows = () => createPostgresIngressSourceRows(testDatabaseUrl());
-export const testIngressDeliveryRows = () => createPostgresIngressDeliveryRows(testDatabaseUrl());
-export const testSessionMailbox = () => createPostgresSessionMailbox(testDatabaseUrl());
-export const testTidyProfiles = () => createPostgresMemoryTidyProfiles(testDatabaseUrl());
-export const testActivityProfiles = () => createPostgresSuggestedActivityProfiles(testDatabaseUrl());
-export const testSwarmRows = () => createPostgresSwarmRows(testDatabaseUrl());
+let shared: string | undefined;
+afterEach(() => {
+  shared = undefined;
+});
+
+export const testSharedDatabaseUrl = (): string => (shared ??= testDatabaseUrl());
+
+export const testCronRows = (url = testSharedDatabaseUrl()) => createPostgresCronRows(tenantBoundUrl(url));
+export const testCronFires = (url = testSharedDatabaseUrl()) => createPostgresCronFireStore(tenantBoundUrl(url));
+export const testMonitorRows = (url = testSharedDatabaseUrl()) => createPostgresMonitorRows(tenantBoundUrl(url));
+export const testWebhookRows = (url = testSharedDatabaseUrl()) => createPostgresWebhookRows(tenantBoundUrl(url));
+export const testLoopRows = (url = testSharedDatabaseUrl()) => createPostgresLoopRows(tenantBoundUrl(url));
+export const testItemRows = (url = testSharedDatabaseUrl()) => createPostgresItemRows(tenantBoundUrl(url));
+export const testOutputRows = (url = testSharedDatabaseUrl()) => createPostgresOutputRows(tenantBoundUrl(url));
+export const testShipGrantRows = (url = testSharedDatabaseUrl()) => createPostgresShipGrantRows(tenantBoundUrl(url));
+export const testIngressSourceRows = (url = testSharedDatabaseUrl()) =>
+  createPostgresIngressSourceRows(tenantBoundUrl(url));
+export const testIngressDeliveryRows = (url = testSharedDatabaseUrl()) =>
+  createPostgresIngressDeliveryRows(tenantBoundUrl(url));
+export const testSessionMailbox = (url = testSharedDatabaseUrl()) => createPostgresSessionMailbox(tenantBoundUrl(url));
+export const testTidyProfiles = (url = testSharedDatabaseUrl()) =>
+  createPostgresMemoryTidyProfiles(tenantBoundUrl(url));
+export const testActivityProfiles = (url = testSharedDatabaseUrl()) =>
+  createPostgresSuggestedActivityProfiles(tenantBoundUrl(url));
+export const testSwarmRows = (url = testSharedDatabaseUrl()) => createPostgresSwarmRows(tenantBoundUrl(url));

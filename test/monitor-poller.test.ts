@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
@@ -11,7 +12,7 @@ import type { ProcessSandbox, ProcessSession, SandboxHandle } from "../src/sandb
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testMap } from "./support/test-database.ts";
 import { testMonitorRows } from "./support/typed-stores.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -106,8 +107,9 @@ async function agent(opts?: {
   onRun?: () => Promise<void>;
 }) {
   const fake = fakeSandbox();
-  const monitors = createMonitorStore(testMonitorRows());
-  const processes = createPostgresProcessRegistry(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const monitors = createMonitorStore(testMonitorRows(url));
+  const processes = createPostgresProcessRegistry(url);
   const deliveries = createDeliveryStore();
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {

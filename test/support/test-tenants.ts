@@ -1,3 +1,4 @@
+import { test as nodeTest, type TestContext, type TestOptions } from "node:test";
 import { TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { isTenantId, withTenant } from "../../src/tenants/context.ts";
 
@@ -20,4 +21,14 @@ export function inTestTenant<T>(fn: () => T, tenant = testTenants()[0]): T {
 
 export function testTenantHeaders(tenant = testTenants()[0]): Record<string, string> {
   return { [TENANT_HEADER]: tenant };
+}
+
+type TestBody = (context: TestContext) => void | Promise<void>;
+
+export function tenantTest(name: string, fn: TestBody): Promise<void>;
+export function tenantTest(name: string, options: TestOptions, fn: TestBody): Promise<void>;
+export function tenantTest(name: string, options: TestOptions | TestBody, fn?: TestBody): Promise<void> {
+  const body = typeof options === "function" ? options : fn;
+  if (!body) throw new Error(`Test ${name} has no body`);
+  return nodeTest(name, typeof options === "function" ? {} : options, (context) => inTestTenant(() => body(context)));
 }

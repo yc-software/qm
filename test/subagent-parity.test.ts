@@ -30,17 +30,11 @@ import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import {
-  testConfigStore,
-  testDatabaseUrl,
-  testMap,
-  testDeployBackings,
-  testAdvisoryLock,
-} from "./support/test-database.ts";
+import { testConfigStore, testMap, testDeployBackings, testAdvisoryLock } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { testSessionMailbox } from "./support/typed-stores.ts";
+import { testSessionMailbox, testSharedDatabaseUrl } from "./support/typed-stores.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
@@ -64,8 +58,8 @@ const SUBAGENT_EXCEPTIONS = {
 const exceptions = Object.keys(SUBAGENT_EXCEPTIONS) as (keyof AgentToolsOptions)[];
 
 async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean) => Call | undefined) {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(testSharedDatabaseUrl());
+  const { runs } = createPostgresRunStore(testSharedDatabaseUrl());
   const featureFlags = createFeatureFlagStore(testMap());
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
   const sidebar: Session[] = [];
@@ -74,7 +68,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     sessions,
     runs,
     mailbox: testSessionMailbox(),
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals: createPostgresRunSignalStore(testSharedDatabaseUrl()),
     maxAttempts: 1,
     conversations: {
       list: async () => sidebar,
@@ -132,8 +126,8 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       return { reply: "done", modelCalls: 1 };
     },
   };
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(testSharedDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testSharedDatabaseUrl());
   const config = testConfigStore("org");
   await config.setInteractiveFastMode(true);
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
@@ -149,11 +143,11 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     sessions,
     runs,
     workspace,
-    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(testSharedDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
     auditLog,
     agent,
-    memory: createPostgresMemoryService(testDatabaseUrl()),
+    memory: createPostgresMemoryService(testSharedDatabaseUrl()),
     deploy: createDeployService({
       ...singleProcessDeps(),
       deployStore: createDeployStore(testDeployBackings()),

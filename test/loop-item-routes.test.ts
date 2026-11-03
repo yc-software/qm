@@ -14,9 +14,16 @@ import type { Loop, LoopItem } from "../src/loops/types.ts";
 import type { LedgerItemView } from "../src/loops/ledger-view.ts";
 import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
 import { sleep } from "../src/util/async.ts";
-import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
+import { testConfigStore } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { testCronRows, testItemRows, testLoopRows, testOutputRows, testShipGrantRows } from "./support/typed-stores.ts";
+import {
+  testCronRows,
+  testItemRows,
+  testLoopRows,
+  testOutputRows,
+  testShipGrantRows,
+  testSharedDatabaseUrl,
+} from "./support/typed-stores.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -55,7 +62,7 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
       items: createLoopItemLedger(testItemRows()),
       outputs: createLoopOutputStore(testOutputRows()),
       grants: createShipGrantStore(testShipGrantRows()),
-      crons: createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+      crons: createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) }),
       config: testConfigStore("org"),
     },
     crons: new Map(),

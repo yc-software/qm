@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { inTenantOf } from "../tenants/claim.ts";
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 import type { IngressDeliveryRows, IngressSourceRows } from "./ingress-table.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Loop, LoopItem } from "./types.ts";
@@ -368,6 +368,39 @@ async function receiveSigned(
   return { status: 202, body: "Accepted" };
 }
 
+async function receiveGmail(
+  c: IngressContext,
+  request: { headers: VerifierInput["headers"]; rawBody: string },
+): Promise<{ status: number; body: string }> {
+  const { deps, enqueue } = c;
+  const authorization = request.headers.authorization;
+  if (
+    !deps.gmailConfig ||
+    !(await (deps.verifyGoogle ?? verifyGmailPush)(
+      typeof authorization === "string" ? authorization : undefined,
+      deps.gmailConfig,
+    ))
+  )
+    return { status: 401, body: "Invalid Pub/Sub identity" };
+  let notification: Record<string, unknown>;
+  try {
+    const envelope = JSON.parse(request.rawBody);
+    if (typeof envelope.message?.data !== "string") throw new Error("Missing data");
+    notification = JSON.parse(Buffer.from(envelope.message.data, "base64").toString());
+    if (typeof notification.emailAddress !== "string" || !/^\d+$/.test(String(notification.historyId)))
+      throw new Error("Invalid notification");
+  } catch {
+    return { status: 400, body: "Invalid Gmail notification" };
+  }
+  const historyId = String(notification.historyId);
+  const sources = await deps.sources.gmailWatching(String(notification.emailAddress).toLowerCase());
+  for (const source of sources)
+    await inTenantOf(source.tenantId, async () => {
+      if (await deps.enabledFor(source.owner)) await enqueue(source, historyId, { historyId });
+    });
+  return { status: 202, body: "Accepted" };
+}
+
 export function createLoopIngress(deps: LoopIngressDeps) {
   let nextCleanupAt = 0;
   const c = ingressContext(deps);
@@ -447,45 +480,20 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         await mergeSource(id, { enabled });
       });
     },
-    async receive(
-      id: string,
-      request: { headers: VerifierInput["headers"]; rawBody: string },
-    ): Promise<{ status: number; body: string }> {
-      if (Buffer.byteLength(request.rawBody) > 64_000)
-        return { status: 413, body: "Event payload must be under 64 KB" };
-      if (id === "gmail") {
-        const authorization = request.headers.authorization;
-        if (
-          !deps.gmailConfig ||
-          !(await (deps.verifyGoogle ?? verifyGmailPush)(
-            typeof authorization === "string" ? authorization : undefined,
-            deps.gmailConfig,
-          ))
-        )
-          return { status: 401, body: "Invalid Pub/Sub identity" };
-        let notification: Record<string, unknown>;
-        try {
-          const envelope = JSON.parse(request.rawBody);
-          if (typeof envelope.message?.data !== "string") throw new Error("Missing data");
-          notification = JSON.parse(Buffer.from(envelope.message.data, "base64").toString());
-          if (typeof notification.emailAddress !== "string" || !/^\d+$/.test(String(notification.historyId)))
-            throw new Error("Invalid notification");
-        } catch {
-          return { status: 400, body: "Invalid Gmail notification" };
-        }
-        const historyId = String(notification.historyId);
-        const sources = await deps.sources.gmailWatching(String(notification.emailAddress).toLowerCase());
-        for (const source of sources)
-          await inTenantOf(source.tenantId, async () => {
-            if (await deps.enabledFor(source.owner)) await enqueue(source, historyId, { historyId });
-          });
-        return { status: 202, body: "Accepted" };
-      }
-      const source = await deps.sources.claim(id);
-      if (!source) return { status: 404, body: "Not found" };
-      return inTenantOf(source.tenantId, () => receiveSigned(c, source, request));
-    },
-    async maintain() {
+    receive: crossTenantLoop(
+      async (
+        id: string,
+        request: { headers: VerifierInput["headers"]; rawBody: string },
+      ): Promise<{ status: number; body: string }> => {
+        if (Buffer.byteLength(request.rawBody) > 64_000)
+          return { status: 413, body: "Event payload must be under 64 KB" };
+        if (id === "gmail") return receiveGmail(c, request);
+        const source = await deps.sources.claim(id);
+        if (!source) return { status: 404, body: "Not found" };
+        return inTenantOf(source.tenantId, () => receiveSigned(c, source, request));
+      },
+    ),
+    maintain: crossTenantLoop(async () => {
       if (Date.now() >= nextCleanupAt) {
         await deps.deliveries.pruneCompleted(Date.now() - 30 * 86_400_000);
         nextCleanupAt = Date.now() + 86_400_000;
@@ -498,7 +506,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
             swallow("Loop ingestion", error),
           );
       }
-    },
+    }),
     process: (sourceId: string) => processSource(c, sourceId),
   };
 }

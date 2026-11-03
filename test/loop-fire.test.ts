@@ -18,10 +18,17 @@ import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testMap } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { testCronRows, testItemRows, testLoopRows, testOutputRows, testShipGrantRows } from "./support/typed-stores.ts";
+import {
+  testCronRows,
+  testItemRows,
+  testLoopRows,
+  testOutputRows,
+  testShipGrantRows,
+  testSharedDatabaseUrl,
+} from "./support/typed-stores.ts";
 
 function fakeIdentity() {
   return {
@@ -59,7 +66,7 @@ function service(
   },
 ) {
   const loops = createLoopStore(testLoopRows());
-  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testSharedDatabaseUrl()) });
   const items = createLoopItemLedger(testItemRows());
   const outputs = createLoopOutputStore(testOutputRows());
   const grants = overrides?.grants ?? createShipGrantStore(testShipGrantRows());
@@ -363,7 +370,7 @@ test("the scheduler sweep detects a stale loop that has never fired", async () =
 });
 
 test("a stale-loop ping is withheld from a group DM its owner has left", async () => {
-  const directory = createPostgresDirectoryStore(testDatabaseUrl());
+  const directory = createPostgresDirectoryStore(testSharedDatabaseUrl());
   await inTestTenant(async () => {
     await directory.replace([
       { principalId: "josh", displayName: "Josh", type: "internal" },
@@ -382,7 +389,7 @@ test("a stale-loop ping is withheld from a group DM its owner has left", async (
 
 test("a stale-loop ping still reaches the owner's web conversation", async () => {
   const s = service(HAPPY, {
-    directory: createPostgresDirectoryStore(testDatabaseUrl()),
+    directory: createPostgresDirectoryStore(testSharedDatabaseUrl()),
     resolveRecipient: async () => ({ kind: "none" }),
   });
   const loop = await makeLoop(s.loops, {
