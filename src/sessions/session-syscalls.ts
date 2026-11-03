@@ -411,6 +411,13 @@ export async function stoppableAncestors(
   return session.parentSessionId ? sessions.sameScopeAncestors([session.threadRef]) : [];
 }
 
+export async function stoppableRoot(
+  sessions: Pick<SessionStore, "sameScopeAncestors">,
+  session: Session,
+): Promise<Session | undefined> {
+  return (await stoppableAncestors(sessions, session)).find((ancestor) => !ancestor.parentSessionId);
+}
+
 export async function sessionTreeWorking(
   sessions: Pick<SessionStore, "childrenOf">,
   runs: Pick<RunStore, "activeForThread">,
@@ -430,7 +437,7 @@ export async function workingSessionThreadRefs(
   const active = await runs.activeSessionIds();
   const working = new Set(active);
   for (const ancestor of await sessions.sameScopeAncestors(active))
-    if (!awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
+    if (!ancestor.parentSessionId && !awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
   return working;
 }
 
