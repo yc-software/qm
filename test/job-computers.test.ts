@@ -32,7 +32,7 @@ function fixture() {
     },
     async teardown() {},
     async listProcesses(handle: SandboxHandle) {
-      return (await processes.listByScope("channel:room"))
+      return (await inTestTenant(() => processes.listByScope("channel:room")))
         .filter((job) => job.sandboxId === handle.resourceId)
         .map((job) => ({
           processId: job.processId,

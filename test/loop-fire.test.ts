@@ -649,7 +649,7 @@ for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
       fireLoop: (id, key, cronId) => s.fire.fire(id, key, cronId),
     });
     await scheduler.tick(cron.createdAt + 60_000);
-    assert.equal((await s.crons.listFires(cron.id)).runs[0]?.status, "ok");
+    assert.equal((await inTestTenant(() => s.crons.listFires(cron.id))).runs[0]?.status, "ok");
     assert.deepEqual(s.turns.map(stage), ["intake", "work", "judge"]);
     await s.fire.fire(loop.id, "manual");
     const output = (await s.outputs.awaitingReview(loop.id))[0]!;
