@@ -933,7 +933,7 @@ test("a delegation chain whose older runs were pruned still sends; a deleted cur
     sessionId: child.threadRef,
     request: { actor, conversation, origin: { kind: "direct" }, text: "continue", delegatingRunId: spawner.id },
   });
-  await r.runs.pruneFinished(Date.now() + 1);
+  await r.runs.pruneFinished(Date.now() + 1, { deadline: Date.now() + 60_000, stop: () => false });
   assert.equal(await r.runs.get(spawner.id), undefined);
   const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
   const api = factory.forTurn({ session: child, scopeId: scope, request: { actor, conversation, runId: childRun.id } });
