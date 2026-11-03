@@ -1,5 +1,5 @@
 import { createPgPool, type Sql } from "./pg-pool.ts";
-import { swallow } from "../util/errors.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 
 type Subscription = { channel: string; receive: (payload: string) => void; resync: () => void };
 const listeners = new Map<string, ReturnType<typeof createListener>>();
@@ -19,7 +19,9 @@ function createListener(connectionString: string) {
     connection = null;
     channels.clear();
     ready.clear();
-    void previous?.then((sql) => sql.end({ timeout: 0 })).catch(() => undefined);
+    void previous
+      ?.then((sql) => sql.end({ timeout: 0 }))
+      .catch(swallowAs("postgres-listener: close failed", undefined));
   }
 
   function scheduleRetry() {
@@ -62,7 +64,7 @@ function createListener(connectionString: string) {
       await pg.close();
       return;
     }
-    const current = (connection ??= pg.dedicated({ pinned: true }));
+    const current = (connection ??= pg.dedicated());
     const sql = await current;
     const wanted = new Set([...subscriptions].map(({ channel }) => channel));
     for (const [channel, unlisten] of channels) {

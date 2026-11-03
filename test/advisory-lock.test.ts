@@ -245,7 +245,7 @@ async function idle(pool: Sql): Promise<boolean> {
 }
 
 test("pg nested locks reuse one connection without bypassing sibling exclusion", { skip, timeout: 10000 }, async () => {
-  const pool = openPgSql(URL!, { max: 1, pinned: true });
+  const pool = openPgSql(URL!, { max: 1 });
   const pg = createPgPool(URL!);
   const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool }, { pollMs: 5, timeoutMs: 100 });
   try {
@@ -305,7 +305,7 @@ test(
   "pg nested lock leases outlive their parent and late inherited work leases anew",
   { skip, timeout: 10000 },
   async () => {
-    const pool = openPgSql(URL!, { max: 1, pinned: true });
+    const pool = openPgSql(URL!, { max: 1 });
     const pg = createPgPool(URL!);
     const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool }, { pollMs: 5 });
     const entered = Promise.withResolvers<void>();
@@ -340,7 +340,7 @@ test(
 );
 
 test("pg contended polling releases connections for unrelated keys", { skip, timeout: 10000 }, async () => {
-  const pool = openPgSql(URL!, { max: 2, pinned: true });
+  const pool = openPgSql(URL!, { max: 2 });
   const pg = createPgPool(URL!);
   const lock = createPostgresAdvisoryLock({ ...pg, sessionPool: async () => pool }, { pollMs: 5 });
   const entered = Promise.withResolvers<void>();

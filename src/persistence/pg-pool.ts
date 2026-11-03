@@ -2,18 +2,18 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { TransactionSql } from "postgres";
 import {
+  CONNECT_TIMEOUT_S,
   openPgSql,
   pgClient,
   pgConnectionOptions as driverConnectionOptions,
   pgUnsafe,
   reservePg,
-  usePg,
   type PgClient,
   type PgConnection,
   type Sql,
 } from "./pg-driver.ts";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 
 export { reservePg };
 export type { PgClient, Sql };
@@ -78,7 +78,7 @@ async function releasePool(
   if (!entry || entry.pool !== pool) return;
   if (--entry.users === 0) {
     sharedPools.delete(key);
-    await usePg(pool, () => pool.end({ timeout: 5 }));
+    await pool.end({ timeout: CONNECT_TIMEOUT_S });
   }
 }
 
@@ -118,7 +118,7 @@ export interface PgQueryOptions {
 export interface PgPool {
   pool(): Promise<Sql>;
   sessionPool(): Promise<Sql>;
-  dedicated(options?: { pinned?: boolean; onclose?: () => void }): Promise<Sql>;
+  dedicated(options?: { onclose?: (id: number) => void }): Promise<Sql>;
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
   query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
   registerMigration(migration: PgMigrationDefinition): void;
@@ -161,8 +161,22 @@ async function runQuery(
   }
 }
 
-export function withPgTransaction<T>(sql: Sql, fn: (client: PgClient) => Promise<T>): Promise<T> {
-  return usePg(sql, () => sql.begin((tx) => fn(pgClient(tx))) as Promise<T>);
+export async function withPgTransaction<T>(sql: Sql, fn: (client: PgClient) => Promise<T>): Promise<T> {
+  let failure: { error: unknown } | undefined;
+  try {
+    return (await sql.begin(async (tx) => {
+      try {
+        return await fn(pgClient(tx));
+      } catch (error) {
+        failure = { error };
+        throw error;
+      }
+    })) as T;
+  } catch (error) {
+    if (!failure) throw error;
+    if (error !== failure.error) swallow("pg-pool: rollback transaction", error);
+    throw failure.error;
+  }
 }
 
 export function assertOneStatement(stmt: string): void {
@@ -407,7 +421,7 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
           [...registered.values()].sort((a, b) => a.id.localeCompare(b.id)),
         );
       } finally {
-        await usePg(pool, () => pool.end({ timeout: 5 }));
+        await pool.end({ timeout: CONNECT_TIMEOUT_S });
       }
     });
   }
@@ -457,7 +471,7 @@ export function createPgPool(
     if (closed) throw new Error("Postgres store is closed");
     return (sessionPoolP ??= retainPool(connectionString, "session"));
   }
-  async function dedicated(options: { pinned?: boolean; onclose?: () => void } = {}): Promise<Sql> {
+  async function dedicated(options: { onclose?: (id: number) => void } = {}): Promise<Sql> {
     await ready();
     if (closed) throw new Error("Postgres store is closed");
     return openPgSql(connectionString, { max: 1, ca: installedCaTrust.ssl?.ca, ...options });
@@ -468,7 +482,7 @@ export function createPgPool(
     options: PgQueryOptions = {},
   ): Promise<{ rows: Rows; rowCount: number }> {
     const p = await pool();
-    return usePg(p, () => runQuery(p, text, params, options));
+    return runQuery(p, text, params, options);
   }
   async function q(text: string, params: unknown[] = [], options?: PgQueryOptions): Promise<Rows> {
     return (await query(text, params, options)).rows;

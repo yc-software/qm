@@ -1,6 +1,5 @@
-import type { PgPool, Sql } from "./pg-pool.ts";
-import { pgRun, usePg } from "./pg-driver.ts";
-import { swallow } from "../util/errors.ts";
+import { reservePg, type PgClient, type PgPool, type Sql } from "./pg-pool.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 
 export interface LeaderLease {
   hold<T>(key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
@@ -18,31 +17,43 @@ export function createNoopLeaderLease(): LeaderLease {
 
 export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
   interface Conn {
-    cp: Promise<Sql>;
+    cp: Promise<Lock>;
     lost: Set<() => void>;
+  }
+  interface Lock {
+    sql: Sql;
+    client: PgClient & { release(): void };
   }
   let conn: Conn | null = null;
   const held = new Set<string>();
 
-  function drop(entry: Conn, c: Sql): void {
+  function drop(entry: Conn, lock: Lock): void {
     if (conn !== entry) return;
     conn = null;
     for (const notify of entry.lost) notify();
     entry.lost.clear();
-    c.end({ timeout: 0 }).catch((e: unknown) => swallow("leader-lease: lock connection close failed", e));
+    lock.client.release();
+    lock.sql.end().catch(swallowAs("leader-lease: lock connection close failed", undefined));
   }
 
   function client(): Conn {
     if (!conn) {
-      const entry: Conn = { cp: undefined as unknown as Promise<Sql>, lost: new Set() };
-      entry.cp = pg.dedicated({
-        onclose: () => {
-          if (conn !== entry) return;
-          if (entry.lost.size)
-            swallow("leader-lease: lock connection died (its locks auto-released)", new Error("connection closed"));
-          void entry.cp.then((c) => drop(entry, c));
-        },
-      });
+      const entry: Conn = { cp: undefined as unknown as Promise<Lock>, lost: new Set() };
+      entry.cp = (async () => {
+        const sql = await pg.dedicated({
+          onclose: (id) => {
+            if (conn !== entry) return;
+            console.error(`[leader-lease] lock connection ${id} closed; its advisory locks were released`);
+            void entry.cp.then((lock) => drop(entry, lock));
+          },
+        });
+        try {
+          return { sql, client: await reservePg(sql) };
+        } catch (error) {
+          await sql.end().catch(swallowAs("leader-lease: lock connection close failed", undefined));
+          throw error;
+        }
+      })();
       entry.cp.catch(() => {
         if (conn === entry) conn = null;
       });
@@ -51,15 +62,21 @@ export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
     return conn;
   }
 
-  async function lead<T>(entry: Conn, c: Sql, key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
+  async function lead<T>(
+    entry: Conn,
+    lock: Lock,
+    key: string,
+    fn: (lost: Promise<void>) => Promise<T>,
+  ): Promise<T | null> {
     let won: boolean;
     try {
-      const res = await pgRun<{ won: boolean }>(c, "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS won", [
-        `leader-lease:${key}`,
-      ]);
+      const res = await lock.client.query<{ won: boolean }>(
+        "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS won",
+        [`leader-lease:${key}`],
+      );
       won = res.rows[0]?.won === true;
     } catch (e) {
-      drop(entry, c);
+      drop(entry, lock);
       throw e;
     }
     if (!won) return null;
@@ -71,8 +88,7 @@ export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
     } finally {
       entry.lost.delete(notifyLost);
       try {
-        const res = await pgRun<{ released: boolean }>(
-          c,
+        const res = await lock.client.query<{ released: boolean }>(
           "SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS released",
           [`leader-lease:${key}`],
         );
@@ -80,11 +96,11 @@ export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
           console.error(
             `[leader-lease] unlock of ${key} reported not-held — is DATABASE_URL behind a transaction-pooling proxy?`,
           );
-          drop(entry, c);
+          drop(entry, lock);
         }
       } catch (e) {
         swallow(`leader-lease: unlock of ${key} failed; dropping the lock connection`, e);
-        drop(entry, c);
+        drop(entry, lock);
       }
     }
   }
@@ -93,12 +109,12 @@ export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
     async hold<T>(key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
       if (held.has(key)) return null;
       held.add(key);
+      const entry = client();
       try {
-        const entry = client();
-        const c = await entry.cp;
-        return await usePg(c, () => lead(entry, c, key, fn));
+        return await lead(entry, await entry.cp, key, fn);
       } finally {
         held.delete(key);
+        if (!held.size && conn === entry) drop(entry, await entry.cp);
       }
     },
   };

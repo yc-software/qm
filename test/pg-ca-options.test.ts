@@ -7,52 +7,23 @@ import { configurePgCaTrust, pgConnectionOptions, resolvePgCaTrust } from "../sr
 
 const PEM = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
 
-test("configured CA trust reaches the Postgres client when the URL specifies SSL settings", (t) => {
+test("configured CA trust verifies the Postgres server whatever SSL settings the URL carries", (t) => {
   configurePgCaTrust({ cert: PEM });
   t.after(() => configurePgCaTrust({}));
-  for (const query of [
-    "sslmode=verify-full",
-    "sslmode=require",
-    "sslmode=disable",
-    "sslmode=no-verify",
-    "ssl=0",
-    "ssl=true",
-    "ssl=no-verify",
-    "sslnegotiation=direct",
-  ]) {
-    assert.deepEqual(pgConnectionOptions(`postgres://user:password@localhost/core?${query}`).ssl, { ca: PEM });
+  for (const query of ["sslmode=verify-full", "sslmode=require", "sslmode=disable", "sslmode=no-verify", "ssl=true"]) {
+    const { url, ssl } = pgConnectionOptions(`postgres://user:password@localhost/core?${query}`);
+    assert.deepEqual(ssl, { ca: PEM });
+    assert.equal(new URL(url).search, "");
   }
 });
 
-test("configured CA trust preserves the Postgres client certificate and key", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "pgca-client-"));
-  const cert = join(dir, "client.crt");
-  const key = join(dir, "client.key");
-  writeFileSync(cert, "client-certificate");
-  writeFileSync(key, "client-key");
-  const url = new URL("postgres://user:password@localhost/core?sslmode=verify-full");
-  url.searchParams.set("sslcert", cert);
-  url.searchParams.set("sslkey", key);
-  configurePgCaTrust({ cert: PEM });
-  t.after(() => configurePgCaTrust({}));
-  const { ssl } = pgConnectionOptions(url.toString());
-  assert.deepEqual(ssl, { ca: PEM, cert: "client-certificate", key: "client-key" });
-});
-
-test("Postgres URL SSL settings remain effective without a configured CA", () => {
-  assert.equal(pgConnectionOptions("postgres://user:password@localhost/core?sslmode=disable").ssl, false);
-});
-
-test("URL SSL modes keep their verification semantics without a configured CA", () => {
-  const ssl = (query: string) => pgConnectionOptions(`postgres://user:password@localhost/core?${query}`).ssl;
-  assert.deepEqual(ssl("sslmode=require"), {});
-  assert.deepEqual(ssl("sslmode=no-verify"), { rejectUnauthorized: false });
-  assert.equal(ssl("ssl=true"), true);
-  assert.equal(ssl("ssl=0"), false);
-  assert.equal(
-    pgConnectionOptions("postgres://user:password@localhost/core?sslmode=require").url.includes("ssl"),
-    false,
-  );
+test("without a configured CA the URL keeps its sslmode, with no-verify mapped to unverified TLS", () => {
+  const options = (query: string) => pgConnectionOptions(`postgres://user:password@localhost/core?${query}`);
+  assert.deepEqual(options("sslmode=disable"), { url: "postgres://user:password@localhost/core?sslmode=disable" });
+  assert.deepEqual(options("sslmode=verify-full"), {
+    url: "postgres://user:password@localhost/core?sslmode=verify-full",
+  });
+  assert.deepEqual(options("sslmode=no-verify"), { url: "postgres://user:password@localhost/core?sslmode=require" });
 });
 
 test("no CA configured → no ssl override (connection string semantics untouched)", () => {

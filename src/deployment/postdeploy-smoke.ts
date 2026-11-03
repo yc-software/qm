@@ -1,7 +1,7 @@
-import { pgConnectionOptions, resolvePgCaTrust } from "../persistence/pg-pool.ts";
+import { resolvePgCaTrust } from "../persistence/pg-pool.ts";
+import { openPgSql } from "../persistence/pg-driver.ts";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import postgres from "postgres";
 import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
 import { mintSignedPayload } from "../auth/signed-token.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
@@ -282,16 +282,11 @@ type PostdeployConfig = Pick<
 async function checkDatabase(config: PostdeployConfig): Promise<void> {
   const { databaseUrl } = config;
   if (!databaseUrl) throw new Error("postdeploy smoke requires DATABASE_URL");
-  const { url, ssl } = pgConnectionOptions(
-    databaseUrl,
-    resolvePgCaTrust({ cert: config.databaseCaCert, certFile: config.databaseCaCertFile }).ssl?.ca,
-  );
-  const sql = postgres(url, {
-    ssl,
+  const sql = openPgSql(databaseUrl, {
     max: 1,
-    connect_timeout: 30,
-    connection: { statement_timeout: 30_000 },
-    onnotice: () => {},
+    ca: resolvePgCaTrust({ cert: config.databaseCaCert, certFile: config.databaseCaCertFile }).ssl?.ca,
+    connectTimeoutS: 30,
+    statementTimeoutMs: 30_000,
   });
   try {
     const unsafe = await sql.unsafe(PARALLEL_EXCEPTION_QUERY);
