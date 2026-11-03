@@ -7,7 +7,7 @@ import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction }
 import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
-import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { ownerUrlOf, testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
 
@@ -26,7 +26,7 @@ const role = `tenant_probe_${randomUUID().slice(0, 8)}`;
 
 before(async () => {
   if (skip) return;
-  url = testMigratedDatabaseUrl();
+  url = ownerUrlOf(testMigratedDatabaseUrl());
   owner = new pg.Pool({ connectionString: url });
   await owner.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`);
   app = new pg.Pool({ connectionString: asRole(url, role) });
