@@ -6,7 +6,7 @@ export type { Sql };
 
 type Queryable = Sql | TransactionSql;
 
-export interface PgResult<R> {
+interface PgResult<R> {
   rows: R[];
   rowCount: number;
 }
@@ -64,7 +64,6 @@ export function openPgSql(
     prepare: true,
     connect_timeout: connectTimeoutS,
     idle_timeout: IDLE_TIMEOUT_S,
-    backoff: () => 0,
     max_lifetime: null,
     onnotice: () => {},
     transform: { undefined: null },
@@ -87,7 +86,7 @@ export function pgUnsafe(sql: Queryable, text: string, params: readonly unknown[
   return sql.unsafe(text, bound as never[], { prepare: true });
 }
 
-export async function pgRun<R>(sql: Queryable, text: string, params: readonly unknown[] = []): Promise<PgResult<R>> {
+async function pgRun<R>(sql: Queryable, text: string, params: readonly unknown[] = []): Promise<PgResult<R>> {
   const result = await pgUnsafe(sql, text, params);
   return { rows: [...result] as R[], rowCount: result.count ?? 0 };
 }
