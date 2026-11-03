@@ -1,5 +1,12 @@
 import { createPgPool, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
+import { claimAcrossTenants } from "../tenants/claim.ts";
+
+export interface TenantEntry<T> {
+  tenantId: string;
+  id: string;
+  value: T;
+}
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
@@ -12,6 +19,7 @@ export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
 export interface DurableMap<T> {
   all(): Promise<T[]>;
   entries(): Promise<Array<[string, T]>>;
+  acrossTenants(): Promise<Array<TenantEntry<T>>>;
   select<K extends Extract<keyof T, string> = never>(query: DurableMapSelect<T, K>): Promise<Array<Omit<T, K>>>;
   selectEntries<K extends Extract<keyof T, string> = never>(
     query: DurableMapSelect<T, K>,
@@ -162,6 +170,11 @@ export function createPostgresMap<T>(
       return (await selectRows(query)).map(([, value]) => value);
     },
     selectEntries: selectRows,
+    async acrossTenants() {
+      await ready();
+      const { rows } = await claimAcrossTenants(pg, `SELECT tenant_id, id, json FROM ${table} ORDER BY tenant_id, id`);
+      return rows.map((row) => ({ tenantId: String(row.tenant_id), id: String(row.id), value: row.json as T }));
+    },
     async get(id) {
       await ready();
       const rows = await pg.q(`SELECT json FROM ${table} WHERE id = $1`, [id]);
