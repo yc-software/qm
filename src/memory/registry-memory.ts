@@ -34,7 +34,7 @@ interface Snapshot {
 export function createRegistryMemoryService(opts: {
   defaultMemory: MemoryService;
   overlay?: MemoryProviderConfig;
-  registry: Pick<MemoryRegistryStore, "current" | "overlayIds">;
+  registry: Pick<MemoryRegistryStore, "current" | "overlayIds" | "key">;
   sessionEntries?: (sessionId: string) => Promise<SessionEntry[]>;
   onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
 }): MemoryService {
@@ -53,7 +53,7 @@ export function createRegistryMemoryService(opts: {
     const { version, record } = await opts.registry.current();
     if (version === snapshot.version) return snapshot;
     try {
-      const { config, disabled } = resolveMemoryRegistry(readRegistry(record), opts.registry.overlayIds);
+      const { config, disabled } = resolveMemoryRegistry(readRegistry(record), opts.registry);
       snapshot = {
         version,
         disabled,

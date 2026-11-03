@@ -202,7 +202,7 @@ QM is always an MCP client of gbrain and never gets gbrain's database URL or its
 
 ### API
 
-Every route needs an org admin and is audited. Client secrets are write-only and read back as `hasClientSecret`; changing a brain's `url` clears its secret.
+Every route needs an org admin and is audited. Client secrets are write-only and read back as `hasClientSecret`; QM stores them encrypted with a key derived from `CONNECTOR_SECRET_KEY`, and changing a brain's `url` clears its secret.
 
 An agent can register a brain for an admin but never carries its client secret. On the admin's own turn it mints a brain link with `POST /v1/keychain/drops` and body `{"memoryBrain": "<brain id>", "purpose": "…"}`. The single-use form shows the brain, its origin and who is bound to it, and writes the secret straight into the registry, audited as `memory-registry.brain.secret`. It never enters a keychain, can't be granted and never reaches the agent's computer. The link stops working if the brain's `url` changes or its owner stops being an org admin.
 
@@ -220,11 +220,11 @@ An agent can register a brain for an admin but never carries its client secret. 
 
 A binding that QM can't serve contributes nothing, and every recall, search or explicit write for its scope records outcome `disabled` with one of these codes (problem `memory_provider_disabled`). `GET /v1/admin/memory-registry` shows each one, with a `detail` for `invalid_config`.
 
-| Code             | Cause                                                                                             | Fix                                       |
-| ---------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| `secret_missing` | The brain has no client secret, for example after its `url` changed.                              | Set the brain's client secret.            |
-| `preset_unknown` | This QM build doesn't know the brain's preset, for example during a rollback.                     | Upgrade QM, or change the preset.         |
-| `id_taken`       | `MEMORY_PROVIDER_CONFIG` now defines a provider with the brain's id.                              | Re-register the brain under another id.   |
-| `invalid_config` | The entry breaks a provider rule, such as the URL rule under [Troubleshooting](#troubleshooting). | Read its `detail`, then fix or delete it. |
+| Code             | Cause                                                                                                                                                            | Fix                                                                |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `secret_missing` | The brain has no client secret, for example after its `url` changed.                                                                                             | Set the brain's client secret.                                     |
+| `preset_unknown` | This QM build doesn't know the brain's preset, for example during a rollback.                                                                                    | Upgrade QM, or change the preset.                                  |
+| `id_taken`       | `MEMORY_PROVIDER_CONFIG` now defines a provider with the brain's id.                                                                                             | Re-register the brain under another id.                            |
+| `invalid_config` | The entry breaks a provider rule, such as the URL rule under [Troubleshooting](#troubleshooting), or its secret was stored under another `CONNECTOR_SECRET_KEY`. | Read its `detail`, then fix or delete it, or set the secret again. |
 
 A stored record this build can't read leaves the last valid snapshot serving; an instance that starts on such a record serves the env routes only. To roll back, delete registry bindings first, then revert QM; the table is never dropped.

@@ -785,6 +785,7 @@ export function buildApp(
   const memorySessions: { store?: SessionStore } = {};
   const memoryRegistry = createMemoryRegistryStore({
     map: artifactMap<MemoryRegistry>(MEMORY_REGISTRY_TABLE),
+    key: deriveConnectorKey(config.connectorSecretKey ?? randomBytes(32), "memory-registry"),
     ...(config.memoryProviderConfig ? { overlay: config.memoryProviderConfig } : {}),
   });
   const baseMemory: MemoryService = withMemoryTidy(

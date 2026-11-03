@@ -8,6 +8,8 @@ import {
   redactBrain,
   resolveMemoryRegistry,
   type MemoryRegistry,
+  type MemoryRegistryStore,
+  type RegistryChange,
 } from "../../../memory/registry.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
@@ -25,22 +27,19 @@ async function registryAdmin(ctx: ApiCtx) {
   return { actor, registry: ctx.deps.memoryRegistry };
 }
 
-function view(record: MemoryRegistry, overlayIds: ReadonlySet<string>) {
+function view(record: MemoryRegistry, registry: MemoryRegistryStore) {
   return {
     brains: record.brains.map(redactBrain),
     bindings: record.bindings,
-    disabled: resolveMemoryRegistry(record, overlayIds).disabled,
-    overlay: [...overlayIds],
+    disabled: resolveMemoryRegistry(record, registry).disabled,
+    overlay: [...registry.overlayIds],
   };
 }
 
 async function change(
   ctx: ApiCtx,
   action: string,
-  apply: (
-    record: MemoryRegistry,
-    change: { actor: string; now: number; overlayIds: ReadonlySet<string> },
-  ) => MemoryRegistry,
+  apply: (record: MemoryRegistry, change: RegistryChange) => MemoryRegistry,
 ): Promise<void> {
   const authorized = await registryAdmin(ctx);
   if (!authorized) return;
@@ -48,10 +47,10 @@ async function change(
   const id = ctx.params.id ?? "";
   try {
     const record = await registry.update((current) =>
-      apply(current, { actor: actor.id, now: Date.now(), overlayIds: registry.overlayIds }),
+      apply(current, { actor: actor.id, now: Date.now(), overlayIds: registry.overlayIds, key: registry.key }),
     );
     audit(ctx.deps, { principalId: actor.id, action, resource: id, scopeLabel: orgScope(ctx.deps) });
-    return sendJson(ctx.res, 200, { ok: true, ...view(record, registry.overlayIds) });
+    return sendJson(ctx.res, 200, { ok: true, ...view(record, registry) });
   } catch (error) {
     if (!(error instanceof MemoryRegistryError)) throw error;
     return sendJson(ctx.res, error.status, { error: ERRORS[error.status], message: error.message });
@@ -68,7 +67,7 @@ async function read(ctx: ApiCtx, pick?: (full: ReturnType<typeof view>) => objec
     resource: ctx.params.id ?? "memory-registry",
     scopeLabel: orgScope(ctx.deps),
   });
-  const full = view(readRegistry((await registry.current()).record), registry.overlayIds);
+  const full = view(readRegistry((await registry.current()).record), registry);
   const found = pick ? pick(full) : full;
   return found ? sendJson(ctx.res, 200, found) : sendJson(ctx.res, 404, { error: "not_found" });
 }
