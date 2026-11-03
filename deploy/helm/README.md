@@ -4,6 +4,18 @@ This chart runs core, web-ui (including the admin settings at `/settings`), port
 (including `/idp` auth), and the optional egress proxy. `services.auth` configures
 an embedded module, not a separate Deployment or Service.
 
+## Porter revision identity
+
+Porter sets the optional `porterAddonRevisionId` string to the add-on revision UUID.
+Each enabled Deployment receives `porter.run/addon-revision-id` in its metadata labels.
+Omitting the value or setting it to `""` omits the label, so direct Helm installations
+do not need a Porter revision.
+
+Changing only this value updates Deployment metadata without changing pod templates,
+selectors, or the Secret checksum. Configuration changes retain their existing rollout
+behavior. Previously published chart versions do not render this label; existing
+installations gain it when upgraded to a chart version that supports it.
+
 ## Images
 
 There is deliberately no default image tag. Build all enabled services from the

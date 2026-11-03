@@ -15,7 +15,7 @@ const options = { skip: !helmAvailable && "Helm 3 is required" };
 type Resource = {
   kind: string;
   stringData?: Record<string, string>;
-  metadata: { name: string; annotations?: Record<string, string> };
+  metadata: { name: string; labels?: Record<string, string>; annotations?: Record<string, string> };
   spec: {
     replicas: number;
     strategy?: { type: string; rollingUpdate?: null };
@@ -25,6 +25,7 @@ type Resource = {
     ports?: { port: number; targetPort: number }[];
     rules?: { http: { paths: { backend: { service: { name: string; port: { number: number } } } }[] } }[];
     template: {
+      metadata: { labels: Record<string, string>; annotations: Record<string, string> };
       spec: {
         securityContext?: { fsGroup: number };
         volumes?: { name: string; persistentVolumeClaim: { claimName: string } }[];
@@ -90,6 +91,62 @@ function env(resources: Resource[], name = "portal") {
     ...Object.fromEntries((container(resources, name).env ?? []).map((e) => [e.name, e.value])),
   };
 }
+
+test("Helm labels every enabled Deployment with the optional Porter revision", options, () => {
+  const revision = "11111111-1111-4111-8111-111111111111";
+  for (const proxyEnabled of [true, false]) {
+    const resources = render({
+      porterAddonRevisionId: revision,
+      services: { "egress-proxy": { enabled: proxyEnabled } },
+    });
+    const deployments = resources.filter((resource) => resource.kind === "Deployment");
+    assert.deepEqual(
+      deployments.map((resource) => resource.metadata.name).sort(),
+      ["test-qm-core", "test-qm-portal", "test-qm-web-ui", ...(proxyEnabled ? ["test-qm-egress-proxy"] : [])].sort(),
+    );
+    for (const resource of deployments) {
+      assert.equal(resource.metadata.labels?.["porter.run/addon-revision-id"], revision);
+      assert.equal(resource.metadata.labels?.["app.kubernetes.io/instance"], "test");
+      assert.ok(resource.metadata.labels?.["app.kubernetes.io/component"]);
+    }
+    for (const resource of resources.filter((resource) => resource.kind !== "Deployment")) {
+      assert.equal(resource.metadata.labels?.["porter.run/addon-revision-id"], undefined);
+    }
+  }
+});
+
+test("Helm revision identity changes only Deployment metadata", options, () => {
+  const key = "porter.run/addon-revision-id";
+  const values = { secretEnv: { CORE_SIGNING_SECRET: "fixture-secret" }, env: { FIXTURE: "unchanged" } };
+  const original = render(values);
+  for (const revision of ["", "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"]) {
+    const resources = render({ ...values, porterAddonRevisionId: revision });
+    for (const resource of resources.filter((resource) => resource.kind === "Deployment")) {
+      assert.equal(resource.metadata.labels?.[key], revision || undefined);
+      delete resource.metadata.labels?.[key];
+    }
+    assert.deepEqual(resources, original);
+  }
+});
+
+test("Helm still rolls pods when Secret or environment configuration changes", options, () => {
+  const values = {
+    porterAddonRevisionId: "11111111-1111-4111-8111-111111111111",
+    secretEnv: { CORE_SIGNING_SECRET: "before" },
+    env: { FIXTURE: "before" },
+  };
+  const original = render(values);
+  const secretChanged = render({ ...values, secretEnv: { CORE_SIGNING_SECRET: "after" } });
+  const envChanged = render({ ...values, env: { FIXTURE: "after" } });
+  for (const resource of original.filter((resource) => resource.kind === "Deployment")) {
+    const name = resource.metadata.name.replace("test-qm-", "");
+    assert.notEqual(
+      deployment(secretChanged, name).spec.template.metadata.annotations["checksum/secret-env"],
+      resource.spec.template.metadata.annotations["checksum/secret-env"],
+    );
+    assert.notDeepEqual(deployment(envChanged, name).spec.template, resource.spec.template);
+  }
+});
 
 test("Helm requires an explicit compatible image and supports full digest references", options, () => {
   assert.throws(() => render({}, false), /imageRef.*image.tag/);

@@ -13,6 +13,7 @@ serviceAccount:
 
 nameOverride: ""
 fullnameOverride: ""
+porterAddonRevisionId: ""
 
 publicUrl: ""
 

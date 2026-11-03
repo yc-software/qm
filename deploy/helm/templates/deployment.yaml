@@ -17,6 +17,9 @@ metadata:
   labels:
     {{- include "qm.labels" $root | nindent 4 }}
     app.kubernetes.io/component: {{ $name }}
+    {{- with $root.Values.porterAddonRevisionId }}
+    porter.run/addon-revision-id: {{ . | quote }}
+    {{- end }}
 spec:
   replicas: {{ $svc.replicas }}
   {{- if and (eq $name "core") $svc.persistence.enabled }}
