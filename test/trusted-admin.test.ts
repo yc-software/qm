@@ -12,7 +12,6 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { trustedPrincipal } from "../plugins/portal/src/trusted-entry.ts";
 import { provisionTrustedAdmin } from "../plugins/portal/src/trusted-admin.ts";
-import { withTenant } from "../src/tenants/context.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
@@ -21,7 +20,6 @@ import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-ten
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
 const issuer = "https://identity.example.test";
-const TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
 function start(enabled = true) {
   const built = buildApp(
     testConfig({
@@ -49,6 +47,7 @@ function start(enabled = true) {
 }
 function claims(overrides: Record<string, unknown> = {}) {
   return {
+    tenant: testTenants()[0],
     purpose: "trusted-entry-admin",
     issuer,
     subject: "founder-7",
@@ -78,15 +77,15 @@ async function send(base: string, payload: unknown, key = identitySecret, source
   });
 }
 
-test("portal provisioning creates a durable ordinary grant once and preserves existing grants", async (t) => {
+test("a portal bound to its tenant provisions a durable ordinary grant there once and preserves existing grants", async (t) => {
   const s = start();
   t.after(s.close);
   const config = { core: s.base, signingSecret, identitySecret, org: "default-org", issuer };
-  await Promise.all(Array.from({ length: 8 }, () => provisionTrustedAdmin(config, "founder-7")));
+  await inTestTenant(() => Promise.all(Array.from({ length: 8 }, () => provisionTrustedAdmin(config, "founder-7"))));
   const principal = { id: trustedPrincipal(issuer, "founder-7"), type: "internal" as const };
   assert.equal((await inTestTenant(() => s.built.admin.adminStatusOf(principal))).isAdmin, true);
   const first = await inTestTenant(() => s.built.admin.listGrants());
-  await provisionTrustedAdmin(config, "founder-7");
+  await inTestTenant(() => provisionTrustedAdmin(config, "founder-7"));
   assert.deepEqual(await inTestTenant(() => s.built.admin.listGrants()), first);
   assert.equal(
     (await inTestTenant(() => s.built.auditLog.events())).filter((e) => e.action === "grant.create").length,
@@ -117,7 +116,8 @@ test("provisioning rejects forged, unrelated, expired, impersonated, and replaye
     { subject: "\ud800" },
     { imp: "operator" },
     { jti: "" },
-    { tenant: TENANT },
+    { tenant: testTenants()[1] },
+    { tenant: undefined },
   ])
     assert.ok((await send(s.base, claims(invalid))).status >= 400, JSON.stringify(invalid));
   assert.equal((await send(s.base, claims(), signingSecret)).status, 403);
@@ -130,15 +130,6 @@ test("provisioning rejects forged, unrelated, expired, impersonated, and replaye
   const payload = claims();
   assert.equal((await send(s.base, payload)).status, 200);
   assert.equal((await send(s.base, payload)).status, 409);
-});
-
-test("provisioning from a bound portal carries its tenant to core", async (t) => {
-  const s = start();
-  t.after(s.close);
-  const config = { core: s.base, signingSecret, identitySecret, org: "default-org", issuer };
-  await withTenant(TENANT, () => provisionTrustedAdmin(config, "founder-8"));
-  const principal = { id: trustedPrincipal(issuer, "founder-8"), type: "internal" as const };
-  assert.equal((await s.built.admin.adminStatusOf(principal)).isAdmin, true);
 });
 
 test("provisioning needs core opt-in and never reactivates a deactivated founder", async (t) => {
