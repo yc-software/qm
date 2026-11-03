@@ -166,7 +166,7 @@ export function createIdentityService(
     },
     refresh,
     ready(): Promise<void> {
-      return roster().loaded ? Promise.resolve() : refresh();
+      return roster().loaded ? Promise.resolve() : refresh(true);
     },
     resolve(actor: ActorAssertion): Principal {
       const p = classify(actor.externalId, actor.isExternalGuest);
