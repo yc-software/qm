@@ -140,7 +140,7 @@ END $base_schema$`,
           `SELECT EXISTS (
           SELECT 1 FROM runs r WHERE r.status='pending' AND r.retry_after <= $1
           AND NOT EXISTS (
-            SELECT 1 FROM runs blocked WHERE blocked.session_id=r.session_id
+            SELECT 1 FROM runs blocked WHERE blocked.tenant_id=r.tenant_id AND blocked.session_id=r.session_id
               AND (blocked.status='running' OR (blocked.status='pending' AND blocked.retry_after > $1))
           )
         ) AS available`,
@@ -213,7 +213,7 @@ END $base_schema$`,
 
   const claimable = (now: string) => `candidate.status='pending' AND candidate.retry_after <= ${now}
     AND NOT EXISTS (
-      SELECT 1 FROM runs sibling WHERE sibling.session_id=candidate.session_id
+      SELECT 1 FROM runs sibling WHERE sibling.tenant_id=candidate.tenant_id AND sibling.session_id=candidate.session_id
         AND (sibling.status='running' OR (sibling.status='pending'
           AND (sibling.retry_after > ${now} OR (sibling.created_at, sibling.seq) < (candidate.created_at, candidate.seq))))
       OFFSET 0
