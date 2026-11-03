@@ -211,7 +211,8 @@ export function goalTools(kit: ToolKit) {
           );
         }
         const signal = ref.abortSignal;
-        const interrupted = () => !!signal?.aborted || !!ref.shutdown?.aborted;
+        const steered = ref.steered;
+        const interrupted = () => !!signal?.aborted || !!ref.shutdown?.aborted || !!steered?.aborted;
         let arrived: string | undefined;
         try {
           arrived = await waitForGoalMessages(
