@@ -336,7 +336,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       `WITH RECURSIVE tree(id, root_id, thread_ref) AS (
          SELECT id, parent_session_id, thread_ref FROM sessions WHERE parent_session_id = ANY($1::text[])
          UNION
-         SELECT s.id, t.root_id, s.thread_ref FROM sessions s JOIN tree t ON s.parent_session_id = t.id
+         SELECT c.id, t.root_id, c.thread_ref FROM tree t
+           CROSS JOIN LATERAL (SELECT id, thread_ref FROM sessions WHERE parent_session_id = t.id OFFSET 0) c
        )
        SELECT id, root_id, thread_ref FROM tree`,
       [[...rootIds]],
@@ -1309,11 +1310,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           `WITH RECURSIVE affected(id) AS (
              SELECT unnest($1::text[])
              UNION
-             SELECT s.id FROM sessions s JOIN affected a ON s.parent_session_id = a.id
+             SELECT c.id FROM affected a
+               CROSS JOIN LATERAL (SELECT id FROM sessions WHERE parent_session_id = a.id OFFSET 0) c
            )
            INSERT INTO session_spend_dirty(day)
-           SELECT DISTINCT floor(r.created_at::numeric / 86400000)::bigint
-             FROM session_llm_requests r JOIN affected a ON a.id = r.session_id WHERE r.usage_json IS NOT NULL
+           SELECT DISTINCT d.day FROM affected a
+             CROSS JOIN LATERAL (
+               SELECT floor(created_at::numeric / 86400000)::bigint AS day FROM session_llm_requests
+                WHERE session_id = a.id AND usage_json IS NOT NULL OFFSET 0
+             ) d
            ON CONFLICT DO NOTHING`,
           [changed.rows.map((r) => r.session_id)],
         );
