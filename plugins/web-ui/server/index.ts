@@ -6,6 +6,7 @@ import { swallow } from "../../chassis/src/errors.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
+import { seatRoutes } from "./seat-routes.ts";
 import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
 import { adminRoutes } from "./admin-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
@@ -1804,6 +1805,12 @@ const apiRoutes: readonly WebRoute[] = [
     coreFetch,
     relayCore,
     relay,
+    json,
+    readJson,
+  }),
+  ...seatRoutes({
+    impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
+    relayCore,
     json,
     readJson,
   }),

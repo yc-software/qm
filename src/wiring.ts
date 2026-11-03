@@ -388,6 +388,7 @@ import { createSlackInstallationStore, type SlackInstallationStore } from "./sur
 import { createSurfaceRegistry } from "./surfaces/registry.ts";
 import { createSlackSurface } from "./surfaces/slack/adapter.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
+import { createSeat, seatAsk, type Seat } from "./seat/seat.ts";
 
 export interface Runtime {
   start(): void;
@@ -463,6 +464,7 @@ export interface BuiltApp {
   oauthFlows: OAuthFlowStore;
   secretDrops: SecretDropStore;
   modelGatewayTransport?: ModelGatewayTransportConfig;
+  seat: Seat;
   resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
@@ -1426,11 +1428,25 @@ export function buildApp(
           ? { ...directProviderAvailability, modelIds: new Set(Object.keys(gatewayTransport.models)) }
           : undefined),
     );
+  const seat = createSeat(databaseUrl, {
+    enabled: (actorId) => featureFlags.enabled("agent_seat", scopeId("personal", actorId)),
+    signals: runSignals,
+    runLive: async (runId) => {
+      const run = await runStore.runs.get(runId);
+      return Boolean(run && !isTerminal(run.status));
+    },
+    ask: seatAsk({
+      modelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
+      providerKeys: resolveCompanyProviderKeys,
+      modelGateway: gatewayTransport,
+    }),
+  });
   const baseAgent =
     overrides.agent ??
     createAgent({
       ...agentConfigOptions(config),
       modelGateway: gatewayTransport,
+      seat,
       resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
       resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
       resolveProviderKeys: resolveCompanyProviderKeys,
@@ -2244,6 +2260,7 @@ export function buildApp(
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
   const providerKeys = directProviderAvailability;
   const app = createApp({
+    seat,
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
@@ -2977,6 +2994,7 @@ export function buildApp(
     oauthFlows,
     secretDrops,
     modelGatewayTransport: gatewayTransport,
+    seat,
     budget,
     resolveBrowserCompanyKeys,
     modelCredentials,
@@ -3066,6 +3084,7 @@ export function serverDeps(
   return {
     externalSlackPolicies: config.externalSlackPolicies,
     modelGatewayTransport: built.modelGatewayTransport,
+    seat: built.seat,
     resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,
     checkReadiness: built.checkReadiness,

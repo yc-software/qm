@@ -25,7 +25,9 @@ import {
   modelOfferedInWebui,
   thinkingLevelsFor,
   fastModeModelIds,
+  safeModelMetadata,
 } from "../../model/pi-models.ts";
+import { SEAT_MODEL_ID, seatModel } from "../../model/seat-model.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
 import { isSafeSkillName, SKILL_NAME_RULE } from "../../skills/skill-name.ts";
@@ -1327,6 +1329,20 @@ async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: Sco
   return null;
 }
 
+async function withSeatModel<T extends { models: string[]; modelCatalog: Record<string, unknown> }>(
+  ctx: ApiCtx,
+  target: { actorId: string; scope: ScopeId },
+  body: T,
+): Promise<T> {
+  if (target.scope !== makeScopeId("personal", target.actorId) || !(await ctx.deps.seat?.enabled(target.actorId)))
+    return body;
+  return {
+    ...body,
+    models: [...body.models, SEAT_MODEL_ID],
+    modelCatalog: { ...body.modelCatalog, [SEAT_MODEL_ID]: safeModelMetadata(SEAT_MODEL_ID, seatModel()) },
+  };
+}
+
 async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   const account = ctx.url.searchParams.get("account");
   if (account !== null && account !== "company") return sendJson(ctx.res, 400, { error: "invalid_account" });
@@ -1337,9 +1353,13 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   return sendJson(
     ctx.res,
     200,
-    ctx.url.searchParams.get("account") === "company"
-      ? await runtimeConfigBody(ctx, target.scope)
-      : await userRuntimeConfigBody(ctx, target.scope, target.actorId),
+    await withSeatModel(
+      ctx,
+      target,
+      ctx.url.searchParams.get("account") === "company"
+        ? await runtimeConfigBody(ctx, target.scope)
+        : await userRuntimeConfigBody(ctx, target.scope, target.actorId),
+    ),
   );
 }
 
@@ -1384,7 +1404,11 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     resource: "runtime-config",
     scopeLabel: target.scope,
   });
-  return sendJson(ctx.res, 200, await userRuntimeConfigBody(ctx, target.scope, target.actorId));
+  return sendJson(
+    ctx.res,
+    200,
+    await withSeatModel(ctx, target, await userRuntimeConfigBody(ctx, target.scope, target.actorId)),
+  );
 }
 
 async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {

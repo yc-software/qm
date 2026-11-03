@@ -1,5 +1,5 @@
 import { html, nothing, render } from "lit";
-import { swallowAs } from "../../../chassis/src/errors.ts";
+import { errMessage, swallowAs } from "../../../chassis/src/errors.ts";
 import type { AdminPage } from "./sections.ts";
 type Data = Record<string, any>;
 type Context = Pick<AdminPage, "api" | "orgScope" | "host" | "href" | "current">;
@@ -25,7 +25,6 @@ const flagLabels: Record<string, string> = {
   fastMode: "Model supports the Anthropic fast tier",
   auxiliary: "Eligible for auxiliary tasks",
 };
-const errorText = (error: unknown) => (error instanceof Error ? error.message : "Request failed.");
 function providerSavedMessage(modelId: string, selected: { ok: boolean; data?: Data }) {
   if (!modelId) return "Key saved. The base model is unchanged.";
   if (selected.ok) return "Key and base model saved.";
@@ -242,7 +241,7 @@ export class Onboarding {
       this.providerMessage = message;
       this.providerTone = tone;
     } catch (error) {
-      this.providerMessage = errorText(error);
+      this.providerMessage = errMessage(error, "Request failed.");
       this.providerTone = "err";
     } finally {
       this.providerBusy = false;
@@ -300,7 +299,7 @@ export class Onboarding {
       this.registryMessage = "Metadata loaded. Review, then verify access.";
     } catch (error) {
       if (token === this.lookupRequest) {
-        this.registryMessage = errorText(error);
+        this.registryMessage = errMessage(error, "Request failed.");
         this.registryTone = "err";
       }
     } finally {
@@ -323,7 +322,7 @@ export class Onboarding {
       this.registryMessage = "Model deleted.";
       this.registryTone = "ok";
     } catch (error) {
-      this.registryMessage = errorText(error);
+      this.registryMessage = errMessage(error, "Request failed.");
       this.registryTone = "err";
     } finally {
       this.registryBusy = false;
@@ -383,7 +382,7 @@ export class Onboarding {
       this.registryMessage = this.verifiedMessage(builtin, response.data?.message);
       this.registryTone = "ok";
     } catch (error) {
-      this.registryMessage = errorText(error);
+      this.registryMessage = errMessage(error, "Request failed.");
       this.registryTone = "err";
     } finally {
       this.registryBusy = false;
