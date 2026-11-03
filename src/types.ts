@@ -1,5 +1,6 @@
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
+import type { SessionOrigin } from "./sessions/session-store.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -121,6 +122,7 @@ export interface Session {
   forkBoundarySeq?: number;
   sideChat?: { entrySeq: number; quote: string; occurrence: number; expanded: boolean };
   parentSessionId?: string;
+  origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
   lastActivityAt?: number;
   hasEntries?: boolean;
