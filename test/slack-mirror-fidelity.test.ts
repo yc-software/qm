@@ -11,7 +11,7 @@ import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 import pg from "pg";
 import { amazonQAlarm } from "./support/slack-amazon-q-alarm.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantBoundUrl } from "./support/test-tenants.ts";
 
 function test(name: string, ...args: [() => void | Promise<void>] | [TestOptions, () => void | Promise<void>]): void {
   const [options, fn] = args.length === 1 ? [{}, args[0]] : args;
@@ -309,7 +309,7 @@ test("HTTP ingestion rejects invalid file sizes", () => {
 test("the whole Slack message is stored in Postgres and follows the same edit and delete precedence as text", async () => {
   const url = testDatabaseUrl();
   const cache = createPostgresSurfaceCache(url);
-  const db = new pg.Client({ connectionString: url });
+  const db = new pg.Client({ connectionString: tenantBoundUrl(url) });
   const container = `raw-${Date.now()}`;
   const original = { ...amazonQAlarm, channel: container, ts: "1000" };
   const edited = {

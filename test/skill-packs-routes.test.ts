@@ -10,7 +10,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testTenantHeaders } from "./support/test-tenants.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "x-admin-actor": "admin-alice@default-org",
@@ -865,7 +865,7 @@ test("skill-pack routes are admin-only and audited", async () => {
       403,
     );
     await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN });
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "skill_packs.read"));
+    assert.ok((await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "skill_packs.read"));
   } finally {
     await s.close();
   }

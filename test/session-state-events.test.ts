@@ -428,38 +428,44 @@ test("a subagent idle between its own runs is not working while its own subagent
   const midThread = "web:U1:tree-mid";
   const leafThread = "web:U1:tree-leaf";
   const got = record(built.sessionStateBus);
-  const root = await built.app.turn(dm("hello", rootThread));
-  const mid = await built.app.turn(dm("hello", midThread));
-  const leaf = await built.app.turn(dm("hello", leafThread));
+  const root = await inTestTenant(() => built.app.turn(dm("hello", rootThread)));
+  const mid = await inTestTenant(() => built.app.turn(dm("hello", midThread)));
+  const leaf = await inTestTenant(() => built.app.turn(dm("hello", leafThread)));
   assert.ok(await waitFor(() => [rootThread, midThread, leafThread].every((t) => statesFor(got, t).includes("idle"))));
   got.length = 0;
-  await built.sessions.setParentSession(mid.sessionId!, root.sessionId!);
-  await built.sessions.setParentSession(leaf.sessionId!, mid.sessionId!);
-  const { run: midRun } = await built.runs.enqueue({
-    sessionId: midThread,
-    request: resolvedDm("delegate", midThread),
-    maxAttempts: 3,
-  });
-  const { run: leafRun } = await built.runs.enqueue({
-    sessionId: leafThread,
-    request: resolvedDm("work", leafThread),
-    maxAttempts: 3,
-  });
+  await inTestTenant(() => built.sessions.setParentSession(mid.sessionId!, root.sessionId!));
+  await inTestTenant(() => built.sessions.setParentSession(leaf.sessionId!, mid.sessionId!));
+  const { run: midRun } = await inTestTenant(() =>
+    built.runs.enqueue({
+      sessionId: midThread,
+      request: resolvedDm("delegate", midThread),
+      maxAttempts: 3,
+    }),
+  );
+  const { run: leafRun } = await inTestTenant(() =>
+    built.runs.enqueue({
+      sessionId: leafThread,
+      request: resolvedDm("work", leafThread),
+      maxAttempts: 3,
+    }),
+  );
   assert.deepEqual(statesFor(got, midThread), ["working"], "a descendant's run does not mark the subagent working");
-  const leasedMid = await built.runs.claimById(midRun.id, "w1", 30_000);
-  await built.runs.complete(midRun.id, leasedMid!.leaseToken!, { status: "ok", reply: "delegated" });
+  const leasedMid = await inTestTenant(() => built.runs.claimById(midRun.id, "w1", 30_000));
+  await inTestTenant(() =>
+    built.runs.complete(midRun.id, leasedMid!.leaseToken!, { status: "ok", reply: "delegated" }),
+  );
   assert.ok(await waitFor(() => statesFor(got, midThread).includes("idle")), "the subagent settles with its own run");
   assert.ok(!statesFor(got, rootThread).includes("idle"), "the root stays working while the tree runs");
 
-  const rows = await built.app.listSessions("U1");
+  const rows = await inTestTenant(() => built.app.listSessions("U1"));
   const byId = (id: string) => rows.find((s) => s.id === id);
   assert.ok(!byId(mid.sessionId!)?.working, "the snapshot agrees the idle subagent is not working");
   assert.equal(byId(leaf.sessionId!)?.working, true);
   assert.equal(byId(root.sessionId!)?.working, true);
   assert.deepEqual(byId(root.sessionId!)?.subagents, { running: 1, waiting: 0 });
 
-  const leasedLeaf = await built.runs.claimById(leafRun.id, "w1", 30_000);
-  await built.runs.complete(leafRun.id, leasedLeaf!.leaseToken!, { status: "ok", reply: "done" });
+  const leasedLeaf = await inTestTenant(() => built.runs.claimById(leafRun.id, "w1", 30_000));
+  await inTestTenant(() => built.runs.complete(leafRun.id, leasedLeaf!.leaseToken!, { status: "ok", reply: "done" }));
   assert.ok(await waitFor(() => statesFor(got, rootThread).includes("idle")), "the last run settles the root");
   assert.deepEqual(statesFor(got, midThread), ["working", "idle"]);
 });
