@@ -71,7 +71,7 @@ test("processRun refuses a run that holds no lease", async () => {
   assert.equal((await runs.get(r.id))?.status, "pending", "the run was not touched");
 });
 
-test("processRun threads runId + background into the turn and completes the run with the result", async () => {
+test("processRun threads runId into the turn and completes the run with the result", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const seen: OrchestratorInput[] = [];
   const orchestrator = fakeOrchestrator(async (input) => {
@@ -85,18 +85,12 @@ test("processRun threads runId + background into the turn and completes the run 
   const result = await processRun(deps, fg!);
   assert.deepEqual(result, { status: "ok", reply: "echo: x" });
   assert.equal(seen[0]?.runId, fg!.id, "the orchestrator sees the run's id");
-  assert.equal(seen[0]?.background, false, "foreground by default");
   assert.equal(seen[0]?.attempt, 1, "the orchestrator sees which claim this is");
 
   const done = await runs.get(fg!.id);
   assert.equal(done?.status, "done");
   assert.deepEqual(done?.result, { status: "ok", reply: "echo: x" });
   assert.equal(done?.leaseToken, null, "the lease is released on completion");
-
-  await runs.enqueue({ sessionId: "s2", request: turn });
-  const bg = await runs.claim("w1", 5_000);
-  await processRun(deps, bg!, { background: true });
-  assert.equal(seen[1]?.background, true, "the worker-loop flag reaches the orchestrator");
 });
 
 test("processRun rejects when a reaped attempt finishes after a retry claims the run", async () => {

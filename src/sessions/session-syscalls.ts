@@ -1128,7 +1128,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "runLeaseToken",
     "runStartedAt",
     "finalAttempt",
-    "background",
     "cancel",
     "shutdown",
     "modelAccount",

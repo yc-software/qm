@@ -2052,6 +2052,7 @@ export function buildApp(
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
   const orchestratorDeps: OrchestratorDeps = {
+    admittedWork,
     installSharedCanvas: async (actorId, fileId, where) => {
       const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
       if (typeof canvas === "string") return canvas;

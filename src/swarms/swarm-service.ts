@@ -178,7 +178,6 @@ function matchesDispatch(input: OrchestratorInput, expected: OrchestratorInput):
     runLeaseToken: true,
     attempt: true,
     finalAttempt: true,
-    background: true,
     cancel: true,
     shutdown: true,
     runStartedAt: true,

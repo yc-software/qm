@@ -3851,16 +3851,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
         await fallbackTitleWrite;
 
-        if (input.background) {
-          tailOwnsCleanup = true;
-          await catchUpMessageRevisions();
-          await deps.sessions.releaseLease(lease);
-          leaseReleased = true;
-          void tail().catch(swallowAs("orchestrator: background tail", undefined));
-        } else {
-          await tail();
-          tailOwnsCleanup = true;
-        }
+        tailOwnsCleanup = true;
+        await catchUpMessageRevisions();
+        await deps.sessions.releaseLease(lease);
+        leaseReleased = true;
+        const work = deps.admittedWork;
+        void (work?.canRun() ? work.run(tail) : tail()).catch(swallowAs("orchestrator: turn tail", undefined));
         await deps.errors?.flush();
         return finalResult;
       } catch (err) {
