@@ -14,6 +14,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["safe"] };
 const externalSlackPolicies = { batch: policy };
@@ -50,7 +51,7 @@ test("external Slack strips private and org preloads before the prompt, but keep
       apiBaseUrl: "https://core.example.test",
     }),
   );
-  await b.identity.ready();
+  await inTestTenant(() => b.identity.ready());
   await b.config.hydrate?.();
   await b.identity.refresh();
   await b.deploymentLayerStore.hydrate();
@@ -58,81 +59,83 @@ test("external Slack strips private and org preloads before the prompt, but keep
     b.scheduler.stop();
     await b.runtime.stop();
   });
-  await b.config.setSharingPosture("org:default-org", "open");
-  await b.config.setSoul("org:default-org", "ORG_SOUL_SENTINEL");
-  await b.memory.capture("personal:U1", ["PERSONAL_MEMORY_SENTINEL"], Date.now(), "U1");
-  await b.memory.capture("org:default-org", ["ORG_MEMORY_SENTINEL"], Date.now(), "U1");
-  await b.workspace.write("org:default-org", "secret.txt", "ORG_FILE_SENTINEL");
-  await b.workspace.write("personal:U1", "secret.txt", "PERSONAL_FILE_SENTINEL");
-  for (const slug of ["safe", "confidential"]) {
-    await b.serviceCreds.setServiceCredential("org:default-org", {
-      slug,
-      name: slug,
-      delivery: "env",
-      envKey: slug.toUpperCase(),
-      secret: `SYNTHETIC_${slug}`,
-      host: "",
-    });
-    await b.acl.grant({
-      ownerScopeId: "org:default-org",
-      ref: encodeRef(serviceCredRef(slug)),
-      granteeScopeId: "org:default-org",
-      permission: "read",
-      grantedBy: "U1",
-    });
-  }
-  const mustNotRead = async (): Promise<never> => {
-    throw new Error("PRIVATE_PRELOAD_CALLED");
-  };
-  b.keychain!.listByOwners = mustNotRead;
-  b.keychain!.listByOwner = mustNotRead;
-  b.keychain!.grantsForScope = mustNotRead;
-  b.keychain!.listConnectorsByOwners = mustNotRead;
-  const prompt = await b.app.turn(request("!sysprompt"));
-  assert.equal(prompt.status, "ok", JSON.stringify(prompt));
-  assert.doesNotMatch(
-    prompt.reply!,
-    /PERSONAL_MEMORY_SENTINEL|ORG_MEMORY_SENTINEL|ORG_SOUL_SENTINEL|PERSONAL_FILE_SENTINEL|ORG_FILE_SENTINEL|confidential/,
-  );
-  assert.match(prompt.reply!, /safe/);
-  await selectDefaultSandbox(b, "U1", scopeId("channel", `${namespace}:C1`));
-  const provisions: string[][] = [];
-  const provision = b.sandbox.provision.bind(b.sandbox);
-  b.sandbox.provision = (layers, opts) => {
-    provisions.push(layers.map((l) => l.scopeId));
-    return provision(layers, opts);
-  };
-  const run = b.sandbox.run.bind(b.sandbox);
-  const seenClaims: CapabilityClaims[] = [];
-  let safeEnv;
-  b.sandbox.run = async (handle, command, opts) => {
-    if (handle.env?.AGENT_API_TOKEN)
-      seenClaims.push((await verifyCapabilityToken(handle.env.AGENT_API_TOKEN, TEST_CAPABILITY_SECRET))!);
-    if (handle.env?.SAFE) safeEnv = handle.env.SAFE;
-    assert.equal(handle.env?.CONFIDENTIAL, undefined);
-    return run(handle, command, opts);
-  };
-  const code = await b.app.turn(
-    request(`!execute ${JSON.stringify({ command: "printf external-code-ok", credentials: ["safe"] })}`),
-  );
-  assert.equal(code.status, "ok", JSON.stringify(code));
-  assert.match(code.reply!, /external-code-ok/);
-  assert.equal(safeEnv, "SYNTHETIC_safe");
-  assert.ok(provisions.length);
-  assert.ok(provisions.every((scopes) => scopes.every((scope) => scope.startsWith("channel:external-slack:"))));
-  assert.equal(seenClaims.at(-1)?.externalSlack, true);
-  assert.equal(seenClaims.at(-1)?.ownerConnections, undefined);
-  assert.equal(seenClaims.at(-1)?.memory, undefined);
-  const missing = request("!sysprompt");
-  delete missing.externalSlack;
-  assert.equal((await b.app.turn(missing)).status, "refused");
-  const privateRequest = {
-    ...missing,
-    slackSource: { accountId: "batch", teamId: "T1", userId: "U1" },
-    conversation: { kind: "dm" as const, threadRef: "slack-account:T1:dm:D1" },
-  };
-  assert.equal((await b.app.turn(privateRequest)).status, "refused");
-  assert.equal((await b.app.turn({ ...privateRequest, slackSource: undefined })).status, "refused");
+  await inTestTenant(async () => {
+    await b.config.setSharingPosture("org:default-org", "open");
+    await b.config.setSoul("org:default-org", "ORG_SOUL_SENTINEL");
+    await b.memory.capture("personal:U1", ["PERSONAL_MEMORY_SENTINEL"], Date.now(), "U1");
+    await b.memory.capture("org:default-org", ["ORG_MEMORY_SENTINEL"], Date.now(), "U1");
+    await b.workspace.write("org:default-org", "secret.txt", "ORG_FILE_SENTINEL");
+    await b.workspace.write("personal:U1", "secret.txt", "PERSONAL_FILE_SENTINEL");
+    for (const slug of ["safe", "confidential"]) {
+      await b.serviceCreds.setServiceCredential("org:default-org", {
+        slug,
+        name: slug,
+        delivery: "env",
+        envKey: slug.toUpperCase(),
+        secret: `SYNTHETIC_${slug}`,
+        host: "",
+      });
+      await b.acl.grant({
+        ownerScopeId: "org:default-org",
+        ref: encodeRef(serviceCredRef(slug)),
+        granteeScopeId: "org:default-org",
+        permission: "read",
+        grantedBy: "U1",
+      });
+    }
+    const mustNotRead = async (): Promise<never> => {
+      throw new Error("PRIVATE_PRELOAD_CALLED");
+    };
+    b.keychain!.listByOwners = mustNotRead;
+    b.keychain!.listByOwner = mustNotRead;
+    b.keychain!.grantsForScope = mustNotRead;
+    b.keychain!.listConnectorsByOwners = mustNotRead;
+    const prompt = await b.app.turn(request("!sysprompt"));
+    assert.equal(prompt.status, "ok", JSON.stringify(prompt));
+    assert.doesNotMatch(
+      prompt.reply!,
+      /PERSONAL_MEMORY_SENTINEL|ORG_MEMORY_SENTINEL|ORG_SOUL_SENTINEL|PERSONAL_FILE_SENTINEL|ORG_FILE_SENTINEL|confidential/,
+    );
+    assert.match(prompt.reply!, /safe/);
+    await selectDefaultSandbox(b, "U1", scopeId("channel", `${namespace}:C1`));
+    const provisions: string[][] = [];
+    const provision = b.sandbox.provision.bind(b.sandbox);
+    b.sandbox.provision = (layers, opts) => {
+      provisions.push(layers.map((l) => l.scopeId));
+      return provision(layers, opts);
+    };
+    const run = b.sandbox.run.bind(b.sandbox);
+    const seenClaims: CapabilityClaims[] = [];
+    let safeEnv;
+    b.sandbox.run = async (handle, command, opts) => {
+      if (handle.env?.AGENT_API_TOKEN)
+        seenClaims.push((await verifyCapabilityToken(handle.env.AGENT_API_TOKEN, TEST_CAPABILITY_SECRET))!);
+      if (handle.env?.SAFE) safeEnv = handle.env.SAFE;
+      assert.equal(handle.env?.CONFIDENTIAL, undefined);
+      return run(handle, command, opts);
+    };
+    const code = await b.app.turn(
+      request(`!execute ${JSON.stringify({ command: "printf external-code-ok", credentials: ["safe"] })}`),
+    );
+    assert.equal(code.status, "ok", JSON.stringify(code));
+    assert.match(code.reply!, /external-code-ok/);
+    assert.equal(safeEnv, "SYNTHETIC_safe");
+    assert.ok(provisions.length);
+    assert.ok(provisions.every((scopes) => scopes.every((scope) => scope.startsWith("channel:external-slack:"))));
+    assert.equal(seenClaims.at(-1)?.externalSlack, true);
+    assert.equal(seenClaims.at(-1)?.ownerConnections, undefined);
+    assert.equal(seenClaims.at(-1)?.memory, undefined);
+    const missing = request("!sysprompt");
+    delete missing.externalSlack;
+    assert.equal((await b.app.turn(missing)).status, "refused");
+    const privateRequest = {
+      ...missing,
+      slackSource: { accountId: "batch", teamId: "T1", userId: "U1" },
+      conversation: { kind: "dm" as const, threadRef: "slack-account:T1:dm:D1" },
+    };
+    assert.equal((await b.app.turn(privateRequest)).status, "refused");
+    assert.equal((await b.app.turn({ ...privateRequest, slackSource: undefined })).status, "refused");
+  });
 });
 
 test("external native tool ceiling cannot delegate, switch sandboxes, read confidential data or invoke MCP", async () => {
@@ -160,67 +163,68 @@ test("external native tool ceiling cannot delegate, switch sandboxes, read confi
   assert.equal(runs, 1);
 });
 
-test("external broker requires the current run lease and both external-safe and ordinary grants", async () => {
-  const { externalSlackCapabilityAllowed } = await import("../src/api/external-slack-capability.ts");
-  const { createAclStore } = await import("../src/acl/acl-store.ts");
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const req = request("test");
-  const { run: queued } = await runs.enqueue({
-    sessionId: req.conversation.threadRef,
-    request: {
-      ...req,
-      actor: { id: "U1", type: "internal" },
-      conversation: { ...req.conversation, publishMembers: undefined, audience: [{ id: "U1", type: "internal" }] },
-      origin: { kind: "human" },
-    },
-  });
-  const run = (await runs.claimById(queued.id, "test-worker", 60_000))!;
-  const claims: CapabilityClaims = {
-    actorId: "U1",
-    scopeId: `channel:${namespace}:C1`,
-    aud: "credential-broker",
-    externalSlack: true,
-    credentials: ["safe"],
-    runId: run.id,
-    runAttempt: run.attempts,
-    runLeaseToken: run.leaseToken!,
-    threadRef: run.sessionId,
-    exp: Date.now() + 60_000,
-  };
-  assert.equal(await externalSlackCapabilityAllowed(claims, { runs, acl, externalSlackPolicies }), false);
-  for (const slug of ["safe", "confidential"])
-    await acl.grant({
-      ownerScopeId: "org:default-org",
-      ref: encodeRef(serviceCredRef(slug)),
-      granteeScopeId: "org:default-org",
-      permission: "read",
-      grantedBy: "U1",
+test("external broker requires the current run lease and both external-safe and ordinary grants", () =>
+  inTestTenant(async () => {
+    const { externalSlackCapabilityAllowed } = await import("../src/api/external-slack-capability.ts");
+    const { createAclStore } = await import("../src/acl/acl-store.ts");
+    const { runs } = createPostgresRunStore(testDatabaseUrl());
+    const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+    const req = request("test");
+    const { run: queued } = await runs.enqueue({
+      sessionId: req.conversation.threadRef,
+      request: {
+        ...req,
+        actor: { id: "U1", type: "internal" },
+        conversation: { ...req.conversation, publishMembers: undefined, audience: [{ id: "U1", type: "internal" }] },
+        origin: { kind: "human" },
+      },
     });
-  assert.equal(await externalSlackCapabilityAllowed(claims, { runs, acl, externalSlackPolicies }), true);
-  assert.equal(
-    await externalSlackCapabilityAllowed(claims, {
-      runs,
-      acl,
-      externalSlackPolicies: { batch: { ...policy, serviceCredentials: [] } },
-    }),
-    false,
-  );
-
-  for (const patch of [
-    { credentials: ["confidential"] },
-    { runLeaseToken: "stale" },
-    { actorId: "U2" },
-    { scopeId: "personal:U1" },
-    { runAttempt: run.attempts + 1 },
-  ])
+    const run = (await runs.claimById(queued.id, "test-worker", 60_000))!;
+    const claims: CapabilityClaims = {
+      actorId: "U1",
+      scopeId: `channel:${namespace}:C1`,
+      aud: "credential-broker",
+      externalSlack: true,
+      credentials: ["safe"],
+      runId: run.id,
+      runAttempt: run.attempts,
+      runLeaseToken: run.leaseToken!,
+      threadRef: run.sessionId,
+      exp: Date.now() + 60_000,
+    };
+    assert.equal(await externalSlackCapabilityAllowed(claims, { runs, acl, externalSlackPolicies }), false);
+    for (const slug of ["safe", "confidential"])
+      await acl.grant({
+        ownerScopeId: "org:default-org",
+        ref: encodeRef(serviceCredRef(slug)),
+        granteeScopeId: "org:default-org",
+        permission: "read",
+        grantedBy: "U1",
+      });
+    assert.equal(await externalSlackCapabilityAllowed(claims, { runs, acl, externalSlackPolicies }), true);
     assert.equal(
-      await externalSlackCapabilityAllowed({ ...claims, ...patch }, { runs, acl, externalSlackPolicies }),
+      await externalSlackCapabilityAllowed(claims, {
+        runs,
+        acl,
+        externalSlackPolicies: { batch: { ...policy, serviceCredentials: [] } },
+      }),
       false,
     );
-  await acl.revoke("org:default-org", encodeRef(serviceCredRef("safe")), "org:default-org", "U1");
-  assert.equal(await externalSlackCapabilityAllowed(claims, { runs, acl, externalSlackPolicies }), false);
-});
+
+    for (const patch of [
+      { credentials: ["confidential"] },
+      { runLeaseToken: "stale" },
+      { actorId: "U2" },
+      { scopeId: "personal:U1" },
+      { runAttempt: run.attempts + 1 },
+    ])
+      assert.equal(
+        await externalSlackCapabilityAllowed({ ...claims, ...patch }, { runs, acl, externalSlackPolicies }),
+        false,
+      );
+    await acl.revoke("org:default-org", encodeRef(serviceCredRef("safe")), "org:default-org", "U1");
+    assert.equal(await externalSlackCapabilityAllowed(claims, { runs, acl, externalSlackPolicies }), false);
+  }));
 
 test("external policy changes invalidate retained requests while untouched workspaces stay unchanged", async () => {
   const { externalSlackRequestAllowed } = await import("../src/resolution/external-slack.ts");
@@ -275,37 +279,39 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
   const { serverDeps } = await import("../src/wiring.ts");
   const config = testConfig({ signingSecret: "synthetic-signing-key-for-http-test", externalSlackPolicies });
   const b = buildApp(config);
-  await b.identity.ready();
+  await inTestTenant(() => b.identity.ready());
   await b.identity.refresh();
   t.after(async () => {
     b.scheduler.stop();
     await b.runtime.stop();
   });
-  await b.serviceCreds.setServiceCredential("org:default-org", {
-    slug: "safe",
-    name: "safe",
-    host: "public.example",
-    delivery: "broker",
-    secret: "SYNTHETIC_BROKER_SECRET",
+  const run = await inTestTenant(async () => {
+    await b.serviceCreds.setServiceCredential("org:default-org", {
+      slug: "safe",
+      name: "safe",
+      host: "public.example",
+      delivery: "broker",
+      secret: "SYNTHETIC_BROKER_SECRET",
+    });
+    await b.acl.grant({
+      ownerScopeId: "org:default-org",
+      ref: encodeRef(serviceCredRef("safe")),
+      granteeScopeId: "org:default-org",
+      permission: "read",
+      grantedBy: "U1",
+    });
+    const req = request("test");
+    const { run: queued } = await b.runs.enqueue({
+      sessionId: req.conversation.threadRef,
+      request: {
+        ...req,
+        actor: { id: "U1", type: "internal" },
+        conversation: { ...req.conversation, publishMembers: undefined, audience: [{ id: "U1", type: "internal" }] },
+        origin: { kind: "human" },
+      },
+    });
+    return (await b.runs.claimById(queued.id, "test-worker", 60_000))!;
   });
-  await b.acl.grant({
-    ownerScopeId: "org:default-org",
-    ref: encodeRef(serviceCredRef("safe")),
-    granteeScopeId: "org:default-org",
-    permission: "read",
-    grantedBy: "U1",
-  });
-  const req = request("test");
-  const { run: queued } = await b.runs.enqueue({
-    sessionId: req.conversation.threadRef,
-    request: {
-      ...req,
-      actor: { id: "U1", type: "internal" },
-      conversation: { ...req.conversation, publishMembers: undefined, audience: [{ id: "U1", type: "internal" }] },
-      origin: { kind: "human" },
-    },
-  });
-  const run = (await b.runs.claimById(queued.id, "test-worker", 60_000))!;
   let forwarded = 0;
   const server = createServer(b.app, {
     ...serverDeps(config, b),
@@ -333,12 +339,13 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
     threadRef: run.sessionId,
     exp: Date.now() + 60_000,
   };
-  const control = await mintCapabilityToken({ ...claims, aud: "control-plane" }, TEST_CAPABILITY_SECRET);
+  const control = await inTestTenant(() =>
+    mintCapabilityToken({ ...claims, aud: "control-plane" }, TEST_CAPABILITY_SECRET),
+  );
   for (const path of ["/v1/apis", "/v1/keychain", "/v1/admin/whoami", "/v1/admin/memory", "/v1/memory", "/v1/crons"])
     assert.equal((await fetch(`${base}${path}`, { headers: { "x-agent-capability": control } })).status, 403, path);
-  const broker = await mintCapabilityToken(
-    { ...claims, aud: "credential-broker", credentials: ["safe"] },
-    TEST_CAPABILITY_SECRET,
+  const broker = await inTestTenant(() =>
+    mintCapabilityToken({ ...claims, aud: "credential-broker", credentials: ["safe"] }, TEST_CAPABILITY_SECRET),
   );
   const call = (token: string) =>
     fetch(`${base}/v1/credentials/broker`, {

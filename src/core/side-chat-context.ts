@@ -1,5 +1,6 @@
 import { countTokens } from "../util/tokens.ts";
 import { commonEntrySeqs } from "../sessions/transcript-source.ts";
+import { entryFromItem } from "../sessions/items.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { Session } from "../types.ts";
 import { visibleTitleEntryText } from "./orchestrator/turn-helpers.ts";
@@ -56,7 +57,7 @@ export async function sideChatContext(
       continue;
     const passageViews = await Promise.all(
       audience.map((id) =>
-        store.visibleEntries(parent.id, id, {
+        store.visibleItems(parent.id, id, {
           sinceSeq: session.sideChat!.entrySeq,
           beforeSeq: session.sideChat!.entrySeq + 1,
         }),
@@ -66,7 +67,7 @@ export async function sideChatContext(
     const discussion: Discussion = { sessionId: session.id, passage: session.sideChat!.quote, messages: [] };
     let beforeSeq: number | undefined;
     while (true) {
-      const first = await store.visibleEntries(session.id, audience[0]!, {
+      const first = await store.visibleItems(session.id, audience[0]!, {
         sinceSeq: (session.forkBoundarySeq ?? -1) + 1,
         beforeSeq,
         messagesOnly: true,
@@ -75,7 +76,7 @@ export async function sideChatContext(
       if (!first.length) break;
       const views = await Promise.all(
         audience.slice(1).map((id) =>
-          store.visibleEntries(session.id, id, {
+          store.visibleItems(session.id, id, {
             sinceSeq: first[0]!.seq,
             beforeSeq: first[first.length - 1]!.seq + 1,
             messagesOnly: true,
@@ -84,7 +85,7 @@ export async function sideChatContext(
         ),
       );
       const common = commonEntrySeqs([first, ...views]);
-      for (const entry of first.slice().reverse()) {
+      for (const entry of first.toReversed().map((item) => entryFromItem(item, session.scopeId))) {
         if (!common.has(entry.seq) || (entry.type !== "user" && entry.type !== "assistant")) continue;
         const text = visibleTitleEntryText(entry);
         const payload = entry.payload as { speakerId?: string; name?: string; overheard?: boolean };

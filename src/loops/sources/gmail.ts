@@ -133,7 +133,7 @@ export const gmailAdapter: LoopSourceAdapter = {
       dedupeKey,
       summary: common.snippet,
       sourceAt: common.receivedAt,
-      sourcePayload: { source: "gmail", ...common, gmail } as LoopSourcePayload,
+      sourcePayload: { ...common, gmail } as LoopSourcePayload,
       ...(draft ? { proposal: { data: draft as unknown as LoopSourcePayload } } : {}),
     };
     return entry;

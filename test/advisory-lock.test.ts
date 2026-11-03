@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock, createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { testAdvisoryLock } from "./support/test-database.ts";
+import { migrateTestDatabase, testAdvisoryLock } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the advisory-lock tests";
@@ -142,6 +142,7 @@ test("pg sandbox upgrade runs once across cores and never overwrites a newer def
     });
     const shared = maps(pgA);
     const other = maps(pgB);
+    await migrateTestDatabase(URL!);
     await shared.defaults.put("personal:cleared", { sandboxId: null });
     const entered = Promise.withResolvers<void>();
     let calls = 0;

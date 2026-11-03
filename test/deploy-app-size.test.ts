@@ -11,26 +11,40 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 function service(maxAppBytes?: number) {
   const dir = mkdtempSync(join(tmpdir(), "deploy-app-size-"));
   let applies = 0;
-  const store = createDeployStore(testDeployBackings({ git: { repoRoot: join(dir, "repos") } }));
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore: store,
-    provider: {
-      profile: { managedScaleToZero: false, ...(maxAppBytes ? { maxAppBytes } : {}) },
-      apply: async () => {
-        applies++;
-        return { host: "127.0.0.1", port: 1 };
+  const store = tenantBound(createDeployStore(testDeployBackings({ git: { repoRoot: join(dir, "repos") } })));
+  const deploy = tenantBound(
+    createDeployService({
+      ...singleProcessDeps(),
+      deployStore: store,
+      provider: {
+        profile: { managedScaleToZero: false, ...(maxAppBytes ? { maxAppBytes } : {}) },
+        apply: async () => {
+          applies++;
+          return { host: "127.0.0.1", port: 1 };
+        },
+        destroy: async () => {},
       },
-      destroy: async () => {},
-    },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    deployDir: join(dir, "deploy"),
-  });
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      deployDir: join(dir, "deploy"),
+    }),
+  );
   return { deploy, store, applies: () => applies };
 }
 

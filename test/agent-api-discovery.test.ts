@@ -13,6 +13,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "discovery-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -46,21 +47,23 @@ const capFor = (
     grants?: string[];
   } = {},
 ) =>
-  mintCapabilityToken(
-    {
-      actorId,
-      scopeId: scopeId("personal", actorId),
-      exp: Date.now() + CAPABILITY_TTL_MS,
-      ...(opts.memory ? { memory: opts.memory } : {}),
-      ...(opts.liveActor ? { liveActor: true } : {}),
-      ...(opts.liveAuthor ? { liveAuthor: true } : {}),
-      ...(opts.grants ? { grants: opts.grants } : {}),
-    },
-    SECRET,
+  inTestTenant(() =>
+    mintCapabilityToken(
+      {
+        actorId,
+        scopeId: scopeId("personal", actorId),
+        exp: Date.now() + CAPABILITY_TTL_MS,
+        ...(opts.memory ? { memory: opts.memory } : {}),
+        ...(opts.liveActor ? { liveActor: true } : {}),
+        ...(opts.liveAuthor ? { liveAuthor: true } : {}),
+        ...(opts.grants ? { grants: opts.grants } : {}),
+      },
+      SECRET,
+    ),
   );
 
 const listApis = async (base: string, cap: string) => {
-  const res = await fetch(`${base}/v1/apis`, { headers: { "x-agent-capability": cap } });
+  const res = await fetch(`${base}/v1/apis`, { headers: { ...testTenantHeaders(), "x-agent-capability": cap } });
   return { status: res.status, body: (await res.json()) as any };
 };
 const paths = (body: any): string[] => body.endpoints.map((e: any) => e.path);
@@ -168,7 +171,7 @@ test("a granted autonomous turn discovers only the unattended read family", asyn
 test("discovery requires a capability token", async () => {
   const s = await start();
   try {
-    assert.equal((await fetch(`${s.base}/v1/apis`)).status, 401);
+    assert.equal((await fetch(`${s.base}/v1/apis`, { headers: testTenantHeaders() })).status, 401);
   } finally {
     await s.close();
   }
@@ -229,7 +232,7 @@ test("disabled swarms are absent from discovery and reject direct API calls", as
     for (const method of ["GET", "POST"]) {
       const response = await fetch(`${base}/v1/swarm`, {
         method,
-        headers: { "x-agent-capability": token, "content-type": "application/json" },
+        headers: { ...testTenantHeaders(), "x-agent-capability": token, "content-type": "application/json" },
         ...(method === "POST"
           ? { body: JSON.stringify({ action: "spawn", requestId: "disabled", text: "work" }) }
           : {}),

@@ -14,6 +14,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "surface-context-test-secret".repeat(3);
 
@@ -23,15 +24,17 @@ describe("surface-context pulls", async () => {
   let built: BuiltApp;
 
   const cap = (overrides: Record<string, unknown> = {}) =>
-    mintCapabilityToken(
-      {
-        actorId: "U1",
-        scopeId: scopeId("channel", "C9"),
-        destination: { type: "slack", target: "C9:1700.0001", audienceScopeId: scopeId("channel", "C9") },
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        ...overrides,
-      },
-      SECRET,
+    inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId: "U1",
+          scopeId: scopeId("channel", "C9"),
+          destination: { type: "slack", target: "C9:1700.0001", audienceScopeId: scopeId("channel", "C9") },
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          ...overrides,
+        },
+        SECRET,
+      ),
     );
 
   const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -43,12 +46,15 @@ describe("surface-context pulls", async () => {
   let pollSeq = 0;
   const pendingPath = () => `/v1/surface-context/pending?source=slack&t=${pollSeq++}`;
   const signedGet = (path: string) =>
-    fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path, "") });
+    fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path, "", testTenantHeaders()) });
   const signedPost = (path: string, body: unknown) => {
     const raw = JSON.stringify(body);
     return fetch(`${base}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", ...signedRequestHeaders(SECRET, "POST", path, raw) },
+      headers: {
+        "content-type": "application/json",
+        ...signedRequestHeaders(SECRET, "POST", path, raw, testTenantHeaders()),
+      },
       body: raw,
     });
   };
@@ -81,24 +87,26 @@ describe("surface-context pulls", async () => {
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    await built.app.upsertDirectory([
-      { principalId: "U1", displayName: "Una", type: "internal" },
-      { principalId: "U-member", displayName: "Mia", type: "internal" },
-    ]);
-    await built.app.upsertChannels(
-      [
-        { channelId: "C9", name: "current" },
-        { channelId: "C-ENG", name: "eng" },
-        { channelId: "CPUBLIC01", name: "general" },
-        { channelId: "C-SECRET", name: "warroom", isPrivate: true },
-      ],
-      [
-        { channelId: "C9", principalId: "U1" },
-        { channelId: "C9", principalId: "U-ghost" },
-        { channelId: "C9", principalId: "U-member" },
-        { channelId: "C-SECRET", principalId: "U-member" },
-      ],
-    );
+    await inTestTenant(async () => {
+      await built.app.upsertDirectory([
+        { principalId: "U1", displayName: "Una", type: "internal" },
+        { principalId: "U-member", displayName: "Mia", type: "internal" },
+      ]);
+      await built.app.upsertChannels(
+        [
+          { channelId: "C9", name: "current" },
+          { channelId: "C-ENG", name: "eng" },
+          { channelId: "CPUBLIC01", name: "general" },
+          { channelId: "C-SECRET", name: "warroom", isPrivate: true },
+        ],
+        [
+          { channelId: "C9", principalId: "U1" },
+          { channelId: "C9", principalId: "U-ghost" },
+          { channelId: "C9", principalId: "U-member" },
+          { channelId: "C-SECRET", principalId: "U-member" },
+        ],
+      );
+    });
   });
 
   after(async () => {
@@ -365,22 +373,23 @@ describe("surface-context pulls", async () => {
     assert.equal((await asking).status, 502);
   });
 
-  it("keeps the viewer's search token out of the durable row but hands it to the fulfiller, and drops it on fulfill", async () => {
-    const r = await built.app.createContextRequest("slack", {
-      conversationTarget: "C9:1.1",
-      count: 10,
-      viewer: "U1",
-      searchAll: "hubble",
-      viewerToken: "xoxp-secret",
-    });
-    const stored = await built.app.getContextRequest(r.id);
-    assert.equal((stored as any)?.query?.viewerToken, undefined, "the stored row never carries the token");
-    const pending = await built.app.pendingContextRequests("slack");
-    const mine = pending.find((p) => p.id === r.id);
-    assert.equal((mine?.query as any)?.viewerToken, "xoxp-secret", "the fulfiller-facing view re-attaches it");
-    await built.app.fulfillContextRequest(r.id, { result: { messages: [] } });
-    const done = await built.app.getContextRequest(r.id);
-    assert.equal((done as any)?.query?.viewerToken, undefined, "a fulfilled row still carries no token");
-    await built.app.deleteContextRequest(r.id);
-  });
+  it("keeps the viewer's search token out of the durable row but hands it to the fulfiller, and drops it on fulfill", () =>
+    inTestTenant(async () => {
+      const r = await built.app.createContextRequest("slack", {
+        conversationTarget: "C9:1.1",
+        count: 10,
+        viewer: "U1",
+        searchAll: "hubble",
+        viewerToken: "xoxp-secret",
+      });
+      const stored = await built.app.getContextRequest(r.id);
+      assert.equal((stored as any)?.query?.viewerToken, undefined, "the stored row never carries the token");
+      const pending = await built.app.pendingContextRequests("slack");
+      const mine = pending.find((p) => p.id === r.id);
+      assert.equal((mine?.query as any)?.viewerToken, "xoxp-secret", "the fulfiller-facing view re-attaches it");
+      await built.app.fulfillContextRequest(r.id, { result: { messages: [] } });
+      const done = await built.app.getContextRequest(r.id);
+      assert.equal((done as any)?.query?.viewerToken, undefined, "a fulfilled row still carries no token");
+      await built.app.deleteContextRequest(r.id);
+    }));
 });

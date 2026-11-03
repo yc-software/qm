@@ -16,6 +16,7 @@ import { Readable } from "node:stream";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const body = async (r: Response | Promise<Response>): Promise<any> => (await r).json();
 
@@ -36,19 +37,21 @@ describe("ui canvas and ui observe", () => {
   const events: SessionStateEvent[] = [];
 
   const token = (extra: Partial<CapabilityClaims> = {}) =>
-    mintCapabilityToken(
-      {
-        actorId: "U1",
-        scopeId: scopeId("personal", "U1"),
-        aud: CONTROL_PLANE_AUD,
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        liveActor: true,
-        surface: "web",
-        runId: "run-live",
-        threadRef: THREAD,
-        ...extra,
-      },
-      SECRET,
+    inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId: "U1",
+          scopeId: scopeId("personal", "U1"),
+          aud: CONTROL_PLANE_AUD,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          liveActor: true,
+          surface: "web",
+          runId: "run-live",
+          threadRef: THREAD,
+          ...extra,
+        },
+        SECRET,
+      ),
     );
 
   const agent = async (method: string, path: string, body?: unknown, extra?: Partial<CapabilityClaims>) =>
@@ -64,7 +67,7 @@ describe("ui canvas and ui observe", () => {
   const source = (method: string, path: string, body?: unknown) =>
     fetch(`${sourceBase}${path}`, {
       method,
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...testTenantHeaders() },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
 
@@ -94,7 +97,7 @@ describe("ui canvas and ui observe", () => {
       conversation: { kind: "dm", threadRef: THREAD },
       text: "hello",
     };
-    sessionId = (await built.app.turn(turn)).sessionId!;
+    sessionId = (await inTestTenant(() => built.app.turn(turn))).sessionId!;
     built.sessionStateBus.subscribe((event) => {
       if (event.state === "ui") events.push(event);
     });
@@ -109,7 +112,7 @@ describe("ui canvas and ui observe", () => {
     const r = await agent("POST", "/v1/ui/canvas", { html: "<p>hi</p>" });
     assert.equal(r.status, 403);
     assert.equal((await body(r)).error, "feature_disabled");
-    await built.featureFlags.setEnabled("ui_canvas", scopeId("personal", "U1"), true, "test");
+    await inTestTenant(() => built.featureFlags.setEnabled("ui_canvas", scopeId("personal", "U1"), true, "test"));
   });
 
   it("refuses tokens that are not a live web turn", async () => {
@@ -138,15 +141,16 @@ describe("ui canvas and ui observe", () => {
     assert.deepEqual([event.sessionId, event.participants, event.ui], [sessionId, ["U1"], { kind: "canvas" }]);
   });
 
-  it("installs a shared sidebar file as the always-on canvas", async () => {
-    const file = (body: string) => ({ stream: Readable.from([Buffer.from(body)]) });
-    assert.equal(await installSharedCanvas(built.uiState, "U2", null), "no such file is shared with you");
-    assert.match(String(await installSharedCanvas(built.uiState, "U2", file("{"))), /^not a shared canvas: .*JSON/);
-    assert.match(String(await installSharedCanvas(built.uiState, "U2", file('{"js":1}'))), /must be strings/);
-    await installSharedCanvas(built.uiState, "U2", file('{"html":"<nav/>","js":"1"}'));
-    const live = await readUiCanvas(built.uiState, "U2", "always-on");
-    assert.deepEqual([live?.html, live?.css, live?.js, live?.pinned], ["<nav/>", "", "1", true]);
-  });
+  it("installs a shared sidebar file as the always-on canvas", () =>
+    inTestTenant(async () => {
+      const file = (body: string) => ({ stream: Readable.from([Buffer.from(body)]) });
+      assert.equal(await installSharedCanvas(built.uiState, "U2", null), "no such file is shared with you");
+      assert.match(String(await installSharedCanvas(built.uiState, "U2", file("{"))), /^not a shared canvas: .*JSON/);
+      assert.match(String(await installSharedCanvas(built.uiState, "U2", file('{"js":1}'))), /must be strings/);
+      await installSharedCanvas(built.uiState, "U2", file('{"html":"<nav/>","js":"1"}'));
+      const live = await readUiCanvas(built.uiState, "U2", "always-on");
+      assert.deepEqual([live?.html, live?.css, live?.js, live?.pinned], ["<nav/>", "", "1", true]);
+    }));
 
   it("rejects bad and oversized writes", async () => {
     assert.equal((await agent("POST", "/v1/ui/canvas", { html: 5 })).status, 400);
@@ -160,9 +164,9 @@ describe("ui canvas and ui observe", () => {
     assert.equal((await source("GET", `/v1/ui/canvases/${sessionId}?principalId=U2`)).status, 404);
     const pin = await source("POST", `/v1/ui/canvases/${sessionId}`, { principalId: "U1", pinned: true });
     assert.equal((await body(pin)).canvas.pinned, true);
-    await built.featureFlags.setEnabled("ui_canvas", scopeId("personal", "U1"), false, "test");
+    await inTestTenant(() => built.featureFlags.setEnabled("ui_canvas", scopeId("personal", "U1"), false, "test"));
     assert.equal((await source("GET", `/v1/ui/canvases/${sessionId}?principalId=U1`)).status, 404);
-    await built.featureFlags.setEnabled("ui_canvas", scopeId("personal", "U1"), true, "test");
+    await inTestTenant(() => built.featureFlags.setEnabled("ui_canvas", scopeId("personal", "U1"), true, "test"));
     await source("POST", `/v1/ui/canvases/${sessionId}`, { principalId: "U1", dismiss: true });
     assert.equal((await body(agent("GET", "/v1/ui/canvas"))).canvas, null);
   });
@@ -223,7 +227,9 @@ describe("ui canvas and ui observe", () => {
 
   it("does not deliver a result into a run the person does not own", async () => {
     runs.set("run-other", { id: "run-other", status: "running", request: { actor: { id: "U2" } } });
-    await built.uiState.put(uiStateId("U1", "observe:forged"), { value: { runId: "run-other" }, updatedAt: 1 });
+    await inTestTenant(() =>
+      built.uiState.put(uiStateId("U1", "observe:forged"), { value: { runId: "run-other" }, updatedAt: 1 }),
+    );
     const r = await source("POST", "/v1/ui/observe/forged/result", { principalId: "U1", snapshot: {} });
     assert.equal(r.status, 404);
   });

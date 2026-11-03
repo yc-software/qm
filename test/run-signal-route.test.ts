@@ -18,6 +18,8 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
+import { mintPortalIdentity as mintTenantPortalIdentity } from "../src/auth/portal-identity.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -64,7 +66,7 @@ async function coreSignal(runId: string, body: unknown): Promise<{ status: numbe
   const raw = JSON.stringify(body);
   const r = await fetch(`${coreBase}${path}`, {
     method: "POST",
-    headers: signedHeaders(SECRET, "POST", path, raw),
+    headers: inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
     body: raw,
   });
   return { status: r.status, json: (await r.json()) as Record<string, unknown> };
@@ -83,7 +85,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
 }
 
 test("core route: signals for a pending run are accepted (abort, steer)", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-accept", request: request("hi") });
+  const { run } = await inTestTenant(() => built.runs.enqueue({ sessionId: "t-accept", request: request("hi") }));
   for (const body of [{ kind: "steer", text: "go left" }, { kind: "abort" }]) {
     const r = await coreSignal(run.id, body);
     assert.equal(r.status, 200);
@@ -102,7 +104,9 @@ function steererRequest(externalId: string, threadRef: string, text: string, dis
 }
 
 test("core route: a steer's ts and request thread through to the signal store", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-fields", request: request("hi", "t-fields") });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: "t-fields", request: request("hi", "t-fields") }),
+  );
   const body = {
     kind: "steer",
     text: "go left",
@@ -111,7 +115,7 @@ test("core route: a steer's ts and request thread through to the signal store", 
   };
   const r = await coreSignal(run.id, body);
   assert.equal(r.status, 200);
-  const [signal] = await built.signals.takePending(run.id);
+  const [signal] = await inTestTenant(() => built.signals.takePending(run.id));
   assert.ok(signal);
   assert.equal(signal.ts, "1712.001");
   assert.equal(signal.request?.actor.externalId, "internal:U1");
@@ -119,7 +123,9 @@ test("core route: a steer's ts and request thread through to the signal store", 
 });
 
 test("core route: another person's steer is attributed with their display name", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-foreign", request: request("hi", "t-foreign") });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: "t-foreign", request: request("hi", "t-foreign") }),
+  );
   const r = await coreSignal(run.id, {
     kind: "steer",
     text: "go right",
@@ -127,13 +133,15 @@ test("core route: another person's steer is attributed with their display name",
     request: steererRequest("web-eve", "t-foreign", "go right", "Eve Example"),
   });
   assert.equal(r.status, 200);
-  const [signal] = await built.signals.takePending(run.id);
+  const [signal] = await inTestTenant(() => built.signals.takePending(run.id));
   assert.equal(signal?.text, "Eve Example: go right");
   assert.equal(signal?.request?.text, "go right", "the replayable request keeps the steerer's own words");
 });
 
 test("core route: a malformed request is rejected 400, and privileged fields are stripped", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-sanitize", request: request("hi", "t-sanitize") });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: "t-sanitize", request: request("hi", "t-sanitize") }),
+  );
   const bad = await coreSignal(run.id, { kind: "steer", text: "x", request: { text: "x" } });
   assert.equal(bad.status, 400);
 
@@ -145,7 +153,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
   };
   const r = await coreSignal(run.id, { kind: "steer", text: "x", request: smuggled });
   assert.equal(r.status, 200);
-  const [signal] = await built.signals.takePending(run.id);
+  const [signal] = await inTestTenant(() => built.signals.takePending(run.id));
   assert.ok(signal?.request);
   assert.equal("ownerKeychainUnion" in signal.request, false);
   assert.equal("spawned" in signal.request, false);
@@ -153,45 +161,59 @@ test("core route: a malformed request is rejected 400, and privileged fields are
 });
 
 test("core route: a bare steer without a ts gets one minted so agents persist it", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-mint", request: request("hi", "t-mint") });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: "t-mint", request: request("hi", "t-mint") }),
+  );
   const r = await coreSignal(run.id, { kind: "steer", text: "keep going" });
   assert.equal(r.status, 200);
-  const [signal] = await built.signals.takePending(run.id);
+  const [signal] = await inTestTenant(() => built.signals.takePending(run.id));
   assert.ok(signal?.ts, "signalRun mints a ts when the caller sends none");
 });
 
 test("signalRun attributes a bare steer from a shared-scope viewer who is not the run's owner", async () => {
-  await built.app.upsertChannels(
-    [{ channelId: "C-STEER", name: "steer-room", isPrivate: true }],
-    [
-      { channelId: "C-STEER", principalId: "steer-owner" },
-      { channelId: "C-STEER", principalId: "steer-member" },
-    ],
+  await inTestTenant(() =>
+    built.app.upsertChannels(
+      [{ channelId: "C-STEER", name: "steer-room", isPrivate: true }],
+      [
+        { channelId: "C-STEER", principalId: "steer-owner" },
+        { channelId: "C-STEER", principalId: "steer-member" },
+      ],
+    ),
   );
-  await built.app.upsertDirectory([{ principalId: "steer-member", displayName: "Steer Member", type: "internal" }]);
+  await inTestTenant(() =>
+    built.app.upsertDirectory([{ principalId: "steer-member", displayName: "Steer Member", type: "internal" }]),
+  );
   const threadRef = "shared-steer:C-STEER";
   const owner = { id: "steer-owner", type: "internal" as const };
-  const { run } = await built.runs.enqueue({
-    sessionId: threadRef,
-    request: {
-      modelAccount: "company",
-      actor: owner,
-      conversation: { kind: "channel", channelRef: "C-STEER", threadRef, audience: [owner] },
-      origin: { kind: "direct" },
-      text: "queued shared work",
-    },
-  });
-  const session = await built.sessions.getOrCreateByThread(threadRef, "channel", "channel:C-STEER", "C-STEER", "web");
-  await built.sessions.addParticipant(session.id, "steer-member");
-  const outcome = await built.app.signalRun(run.id, { kind: "steer", text: "try harder" }, "steer-member");
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({
+      sessionId: threadRef,
+      request: {
+        modelAccount: "company",
+        actor: owner,
+        conversation: { kind: "channel", channelRef: "C-STEER", threadRef, audience: [owner] },
+        origin: { kind: "direct" },
+        text: "queued shared work",
+      },
+    }),
+  );
+  const session = await inTestTenant(() =>
+    built.sessions.getOrCreateByThread(threadRef, "channel", "channel:C-STEER", "C-STEER", "web"),
+  );
+  await inTestTenant(() => built.sessions.addParticipant(session.id, "steer-member"));
+  const outcome = await inTestTenant(() =>
+    built.app.signalRun(run.id, { kind: "steer", text: "try harder" }, "steer-member"),
+  );
   assert.equal(outcome.accepted, true);
-  const [signal] = await built.signals.takePending(run.id);
+  const [signal] = await inTestTenant(() => built.signals.takePending(run.id));
   assert.equal(signal?.text, "Steer Member: try harder");
   assert.ok(signal?.ts);
 });
 
 test("core route: a request claiming a different conversation than the run's is refused 400", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-bind", request: request("hi", "t-bind") });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: "t-bind", request: request("hi", "t-bind") }),
+  );
   const r = await coreSignal(run.id, {
     kind: "steer",
     text: "over here instead",
@@ -199,11 +221,13 @@ test("core route: a request claiming a different conversation than the run's is 
   });
   assert.equal(r.status, 400);
   assert.equal(r.json.reason, "conversation_mismatch");
-  assert.deepEqual(await built.signals.takePending(run.id), []);
+  assert.deepEqual(await inTestTenant(() => built.signals.takePending(run.id)), []);
 });
 
 test("core route: a portal identity that does not match the request actor is refused 403", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-mismatch", request: request("hi", "t-mismatch") });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: "t-mismatch", request: request("hi", "t-mismatch") }),
+  );
   const path = `/v1/runs/${encodeURIComponent(run.id)}/signal`;
   const raw = JSON.stringify({
     kind: "steer",
@@ -213,36 +237,43 @@ test("core route: a portal identity that does not match the request actor is ref
   const r = await fetch(`${coreBase}${path}`, {
     method: "POST",
     headers: {
-      ...signedHeaders(SECRET, "POST", path, raw),
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "eve", exp: Date.now() + 60_000 }, SECRET),
+      ...inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
+      [PORTAL_IDENTITY_HEADER]: await mintTenantPortalIdentity(
+        { p: "eve", t: testTenants()[0], exp: Date.now() + 60_000 },
+        SECRET,
+      ),
     },
     body: raw,
   });
   assert.equal(r.status, 403);
-  assert.deepEqual(await built.signals.takePending(run.id), []);
+  assert.deepEqual(await inTestTenant(() => built.signals.takePending(run.id)), []);
 });
 
 test("an orphaned steer with a request replays as the steerer, not the run's owner", async () => {
   const threadRef = `web:web-eve:${crypto.randomUUID()}`;
-  const { run } = await built.runs.enqueue({
-    sessionId: "t-orphan",
-    request: { ...request("hi", "t-orphan"), timezone: "America/New_York" },
-  });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({
+      sessionId: "t-orphan",
+      request: { ...request("hi", "t-orphan"), timezone: "America/New_York" },
+    }),
+  );
   const attachment = { name: "notes.txt", mimetype: "text/plain", sizeBytes: 5, blobId: "blob-1" };
-  await built.signals.send(run.id, {
-    kind: "steer",
-    text: "finish this instead",
-    ts: "1712.003",
-    request: { ...steererRequest("web-eve", threadRef, "finish this instead"), attachments: [attachment] },
-  });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+  await inTestTenant(() =>
+    built.signals.send(run.id, {
+      kind: "steer",
+      text: "finish this instead",
+      ts: "1712.003",
+      request: { ...steererRequest("web-eve", threadRef, "finish this instead"), attachments: [attachment] },
+    }),
+  );
+  const claimed = await inTestTenant(() => built.runs.claimById(run.id, "test-worker", 5_000));
   assert.ok(claimed);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  await built.app.replayOrphanedRunSignals(run.id);
-  let replayed = await built.runs.activeForThread(threadRef);
+  await inTestTenant(() => built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" }));
+  await inTestTenant(() => built.app.replayOrphanedRunSignals(run.id));
+  let replayed = await inTestTenant(() => built.runs.activeForThread(threadRef));
   for (let i = 0; !replayed && i < 50; i++) {
     await new Promise((r) => setTimeout(r, 100));
-    replayed = await built.runs.activeForThread(threadRef);
+    replayed = await inTestTenant(() => built.runs.activeForThread(threadRef));
   }
   assert.ok(replayed, "the steer text was re-enqueued as its own turn");
   assert.equal(replayed!.request.actor.id, "web-eve");
@@ -253,27 +284,31 @@ test("an orphaned steer with a request replays as the steerer, not the run's own
 
 test("an orphaned steer whose own request is refused falls back to replaying on the run's request", async () => {
   const threadRef = "t-orphan-fallback";
-  const { run } = await built.runs.enqueue({ sessionId: threadRef, request: request("hi", threadRef) });
-  await built.signals.send(run.id, {
-    kind: "steer",
-    text: "still matters",
-    ts: "1712.004",
-    request: {
-      surface: "web",
-      actor: { externalId: "web-eve" },
-      conversation: { kind: "group", threadRef: `web:web-eve:${crypto.randomUUID()}`, channelRef: "G-NOPE" },
-      liveActor: true,
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: threadRef, request: request("hi", threadRef) }),
+  );
+  await inTestTenant(() =>
+    built.signals.send(run.id, {
+      kind: "steer",
       text: "still matters",
-    },
-  });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+      ts: "1712.004",
+      request: {
+        surface: "web",
+        actor: { externalId: "web-eve" },
+        conversation: { kind: "group", threadRef: `web:web-eve:${crypto.randomUUID()}`, channelRef: "G-NOPE" },
+        liveActor: true,
+        text: "still matters",
+      },
+    }),
+  );
+  const claimed = await inTestTenant(() => built.runs.claimById(run.id, "test-worker", 5_000));
   assert.ok(claimed);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  await built.app.replayOrphanedRunSignals(run.id);
-  let replayed = await built.runs.activeForThread(threadRef);
+  await inTestTenant(() => built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" }));
+  await inTestTenant(() => built.app.replayOrphanedRunSignals(run.id));
+  let replayed = await inTestTenant(() => built.runs.activeForThread(threadRef));
   for (let i = 0; !replayed && i < 50; i++) {
     await new Promise((r) => setTimeout(r, 100));
-    replayed = await built.runs.activeForThread(threadRef);
+    replayed = await inTestTenant(() => built.runs.activeForThread(threadRef));
   }
   assert.ok(replayed, "a refused steerer request still replays the text on the run's own request");
   assert.equal(replayed!.request.actor.id, "internal:U1");
@@ -290,7 +325,7 @@ test("attributedSteerText prefixes foreign and ambient steers only", () => {
 });
 
 test("core route: steer without text is rejected 400", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-notext", request: request("hi") });
+  const { run } = await inTestTenant(() => built.runs.enqueue({ sessionId: "t-notext", request: request("hi") }));
   for (const body of [{ kind: "steer" }, { kind: "steer", text: "   " }]) {
     const r = await coreSignal(run.id, body);
     assert.equal(r.status, 400);
@@ -299,16 +334,16 @@ test("core route: steer without text is rejected 400", async () => {
 });
 
 test("core route: a bad kind is rejected 400, an unknown run 404", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-bad", request: request("hi") });
+  const { run } = await inTestTenant(() => built.runs.enqueue({ sessionId: "t-bad", request: request("hi") }));
   assert.equal((await coreSignal(run.id, { kind: "explode" })).status, 400);
   assert.equal((await coreSignal("no-such-run", { kind: "abort" })).status, 404);
 });
 
 test("core route: a terminal run rejects signals with reason=terminal", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-terminal", request: request("hi") });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
+  const { run } = await inTestTenant(() => built.runs.enqueue({ sessionId: "t-terminal", request: request("hi") }));
+  const claimed = await inTestTenant(() => built.runs.claimById(run.id, "test-worker", 5_000));
   assert.ok(claimed);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await inTestTenant(() => built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" }));
   const r = await coreSignal(run.id, { kind: "abort" });
   assert.equal(r.status, 409);
   assert.deepEqual(r.json, { accepted: false, reason: "terminal" });
@@ -364,7 +399,7 @@ test("web proxy: a steer carries a server-built ts and TurnRequest for the signe
   );
   assert.equal(steer.status, 200);
 
-  const [signal] = await built.signals.takePending(submit.runId!);
+  const [signal] = await inTestTenant(() => built.signals.takePending(submit.runId!));
   assert.ok(signal);
   assert.equal(signal.text, "louder");
   assert.ok(
@@ -378,22 +413,26 @@ test("web proxy: a steer carries a server-built ts and TurnRequest for the signe
 
 test("web proxy: inbox steering cannot omit or disguise its context to bypass rollout gates", async () => {
   const threadRef = "web:alice:inbox";
-  const { run } = await built.runs.enqueue({
-    sessionId: "inbox-steer-gates",
-    request: {
-      ...request("Review my inbox", threadRef),
-      surface: "web",
-      actor: { id: "alice", type: "internal" },
-      conversation: { kind: "dm", threadRef, audience: [{ id: "alice", type: "internal" }] },
-    },
-  });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({
+      sessionId: "inbox-steer-gates",
+      request: {
+        ...request("Review my inbox", threadRef),
+        surface: "web",
+        actor: { id: "alice", type: "internal" },
+        conversation: { kind: "dm", threadRef, audience: [{ id: "alice", type: "internal" }] },
+      },
+    }),
+  );
   const previousAllowlist = process.env.INBOX_USERS;
   const steer = (body: Record<string, unknown>) =>
     fetch(`${webBase}/api/runs/${run.id}/signal`, asUser("alice", { method: "POST", body: JSON.stringify(body) }));
   try {
     process.env.INBOX_USERS = "alice";
     for (const enabled of [false, true]) {
-      await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), enabled, "test");
+      await inTestTenant(() =>
+        built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), enabled, "test"),
+      );
       for (const context of [{}, { threadRef: "" }, { threadRef: "invalid" }, { threadRef: "web:alice:ordinary" }]) {
         const response = await steer({
           kind: "steer",
@@ -403,11 +442,11 @@ test("web proxy: inbox steering cannot omit or disguise its context to bypass ro
         });
         assert.equal(response.status, 400);
         assert.equal(((await response.json()) as { reason?: string }).reason, "conversation_mismatch");
-        assert.deepEqual(await built.signals.takePending(run.id), []);
+        assert.deepEqual(await inTestTenant(() => built.signals.takePending(run.id)), []);
       }
       const response = await steer({ kind: "steer", text: "Prioritize these", threadRef });
       assert.equal(response.status, enabled ? 200 : 403);
-      const signals = await built.signals.takePending(run.id);
+      const signals = await inTestTenant(() => built.signals.takePending(run.id));
       assert.equal(signals.length, enabled ? 1 : 0);
       if (enabled) {
         assert.equal(signals[0]?.request?.conversation.threadRef, threadRef);
@@ -417,11 +456,11 @@ test("web proxy: inbox steering cannot omit or disguise its context to bypass ro
     process.env.INBOX_USERS = "bob";
     const denied = await steer({ kind: "steer", text: "Prioritize these", threadRef });
     assert.equal(denied.status, 403);
-    assert.deepEqual(await built.signals.takePending(run.id), []);
+    assert.deepEqual(await inTestTenant(() => built.signals.takePending(run.id)), []);
     const abort = await steer({ kind: "abort" });
     assert.equal(abort.status, 200);
   } finally {
-    await built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), false, "test");
+    await inTestTenant(() => built.featureFlags.setEnabled("inbox_loops", scopeId("personal", "alice"), false, "test"));
     if (previousAllowlist === undefined) delete process.env.INBOX_USERS;
     else process.env.INBOX_USERS = previousAllowlist;
   }
@@ -430,15 +469,17 @@ test("web proxy: inbox steering cannot omit or disguise its context to bypass ro
 test("web proxy: shared scopes cannot disguise an alias-owned inbox thread", async () => {
   const user = "alice@example.com";
   const threadRef = "web:ALICE@example.com:inbox";
-  const { run } = await built.runs.enqueue({
-    sessionId: "inbox-alias-steer-gates",
-    request: {
-      ...request("Review my inbox", threadRef),
-      surface: "web",
-      actor: { id: user, type: "internal" },
-      conversation: { kind: "dm", threadRef, audience: [{ id: user, type: "internal" }] },
-    },
-  });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({
+      sessionId: "inbox-alias-steer-gates",
+      request: {
+        ...request("Review my inbox", threadRef),
+        surface: "web",
+        actor: { id: user, type: "internal" },
+        conversation: { kind: "dm", threadRef, audience: [{ id: user, type: "internal" }] },
+      },
+    }),
+  );
   const previousAllowlist = process.env.INBOX_USERS;
   try {
     process.env.INBOX_USERS = "nobody";
@@ -452,7 +493,7 @@ test("web proxy: shared scopes cannot disguise an alias-owned inbox thread", asy
           }),
         );
         assert.equal(response.status, 403);
-        assert.deepEqual(await built.signals.takePending(run.id), []);
+        assert.deepEqual(await inTestTenant(() => built.signals.takePending(run.id)), []);
       }
     }
   } finally {
@@ -475,18 +516,23 @@ test("web proxy: a steer claiming another user's thread is refused", async () =>
   );
   assert.equal(steer.status, 400);
   assert.equal(((await steer.json()) as { reason?: string }).reason, "conversation_mismatch");
-  assert.deepEqual(await built.signals.takePending(submit.runId!), []);
+  assert.deepEqual(await inTestTenant(() => built.signals.takePending(submit.runId!)), []);
 });
 
 test("web proxy: Project roster revisions revoke pending run status, signals, and events", async () => {
-  await built.app.upsertDirectory([
-    { principalId: "project-owner", displayName: "Project Owner", type: "internal" },
-    { principalId: "project-member", displayName: "Project Member", type: "internal" },
-    { principalId: "project-late-member", displayName: "Late Member", type: "internal" },
-  ]);
-  const project = await built.app.createProject("project-owner", "Run access");
+  await inTestTenant(() =>
+    built.app.upsertDirectory([
+      { principalId: "project-owner", displayName: "Project Owner", type: "internal" },
+      { principalId: "project-member", displayName: "Project Member", type: "internal" },
+      { principalId: "project-late-member", displayName: "Late Member", type: "internal" },
+    ]),
+  );
+  const project = await inTestTenant(() => built.app.createProject("project-owner", "Run access"));
   assert.ok(project);
-  assert.equal((await built.app.addProjectMember(project.id, "project-owner", "project-member")).status, "ok");
+  assert.equal(
+    (await inTestTenant(() => built.app.addProjectMember(project.id, "project-owner", "project-member"))).status,
+    "ok",
+  );
 
   const threadRef = `web:project-owner:${crypto.randomUUID()}`;
   const submitted = await fetch(
@@ -516,7 +562,10 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   );
   assert.equal(discovered.runToken, undefined);
 
-  assert.equal((await built.app.addProjectMember(project.id, "project-owner", "project-late-member")).status, "ok");
+  assert.equal(
+    (await inTestTenant(() => built.app.addProjectMember(project.id, "project-owner", "project-late-member"))).status,
+    "ok",
+  );
   const lateMember = (await (
     await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("project-late-member"))
   ).json()) as { runId?: string | null };
@@ -564,8 +613,14 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
   const statusPath = `/api/runs/${encodeURIComponent(current.runId!)}`;
   assert.equal((await fetch(`${webBase}${statusPath}`, asUser("project-member"))).status, 200);
 
-  assert.equal((await built.app.removeProjectMember(project.id, "project-owner", "project-member")).status, "ok");
-  assert.equal((await built.app.addProjectMember(project.id, "project-owner", "project-member")).status, "ok");
+  assert.equal(
+    (await inTestTenant(() => built.app.removeProjectMember(project.id, "project-owner", "project-member"))).status,
+    "ok",
+  );
+  assert.equal(
+    (await inTestTenant(() => built.app.addProjectMember(project.id, "project-owner", "project-member"))).status,
+    "ok",
+  );
   const active = (await (
     await fetch(
       `${webBase}/api/runs/active?threadRef=${encodeURIComponent(currentThreadRef)}`,
@@ -592,28 +647,38 @@ test("web proxy: Project roster revisions revoke pending run status, signals, an
 });
 
 test("web proxy: a Project member can resolve their own approval in another member's thread", async () => {
-  await built.app.upsertDirectory([
-    { principalId: "approval-owner", displayName: "Approval Owner", type: "internal" },
-    { principalId: "approval-member", displayName: "Approval Member", type: "internal" },
-  ]);
-  const project = await built.app.createProject("approval-owner", "Shared approvals");
+  await inTestTenant(() =>
+    built.app.upsertDirectory([
+      { principalId: "approval-owner", displayName: "Approval Owner", type: "internal" },
+      { principalId: "approval-member", displayName: "Approval Member", type: "internal" },
+    ]),
+  );
+  const project = await inTestTenant(() => built.app.createProject("approval-owner", "Shared approvals"));
   assert.ok(project);
-  assert.equal((await built.app.addProjectMember(project.id, "approval-owner", "approval-member")).status, "ok");
+  assert.equal(
+    (await inTestTenant(() => built.app.addProjectMember(project.id, "approval-owner", "approval-member"))).status,
+    "ok",
+  );
   const threadRef = `web:approval-owner:${crypto.randomUUID()}`;
   const channelRef = project.scopeId.slice("group:".length);
   const conversation = { kind: "group" as const, channelRef, channelName: project.name, threadRef, audience: [] };
 
   assert.equal(
-    (await built.app.turn({ surface: "web", actor: { externalId: "approval-owner" }, conversation, text: "start" }))
-      .status,
+    (
+      await inTestTenant(() =>
+        built.app.turn({ surface: "web", actor: { externalId: "approval-owner" }, conversation, text: "start" }),
+      )
+    ).status,
     "ok",
   );
-  const pending = await built.app.turn({
-    surface: "web",
-    actor: { externalId: "approval-member" },
-    conversation,
-    text: "!run git push --force origin main",
-  });
+  const pending = await inTestTenant(() =>
+    built.app.turn({
+      surface: "web",
+      actor: { externalId: "approval-member" },
+      conversation,
+      text: "!run git push --force origin main",
+    }),
+  );
   assert.equal(pending.status, "pending_approval");
   const requestId = pending.pendingApprovals?.[0]?.requestId;
   assert.ok(requestId);
@@ -627,20 +692,24 @@ test("web proxy: a Project member can resolve their own approval in another memb
 });
 
 test("run control follows current shared membership while public history requires an active principal", async () => {
-  await built.app.upsertChannels(
-    [
-      { channelId: "C-RUN", name: "run-room", isPrivate: true },
-      { channelId: "C-PUBLIC-RUN", name: "public-run", isPrivate: false },
-    ],
-    [
-      { channelId: "C-RUN", principalId: "shared-owner" },
-      { channelId: "C-RUN", principalId: "shared-member" },
-    ],
+  await inTestTenant(() =>
+    built.app.upsertChannels(
+      [
+        { channelId: "C-RUN", name: "run-room", isPrivate: true },
+        { channelId: "C-PUBLIC-RUN", name: "public-run", isPrivate: false },
+      ],
+      [
+        { channelId: "C-RUN", principalId: "shared-owner" },
+        { channelId: "C-RUN", principalId: "shared-member" },
+      ],
+    ),
   );
-  await built.app.upsertGroups([
-    { groupId: "G-RUN", principalId: "shared-owner" },
-    { groupId: "G-RUN", principalId: "shared-member" },
-  ]);
+  await inTestTenant(() =>
+    built.app.upsertGroups([
+      { groupId: "G-RUN", principalId: "shared-owner" },
+      { groupId: "G-RUN", principalId: "shared-member" },
+    ]),
+  );
 
   for (const shared of [
     { kind: "channel" as const, ref: "C-RUN", scope: "channel:C-RUN" as const },
@@ -648,36 +717,42 @@ test("run control follows current shared membership while public history require
   ]) {
     const threadRef = `shared-run:${shared.ref}`;
     const owner = { id: "shared-owner", type: "internal" as const };
-    const { run } = await built.runs.enqueue({
-      sessionId: threadRef,
-      request: {
-        modelAccount: "company",
-        actor: owner,
-        conversation: { kind: shared.kind, channelRef: shared.ref, threadRef, audience: [owner] },
-        origin: { kind: "direct" },
-        text: "queued shared work",
-      },
-    });
-    const session = await built.sessions.getOrCreateByThread(threadRef, shared.kind, shared.scope, shared.ref, "web");
-    await built.sessions.addParticipant(session.id, "shared-member");
-    assert.ok(await built.app.getRun(run.id, "shared-member"));
+    const { run } = await inTestTenant(() =>
+      built.runs.enqueue({
+        sessionId: threadRef,
+        request: {
+          modelAccount: "company",
+          actor: owner,
+          conversation: { kind: shared.kind, channelRef: shared.ref, threadRef, audience: [owner] },
+          origin: { kind: "direct" },
+          text: "queued shared work",
+        },
+      }),
+    );
+    const session = await inTestTenant(() =>
+      built.sessions.getOrCreateByThread(threadRef, shared.kind, shared.scope, shared.ref, "web"),
+    );
+    await inTestTenant(() => built.sessions.addParticipant(session.id, "shared-member"));
+    assert.ok(await inTestTenant(() => built.app.getRun(run.id, "shared-member")));
     if (shared.kind === "channel") {
-      await built.app.upsertChannels(
-        [
-          { channelId: "C-RUN", name: "run-room", isPrivate: true },
-          { channelId: "C-PUBLIC-RUN", name: "public-run", isPrivate: false },
-        ],
-        [{ channelId: "C-RUN", principalId: "shared-owner" }],
+      await inTestTenant(() =>
+        built.app.upsertChannels(
+          [
+            { channelId: "C-RUN", name: "run-room", isPrivate: true },
+            { channelId: "C-PUBLIC-RUN", name: "public-run", isPrivate: false },
+          ],
+          [{ channelId: "C-RUN", principalId: "shared-owner" }],
+        ),
       );
     } else {
-      await built.app.upsertGroups([{ groupId: "G-RUN", principalId: "shared-owner" }]);
+      await inTestTenant(() => built.app.upsertGroups([{ groupId: "G-RUN", principalId: "shared-owner" }]));
     }
     assert.ok(
-      await built.app.getSessionForViewer(session.id, "shared-member"),
+      await inTestTenant(() => built.app.getSessionForViewer(session.id, "shared-member")),
       "history remains readable through the participant window",
     );
-    assert.equal(await built.app.getRun(run.id, "shared-member"), null);
-    assert.deepEqual(await built.app.signalRun(run.id, { kind: "abort" }, "shared-member"), {
+    assert.equal(await inTestTenant(() => built.app.getRun(run.id, "shared-member")), null);
+    assert.deepEqual(await inTestTenant(() => built.app.signalRun(run.id, { kind: "abort" }, "shared-member")), {
       accepted: false,
       reason: "not_found",
     });
@@ -686,27 +761,25 @@ test("run control follows current shared membership while public history require
   const publicMember = "public-history-member";
   const publicThread = "shared-run:public";
   const publicOwner = { id: "public-owner", type: "internal" as const };
-  const { run: publicRun } = await built.runs.enqueue({
-    sessionId: publicThread,
-    request: {
-      actor: publicOwner,
-      conversation: { kind: "channel", channelRef: "C-PUBLIC-RUN", threadRef: publicThread, audience: [publicOwner] },
-      origin: { kind: "direct" },
-      text: "queued public work",
-    },
-  });
-  const publicSession = await built.sessions.getOrCreateByThread(
-    publicThread,
-    "channel",
-    "channel:C-PUBLIC-RUN",
-    "public-run",
-    "web",
+  const { run: publicRun } = await inTestTenant(() =>
+    built.runs.enqueue({
+      sessionId: publicThread,
+      request: {
+        actor: publicOwner,
+        conversation: { kind: "channel", channelRef: "C-PUBLIC-RUN", threadRef: publicThread, audience: [publicOwner] },
+        origin: { kind: "direct" },
+        text: "queued public work",
+      },
+    }),
   );
-  await built.sessions.addParticipant(publicSession.id, publicMember);
-  assert.ok(await built.app.getRun(publicRun.id, publicMember));
-  await built.identity.deactivate(publicMember);
-  assert.equal(await built.app.getRun(publicRun.id, publicMember), null);
-  await built.identity.reactivate(publicMember);
+  const publicSession = await inTestTenant(() =>
+    built.sessions.getOrCreateByThread(publicThread, "channel", "channel:C-PUBLIC-RUN", "public-run", "web"),
+  );
+  await inTestTenant(() => built.sessions.addParticipant(publicSession.id, publicMember));
+  assert.ok(await inTestTenant(() => built.app.getRun(publicRun.id, publicMember)));
+  await inTestTenant(() => built.identity.deactivate(publicMember));
+  assert.equal(await inTestTenant(() => built.app.getRun(publicRun.id, publicMember)), null);
+  await inTestTenant(() => built.identity.reactivate(publicMember));
 });
 
 test("web proxy: /api/runs/active tracks queued runs — the live one first, the queued one after it finishes", async () => {
@@ -727,9 +800,9 @@ test("web proxy: /api/runs/active tracks queued runs — the live one first, the
   ).json()) as { runId?: string | null };
   assert.equal(active1.runId, first, "the oldest live run is the active one");
 
-  const claimed = await built.runs.claimById(first, "test-worker", 5_000);
+  const claimed = await inTestTenant(() => built.runs.claimById(first, "test-worker", 5_000));
   assert.ok(claimed);
-  await built.runs.complete(first, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  await inTestTenant(() => built.runs.complete(first, claimed!.leaseToken!, { status: "ok", reply: "done" }));
 
   const active2 = (await (
     await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, asUser("carol"))
@@ -762,8 +835,8 @@ test("web steering atomically transfers file-only queues and deduplicates retrie
     );
     assert.equal(response.status, 200, await response.text());
   }
-  assert.equal(await built.runs.get(queuedRunId), null);
-  const signals = await built.signals.takePending(runId);
+  assert.equal(await inTestTenant(() => built.runs.get(queuedRunId)), null);
+  const signals = await inTestTenant(() => built.signals.takePending(runId));
   assert.equal(signals.length, 1);
   assert.deepEqual(signals[0]?.request?.attachments, attachments);
 });
@@ -773,7 +846,7 @@ async function coreTurn(body: unknown): Promise<{ status: number; json: Record<s
   const raw = JSON.stringify(body);
   const r = await fetch(`${coreBase}${path}`, {
     method: "POST",
-    headers: signedHeaders(SECRET, "POST", path, raw),
+    headers: inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
     body: raw,
   });
   return { status: r.status, json: (await r.json()) as Record<string, unknown> };
@@ -845,7 +918,7 @@ test("core route: valid clientTools reach the queued run, stripped to the declar
     ]),
   );
   assert.equal(r.status, 202);
-  const run = await built.runs.get(r.json.runId as string);
+  const run = await inTestTenant(() => built.runs.get(r.json.runId as string));
   assert.deepEqual(run?.request.clientTools, [
     pageTool("ui__highlight_rows", { timeoutMs: 60_000 }),
     pageTool("ui__get_selection", { timeoutMs: 1_000 }),
@@ -861,7 +934,7 @@ const surfaceTurn = (surfaceBriefing: unknown, extra: Partial<TurnRequest> = {})
 async function queuedRequest(body: TurnRequest): Promise<OrchestratorInput> {
   const r = await coreTurn(body);
   assert.equal(r.status, 202);
-  return (await built.runs.get(r.json.runId as string))!.request;
+  return (await inTestTenant(() => built.runs.get(r.json.runId as string)))!.request;
 }
 
 test("core route: surface briefing is not glued onto the person's message text", async () => {
@@ -929,26 +1002,30 @@ function withPageTools(threadRef: string): OrchestratorInput {
 }
 
 test("core route: a client_result is refused for a run that declared no client tools", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-client-none", request: request("hi", "t-client-none") });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: "t-client-none", request: request("hi", "t-client-none") }),
+  );
   const r = await coreSignal(run.id, { kind: "client_result", callId: "c1", result: { content: "x" } });
   assert.equal(r.status, 409);
   assert.deepEqual(r.json, { accepted: false, reason: "no_client_tools" });
-  assert.deepEqual(await built.signals.takePending(run.id), []);
+  assert.deepEqual(await inTestTenant(() => built.signals.takePending(run.id)), []);
 });
 
 test("signalRun refuses a client_result from anyone but the run's own actor", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-client-other", request: withPageTools("t-client-other") });
-  const outcome = await built.app.signalRun(
-    run.id,
-    { kind: "client_result", callId: "c1", result: { content: "x" } },
-    "web-eve",
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: "t-client-other", request: withPageTools("t-client-other") }),
+  );
+  const outcome = await inTestTenant(() =>
+    built.app.signalRun(run.id, { kind: "client_result", callId: "c1", result: { content: "x" } }, "web-eve"),
   );
   assert.deepEqual(outcome, { accepted: false, reason: "not_found" });
-  assert.deepEqual(await built.signals.takePending(run.id), []);
+  assert.deepEqual(await inTestTenant(() => built.signals.takePending(run.id)), []);
 });
 
 test("core route: a client_result is accepted once, with a per-call dedupe key", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-client", request: withPageTools("t-client") });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: "t-client", request: withPageTools("t-client") }),
+  );
   const body = {
     kind: "client_result",
     callId: "call-1",
@@ -960,7 +1037,7 @@ test("core route: a client_result is accepted once, with a per-call dedupe key",
   const second = await coreSignal(run.id, { ...body, result: { content: "late" } });
   assert.equal(second.status, 409);
   assert.deepEqual(second.json, { accepted: false, reason: "duplicate" });
-  const signals = await built.signals.takePending(run.id);
+  const signals = await inTestTenant(() => built.signals.takePending(run.id));
   assert.equal(signals.length, 1);
   assert.equal(signals[0]!.kind, "client_result");
   assert.equal(signals[0]!.callId, "call-1");
@@ -969,7 +1046,9 @@ test("core route: a client_result is accepted once, with a per-call dedupe key",
 });
 
 test("core route: malformed client_result signals are rejected 400", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-client-bad", request: withPageTools("t-client-bad") });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: "t-client-bad", request: withPageTools("t-client-bad") }),
+  );
   for (const body of [
     { kind: "client_result", result: { content: "x" } },
     { kind: "client_result", callId: "", result: { content: "x" } },
@@ -982,13 +1061,15 @@ test("core route: malformed client_result signals are rejected 400", async () =>
     const r = await coreSignal(run.id, body);
     assert.equal(r.status, 400, JSON.stringify(body));
   }
-  assert.deepEqual(await built.signals.takePending(run.id), []);
+  assert.deepEqual(await inTestTenant(() => built.signals.takePending(run.id)), []);
   const named = await coreSignal(run.id, { kind: "client_result", callId: "c2", result: { content: ["x"] } });
   assert.match(String(named.json.message), /^client_result\.result\.content: /);
 });
 
 test("core route: a client_result keeps only the declared result fields", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-client-strip", request: withPageTools("t-client-strip") });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: "t-client-strip", request: withPageTools("t-client-strip") }),
+  );
   const r = await coreSignal(run.id, {
     kind: "client_result",
     callId: "c1",
@@ -996,16 +1077,18 @@ test("core route: a client_result keeps only the declared result fields", async 
     extra: "ignored",
   });
   assert.equal(r.status, 200);
-  const [signal] = await built.signals.takePending(run.id);
+  const [signal] = await inTestTenant(() => built.signals.takePending(run.id));
   assert.deepEqual(signal?.result, { content: "ok" });
 });
 
 test("core route: client_result for an unknown run is 404 and for a terminal run is 409", async () => {
   const body = { kind: "client_result", callId: "c1", result: { content: "x" } };
   assert.equal((await coreSignal("no-such-run", body)).status, 404);
-  const { run } = await built.runs.enqueue({ sessionId: "t-client-done", request: withPageTools("t-client-done") });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: "t-client-done", request: withPageTools("t-client-done") }),
+  );
+  const claimed = await inTestTenant(() => built.runs.claimById(run.id, "test-worker", 5_000));
+  await inTestTenant(() => built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" }));
   const r = await coreSignal(run.id, body);
   assert.equal(r.status, 409);
   assert.deepEqual(r.json, { accepted: false, reason: "terminal" });
@@ -1014,60 +1097,70 @@ test("core route: client_result for an unknown run is 404 and for a terminal run
 async function settleNoReplay(threadRef: string): Promise<void> {
   for (let i = 0; i < 5; i++) {
     await new Promise((r) => setTimeout(r, 50));
-    assert.equal(await built.runs.activeForThread(threadRef), null, "no replay turn was started");
+    assert.equal(await inTestTenant(() => built.runs.activeForThread(threadRef)), null, "no replay turn was started");
   }
 }
 
 test("orphan replay drops a late client_result instead of starting a turn", async () => {
   const threadRef = `t-client-orphan-${crypto.randomUUID()}`;
-  const { run } = await built.runs.enqueue({ sessionId: threadRef, request: request("hi", threadRef) });
-  await built.signals.send(run.id, {
-    kind: "client_result",
-    callId: "late",
-    text: "a late page answer",
-    result: { content: "a late page answer" },
-  });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  await built.app.replayOrphanedRunSignals(run.id);
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: threadRef, request: request("hi", threadRef) }),
+  );
+  await inTestTenant(() =>
+    built.signals.send(run.id, {
+      kind: "client_result",
+      callId: "late",
+      text: "a late page answer",
+      result: { content: "a late page answer" },
+    }),
+  );
+  const claimed = await inTestTenant(() => built.runs.claimById(run.id, "test-worker", 5_000));
+  await inTestTenant(() => built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" }));
+  await inTestTenant(() => built.app.replayOrphanedRunSignals(run.id));
   await settleNoReplay(threadRef);
-  assert.deepEqual(await built.signals.pending(run.id), [], "the late answer is consumed");
+  assert.deepEqual(await inTestTenant(() => built.signals.pending(run.id)), [], "the late answer is consumed");
 });
 
 test("orphan replays never carry client tools into the new run", async () => {
   const requestless = `t-client-replay-${crypto.randomUUID()}`;
-  const { run: first } = await built.runs.enqueue({ sessionId: requestless, request: withPageTools(requestless) });
-  await built.signals.send(first.id, { kind: "steer", text: "carry on", ts: "1712.101" });
-  const firstClaim = await built.runs.claimById(first.id, "test-worker", 5_000);
-  await built.runs.complete(first.id, firstClaim!.leaseToken!, { status: "ok", reply: "done" });
-  await built.app.replayOrphanedRunSignals(first.id);
-  let replayed = await built.runs.activeForThread(requestless);
+  const { run: first } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: requestless, request: withPageTools(requestless) }),
+  );
+  await inTestTenant(() => built.signals.send(first.id, { kind: "steer", text: "carry on", ts: "1712.101" }));
+  const firstClaim = await inTestTenant(() => built.runs.claimById(first.id, "test-worker", 5_000));
+  await inTestTenant(() => built.runs.complete(first.id, firstClaim!.leaseToken!, { status: "ok", reply: "done" }));
+  await inTestTenant(() => built.app.replayOrphanedRunSignals(first.id));
+  let replayed = await inTestTenant(() => built.runs.activeForThread(requestless));
   for (let i = 0; !replayed && i < 50; i++) {
     await new Promise((r) => setTimeout(r, 100));
-    replayed = await built.runs.activeForThread(requestless);
+    replayed = await inTestTenant(() => built.runs.activeForThread(requestless));
   }
   assert.ok(replayed, "the requestless steer replays on the dead run's request");
   assert.equal(replayed!.request.text, "carry on");
   assert.equal(replayed!.request.clientTools, undefined, "the dead run's client tools are not inherited");
 
   const threadRef = `web:web-eve:${crypto.randomUUID()}`;
-  const { run: second } = await built.runs.enqueue({
-    sessionId: "t-client-replay-own",
-    request: request("hi", "t-client-replay-own"),
-  });
-  await built.signals.send(second.id, {
-    kind: "steer",
-    text: "and this",
-    ts: "1712.102",
-    request: { ...steererRequest("web-eve", threadRef, "and this"), clientTools: [pageTool("ui__get_selection")] },
-  });
-  const secondClaim = await built.runs.claimById(second.id, "test-worker", 5_000);
-  await built.runs.complete(second.id, secondClaim!.leaseToken!, { status: "ok", reply: "done" });
-  await built.app.replayOrphanedRunSignals(second.id);
-  let own = await built.runs.activeForThread(threadRef);
+  const { run: second } = await inTestTenant(() =>
+    built.runs.enqueue({
+      sessionId: "t-client-replay-own",
+      request: request("hi", "t-client-replay-own"),
+    }),
+  );
+  await inTestTenant(() =>
+    built.signals.send(second.id, {
+      kind: "steer",
+      text: "and this",
+      ts: "1712.102",
+      request: { ...steererRequest("web-eve", threadRef, "and this"), clientTools: [pageTool("ui__get_selection")] },
+    }),
+  );
+  const secondClaim = await inTestTenant(() => built.runs.claimById(second.id, "test-worker", 5_000));
+  await inTestTenant(() => built.runs.complete(second.id, secondClaim!.leaseToken!, { status: "ok", reply: "done" }));
+  await inTestTenant(() => built.app.replayOrphanedRunSignals(second.id));
+  let own = await inTestTenant(() => built.runs.activeForThread(threadRef));
   for (let i = 0; !own && i < 50; i++) {
     await new Promise((r) => setTimeout(r, 100));
-    own = await built.runs.activeForThread(threadRef);
+    own = await inTestTenant(() => built.runs.activeForThread(threadRef));
   }
   assert.ok(own, "the steer replays on its own request");
   assert.equal(own!.request.text, "and this");
@@ -1076,15 +1169,17 @@ test("orphan replays never carry client tools into the new run", async () => {
 
 test("subagent orphan replay never carries client tools into the new run", async () => {
   const threadRef = `agent:main:subagent:${crypto.randomUUID()}`;
-  const { run } = await built.runs.enqueue({ sessionId: threadRef, request: withPageTools(threadRef) });
-  await built.signals.send(run.id, { kind: "steer", text: "keep going" });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  await built.app.replayOrphanedRunSignals(run.id);
-  let replayed = await built.runs.activeForThread(threadRef);
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: threadRef, request: withPageTools(threadRef) }),
+  );
+  await inTestTenant(() => built.signals.send(run.id, { kind: "steer", text: "keep going" }));
+  const claimed = await inTestTenant(() => built.runs.claimById(run.id, "test-worker", 5_000));
+  await inTestTenant(() => built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" }));
+  await inTestTenant(() => built.app.replayOrphanedRunSignals(run.id));
+  let replayed = await inTestTenant(() => built.runs.activeForThread(threadRef));
   for (let i = 0; !replayed && i < 50; i++) {
     await new Promise((r) => setTimeout(r, 100));
-    replayed = await built.runs.activeForThread(threadRef);
+    replayed = await inTestTenant(() => built.runs.activeForThread(threadRef));
   }
   assert.ok(replayed, "the subagent steer replays on the dead run's request");
   assert.equal(replayed!.request.text, "keep going");
@@ -1093,16 +1188,20 @@ test("subagent orphan replay never carries client tools into the new run", async
 
 test("subagent orphan replay drops a late client_result instead of starting a turn", async () => {
   const threadRef = `agent:main:subagent:${crypto.randomUUID()}`;
-  const { run } = await built.runs.enqueue({ sessionId: threadRef, request: request("hi", threadRef) });
-  await built.signals.send(run.id, {
-    kind: "client_result",
-    callId: "late",
-    text: "a late page answer",
-    result: { content: "a late page answer" },
-  });
-  const claimed = await built.runs.claimById(run.id, "test-worker", 5_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  await built.app.replayOrphanedRunSignals(run.id);
+  const { run } = await inTestTenant(() =>
+    built.runs.enqueue({ sessionId: threadRef, request: request("hi", threadRef) }),
+  );
+  await inTestTenant(() =>
+    built.signals.send(run.id, {
+      kind: "client_result",
+      callId: "late",
+      text: "a late page answer",
+      result: { content: "a late page answer" },
+    }),
+  );
+  const claimed = await inTestTenant(() => built.runs.claimById(run.id, "test-worker", 5_000));
+  await inTestTenant(() => built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" }));
+  await inTestTenant(() => built.app.replayOrphanedRunSignals(run.id));
   await settleNoReplay(threadRef);
-  assert.deepEqual(await built.signals.pending(run.id), [], "the late answer is acknowledged");
+  assert.deepEqual(await inTestTenant(() => built.signals.pending(run.id)), [], "the late answer is acknowledged");
 });

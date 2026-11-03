@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-artifacts-")) }));
@@ -29,29 +30,39 @@ const json = async (r: Response): Promise<any> => r.json();
 test("per-kind artifact reads are scope-filtered, authz-gated, and audited", async () => {
   const s = start();
   try {
-    await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "ping",
-      destination: { type: "slack", target: "D1", audienceScopeId: "personal:U1" },
-    });
-    await s.built.app.createCron({
-      ownerScopeId: "personal:OTHER",
-      owner: "U9",
-      createdBy: "U9",
-      schedule: { everyMs: 60_000 },
-      action: "noise",
-    });
-    const madeSkill = await s.built.skills.create({
-      scopeId: "personal:U1",
-      manifest: { name: "summarize", description: "sum it up", requiredCapabilities: [], body: "..." },
-      createdBy: "U1",
-    });
-    await s.built.skills.recordUse(madeSkill.id, 777);
+    await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: "personal:U1",
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "ping",
+        destination: { type: "slack", target: "D1", audienceScopeId: "personal:U1" },
+      }),
+    );
+    await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: "personal:OTHER",
+        owner: "U9",
+        createdBy: "U9",
+        schedule: { everyMs: 60_000 },
+        action: "noise",
+      }),
+    );
+    const madeSkill = await inTestTenant(() =>
+      s.built.skills.create({
+        scopeId: "personal:U1",
+        manifest: { name: "summarize", description: "sum it up", requiredCapabilities: [], body: "..." },
+        createdBy: "U1",
+      }),
+    );
+    await inTestTenant(() => s.built.skills.recordUse(madeSkill.id, 777));
 
-    const crons = await json(await fetch(`${s.base}/v1/admin/crons?scope=personal:U1`, { headers: ALICE_ADMIN }));
+    const crons = await json(
+      await fetch(`${s.base}/v1/admin/crons?scope=personal:U1`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
+    );
     assert.equal(crons.crons.length, 1, "crons from other scopes are filtered out");
     assert.equal(crons.crons[0].action, "ping");
     assert.equal(crons.crons[0].createdBy, "U1");
@@ -59,7 +70,11 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
     assert.deepEqual(crons.crons[0].destination, { type: "slack", target: "D1", audienceScopeId: "personal:U1" });
     assert.ok(crons.crons[0].createdAt > 0, "rows carry createdAt for the dashboard");
 
-    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=personal:U1`, { headers: ALICE_ADMIN }));
+    const skills = await json(
+      await fetch(`${s.base}/v1/admin/skills?scope=personal:U1`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
+    );
     assert.equal(skills.skills.length, 1);
     assert.equal(skills.skills[0].name, "summarize");
     assert.equal(skills.skills[0].description, "sum it up");
@@ -67,7 +82,9 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
     assert.equal(skills.skills[0].lastUsedAt, 777, "rows carry lastUsedAt for the recency sort");
 
     const deployments = await json(
-      await fetch(`${s.base}/v1/admin/deployments?scope=personal:U1`, { headers: ALICE_ADMIN }),
+      await fetch(`${s.base}/v1/admin/deployments?scope=personal:U1`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
     );
     assert.deepEqual(
       deployments,
@@ -77,21 +94,23 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
 
     for (const kind of ["crons", "deployments", "skills"]) {
       assert.equal(
-        (await fetch(`${s.base}/v1/admin/${kind}`, { headers: ALICE_ADMIN })).status,
+        (await fetch(`${s.base}/v1/admin/${kind}`, { headers: { ...testTenantHeaders(), ...ALICE_ADMIN } })).status,
         400,
         `${kind}: scope is required`,
       );
       assert.equal(
         (
           await fetch(`${s.base}/v1/admin/${kind}?scope=personal:U1`, {
-            headers: { "x-admin-actor": "nobody@default-org" },
+            headers: { ...testTenantHeaders(), "x-admin-actor": "nobody@default-org" },
           })
         ).status,
         403,
         `${kind}: admin-only`,
       );
       assert.ok(
-        (await s.built.auditLog.events()).some((e) => e.action === `${kind}.read` && e.scopeLabel === "personal:U1"),
+        (await inTestTenant(() => s.built.auditLog.events())).some(
+          (e) => e.action === `${kind}.read` && e.scopeLabel === "personal:U1",
+        ),
         `${kind}: the read is audited`,
       );
     }
@@ -103,18 +122,20 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
 test("an admin cannot repoint someone else's grant-carrying cron; its owner can", async () => {
   const s = start();
   try {
-    const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "review spend",
-      unattendedGrants: ["admin.spend.read"],
-    });
+    const cron = await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: "personal:U1",
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "review spend",
+        unattendedGrants: ["admin.spend.read"],
+      }),
+    );
     const put = (destination: unknown) =>
       fetch(`${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=personal:U1`, {
         method: "PUT",
-        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN, "content-type": "application/json" },
         body: JSON.stringify({ destination }),
       });
     assert.equal((await put({ type: "slack", target: "C9", audienceScopeId: "channel:C9" })).status, 409);
@@ -123,26 +144,28 @@ test("an admin cannot repoint someone else's grant-carrying cron; its owner can"
       409,
       "a caller-supplied audience cannot launder a room destination",
     );
-    assert.equal((await s.built.app.getCron(cron.id))?.destination, undefined);
+    assert.equal((await inTestTenant(() => s.built.app.getCron(cron.id)))?.destination, undefined);
 
-    const own = await s.built.app.createCron({
-      ownerScopeId: "personal:admin-alice",
-      owner: "admin-alice",
-      createdBy: "admin-alice",
-      schedule: { everyMs: 60_000 },
-      action: "review spend",
-      unattendedGrants: ["admin.spend.read"],
-    });
+    const own = await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: "personal:admin-alice",
+        owner: "admin-alice",
+        createdBy: "admin-alice",
+        schedule: { everyMs: 60_000 },
+        action: "review spend",
+        unattendedGrants: ["admin.spend.read"],
+      }),
+    );
     const moved = await fetch(
       `${s.base}/v1/admin/crons/${encodeURIComponent(own.id)}/destination?scope=personal:admin-alice`,
       {
         method: "PUT",
-        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN, "content-type": "application/json" },
         body: JSON.stringify({ destination: { type: "slack", target: "C9", audienceScopeId: "channel:C9" } }),
       },
     );
     assert.equal(moved.status, 200, "the owner, acting live, chooses where their cron's output goes");
-    const after = await s.built.app.getCron(own.id);
+    const after = await inTestTenant(() => s.built.app.getCron(own.id));
     assert.equal(after?.destination?.target, "C9");
     assert.deepEqual(after?.unattendedGrants, ["admin.spend.read"]);
   } finally {
@@ -153,29 +176,31 @@ test("an admin cannot repoint someone else's grant-carrying cron; its owner can"
 test("an admin can edit and clear a cron destination inside the administered scope", async () => {
   const s = start();
   try {
-    const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "ping",
-    });
+    const cron = await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: "personal:U1",
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "ping",
+      }),
+    );
 
     const set = await fetch(`${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=personal:U1`, {
       method: "PUT",
-      headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), ...ALICE_ADMIN, "content-type": "application/json" },
       body: JSON.stringify({
         destination: { type: "principal", target: "U2", audienceScopeId: "personal:U2", onBehalfOf: "U1" },
       }),
     });
     assert.equal(set.status, 200);
-    assert.equal((await s.built.app.getCron(cron.id))?.destination?.target, "U2");
+    assert.equal((await inTestTenant(() => s.built.app.getCron(cron.id)))?.destination?.target, "U2");
 
     const invalid = await fetch(
       `${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=personal:U1`,
       {
         method: "PUT",
-        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN, "content-type": "application/json" },
         body: JSON.stringify({ destination: { type: "email", target: "ops@example.com" } }),
       },
     );
@@ -185,7 +210,7 @@ test("an admin can edit and clear a cron destination inside the administered sco
       `${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=channel:C9`,
       {
         method: "PUT",
-        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN, "content-type": "application/json" },
         body: JSON.stringify({ destination: { type: "slack", target: "C9", audienceScopeId: "channel:C9" } }),
       },
     );
@@ -193,13 +218,13 @@ test("an admin can edit and clear a cron destination inside the administered sco
 
     const clear = await fetch(`${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=personal:U1`, {
       method: "PUT",
-      headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), ...ALICE_ADMIN, "content-type": "application/json" },
       body: JSON.stringify({ destination: null }),
     });
     assert.equal(clear.status, 200);
-    assert.equal((await s.built.app.getCron(cron.id))?.destination, undefined);
+    assert.equal((await inTestTenant(() => s.built.app.getCron(cron.id)))?.destination, undefined);
     assert.ok(
-      (await s.built.auditLog.events()).some(
+      (await inTestTenant(() => s.built.auditLog.events())).some(
         (e) => e.action === "cron.destination.update" && e.scopeLabel === "personal:U1",
       ),
       "the admin edit is audited",
@@ -212,30 +237,38 @@ test("an admin can edit and clear a cron destination inside the administered sco
 test("a single skill drills in to its body, capabilities, and approvals — scope-pinned and audited", async () => {
   const s = start();
   try {
-    const made = await s.built.skills.create({
-      scopeId: "personal:U1",
-      manifest: {
-        name: "summarize",
-        description: "sum it up",
-        requiredCapabilities: ["egress:example.com"],
-        body: "# Summarize\nDo the thing.",
-      },
-      createdBy: "U1",
-    });
+    const made = await inTestTenant(() =>
+      s.built.skills.create({
+        scopeId: "personal:U1",
+        manifest: {
+          name: "summarize",
+          description: "sum it up",
+          requiredCapabilities: ["egress:example.com"],
+          body: "# Summarize\nDo the thing.",
+        },
+        createdBy: "U1",
+      }),
+    );
 
     const got = await json(
-      await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=personal:U1`, { headers: ALICE_ADMIN }),
+      await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=personal:U1`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
     );
     assert.equal(got.name, "summarize");
     assert.equal(got.body, "# Summarize\nDo the thing.", "the full SKILL.md body comes back for the drill-in");
     assert.deepEqual(got.requiredCapabilities, ["egress:example.com"]);
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "skill.read" && e.scopeLabel === "personal:U1"),
+      (await inTestTenant(() => s.built.auditLog.events())).some(
+        (e) => e.action === "skill.read" && e.scopeLabel === "personal:U1",
+      ),
       "the read is audited",
     );
 
     const mismatched = await json(
-      await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=channel:C9`, { headers: ALICE_ADMIN }),
+      await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=channel:C9`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
     );
     assert.equal(
       mismatched.id,
@@ -244,17 +277,23 @@ test("a single skill drills in to its body, capabilities, and approvals — scop
     );
     assert.equal(mismatched.ownerScopeId, "personal:U1", "the response reports the skill's own scope");
     const orgGot = await json(
-      await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=org:default-org`, { headers: ALICE_ADMIN }),
+      await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=org:default-org`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
     );
     assert.equal(orgGot.id, made.id, "an org scope reads any skill");
     assert.equal(
-      (await fetch(`${s.base}/v1/admin/skills/does-not-exist?scope=org:default-org`, { headers: ALICE_ADMIN })).status,
+      (
+        await fetch(`${s.base}/v1/admin/skills/does-not-exist?scope=org:default-org`, {
+          headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+        })
+      ).status,
       404,
     );
     assert.equal(
       (
         await fetch(`${s.base}/v1/admin/skills/${made.id}?scope=personal:U1`, {
-          headers: { "x-admin-actor": "nobody@default-org" },
+          headers: { ...testTenantHeaders(), "x-admin-actor": "nobody@default-org" },
         })
       ).status,
       403,
@@ -268,61 +307,89 @@ test("a single skill drills in to its body, capabilities, and approvals — scop
 test('an org scope reads everything — the dashboard\'s default "All scopes" view', async () => {
   const s = start();
   try {
-    await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "ping",
-    });
-    await s.built.app.createCron({
-      ownerScopeId: "channel:C9",
-      owner: "U2",
-      createdBy: "U2",
-      schedule: { everyMs: 60_000 },
-      action: "digest",
-    });
-    await s.built.skills.create({
-      scopeId: "personal:U1",
-      manifest: { name: "summarize", description: "sum it up", requiredCapabilities: [], body: "..." },
-      createdBy: "U1",
-    });
-    s.built.errors.record({
-      category: "turn",
-      code: "boom",
-      message: "redacted",
-      scopeLabel: "personal:U1",
-      sessionId: "sess-1",
-    });
-    s.built.errors.record({ category: "turn", code: "bang", message: "redacted", scopeLabel: "channel:C9" });
+    await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: "personal:U1",
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "ping",
+      }),
+    );
+    await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: "channel:C9",
+        owner: "U2",
+        createdBy: "U2",
+        schedule: { everyMs: 60_000 },
+        action: "digest",
+      }),
+    );
+    await inTestTenant(() =>
+      s.built.skills.create({
+        scopeId: "personal:U1",
+        manifest: { name: "summarize", description: "sum it up", requiredCapabilities: [], body: "..." },
+        createdBy: "U1",
+      }),
+    );
+    inTestTenant(() =>
+      s.built.errors.record({
+        category: "turn",
+        code: "boom",
+        message: "redacted",
+        scopeLabel: "personal:U1",
+        sessionId: "sess-1",
+      }),
+    );
+    inTestTenant(() =>
+      s.built.errors.record({ category: "turn", code: "bang", message: "redacted", scopeLabel: "channel:C9" }),
+    );
 
-    const crons = await json(await fetch(`${s.base}/v1/admin/crons?scope=org:default-org`, { headers: ALICE_ADMIN }));
+    const crons = await json(
+      await fetch(`${s.base}/v1/admin/crons?scope=org:default-org`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
+    );
     assert.deepEqual(
       crons.crons.map((c: any) => c.ownerScopeId).sort(),
       ["channel:C9", "personal:U1"],
       "org scope lists every scope's crons, labelled with their owner scope",
     );
 
-    const skills = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ALICE_ADMIN }));
+    const skills = await json(
+      await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
+    );
     assert.ok(
       skills.skills.some((k: any) => k.ownerScopeId === "personal:U1"),
       "org scope includes other scopes' skills (alongside the seeded org ones)",
     );
 
-    const errors = await json(await fetch(`${s.base}/v1/admin/errors?scope=org:default-org`, { headers: ALICE_ADMIN }));
+    const errors = await json(
+      await fetch(`${s.base}/v1/admin/errors?scope=org:default-org`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
+    );
     assert.deepEqual(
       errors.errors.map((e: any) => e.scopeLabel).sort(),
       ["channel:C9", "personal:U1"],
       "org scope sees every scope's errors",
     );
-    const scoped = await json(await fetch(`${s.base}/v1/admin/errors?scope=personal:U1`, { headers: ALICE_ADMIN }));
+    const scoped = await json(
+      await fetch(`${s.base}/v1/admin/errors?scope=personal:U1`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
+    );
     assert.deepEqual(
       scoped.errors.map((e: any) => e.scopeLabel),
       ["personal:U1"],
       "a non-org scope still filters",
     );
     const bySession = await json(
-      await fetch(`${s.base}/v1/admin/errors?scope=org:default-org&sessionId=sess-1`, { headers: ALICE_ADMIN }),
+      await fetch(`${s.base}/v1/admin/errors?scope=org:default-org&sessionId=sess-1`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
     );
     assert.deepEqual(
       bySession.errors.map((e: any) => e.code),
@@ -330,11 +397,17 @@ test('an org scope reads everything — the dashboard\'s default "All scopes" vi
       "sessionId narrows to that session's errors (the transcript error strip)",
     );
     const noSession = await json(
-      await fetch(`${s.base}/v1/admin/errors?scope=org:default-org&sessionId=sess-none`, { headers: ALICE_ADMIN }),
+      await fetch(`${s.base}/v1/admin/errors?scope=org:default-org&sessionId=sess-none`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
     );
     assert.deepEqual(noSession.errors, [], "an unknown sessionId matches nothing");
 
-    const audit = await json(await fetch(`${s.base}/v1/admin/audit?scope=org:default-org`, { headers: ALICE_ADMIN }));
+    const audit = await json(
+      await fetch(`${s.base}/v1/admin/audit?scope=org:default-org`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
+    );
     assert.ok(
       audit.events.some((e: any) => e.scopeLabel !== "org:default-org"),
       "org scope sees admin activity on every scope, not just org-labelled events",
@@ -347,29 +420,39 @@ test('an org scope reads everything — the dashboard\'s default "All scopes" vi
 test("the skills list + detail link an imported skill to its pack; built-in/personal skills don't", async () => {
   const s = start();
   try {
-    const pack = await s.built.app.registerSkillPack({
-      kind: "git",
-      url: "https://github.com/acme/skills-pack.git",
-      ref: "main",
-      syncMode: "pinned",
-      trustTier: "third-party",
-      targetScopeId: "org:default-org",
-      subset: "all",
-      createdBy: "admin-alice",
-    });
-    const imported = await s.built.skills.create({
-      scopeId: "org:default-org",
-      manifest: { name: "from-pack", description: "imported", requiredCapabilities: [], body: "..." },
-      createdBy: `pack:${pack.id}`,
-      pack: { packId: pack.id, commit: "abc123", upstreamName: "from-pack" },
-    });
-    await s.built.skills.create({
-      scopeId: "org:default-org",
-      manifest: { name: "homegrown", description: "local", requiredCapabilities: [], body: "..." },
-      createdBy: "system:plugin-skills",
-    });
+    const pack = await inTestTenant(() =>
+      s.built.app.registerSkillPack({
+        kind: "git",
+        url: "https://github.com/acme/skills-pack.git",
+        ref: "main",
+        syncMode: "pinned",
+        trustTier: "third-party",
+        targetScopeId: "org:default-org",
+        subset: "all",
+        createdBy: "admin-alice",
+      }),
+    );
+    const imported = await inTestTenant(() =>
+      s.built.skills.create({
+        scopeId: "org:default-org",
+        manifest: { name: "from-pack", description: "imported", requiredCapabilities: [], body: "..." },
+        createdBy: `pack:${pack.id}`,
+        pack: { packId: pack.id, commit: "abc123", upstreamName: "from-pack" },
+      }),
+    );
+    await inTestTenant(() =>
+      s.built.skills.create({
+        scopeId: "org:default-org",
+        manifest: { name: "homegrown", description: "local", requiredCapabilities: [], body: "..." },
+        createdBy: "system:plugin-skills",
+      }),
+    );
 
-    const list = await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ALICE_ADMIN }));
+    const list = await json(
+      await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
+    );
     const listImported = list.skills.find((k: any) => k.name === "from-pack");
     assert.deepEqual(
       listImported.pack,
@@ -384,7 +467,9 @@ test("the skills list + detail link an imported skill to its pack; built-in/pers
     );
 
     const detail = await json(
-      await fetch(`${s.base}/v1/admin/skills/${imported.id}?scope=org:default-org`, { headers: ALICE_ADMIN }),
+      await fetch(`${s.base}/v1/admin/skills/${imported.id}?scope=org:default-org`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
     );
     assert.deepEqual(
       detail.pack,
@@ -399,20 +484,22 @@ test("the skills list + detail link an imported skill to its pack; built-in/pers
 test("admin cron runtime edits preserve task authority and reject unavailable or out-of-scope choices", async () => {
   const s = start();
   try {
-    const cron = await s.built.crons.create({
-      ownerScopeId: "personal:U1",
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "run the existing script",
-      unattendedGrants: ["publish"],
-      destination: { type: "principal", target: "U1" },
-    });
+    const cron = await inTestTenant(() =>
+      s.built.crons.create({
+        ownerScopeId: "personal:U1",
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "run the existing script",
+        unattendedGrants: ["publish"],
+        destination: { type: "principal", target: "U1" },
+      }),
+    );
     const runtime = { modelId: "claude-sonnet-5" };
     const put = (body: unknown, scope = "personal:U1", actor = ALICE_ADMIN) =>
       fetch(`${s.base}/v1/admin/crons/${cron.id}/runtime?scope=${scope}`, {
         method: "PUT",
-        headers: { ...actor, "content-type": "application/json" },
+        headers: { ...testTenantHeaders(), ...actor, "content-type": "application/json" },
         body: JSON.stringify(body),
       });
     assert.equal((await put({ runtime }, "personal:U1", { "x-admin-actor": "nobody@default-org" })).status, 403);
@@ -423,14 +510,20 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
     const result = await put({ runtime });
     assert.equal(result.status, 200);
     assert.deepEqual(await result.json(), { cron: { id: cron.id, runtime } });
-    const updated = await s.built.app.getCron(cron.id);
+    const updated = await inTestTenant(() => s.built.app.getCron(cron.id));
     assert.deepEqual(updated, { ...cron, runtime });
-    const listed = await json(await fetch(`${s.base}/v1/admin/crons?scope=personal:U1`, { headers: ALICE_ADMIN }));
+    const listed = await json(
+      await fetch(`${s.base}/v1/admin/crons?scope=personal:U1`, {
+        headers: { ...testTenantHeaders(), ...ALICE_ADMIN },
+      }),
+    );
     assert.deepEqual(listed.crons[0].runtime, runtime);
     assert.deepEqual(listed.crons[0].unattendedGrants, cron.unattendedGrants);
     assert.equal((await put({ runtime: null })).status, 200);
-    assert.deepEqual(await s.built.app.getCron(cron.id), { ...cron, runtime: null });
-    const audit = (await s.built.auditLog.events()).filter((event) => event.action === "cron.runtime.update");
+    assert.deepEqual(await inTestTenant(() => s.built.app.getCron(cron.id)), { ...cron, runtime: null });
+    const audit = (await inTestTenant(() => s.built.auditLog.events())).filter(
+      (event) => event.action === "cron.runtime.update",
+    );
     assert.equal(audit.length, 2);
     assert.ok(audit.every((event) => event.principalId === "admin-alice" && event.resource === cron.id));
   } finally {

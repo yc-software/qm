@@ -14,6 +14,18 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 function svc() {
   const deployStore = createDeployStore(testDeployBackings());
@@ -30,7 +42,7 @@ function svc() {
     acl,
     deployDir: mkdtempSync(join(tmpdir(), "rn-")),
   });
-  return { deploy, deployStore };
+  return { deploy: tenantBound(deploy), deployStore: tenantBound(deployStore), service: deploy };
 }
 
 const make = (deploy: ReturnType<typeof svc>["deploy"], name: string) =>
@@ -68,7 +80,7 @@ test("setDeploymentDisplayName sets the label, then clears it (independent of th
 
 test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
   const s = svc();
-  const app = createApp({ deploy: s.deploy } as unknown as Parameters<typeof createApp>[0]);
+  const app = createApp({ deploy: s.service } as unknown as Parameters<typeof createApp>[0]);
   const identitySecret = "deployment-route-identity-secret";
   const server = createInsecureTestServer(app, {
     portalIdentitySecret: identitySecret,
@@ -76,11 +88,11 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const identity = await mintSignedPayload({ p: "U1", exp: Date.now() + 60_000 }, identitySecret);
+  const identity = await mintSignedPayload({ t: testTenants()[0], p: "U1", exp: Date.now() + 60_000 }, identitySecret);
   const post = (path: string, body: unknown) =>
     fetch(base + path, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-portal-identity": identity },
+      headers: { "content-type": "application/json", "x-portal-identity": identity, ...testTenantHeaders() },
       body: JSON.stringify(body),
     });
   try {

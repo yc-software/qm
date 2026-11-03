@@ -39,7 +39,7 @@ test("runtime resolution uses explicit choice, then scope, then org and rejects 
     modelId: "claude-sonnet-4-6",
   });
   await assert.rejects(
-    async () => await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "no-such-model" }),
+    async () => resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "no-such-model" }),
     /not approved/,
   );
 });

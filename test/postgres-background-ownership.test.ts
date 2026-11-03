@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
+import { grantTestAppLogin } from "./support/app-login.ts";
+import { migrateTestDatabase, ownerUrlOf } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 test(
@@ -13,6 +15,7 @@ test(
     const factories = [createPostgresMapFactory(databaseUrl!), createPostgresMapFactory(databaseUrl!)];
     try {
       const maps = factories.map((factory) => factory.map<BackgroundOwnership>(table));
+      await migrateTestDatabase(databaseUrl);
       const stores = maps.map((map) => createBackgroundOwnershipStore(map));
       const claims = await Promise.allSettled(
         stores.map((store, i) =>
@@ -49,8 +52,6 @@ test(
         members: [{ instanceId: "old", deploymentId: "core:blue", state: "admitted" }],
       });
     } finally {
-      const pool = await factories[0]!.pool.pool();
-      await pool.query(`DROP TABLE IF EXISTS ${table}`);
       await Promise.all(factories.map((factory) => factory.pool.close()));
     }
   },
@@ -61,8 +62,11 @@ test(
   { skip: !databaseUrl, timeout: 20_000 },
   async () => {
     const { createPgBossCronQueue } = await import("../src/cron/job-queue.ts");
-    const schema = `handover_${randomUUID().replaceAll("-", "")}`;
-    const queue = createPgBossCronQueue(databaseUrl!, schema);
+    const provisioner = createPgBossCronQueue(ownerUrlOf(databaseUrl!));
+    await provisioner.start({ onFire: async () => {} });
+    await provisioner.stop();
+    await grantTestAppLogin(ownerUrlOf(databaseUrl!), databaseUrl!);
+    const queue = createPgBossCronQueue(databaseUrl!);
     const oldEntered = Promise.withResolvers<void>();
     const oldFinish = Promise.withResolvers<void>();
     const newEntered = Promise.withResolvers<void>();
@@ -93,10 +97,6 @@ test(
     } finally {
       oldFinish.resolve();
       await queue.stop();
-      const { default: pg } = await import("pg");
-      const pool = new pg.Pool({ connectionString: databaseUrl! });
-      await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-      await pool.end();
     }
   },
 );
@@ -109,6 +109,7 @@ test(
     const table = `background_test_${randomUUID().replaceAll("-", "")}`;
     const factory = createPostgresMapFactory(databaseUrl!);
     const store = createBackgroundOwnershipStore(factory.map<BackgroundOwnership>(table));
+    await migrateTestDatabase(databaseUrl);
     const pool = await factory.pool.pool();
     const blocker = await pool.connect();
     let first: Promise<BackgroundOwnership> | undefined;
@@ -150,7 +151,6 @@ test(
       await blocker.query("ROLLBACK").catch(() => {});
       blocker.release();
       await first?.catch(() => {});
-      await pool.query(`DROP TABLE IF EXISTS ${table}`);
       await factory.pool.close();
     }
   },

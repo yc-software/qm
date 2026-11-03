@@ -243,13 +243,13 @@ test("removed gateway selections never fall back to a different org or direct mo
   const fallback = { modelId: "claude-opus-5" };
   await store.setRuntimeSelection(org, { modelId: "gateway/removed" });
   await assert.rejects(
-    async () => await resolveRuntimeChoice(store, org, personal, fallback),
+    async () => resolveRuntimeChoice(store, org, personal, fallback),
     /Gateway model is unavailable/,
   );
   await store.setRuntimeSelection(org, fallback);
   await store.setRuntimeSelection(personal, { modelId: "gateway/removed" });
   await assert.rejects(
-    async () => await resolveRuntimeChoice(store, org, personal, fallback),
+    async () => resolveRuntimeChoice(store, org, personal, fallback),
     /Gateway model is unavailable/,
   );
 });

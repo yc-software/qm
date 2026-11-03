@@ -16,6 +16,7 @@ import {
 } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const key = "company-gateway-secret";
 const endUser = createHmac("sha256", TEST_CAPABILITY_SECRET).update("U1").digest("hex").slice(0, 32);
@@ -52,7 +53,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
   const built = buildApp(config);
-  await built.identity.ready();
+  await inTestTenant(() => built.identity.ready());
   let overBudget = false;
   const server = createServer(built.app, {
     ...serverDeps(config, built),
@@ -164,7 +165,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   overBudget = true;
   assert.equal((await openai(chat)).status, 429);
   overBudget = false;
-  await built.config.setSecurityPosture("personal:U1", "strict");
+  await inTestTenant(() => built.config.setSecurityPosture("personal:U1", "strict"));
   assert.equal((await openai(chat)).status, 403);
   assert.equal(calls.length, 8);
 });
@@ -172,7 +173,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
 test("a sandbox-model token is refused on every other route", async (t) => {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
   const built = buildApp(config);
-  await built.identity.ready();
+  await inTestTenant(() => built.identity.ready());
   const server = createServer(built.app, serverDeps(config, built));
   const base = await listen(server as unknown as ReturnType<typeof httpServer>);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -204,8 +205,9 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
     modelGateway: { url: "https://models.invalid", apiKey: key, apiKeyHeader: "api-key", models: routes },
   });
   const built = buildApp(config, { modelCredentialFetch: async () => new Response("unavailable", { status: 503 }) });
-  await built.identity.ready();
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
+
+  await inTestTenant(() => built.identity.ready());
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (layers, opts) => {
@@ -213,12 +215,14 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
     return provision(layers, opts);
   };
   const turn = (text: string, thread: string) =>
-    built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: `dm:U1:${thread}` },
-      text,
-    });
+    inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: `dm:U1:${thread}` },
+        text,
+      }),
+    );
   assert.equal((await turn("!run echo models", "run")).status, "ok");
   const env = captured!.env!;
   assert.equal(env.MODEL_GATEWAY_URL, "https://core.example.test/v1/sandbox-model");
@@ -229,26 +233,29 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
   assert.equal(claims?.scopeId, "personal:U1");
   assert.match((await turn("!sysprompt", "prompt")).reply ?? "", /MODEL_GATEWAY_TOKEN/);
 
-  await built.config.setSecurityPosture("personal:U1", "strict");
+  await inTestTenant(() => built.config.setSecurityPosture("personal:U1", "strict"));
   assert.doesNotMatch((await turn("!sysprompt", "strict-prompt")).reply ?? "", /MODEL_GATEWAY/);
 });
 
 test("deployments without a gateway leave the sandbox gateway variables unset", async () => {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3), apiBaseUrl: "https://core.example.test" });
   const built = buildApp(config);
-  await built.identity.ready();
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
+
+  await inTestTenant(() => built.identity.ready());
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = (layers, opts) => {
     captured = opts;
     return provision(layers, opts);
   };
-  await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "dm:U1:no-gateway" },
-    text: "!run echo none",
-  });
+  await inTestTenant(() =>
+    built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "dm:U1:no-gateway" },
+      text: "!run echo none",
+    }),
+  );
   for (const name of ["MODEL_GATEWAY_URL", "MODEL_GATEWAY_TOKEN"]) assert.equal(captured?.env?.[name], undefined, name);
 });

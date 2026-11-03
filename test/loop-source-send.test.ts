@@ -13,7 +13,7 @@ function item(source: string, payload: Record<string, unknown>, proposal?: Recor
     loopId: "l1",
     sourceKey: "t1",
     source,
-    sourcePayload: { source, title: "Quarterly numbers", from: "Ada", snippet: "…", receivedAt: 1, ...payload },
+    sourcePayload: { title: "Quarterly numbers", from: "Ada", snippet: "…", receivedAt: 1, ...payload },
     sourceAt: 1,
     status: proposal ? "ready" : "queued",
     attempts: 0,
@@ -285,7 +285,6 @@ test("adapters parse their own source shape into an opaque payload", () => {
   if ("error" in parsed) return;
   assert.equal(parsed.dedupeKey, "thread-9");
   assert.equal(parsed.sourceAt, 1700);
-  assert.equal(parsed.sourcePayload.source, "gmail");
   assert.deepEqual(parsed.proposal?.data, { body: "sure", to: ["ada@example.com"] });
 });
 
@@ -350,10 +349,13 @@ test("every agent draft the item ever had contributes to the disarm set, even af
 test("an agent posting through the API and an item with unknown provenance get every mention disarmed", () => {
   const fresh = item("slack", slackMeta, { body: "x" });
   assert.equal(renderSlackSendText(fresh, "go <!here> <@U9>", "agent"), "go @\u200bhere @U9");
-  const legacy = item("slack", slackMeta, { body: "edited before deploy <!here>" });
-  legacy.proposal!.by = "human";
-  delete legacy.agentDrafts;
-  assert.equal(renderSlackSendText(legacy, "edited before deploy <!here>"), "edited before deploy @\u200bhere");
+  const unknownProvenance = item("slack", slackMeta, { body: "edited before deploy <!here>" });
+  unknownProvenance.proposal!.by = "human";
+  delete unknownProvenance.agentDrafts;
+  assert.equal(
+    renderSlackSendText(unknownProvenance, "edited before deploy <!here>"),
+    "edited before deploy @\u200bhere",
+  );
   const scratch = item("slack", slackMeta);
   scratch.agentDrafts = [];
   assert.equal(renderSlackSendText(scratch, "mine <!here>"), "mine <!here>", "a person's own item stays live");
