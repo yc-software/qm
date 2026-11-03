@@ -4,11 +4,12 @@ import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
 import { promptEnvelopeBody } from "../src/sessions/session-store.ts";
-import { isUserItem, messageTs, storedItem, type Item } from "../src/sessions/items.ts";
+import { isAgentReply, isUserItem, messageTs, storedItem, type Item } from "../src/sessions/items.ts";
 import type { ScopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { PARKED } from "../src/runs/run-store.ts";
 
 type Sink = {
   entries: Item[];
@@ -676,12 +677,12 @@ for (const abort of ["shutdown", "stop"] as const) {
         (({ interrupted, stopped }) => ({ interrupted, stopped }))(results[0]!.body),
         abort === "shutdown" ? { interrupted: true, stopped: undefined } : { interrupted: undefined, stopped: true },
       );
-      const { resumeStrategy } = await import("../src/core/turn-resume.ts");
+      const { reconcile } = await import("../src/core/turn-resume.ts");
       const userSeq = entries.find((entry) => entry.kind === "UserMessage")!.seq;
-      assert.equal(
-        resumeStrategy(entries, { userSeq, workEntries: entries.filter((e) => e.seq > userSeq).length }).kind,
-        "continue",
-      );
+      assert.deepEqual(reconcile(entries, { userSeq, workEntries: entries.filter((e) => e.seq > userSeq).length }), {
+        settleItems: [],
+        resumed: true,
+      });
     } finally {
       globalThis.fetch = realFetch;
       await agent.close?.();
@@ -721,5 +722,128 @@ test("a request rejected as too long retries once without its inline documents i
     assert.match(requests.at(-1)!, /doc-big/);
   } finally {
     globalThis.fetch = realFetch;
+  }
+});
+
+test("a park lets the running tool finish, records its real result and stops before the next model step", async () => {
+  const agent = createAgent({ apiKey: "sk-test" });
+  const store = createPostgresSessionStore(testDatabaseUrl());
+  const session = await store.getOrCreateByThread("web:park-tool", "dm", "personal:tester" as ScopeId);
+  const writer = { sessionId: session.id };
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    if (++calls > 1) return sse(textReplyEvents("done"));
+    const events = textReplyEvents("");
+    events[1] = {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "read-memory", name: "memory", input: {} },
+    };
+    events[2] = {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: JSON.stringify({ action: "read", retrySafe: false }) },
+    };
+    events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
+    return sse(events);
+  }) as typeof fetch;
+  const shutdown = new AbortController();
+  const cancel = new AbortController();
+  const parkRequest = new AbortController();
+  const entries: Item[] = [];
+  let stoppedDuringTool: boolean | undefined;
+  try {
+    await agent.runTurn(
+      turnInput(
+        session.id,
+        { entries: [] },
+        {
+          session,
+          runId: "park-tool",
+          cancel: cancel.signal,
+          shutdown: shutdown.signal,
+          park: {
+            requested: () => parkRequest.signal.aborted,
+            now: () => {
+              shutdown.abort(PARKED);
+              cancel.abort();
+            },
+          },
+          tools: {
+            memoryRead: async () => {
+              parkRequest.abort();
+              await new Promise((resolve) => setTimeout(resolve, 100));
+              stoppedDuringTool = shutdown.signal.aborted;
+              return "saved facts";
+            },
+          } as AgentTurnInput["tools"],
+          emit: async (entry) => {
+            const saved = await store.append(writer, entry);
+            entries.push(saved);
+            return saved;
+          },
+        },
+      ),
+    );
+    assert.equal(stoppedDuringTool, false, "the park waits for the running tool");
+    assert.equal(shutdown.signal.aborted, true, "the park lands at the step boundary");
+    assert.equal(calls, 1, "no model step runs after the park");
+    const results = entries.filter((entry) => entry.kind === "ToolResult");
+    assert.equal(results.length, 1);
+    const body = results[0]!.body;
+    assert.deepEqual([body.interrupted, body.stopped], [undefined, undefined], "the result is the tool's own");
+    assert.match(results[0]!.text ?? "", /saved facts/);
+    assert.equal(entries.filter(isAgentReply).length, 0, "the parked turn stays open for resume");
+  } finally {
+    globalThis.fetch = realFetch;
+    await agent.close?.();
+  }
+});
+
+test("a park requested during the turn's last model step lets the turn finish", async () => {
+  const agent = createAgent({ apiKey: "sk-test" });
+  const store = createPostgresSessionStore(testDatabaseUrl());
+  const session = await store.getOrCreateByThread("web:park-last-step", "dm", "personal:tester" as ScopeId);
+  const writer = { sessionId: session.id };
+  const realFetch = globalThis.fetch;
+  const parkRequest = new AbortController();
+  globalThis.fetch = (async () => {
+    parkRequest.abort();
+    return sse(textReplyEvents("all done"));
+  }) as typeof fetch;
+  const shutdown = new AbortController();
+  const cancel = new AbortController();
+  const entries: Item[] = [];
+  try {
+    const result = await agent.runTurn(
+      turnInput(
+        session.id,
+        { entries: [] },
+        {
+          session,
+          runId: "park-last-step",
+          cancel: cancel.signal,
+          shutdown: shutdown.signal,
+          park: {
+            requested: () => parkRequest.signal.aborted,
+            now: () => {
+              shutdown.abort(PARKED);
+              cancel.abort();
+            },
+          },
+          emit: async (entry) => {
+            const saved = await store.append(writer, entry);
+            entries.push(saved);
+            return saved;
+          },
+        },
+      ),
+    );
+    assert.equal(shutdown.signal.aborted, false, "no model step follows, so nothing parks");
+    assert.equal(result.reply, "all done");
+  } finally {
+    globalThis.fetch = realFetch;
+    await agent.close?.();
   }
 });

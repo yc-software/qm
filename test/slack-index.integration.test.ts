@@ -236,8 +236,6 @@ class FakeCore implements SlackCoreClient {
   externalParticipants = false;
   result: TurnResult = { status: "ok", reply: "agent reply" };
   submitError: Error | undefined;
-  activeRun: string | undefined;
-  abortedRuns: string[] = [];
   queuedRunId: string | undefined;
   engageRun = false;
   sessionStatus?: SlackCoreClient["sessionStatus"];
@@ -316,17 +314,6 @@ class FakeCore implements SlackCoreClient {
   finishRun(result: TurnResult): void {
     this.result = result;
     this.releaseRun?.();
-  }
-  async activeRunForThread(): Promise<string | undefined> {
-    return this.activeRun;
-  }
-  async stopConversation(): Promise<boolean> {
-    if (!this.activeRun) return false;
-    await this.signalRunAbort(this.activeRun);
-    return true;
-  }
-  async signalRunAbort(runId: string): Promise<void> {
-    this.abortedRuns.push(runId);
   }
   async ackRunDelivery(): Promise<void> {}
   async reportRunEditRef(): Promise<void> {}
@@ -1106,42 +1093,12 @@ test("a verified legacy bot without a user principal can become a turn", async (
   }
 });
 
-test("a bot-authored stop can abort a live run", async () => {
-  const f = await fixture();
-  try {
-    f.client.usersById.set("B1", {
-      id: "B1",
-      team_id: "T1",
-      is_bot: true,
-      name: "peerbot",
-      profile: { display_name: "Peer Bot" },
-    });
-    f.core.activeRun = "run-active";
-    await f.app.emitMessage({
-      channel: "D1",
-      channel_type: "im",
-      subtype: "bot_message",
-      user: "B1",
-      bot_id: "B-PEER",
-      text: "stop",
-      ts: "102.3",
-    });
-    assert.deepEqual(f.core.abortedRuns, ["run-active"]);
-    assert.equal(f.core.turns.length, 0);
-    assert.equal(f.core.ackPicks.length, 0);
-  } finally {
-    await f.stop();
-  }
-});
-
 test("a Slack Connect mention is refused ephemerally and never mirrored", async () => {
   const f = await fixture();
   try {
-    f.core.activeRun = "run-active";
     const event = { channel: "CX", channel_type: "channel", user: "U1", text: "<@UBOT> stop", ts: "103.1" };
     await f.app.emitEvent("app_mention", event);
     assert.equal(f.core.turns.length, 0);
-    assert.equal(f.core.abortedRuns.length, 0);
     assert.equal(f.core.ackPicks.length, 0);
     assert.equal(f.core.ingests.length, 0);
     assert.equal(f.client.posts.length, 0);
@@ -1569,19 +1526,6 @@ test("raw core failures never leak through Slack", async () => {
     assert.equal(f.client.posts.length, 1);
     assert.match(f.client.posts[0].text, /Something went wrong on my end/);
     assert.doesNotMatch(f.client.posts[0].text, /super-secret|postgres|run\/abc/);
-  } finally {
-    await f.stop();
-  }
-});
-
-test("stop aborts the active run without enqueuing a second turn", async () => {
-  const f = await fixture();
-  try {
-    f.core.activeRun = "run-active";
-    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "stop", ts: "107.1" });
-    assert.deepEqual(f.core.abortedRuns, ["run-active"]);
-    assert.equal(f.core.turns.length, 0);
-    assert.equal(f.client.posts.length, 0);
   } finally {
     await f.stop();
   }

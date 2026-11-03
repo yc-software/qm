@@ -5,7 +5,7 @@ import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { surfaceToolPrompt } from "../src/surfaces/registry.ts";
-import { resumeStrategy } from "../src/core/turn-resume.ts";
+import { reconcile } from "../src/core/turn-resume.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
@@ -3984,7 +3984,7 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
   };
   const strategy = (emitted: Emitted[]) => {
     const items = emitted.map((e, i) => ({ ...e, seq: i + 2 }));
-    return resumeStrategy(items, { userSeq: 1, workEntries: items.length });
+    return reconcile(items, { userSeq: 1, workEntries: items.length });
   };
 
   const interrupted = await record("shutdown");
@@ -3992,17 +3992,17 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
   assert.deepEqual(interrupted.find((e) => e.kind === "ToolResult")?.body.stop, { kind: "shutdown" });
   assert.deepEqual(
     strategy(interrupted),
-    { kind: "continue" },
+    { settleItems: [], resumed: true },
     "a killed call is not re-run; its replayed result says what happened",
   );
-  assert.deepEqual(strategy(await record("shutdown", false)), { kind: "continue" });
+  assert.deepEqual(strategy(await record("shutdown", false)), { settleItems: [], resumed: true });
 
   for (const abort of ["stop", "none"] as const) {
     const emitted = await record(abort);
     const payload = emitted.find((e) => e.kind === "ToolResult")!;
     assert.ok(!("interrupted" in payload.body), `${abort}: an ordinary result stays a real answer`);
     assert.equal(payload.body.stopped === true, abort === "stop", `${abort}: only a Stop marks the result as cut off`);
-    assert.deepEqual(strategy(emitted), { kind: "continue" });
+    assert.deepEqual(strategy(emitted), { settleItems: [], resumed: true });
   }
 });
 

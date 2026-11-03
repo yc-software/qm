@@ -3,7 +3,7 @@ import { nonDeploymentCredential, withDeploymentCredentials } from "./credential
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
-import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
+import { createDecisionHooks, createReplyCheck, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
@@ -50,7 +50,7 @@ import {
   type SessionSyscallsFactory,
   deliverSubagentMail,
   sessionTreeRoot,
-  sessionTreeRunCount,
+  sessionTreeRuns,
   sessionTreeWorking,
   stoppableRoot,
   SUBAGENT_TREE_RUN_CAP,
@@ -132,11 +132,7 @@ import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
-import {
-  SETTLED_CANDIDATES_MIGRATION,
-  TURN_ORIGIN_MIGRATION,
-  rewriteSurfaceOrigins,
-} from "./surfaces/origin-migration.ts";
+import { SETTLED_CANDIDATES_MIGRATION, rewriteSurfaceOrigins } from "./surfaces/origin-migration.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
@@ -551,7 +547,7 @@ export function buildApp(
   const admittedWork = createAdmittedWork({
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
   });
-  let inlineShutdown = new AbortController();
+  let turnWaitShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   const databaseUrl = config.databaseUrl;
@@ -1537,7 +1533,7 @@ export function buildApp(
           known &&
           (known.parentSessionId || (await sessions.childrenOf(known.id)).length > 0) &&
           !(input.dedupKey && (await runStore.runs.getByDedupKey(input.dedupKey))) &&
-          (await sessionTreeRunCount(sessions, runStore.runs, await sessionTreeRoot(sessions, known))) >=
+          (await sessionTreeRuns(sessions, runStore.runs, await sessionTreeRoot(sessions, known))).length >=
             SUBAGENT_TREE_RUN_CAP
         )
           throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
@@ -1895,7 +1891,6 @@ export function buildApp(
   };
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
   pgArtifactMap.pool.registerMigration(SETTLED_CANDIDATES_MIGRATION);
-  pgArtifactMap.pool.registerMigration(TURN_ORIGIN_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/turn_wall_clock_configs/0002-drop",
@@ -1921,6 +1916,10 @@ export function buildApp(
       "DROP TABLE IF EXISTS internal_member_overrides",
       "DELETE FROM durable_map_versions WHERE tbl = 'internal_member_overrides'",
     ],
+  });
+  pgArtifactMap.pool.registerMigration({
+    id: "ratelimit/limiter/0002-drop",
+    statements: ["DROP TABLE IF EXISTS rate_limit_windows"],
   });
   pgArtifactMap.pool.registerMigration({
     id: "runtime/0002-drop-harness-choice",
@@ -2148,6 +2147,7 @@ export function buildApp(
     managedGroups: projects,
     projects,
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
+    ...(decisions ? { replyCheck: createReplyCheck(decisions, decide) } : {}),
     environments,
     brokeredTools,
     deploymentLayer,
@@ -2240,7 +2240,7 @@ export function buildApp(
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
-    shutdown: () => inlineShutdown.signal,
+    shutdown: () => turnWaitShutdown.signal,
     resourceSearch: createPostgresResourceSearch(pgArtifactMap.pool),
     swarms,
     identity,
@@ -2249,7 +2249,6 @@ export function buildApp(
     orchestrator,
     surfaces,
     runs,
-    leaseTtlMs,
     maxAttempts,
     turnStream,
     runStreamEvents,
@@ -2501,13 +2500,11 @@ export function buildApp(
   orchestratorDeps.surfaceCache = surfaceCache;
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
   const runTriggered = async (req: TurnRequest): Promise<TurnResult> => {
-    const latest =
-      !req.surfaceOrigin && (await sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
-        ? (await runs.latestForThread(req.conversation.threadRef))?.request.surfaceOrigin
-        : undefined;
-    if (!latest) return app.turn(req);
-    if (latest.audience === "internal") return app.turn({ ...req, surfaceOrigin: latest });
-    const { access: _access, ...internal } = latest;
+    const session = req.surfaceOrigin ? undefined : await sessions.getByThread(req.conversation.threadRef);
+    const bound = session?.surface === "slack" ? session.surfaceBinding : undefined;
+    if (!bound) return app.turn(req);
+    if (bound.audience === "internal") return app.turn({ ...req, surfaceOrigin: bound });
+    const { access: _access, ...internal } = bound;
     return app.turn({ ...req, surfaceOrigin: { ...internal, audience: "internal" } });
   };
   const askResolution = keychain
@@ -2881,10 +2878,10 @@ export function buildApp(
   }
   let releasing: Promise<void> | null = null;
   function releaseInFlightRuns(): Promise<void> {
-    inlineShutdown.abort();
+    turnWaitShutdown.abort();
     releasing ??= Promise.all([
-      withTimeout(() => admittedWork.drained(), SHUTDOWN_RELEASE_MS, "inline turn handback").catch(
-        swallowAs("wiring: inline turn handback failed", undefined),
+      withTimeout(() => admittedWork.drained(), SHUTDOWN_RELEASE_MS, "synchronous turn wait release").catch(
+        swallowAs("wiring: synchronous turn wait release failed", undefined),
       ),
       worker.releaseInFlight(),
     ]).then(() => {});
@@ -2892,7 +2889,7 @@ export function buildApp(
   }
   const runtime: Runtime = {
     start() {
-      if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      if (turnWaitShutdown.signal.aborted) turnWaitShutdown = new AbortController();
       releasing = null;
       flyTunnel?.monitor();
       drain.start();

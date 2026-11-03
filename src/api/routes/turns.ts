@@ -3,7 +3,7 @@ import type { ClientToolDeclaration, SurfaceBriefing, TurnOrigin, TurnRequest } 
 import { promptText } from "../../util/text.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
-import { LEGACY_ORIGIN_KEYS } from "../../surfaces/origin-migration.ts";
+import { RETIRED_ORIGIN_KEYS } from "../../core/turn-origin.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -103,7 +103,7 @@ function zodMessage(field: string, error: z.ZodError): string {
 }
 
 const removedOriginFieldsSchema = z.object(
-  Object.fromEntries(LEGACY_ORIGIN_KEYS.map((field) => [field, z.never().optional()])),
+  Object.fromEntries(RETIRED_ORIGIN_KEYS.map((field) => [field, z.never().optional()])),
 );
 
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
@@ -130,6 +130,8 @@ function sanitizedTurnRequest(
     return { error: "idempotencyKey must not use the reserved slack: prefix" };
   const origin = publicOrigin(safeBody.origin);
   const { clientTools: rawClientTools, surfaceBriefing: rawSurfaceBriefing, ...rest } = safeBody;
+  if (!z.enum(["steer", "queue"]).optional().safeParse(rest.midTurn).success)
+    return { error: "midTurn must be steer or queue" };
   if (rest.desktopClientId !== undefined && !z.uuid().safeParse(rest.desktopClientId).success)
     return { error: "desktopClientId must be a UUID" };
   let clientTools: ClientToolDeclaration[] | undefined;

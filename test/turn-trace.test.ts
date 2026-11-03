@@ -161,16 +161,14 @@ test("a human web turn persists its entries inside step.persist spans of the run
 
 test("a turn whose agent fails still sends its dispatch span", async () => {
   transactions.length = 0;
-  const built = buildApp(testConfig());
-  await assert.rejects(
-    built.app.turn({
-      surface: "web",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "web:U1:trace-fail" },
-      text: "!boom-always",
-    }),
-    /boom/,
-  );
+  const built = buildApp(testConfig({ maxAttempts: 1 }));
+  const failed = await built.app.turn({
+    surface: "web",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "web:U1:trace-fail" },
+    text: "!boom-always",
+  });
+  assert.equal(failed.status, "failed");
   for (let i = 0; i < 40 && !transactions.some((event) => event.contexts?.trace?.op === "queue.process"); i++) {
     await flushErrorReporting();
     await new Promise((resolve) => setTimeout(resolve, 50));

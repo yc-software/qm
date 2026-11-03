@@ -244,6 +244,7 @@ async function gatewayApp(
         headers["x-qm-purpose"] === purpose && (sessionId === undefined || headers["x-qm-session-id"] === sessionId),
     );
   const built = buildApp(config);
+  built.runtime.start();
   t.after(() => built.runtime.stop());
   return { config, built, seen, sent };
 }

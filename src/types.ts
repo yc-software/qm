@@ -124,6 +124,8 @@ export interface Session {
   parentSessionId?: string;
   origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
+  surfaceBinding?: TurnSurfaceOrigin;
+  runtime?: TurnRuntime;
   lastActivityAt?: number;
   hasEntries?: boolean;
   working?: boolean;
@@ -150,6 +152,7 @@ export interface Resolution {
   approvalGrantModes: ApprovalGrantModes;
   orgScopeId: ScopeId;
   grantedHandles: GrantedHandle[];
+  guidance?: string;
 }
 
 export type Permission = "read" | "write";
@@ -189,6 +192,7 @@ export interface Destination {
   pin?: { messageTs: string; remove?: boolean };
   identity?: string;
   debugFooter?: string;
+  editNote?: string;
   webTranscript?:
     | { kind: "reply" }
     | { kind: "slack_reply"; sessionId: string; ts: string; name: string }
@@ -330,6 +334,7 @@ export interface ClientToolResult {
 
 export interface TurnRequest {
   desktopClientId?: string;
+  midTurn?: "steer" | "queue";
   surfaceOrigin?: TurnSurfaceOrigin;
   sessionSenderId?: string;
   delegatingRunId?: string;
@@ -456,10 +461,12 @@ export interface TurnResult {
   adminUrl?: string;
   runId?: string;
   steered?: true;
+  steerTs?: string;
   stopped?: boolean;
   pendingApprovals?: PendingApproval[];
   attachments?: OutgoingAttachment[];
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
   runtime?: TurnRuntime;
+  retracted?: string[];
 }

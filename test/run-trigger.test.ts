@@ -278,3 +278,26 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
     assert.equal((await d.deliveries.pending("slack")).length, 1, "core delivers the cron reply via the enqueue path");
   });
 });
+
+describe("runTrigger: a turn abandoned while still queued leaves the fire retryable", () => {
+  it("sends the error notice and throws without spending the fire key", async () => {
+    const d = deps(async () => ({ status: "queued", sessionId: "s1", runId: "r1" }));
+    await assert.rejects(
+      runTrigger(d, {
+        owner: "U1",
+        ownerScopeId: scopeId("channel", "C1"),
+        input: "report back",
+        fireKey: "cron:c7:2000",
+        surface: "cron",
+        threadRef: "cron:c7:2000",
+        destination: toChannel,
+        errorNotice: (s: string) => `⚠️ could not run: ${s}`,
+      }),
+      /still waiting to finish when this process shut down/,
+    );
+    assert.equal(await d.idempotency.committed("cron:c7:2000"), false);
+    const pending = await d.deliveries.pending("slack");
+    assert.equal(pending.length, 1);
+    assert.match(pending[0]!.text, /^⚠️ could not run:/);
+  });
+});

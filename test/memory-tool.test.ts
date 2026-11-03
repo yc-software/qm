@@ -168,6 +168,9 @@ test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing"
 
   assert.match(await run({ action: "search", query: "" }), /\[error\]/);
   assert.match(await run({ action: "add", facts: [] }), /\[error\]/);
+  const many = Array.from({ length: 21 }, (_, i) => ({ text: `Batch fact ${i}` }));
+  assert.match(await run({ action: "add", facts: many }), /\[error\] memory add takes at most 20 facts/);
+  assert.doesNotMatch(await memory.read(personal), /Batch fact/);
   assert.match(await run({ action: "edit", facts: [{ text: "no id" }] }), /\[error\]/);
 });
 

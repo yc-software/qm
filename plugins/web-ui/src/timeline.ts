@@ -6,6 +6,7 @@ import {
   isNarration,
   isUserMessage,
   reasoningStepKey,
+  retractedReason,
   type Item,
   type RunActivityEntry,
 } from "./items.ts";
@@ -376,8 +377,18 @@ export function streamingTextTail(text: string, activity: readonly RunActivityEn
   return tail;
 }
 
+export function retractedReplies(work: WorkBlock): Array<{ item: Item; reason: string; text: string }> {
+  return activityItems(work.activity).flatMap((item) => {
+    const reason = retractedReason(item);
+    const text = item.text ?? "";
+    return reason && text.trim() ? [{ item, reason, text }] : [];
+  });
+}
+
 export function messageWorkTimeline(work: WorkBlock, finalText: string): TimelineItem[] {
-  const timeline = buildTimeline(work);
+  const timeline = buildTimeline(work).filter(
+    (item) => !(finalText.trim() && item.kind === "text" && retractedReason(item.item)),
+  );
   const lastText = finalText.trim() ? timeline.findLastIndex((item) => item.kind === "text") : -1;
   return timeline.filter((item, index) => {
     if (item.kind === "thinking") return Boolean(item.text.trim());

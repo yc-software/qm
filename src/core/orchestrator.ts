@@ -17,7 +17,12 @@ import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
-import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
+import {
+  requiresDelegation,
+  delegatedAuthorizationOrigin,
+  ownsSessionContext,
+  sessionContextOf,
+} from "../sessions/session-syscalls.ts";
 import {
   documentText,
   type DocumentInput,
@@ -60,7 +65,9 @@ import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolutio
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { reachEnqueue } from "../reach/reach.ts";
+import { interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
+import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { DirectoryStore, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { SessionWriter } from "../sessions/session-store.ts";
@@ -122,6 +129,15 @@ import {
 } from "../security/security-posture.ts";
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import { approvalView, grantModesWithin } from "./orchestrator/approvals.ts";
+import {
+  intakeOf,
+  midTurnPrompt,
+  senderLine,
+  speakerName,
+  wordsToScreen,
+  type IncomingMessage,
+  type Speaker,
+} from "./orchestrator/intake.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { collectBlob } from "../persistence/blob-transfer.ts";
@@ -130,7 +146,7 @@ import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onbo
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
 import type { FileArtifact } from "../files/file-artifact-store.ts";
 import { artifactImageLoader } from "../agent/replay-images.ts";
-import { principalEntitledToScope } from "../resolution/context-filter.ts";
+import { entitledScopes, principalEntitledToScope } from "../resolution/context-filter.ts";
 import { openSessionItem, searchSessionItems } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { defaultPublishAudience } from "../resolution/publish-audience.ts";
@@ -138,8 +154,6 @@ import {
   INBOX_DIR,
   TURN_FILES_DIR,
   inboundIssuesNote,
-  inboundIssueList,
-  inboundManifest,
   isVisionAttachment,
   materializeInbound,
   safeAttachmentName,
@@ -148,13 +162,7 @@ import {
   withoutAlreadyIngested,
 } from "./attachments.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import {
-  findTrailingPartialTurn,
-  resumeStrategy,
-  runtimeSwitchNote,
-  turnAtSeq,
-  unrecordedResultItems,
-} from "./turn-resume.ts";
+import { findTrailingPartialTurn, overtaken, reconcile, runtimeSwitchNote, turnAtSeq } from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
   overheardItem,
@@ -796,10 +804,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           sessionSender.scopeId === scopeId &&
           (await deps.sessions.getForParticipant(sessionSender.id, actor.id)),
         );
+        const screenedWords = wordsToScreen(
+          input.text,
+          { id: actor.id, origin: input.origin, fromSession: sessionTurn },
+          actor.id,
+        );
         const screenPayload = screenInbound
           ? securityScreenPayload({
               ...input,
-              ...(sessionTurn ? { origin: { kind: "automation" as const, screenData: input.text } } : {}),
+              ...(screenedWords !== undefined
+                ? { origin: { kind: "automation" as const, screenData: screenedWords } }
+                : {}),
               overheard: [],
               externalPromptData,
               verifiedSwarm: Boolean(input.swarm && swarmBinding),
@@ -1171,6 +1186,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         conversation.channelName,
         input.surface,
         desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
+        {
+          ...(input.surfaceOrigin ? { surfaceBinding: input.surfaceOrigin } : {}),
+          ...(ownsSessionContext(conversation.threadRef, input) ? { context: sessionContextOf(input) } : {}),
+        },
       );
       screenSession.id = session.id;
       const origin = await originOf(session);
@@ -1459,7 +1478,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               conversation.audience,
               scopeId,
               resolution.orgScopeId,
-              principalEntitledToScope,
+              entitledScopes,
             )
           ).map((g) => parseRef(g.ref).id),
         );
@@ -2436,7 +2455,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             conversation.audience,
             scopeId,
             resolution.orgScopeId,
-            principalEntitledToScope,
+            entitledScopes,
           );
           if (!fresh) readableHandles = handles;
           return handles.some(
@@ -2635,21 +2654,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   : undefined,
               )
             : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
-        const inbound = await receiveInbound(input.attachments, fileRegistration, turnInboxDir, input.text);
-        const manifest = inboundManifest(inbound.metas, turnInboxDir, inbound.unstaged, actor.displayName);
-        const inboundIssues = inboundIssueList({
-          tooMany: inbound.tooMany,
-          unavailable: inbound.unavailable,
-          blocked: inbound.blocked,
-          surfaceNotes: [
-            ...(input.inboundNotes ?? []),
-            ...(strictReadOnly
-              ? (input.attachments ?? []).map(
-                  (attachment) => `${safeAttachmentName(attachment.name)} — unavailable in Strict posture`,
-                )
-              : []),
-          ],
-        });
+        const takeIn = async (message: IncomingMessage, registration: ArtifactRegistration, inboxDir: string) =>
+          intakeOf(await receiveInbound(message.attachments, registration, inboxDir, message.text), message, inboxDir, {
+            strictReadOnly,
+            enforceScreen,
+          });
+        const {
+          received: inbound,
+          manifest,
+          issues: inboundIssues,
+          unscreened: inboundUnscreened,
+        } = await takeIn(
+          {
+            text: input.text,
+            ...(input.attachments ? { attachments: input.attachments } : {}),
+            ...(actor.displayName ? { sharer: actor.displayName } : {}),
+            ...(input.inboundNotes ? { notes: input.inboundNotes } : {}),
+          },
+          fileRegistration,
+          turnInboxDir,
+        );
 
         const importedOverheard: OverheardEntryPayload[] = [];
         if ((!input.envelopeWrapped || humanInput) && input.overheard?.length) {
@@ -2680,16 +2704,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           (outcome) => void recallOutcomes.push(outcome),
         );
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
-        let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
-        if (partial && resumePlan?.kind === "settle") {
-          const settle = resumePlan;
+        const reconciled = partial ? reconcile(visibleHistory, partial, input.resumeCause) : null;
+        if (reconciled?.settleItems.length) {
           const settled = await withManagedRosterVersion(() =>
-            deps.sessions.appendMany(writer, unrecordedResultItems(settle, input.resumeCause)),
+            deps.sessions.appendMany(writer, reconciled.settleItems),
           );
           visibleHistory = filterHistory(forModelContext([...rawEntries, ...settled]));
-          resumePlan = resumeStrategy(visibleHistory, partial);
         }
-        const resume = resumePlan && resumePlan.kind !== "restart" ? partial : null;
+        const resume = reconciled?.resumed ? partial : null;
         const documentBudget = documentTokenBudget(scopeId, input.model);
         const history = await withManagedRosterVersion(() =>
           compactContextIfNeeded({
@@ -2786,14 +2808,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
         const lastUserAt = visibleHistory.findLast((e) => isUserItem(e) && !isOverheard(e))?.createdAt;
         const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef, lastUserAt);
-        const sender =
-          !automatedTurn && !sessionTurn && conversation.kind !== "dm" && input.text.trim()
-            ? senderNote(actor.displayName ?? nameOf(actor.id) ?? actor.id)
-            : "";
+        const speakerLine = (speaker: Speaker) =>
+          senderLine({ conversationKind: conversation.kind, ownerId: actor.id }, speaker, nameOf);
+        const sender = input.text.trim()
+          ? speakerLine({
+              id: actor.id,
+              ...(actor.displayName ? { name: actor.displayName } : {}),
+              origin: input.origin,
+              fromSession: sessionTurn,
+            })
+          : "";
         const unscreenedNote =
-          inputUnscreened || (enforceScreen && inbound.unscreened.length) || documentInputs.unscreened
-            ? unscreenedNotice("inbound content")
-            : "";
+          inputUnscreened || inboundUnscreened || documentInputs.unscreened ? unscreenedNotice("inbound content") : "";
         const screenSwarmMessage = async (text: string): Promise<string | null> => {
           const screen = await orchestrator.screenSecuritySteer({
             payload: text,
@@ -2852,14 +2878,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : `attempt ${input.attempt}; re-running turn at seq ${partial.userSeq} (no recorded work to resume)`,
           });
           console.error(
-            `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} strategy=${resumePlan!.kind}`,
+            `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} settled=${reconciled!.settleItems.length} rerun=${reconciled!.rerun?.callId ?? "none"}`,
           );
         }
         let turnInput = baseText;
-        const continueTurn = !!partial && history.some((entry) => entry.seq === partial.userSeq) && !releasedToolOutput;
+        const overtakenTurn = !!partial && overtaken(visibleHistory, partial, input.runId);
+        const continueTurn =
+          !!partial && history.some((entry) => entry.seq === partial.userSeq) && !releasedToolOutput && !overtakenTurn;
         if (partial) spine.turnUserEntrySeq = partial.userSeq;
         if (releasedToolOutput) {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
+        } else if (overtakenTurn) {
+          turnInput = `[system] This turn paused while another turn ran in this conversation. Continue this turn's original task from its recorded work without repeating completed actions, and follow any instruction given since that changes or cancels it. Original task: ${baseText}`;
         }
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
         const sessionUsedTools = visibleHistory.some(
@@ -3021,6 +3051,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           if (error) throw new NonRetryableTurnError(error);
         }
+        const replyCheck = await (automatedTurn || sessionTurn ? undefined : deps.replyCheck)?.({
+          surfaceName,
+          ...(runtimePurpose ? { runtimePurpose } : {}),
+          guidance: turnGuidance(
+            resolution.guidance,
+            conversation.kind !== "dm" && conversation.channelRef
+              ? async () => (await deps.channelPolicy?.get(conversation.channelRef!))?.orders
+              : undefined,
+          ),
+          input: baseText,
+          turn: {
+            actorId: actor.id,
+            scopeLabel: scopeId,
+            sessionId: session.id,
+            ...(input.runId ? { runId: input.runId } : {}),
+            cancel: turnAbort.signal,
+          },
+        }).catch(swallowAs("orchestrator: reply check setup", undefined));
+        const checkReply = replyCheck?.enforce ? replyCheck.check : undefined;
         const runAgentSegment = async (
           agentInput: string,
           extras: {
@@ -3094,7 +3143,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               Object.assign(body, swarmEntryProvenance);
               delete body.speakerId;
               if (humanInput && !syntheticPrompt && !continuation && !steered && !overheard) body.speakerId = actor.id;
-              if (actor.displayName?.trim() && typeof body.name !== "string") body.name = actor.displayName.trim();
+              const ownWords = !steered || !entry.author || samePerson(entry.author, actor.id);
+              if (ownWords && actor.displayName?.trim() && typeof body.name !== "string")
+                body.name = actor.displayName.trim();
               if (
                 input.displayText?.trim() &&
                 (entry.text ?? "") === pgTextSafe(input.text) &&
@@ -3168,7 +3219,47 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             loadImage: artifactImageLoader(deps.files, mayReadArtifact),
             ...(turnTimezone ? { timezone: turnTimezone } : {}),
             prepareSteer: async (text, request) => {
-              const author = request ? deps.identity.resolve(request.actor).id : actor.id;
+              const steerer = request ? deps.identity.resolve(request.actor) : actor;
+              const author = steerer.id;
+              const speaker: Speaker = request
+                ? {
+                    id: author,
+                    ...(request.actor.displayName ? { name: request.actor.displayName } : {}),
+                    origin: request.origin ?? { kind: "automation", screenData: text },
+                    fromSession: isSessionTurn(request),
+                  }
+                : {
+                    id: author,
+                    ...(actor.displayName ? { name: actor.displayName } : {}),
+                    origin: { kind: "direct" },
+                    fromSession: false,
+                  };
+              const by = {
+                author,
+                ...(samePerson(author, actor.id) ? {} : { authorName: speakerName(speaker, nameOf) }),
+              };
+              let said = [text.trim() ? speakerLine(speaker) : "", text].filter(Boolean).join("\n");
+              const screened = [wordsToScreen(said, speaker, actor.id), ...(request?.inboundNotes ?? [])]
+                .filter(Boolean)
+                .join("\n\n");
+              if (screened) {
+                const screen = await orchestrator
+                  .screenSecuritySteer({ payload: screened, actor: steerer, conversation, sessionId: session.id })
+                  .catch((error: unknown) => {
+                    reportFailure("orchestrator: mid-turn message screen", error);
+                    return undefined;
+                  });
+                if (!screen || screen === "block")
+                  return {
+                    text: screen
+                      ? "A mid-turn message was withheld by the security screen."
+                      : "A mid-turn message was withheld because the security screen could not check it.",
+                    author,
+                    authorName: speakerName(speaker, nameOf),
+                    withheld: true,
+                  };
+                if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;
+              }
               const refreshedInbox =
                 input.surface === "web" &&
                 conversation.kind === "dm" &&
@@ -3189,39 +3280,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   );
                   allowed = cleanVerdict(verdict);
                 }
-                text = `${text}\n\n${allowed ? refreshedInbox : "Updated inbox context was withheld by the security screen."}`;
+                said = `${said}\n\n${allowed ? refreshedInbox : "Updated inbox context was withheld by the security screen."}`;
               }
-              if (!request?.attachments?.length) return { text, author };
-              const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
-              const inboxDir = `${turnInboxDir}/${randomUUID()}`;
-              const received = await receiveInbound(request.attachments, { ...fileRegistration, seed }, inboxDir, text);
-              const steeredDocuments = await ingestDocuments(received.metas, text, initialDocuments);
-              documentInputs.documents.push(...steeredDocuments.documents);
-              const issues = inboundIssueList({
-                ...received,
-                surfaceNotes: strictReadOnly
-                  ? request.attachments.map((a) => `${safeAttachmentName(a.name)} — unavailable in read-only mode`)
-                  : [],
-              });
-              return {
-                text: [
+              if (!request?.attachments?.length && !request?.inboundNotes?.length) return { text: said, ...by };
+              const intake = await takeIn(
+                {
                   text,
-                  inboundManifest(received.metas, inboxDir, received.unstaged, request.actor.displayName),
-                  ...steeredDocuments.notices,
-                  inboundIssuesNote(issues),
-                  enforceScreen &&
-                  (steeredDocuments.unscreened ||
-                    received.unscreened.length ||
-                    received.metas.some((a) => !isScreenableTextAttachment(a.mimetype)))
-                    ? unscreenedNotice("inbound content")
-                    : "",
-                ]
-                  .filter(Boolean)
-                  .join("\n\n"),
-                attachments: received.metas,
-                images: received.images,
+                  ...(request.attachments ? { attachments: request.attachments } : {}),
+                  ...(request.actor.displayName ? { sharer: request.actor.displayName } : {}),
+                  ...(request.inboundNotes ? { notes: request.inboundNotes } : {}),
+                },
+                { ...fileRegistration, seed: `${fileRegistration.seed}:steer:${randomUUID()}` },
+                `${turnInboxDir}/${randomUUID()}`,
+              );
+              const steeredDocuments = await ingestDocuments(intake.received.metas, text, initialDocuments);
+              documentInputs.documents.push(...steeredDocuments.documents);
+              return {
+                text: midTurnPrompt(said, intake, steeredDocuments),
+                attachments: intake.received.metas,
+                images: intake.received.images,
                 documents: steeredDocuments.documents,
-                author,
+                ...by,
               };
             },
             ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),
@@ -3261,6 +3340,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             cancel: turnAbort.signal,
             ...(silentResume ? { continueTurn: true, resumeUserSeq: partial!.userSeq } : {}),
             ...(input.shutdown ? { shutdown: input.shutdown } : {}),
+            ...(input.park ? { park: input.park } : {}),
             input: continueTurn && !continuation && !silentResume ? "" : agentInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
@@ -3402,11 +3482,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             history: continuation?.history ?? history,
             tools,
             ...(mcpTools ? { mcpTools } : {}),
-            ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
+            ...(reconciled?.rerun && !continuation ? { resumeToolCall: reconciled.rerun } : {}),
             emit,
             goal: sessionGoal,
             saveGoal,
             ...(goalInbox ? { goalInbox } : {}),
+            ...(checkReply ? { checkReply } : {}),
+            onInterimReply: interimReplyDelivery({
+              surfaceName,
+              spineTurn: input.surfaceTools === true,
+              addressed: input.addressed === true,
+              strictReadOnly,
+              destination: defaultDestination,
+              deliveries: deps.deliveries,
+              postKeys,
+              provenance: postProvenance,
+              ackText: () => spineAckText,
+              postedSoFar: () => spine.surfaceOutboundCount,
+            }),
             scopeLabel: scopeId,
             orgScopeId: resolution.orgScopeId,
             onModelRequest: () => dispatchTrace?.modelRequest(),
@@ -3506,6 +3599,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
+        if (replyCheck && !replyCheck.enforce && result.reply.trim() && !result.silent && !result.stopped)
+          void replyCheck.check(result.reply).catch(swallowAs("orchestrator: observed reply check", undefined));
         if (
           input.addressed &&
           !strictReadOnly &&
@@ -3520,9 +3615,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (primaryReply && defaultDestination && deps.deliveries) {
             try {
               const directKey = postKeys.key(defaultDestination, postKeys.take());
+              const editNote = replyEditNote(result.retracted);
               await reachEnqueue({
                 deliveries: deps.deliveries,
-                destination: defaultDestination,
+                destination: editNote ? { ...defaultDestination, editNote } : defaultDestination,
                 text: primaryReply,
                 idempotencyKey: directKey,
                 provenance: postProvenance(directKey),
@@ -3701,6 +3797,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             status: "ok",
             sessionId: session.id,
             reply,
+            ...(result.retracted?.length ? { retracted: result.retracted } : {}),
             ...(result.stopped ? { stopped: true } : {}),
             ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
             ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
@@ -3709,6 +3806,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
+        if (turnRuntime) await deps.sessions.setRuntime(session.id, turnRuntime);
         await fallbackTitleWrite;
 
         tailOwnsCleanup = true;

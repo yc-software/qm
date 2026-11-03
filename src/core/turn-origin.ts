@@ -1,8 +1,23 @@
 import type { TurnOrigin, TurnRequest } from "../types.ts";
 export type { TurnOrigin } from "../types.ts";
 
+export const RETIRED_ORIGIN_KEYS = [
+  "triggered",
+  "unprompted",
+  "liveActor",
+  "triggerTs",
+  "entryTs",
+  "securityScreenData",
+  "triggerDestination",
+  "ownerKeychainUnion",
+] as const;
+
 export function isPersonAuthored(kind: TurnOrigin["kind"]): boolean {
   return kind === "human" || kind === "direct";
+}
+
+export function spokenByPerson(origin: TurnOrigin): boolean {
+  return origin.kind === "human" || (origin.kind === "ambient" && origin.live === true);
 }
 
 export function isSessionTurn(input: Pick<TurnRequest, "sessionSenderId" | "delegatingRunId">): boolean {

@@ -1855,6 +1855,11 @@ a.chat-row-open {
   box-shadow: var(--chat-surface-shadow);
 }
 
+.message-stack .user-row.stuck > .message-meta {
+  position: static;
+  margin-bottom: calc(-1 * var(--meta-lane));
+}
+
 @media (prefers-reduced-motion: reduce) {
   .message-stack .user-row > .user-bubble {
     transition: none;
@@ -3000,6 +3005,14 @@ qm-markdown .tok-in {
 .thinking-row {
   display: block;
   min-width: 0;
+}
+.continuing-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--muted-foreground);
+  font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
 }
 .thinking-summary {
   display: flex;

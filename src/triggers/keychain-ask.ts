@@ -5,7 +5,8 @@ import type { Destination, ScopeId } from "../types.ts";
 import type { Cron } from "./types.ts";
 import { runTrigger, destinationVisible, type TriggerDeps, type TriggerOutcome } from "./run-trigger.ts";
 import { principalDestination, withWebTranscriptText } from "../reach/reach.ts";
-import { swallow } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
+import { isTransientFailure } from "../core/turn-error.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { samePerson } from "../directory/person.ts";
 
@@ -128,6 +129,10 @@ export async function fireDropResolution(deps: TriggerDeps, drop: DropResolution
     surface: "secret-drop",
     ...(drop.destination ? { destination: drop.destination } : {}),
     ...(drop.threadRef ? { threadRef: drop.threadRef } : {}),
+  }).catch((error: unknown): TriggerOutcome => {
+    if (!isTransientFailure(error)) throw error;
+    swallow("secret-drop: resolution resume cut off", error);
+    return { authzFailed: false, ran: false, note: errMessage(error) };
   });
   if (outcome.ran && outcome.status === "ok") return outcome;
   if (drop.destination && (await destinationVisible(deps, drop.ownerId, drop.destination))) {
