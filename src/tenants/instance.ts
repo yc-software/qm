@@ -5,9 +5,7 @@ export async function instanceTenant(config: Pick<Config, "databaseUrl">): Promi
   if (!config.databaseUrl) return undefined;
   const db = createPgPool(config.databaseUrl);
   try {
-    const rows = await db.q("SELECT id::text AS id FROM tenants");
-    if (rows.length !== 1) throw new Error(`Expected exactly one tenant in this database, found ${rows.length}`);
-    return String(rows[0]!.id);
+    return String((await db.q("SELECT qm_tenant_id()::text AS id"))[0]!.id);
   } finally {
     await db.close();
   }

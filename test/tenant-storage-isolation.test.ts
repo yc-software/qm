@@ -32,8 +32,7 @@ import {
 import { createMemorySnapshotStore, createS3SnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { migrateDir, migrateObjects, renameScopes, rootScopeRenames } from "../src/tenants/storage-migration.ts";
-import { scopeStorageKey } from "../cli/src/scope-storage-key.ts";
+import { migrateDir, migrateObjects } from "../src/tenants/storage-migration.ts";
 import { validateCoreSecretEnv } from "../src/deployment/secret-schema.ts";
 
 const A = "00000000-0000-4000-8000-00000000000a";
@@ -194,7 +193,7 @@ test("workspace directories are tenant-scoped", async () => {
   assert.equal(await withTenant(A, () => store.read("personal:alice@example.com", "notes.md")), "a");
 });
 
-test("storage migration moves legacy objects under the only tenant and keeps existing tenant copies", async () => {
+test("storage migration moves legacy objects under the instance tenant and keeps existing tenant copies", async () => {
   const s3 = fakeS3();
   s3.objects.set("p/files/abc", { body: Buffer.from("file"), at: new Date(1) });
   s3.objects.set("p/files/uploads/0123", { body: Buffer.from("upload"), at: new Date(1) });
@@ -205,10 +204,10 @@ test("storage migration moves legacy objects under the only tenant and keeps exi
   const tenants = new Set([A]);
   const docstore = { client: s3.client, bucket: "b", from: "p/files/", to: "p/docstore/", under: "files/" };
   const homes = { client: s3.client, bucket: "b", from: "modal-home/", to: "modal-home/" };
-  assert.equal(await migrateObjects(docstore, tenants), 2);
+  assert.equal(await migrateObjects(docstore, tenants, A), 2);
   const data = { client: s3.client, bucket: "b", from: "deploy-data/", to: "deploy-data/" };
-  assert.equal(await migrateObjects(homes, tenants), 2);
-  assert.equal(await migrateObjects(data, tenants), 1);
+  assert.equal(await migrateObjects(homes, tenants, A), 2);
+  assert.equal(await migrateObjects(data, tenants, A), 1);
   assert.deepEqual([...s3.objects.keys()].sort(), [
     `deploy-data/${A}/0123/litestream/generations/x`,
     `modal-home/${A}/personal%3Aa.tar`,
@@ -217,18 +216,8 @@ test("storage migration moves legacy objects under the only tenant and keeps exi
     `p/docstore/${A}/files/uploads/0123`,
   ]);
   assert.equal(s3.objects.get(`modal-home/${A}/personal%3Aa.tar`)!.body.toString(), "new");
-  assert.equal(await migrateObjects(homes, tenants), 0);
-  assert.equal(await migrateObjects(data, tenants), 0);
-});
-
-test("storage migration refuses legacy data when the owner is ambiguous", async () => {
-  const s3 = fakeS3();
-  s3.objects.set("transfer/0123", { body: Buffer.from("x"), at: new Date() });
-  const area = { client: s3.client, bucket: "b", from: "transfer/", to: "transfer/" };
-  await assert.rejects(() => migrateObjects(area, new Set([A, B])), /predates tenant storage/);
-  const root = mkdtempSync(join(tmpdir(), "qm-migrate-"));
-  mkdirSync(join(root, "personal__alice"));
-  await assert.rejects(() => migrateDir(root, new Set([A, B])), /predates tenant storage/);
+  assert.equal(await migrateObjects(homes, tenants, A), 0);
+  assert.equal(await migrateObjects(data, tenants, A), 0);
 });
 
 test("storage migration merges legacy directories into the tenant directory", async () => {
@@ -237,30 +226,10 @@ test("storage migration merges legacy directories into the tenant directory", as
   writeFileSync(join(root, "files", "abc"), "legacy");
   mkdirSync(join(root, A, "files"), { recursive: true });
   writeFileSync(join(root, A, "files", "def"), "current");
-  assert.equal(await migrateDir(root, new Set([A])), 1);
+  assert.equal(await migrateDir(root, new Set([A]), A), 1);
   assert.equal(readFileSync(join(root, A, "files", "abc"), "utf8"), "legacy");
   assert.equal(readFileSync(join(root, A, "files", "def"), "utf8"), "current");
   assert.equal(existsSync(join(root, "files")), false);
-});
-
-test("the root scope rename moves the old org's workspace and home snapshot to the tenant's org scope", async () => {
-  const s3 = fakeS3();
-  const homes = { client: s3.client, bucket: "b", from: "modal-home/", to: "modal-home/" };
-  s3.objects.set(`modal-home/${A}/org%3Aacme.tar`, { body: Buffer.from("home"), at: new Date(1) });
-  s3.objects.set(`modal-home/${A}/personal%3Aa.tar`, { body: Buffer.from("mine"), at: new Date(1) });
-  const root = mkdtempSync(join(tmpdir(), "qm-rename-"));
-  mkdirSync(join(root, A, scopeStorageKey("org:acme")), { recursive: true });
-  writeFileSync(join(root, A, scopeStorageKey("org:acme"), "notes.md"), "kept");
-  const areas = { objects: [homes], dirs: [root] };
-  assert.equal(await renameScopes(areas, A, rootScopeRenames("acme", A)), 2);
-  assert.deepEqual([...s3.objects.keys()].sort(), [
-    `modal-home/${A}/${encodeURIComponent(`org:${A}`)}.tar`,
-    `modal-home/${A}/personal%3Aa.tar`,
-  ]);
-  assert.equal(readFileSync(join(root, A, scopeStorageKey(`org:${A}`), "notes.md"), "utf8"), "kept");
-  assert.equal(existsSync(join(root, A, scopeStorageKey("org:acme"))), false);
-  assert.equal(await renameScopes(areas, A, rootScopeRenames("acme", A)), 0);
-  assert.equal(await renameScopes(areas, B, rootScopeRenames("acme", B)), 0);
 });
 
 test("deployment-wide sandbox secrets refuse to load", () => {
