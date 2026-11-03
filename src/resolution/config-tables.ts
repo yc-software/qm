@@ -45,6 +45,7 @@ export interface ScopeSettings {
   orgAmbient?: boolean;
   interactiveFastMode?: boolean;
   individualModelAuth?: boolean;
+  embeddingModelId?: string;
 }
 
 export interface SoulRevision {
@@ -62,10 +63,6 @@ export interface SlackEmojiCatalog {
   updatedAt: number;
 }
 
-export interface OperatorSettings {
-  embeddingModelId?: string;
-}
-
 export interface ConfigTables {
   readonly fresh?: boolean;
   scopeSettings(ids?: readonly ScopeId[]): Promise<Array<[ScopeId, ScopeSettings]>>;
@@ -73,6 +70,7 @@ export interface ConfigTables {
   updateScopeSetting(id: ScopeId, fn: (current: ScopeSettings) => ScopeSettings): Promise<ScopeSettings>;
   soulRevisions(perScope: number, ids?: readonly ScopeId[]): Promise<SoulRevision[]>;
   appendSoul(revision: SoulRevision, expectedVersion: number, baseVersion: number): Promise<boolean>;
+  claimOrg(orgId: string): Promise<string>;
   purposeRuntimes(): Promise<Partial<Record<RuntimePurpose, RuntimeSelection>>>;
   setPurposeRuntime(purpose: RuntimePurpose, selection: RuntimeSelection | null): Promise<void>;
   connectorClients(id: ScopeId): Promise<StoredConnectorClient[]>;
@@ -81,8 +79,6 @@ export interface ConfigTables {
   deleteConnectorClient(id: ScopeId, provider: string): Promise<void>;
   slackEmojiCatalog(id: ScopeId): Promise<SlackEmojiCatalog | null>;
   putSlackEmojiCatalog(catalog: SlackEmojiCatalog): Promise<void>;
-  operatorSettings(): Promise<OperatorSettings>;
-  updateOperatorSettings(fn: (current: OperatorSettings) => OperatorSettings): Promise<OperatorSettings>;
   close?(): Promise<void>;
 }
 

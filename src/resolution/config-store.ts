@@ -15,7 +15,6 @@ import { currentTenant } from "../tenants/context.ts";
 import {
   type ConfigTables,
   type ModelAccount,
-  type OperatorSettings,
   type OrgBranding,
   type RuntimePurpose,
   type RuntimeSelection,
@@ -25,7 +24,7 @@ import {
 } from "./config-tables.ts";
 import {
   connectorMethods,
-  operatorMethods,
+  embeddingMethods,
   policyMethods,
   preferenceMethods,
   runtimeMethods,
@@ -140,12 +139,13 @@ function groupSouls(revisions: readonly SoulRevision[]): Map<ScopeId, SoulRevisi
   return souls;
 }
 
-function tenantCache(tables: ConfigTables, org: ScopeId) {
+function tenantCache(tables: ConfigTables, orgId: string) {
+  const org = scopeId("org", orgId);
   const tenants = new Map<string, TenantConfig>();
   const loads = new Map<string, Promise<void>>();
+  const failures = new Map<string, unknown>();
   const written = new Map<string, number>();
   let tick = 0;
-  const operator: { settings: OperatorSettings } = { settings: {} };
   const writeKey = (id: ScopeId) => `${currentTenant()}|${id}`;
   const loaded = (): TenantConfig | undefined => {
     const tenant = currentTenant();
@@ -158,17 +158,18 @@ function tenantCache(tables: ConfigTables, org: ScopeId) {
   const cached = (): TenantConfig => {
     const found = loaded();
     if (found) return found;
+    const tenant = currentTenant();
     void hydrate();
-    throw new Error(`Configuration for tenant ${currentTenant()} has not been loaded`);
+    throw new Error(`Configuration for tenant ${tenant} has not been loaded`, { cause: failures.get(tenant) });
   };
   const load = async (tenant: string) => {
-    const [scopes, souls, purposes, settings] = await Promise.all([
+    const [owner, scopes, souls, purposes] = await Promise.all([
+      tables.claimOrg(orgId),
       tables.scopeSettings(),
       tables.soulRevisions(SOUL_HISTORY_LIMIT),
       tables.purposeRuntimes(),
-      tables.operatorSettings(),
     ]);
-    operator.settings = settings;
+    if (owner !== orgId) throw new Error(`database belongs to org ${owner}, not ${orgId}`);
     tenants.set(tenant, { scopes: new Map(scopes), souls: groupSouls(souls), purposes });
   };
   const setSouls = (target: TenantConfig, id: ScopeId, souls: SoulRevision[] | undefined) => {
@@ -180,7 +181,13 @@ function tenantCache(tables: ConfigTables, org: ScopeId) {
     let pending = loads.get(tenant);
     if (!pending) {
       pending = load(tenant);
-      pending.catch(() => loads.delete(tenant));
+      pending.then(
+        () => failures.delete(tenant),
+        (error: unknown) => {
+          failures.set(tenant, error);
+          loads.delete(tenant);
+        },
+      );
       loads.set(tenant, pending);
     }
     return pending;
@@ -188,7 +195,6 @@ function tenantCache(tables: ConfigTables, org: ScopeId) {
   return {
     loaded,
     cached,
-    operator,
     hydrate,
     markWritten: (id: ScopeId) => void written.set(writeKey(id), ++tick),
     async refresh(ids: readonly ScopeId[], withOrg: boolean) {
@@ -209,7 +215,7 @@ function tenantCache(tables: ConfigTables, org: ScopeId) {
         if (moved.includes(id)) setSouls(target, id, histories.get(id));
       }
       if (!withOrg || !ids.includes(org)) return;
-      [target.purposes, operator.settings] = await Promise.all([tables.purposeRuntimes(), tables.operatorSettings()]);
+      target.purposes = await tables.purposeRuntimes();
     },
     async reloadSouls(id: ScopeId) {
       const souls = await tables.soulRevisions(SOUL_HISTORY_LIMIT, [id]);
@@ -230,7 +236,7 @@ export function createConfigStore(
 ): ScopedConfigStore {
   const { tables } = opts;
   const org = scopeId("org", orgId);
-  const cache = tenantCache(tables, org);
+  const cache = tenantCache(tables, orgId);
   const keyed = createKeyedQueue();
   const queue = <T>(key: string, fn: () => Promise<T>) => keyed(`${currentTenant()}|${key}`, fn);
   const writeScope = (id: ScopeId, fn: (current: ScopeSettings) => ScopeSettings) =>
@@ -254,7 +260,6 @@ export function createConfigStore(
     loaded: cache.loaded,
     reloadSouls: cache.reloadSouls,
     markWritten: cache.markWritten,
-    operator: cache.operator,
     defaultSecurityPosture: opts.defaultSecurityPosture ?? "auto",
     defaultSharingPosture: opts.defaultSharingPosture ?? "isolated",
     connectorKey: deriveConnectorKey(opts.connectorSecretKey ?? randomBytes(32), "connector-clients"),
@@ -264,7 +269,7 @@ export function createConfigStore(
     ...policyMethods(ctx),
     ...runtimeMethods(ctx),
     ...preferenceMethods(ctx),
-    ...operatorMethods(ctx),
+    ...embeddingMethods(ctx),
     ...connectorMethods(ctx),
     hydrate: cache.hydrate,
     refreshScope: (id) => cache.refresh([id], true),

@@ -7,7 +7,6 @@ import { SHARING_POSTURES } from "./sharing-posture.ts";
 import {
   definedOnly,
   type ConfigTables,
-  type OperatorSettings,
   type RuntimePurpose,
   type RuntimeSelection,
   type ScopeSettings,
@@ -54,6 +53,7 @@ const SCOPE_COLUMNS = [
   "org_ambient",
   "interactive_fast_mode",
   "individual_model_auth",
+  "embedding_model_id",
 ] as const;
 
 const cell = <T extends z.ZodType>(type: T) => type.nullish().transform((v) => v ?? undefined);
@@ -105,6 +105,7 @@ const SCOPE_ROW = z.object({
   org_ambient: flag,
   interactive_fast_mode: flag,
   individual_model_auth: flag,
+  embedding_model_id: text,
 });
 
 function scopeFromRow(row: Row): [ScopeId, ScopeSettings] {
@@ -157,6 +158,7 @@ function scopeFromRow(row: Row): [ScopeId, ScopeSettings] {
       orgAmbient: r.org_ambient,
       interactiveFastMode: r.interactive_fast_mode,
       individualModelAuth: r.individual_model_auth,
+      embeddingModelId: r.embedding_model_id,
     }),
   ];
 }
@@ -196,6 +198,7 @@ function scopeToColumns(s: ScopeSettings): unknown[] {
     s.orgAmbient,
     s.interactiveFastMode,
     s.individualModelAuth,
+    s.embeddingModelId,
   ].map((cell) => cell ?? null);
 }
 
@@ -250,9 +253,6 @@ const connectorFromRow = (row: Row): StoredConnectorClient => {
     updatedAt: r.updated_at.getTime(),
   });
 };
-
-const operatorFromRow = (row: Row | undefined): OperatorSettings =>
-  definedOnly({ embeddingModelId: text.parse(row?.embedding_model_id) });
 
 const PURPOSE_ROW = z.object({
   purpose: z.enum(["cron", "subagent", "fallback"]),
@@ -383,22 +383,17 @@ export function createPostgresConfigTables(databaseUrl: string): ConfigTables {
       const { emoji, updated_at } = EMOJI_ROW.parse(row);
       return { scopeId: id, emoji, updatedAt: updated_at.getTime() };
     },
+    async claimOrg(orgId) {
+      await db.q(`INSERT INTO deployment_identity(org_id) VALUES ($1) ON CONFLICT DO NOTHING`, [orgId]);
+      const [row] = await db.q(`SELECT org_id FROM deployment_identity WHERE ${TENANT}`);
+      return z.string().parse(row?.org_id);
+    },
     async putSlackEmojiCatalog(c) {
       await db.q(
         `INSERT INTO slack_emoji_catalog(scope_id, emoji, updated_at) VALUES ($1, $2, to_timestamp($3::double precision / 1000))
          ON CONFLICT (tenant_id, scope_id) DO UPDATE SET emoji = EXCLUDED.emoji, updated_at = EXCLUDED.updated_at`,
         [c.scopeId, JSON.stringify(c.emoji), c.updatedAt],
       );
-    },
-    operatorSettings: async () => operatorFromRow((await db.q(`SELECT * FROM operator_settings`))[0]),
-    async updateOperatorSettings(fn) {
-      return withPgTransaction(await db.pool(), async (client) => {
-        await client.query(`INSERT INTO operator_settings DEFAULT VALUES ON CONFLICT DO NOTHING`);
-        const { rows } = await client.query(`SELECT * FROM operator_settings FOR UPDATE`);
-        const next = definedOnly(fn(operatorFromRow(rows[0])));
-        await client.query(`UPDATE operator_settings SET embedding_model_id = $1`, [next.embeddingModelId ?? null]);
-        return next;
-      });
     },
   };
 }

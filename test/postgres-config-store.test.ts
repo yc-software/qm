@@ -215,6 +215,7 @@ test("a tenant never reads or overwrites another tenant's configuration", { skip
       await mine.setPurposeRuntime("cron", { modelId: "mine" });
       await mine.setConnectorClient(org, "google", { clientId: "mine", clientSecret: "s" });
       await mine.setSlackEmojiCatalog(channel, { a: "b" });
+      await mine.setEmbeddingModel("embed-mine");
     });
     const theirs = await store(otherTenant);
     await withTenant(otherTenant, async () => {
@@ -224,6 +225,7 @@ test("a tenant never reads or overwrites another tenant's configuration", { skip
       assert.equal(theirs.getPurposeRuntime("cron"), undefined);
       assert.deepEqual(await theirs.listConnectorClients(org), []);
       assert.equal(await theirs.getSlackEmojiCatalogDurable(channel), null);
+      assert.equal(await theirs.getEmbeddingModelDurable(), null);
       assert.equal(await theirs.setSoul(channel, "their soul"), 1);
       await theirs.setEgress(channel, { allowedHosts: ["theirs.example"] });
     });
@@ -256,13 +258,12 @@ test("a tenant never reads or overwrites another tenant's configuration", { skip
       `SELECT c.relname, c.relrowsecurity, (SELECT count(*)::int FROM pg_policy p WHERE p.polrelid = c.oid) AS policies
          FROM pg_class c
         WHERE c.relname IN ('scope_settings', 'soul_revisions', 'purpose_runtimes', 'connector_clients',
-                            'slack_emoji_catalog', 'operator_settings')
+                            'slack_emoji_catalog')
           AND c.relnamespace = current_schema()::regnamespace
         ORDER BY c.relname`,
     );
     assert.deepEqual(rows, [
       { relname: "connector_clients", relrowsecurity: true, policies: 1 },
-      { relname: "operator_settings", relrowsecurity: false, policies: 0 },
       { relname: "purpose_runtimes", relrowsecurity: true, policies: 1 },
       { relname: "scope_settings", relrowsecurity: true, policies: 1 },
       { relname: "slack_emoji_catalog", relrowsecurity: true, policies: 1 },
@@ -297,6 +298,29 @@ test("a loaded store refuses unbound reads and writes instead of answering from 
   });
 });
 
+test("a tenant's data stays pinned to the organization that first loaded it", { skip }, async () => {
+  await withConfigDb(async ({ tenant, otherTenant, store, url }) => {
+    await store(tenant);
+    const tables = createPostgresConfigTables(url);
+    try {
+      const other = createConfigStore("other-org", { tables, connectorSecretKey: "test-key" });
+      await assert.rejects(
+        withTenant(tenant, () => other.hydrate!()),
+        /database belongs to org default-org, not other-org/,
+      );
+      await withTenant(tenant, () =>
+        assert.throws(
+          () => other.getSoul(channel),
+          (error: Error) => /not been loaded/.test(error.message) && /belongs to org/.test(String(error.cause)),
+        ),
+      );
+      await withTenant(otherTenant, () => other.hydrate!());
+    } finally {
+      await tables.close!();
+    }
+  });
+});
+
 test("a tenant added after boot loads its configuration on first use", { skip }, async () => {
   await withConfigDb(async ({ tenant, otherTenant, store }) => {
     const config = await store(tenant);
@@ -311,6 +335,7 @@ test("a tenant added after boot loads its configuration on first use", { skip },
 });
 
 const seedLegacyConfig = async (admin: Parameters<typeof seedKeyValueTable>[0]) => {
+  await seedKeyValueTable(admin, "deployment_identity", { singleton: { orgId: ORG } });
   await seedKeyValueTable(admin, "soul_configs", {
     [channel]: {
       scopeId: channel,
@@ -427,7 +452,8 @@ test(
       const { rows } = await admin.query(
         `SELECT to_regclass('soul_configs') IS NULL AND to_regclass('soul_history') IS NULL
             AND to_regclass('base_model_configs') IS NULL
-            AND to_regclass('connector_clients_kv') IS NULL AND to_regclass('slack_emoji_catalog_kv') IS NULL AS dropped,
+            AND to_regclass('connector_clients_kv') IS NULL AND to_regclass('slack_emoji_catalog_kv') IS NULL
+            AND to_regclass('deployment_identity_kv') IS NULL AS dropped,
               (SELECT count(*)::int FROM durable_map_versions) AS versions`,
       );
       assert.deepEqual(rows, [{ dropped: true, versions: 0 }]);
@@ -443,6 +469,7 @@ test("the app registers every config table migration under the default config", 
     "tenancy/config-store/0001-typed",
     "tenancy/connector_clients/0001-typed",
     "tenancy/slack_emoji_catalog/0001-typed",
+    "tenancy/deployment_identity/0001-typed",
   ])
     assert.ok(ids.has(id), id);
 });

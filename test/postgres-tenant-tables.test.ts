@@ -15,7 +15,6 @@ const [a, b] = process.env.DATABASE_URL ? testTenants() : ["", ""];
 const UNTENANTED_REASONS: Record<string, string> = {
   durable_map_versions: "version counters of the durable map store itself",
   instance_heartbeats: "liveness and build of each server process, shared by every tenant",
-  operator_settings: "operator-level settings of the install, written only by the operator",
   qm_schema_migrations: "the migration ledger of the database",
   qm_settings: "install-wide settings",
   qm_tenant: "the legacy single-install tenant id, copied into tenants by the upgrade",

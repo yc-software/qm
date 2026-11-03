@@ -11,14 +11,7 @@ import {
   type SecretKey,
   type StoredConnectorClient,
 } from "../connectors/connector-client-store.ts";
-import type {
-  ConfigTables,
-  OperatorSettings,
-  RuntimePurpose,
-  RuntimeSelection,
-  ScopeSettings,
-  SoulRevision,
-} from "./config-tables.ts";
+import type { ConfigTables, RuntimePurpose, RuntimeSelection, ScopeSettings, SoulRevision } from "./config-tables.ts";
 import { definedOnly } from "./config-tables.ts";
 import type { ScopedConfigStore, ScopedRuntimeSelection } from "./config-store.ts";
 
@@ -40,7 +33,6 @@ export interface ConfigContext {
   loaded(): TenantConfig | undefined;
   reloadSouls(id: ScopeId): Promise<void>;
   markWritten(id: ScopeId): void;
-  operator: { settings: OperatorSettings };
   defaultSecurityPosture: SecurityPosture;
   defaultSharingPosture: SharingPosture;
   connectorKey: SecretKey;
@@ -392,15 +384,11 @@ export function preferenceMethods(ctx: ConfigContext): Methods<PreferenceMethods
   };
 }
 
-export function operatorMethods(ctx: ConfigContext): Methods<"getEmbeddingModelDurable" | "setEmbeddingModel"> {
-  const { tables, operator } = ctx;
-  const update = (patch: OperatorSettings) =>
-    ctx.queue("operator", async () => {
-      operator.settings = await tables.updateOperatorSettings((current) => ({ ...current, ...patch }));
-    });
+export function embeddingMethods(ctx: ConfigContext): Methods<"getEmbeddingModelDurable" | "setEmbeddingModel"> {
+  const { org } = ctx;
   return {
-    getEmbeddingModelDurable: async () => (await tables.operatorSettings()).embeddingModelId ?? null,
-    setEmbeddingModel: (modelId) => update({ embeddingModelId: modelId ?? undefined }),
+    getEmbeddingModelDurable: async () => (await ctx.own(org)).embeddingModelId ?? null,
+    setEmbeddingModel: (modelId) => ctx.put(org, "embeddingModelId", modelId),
   };
 }
 

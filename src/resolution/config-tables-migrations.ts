@@ -65,6 +65,7 @@ const SCOPE_SOURCES: Array<[string, Record<string, string>]> = [
       fast_mode: flag("json->>'fastMode'"),
       runtime_revision: "(json->>'revision')::integer",
       org_revision: "(json->>'orgRevision')::integer",
+      embedding_model_id: "json->>'embeddingModelId'",
     },
   ],
 ];
@@ -83,8 +84,6 @@ const soulRevisionsFrom = (source: string, scope: string, revision: string, wher
     SELECT ${scope}, (${revision}->>'version')::integer, ${revision}->>'content',
       ${at(`${revision}->>'updatedAt'`)}, ${revision}->>'updatedBy', ${revision}->>'sessionId'
     ${source} WHERE ${where} ON CONFLICT DO NOTHING`;
-
-const ORG_ROW = (table: string) => `(SELECT json FROM ${table} WHERE id LIKE 'org:%' LIMIT 1)`;
 
 const CREATE_TABLES = [
   `CREATE TABLE scope_settings(
@@ -117,6 +116,7 @@ const CREATE_TABLES = [
      model_id TEXT,
      effort_level TEXT,
      fast_mode BOOLEAN,
+     embedding_model_id TEXT,
      runtime_revision INTEGER,
      org_revision INTEGER,
      org_ambient BOOLEAN,
@@ -137,10 +137,6 @@ const CREATE_TABLES = [
      model_id TEXT NOT NULL,
      effort_level TEXT,
      fast_mode BOOLEAN
-   )`,
-  `CREATE TABLE operator_settings(
-     singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
-     embedding_model_id TEXT
    )`,
 ];
 
@@ -166,7 +162,6 @@ const BACKFILL = [
     "h.json",
     "(h.json->>'version')::integer < (s.json->>'version')::integer",
   ),
-  `INSERT INTO operator_settings(embedding_model_id) SELECT ${ORG_ROW("base_model_configs")}->>'embeddingModelId'`,
 ];
 
 const SOURCES = [...SCOPE_SOURCES.map(([table]) => table), ...OTHER_SOURCES];
@@ -223,6 +218,13 @@ export const CONFIG_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
       updated_at: at("json->>'updatedAt'"),
     },
     where: "json ?& ARRAY['scopeId', 'provider', 'clientId', 'secretEnc']",
+  }),
+  typedTableMigration({
+    table: "deployment_identity",
+    columns: ["singleton BOOLEAN NOT NULL DEFAULT TRUE CHECK (singleton)", "org_id TEXT NOT NULL"],
+    primaryKey: ["singleton"],
+    backfill: { org_id: "json->>'orgId'" },
+    where: "json ? 'orgId'",
   }),
   typedTableMigration({
     table: "slack_emoji_catalog",
