@@ -676,12 +676,12 @@ for (const abort of ["shutdown", "stop"] as const) {
         (({ interrupted, stopped }) => ({ interrupted, stopped }))(results[0]!.body),
         abort === "shutdown" ? { interrupted: true, stopped: undefined } : { interrupted: undefined, stopped: true },
       );
-      const { resumeStrategy } = await import("../src/core/turn-resume.ts");
+      const { reconcile } = await import("../src/core/turn-resume.ts");
       const userSeq = entries.find((entry) => entry.kind === "UserMessage")!.seq;
-      assert.equal(
-        resumeStrategy(entries, { userSeq, workEntries: entries.filter((e) => e.seq > userSeq).length }).kind,
-        "continue",
-      );
+      assert.deepEqual(reconcile(entries, { userSeq, workEntries: entries.filter((e) => e.seq > userSeq).length }), {
+        settleItems: [],
+        resumed: true,
+      });
     } finally {
       globalThis.fetch = realFetch;
       await agent.close?.();
