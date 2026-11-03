@@ -31,6 +31,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
@@ -1013,36 +1014,42 @@ describe("/v1/keychain routes (capability-authed)", () => {
   let built: BuiltApp;
 
   const capFor = async (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    await mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
+    await inTestTenant(() =>
+      mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET),
+    );
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-routes-")), signingSecret: SECRET }));
-    await built.directory.replaceChannels(
-      [
-        { channelId: "C_SECONDS", name: "seconds", isPrivate: false },
-        { channelId: "C_BAD_EXP", name: "bad-exp", isPrivate: false },
-        { channelId: "C7", name: "grants", isPrivate: false },
-        { channelId: "C_OVERVIEW", name: "overview", isPrivate: false },
-        { channelId: "C_NAMED", name: "pilot-portal", isPrivate: false },
-        { channelId: "C_MYSTERY", name: "", isPrivate: false },
-        { channelId: "C8", name: "file-grants", isPrivate: false },
-      ],
-      [
-        { channelId: "C_SECONDS", principalId: "U_SECONDS" },
-        { channelId: "C_BAD_EXP", principalId: "U_BAD_EXP" },
-        { channelId: "C7", principalId: "OWNER" },
-        { channelId: "C7", principalId: "U3" },
-        { channelId: "C_OVERVIEW", principalId: "OVERVIEW_OWNER" },
-        { channelId: "C_NAMED", principalId: "SCOPENAME_OWNER" },
-        { channelId: "C_MYSTERY", principalId: "SCOPENAME_OWNER" },
-        { channelId: "C8", principalId: "OWNER" },
-        { channelId: "C8", principalId: "U3" },
-      ],
+    await inTestTenant(() =>
+      built.directory.replaceChannels(
+        [
+          { channelId: "C_SECONDS", name: "seconds", isPrivate: false },
+          { channelId: "C_BAD_EXP", name: "bad-exp", isPrivate: false },
+          { channelId: "C7", name: "grants", isPrivate: false },
+          { channelId: "C_OVERVIEW", name: "overview", isPrivate: false },
+          { channelId: "C_NAMED", name: "pilot-portal", isPrivate: false },
+          { channelId: "C_MYSTERY", name: "", isPrivate: false },
+          { channelId: "C8", name: "file-grants", isPrivate: false },
+        ],
+        [
+          { channelId: "C_SECONDS", principalId: "U_SECONDS" },
+          { channelId: "C_BAD_EXP", principalId: "U_BAD_EXP" },
+          { channelId: "C7", principalId: "OWNER" },
+          { channelId: "C7", principalId: "U3" },
+          { channelId: "C_OVERVIEW", principalId: "OVERVIEW_OWNER" },
+          { channelId: "C_NAMED", principalId: "SCOPENAME_OWNER" },
+          { channelId: "C_MYSTERY", principalId: "SCOPENAME_OWNER" },
+          { channelId: "C8", principalId: "OWNER" },
+          { channelId: "C8", principalId: "U3" },
+        ],
+      ),
     );
-    await built.directory.replaceGroups([
-      { groupId: "G_CONN", principalId: "alex@conn" },
-      { groupId: "G_CONN", principalId: "carol@conn" },
-    ]);
+    await inTestTenant(() =>
+      built.directory.replaceGroups([
+        { groupId: "G_CONN", principalId: "alex@conn" },
+        { groupId: "G_CONN", principalId: "carol@conn" },
+      ]),
+    );
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -1075,7 +1082,7 @@ describe("/v1/keychain routes (capability-authed)", () => {
     audienceScopeId: CapabilityClaims["scopeId"],
     mode: "once" | "standing",
     purpose: string,
-  ) => built.keychain!.createGrant({ credentialId, ownerId, audienceScopeId, mode, purpose });
+  ) => inTestTenant(() => built.keychain!.createGrant({ credentialId, ownerId, audienceScopeId, mode, purpose }));
 
   it("saves to the TOKEN's actor and lists only the caller's own credentials", async () => {
     const res = await post(
@@ -1249,7 +1256,9 @@ describe("/v1/keychain routes (capability-authed)", () => {
         await capFor(owner),
       )
     ).json()) as any;
-    await built.sessions.getOrCreateByThread("slack:C_NAMED:1", "channel", "channel:C_NAMED", "pilot-portal");
+    await inTestTenant(() =>
+      built.sessions.getOrCreateByThread("slack:C_NAMED:1", "channel", "channel:C_NAMED", "pilot-portal"),
+    );
     await grantHere(credential.id, owner, "channel:C_NAMED", "standing", "named channel work");
     await grantHere(credential.id, owner, "channel:C_MYSTERY", "standing", "unnamed channel work");
     const body = (await (await get("/v1/keychain/overview", await capFor(owner))).json()) as any;
@@ -1329,15 +1338,15 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   });
 
   const audience = [{ externalId: "U_ASKER" }, { externalId: "U_OWNER", displayName: "Alice" }];
-  const sys = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
+  const sys = await inTestTenant(() => built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience)));
   assert.equal(sys.status, "ok");
   assert.match(sys.reply ?? "", /## Credentials/);
   assert.doesNotMatch(sys.reply ?? "", /### Alice|github \(AliceBell\)|request-access` skill:/);
   assert.ok(!(sys.reply ?? "").includes("ghp_e2e"), "prompt never carries the secret");
-  await selectDefaultSandbox(built, "U_ASKER", "channel:C1");
+  await inTestTenant(() => selectDefaultSandbox(built, "U_ASKER", "channel:C1"));
 
   let mark = fakeSprites.execScripts().length;
-  assert.equal((await built.app.turn(channelTurn("!run true", "U_ASKER", audience))).status, "ok");
+  assert.equal((await inTestTenant(() => built.app.turn(channelTurn("!run true", "U_ASKER", audience)))).status, "ok");
   assert.ok(!execScriptsMention("ghp_e2e", mark), "no grant → no secret in the channel sandbox");
 
   await built.keychain!.createGrant({
@@ -1347,19 +1356,19 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
     mode: "standing",
     purpose: "use my gh here for repo work",
   });
-  const sys2 = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
+  const sys2 = await inTestTenant(() => built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience)));
   assert.match(sys2.reply ?? "", new RegExp(`\`github:${cred.id}\` — github \\(AliceBell\\); env \`GITHUB_TOKEN\``));
   assert.doesNotMatch(sys2.reply ?? "", /use my gh here for repo work|Not granted here/);
 
   mark = fakeSprites.execScripts().length;
-  assert.equal((await built.app.turn(channelTurn("!run true", "U_ASKER", audience))).status, "ok");
+  assert.equal((await inTestTenant(() => built.app.turn(channelTurn("!run true", "U_ASKER", audience)))).status, "ok");
   assert.ok(!execScriptsMention("export GITHUB_TOKEN=", mark), "standing grants are not ambient");
   assert.ok(!execScriptsMention("ghp_e2e", mark), "an unrequested command never receives the secret");
-  const unchanged = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
+  const unchanged = await inTestTenant(() => built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience)));
   const system = (reply?: string) => (reply ?? "").split("<environment>")[0];
   assert.equal(system(unchanged.reply), system(sys2.reply));
 
-  await selectDefaultSandbox(built, "U_OWNER", "personal:U_OWNER");
+  await inTestTenant(() => selectDefaultSandbox(built, "U_OWNER", "personal:U_OWNER"));
   mark = fakeSprites.execScripts().length;
   const dm: TurnRequest = {
     surface: "test",
@@ -1368,12 +1377,14 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
     origin: { kind: "human" },
     text: "!run true",
   } as TurnRequest;
-  assert.equal((await built.app.turn(dm)).status, "ok");
+  assert.equal((await inTestTenant(() => built.app.turn(dm))).status, "ok");
   assert.ok(!execScriptsMention("ghp_e2e", mark), "unrequested secrets are never materialized");
-  const selected = await built.app.turn({
-    ...dm,
-    text: `!execute ${JSON.stringify({ command: 'test "$GITHUB_TOKEN" = ghp_e2e && echo selected', credentials: [credentialHandle(cred)] })}`,
-  });
+  const selected = await inTestTenant(() =>
+    built.app.turn({
+      ...dm,
+      text: `!execute ${JSON.stringify({ command: 'test "$GITHUB_TOKEN" = ghp_e2e && echo selected', credentials: [credentialHandle(cred)] })}`,
+    }),
+  );
   assert.equal(selected.reply, "selected");
   assert.deepEqual(resolved, [cred.id]);
 });
