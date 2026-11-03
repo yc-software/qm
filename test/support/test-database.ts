@@ -36,12 +36,17 @@ function startDatabaseWorker(): NonNullable<typeof databaseWorker> {
 }
 
 let createdInTest: string[] | undefined;
+let testDepth = 0;
+let fileDatabase: string | undefined;
+let testDatabase: string | undefined;
 beforeEach(() => {
-  createdInTest = [];
+  if (testDepth++ === 0) createdInTest = [];
 });
 afterEach(() => {
+  if (--testDepth > 0) return;
   if (createdInTest?.length) startDatabaseWorker().worker.postMessage({ release: createdInTest });
   createdInTest = undefined;
+  testDatabase = undefined;
 });
 
 function createDatabaseSync(request: { template?: string }, scope: "test" | "file" = "test"): string {
@@ -96,8 +101,17 @@ export function restoreFileOwner(): void {
   useOwnerDatabase(process.env.DATABASE_OWNER_URL);
 }
 
-export function testDatabaseUrl(): string {
+export function testSeparateDatabaseUrl(): string {
   return ownedDatabaseUrl(createDatabaseSync({}));
+}
+
+export function testDatabaseUrl(): string {
+  const url =
+    testDepth === 0
+      ? (fileDatabase ??= databaseUrl(createDatabaseSync({})))
+      : (testDatabase ??= databaseUrl(createDatabaseSync({})));
+  useOwnerDatabase(ownerUrlOf(url));
+  return url;
 }
 
 export function testBareDatabaseUrl(): string {
@@ -105,9 +119,7 @@ export function testBareDatabaseUrl(): string {
 }
 
 export function testMigratedDatabaseUrl(): string {
-  const template = process.env.QM_TEST_TEMPLATE_DATABASE;
-  if (!template) throw new Error("QM_TEST_TEMPLATE_DATABASE is unset: run tests through scripts/run-pg-tests.mjs");
-  return ownedDatabaseUrl(createDatabaseSync({ template }));
+  return testDatabaseUrl();
 }
 
 let shared: { url: string; maps: ReturnType<typeof createPostgresMapFactory> } | undefined;
