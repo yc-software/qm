@@ -76,10 +76,10 @@ function spyProvisioning(sandbox: Sandbox) {
   const counts = { provisioned: 0, live: 0 };
   const provision = sandbox.provision.bind(sandbox);
   const teardown = sandbox.teardown.bind(sandbox);
-  sandbox.provision = async (layers, opts) => {
+  sandbox.provision = async (owner, opts) => {
     counts.provisioned++;
     counts.live++;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   sandbox.teardown = async (handle, opts) => {
     await teardown(handle, opts);
@@ -478,9 +478,9 @@ test("a per-turn egress-proxy token is minted and passed to provision, carrying 
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const res = await app.turn(dm("!run echo go"));
@@ -505,9 +505,9 @@ test("large channel turns apply the compression rollout setting to every sandbox
     );
     let captured: ProvisionOptions | undefined;
     const provision = sandbox.provision.bind(sandbox);
-    sandbox.provision = (layers, opts) => {
+    sandbox.provision = (owner, opts) => {
       captured = opts;
-      return provision(layers, opts);
+      return provision(owner, opts);
     };
     const members = Array.from({ length: 120 }, (_, i) => ({
       externalId: i === 0 ? "U1" : `U${i + 1}-compression-fixture`,
@@ -548,9 +548,9 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
   const actor = { externalId: "B-LEGACY", isBot: true };
   const res = await app.turn(
@@ -588,9 +588,9 @@ test("Composio backend access is announced without delivering the project key", 
   });
   let captured: ProvisionOptions | undefined;
   const provision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return provision(layers, opts);
+    return provision(owner, opts);
   };
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
@@ -690,9 +690,9 @@ test("org credentials are delivered only when requested and read live after rota
     return realRun(handle, command, opts);
   };
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     if (opts) captures.push(opts);
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const request = `!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel", "browse-model-key"] })}`;
@@ -749,9 +749,9 @@ test("a disabled or broker-delivery credential never rides provision env", async
   });
   const captures: ProvisionOptions[] = [];
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     if (opts) captures.push(opts);
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:env3" } }));
@@ -789,9 +789,9 @@ test("a credential flipped away from env between the metadata read and the secre
   };
   const captures: ProvisionOptions[] = [];
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     if (opts) captures.push(opts);
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   await assert.rejects(
@@ -824,9 +824,9 @@ test("env-delivery credentials are not offered to an external audience", async (
   await grantCred(acl, org, "browse-steel");
   const captures: ProvisionOptions[] = [];
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     if (opts) captures.push(opts);
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const externalRoom = await app.turn(
@@ -870,9 +870,9 @@ test("a channel cron receives env credentials only when the directory proves an 
     return realRun(handle, command, opts);
   };
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     if (opts) captures.push(opts);
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
   const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await directory.replace([
@@ -955,9 +955,9 @@ test("env-delivery credentials are gated by service-cred grants — no grant, no
     return realRun(handle, command, opts);
   };
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     if (opts) captures.push(opts);
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   let res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:gate1" } }));
@@ -995,9 +995,9 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const res = await app.turn(dm("!run echo steps"));
@@ -1037,9 +1037,9 @@ test("a legacy browse-only model cannot strand managed default-model browsing", 
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   await built.config.setBrowseModel("org:acme", "claude-retired-by-pi-ai");
@@ -1063,9 +1063,9 @@ test("browse follows a live org base model change, not the process-start default
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   let res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:live1" } }));
@@ -1095,9 +1095,9 @@ test("an OpenAI deployment provisions managed browser access without its provide
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:oa1" } }));
@@ -1119,9 +1119,9 @@ test("turn timezone rides the prompt and control-plane capability token", async 
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const res = await app.turn(dm("!run echo tz", { timezone: "America/New_York" }));
@@ -1173,9 +1173,9 @@ for (const hours of [undefined, "72", "0", "none"]) {
     let captured: ProvisionOptions | undefined;
     let executed: Record<string, string> | undefined;
     const provision = sandbox.provision.bind(sandbox);
-    sandbox.provision = (layers, opts) => {
+    sandbox.provision = (owner, opts) => {
       captured = opts;
-      return provision(layers, opts);
+      return provision(owner, opts);
     };
     const run = sandbox.run.bind(sandbox);
     sandbox.run = (handle, command, opts) => {
@@ -1217,9 +1217,9 @@ test("unattended grants enter capability claims only on non-live turns", async (
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   await app.turn(dm("!run echo cron", { triggered: true, unattendedGrants: ["admin.sessions.read"] }));
@@ -1374,9 +1374,9 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
 
   const adminTurn = (extra: Partial<TurnRequest> = {}): TurnRequest => ({
@@ -1431,9 +1431,9 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
   const { app, sandbox } = buildApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
-  sandbox.provision = (layers, opts) => {
+  sandbox.provision = (owner, opts) => {
     captured = opts;
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
   const admin = { externalId: "admin-alice" };
 
@@ -1727,7 +1727,7 @@ test("a later turn removes same-conversation and expired transfer files", async 
   const built = freshApp();
   const { app, sandbox } = built;
   await selectComputer(built, "U1", scopeId("personal", "U1"));
-  const handle = await sandbox.provision([{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }]);
+  const handle = await sandbox.provision(scopeId("personal", "U1"));
   const sessionDir = `${TURN_FILES_DIR}/${hashId(["dm:U1:t1"], 24)}`;
   await sandbox.writeFile(handle, `${sessionDir}/abandoned/inbox/stale.bin`, "stale");
   const expiredSessionDir = `${TURN_FILES_DIR}/${hashId(["dm:U1:other"], 24)}`;
@@ -3697,9 +3697,9 @@ test("environments: an unattached scope provisions through its own scope (today'
   const { app, sandbox } = built;
   const realProvision = sandbox.provision.bind(sandbox);
   let rwScope: string | undefined;
-  sandbox.provision = (layers, opts) => {
-    rwScope = layers.find((l) => l.mode === "rw")?.scopeId;
-    return realProvision(layers, opts);
+  sandbox.provision = (owner, opts) => {
+    rwScope = owner;
+    return realProvision(owner, opts);
   };
 
   const before = await app.turn(dm("!run echo go"));
@@ -3756,13 +3756,13 @@ test("a failed eager provision clears the slot — the tool call retries instead
   const realProvision = built.sandbox.provision.bind(built.sandbox);
   let failNext = true;
   let attempts = 0;
-  built.sandbox.provision = async (layers, opts) => {
+  built.sandbox.provision = async (owner, opts) => {
     attempts++;
     if (failNext) {
       failNext = false;
       throw new Error("transient provision fault");
     }
-    return realProvision(layers, opts);
+    return realProvision(owner, opts);
   };
   const res = await built.app.turn(dm("!run echo hi"));
   assert.equal(res.status, "ok", res.reason);
@@ -4075,9 +4075,9 @@ test("default screening does not invoke a model for inbound data or tool results
   const built = freshApp({ securityScreen: loadConfig({}).securityScreen });
   let captured: ProvisionOptions | undefined;
   const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = (layers, options) => {
+  built.sandbox.provision = (owner, options) => {
     captured = options;
-    return provision(layers, options);
+    return provision(owner, options);
   };
   const result = await built.app.turn(
     dm("!run printf screening-default-ok", {
@@ -4098,7 +4098,7 @@ for (const combined of [true, false]) {
     const built = freshApp();
     if (!combined) built.sandbox.removeDirAndList = undefined;
     await selectComputer(built, "U1", scopeId("personal", "U1"));
-    const handle = await built.sandbox.provision([{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }]);
+    const handle = await built.sandbox.provision(scopeId("personal", "U1"));
     const old = `.agent-turn/owner/${(Date.now() - 48 * 3600_000).toString(36)}-nonce/file`;
     const recent = `.agent-turn/owner/${Date.now().toString(36)}-nonce/file`;
     const malformed = ".agent-turn/owner/!invalid/file";

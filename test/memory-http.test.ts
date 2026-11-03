@@ -17,7 +17,6 @@ function start() {
     admin: built.admin,
     auditLog: built.auditLog,
     memory: built.memory,
-    workspace: built.workspace,
     sessions: built.sessions,
   });
   server.listen(0);

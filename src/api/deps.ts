@@ -39,7 +39,6 @@ import type { AuditLog } from "../audit/audit-log.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
-import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import type { EgressEnforcement, Sandbox } from "../sandbox/sandbox.ts";
@@ -158,7 +157,6 @@ export interface ServerDeps {
   runs?: RunStore;
   signals?: RunSignalStore;
   sessionStateBus?: SessionStateBus;
-  workspace?: WorkspaceStore;
   files?: FileArtifactStore;
   fileUploads?: DirectFileUploads;
   memory?: MemoryService;

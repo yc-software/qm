@@ -13,7 +13,6 @@ import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/re
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { createRenderWorkspaceStore } from "./workspace/render-workspace-store.ts";
 import {
   createRenderSandbox,
   type StoredRenderCleanup,
@@ -185,7 +184,6 @@ import {
   type ManagesArtifactHome,
 } from "./resolution/scope-membership.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
-import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
@@ -497,7 +495,6 @@ export interface BuiltApp {
   keychainApprovals?: KeychainApprovals;
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
-  workspace: WorkspaceStore;
   memory: MemoryService;
   sandbox: Sandbox;
   advisoryLock: AdvisoryLock;
@@ -733,10 +730,6 @@ export function buildApp(
 
   const s3 = config.s3Endpoint ? s3Client(config.s3Region, { endpoint: config.s3Endpoint }) : undefined;
   const s3Override = s3 ? { _client: s3 } : {};
-  const workspace =
-    config.workspaceStore === "postgres"
-      ? createRenderWorkspaceStore(config.dataDir, databaseUrl)
-      : createLocalWorkspaceStore(config.dataDir);
   const blobTransfer: BlobTransferStore =
     config.transferStore === "s3" && config.s3Bucket
       ? createS3BlobTransferStore({
@@ -804,13 +797,13 @@ export function buildApp(
       error,
     );
   const buildLocal = (): Sandbox =>
-    createLocalSandbox(workspace, {
+    createLocalSandbox({
       ...config.localSandbox,
       onError: sandboxOnError,
     });
   const buildSprites = (): Sandbox => {
     const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
-    return createSpritesSandbox(workspace, {
+    return createSpritesSandbox({
       ...sprites,
       initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
       advisoryLock,
@@ -831,7 +824,7 @@ export function buildApp(
   const smolmachinesBodies = artifactMap<StoredSmolmachinesSandbox>("smolmachines_sandbox_bodies");
   const buildSmolmachines = (): Sandbox => {
     const { snapshotS3Bucket, snapshotIntervalSec, ...smol } = config.smolmachinesSandbox;
-    return createSmolmachinesSandbox(workspace, {
+    return createSmolmachinesSandbox({
       ...smol,
       ...(snapshotIntervalSec !== undefined ? { snapshotIntervalMs: snapshotIntervalSec * 1000 } : {}),
       blobTransfer,
@@ -886,7 +879,7 @@ export function buildApp(
   };
   const buildE2b = (): Sandbox => {
     const e2b = config.e2bSandbox;
-    return createE2bSandbox(workspace, {
+    return createE2bSandbox({
       advisoryLock,
       client: e2bClient("computers"),
       ...(e2b.namePrefix ? { namePrefix: e2b.namePrefix } : {}),
@@ -915,7 +908,7 @@ export function buildApp(
   const buildManagedAgents = (): Sandbox => {
     const managedAgents = config.managedAgentsSandbox;
     if (!managedAgents.apiToken) throw new Error("SANDBOX_BACKEND=do-managed-agents requires DO_AGENTS_API_TOKEN");
-    return createManagedAgentsSandbox(workspace, {
+    return createManagedAgentsSandbox({
       client: createSdkManagedAgentsClient({
         apiToken: managedAgents.apiToken,
         ...(managedAgents.apiBaseUrl ? { apiBaseUrl: managedAgents.apiBaseUrl } : {}),
@@ -950,7 +943,7 @@ export function buildApp(
     const modal = config.modalSandbox;
     if (!modal.tokenId || !modal.tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
-    return createModalSandbox(workspace, {
+    return createModalSandbox({
       advisoryLock,
       client: createSdkModalClient({
         tokenId: modal.tokenId,
@@ -990,7 +983,7 @@ export function buildApp(
     });
   };
   const buildAgent37 = (): Sandbox =>
-    createAgent37Sandbox(workspace, {
+    createAgent37Sandbox({
       ...config.agent37Sandbox,
       advisoryLock,
       blobTransfer,
@@ -1025,7 +1018,7 @@ export function buildApp(
       )
       .digest("hex")
       .slice(0, 32);
-    return createSuperserveSandbox(workspace, {
+    return createSuperserveSandbox({
       configEpoch: ss.configGeneration ?? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock),
       client: createSdkSuperserveClient({
         apiKey: ss.apiKey,
@@ -1055,7 +1048,7 @@ export function buildApp(
   };
   const buildAws = (): Sandbox => {
     if (!config.awsSandbox.s3Bucket) throw new Error("SANDBOX_BACKEND=aws requires AWS_SANDBOX_S3_BUCKET");
-    return createAwsSandbox(workspace, {
+    return createAwsSandbox({
       ...config.awsSandbox,
       s3Bucket: config.awsSandbox.s3Bucket,
       advisoryLock,
@@ -1070,7 +1063,7 @@ export function buildApp(
     });
   };
   const buildPorter = (): Sandbox =>
-    createPorterSandbox(workspace, {
+    createPorterSandbox({
       ...config.porterSandbox,
       advisoryLock,
       blobTransfer,
@@ -1086,7 +1079,7 @@ export function buildApp(
     if (!renderClient || !renderBase) {
       throw new Error("SANDBOX_BACKEND=render requires RENDER_API_KEY, RENDER_WORKSPACE_ID, and RENDER_SANDBOX_IMAGE");
     }
-    return createRenderSandbox(workspace, {
+    return createRenderSandbox({
       client: renderClient,
       base: renderBase,
       ...(render.defaultTimeoutSec !== undefined ? { defaultTimeoutSec: render.defaultTimeoutSec } : {}),
@@ -2078,7 +2071,6 @@ export function buildApp(
     userModelCredentials,
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     sessions,
-    workspace,
     files,
     toolOutput,
     sandbox,
@@ -3002,7 +2994,6 @@ export function buildApp(
     principalLinks,
     slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
     composioReturns,
-    workspace,
     memory,
     ...(keychain ? { keychain } : {}),
     serviceCreds,
@@ -3152,7 +3143,6 @@ export function serverDeps(
     runs: built.runs,
     signals: built.signals,
     sessionStateBus: built.sessionStateBus,
-    workspace: built.workspace,
     files: built.files,
     ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
     memory: built.memory,

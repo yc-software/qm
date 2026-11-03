@@ -1,11 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { carriedFileHandles } from "../src/resolution/sharing-access.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { fileArtifactId, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -73,11 +69,11 @@ for (const carried of [false, true]) {
     const ctx = createToolContext({
       sandbox: {} as Sandbox,
       provision: noComputer,
-      layers: [{ scopeId: grantee, mountPath: "", mode: "rw" }],
+      writableScopeId: grantee,
+      readOnlyScopeIds: [],
       commandPolicy: () => ({}) as never,
       authorizeCommand: () => false,
       grantedHandles: handles,
-      workspace: createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fshare-"))),
       files,
       deploy: {} as never,
       acl,
