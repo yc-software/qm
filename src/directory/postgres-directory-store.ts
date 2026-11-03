@@ -13,6 +13,7 @@ import {
   type DirectoryMember,
   type DirectoryStore,
 } from "./directory-store.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 const INITIAL_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS directory_members(
@@ -171,6 +172,7 @@ function dedupMemberships(rows: ChannelMembership[]): ChannelMembership[] {
 }
 
 export const DIRECTORY_MIGRATIONS = [
+  ...TENANCY,
   {
     id: "directory/store/0001",
     expectedChecksum: "c47a45848f9d225ff601c9df13dc272349c7df7525e7e2417f33d68be7672cc1",
@@ -186,6 +188,15 @@ export const DIRECTORY_MIGRATIONS = [
     id: "directory/store/0005",
     statements: ["ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS avatar_url TEXT"],
   },
+  tenantTables("directory/store/0006-tenants", [
+    { table: "directory_members", primaryKey: "org_id, principal_id" },
+    { table: "directory_channels", primaryKey: "org_id, channel_id" },
+    { table: "directory_channel_members", primaryKey: "org_id, channel_id, principal_id" },
+    { table: "directory_group_members", primaryKey: "org_id, group_id, principal_id" },
+    { table: "directory_groups", primaryKey: "org_id, group_id" },
+    { table: "directory_sync", primaryKey: "org_id" },
+    { table: "directory_meta", primaryKey: "org_id" },
+  ]),
 ];
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {

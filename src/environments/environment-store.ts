@@ -1,6 +1,7 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 export interface Environment {
   id: string;
@@ -65,6 +66,7 @@ export function createPostgresEnvironmentStore(
 ): EnvironmentStore {
   const now = opts.now ?? (() => Date.now());
   const { q } = createPgPool(connectionString, [
+    ...TENANCY,
     {
       id: "environments/store/0001",
       statements: [
@@ -81,6 +83,23 @@ export function createPostgresEnvironmentStore(
         ON environment_attachments(environment_id)`,
       ],
     },
+    tenantTables(
+      "environments/store/0002-tenants",
+      [
+        { table: "environments", primaryKey: "id" },
+        { table: "environment_attachments", primaryKey: "scope_id" },
+      ],
+      {
+        foreignKeys: [
+          {
+            table: "environment_attachments",
+            name: "environment_attachments_environment_id_fkey",
+            columns: "environment_id",
+            references: "environments(tenant_id, id)",
+          },
+        ],
+      },
+    ),
   ]);
   return {
     async create(input): Promise<Environment> {

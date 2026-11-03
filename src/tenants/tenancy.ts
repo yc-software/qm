@@ -65,8 +65,8 @@ export function createTenancy(pool: PgPool, owner: PgPool = pool): Tenancy {
     hostTenant,
     multi: async () => (await hostTenant("")).multi,
     async soleTenant() {
-      const rows = await owner.q("SELECT id::text AS id FROM tenants LIMIT 2");
-      return rows.length === 1 && typeof rows[0]?.id === "string" ? rows[0].id : undefined;
+      const sole = (await pool.q("SELECT sole::text AS sole FROM qm_sole_tenant()"))[0]?.sole;
+      return typeof sole === "string" ? sole : undefined;
     },
     async settings(tenant) {
       const cached = settingsCache.get(tenant);

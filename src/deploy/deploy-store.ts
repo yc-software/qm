@@ -10,6 +10,8 @@ import {
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
 } from "./deploy-git-store.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
+import { durableMapTenancy } from "../persistence/durable-map.ts";
 
 export interface DeploymentVersion {
   version: number;
@@ -146,6 +148,26 @@ interface DeployAccess {
   findByName?(name: string): Promise<Deployment | null>;
 }
 
+const ACCESS_TENANCY = tenantTables(
+  "durable-map/deployments/0011-access-tenants",
+  [{ table: "deployment_access", primaryKey: "id" }],
+  {
+    foreignKeys: [
+      {
+        table: "deployment_access",
+        name: "deployment_access_id_fkey",
+        columns: "id",
+        references: "deployments(tenant_id, id)",
+        onDelete: "CASCADE",
+      },
+    ],
+    after: [
+      `DROP INDEX IF EXISTS ${NAME_INDEX}`,
+      `CREATE UNIQUE INDEX ${NAME_INDEX} ON deployments (tenant_id, (json->>'name')) WHERE json->>'name' IS NOT NULL`,
+    ],
+  },
+);
+
 function createPgDeployAccess(pg: PgPool): DeployAccess {
   const migration = {
     id: "deploy/access/0001",
@@ -157,16 +179,19 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
       )`,
     ],
   };
+  const tenancy = [...TENANCY, durableMapTenancy("deployments"), ACCESS_TENANCY];
   pg.registerMigration(migration);
+  for (const definition of tenancy) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
       readyP = (async () => {
         await pg.migrate(migration);
+        for (const definition of tenancy) await pg.migrate(definition);
         await pg
           .q(
             `CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX}
-             ON deployments ((json->>'name')) WHERE json->>'name' IS NOT NULL`,
+             ON deployments (tenant_id, (json->>'name')) WHERE json->>'name' IS NOT NULL`,
           )
           .catch((e) =>
             swallow(
@@ -197,7 +222,7 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
       const res = await pg.query(
         `INSERT INTO deployment_access (id, last_access_at)
          SELECT d.id, $2::bigint FROM deployments d WHERE d.id = $1
-         ON CONFLICT (id) DO UPDATE SET last_access_at = GREATEST(deployment_access.last_access_at, EXCLUDED.last_access_at)`,
+         ON CONFLICT (tenant_id, id) DO UPDATE SET last_access_at = GREATEST(deployment_access.last_access_at, EXCLUDED.last_access_at)`,
         [id, at],
       );
       return res.rowCount > 0;
