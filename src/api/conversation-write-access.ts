@@ -8,7 +8,7 @@ import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-st
 import type { AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
-export interface ProjectAccess {
+interface ProjectAccess {
   id: string;
   audience: Principal[];
   name: string;
