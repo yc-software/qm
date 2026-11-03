@@ -8,34 +8,39 @@ import { inTestTenant } from "./support/test-tenants.ts";
 
 const id = testIdentityService();
 
-test("classifies a same-org member as internal", () => {
-  const p = id.classify("U1");
-  assert.equal(p.type, "internal");
-  assert.equal(id.isInternal(p), true);
-});
+test("classifies a same-org member as internal", () =>
+  inTestTenant(() => {
+    const p = id.classify("U1");
+    assert.equal(p.type, "internal");
+    assert.equal(id.isInternal(p), true);
+  }));
 
-test("classifies a flagged Slack Connect user as guest", () => {
-  const p = id.classify("U2", true);
-  assert.equal(p.type, "guest");
-  assert.equal(id.isInternal(p), false);
-});
+test("classifies a flagged Slack Connect user as guest", () =>
+  inTestTenant(() => {
+    const p = id.classify("U2", true);
+    assert.equal(p.type, "guest");
+    assert.equal(id.isInternal(p), false);
+  }));
 
-test("resolves bot assertions as internal automation callers", () => {
-  const p = id.resolve({ externalId: "B1", isBot: true });
-  assert.equal(p.type, "internal");
-  assert.equal(id.isInternal(p), true);
-});
+test("resolves bot assertions as internal automation callers", () =>
+  inTestTenant(() => {
+    const p = id.resolve({ externalId: "B1", isBot: true });
+    assert.equal(p.type, "internal");
+    assert.equal(id.isInternal(p), true);
+  }));
 
-test("audienceIsAllInternal is false if any member is non-internal (G1)", () => {
-  const internal = id.classify("U1");
-  const guest = id.classify("U2", true);
-  assert.equal(id.audienceIsAllInternal([internal]), true);
-  assert.equal(id.audienceIsAllInternal([internal, guest]), false);
-});
+test("audienceIsAllInternal is false if any member is non-internal (G1)", () =>
+  inTestTenant(() => {
+    const internal = id.classify("U1");
+    const guest = id.classify("U2", true);
+    assert.equal(id.audienceIsAllInternal([internal]), true);
+    assert.equal(id.audienceIsAllInternal([internal, guest]), false);
+  }));
 
-test("audienceIsAllInternal is false for an empty audience (unknown ≠ all-internal)", () => {
-  assert.equal(id.audienceIsAllInternal([]), false);
-});
+test("audienceIsAllInternal is false for an empty audience (unknown ≠ all-internal)", () =>
+  inTestTenant(() => {
+    assert.equal(id.audienceIsAllInternal([]), false);
+  }));
 
 test("a deactivated principal classifies as non-internal (fail-closed source, §3)", () =>
   inTestTenant(async () => {
