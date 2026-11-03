@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
 import { AdminError } from "../../admin/admin-service.ts";
 import { sendJson } from "../http.ts";
-import { currentTenant } from "../../tenants/context.ts";
 import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
 import { tenantAllowsEmail } from "../../tenants/settings-parse.ts";
@@ -50,8 +49,7 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<void> {
     });
   }
   for (const id of ids as string[]) {
-    if (await deps.replayDedupe.claim(`${NAMESPACE}${currentTenant()}:${id}`, expiresAtMs))
-      return sendJson(res, 200, { claimed: id });
+    if (await deps.replayDedupe.claim(`${NAMESPACE}${id}`, expiresAtMs)) return sendJson(res, 200, { claimed: id });
   }
   return sendJson(res, 200, { claimed: null });
 }
@@ -137,7 +135,7 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
   if (
     !isObj(claims) ||
     claims.purpose !== "trusted-entry-admin" ||
-    claims.tenant !== currentTenant() ||
+    claims.org !== orgScope() ||
     typeof claims.issuer !== "string" ||
     typeof claims.subject !== "string" ||
     !claims.subject ||
@@ -182,7 +180,7 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
   if (
     !isObj(claims) ||
     claims.purpose !== "teammate-invite" ||
-    claims.tenant !== currentTenant() ||
+    claims.org !== orgScope(deps) ||
     claims.aud !== deps.portalUrl.replace(/\/+$/, "") ||
     typeof claims.email !== "string" ||
     typeof claims.iat !== "number" ||

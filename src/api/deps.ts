@@ -74,13 +74,10 @@ import type { ChannelPolicyStore } from "../surface-cache/channel-policy-store.t
 import type { UiStateStore } from "../surfaces/ui-state.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { ConnectorTokenSource, SlackUserClient } from "../loops/sources/adapter.ts";
-import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
 import type { BudgetTracker } from "../ratelimit/budget.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
-import type { TenantResolver } from "../tenants/resolver.ts";
-import type { RowTenants } from "../tenants/row-tenant.ts";
 
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
@@ -97,12 +94,12 @@ export interface ServerDeps {
   composioFetch?: typeof fetch;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   production?: boolean;
-  tenants?: TenantResolver;
-  rowTenants?: RowTenants;
+  allowUnauthenticatedCore?: boolean;
   signingSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
+  requireSignedPortalIdentity?: boolean;
   control: ControlService;
   replayDedupe?: ReplayDedupe;
   deploymentLiveSmoke?: () => Promise<void>;
@@ -149,7 +146,6 @@ export interface ServerDeps {
   admin?: AdminService;
   inviteMailer?: Mailer;
   slackAllowFrom?: readonly string[];
-  rateLimiter?: RateLimiter;
   budget?: BudgetTracker;
   sessions?: SessionStore;
   auditLog?: AuditLog;

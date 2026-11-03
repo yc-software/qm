@@ -16,7 +16,6 @@ import { Readable } from "node:stream";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 const body = async (r: Response | Promise<Response>): Promise<any> => (await r).json();
 
@@ -85,7 +84,7 @@ describe("ui canvas and ui observe", () => {
       signingSecret: SECRET,
       ...deps,
     });
-    sourceServer = createInsecureTestServer(TEST_TENANT, built.app, deps);
+    sourceServer = createInsecureTestServer(built.app, deps);
     await new Promise<void>((resolve) => agentServer.listen(0, resolve));
     await new Promise<void>((resolve) => sourceServer.listen(0, resolve));
     agentBase = `http://localhost:${(agentServer.address() as AddressInfo).port}`;

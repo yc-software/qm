@@ -116,7 +116,6 @@ test("agentConfigOptions maps every Config knob the agent consumes, field by fie
     testConfig({
       captureLlmRequests: false,
 
-      reachExecEnabled: true,
       signingSecret: "sek",
       apiBaseUrl: "https://core.test",
       turnWallClockMs: 111_000,
@@ -130,7 +129,6 @@ test("agentConfigOptions maps every Config knob the agent consumes, field by fie
   assert.deepEqual(opts, {
     captureRequests: false,
     sandboxResources: true,
-    reachExec: true,
     controlTools: true,
     turnWallClockMs: 111_000,
     execTimeoutMs: 22_000,

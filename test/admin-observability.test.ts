@@ -10,12 +10,11 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-")), ...overrides });
   const built = buildApp(config);
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
@@ -1020,7 +1019,7 @@ test("the Files view is the document store (write-tool artifacts), not the sandb
     data: Buffer.from("%PDF-1.4 deck"),
     direction: "out",
   });
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
@@ -1091,7 +1090,7 @@ test("a saved document is read and downloaded by artifact id", async () => {
     data: Buffer.from("a,b\n1,2"),
     direction: "out",
   });
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
@@ -1141,7 +1140,7 @@ test("admin observability enforces scope grants (authz is the boundary)", async 
 test("admin governance reports the sandbox's actual egress enforcement capability", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-egress-capability-")) }));
   const read = async (declared: "none" | "ip_port" | "domain", effective: "none" | "ip_port" | "domain") => {
-    const server = createInsecureTestServer(TEST_TENANT, built.app, {
+    const server = createInsecureTestServer(built.app, {
       admin: built.admin,
       config: built.config,
       auditLog: built.auditLog,
@@ -1197,7 +1196,7 @@ test("admin governance reports the sandbox's actual egress enforcement capabilit
 
 test("admin governance: base model round-trips per-scope, validates ids", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-model-")) }));
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     config: built.config,
     auditLog: built.auditLog,
@@ -1266,7 +1265,7 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
 
 test("admin governance: browse step limit round-trips, validates, and is org-scoped", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-browsesteps-")) }));
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     config: built.config,
     auditLog: built.auditLog,
@@ -1319,7 +1318,7 @@ test("an OpenAI-only deployment still gets a browse model picker, and Anthropic 
     tenantSettings: testTenantSettings({ PI_MODEL: "gpt-5.6-sol" }),
   });
   await built.modelCredentials.set("openai", "sk-openai-test", "admin");
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     config: built.config,
     auditLog: built.auditLog,
@@ -1356,7 +1355,7 @@ test("an OpenAI-only deployment still gets a browse model picker, and Anthropic 
 
 test("admin governance: browse model round-trips, validates, and is org-scoped", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-browsemodel-")) }));
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     config: built.config,
     auditLog: built.auditLog,

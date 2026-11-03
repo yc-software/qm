@@ -111,7 +111,7 @@ export interface RunStore {
 
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
-  releaseLease(runId: string, leaseToken: string, stop?: RunStop): Promise<boolean>;
+  releaseLease(runId: string, leaseToken: string, stop?: RunStop, retryAfter?: number): Promise<boolean>;
 
   complete(runId: string, leaseToken: string, result: TurnResult): Promise<boolean>;
 

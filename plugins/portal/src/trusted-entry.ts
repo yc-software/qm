@@ -53,12 +53,11 @@ export function createTrustedEntry(
   const key = deriveKey(sessionSecret, "trusted-entry-tmp");
   const ttl = 600;
   return {
-    start(returnTo: string, tenant: string) {
+    start(returnTo: string) {
       const { verifier, challenge } = pkcePair();
       const now = Math.floor(Date.now() / 1000);
       const tmp: TmpClaims = {
         k: "tmp",
-        tenant,
         state: randomToken(),
         nonce: randomToken(),
         pkceVerifier: verifier,
@@ -72,8 +71,8 @@ export function createTrustedEntry(
         ttl,
       };
     },
-    async finish(cookie: string | null, url: URL, tenant: string) {
-      const tmp = openTmp(cookie, key, Date.now(), tenant);
+    async finish(cookie: string | null, url: URL) {
+      const tmp = openTmp(cookie, key, Date.now());
       const state = url.searchParams.get("state");
       const code = url.searchParams.get("code");
       if (url.searchParams.has("error") || !tmp || !state || !code || !safeEqual(state, tmp.state))

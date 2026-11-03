@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { currentTenant } from "../../../tenants/context.ts";
 import { gatewayActorId } from "../../../model/provider-endpoints.ts";
 import { mintSignedPayload } from "../../../auth/signed-token.ts";
 import { scopeId as makeScopeId } from "../../../types.ts";
@@ -189,7 +188,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
             purpose: "teammate-invite",
             inviteId: member.inviteId,
             email,
-            tenant: currentTenant(),
+            org: scope,
             aud: deps.portalUrl!.replace(/\/+$/, ""),
             iat: now,
             exp: now + 24 * 60 * 60 * 1000,

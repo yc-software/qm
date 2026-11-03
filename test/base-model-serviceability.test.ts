@@ -14,7 +14,6 @@ import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -27,7 +26,7 @@ async function start(
   for (const [provider, key] of Object.entries(keys))
     await built.modelCredentials.set(provider as ModelProvider, key, "test");
   await built.tenantSettings.get();
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,

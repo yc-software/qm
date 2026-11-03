@@ -162,6 +162,9 @@ import type { ModelProvider } from "../src/model/model-credential-store.ts";
 import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenants } from "./support/test-tenants.ts";
+
+const [TEST_TENANT] = testTenants();
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
 import { modelFromOverlay } from "../src/model/pi-models.ts";
@@ -190,7 +193,7 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     { OPENAI_BASE_URL: upstream.url + "/v1", ANTHROPIC_BASE_URL: upstream.url },
     { modelCredentialFetch: async () => Response.json({ data: [] }) },
   );
-  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -525,7 +528,6 @@ test("admin and gateway credential changes invalidate cached fingerprints", asyn
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { probeModel } from "../src/model/model-runtime.ts";
 import { testMap } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 test("legacy fingerprint versions stay unavailable until a successful new verification", async () => {
   const { built } = await seededApp({ openai: "test-key" });

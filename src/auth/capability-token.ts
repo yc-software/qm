@@ -1,6 +1,7 @@
 import { promisify } from "node:util";
 import { deflateRaw, inflateRaw } from "node:zlib";
-import { currentTenant, isTenantId } from "../tenants/context.ts";
+import { orgId as configOrgId } from "../config.ts";
+import { isTenantId, tenantClaim } from "../tenants/context.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import type { SessionOrigin } from "../sessions/session-store.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
@@ -38,7 +39,7 @@ interface BlobGrant {
   id?: string;
 }
 
-export type VerifiedCapability = CapabilityClaims & { tenant: string };
+export type VerifiedCapability = CapabilityClaims & { tenant?: string };
 
 type BlobTransferClaims = VerifiedCapability & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
@@ -88,7 +89,7 @@ export async function mintCapabilityToken(
   secret: string,
   compressionEnabled = false,
 ): Promise<string> {
-  const value = { ...claims, tenant: currentTenant() };
+  const value = { orgId: configOrgId(), ...claims, ...tenantClaim() };
   const bytes = Buffer.from(JSON.stringify(value));
   if (bytes.length > MAX_CLAIMS_BYTES) throw new Error("Capability claims exceed size limit");
   return mintSignedPayload(
@@ -131,7 +132,7 @@ export async function verifyCapabilityToken(
   const claims = await readCapabilityClaims(token, secret);
   if (
     !claims ||
-    !isTenantId(claims.tenant) ||
+    (claims.tenant !== undefined && !isTenantId(claims.tenant)) ||
     typeof claims.actorId !== "string" ||
     typeof claims.scopeId !== "string" ||
     typeof claims.exp !== "number"
