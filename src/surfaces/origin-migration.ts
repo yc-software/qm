@@ -230,21 +230,26 @@ const LIVE_ORIGIN_REWRITES = [
       ),
     ),
   ]),
-  migration("surface-origin-rewrite/spawn-meta", [
-    ifTable(
-      "sessions",
-      `UPDATE sessions SET
-         spawn_meta = CASE WHEN ${oldKeysIn("spawn_meta")} THEN COALESCE(pg_temp.qm_surface_request(
-           pg_temp.qm_jsonb_or_null(spawn_meta) || CASE
-             WHEN slack_binding ? 'teamId' AND spawn_meta LIKE '%"externalSlack"%' AND spawn_meta NOT LIKE '%"slackSource"%'
-             THEN jsonb_build_object('slackSource', slack_binding) ELSE '{}'::jsonb END)::text, spawn_meta) ELSE spawn_meta END,
-         slack_binding = CASE WHEN slack_binding ? 'teamId'
-           THEN pg_temp.qm_surface_request(jsonb_build_object('slackSource', slack_binding)) -> 'surfaceOrigin'
-           ELSE slack_binding END
-       WHERE ${oldKeysIn("spawn_meta")} OR slack_binding ? 'teamId'`,
-    ),
-  ]),
 ];
+
+export const SESSION_PAGE = 2000;
+const SESSION_ORIGIN_PAGE = {
+  id: "surface-origin-rewrite/spawn-meta",
+  statement: `WITH page AS (
+     SELECT id FROM sessions WHERE id > $1 ORDER BY id LIMIT ${SESSION_PAGE}
+   ), rewritten AS (
+     UPDATE sessions s SET
+       spawn_meta = CASE WHEN ${oldKeysIn("s.spawn_meta")} THEN COALESCE(pg_temp.qm_surface_request(
+         pg_temp.qm_jsonb_or_null(s.spawn_meta) || CASE
+           WHEN s.slack_binding ? 'teamId' AND s.spawn_meta LIKE '%"externalSlack"%' AND s.spawn_meta NOT LIKE '%"slackSource"%'
+           THEN jsonb_build_object('slackSource', s.slack_binding) ELSE '{}'::jsonb END)::text, s.spawn_meta) ELSE s.spawn_meta END,
+       slack_binding = CASE WHEN s.slack_binding ? 'teamId'
+         THEN pg_temp.qm_surface_request(jsonb_build_object('slackSource', s.slack_binding)) -> 'surfaceOrigin'
+         ELSE s.slack_binding END
+     FROM page WHERE s.id = page.id AND (${oldKeysIn("s.spawn_meta")} OR s.slack_binding ? 'teamId')
+   )
+   SELECT max(id) AS last FROM page`,
+};
 
 const SETTLED_CANDIDATES = "surface_origin_settled_candidates";
 const SETTLED_COLLECTED = "surface_origin_settled_collected";
@@ -366,19 +371,34 @@ async function rewriteSettledBatch(client: PoolClient): Promise<boolean> {
 
 const FRESH_WRITE_REWRITES = [OVERLAP_TURN_ORIGIN_REWRITE, ...LIVE_ORIGIN_REWRITES];
 
+async function rewriteSessionPage(client: PoolClient, after: string): Promise<string | null> {
+  for (const statement of [`SET LOCAL lock_timeout = '3s'`, ...HELPERS]) await client.query(statement);
+  const last = (await client.query<{ last: string | null }>(SESSION_ORIGIN_PAGE.statement, [after])).rows[0]?.last;
+  for (const statement of DROPS) await client.query(statement);
+  return last ?? null;
+}
+
 export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
   const pool = await pg.pool();
   const rewrite = (migration: { id: string; statements: string[] }) =>
     rewriteInTransaction(pool, migration.id, REWRITE_LOCK, async (client) => {
       for (const statement of migration.statements) await client.query(statement);
     });
-  for (const migration of [...FRESH_WRITE_REWRITES, SETTLED_CATCH_UP]) await rewrite(migration);
+  const rewriteFreshWrites = async () => {
+    for (const migration of FRESH_WRITE_REWRITES) await rewrite(migration);
+    for (let after: string | null = ""; after !== null;)
+      after = await rewriteInTransaction(pool, SESSION_ORIGIN_PAGE.id, REWRITE_LOCK, (client) =>
+        rewriteSessionPage(client, after!),
+      );
+  };
+  await rewriteFreshWrites();
+  await rewrite(SETTLED_CATCH_UP);
   await Promise.all(
     Array.from({ length: SETTLED_BATCH_WORKERS }, async () => {
       while (await rewriteInTransaction(pool, SETTLED_BATCH_REWRITE.id, BATCH_LOCK, rewriteSettledBatch));
     }),
   );
-  for (const migration of FRESH_WRITE_REWRITES) await rewrite(migration);
+  await rewriteFreshWrites();
   await pg.migrate(SETTLED_ORIGIN_MIGRATION).catch((error: unknown) => {
     throw new Error(`surface origin rewrite ${SETTLED_ORIGIN_MIGRATION.id} failed: ${errMessage(error)}`, {
       cause: error,

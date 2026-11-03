@@ -12,6 +12,7 @@ import {
   SETTLED_CANDIDATES_MIGRATION,
   SETTLED_ORIGIN_MIGRATION,
   rewriteSurfaceOrigins,
+  SESSION_PAGE,
 } from "../src/surfaces/origin-migration.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 
@@ -182,6 +183,11 @@ test(
         },
       );
       await bindSession("bound-internal", internalSource, { origin: { kind: "human" } });
+      await admin.query(
+        `INSERT INTO sessions (id, type, scope_id, thread_ref, created_at, slack_binding)
+         SELECT 'paged-' || lpad(g::text, 6, '0'), 'dm', 'org:o', 'paged-' || g, 1, $1::jsonb FROM generate_series(1, $2::int) g`,
+        [JSON.stringify(internalSource), SESSION_PAGE + 1],
+      );
       const signal = (consumed: number | null) =>
         admin.query(
           "INSERT INTO run_signals (run_id, kind, payload, created_at, consumed_at) VALUES ('pending', 'steer', $1, 1, $2)",
@@ -296,6 +302,11 @@ test(
       );
       assert.deepEqual(boundExternal.spawnMeta, { surfaceOrigin: externalOrigin, origin: { kind: "human" } });
       const boundInternal = await bound("bound-internal");
+      assert.equal(
+        (await admin.query("SELECT count(*)::int AS n FROM sessions WHERE slack_binding ? 'teamId'")).rows[0].n,
+        0,
+        "bindings on every page are converted",
+      );
       assert.deepEqual(boundInternal.surfaceBinding, internalOrigin);
       assert.deepEqual(boundInternal.spawnMeta, { origin: { kind: "human" } });
       const signals = (await admin.query("SELECT payload FROM run_signals ORDER BY id")).rows;
