@@ -62,7 +62,7 @@ export interface MemoryService {
     author?: string,
     context?: MemoryCaptureContext,
   ): Promise<number>;
-  query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<string[]>;
+  query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   read(scopeId: ScopeId): Promise<string>;
   facts?(scopeId: ScopeId): Promise<MemoryFact[]>;
   edit?(scopeId: ScopeId, edits: MemoryEdit[], author?: string, context?: MemoryCaptureMetadata): Promise<void>;
@@ -70,13 +70,13 @@ export interface MemoryService {
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }
 
-export function queryFacts(facts: readonly MemoryFact[], q: string, limit: number): string[] {
+export function queryFacts(facts: readonly MemoryFact[], q: string, limit: number): MemoryCandidate[] {
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
   return facts
     .filter((fact) => terms.every((term) => fact.text.toLowerCase().includes(term)))
     .slice(0, limit)
-    .map(factLine);
+    .map((fact) => ({ id: fact.id, claim: fact.text, text: factLine(fact) }));
 }
 
 const normalize = (text: string) => text.trim().toLowerCase();

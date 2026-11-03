@@ -3,6 +3,7 @@ import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp
 import { withTimeout } from "../util/async.ts";
 import { attestedPerson } from "../directory/person.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
+import type { MemoryCandidate } from "./facts.ts";
 import { DENIED_CODES, reportEnvelope } from "./provider-outcome.ts";
 
 export interface McpMemoryOperation {
@@ -28,7 +29,31 @@ function resultText(result: CallToolResult): string {
   return result.structuredContent == null ? "" : JSON.stringify(result.structuredContent);
 }
 
+interface ProviderFact {
+  id: string;
+  text: string;
+  date?: unknown;
+  kind?: unknown;
+  arm?: unknown;
+}
+
+function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
+  const facts = (result.structuredContent as { facts?: unknown } | undefined)?.facts;
+  if (!Array.isArray(facts)) return undefined;
+  return facts.map((fact: Partial<ProviderFact> | null) => {
+    if (typeof fact?.id !== "string" || typeof fact.text !== "string")
+      throw new Error("memory provider returned a fact without a string id and text");
+    return fact as ProviderFact;
+  });
+}
+
+const stamped = (fact: ProviderFact) => {
+  const stamp = [fact.date, fact.kind].filter((part) => typeof part === "string" && part).join("; ");
+  return stamp ? `(${stamp}) ${fact.text}` : fact.text;
+};
+
 export function createMcpMemoryProvider(opts: {
+  id: string;
   read: McpMemoryOperation;
   write?: McpMemoryOperation;
   attestActor?: boolean;
@@ -47,7 +72,7 @@ export function createMcpMemoryProvider(opts: {
     return result;
   };
 
-  const read = async (scopeId: string, query: string, context?: MemoryRecallContext): Promise<string> => {
+  const read = async (scopeId: string, query: string, context?: MemoryRecallContext): Promise<CallToolResult> => {
     const op = opts.read;
     const args: Record<string, unknown> = { [op.queryArg ?? "query"]: query };
     if (op.scopeArg) args[op.scopeArg] = scopeId;
@@ -57,17 +82,32 @@ export function createMcpMemoryProvider(opts: {
     const { code } = mcpEnvelope(result);
     if (code && code !== "actor_unlinked" && DENIED_CODES.has(code))
       throw new McpCallError(`memory provider refused the read (${code})`, { code });
+    return result;
+  };
+
+  const rows = (
+    result: CallToolResult,
+    maxChars: number | undefined,
+    line: (fact: ProviderFact, ref: string) => string,
+  ): MemoryCandidate[] => {
+    const facts = providerFacts(result);
+    if (facts)
+      return facts.map((fact) => {
+        const ref = `${opts.id}:${fact.id}`;
+        const arm = fact.arm === "own" || fact.arm === "ranked" ? fact.arm : undefined;
+        return { ref, claim: fact.text, text: line(fact, ref), ...(arm ? { arm } : {}) };
+      });
     const text = resultText(result);
-    return maxChars && text.length > maxChars ? text.slice(0, maxChars) : text;
+    return (maxChars && text.length > maxChars ? text.slice(0, maxChars) : text)
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => ({ text: line }));
   };
 
   return {
     async recall(scopeId, context) {
-      const text = await read(scopeId, context?.query ?? "", context);
-      return text
-        .split("\n")
-        .filter((line) => line.trim())
-        .map((line) => ({ text: line, score: 0.2 }));
+      const result = await read(scopeId, context?.query ?? "", context);
+      return rows(result, context?.maxChars, (fact) => `- ${stamped(fact)}`);
     },
 
     async capture(scopeId, facts, at, author, context) {
@@ -89,10 +129,10 @@ export function createMcpMemoryProvider(opts: {
     },
 
     async query(scopeId, q, limit = 20, context) {
-      const text = await read(scopeId, q, context);
-      return text ? text.split("\n").filter(Boolean).slice(0, limit) : [];
+      const result = await read(scopeId, q, context);
+      return rows(result, context?.maxChars, (fact, ref) => `${ref} ${stamped(fact)}`).slice(0, limit);
     },
 
-    read: (scopeId) => read(scopeId, ""),
+    read: async (scopeId) => resultText(await read(scopeId, "")),
   };
 }

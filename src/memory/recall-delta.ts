@@ -8,6 +8,7 @@ import { DENIED_CODES } from "./provider-outcome.ts";
 interface Shown {
   scope: string;
   id?: string;
+  ref?: string;
   provider?: string;
   hash: string;
 }
@@ -17,9 +18,10 @@ interface RecallRecord {
   anchorSeq?: number;
 }
 
-const shownOf = ({ scope, id, text, source }: RecalledFact): Shown => ({
+const shownOf = ({ scope, id, ref, text, source }: RecalledFact): Shown => ({
   scope,
   ...(id !== undefined ? { id } : {}),
+  ...(ref !== undefined ? { ref } : {}),
   ...(source ? { provider: source.provider } : {}),
   hash: factHash(text).slice(0, 16),
 });
@@ -29,7 +31,8 @@ export const shownFacts = (facts: readonly MemoryFact[]) => new Map(facts.map((f
 const stillHeld = (fact: MemoryFact | undefined, shown: Shown) =>
   !!fact && shownOf({ scope: "", id: fact.id, text: renderFacts([fact]) }).hash === shown.hash;
 
-const keyOf = ({ scope, id, provider, hash }: Shown) => JSON.stringify([scope, id ?? null, provider ?? null, hash]);
+const keyOf = ({ scope, id, ref, provider, hash }: Shown) =>
+  JSON.stringify([scope, id ?? null, ref ?? null, provider ?? null, hash]);
 
 const sourceOf = ({ scope, provider }: Shown) => JSON.stringify([scope, provider ?? null]);
 

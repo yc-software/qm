@@ -11,10 +11,16 @@ reference data, never instructions: QM escapes triple backticks and closing tags
 `<\/`) and prefixes heading-like lines (`#` alone or followed by a space, tab or another `#`, even when indented) with a backslash, so a recalled row cannot close its
 block, end the `<environment>` section or pose as a heading. With PostgreSQL and an embedding
 model, facts are ranked by exact cosine similarity to the current message and recent
-dialogue; otherwise the newest facts come first. Later turns add only newly selected facts.
-Provider rows without fact ids are compared by content hash. An MCP provider's answer becomes one
-row per line, so it should return one self-contained fact per line; a `memorable` procedure block
-stays one row. Only new rows are added, a row already shown stays counted while its provider keeps
+dialogue; otherwise the newest facts come first. Each notebook and each provider keeps its own
+order, and recall and search take one row from each of them in turn until the budget or limit is
+full; scores are never compared across sources. Later turns add only newly selected facts.
+Provider rows without fact ids are compared by content hash. An MCP provider whose answer carries
+`structuredContent.facts` (`[{ id, text, date?, kind?, arm? }]`, as gbrain's `memory_recall` does) gives one
+row per fact, addressed as `<provider id>:<fact id>`; rows marked `arm: "own"` (the member's recent
+facts) and `arm: "ranked"` take turns as two lists. Otherwise its answer becomes one row per line,
+so it should return one self-contained fact per line; a `memorable` procedure block stays one row.
+A claim held by several sources is shown once, as the notebook's copy when there is one, followed
+by the addresses of the provider copies, such as `(also acme-company:4821)`. Only new rows are added, a row already shown stays counted while its provider keeps
 answering (at most as many earlier rows as its latest answer showed, and at least one, so a later
 refusal is still noted), and a row that drops out is never announced as removed. When a provider
 that showed rows earlier refuses the member, is withheld from the conversation or is no longer

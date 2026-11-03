@@ -20,9 +20,9 @@ const change = { actor: "U1", now: 1_762_128_000_000, overlayIds: new Set<string
 const BRAIN = memberBrainId("U1");
 
 const notebook: MemoryService = {
-  recall: async () => [{ text: "notebook fact", score: 0.2 }],
+  recall: async () => [{ text: "notebook fact" }],
   capture: async (_scope, facts) => facts.length,
-  query: async () => ["notebook hit"],
+  query: async () => [{ text: "notebook hit" }],
   read: async () => "",
 };
 
@@ -53,7 +53,9 @@ function serving(record: MemoryRegistry, memberFetch?: AddressFetch) {
     onError: (error) => void errors.push(error),
   });
   const search = () =>
-    withProviders("search", (report) => memory.query("personal:U1", "bees", 5, { actorId: "U1", report }));
+    withProviders("search", async (report) =>
+      (await memory.query("personal:U1", "bees", 5, { actorId: "U1", report })).map(({ text }) => text),
+    );
   return { search, errors };
 }
 

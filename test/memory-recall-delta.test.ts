@@ -123,7 +123,7 @@ test("id-less provider lines inject only new lines over 20 turns, and timeouts o
         reportEnvelope({ code: "actor_unlinked" });
         return [];
       }
-      return Array.from({ length: 6 }, (_, k) => ({ text: line(window + k), score: 0.2 }));
+      return Array.from({ length: 6 }, (_, k) => ({ text: line(window + k) }));
     },
     async capture() {
       return 0;
@@ -220,7 +220,7 @@ test("a multi-line provider block that shares a line with an earlier one is inje
   let block = "Procedure: deploy staging\n1. Back up the database\n2. Deploy to staging";
   const procedures: MemoryService = {
     async recall() {
-      return [{ text: block, score: 0.2 }];
+      return [{ text: block }];
     },
     async capture() {
       return 0;

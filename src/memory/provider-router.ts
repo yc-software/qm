@@ -2,6 +2,7 @@ import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import type { MemoryProviderOutcome, MemoryRecallContext, MemoryService } from "./memory-service.ts";
+import type { MemoryCandidate } from "./facts.ts";
 import { failedOutcome, strictFailure, withEnvelope } from "./provider-outcome.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
@@ -38,6 +39,10 @@ export function createRoutedMemoryService(opts: {
     if (!provider) throw new Error(`unknown memory provider: ${route.provider}`);
     return provider;
   };
+  const tagged = (route: MemoryProviderRoute, rows: MemoryCandidate[]): MemoryCandidate[] =>
+    route.provider === "default"
+      ? rows
+      : rows.map((row) => ({ ...row, source: { provider: route.provider, label: route.label ?? route.provider } }));
   const managerFor = (scopeId: ScopeId): MemoryService | undefined => {
     const route = routesFor(scopeId).find((candidate) => candidate.manage !== false);
     return route ? providerFor(route) : undefined;
@@ -99,13 +104,7 @@ export function createRoutedMemoryService(opts: {
           ),
         ),
       );
-      return routes.flatMap((route, index) =>
-        batches[index]!.map((row) =>
-          route.provider === "default"
-            ? row
-            : { ...row, source: { provider: route.provider, label: route.label ?? route.provider } },
-        ),
-      );
+      return routes.flatMap((route, index) => tagged(route, batches[index]!));
     },
 
     async capture(scopeId, facts, at, author, context) {
@@ -134,7 +133,7 @@ export function createRoutedMemoryService(opts: {
 
     async query(scopeId, q, limit = 20, context) {
       const routes = routesFor(scopeId).filter((route) => route.recall !== false);
-      const rows = strict(
+      const batches = strict(
         await Promise.all(
           routes.map((route) =>
             attempt(
@@ -149,7 +148,7 @@ export function createRoutedMemoryService(opts: {
           ),
         ),
       );
-      return [...new Set(rows.flat())].slice(0, limit);
+      return routes.flatMap((route, index) => tagged(route, batches[index]!));
     },
 
     async read(scopeId) {

@@ -14,13 +14,13 @@ import { recallText } from "./support/recall-text.ts";
 
 const notebook: MemoryService = {
   async recall() {
-    return [{ text: "notebook fact", score: 0.2 }];
+    return [{ text: "notebook fact" }];
   },
   async capture(_scope, facts) {
     return facts.length;
   },
   async query() {
-    return ["notebook hit"];
+    return [{ text: "notebook hit" }];
   },
   async read() {
     return "";
@@ -349,7 +349,7 @@ test("a notebook failure in another scope still fails a search that a strict pro
   const notebooks: MemoryService = {
     ...notebook,
     async query(scope) {
-      if (scope !== "org:acme") return ["notebook hit"];
+      if (scope !== "org:acme") return [{ text: "notebook hit" }];
       await new Promise((resolve) => setTimeout(resolve, 30));
       throw new Error("org notebook offline");
     },

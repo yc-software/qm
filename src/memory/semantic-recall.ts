@@ -60,7 +60,7 @@ export function createSemanticMemoryService(
             });
             return matches.flatMap((match) => {
               const fact = byId.get(match.factId);
-              return fact?.updatedAt === match.updatedAt ? [factCandidate(fact, match.score)] : [];
+              return fact?.updatedAt === match.updatedAt ? [factCandidate(fact)] : [];
             });
           }
           return recentCandidates(facts);

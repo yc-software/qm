@@ -65,6 +65,7 @@ export function createMemoryProviders(
     }
     const fetchFn = opts.fetchFor?.(provider.id) ?? fetch;
     providers[provider.id] = createMcpMemoryProvider({
+      id: provider.id,
       read: operation(provider.url, provider.read, provider.timeoutMs, fetchFn),
       ...(provider.write ? { write: operation(provider.url, provider.write, provider.timeoutMs, fetchFn) } : {}),
       attestActor: provider.attestActor,
