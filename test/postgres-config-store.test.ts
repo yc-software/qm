@@ -5,7 +5,10 @@ import { createPostgresConfigTables } from "../src/resolution/config-tables-pg.t
 import type { ConfigTables } from "../src/resolution/config-tables.ts";
 import { defaultOrgPolicy } from "../src/policy/command-policy.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { createPgPool, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { buildApp } from "../src/wiring.ts";
+import { stopAtEnd } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb, type TypedTableDb } from "./support/typed-table.ts";
 
@@ -405,3 +408,15 @@ test(
     }, seedLegacyConfig);
   },
 );
+
+test("the app registers every config table migration under the default config", { skip }, async () => {
+  const config = testConfig();
+  stopAtEnd(buildApp(config));
+  const ids = new Set(registeredPgMigrations(config.databaseUrl!).map((migration) => migration.id));
+  for (const id of [
+    "tenancy/config-store/0001-typed",
+    "tenancy/connector_clients/0001-typed",
+    "tenancy/slack_emoji_catalog/0001-typed",
+  ])
+    assert.ok(ids.has(id), id);
+});
