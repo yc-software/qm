@@ -2,6 +2,7 @@ import type { CronFireLogEntry } from "../triggers/types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 export interface CronFireRecord extends CronFireLogEntry {
   cronId: string;
@@ -85,7 +86,7 @@ const LEGACY_FIRE_FIELDS = [
   "source.json->>'reply'",
 ].join(", ");
 
-const LEGACY_FIRE_UPSERT = `ON CONFLICT (cron_id, fire_key) DO UPDATE SET ${UPSERT_SET}
+const LEGACY_FIRE_UPSERT = `ON CONFLICT (tenant_id, cron_id, fire_key) DO UPDATE SET ${UPSERT_SET}
   WHERE EXCLUDED.fired_at >= cron_fires.fired_at
     AND (cron_fires.ended_at IS NULL OR EXCLUDED.ended_at IS NOT NULL)
     AND ${ROW_OF("cron_fires")} IS DISTINCT FROM ${ROW_OF("EXCLUDED")}`;
@@ -96,15 +97,15 @@ const LEGACY_FIRE_MAINTENANCE = {
     `DO $body$ BEGIN
       IF to_regclass('cron_fire_log') IS NOT NULL THEN
         LOCK TABLE cron_fire_log IN SHARE ROW EXCLUSIVE MODE;
-        INSERT INTO cron_fires (${FIRE_COLUMNS})
-        SELECT ${LEGACY_FIRE_FIELDS} FROM cron_fire_log source
+        INSERT INTO cron_fires (tenant_id, ${FIRE_COLUMNS})
+        SELECT qm_tenant_id(), ${LEGACY_FIRE_FIELDS} FROM cron_fire_log source
         ${LEGACY_FIRE_UPSERT};
       END IF;
     END $body$`,
     `CREATE OR REPLACE FUNCTION qm_sync_legacy_cron_fire() RETURNS trigger LANGUAGE plpgsql AS $body$
       BEGIN
-        INSERT INTO cron_fires (${FIRE_COLUMNS})
-        SELECT ${LEGACY_FIRE_FIELDS} FROM (SELECT NEW.*) source
+        INSERT INTO cron_fires (tenant_id, ${FIRE_COLUMNS})
+        SELECT qm_tenant_id(), ${LEGACY_FIRE_FIELDS} FROM (SELECT NEW.*) source
         ${LEGACY_FIRE_UPSERT};
         RETURN NEW;
       END
@@ -123,6 +124,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
   const pg = createPgPool(
     connectionString,
     [
+      ...TENANCY,
       {
         id: "cron/fires/0001",
         statements: [
@@ -143,6 +145,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
           `CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)`,
         ],
       },
+      tenantTables("cron/fires/0002-tenants", [{ table: "cron_fires", primaryKey: "cron_id, fire_key" }]),
     ],
     [LEGACY_FIRE_MAINTENANCE],
   );

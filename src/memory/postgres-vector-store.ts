@@ -2,6 +2,7 @@ import { createPgPool } from "../persistence/pg-pool.ts";
 import { unitVector } from "../model/embeddings.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
 import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
+import { tenantTables } from "../tenants/migrations.ts";
 
 export interface MemoryVector {
   scope: string;
@@ -66,6 +67,9 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
     ...MEMORY_FACTS_MIGRATIONS,
     { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
     { id: "memory/vectors/0002", statements: SCHEMA },
+    tenantTables("memory/vectors/0003-tenants", [
+      { table: "memory_fact_vectors", primaryKey: "scope_id, model, fact_id" },
+    ]),
   ]);
   return {
     async search(input) {
