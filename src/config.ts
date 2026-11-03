@@ -65,6 +65,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   databaseUrl?: string;
   databaseCaCert?: string;
   databaseCaCertFile?: string;
+  databaseOwnerUrl?: string;
   databasePoolUrl?: string;
   databasePoolCaCert?: string;
   securityPosture: SecurityPosture;
@@ -494,6 +495,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
       : {}),
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
+    ...(env.DATABASE_OWNER_URL ? { databaseOwnerUrl: env.DATABASE_OWNER_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),

@@ -13,6 +13,7 @@ import {
   type DirectoryMember,
   type DirectoryStore,
 } from "./directory-store.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 const INITIAL_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS directory_members(
@@ -114,7 +115,7 @@ const EXTERNAL_ROSTER_SCHEMA = [
   )`,
   `INSERT INTO directory_groups (org_id, group_id, roster_known)
     SELECT DISTINCT org_id, group_id, TRUE FROM directory_group_members
-    ON CONFLICT (org_id, group_id) DO NOTHING`,
+    ON CONFLICT (tenant_id, org_id, group_id) DO NOTHING`,
 ];
 
 const SYNC_STAMP_SCHEMA = [
@@ -171,6 +172,7 @@ function dedupMemberships(rows: ChannelMembership[]): ChannelMembership[] {
 }
 
 export const DIRECTORY_MIGRATIONS = [
+  ...TENANCY,
   {
     id: "directory/store/0001",
     expectedChecksum: "c47a45848f9d225ff601c9df13dc272349c7df7525e7e2417f33d68be7672cc1",
@@ -186,6 +188,15 @@ export const DIRECTORY_MIGRATIONS = [
     id: "directory/store/0005",
     statements: ["ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS avatar_url TEXT"],
   },
+  tenantTables("directory/store/0006-tenants", [
+    { table: "directory_members", primaryKey: "org_id, principal_id" },
+    { table: "directory_channels", primaryKey: "org_id, channel_id" },
+    { table: "directory_channel_members", primaryKey: "org_id, channel_id, principal_id" },
+    { table: "directory_group_members", primaryKey: "org_id, group_id, principal_id" },
+    { table: "directory_groups", primaryKey: "org_id, group_id" },
+    { table: "directory_sync", primaryKey: "org_id" },
+    { table: "directory_meta", primaryKey: "org_id" },
+  ]),
 ];
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
@@ -267,7 +278,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       if (partial && complete === false) return false;
       await client.query(
         `INSERT INTO directory_sync (org_id, ${hashCol}, ${syncedAtCol}, updated_at) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (org_id) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol},
+         ON CONFLICT (tenant_id, org_id) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol},
            ${syncedAtCol} = COALESCE(EXCLUDED.${syncedAtCol}, directory_sync.${syncedAtCol}),
            updated_at = EXCLUDED.updated_at`,
         [orgId, partial || complete === false ? null : hash, partial ? null : (syncedAt ?? null), Date.now()],
@@ -365,7 +376,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
             await client.query(
               `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private, is_external, roster_known, observed_at)
              SELECT $1, rows.*, $8::bigint FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[], $7::boolean[]) AS rows
-             ON CONFLICT (org_id, channel_id) DO UPDATE SET
+             ON CONFLICT (tenant_id, org_id, channel_id) DO UPDATE SET
                name = EXCLUDED.name,
                name_lc = EXCLUDED.name_lc,
                is_private = EXCLUDED.is_private,
@@ -415,7 +426,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     async setWorkspaceUrl(url) {
       await q(
         `INSERT INTO directory_meta (org_id, workspace_url, updated_at) VALUES ($1, $2, $3)
-         ON CONFLICT (org_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url, updated_at = EXCLUDED.updated_at`,
+         ON CONFLICT (tenant_id, org_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url, updated_at = EXCLUDED.updated_at`,
         [orgId, url, Date.now()],
       );
     },
@@ -502,7 +513,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
           await client.query(
             `INSERT INTO directory_groups (org_id, group_id, roster_known)
              SELECT $1, * FROM unnest($2::text[], $3::boolean[])
-             ON CONFLICT (org_id, group_id) DO UPDATE SET
+             ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET
                roster_known = directory_groups.roster_known OR EXCLUDED.roster_known`,
             [orgId, listedIds, listedIds.map((groupId) => rostered.has(groupId))],
           );
@@ -528,7 +539,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
         await client.query(
           `INSERT INTO directory_groups (org_id, group_id, roster_known) VALUES ($1, $2, TRUE)
-           ON CONFLICT (org_id, group_id) DO UPDATE SET roster_known = TRUE`,
+           ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET roster_known = TRUE`,
           [orgId, groupId],
         );
         await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [orgId, groupId]);
@@ -542,7 +553,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         ]);
         await client.query(
           `INSERT INTO directory_sync (org_id, groups_hash, groups_synced_at, updated_at) VALUES ($1, $2, $3, $3)
-           ON CONFLICT (org_id) DO UPDATE SET groups_hash = EXCLUDED.groups_hash,
+           ON CONFLICT (tenant_id, org_id) DO UPDATE SET groups_hash = EXCLUDED.groups_hash,
              groups_synced_at = GREATEST(COALESCE(directory_sync.groups_synced_at, 0), EXCLUDED.groups_synced_at),
              updated_at = EXCLUDED.updated_at`,
           [orgId, hashRoster(all.rows.map((r) => `${r.group_id}|${r.principal_id}`)), Date.now()],
