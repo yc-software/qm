@@ -1,25 +1,23 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { fileArtifactId, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { testDatabaseUrl, testIdentity } from "./support/test-database.ts";
+import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = "default-org";
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
 const channel = scopeId("channel", "C1");
 
-function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore>) {
+async function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore>) {
   return createApp({
     acl,
     files,
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    identity: await testIdentity(),
   } as unknown as AppDeps);
 }
 
@@ -64,10 +62,10 @@ async function drain(stream: NodeJS.ReadableStream): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-test("owner sees their own file in owned[] and can open its bytes", () =>
+tenantTest("owner sees their own file in owned[] and can open its bytes", () =>
   inTestTenant(async () => {
     const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-    const app = makeApp(
+    const app = await makeApp(
       files,
       createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
     );
@@ -92,15 +90,16 @@ test("owner sees their own file in owned[] and can open its bytes", () =>
     const opened = await app.openFileForViewer(id, "U1");
     assert.ok(opened);
     assert.deepEqual(await drain(opened!.stream), PNG);
-  }));
+  }),
+);
 
-test("a grantee sees a shared file in shared[] and can open it; the owner doesn't double-list it", () =>
+tenantTest("a grantee sees a shared file in shared[] and can open it; the owner doesn't double-list it", () =>
   inTestTenant(async () => {
     const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
       resolveFiles: (refs) => files.resolveByIds(refs),
     });
-    const app = makeApp(files, acl);
+    const app = await makeApp(files, acl);
     const owner = scopeId("personal", "U1");
     const id = fileArtifactId("share", "out", 0);
     await files.put({
@@ -130,12 +129,13 @@ test("a grantee sees a shared file in shared[] and can open it; the owner doesn'
     const opened = await app.openFileForViewer(id, "U2");
     assert.ok(opened, "the grant authorizes the bytes");
     assert.deepEqual(await drain(opened!.stream), Buffer.from("v1"));
-  }));
+  }),
+);
 
-test("a stranger sees nothing and cannot open the file (404 = null)", () =>
+tenantTest("a stranger sees nothing and cannot open the file (404 = null)", () =>
   inTestTenant(async () => {
     const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-    const app = makeApp(
+    const app = await makeApp(
       files,
       createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
     );
@@ -155,15 +155,16 @@ test("a stranger sees nothing and cannot open the file (404 = null)", () =>
     assert.equal(page.owned.length, 0);
     assert.equal(page.shared.length, 0);
     assert.equal(await app.openFileForViewer(id, "U3"), null, "not-authorized is indistinguishable from not-found");
-  }));
+  }),
+);
 
-test("an org grant surfaces the file to any org member", () =>
+tenantTest("an org grant surfaces the file to any org member", () =>
   inTestTenant(async () => {
     const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
       resolveFiles: (refs) => files.resolveByIds(refs),
     });
-    const app = makeApp(files, acl);
+    const app = await makeApp(files, acl);
     const owner = scopeId("personal", "U1");
     const id = fileArtifactId("orgshare", "out", 0);
     await files.put({
@@ -187,9 +188,10 @@ test("an org grant surfaces the file to any org member", () =>
     const page = await app.listFilesForViewer("U9");
     assert.equal(page.shared.length, 1, "any org member sees an org-granted file");
     assert.ok(await app.openFileForViewer(id, "U9"));
-  }));
+  }),
+);
 
-test("openFileForViewer returns null when the bytes are gone (a backfilled history row)", async () => {
+tenantTest("openFileForViewer returns null when the bytes are gone (a backfilled history row)", async () => {
   const owner = scopeId("personal", "U1");
   const id = "backfill-1";
   const row = {
@@ -212,7 +214,7 @@ test("openFileForViewer returns null when the bytes are gone (a backfilled histo
     get: async () => row,
     open: async () => null,
   } as unknown as FileArtifactStore;
-  const app = makeApp(
+  const app = await makeApp(
     files,
     createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
   );
@@ -220,7 +222,7 @@ test("openFileForViewer returns null when the bytes are gone (a backfilled histo
   assert.equal(await app.openFileForViewer(id, "U1"), null, "owner is authorized but the bytes are unavailable → 404");
 });
 
-test("uploadFileForViewer stores a personal inbound file", () =>
+tenantTest("uploadFileForViewer stores a personal inbound file", () =>
   inTestTenant(async () => {
     const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     const app = makeUploadApp(
@@ -244,9 +246,10 @@ test("uploadFileForViewer stores a personal inbound file", () =>
       [file!.id],
     );
     assert.deepEqual(await drain((await app.openFileForViewer(file!.id, "U1"))!.stream), Buffer.from("hello"));
-  }));
+  }),
+);
 
-test("uploadFileForViewer to a shared context is visible to another context member", () =>
+tenantTest("uploadFileForViewer to a shared context is visible to another context member", () =>
   inTestTenant(async () => {
     const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
@@ -274,9 +277,10 @@ test("uploadFileForViewer to a shared context is visible to another context memb
       ["brief.pdf"],
     );
     assert.deepEqual(await drain((await app.openFileForViewer(file!.id, "U2"))!.stream), PNG);
-  }));
+  }),
+);
 
-test("scoped file listing pages within the requested context", () =>
+tenantTest("scoped file listing pages within the requested context", () =>
   inTestTenant(async () => {
     const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     const app = makeUploadApp(
@@ -301,9 +305,10 @@ test("scoped file listing pages within the requested context", () =>
       [shared!.id],
     );
     assert.equal(page.nextCursor, undefined, "unrelated files do not create a misleading next page");
-  }));
+  }),
+);
 
-test("project files collapse across contributors and turns before paging owned and shared documents", () =>
+tenantTest("project files collapse across contributors and turns before paging owned and shared documents", () =>
   inTestTenant(async () => {
     const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
@@ -356,10 +361,11 @@ test("project files collapse across contributors and turns before paging owned a
     for (const id of ledger) assert.ok(await files.get(id), "deduplication does not delete the artifact ledger");
     const stranger = await app.listFilesForViewer("U3", undefined, channel);
     assert.deepEqual([...stranger.owned, ...stranger.shared], []);
-  }));
+  }),
+);
 
 for (const authors of [["U1"], ["U2"], ["U1", "U2"]]) {
-  test("scope resources drain file pages for " + authors.join(" and "), () =>
+  tenantTest("scope resources drain file pages for " + authors.join(" and "), () =>
     inTestTenant(async () => {
       const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
       const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
@@ -395,7 +401,7 @@ for (const authors of [["U1"], ["U2"], ["U1", "U2"]]) {
   );
 }
 
-test("file grants name one Files record, not its path or another generation", () =>
+tenantTest("file grants name one Files record, not its path or another generation", () =>
   inTestTenant(async () => {
     const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
@@ -436,4 +442,5 @@ test("file grants name one Files record, not its path or another generation", ()
     await files.delete(original.id);
     assert.deepEqual((await app.listFilesForViewer("U2")).shared, []);
     assert.equal(await app.openFileForViewer(replacement.id, "U2"), null);
-  }));
+  }),
+);

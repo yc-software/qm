@@ -1,5 +1,5 @@
 import "./support/auto-fake-sprites.ts";
-import { test, mock, type TestContext } from "node:test";
+import { mock, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { randomUUID } from "node:crypto";
@@ -11,7 +11,7 @@ import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
 
 mock.module("./support/mock-agent.ts", {
   namedExports: {
@@ -51,9 +51,10 @@ const members = ["alice", "bob"].map((id) => ({ id, type: "internal" as const })
 
 async function fixture(t: TestContext) {
   const b = buildApp(testConfig({ signingSecret: SECRET, memoryCapture: "off" }));
+  await inTestTenant(() => b.identity.ready());
   await b.config.hydrate?.();
   await b.identity.refresh();
-  await b.startup();
+  await b.deploymentLayerStore.hydrate();
   await inTestTenant(() =>
     b.app.upsertDirectory(
       ["alice", "bob", "stranger"].map((principalId) => ({
@@ -88,7 +89,6 @@ async function fixture(t: TestContext) {
   t.after(async () => {
     await new Promise<void>((r) => server.close(() => r()));
     inTestTenant(() => b.scheduler.stop());
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   const cap = (actorId: string, scopeId: CapabilityClaims["scopeId"] = "channel:public-room") =>
@@ -151,7 +151,7 @@ async function fixture(t: TestContext) {
     const response = await fetch(base + "/v1/turns", {
       method: "POST",
       headers: {
-        ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+        ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
         "content-type": "application/json",
       },
       body,
@@ -162,86 +162,95 @@ async function fixture(t: TestContext) {
   return { ...b, cap, request, turn, roster, awaitFire };
 }
 
-test("HTTP Open continuity: personal sandbox follows owner into shared channel and back, never another member", async (t) => {
-  const b = await fixture(t);
-  const resource = await inTestTenant(() =>
-    b.sandboxResources.create("alice", "personal:alice", "sprites", "personal-proof"),
-  );
-  const command = (cmd: string) => `!proof ${JSON.stringify({ id: resource.id, command: cmd })}`;
-  const first = await b.turn(command("printf continuity-sentinel > proof.txt; cat proof.txt"), "alice", false);
-  assert.equal(first.http, 200, JSON.stringify(first));
-  assert.equal(first.reply, "continuity-sentinel");
-  assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
-  assert.match((await b.turn(command("cat proof.txt"), "bob")).reply ?? "", /DENIED/);
-  assert.match((await b.turn(command("cat proof.txt"), "stranger")).reply ?? "", /DENIED/);
-  await inTestTenant(() => b.config.setSharingPosture("personal:alice", "isolated"));
-  assert.match((await b.turn(command("cat proof.txt"))).reply ?? "", /DENIED/);
-  assert.equal((await b.turn(command("cat proof.txt"), "alice", false)).reply, "continuity-sentinel");
-  await inTestTenant(() => b.config.clearSharingPosture("personal:alice"));
-  await b.roster(["bob"]);
-  assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
-  const guests = [{ externalId: "alice" }, { externalId: "guest", isExternalGuest: true }];
-  const refused = await b.turn(command("cat proof.txt"), "alice", true, guests);
-  assert.equal(refused.http, 403);
-  assert.equal(refused.status, "refused");
-  assert.equal(refused.reply, undefined);
-});
+tenantTest(
+  "HTTP Open continuity: personal sandbox follows owner into shared channel and back, never another member",
+  async (t) => {
+    const b = await fixture(t);
+    const resource = await inTestTenant(() =>
+      b.sandboxResources.create("alice", "personal:alice", "sprites", "personal-proof"),
+    );
+    const command = (cmd: string) => `!proof ${JSON.stringify({ id: resource.id, command: cmd })}`;
+    const first = await b.turn(command("printf continuity-sentinel > proof.txt; cat proof.txt"), "alice", false);
+    assert.equal(first.http, 200, JSON.stringify(first));
+    assert.equal(first.reply, "continuity-sentinel");
+    assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
+    assert.match((await b.turn(command("cat proof.txt"), "bob")).reply ?? "", /DENIED/);
+    assert.match((await b.turn(command("cat proof.txt"), "stranger")).reply ?? "", /DENIED/);
+    await inTestTenant(() => b.config.setSharingPosture("personal:alice", "isolated"));
+    assert.match((await b.turn(command("cat proof.txt"))).reply ?? "", /DENIED/);
+    assert.equal((await b.turn(command("cat proof.txt"), "alice", false)).reply, "continuity-sentinel");
+    await inTestTenant(() => b.config.clearSharingPosture("personal:alice"));
+    await b.roster(["bob"]);
+    assert.equal((await b.turn(command("cat proof.txt"))).reply, "continuity-sentinel");
+    const guests = [{ externalId: "alice" }, { externalId: "guest", isExternalGuest: true }];
+    const refused = await b.turn(command("cat proof.txt"), "alice", true, guests);
+    assert.equal(refused.http, 403);
+    assert.equal(refused.status, "refused");
+    assert.equal(refused.reply, undefined);
+  },
+);
 
-test("HTTP Open continuity: only the owner or a write grantee edits; grantee edits keep the owner, notify privately, and fire with owner resources", async (t) => {
-  const b = await fixture(t);
-  const resource = await inTestTenant(() =>
-    b.sandboxResources.create("alice", "personal:alice", "sprites", "cron-proof"),
-  );
-  const action = `!proof ${JSON.stringify({ id: resource.id, command: "printf cron-owner-resource" })}`;
-  const owner = await b.cap("alice");
-  const member = await b.cap("bob");
-  const created = await b.request("POST", "/v1/crons", owner, {
-    title: "Continuity proof",
-    schedule: { everyMs: 3600000 },
-    task: action,
-  });
-  assert.equal(created.status, 200, JSON.stringify(created.body));
-  const id = created.body.cron.id as string;
-  assert.equal((await b.request("PATCH", `/v1/crons/${id}`, member, { title: "Unshared edit" })).status, 403);
-  const shared = await b.request("POST", "/v1/share", owner, {
-    type: "cron",
-    id,
-    toScope: "personal:bob",
-    permission: "write",
-  });
-  assert.equal(shared.status, 200, JSON.stringify(shared.body));
-  const edit = await b.request("PATCH", `/v1/crons/${id}`, member, { title: "Member edited proof" });
-  assert.equal(edit.status, 200, JSON.stringify(edit.body));
-  assert.equal((await inTestTenant(() => b.crons.get(id)))?.owner, "alice");
-  const notices = await inTestTenant(() => b.deliveries.pending("principal"));
-  assert.equal(notices.length, 1);
-  assert.equal(notices[0]!.destination.target, "alice");
-  assert.match(notices[0]!.text, /bob.*renamed/);
-  assert.equal(
-    (await b.request("PATCH", `/v1/crons/${id}`, await b.cap("stranger"), { title: "hijacked" })).status,
-    403,
-  );
-  const fired = await b.request("POST", `/v1/crons/${id}/run`, owner, {});
-  assert.equal(fired.status, 200, JSON.stringify(fired.body));
-  const log = await b.awaitFire(id, owner);
-  assert.ok(log?.length, "HTTP scheduler created a fire log");
-  assert.ok(
-    (await inTestTenant(() => b.deliveries.pending("slack"))).some((d) => d.text.includes("cron-owner-resource")),
-    JSON.stringify(log),
-  );
-  assert.equal(
-    (await b.request("PATCH", `/v1/crons/${id}`, await b.cap("alice", "personal:alice"), { title: "Back in personal" }))
-      .status,
-    200,
-  );
-  assert.equal(
-    (await inTestTenant(() => b.deliveries.pending("principal"))).length,
-    1,
-    "owner edits do not notify themselves",
-  );
-});
+tenantTest(
+  "HTTP Open continuity: only the owner or a write grantee edits; grantee edits keep the owner, notify privately, and fire with owner resources",
+  async (t) => {
+    const b = await fixture(t);
+    const resource = await inTestTenant(() =>
+      b.sandboxResources.create("alice", "personal:alice", "sprites", "cron-proof"),
+    );
+    const action = `!proof ${JSON.stringify({ id: resource.id, command: "printf cron-owner-resource" })}`;
+    const owner = await b.cap("alice");
+    const member = await b.cap("bob");
+    const created = await b.request("POST", "/v1/crons", owner, {
+      title: "Continuity proof",
+      schedule: { everyMs: 3600000 },
+      task: action,
+    });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    const id = created.body.cron.id as string;
+    assert.equal((await b.request("PATCH", `/v1/crons/${id}`, member, { title: "Unshared edit" })).status, 403);
+    const shared = await b.request("POST", "/v1/share", owner, {
+      type: "cron",
+      id,
+      toScope: "personal:bob",
+      permission: "write",
+    });
+    assert.equal(shared.status, 200, JSON.stringify(shared.body));
+    const edit = await b.request("PATCH", `/v1/crons/${id}`, member, { title: "Member edited proof" });
+    assert.equal(edit.status, 200, JSON.stringify(edit.body));
+    assert.equal((await inTestTenant(() => b.crons.get(id)))?.owner, "alice");
+    const notices = await inTestTenant(() => b.deliveries.pending("principal"));
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0]!.destination.target, "alice");
+    assert.match(notices[0]!.text, /bob.*renamed/);
+    assert.equal(
+      (await b.request("PATCH", `/v1/crons/${id}`, await b.cap("stranger"), { title: "hijacked" })).status,
+      403,
+    );
+    const fired = await b.request("POST", `/v1/crons/${id}/run`, owner, {});
+    assert.equal(fired.status, 200, JSON.stringify(fired.body));
+    const log = await b.awaitFire(id, owner);
+    assert.ok(log?.length, "HTTP scheduler created a fire log");
+    assert.ok(
+      (await inTestTenant(() => b.deliveries.pending("slack"))).some((d) => d.text.includes("cron-owner-resource")),
+      JSON.stringify(log),
+    );
+    assert.equal(
+      (
+        await b.request("PATCH", `/v1/crons/${id}`, await b.cap("alice", "personal:alice"), {
+          title: "Back in personal",
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (await inTestTenant(() => b.deliveries.pending("principal"))).length,
+      1,
+      "owner edits do not notify themselves",
+    );
+  },
+);
 
-test("HTTP Open shared cron isolates synthetic owner credential and revokes resource access", async (t) => {
+tenantTest("HTTP Open shared cron isolates synthetic owner credential and revokes resource access", async (t) => {
   const b = await fixture(t);
   const keychain = b.keychain;
   assert.ok(keychain);
@@ -285,98 +294,104 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
 
 for (const isPrivate of [false, true]) {
   for (const veto of ["org:default-org", "personal:alice", "channel:public-room"]) {
-    test(`HTTP Open cron opt-out stops owner credentials before materialization (${isPrivate ? "private" : "public"}, ${veto})`, async (t) => {
-      const b = await fixture(t);
-      const keychain = b.keychain;
-      assert.ok(keychain);
-      await inTestTenant(() =>
-        b.directory.replaceChannels(
-          [{ channelId: "public-room", name: "public-room", isPrivate }],
-          ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
-        ),
-      );
-      const credential = await inTestTenant(() =>
-        keychain.save({
-          ownerId: "alice",
-          service: "continuity-veto",
-          envKey: "CONTINUITY_VETO_TOKEN",
-          secret: "synthetic-veto-sentinel",
-        }),
-      );
-      const response = await b.request("POST", "/v1/crons", await b.cap("alice"), {
-        title: "Opt-out proof",
-        schedule: { everyMs: 3600000 },
-        task: `!proof ${JSON.stringify({ credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_VETO_TOKEN" = "synthetic-veto-sentinel" && printf veto-credential-present' })}`,
-      });
-      assert.equal(response.status, 200, JSON.stringify(response.body));
-      const id = response.body.cron.id;
-      const initial = await inTestTenant(() => b.scheduler.runNow(id));
-      assert.equal(initial.started, true);
-      if (initial.started) await initial.settled;
-      assert.ok(
-        (await inTestTenant(() => b.deliveries.pending("slack"))).some((d) =>
-          d.text.includes("veto-credential-present"),
-        ),
-      );
-      const original = keychain.materializeOwnById.bind(keychain);
-      let materializations = 0;
-      keychain.materializeOwnById = async (...args: Parameters<typeof original>) => {
-        materializations++;
-        return original(...args);
-      };
-      await inTestTenant(() => b.config.setSharingPosture(veto, "isolated"));
-      const revoked = await inTestTenant(() => b.scheduler.runNow(id));
-      if (revoked.started) await revoked.settled;
-      assert.equal(materializations, 0);
-      assert.equal(
-        (await inTestTenant(() => b.deliveries.pending("slack"))).filter((d) =>
-          d.text.includes("veto-credential-present"),
-        ).length,
-        1,
-      );
-      assert.equal((await b.turn('!run printf "%s" "${CONTINUITY_VETO_TOKEN-unset}"', "bob")).reply, "unset");
-    });
+    tenantTest(
+      `HTTP Open cron opt-out stops owner credentials before materialization (${isPrivate ? "private" : "public"}, ${veto})`,
+      async (t) => {
+        const b = await fixture(t);
+        const keychain = b.keychain;
+        assert.ok(keychain);
+        await inTestTenant(() =>
+          b.directory.replaceChannels(
+            [{ channelId: "public-room", name: "public-room", isPrivate }],
+            ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
+          ),
+        );
+        const credential = await inTestTenant(() =>
+          keychain.save({
+            ownerId: "alice",
+            service: "continuity-veto",
+            envKey: "CONTINUITY_VETO_TOKEN",
+            secret: "synthetic-veto-sentinel",
+          }),
+        );
+        const response = await b.request("POST", "/v1/crons", await b.cap("alice"), {
+          title: "Opt-out proof",
+          schedule: { everyMs: 3600000 },
+          task: `!proof ${JSON.stringify({ credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_VETO_TOKEN" = "synthetic-veto-sentinel" && printf veto-credential-present' })}`,
+        });
+        assert.equal(response.status, 200, JSON.stringify(response.body));
+        const id = response.body.cron.id;
+        const initial = await inTestTenant(() => b.scheduler.runNow(id));
+        assert.equal(initial.started, true);
+        if (initial.started) await initial.settled;
+        assert.ok(
+          (await inTestTenant(() => b.deliveries.pending("slack"))).some((d) =>
+            d.text.includes("veto-credential-present"),
+          ),
+        );
+        const original = keychain.materializeOwnById.bind(keychain);
+        let materializations = 0;
+        keychain.materializeOwnById = async (...args: Parameters<typeof original>) => {
+          materializations++;
+          return original(...args);
+        };
+        await inTestTenant(() => b.config.setSharingPosture(veto, "isolated"));
+        const revoked = await inTestTenant(() => b.scheduler.runNow(id));
+        if (revoked.started) await revoked.settled;
+        assert.equal(materializations, 0);
+        assert.equal(
+          (await inTestTenant(() => b.deliveries.pending("slack"))).filter((d) =>
+            d.text.includes("veto-credential-present"),
+          ).length,
+          1,
+        );
+        assert.equal((await b.turn('!run printf "%s" "${CONTINUITY_VETO_TOKEN-unset}"', "bob")).reply, "unset");
+      },
+    );
   }
 }
 
-test("HTTP private channel cron runs without its owner's keychain once the conversation isn't Open", async (t) => {
-  const b = await fixture(t);
-  const keychain = b.keychain;
-  assert.ok(keychain);
-  await inTestTenant(() =>
-    b.directory.replaceChannels(
-      [{ channelId: "public-room", name: "private-room", isPrivate: true }],
-      ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
-    ),
-  );
-  await inTestTenant(() => b.config.setSharingPosture("org:default-org", "isolated"));
-  const credential = await inTestTenant(() =>
-    keychain.save({
-      ownerId: "alice",
-      service: "continuity-isolated",
-      envKey: "CONTINUITY_ISOLATED_TOKEN",
-      secret: "synthetic-isolated-sentinel",
-    }),
-  );
-  const cron = await inTestTenant(() =>
-    b.crons.create({
-      owner: "alice",
-      createdBy: "alice",
-      ownerScopeId: "channel:public-room",
-      schedule: { everyMs: 3600000 },
-      action: `!proof ${JSON.stringify({ credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_ISOLATED_TOKEN" = "synthetic-isolated-sentinel" && printf isolated-credential-present' })}`,
-      destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },
-    }),
-  );
-  const fired = await inTestTenant(() => b.scheduler.runNow(cron.id));
-  assert.equal(fired.started, true);
-  if (fired.started) await fired.settled;
-  const { runs } = await inTestTenant(() => b.crons.listFires(cron.id));
-  assert.equal(runs.at(-1)?.status, "ok", "the fire still runs");
-  assert.ok(
-    !(await inTestTenant(() => b.deliveries.pending("slack"))).some((d) =>
-      d.text.includes("isolated-credential-present"),
-    ),
-  );
-  assert.equal((await inTestTenant(() => b.crons.get(cron.id)))?.enabled, true);
-});
+tenantTest(
+  "HTTP private channel cron runs without its owner's keychain once the conversation isn't Open",
+  async (t) => {
+    const b = await fixture(t);
+    const keychain = b.keychain;
+    assert.ok(keychain);
+    await inTestTenant(() =>
+      b.directory.replaceChannels(
+        [{ channelId: "public-room", name: "private-room", isPrivate: true }],
+        ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
+      ),
+    );
+    await inTestTenant(() => b.config.setSharingPosture("org:default-org", "isolated"));
+    const credential = await inTestTenant(() =>
+      keychain.save({
+        ownerId: "alice",
+        service: "continuity-isolated",
+        envKey: "CONTINUITY_ISOLATED_TOKEN",
+        secret: "synthetic-isolated-sentinel",
+      }),
+    );
+    const cron = await inTestTenant(() =>
+      b.crons.create({
+        owner: "alice",
+        createdBy: "alice",
+        ownerScopeId: "channel:public-room",
+        schedule: { everyMs: 3600000 },
+        action: `!proof ${JSON.stringify({ credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_ISOLATED_TOKEN" = "synthetic-isolated-sentinel" && printf isolated-credential-present' })}`,
+        destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },
+      }),
+    );
+    const fired = await inTestTenant(() => b.scheduler.runNow(cron.id));
+    assert.equal(fired.started, true);
+    if (fired.started) await fired.settled;
+    const { runs } = await inTestTenant(() => b.crons.listFires(cron.id));
+    assert.equal(runs.at(-1)?.status, "ok", "the fire still runs");
+    assert.ok(
+      !(await inTestTenant(() => b.deliveries.pending("slack"))).some((d) =>
+        d.text.includes("isolated-credential-present"),
+      ),
+    );
+    assert.equal((await inTestTenant(() => b.crons.get(cron.id)))?.enabled, true);
+  },
+);

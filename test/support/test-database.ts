@@ -10,7 +10,9 @@ import { applyPgMigrations, createPgPool, registeredPgMigrations, type PgPool } 
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
+import { createIdentityService, type IdentityService } from "../../src/identity/identity-service.ts";
 import { useOwnerDatabase } from "../../src/tenants/claim.ts";
+import { inTestTenant } from "./test-tenants.ts";
 
 function baseDatabaseUrl(variable: "DATABASE_URL" | "DATABASE_OWNER_URL" = "DATABASE_URL"): URL {
   const base = process.env[variable];
@@ -170,4 +172,10 @@ export function testDeployBackings(
     pg: maps.pool,
     ...backings,
   };
+}
+
+export async function testIdentity(): Promise<IdentityService> {
+  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  await inTestTenant(() => identity.ready());
+  return identity;
 }

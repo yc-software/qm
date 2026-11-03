@@ -30,8 +30,8 @@ export function crossTenantLoop<A extends unknown[], R>(body: (...args: A) => R)
   return (...args) => withoutTenant(() => body(...args));
 }
 
-export function inTenantOf<T>(tenantId: string | undefined, fn: () => T): T {
-  return tenantId === undefined ? withoutTenant(fn) : withTenant(tenantId, fn);
+export async function inTenantOf<T>(tenantId: string | undefined, fn: () => T): Promise<Awaited<T>> {
+  return tenantId === undefined ? await withoutTenant(fn) : withTenant(tenantId, fn);
 }
 
 export function rowTenant(row: Record<string, unknown>): { tenantId?: string } {

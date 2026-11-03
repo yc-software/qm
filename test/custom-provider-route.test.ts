@@ -5,14 +5,14 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, afterEach } from "node:test";
+import { afterEach } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { testTenantHeaders } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -21,7 +21,7 @@ const ADMIN = {
 };
 const USER = { "content-type": "application/json", "x-admin-actor": "bob@default-org", ...testTenantHeaders() };
 
-afterEach(() => setCustomProviders([]));
+afterEach(() => inTestTenant(() => setCustomProviders([])));
 
 function start(modelCredentialFetch: typeof fetch = async () => new Response(null, { status: 200 })): {
   base: string;
@@ -57,7 +57,7 @@ const BODY = {
   apiKey: "sk-acme-secret",
 };
 
-test("custom provider lifecycle: register, list, resolve, delete — admin only, no key leakage", async () => {
+tenantTest("custom provider lifecycle: register, list, resolve, delete — admin only, no key leakage", async () => {
   const validated: string[] = [];
   const srv = start(async (input) => {
     validated.push(String(input));
@@ -102,7 +102,7 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
   }
 });
 
-test("a rejected key blocks registration unless validate:false", async () => {
+tenantTest("a rejected key blocks registration unless validate:false", async () => {
   const srv = start(async () => new Response(null, { status: 401 }));
   try {
     const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
@@ -124,7 +124,7 @@ test("a rejected key blocks registration unless validate:false", async () => {
   }
 });
 
-test("bad specs are refused with a reason", async () => {
+tenantTest("bad specs are refused with a reason", async () => {
   const srv = start();
   try {
     for (const [patch, reason] of [

@@ -127,22 +127,16 @@ test("loop bodies and sweeps run unbound even when started under a tenant", asyn
   const seen: Array<string | undefined> = [];
   await withTenant(A, () => crossTenantLoop(async () => void seen.push(boundTenant()))());
   const sweeper = createSweeper(() => seen.push(boundTenant()), 60_000, { immediate: true });
-  withTenant(A, () => sweeper.start());
+  await withTenant(A, () => sweeper.start());
   await sweeper.stop();
   assert.deepEqual(seen, [undefined, undefined]);
 });
 
-test("a claimed row binds its own tenant, and a row without one runs unbound", () => {
+test("a claimed row binds its own tenant, and a row without one runs unbound", async () => {
   assert.deepEqual(rowTenant({ tenant_id: A }), { tenantId: A });
   assert.deepEqual(rowTenant({ tenant_id: null }), {});
-  assert.equal(
-    withTenant(B, () => inTenantOf(A, boundTenant)),
-    A,
-  );
-  assert.equal(
-    withTenant(B, () => inTenantOf(undefined, boundTenant)),
-    undefined,
-  );
+  assert.equal(await withTenant(B, () => inTenantOf(A, boundTenant)), A);
+  assert.equal(await withTenant(B, () => inTenantOf(undefined, boundTenant)), undefined);
 });
 
 test("one worker claims across tenants and runs each turn under its run's tenant", { skip }, async () => {
@@ -159,7 +153,7 @@ test("one worker claims across tenants and runs each turn under its run's tenant
         return { status: "silent" as const };
       },
     } as unknown as Orchestrator;
-    const worker = withTenant(A, () => createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 }));
+    const worker = await withTenant(A, () => createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 }));
     withTenant(B, () => worker.start());
     for (let i = 0; i < 400 && ran.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 5));
     await worker.stop(1);
@@ -339,6 +333,18 @@ test("pruning ended cron fires keeps the newest per cron within each tenant", { 
     );
   } finally {
     await raw.end();
+  }
+});
+
+test("work a cross-tenant claim binds to a cold tenant sees that tenant's roster loaded", { skip }, async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cold-claim-")), workers: 0 }));
+  try {
+    const { rows } = await claimAcrossTenants("SELECT id AS tenant_id FROM tenants WHERE id = $1", [B]);
+    assert.equal(rows.length, 1);
+    const principal = await inTenantOf(rowTenant(rows[0]!).tenantId, () => built.identity.classify("U1"));
+    assert.equal(principal.type, "internal");
+  } finally {
+    await built.runtime.stop();
   }
 });
 

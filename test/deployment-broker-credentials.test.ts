@@ -1,7 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,7 +24,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "deployment-broker-secret".repeat(3);
 const ADMIN = {
@@ -53,7 +52,7 @@ const envWith = (list: unknown, extra: Record<string, string> = {}) => ({
 });
 const deploymentCreds = (): DeploymentBrokerCredential[] => deploymentBrokerCredentialsFromEnv(envWith([entry]));
 
-test("BROKER_CREDENTIALS parses each entry and reads the secret from the named env var", () => {
+tenantTest("BROKER_CREDENTIALS parses each entry and reads the secret from the named env var", () => {
   assert.deepEqual(deploymentBrokerCredentialsFromEnv({}), []);
   assert.deepEqual(deploymentCreds(), [
     {
@@ -73,7 +72,7 @@ test("BROKER_CREDENTIALS parses each entry and reads the secret from the named e
   assert.deepEqual(minimal, [{ slug: "news", name: "news", secret: KEY, host: "news.example.com" }]);
 });
 
-test("BROKER_CREDENTIALS fails fast on any malformed entry without echoing secrets", () => {
+tenantTest("BROKER_CREDENTIALS fails fast on any malformed entry without echoing secrets", () => {
   const cases: Array<[unknown, RegExp, Record<string, string>?]> = [
     [{ nope: 1 }, /must be a JSON array/],
     [["x"], /must be an object/],
@@ -161,38 +160,41 @@ function memoryStore(): ServiceCredentialStore & { writes: string[] } {
   };
 }
 
-test("deployment credentials win lookups in their org and reserve their slugs against stored writes", async () => {
-  const stored = memoryStore();
-  const store = withDeploymentCredentials(stored, ORG, deploymentCreds());
+tenantTest(
+  "deployment credentials win lookups in their org and reserve their slugs against stored writes",
+  async () => {
+    const stored = memoryStore();
+    const store = withDeploymentCredentials(stored, ORG, deploymentCreds());
 
-  const listed = await store.listServiceCredentials(ORG);
-  assert.deepEqual(
-    listed.map((c) => [c.slug, c.source, c.host]),
-    [
-      ["search", "deployment", "api.search.example"],
-      ["stored", undefined, "db.example.com"],
-    ],
-  );
-  assert.doesNotMatch(JSON.stringify(listed), new RegExp(KEY));
-  assert.equal(listed[0]!.deployments, false);
-  assert.equal((await store.getServiceCredentialSecret(ORG, "search"))?.secret, KEY);
-  assert.equal((await store.getServiceCredentialSecret(ORG, "search"))?.source, "deployment");
-  assert.equal((await store.getServiceCredentialSecret(ORG, "stored"))?.source, undefined);
-  assert.equal(nonDeploymentCredential(await store.getServiceCredentialSecret(ORG, "search")), null);
-  assert.equal(nonDeploymentCredential(await store.getServiceCredentialSecret(ORG, "stored"))?.secret, "db-secret");
-  assert.equal((await store.getServiceCredentialSecret(ORG, "stored"))?.secret, "db-secret");
-  assert.equal((await store.getServiceCredentialSecret("org:other", "search"))?.secret, "db-secret");
-  assert.equal((await store.listServiceCredentials("org:other")).length, 2);
+    const listed = await store.listServiceCredentials(ORG);
+    assert.deepEqual(
+      listed.map((c) => [c.slug, c.source, c.host]),
+      [
+        ["search", "deployment", "api.search.example"],
+        ["stored", undefined, "db.example.com"],
+      ],
+    );
+    assert.doesNotMatch(JSON.stringify(listed), new RegExp(KEY));
+    assert.equal(listed[0]!.deployments, false);
+    assert.equal((await store.getServiceCredentialSecret(ORG, "search"))?.secret, KEY);
+    assert.equal((await store.getServiceCredentialSecret(ORG, "search"))?.source, "deployment");
+    assert.equal((await store.getServiceCredentialSecret(ORG, "stored"))?.source, undefined);
+    assert.equal(nonDeploymentCredential(await store.getServiceCredentialSecret(ORG, "search")), null);
+    assert.equal(nonDeploymentCredential(await store.getServiceCredentialSecret(ORG, "stored"))?.secret, "db-secret");
+    assert.equal((await store.getServiceCredentialSecret(ORG, "stored"))?.secret, "db-secret");
+    assert.equal((await store.getServiceCredentialSecret("org:other", "search"))?.secret, "db-secret");
+    assert.equal((await store.listServiceCredentials("org:other")).length, 2);
 
-  const input = { slug: "search", name: "x", host: "evil.example.com", secret: "s" };
-  await assert.rejects(store.setServiceCredential(ORG, input), /supplied by this deployment/);
-  await assert.rejects(store.setServiceCredentialIfAbsent(ORG, input), /supplied by this deployment/);
-  await assert.rejects(store.setServiceCredentialIfCurrent(ORG, input, 1), /supplied by this deployment/);
-  await assert.rejects(store.deleteServiceCredential(ORG, "search"), /supplied by this deployment/);
-  await assert.rejects(store.deleteServiceCredentialIfCurrent(ORG, "search", 1), /supplied by this deployment/);
-  await store.setServiceCredential(ORG, { ...input, slug: "stored" });
-  assert.deepEqual(stored.writes, ["set:stored"]);
-});
+    const input = { slug: "search", name: "x", host: "evil.example.com", secret: "s" };
+    await assert.rejects(store.setServiceCredential(ORG, input), /supplied by this deployment/);
+    await assert.rejects(store.setServiceCredentialIfAbsent(ORG, input), /supplied by this deployment/);
+    await assert.rejects(store.setServiceCredentialIfCurrent(ORG, input, 1), /supplied by this deployment/);
+    await assert.rejects(store.deleteServiceCredential(ORG, "search"), /supplied by this deployment/);
+    await assert.rejects(store.deleteServiceCredentialIfCurrent(ORG, "search", 1), /supplied by this deployment/);
+    await store.setServiceCredential(ORG, { ...input, slug: "stored" });
+    assert.deepEqual(stored.writes, ["set:stored"]);
+  },
+);
 
 function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploymentCreds()) {
   const built = buildApp(
@@ -223,39 +225,42 @@ function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploy
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-test("admin settings show a deployment credential read-only and refuse to edit, delete or shadow it", async () => {
-  const srv = start(async () => ({ status: 200, text: async () => "{}" }), true);
-  try {
-    const cfg = (await (await fetch(`${srv.base}/v1/admin/scopes/${ORG}`, { headers: ADMIN })).json()) as {
-      serviceCredentials: Array<{ slug: string; source?: string; hasSecret: boolean; maxRequestsPerDay?: number }>;
-    };
-    const search = cfg.serviceCredentials.find((c) => c.slug === "search");
-    assert.equal(search?.source, "deployment");
-    assert.equal(search?.hasSecret, true);
-    assert.equal(search?.maxRequestsPerDay, 2);
-    assert.doesNotMatch(JSON.stringify(cfg), new RegExp(KEY));
+tenantTest(
+  "admin settings show a deployment credential read-only and refuse to edit, delete or shadow it",
+  async () => {
+    const srv = start(async () => ({ status: 200, text: async () => "{}" }), true);
+    try {
+      const cfg = (await (await fetch(`${srv.base}/v1/admin/scopes/${ORG}`, { headers: ADMIN })).json()) as {
+        serviceCredentials: Array<{ slug: string; source?: string; hasSecret: boolean; maxRequestsPerDay?: number }>;
+      };
+      const search = cfg.serviceCredentials.find((c) => c.slug === "search");
+      assert.equal(search?.source, "deployment");
+      assert.equal(search?.hasSecret, true);
+      assert.equal(search?.maxRequestsPerDay, 2);
+      assert.doesNotMatch(JSON.stringify(cfg), new RegExp(KEY));
 
-    for (const body of [
-      { slug: "search", name: "Mine", host: "evil.example.com", secret: "s" },
-      { slug: "search", name: "Mine", host: "api.search.example", expectedUpdatedAt: 0 },
-      { slug: "search", delete: true, expectedUpdatedAt: 0 },
-    ]) {
-      const res = await fetch(`${srv.base}/v1/admin/scopes/${ORG}/service-credentials`, {
-        method: "PUT",
-        headers: ADMIN,
-        body: JSON.stringify(body),
-      });
-      assert.equal(res.status, 409);
-      const json = (await res.json()) as { error?: string; message?: string };
-      assert.equal(json.error, "deployment_credential");
-      assert.match(String(json.message), /supplied by this deployment/);
+      for (const body of [
+        { slug: "search", name: "Mine", host: "evil.example.com", secret: "s" },
+        { slug: "search", name: "Mine", host: "api.search.example", expectedUpdatedAt: 0 },
+        { slug: "search", delete: true, expectedUpdatedAt: 0 },
+      ]) {
+        const res = await fetch(`${srv.base}/v1/admin/scopes/${ORG}/service-credentials`, {
+          method: "PUT",
+          headers: ADMIN,
+          body: JSON.stringify(body),
+        });
+        assert.equal(res.status, 409);
+        const json = (await res.json()) as { error?: string; message?: string };
+        assert.equal(json.error, "deployment_credential");
+        assert.match(String(json.message), /supplied by this deployment/);
+      }
+    } finally {
+      await srv.close();
     }
-  } finally {
-    await srv.close();
-  }
-});
+  },
+);
 
-test("the broker serves a deployment credential with its pins, injection, usage log and daily cap", async () => {
+tenantTest("the broker serves a deployment credential with its pins, injection, usage log and daily cap", async () => {
   const calls: Array<{ url: string; method: string; headers: Record<string, string> }> = [];
   const srv = start(async (url, init) => {
     calls.push({ url, method: init.method, headers: init.headers });
@@ -308,7 +313,7 @@ const dm = (text: string): TurnRequest => ({
   text,
 });
 
-test("org members' agents get a deployment credential by broker only, as if granted org-wide", async () => {
+tenantTest("org members' agents get a deployment credential by broker only, as if granted org-wide", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "deploy-broker-stamp-")),
@@ -335,7 +340,7 @@ test("org members' agents get a deployment credential by broker only, as if gran
   assert.doesNotMatch(JSON.stringify(executed), new RegExp(KEY));
 });
 
-test("a deployment credential cannot back a decision provider", async () => {
+tenantTest("a deployment credential cannot back a decision provider", async () => {
   const saved: unknown[] = [];
   const serviceCreds = withDeploymentCredentials(memoryStore(), ORG, deploymentCreds());
   const ctx = (body: unknown) =>
@@ -362,7 +367,7 @@ test("a deployment credential cannot back a decision provider", async () => {
   assert.deepEqual(listing.credentials, ["stored"]);
 });
 
-test("the broker adds a deployment credential's fixed headers, which callers cannot override", async () => {
+tenantTest("the broker adds a deployment credential's fixed headers, which callers cannot override", async () => {
   const pinned = {
     ...entry,
     slug: "versioned",

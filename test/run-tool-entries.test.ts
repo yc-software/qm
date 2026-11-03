@@ -35,6 +35,7 @@ async function settled(built: ReturnType<typeof buildApp>, runId: string) {
 
 test("a run's tool entries are read from the session, bounded by its turn and its viewer", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-tools-")) }));
+  await inTestTenant(() => built.identity.ready());
   built.runtime.start();
   try {
     await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
@@ -60,6 +61,7 @@ test("a run's tool entries are read from the session, bounded by its turn and it
 
 test("a run's tool entries include rounds after a mid-run goal prompt and stop at the next run", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-tools-goal-")) }));
+  await inTestTenant(() => built.identity.ready());
   built.runtime.start();
   try {
     await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
@@ -113,6 +115,7 @@ test("a run's tool entries include rounds after a mid-run goal prompt and stop a
 
 test("each tool entry nudges the run stream once it is durable", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-tools-nudge-")) }));
+  await inTestTenant(() => built.identity.ready());
   const log: string[] = [];
   const append = built.sessions.append.bind(built.sessions);
   built.sessions.append = async (writer, entry) => {
@@ -123,7 +126,7 @@ test("each tool entry nudges the run stream once it is durable", async () => {
   try {
     await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
     const turn = await inTestTenant(() => built.app.turn(dm("!run echo hi")));
-    const unsubscribe = inTestTenant(() =>
+    const unsubscribe = await inTestTenant(() =>
       built.app.subscribeRun(turn.runId!, (event) => {
         if (event.kind === "refresh") log.push("refresh");
       }),

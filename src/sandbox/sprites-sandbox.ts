@@ -123,8 +123,8 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   snapshots?: HomeSnapshotStore;
   initializationStore: DurableMap<{ pending: boolean }>;
   advisoryLock: AdvisoryLock;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   connectorSdk?: () => Promise<ConnectorSdkBundle>;
   layerToolFiles?: () => readonly LayerInstallFile[];
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
@@ -355,9 +355,9 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         label: "sprites",
         homeDir: HOME_DIR,
         homeTarPath: HOME_TAR,
-        prunePaths: [
+        prunePaths: () => [
           ...HOME_SNAPSHOT_PRUNE,
-          ...ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => `./${rel}`),
+          ...ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => `./${rel}`),
         ],
         store: opts.snapshots,
         io: {
@@ -433,7 +433,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     prefix,
     homeDir: HOME_DIR,
     defaultTimeoutSec,
-    credentialPaths: opts.credentialPaths ?? [],
+    credentialPaths: () => opts.credentialPaths?.() ?? [],
     installLayerTools: withConnectorSdk(
       HOME_DIR,
       createLayerToolInstaller(opts.layerToolFiles ?? (() => [])),
@@ -497,10 +497,10 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       os: "Ubuntu (25.10 for newly created sprites; existing sprites keep the release they were created with) — Fly Sprite microVM: the whole disk persists and idle sprites sleep; background processes are held awake while they run but do not survive a cold wake or restart",
       runtimes: ["Node 24", "Python 3"],
       get tools() {
-        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
+        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools?.() ?? [])]);
       },
       get notInstalled() {
-        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools?.() ?? []);
       },
       cpus: SPRITE_CPUS,
       ...(opts.memoryMb !== undefined ? { memoryMb: opts.memoryMb } : {}),
@@ -532,7 +532,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: HOME_DIR,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => rel),
   });
 
   async function startProcess(

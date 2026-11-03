@@ -1,6 +1,6 @@
 import "./support/auto-fake-sprites.ts";
-import { test, type TestContext } from "node:test";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { type TestContext } from "node:test";
+import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -8,16 +8,17 @@ import type { TurnRequest } from "../src/types.ts";
 
 async function fixture(t: TestContext) {
   const built = buildApp(testConfig());
-  await built.startup();
+  await built.deploymentLayerStore.hydrate();
   await inTestTenant(async () => {
     for (const actor of ["U1", "U2"]) {
       const computer = await built.sandboxResources.create(actor, `personal:${actor}`, "sprites", "default");
       await built.sandboxResources.setDefault(actor, `personal:${actor}`, computer.id);
     }
   });
+
+  await inTestTenant(() => built.identity.ready());
   t.after(async () => {
     built.scheduler.stop();
-    built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
   let provisions = 0;
@@ -57,7 +58,7 @@ async function fixture(t: TestContext) {
 }
 
 function fixtureTest(name: string, fn: (b: Awaited<ReturnType<typeof fixture>>) => Promise<void>): void {
-  test(name, async (t) => {
+  tenantTest(name, async (t) => {
     const b = await fixture(t);
     await inTestTenant(() => fn(b));
   });
@@ -118,112 +119,115 @@ fixtureTest("published source follows scope shadowing and preserves sandbox-auth
   assert.match(await b.turn("!skill source-helper"), /\nORG_BODY$/);
 });
 
-test("a body read avoids sandbox work and a file request materializes that skill under the skills root", async () => {
-  const { createTurnSandboxes } = await import("../src/core/orchestrator/sandboxes.ts");
-  const { SandboxAccessError } = await import("../src/sandbox/sandbox-resources.ts");
-  type TurnSandboxContext = import("../src/core/orchestrator/sandboxes.ts").TurnSandboxContext;
-  type SkillResolution = import("../src/skills/skill-store.ts").SkillResolution;
-  const files = new Map<string, string>();
-  let provisions = 0;
-  const sandboxIds: Array<string | undefined> = [];
-  let resolution = {
-    skill: {
-      id: "s",
-      version: 1,
+tenantTest(
+  "a body read avoids sandbox work and a file request materializes that skill under the skills root",
+  async () => {
+    const { createTurnSandboxes } = await import("../src/core/orchestrator/sandboxes.ts");
+    const { SandboxAccessError } = await import("../src/sandbox/sandbox-resources.ts");
+    type TurnSandboxContext = import("../src/core/orchestrator/sandboxes.ts").TurnSandboxContext;
+    type SkillResolution = import("../src/skills/skill-store.ts").SkillResolution;
+    const files = new Map<string, string>();
+    let provisions = 0;
+    const sandboxIds: Array<string | undefined> = [];
+    let resolution = {
+      skill: {
+        id: "s",
+        version: 1,
+        scopeId: "personal:U1",
+        manifest: {
+          name: "source-helper",
+          body: "BODY",
+          files: [{ path: "references/example.txt", content: "v1" }],
+        },
+      },
+      shadowed: [],
+    } as unknown as SkillResolution;
+    const unrelated = structuredClone(resolution);
+    unrelated.skill!.id = "other";
+    unrelated.skill!.manifest.name = "unrelated";
+    unrelated.skill!.pack = { packId: "other-pack", commit: "c", upstreamName: "unrelated" };
+    const visible = [resolution, unrelated];
+    const handle = { id: "box", rootDir: "/workspace" };
+    const turn = createTurnSandboxes({
+      deps: {
+        skills: { recordUse: async () => {} },
+        sandboxResources: {
+          access: async (_actor: string, id: string) => {
+            if (id !== "resource-1" && id !== "box") throw new SandboxAccessError("sandbox not found");
+            return { id, ownerScopeId: "personal:U1" };
+          },
+        },
+        sandbox: {
+          provision: async (_layers: unknown, options?: { sandboxId?: string }) => {
+            sandboxIds.push(options?.sandboxId);
+            provisions++;
+            return { ...handle, id: options?.sandboxId ?? handle.id };
+          },
+          listDir: async () => [],
+          removeDir: async () => {},
+          readFile: async (_handle: unknown, path: string) => files.get(path) ?? null,
+          writeFile: async (_handle: unknown, path: string, content: string) => {
+            files.set(path, content);
+          },
+        },
+      },
+      input: { origin: { kind: "human" } },
+      actor: { id: "U1" },
+      session: { id: "s" },
+      resolution: { layers: [{ scopeId: "personal:U1", mountPath: "", mode: "rw" }] },
       scopeId: "personal:U1",
-      manifest: {
-        name: "source-helper",
-        body: "BODY",
-        files: [{ path: "references/example.txt", content: "v1" }],
-      },
-    },
-    shadowed: [],
-  } as unknown as SkillResolution;
-  const unrelated = structuredClone(resolution);
-  unrelated.skill!.id = "other";
-  unrelated.skill!.manifest.name = "unrelated";
-  unrelated.skill!.pack = { packId: "other-pack", commit: "c", upstreamName: "unrelated" };
-  const visible = [resolution, unrelated];
-  const handle = { id: "box", rootDir: "/workspace" };
-  const turn = createTurnSandboxes({
-    deps: {
-      skills: { recordUse: async () => {} },
-      sandboxResources: {
-        access: async (_actor: string, id: string) => {
-          if (id !== "resource-1" && id !== "box") throw new SandboxAccessError("sandbox not found");
-          return { id, ownerScopeId: "personal:U1" };
-        },
-      },
-      sandbox: {
-        provision: async (_layers: unknown, options?: { sandboxId?: string }) => {
-          sandboxIds.push(options?.sandboxId);
-          provisions++;
-          return { ...handle, id: options?.sandboxId ?? handle.id };
-        },
-        listDir: async () => [],
-        removeDir: async () => {},
-        readFile: async (_handle: unknown, path: string) => files.get(path) ?? null,
-        writeFile: async (_handle: unknown, path: string, content: string) => {
-          files.set(path, content);
-        },
-      },
-    },
-    input: { origin: { kind: "human" } },
-    actor: { id: "U1" },
-    session: { id: "s" },
-    resolution: { layers: [{ scopeId: "personal:U1", mountPath: "", mode: "rw" }] },
-    scopeId: "personal:U1",
-    memoryScopeId: "personal:U1",
-    turnSessionDir: "turn/s",
-    turnFilesDir: "turn/s/t",
-    connectorEnv: {},
-    visibleSkillsForTurn: async () => visible,
-    perf: { credsMs: 0 },
-  } as unknown as TurnSandboxContext);
-  const bodyOnly = structuredClone(unrelated);
-  bodyOnly.skill!.id = "body-only";
-  bodyOnly.skill!.manifest.name = "body-only";
-  bodyOnly.skill!.manifest.files = [];
-  delete bodyOnly.skill!.pack;
-  visible.push(bodyOnly);
-  assert.deepEqual(await turn.useSkill("body-only", "SKILL.md"), { content: "BODY", sourceScopeId: "personal:U1" });
-  await assert.rejects(turn.useSkill("source-helper", "SKILL.md", ""), /non-empty/);
-  await assert.rejects(turn.useSkill("source-helper", "SKILL.md", "missing"), /sandbox not found/);
-  assert.equal(provisions, 0);
-  await turn.provision();
-  assert.equal(provisions, 1);
-  assert.equal(files.size, 0);
-  resolution = structuredClone(resolution);
-  resolution.skill!.manifest.files![0]!.content = "v2";
-  visible[0] = resolution;
-  const loaded = await turn.useSkill("source-helper", "references/example.txt");
-  assert.equal(loaded.content, "v2");
-  assert.match(loaded.dir!, /^\/workspace\/\.agent-skills\/s\/[a-f0-9]{16}\/source-helper$/);
-  const root = loaded.dir!.slice("/workspace/".length, -"/source-helper".length);
-  assert.equal(provisions, 1);
-  assert.equal(files.get(`${root}/source-helper/references/example.txt`), "v2");
-  files.set(`${root}/source-helper/references/example.txt`, "local edit");
-  assert.equal((await turn.useSkill("source-helper", "SKILL.md")).dir, loaded.dir);
-  assert.equal(files.get(`${root}/source-helper/references/example.txt`), "local edit");
-  await turn.useSkill("source-helper", "SKILL.md", "box");
-  assert.equal(files.get(`${root}/source-helper/references/example.txt`), "local edit");
-  resolution.skill!.pack = { packId: "pack", commit: "c", upstreamName: "source-helper" };
-  resolution.screenedBundles = [
-    { packId: "pack", commit: "c", hash: "pack-hash", files: [{ path: "lib.txt", content: "PACK_RESOURCE" }] },
-  ];
-  const beforeResource = new Map(files);
-  await turn.provisionResource("resource-1");
-  assert.deepEqual(files, beforeResource);
-  const onResource = await turn.useSkill("source-helper", "SKILL.md", "resource-1");
-  assert.equal(onResource.dir, loaded.dir);
-  assert.equal(onResource.packDir, `/workspace/${root}/.packs/pack`);
-  assert.deepEqual(sandboxIds, [undefined, "box", "resource-1"]);
-  assert.equal(files.get(`${root}/.packs/pack/lib.txt`), "PACK_RESOURCE");
-  assert.equal(
-    [...files.keys()].some((path) => path.includes("/unrelated/")),
-    false,
-  );
-});
+      memoryScopeId: "personal:U1",
+      turnSessionDir: "turn/s",
+      turnFilesDir: "turn/s/t",
+      connectorEnv: {},
+      visibleSkillsForTurn: async () => visible,
+      perf: { credsMs: 0 },
+    } as unknown as TurnSandboxContext);
+    const bodyOnly = structuredClone(unrelated);
+    bodyOnly.skill!.id = "body-only";
+    bodyOnly.skill!.manifest.name = "body-only";
+    bodyOnly.skill!.manifest.files = [];
+    delete bodyOnly.skill!.pack;
+    visible.push(bodyOnly);
+    assert.deepEqual(await turn.useSkill("body-only", "SKILL.md"), { content: "BODY", sourceScopeId: "personal:U1" });
+    await assert.rejects(turn.useSkill("source-helper", "SKILL.md", ""), /non-empty/);
+    await assert.rejects(turn.useSkill("source-helper", "SKILL.md", "missing"), /sandbox not found/);
+    assert.equal(provisions, 0);
+    await turn.provision();
+    assert.equal(provisions, 1);
+    assert.equal(files.size, 0);
+    resolution = structuredClone(resolution);
+    resolution.skill!.manifest.files![0]!.content = "v2";
+    visible[0] = resolution;
+    const loaded = await turn.useSkill("source-helper", "references/example.txt");
+    assert.equal(loaded.content, "v2");
+    assert.match(loaded.dir!, /^\/workspace\/\.agent-skills\/s\/[a-f0-9]{16}\/source-helper$/);
+    const root = loaded.dir!.slice("/workspace/".length, -"/source-helper".length);
+    assert.equal(provisions, 1);
+    assert.equal(files.get(`${root}/source-helper/references/example.txt`), "v2");
+    files.set(`${root}/source-helper/references/example.txt`, "local edit");
+    assert.equal((await turn.useSkill("source-helper", "SKILL.md")).dir, loaded.dir);
+    assert.equal(files.get(`${root}/source-helper/references/example.txt`), "local edit");
+    await turn.useSkill("source-helper", "SKILL.md", "box");
+    assert.equal(files.get(`${root}/source-helper/references/example.txt`), "local edit");
+    resolution.skill!.pack = { packId: "pack", commit: "c", upstreamName: "source-helper" };
+    resolution.screenedBundles = [
+      { packId: "pack", commit: "c", hash: "pack-hash", files: [{ path: "lib.txt", content: "PACK_RESOURCE" }] },
+    ];
+    const beforeResource = new Map(files);
+    await turn.provisionResource("resource-1");
+    assert.deepEqual(files, beforeResource);
+    const onResource = await turn.useSkill("source-helper", "SKILL.md", "resource-1");
+    assert.equal(onResource.dir, loaded.dir);
+    assert.equal(onResource.packDir, `/workspace/${root}/.packs/pack`);
+    assert.deepEqual(sandboxIds, [undefined, "box", "resource-1"]);
+    assert.equal(files.get(`${root}/.packs/pack/lib.txt`), "PACK_RESOURCE");
+    assert.equal(
+      [...files.keys()].some((path) => path.includes("/unrelated/")),
+      false,
+    );
+  },
+);
 
 fixtureTest("pack assets run from the skills root and stay across turns", async (b) => {
   const { computeBundleHash } = await import("../src/skills/skill-bundle-store.ts");

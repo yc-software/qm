@@ -1,11 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testIdentity, testMap } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 const approval = (sessionId: string, actor: string, command: string, blocksInput = true): PendingApprovalRecord => ({
@@ -51,7 +50,7 @@ test("session approvals are read by session id, never by scanning every approval
     const app = createApp({
       sessions,
       approvals,
-      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      identity: await testIdentity(),
     } as unknown as Parameters<typeof createApp>[0]);
 
     const listed = await app.listSessionApprovals(mine.id, "alice");
