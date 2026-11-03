@@ -383,6 +383,36 @@ test("POST /v1/skills rejects a duplicate name in the caller's personal scope wi
   }
 });
 
+test("concurrent POST /v1/skills of one name in one scope save it once and 409 the rest", async () => {
+  const srv = start();
+  try {
+    const statuses = await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        fetch(`${srv.base}/v1/skills`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            principalId: "U1",
+            name: "watch-ci",
+            description: `attempt ${i}`,
+            body: "# watch-ci",
+          }),
+        }).then((res) => res.status),
+      ),
+    );
+    assert.deepEqual(
+      statuses.toSorted((a, b) => a - b),
+      [201, 409, 409, 409, 409],
+    );
+    const rows = (await srv.skills.list()).filter(
+      (s) => s.scopeId === scopeId("personal", "U1") && s.manifest.name === "watch-ci",
+    );
+    assert.equal(rows.length, 1);
+  } finally {
+    await srv.close();
+  }
+});
+
 test("POST /v1/skills is a 400 when a required field is missing or blank", async () => {
   const srv = start();
   try {

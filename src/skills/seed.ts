@@ -96,7 +96,7 @@ export function upsertSeedSkill(
 ): Promise<UpsertOutcome> {
   const run = () => upsertSeedSkillUnsafe(skills, input);
   return upsertQueue(`${input.scopeId}\0${input.manifest.name}`, () =>
-    skills.withNameLock ? skills.withNameLock(input.scopeId, input.manifest.name, run) : run(),
+    skills.withNameLock(input.scopeId, input.manifest.name, run),
   );
 }
 

@@ -399,26 +399,28 @@ export function createSkillMethods(
           "a skill cannot be created directly in an org or team scope — promote a published skill instead",
         );
       }
-      const existing = (await deps.skills.list()).find((s) => s.scopeId === homeScope && s.manifest.name === name);
-      if (existing && existing.status !== "archived") return null;
-      if (existing) await deps.skills.delete(existing.id);
-      const manifest: SkillManifest = {
-        name,
-        description,
-        requiredCapabilities: input.requiredCapabilities ?? [],
-        body,
-      };
-      const skill = await deps.skills.create({ scopeId: homeScope, manifest, createdBy: input.principalId });
-      await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
-      const published = await deps.skills.publish(skill.id);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: input.principalId,
-        action: "skill_create",
-        resource: skill.id,
-        scopeLabel: homeScope,
+      return deps.skills.withNameLock(homeScope, name, async () => {
+        const existing = (await deps.skills.list()).find((s) => s.scopeId === homeScope && s.manifest.name === name);
+        if (existing && existing.status !== "archived") return null;
+        if (existing) await deps.skills.delete(existing.id);
+        const manifest: SkillManifest = {
+          name,
+          description,
+          requiredCapabilities: input.requiredCapabilities ?? [],
+          body,
+        };
+        const skill = await deps.skills.create({ scopeId: homeScope, manifest, createdBy: input.principalId });
+        await deps.skills.review(skill.id, "system:skill-authoring", manifest.requiredCapabilities);
+        const published = await deps.skills.publish(skill.id);
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: input.principalId,
+          action: "skill_create",
+          resource: skill.id,
+          scopeLabel: homeScope,
+        });
+        return published;
       });
-      return published;
     },
     async deleteOwnedSkill({ principalId, id, liveActor }) {
       const skill = await deps.skills.get(id);

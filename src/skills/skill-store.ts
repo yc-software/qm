@@ -84,7 +84,7 @@ export interface SkillStoreOptions {
 export interface SkillStore {
   create(input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; pack?: Skill["pack"] }): Promise<Skill>;
   update(id: string, manifest: SkillManifest): Promise<Skill>;
-  withNameLock?<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
+  withNameLock<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
   get(id: string): Promise<Skill | null>;
   list(): Promise<Skill[]>;
   verify(skill: Skill): boolean;
@@ -302,25 +302,27 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       assertSafeSkillName(s.manifest.name);
       if (s.status !== "published") throw new Error("only a published skill can be promoted");
       if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — cannot promote");
-      const existing = (await skills.all()).find(
-        (x) => x.status === "published" && x.scopeId === targetScopeId && x.manifest.name === s.manifest.name,
-      );
-      const at = Date.now();
-      const promoted: Skill = {
-        id: existing?.id ?? randomUUID(),
-        scopeId: targetScopeId,
-        manifest: s.manifest,
-        signature: sign(s.manifest),
-        status: "published",
-        createdBy: s.createdBy,
-        version: (existing?.version ?? 0) + 1,
-        grantedCapabilities: [...s.grantedCapabilities],
-        approvals: [...s.approvals],
-        createdAt: at,
-        updatedAt: at,
-      };
-      await skills.put(promoted.id, promoted);
-      return promoted;
+      return withNameLock(targetScopeId, s.manifest.name, async () => {
+        const existing = (await skills.all()).find(
+          (x) => x.status === "published" && x.scopeId === targetScopeId && x.manifest.name === s.manifest.name,
+        );
+        const at = Date.now();
+        const promoted: Skill = {
+          id: existing?.id ?? randomUUID(),
+          scopeId: targetScopeId,
+          manifest: s.manifest,
+          signature: sign(s.manifest),
+          status: "published",
+          createdBy: s.createdBy,
+          version: (existing?.version ?? 0) + 1,
+          grantedCapabilities: [...s.grantedCapabilities],
+          approvals: [...s.approvals],
+          createdAt: at,
+          updatedAt: at,
+        };
+        await skills.put(promoted.id, promoted);
+        return promoted;
+      });
     },
 
     async move(id, toScopeId) {
