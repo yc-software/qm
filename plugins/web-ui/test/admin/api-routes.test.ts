@@ -82,7 +82,6 @@ const core = createServer(async (req, res) => {
 });
 await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
 process.env.CORE_API_URL = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
-process.env.CORE_ORG_ID = "acme";
 process.env.CORE_SIGNING_SECRET = signingSecret;
 process.env.PORTAL_IDENTITY_SECRET = identitySecret;
 process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";

@@ -578,13 +578,11 @@ const config: QmConfig = {
 test("AWS environment derives identity, public URLs, private wiring, and MicroVM coordinates", () => {
   assert.deepEqual(serviceEnvironment(config, "web-ui"), {
     CORE_API_URL: "http://core.acme.internal:8080",
-    CORE_ORG_ID: "acme",
     PORT: "8080",
     REQUIRE_SIGNED_PORTAL_IDENTITY: "1",
     WEB_UI_PUBLIC_URL: "https://agent.acme.example",
   });
   const core = serviceEnvironment(config, "core");
-  assert.equal(core.ORG_ID, "acme");
   assert.equal(core.PUBLIC_WEB_URL, "https://agent.acme.example");
   assert.equal(core.WEB_UI_PUBLIC_URL, "https://agent.acme.example");
   assert.equal(core.SANDBOX_BACKEND, "sprites");
@@ -2374,7 +2372,6 @@ test("AWS renders third-party plugins as private ECS workloads with scoped secre
     ),
     {
       CORE_API_URL: "http://core.acme.internal:8080",
-      CORE_ORG_ID: "acme",
       LINEAR_REGION: "us",
       PORT: "8080",
     },
@@ -2412,7 +2409,6 @@ test("AWS coreless workloads receive no core endpoint or source-auth secret", ()
     (container.environment as Array<{ name: string; value: string }>).map(({ name, value }) => [name, value]),
   );
   assert.equal(environment.CORE_API_URL, undefined);
-  assert.equal(environment.CORE_ORG_ID, "acme");
   assert.deepEqual(container.secrets, []);
 });
 

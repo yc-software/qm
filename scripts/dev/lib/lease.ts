@@ -110,18 +110,6 @@ export function readState(lock: string): Record<string, unknown> | null {
   }
 }
 
-export function leaseOrgId(lease: LeaseInfo): string {
-  try {
-    const spec = JSON.parse(readFileSync(join(lease.lockDir, "boot-spec.json"), "utf8")) as {
-      callerEnv?: { DEV_INSTANCE_ORG_ID?: unknown };
-    };
-    const orgId = spec.callerEnv?.DEV_INSTANCE_ORG_ID;
-    return typeof orgId === "string" && orgId ? orgId : "acme";
-  } catch {
-    return "acme";
-  }
-}
-
 export function writeState(lock: string, state: Record<string, unknown>): void {
   const tmp = join(lock, "state.json.tmp");
   writeFileSync(tmp, JSON.stringify(state, null, 2));

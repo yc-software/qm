@@ -359,7 +359,7 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
   const out: Record<string, string> = {
     [def.docker.portEnv]: String(def.docker.internalPort),
     CORE_API_URL: "http://core:8080",
-    ...orgEnv(service, config.orgId, config.publicUrl, brandEnvOf(config)),
+    ...orgEnv(service, config.publicUrl, brandEnvOf(config)),
   };
   if (service === "core" && localSandboxActive(config)) {
     out.DOCKER_HOST = "unix:///var/run/docker.sock";
@@ -386,7 +386,7 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
   const out: Record<string, string> = {};
   if (ctx.signingSecret) out.CORE_SIGNING_SECRET = ctx.signingSecret;
   if (service === "core") {
-    Object.assign(out, orgEnv("core", config.orgId, config.publicUrl, brandEnvOf(config)));
+    Object.assign(out, orgEnv("core", config.publicUrl, brandEnvOf(config)));
     out.PORT = "8080";
     out.DATA_DIR = "/data";
     out.DATABASE_URL = ctx.databaseUrl;
@@ -719,7 +719,7 @@ export async function dockerUp(
     ];
     const wiring = {
       ...(p.coreAccess === false ? {} : { CORE_API_URL: "http://core:8080" }),
-      ...orgEnv(p.name, config.orgId, config.publicUrl, brandEnvOf(config)),
+      ...orgEnv(p.name, config.publicUrl, brandEnvOf(config)),
       PORT: "8080",
     };
     const env = {

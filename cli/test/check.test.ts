@@ -488,7 +488,7 @@ test("a delivered secret name shadowing renderer-derived env fails config.secret
     secretEnv: { core: { S3_BUCKET: "SOME_SECRET_BUCKET_URL" } },
   });
   const benign = deployment(() => {}, { ...base, secretEnv: { core: { EXTRA_API_KEY: "EXTRA_API_KEY" } } });
-  const dockerTarget = deployment(() => {}, { secretEnv: { core: { ORG_ID: "SOME_STORE_NAME" } } });
+  const dockerTarget = deployment(() => {}, { secretEnv: { core: { S3_BUCKET: "SOME_STORE_NAME" } } });
   try {
     assert.throws(
       () => check(shadowed),

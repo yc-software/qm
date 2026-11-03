@@ -53,7 +53,6 @@ const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: str
   const brand = brandEnvOf(config);
   return {
     appPrefix,
-    orgId: config.orgId,
     deployAppPrefix,
     publicUrl: config.publicUrl,
     hasAuth: config.services.includes("auth"),
@@ -953,7 +952,7 @@ function pluginTomlContent(
 ): string {
   const env: Record<string, string> = {
     ...(plugin.coreAccess === false ? {} : { CORE_API_URL: `http://${appPrefix}-core.internal:8080` }),
-    ...orgEnv(plugin.name, orgId, publicUrl, brand),
+    ...orgEnv(plugin.name, publicUrl, brand),
     PORT: "8080",
     ...plugin.env,
     [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(flyOrg, orgId, appPrefix),
