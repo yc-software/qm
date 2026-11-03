@@ -168,12 +168,16 @@ async function beginTransaction(client: PoolClient): Promise<void> {
   if (settings.length) await client.query(settingsQuery(settings));
 }
 
-export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+export function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  return pinTenant(() => runPgTransaction(pool, fn));
+}
+
+async function runPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   let rollbackError: Error | undefined;
   try {
     await beginTransaction(client);
-    const result = await pinTenant(() => fn(client));
+    const result = await fn(client);
     await client.query("COMMIT");
     return result;
   } catch (error) {
@@ -239,12 +243,48 @@ async function lockSchema(client: PoolClient, name: string): Promise<void> {
   }
 }
 
+async function pendingPgMigrations(client: PoolClient, migrations: readonly PgMigration[]): Promise<PgMigration[]> {
+  const ledger = await client.query<{ present: boolean }>(
+    `SELECT to_regclass('${PG_MIGRATIONS_TABLE}') IS NOT NULL AS present`,
+  );
+  if (!ledger.rows[0]?.present) return [...migrations];
+  const applied = new Map(
+    (
+      await client.query<{ id: string; checksum: string }>(
+        `SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = ANY($1)`,
+        [migrations.map((migration) => migration.id)],
+      )
+    ).rows.map((row) => [row.id, row.checksum]),
+  );
+  for (const migration of migrations) {
+    const checksum = applied.get(migration.id);
+    if (checksum !== undefined && checksum !== migration.checksum) {
+      throw new Error(
+        `pg-pool: migration ${migration.id} checksum mismatch (database=${checksum}, source=${migration.checksum})`,
+      );
+    }
+  }
+  return migrations.filter((migration) => !applied.has(migration.id));
+}
+
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
   if (!migrations.length) return;
   const client = await pool.connect();
   let discard: Error | undefined;
+  let locked = false;
   try {
+    const pending = await pendingPgMigrations(client, migrations);
+    if (!pending.length) return;
+    const creator = await client.query<{ login: string; creates: boolean }>(
+      "SELECT current_user AS login, has_schema_privilege(current_schema(), 'CREATE') AS creates",
+    );
+    if (!creator.rows[0]?.creates) {
+      throw new Error(
+        `pg-pool: ${creator.rows[0]?.login} cannot apply pending migrations ${pending.map((migration) => migration.id).join(", ")}; run migrations as the database owner first`,
+      );
+    }
     await lockSchema(client, "qm:schema-migrations");
+    locked = true;
     await client.query(
       `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
         id TEXT PRIMARY KEY,
@@ -252,19 +292,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
     );
-    for (const migration of migrations) {
-      const applied = await client.query<{ checksum: string }>(
-        `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
-        [migration.id],
-      );
-      if (applied.rows[0]) {
-        if (applied.rows[0].checksum !== migration.checksum) {
-          throw new Error(
-            `pg-pool: migration ${migration.id} checksum mismatch (database=${applied.rows[0].checksum}, source=${migration.checksum})`,
-          );
-        }
-        continue;
-      }
+    for (const migration of await pendingPgMigrations(client, migrations)) {
       if (migration.statements.some((statement) => concurrentIndexName(statement))) {
         if (migration.legacyId || !migration.statements.every((statement) => concurrentIndexName(statement))) {
           throw new Error(`pg-pool: concurrent index migration ${migration.id} must contain only concurrent indexes`);
@@ -325,9 +353,11 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       }
     }
   } finally {
-    await client
-      .query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))")
-      .catch(swallowAs("pg-pool: schema-migrations unlock", undefined));
+    if (locked) {
+      await client
+        .query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))")
+        .catch(swallowAs("pg-pool: schema-migrations unlock", undefined));
+    }
     client.release(discard);
   }
 }

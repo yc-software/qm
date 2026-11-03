@@ -85,10 +85,7 @@ test("rows that cannot name their one tenant stop the upgrade instead of picking
       db,
       registeredPgMigrations(url).filter((m) => m.id.startsWith("0000-tenancy/")),
     );
-    await db.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'one', 'One'), ($2, 'two', 'Two')`, [
-      randomUUID(),
-      randomUUID(),
-    ]);
+    await db.query(`INSERT INTO tenants(id) VALUES ($1), ($2)`, [randomUUID(), randomUUID()]);
     await assert.rejects(
       migrateRegisteredPgSchemas(url),
       /Rows in acl_grants need a tenant, but this database has 2 tenants/,
