@@ -10,7 +10,7 @@ import {
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
 } from "./deploy-git-store.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
+import { TENANCY, createIfParentTenantKeyed, tenantTables } from "../tenants/migrations.ts";
 import { durableMapTenancy } from "../persistence/durable-map.ts";
 
 export interface DeploymentVersion {
@@ -179,15 +179,19 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
       )`,
     ],
   };
-  const tenancy = [...TENANCY, durableMapTenancy("deployments"), ACCESS_TENANCY];
-  pg.registerMigration(migration);
-  for (const definition of tenancy) pg.registerMigration(definition);
+  const preKeyed = createIfParentTenantKeyed(
+    "deploy/access/0000-tenant-keyed-deployments",
+    "deployments",
+    "deployment_access",
+    "CREATE TABLE deployment_access (id TEXT NOT NULL, last_access_at BIGINT NOT NULL)",
+  );
+  const migrations = [...TENANCY, preKeyed, migration, durableMapTenancy("deployments"), ACCESS_TENANCY];
+  for (const definition of migrations) pg.registerMigration(definition);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
       readyP = (async () => {
-        await pg.migrate(migration);
-        for (const definition of tenancy) await pg.migrate(definition);
+        for (const definition of migrations) await pg.migrate(definition);
         await pg
           .q(
             `CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX}

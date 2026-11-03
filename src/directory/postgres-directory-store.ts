@@ -115,7 +115,7 @@ const EXTERNAL_ROSTER_SCHEMA = [
   )`,
   `INSERT INTO directory_groups (org_id, group_id, roster_known)
     SELECT DISTINCT org_id, group_id, TRUE FROM directory_group_members
-    ON CONFLICT (tenant_id, org_id, group_id) DO NOTHING`,
+    ON CONFLICT (org_id, group_id) DO NOTHING`,
 ];
 
 const SYNC_STAMP_SCHEMA = [
