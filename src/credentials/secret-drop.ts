@@ -25,6 +25,7 @@ export interface SecretDropRecord {
   destination?: Destination;
   threadRef?: string;
   requiresToken?: boolean;
+  memoryBrain?: { id: string; url: string };
   createdAt: number;
 }
 

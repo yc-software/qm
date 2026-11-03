@@ -92,7 +92,7 @@ export const putMemoryBrain = (ctx: ApiCtx) =>
     ? sendJson(ctx.res, 400, {
         error: "bad_request",
         message:
-          "a brain's client secret never goes through the agent: register the brain without clientSecret, then set it through the admin API outside chat",
+          'a brain\'s client secret never goes through the agent: register the brain without clientSecret, then mint a link for it with POST /v1/keychain/drops {"memoryBrain":"<brain id>","purpose":"…"}',
       })
     : change(ctx, "memory-registry.brain.update", (record, c) => putBrain(record, ctx.params.id ?? "", ctx.body, c));
 

@@ -489,7 +489,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/keychain/drops",
         summary:
-          "mint a single-use, expiring link for someone to enter a new credential into their keychain — follow the `secret-drop` skill",
+          "mint a single-use, expiring link for someone to enter a new credential into their keychain, or (org admins, body {memoryBrain, purpose}) a registered memory brain's client secret, which QM's core keeps and never puts in a keychain — follow the `secret-drop` skill",
       },
     ],
   },
