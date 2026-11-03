@@ -67,9 +67,9 @@ test("workers delay all failed-turn retries and respect terminal budgets", async
     if (error instanceof NonRetryableTurnError)
       assert.equal((await inTestTenant(() => runs.get(run.id)))?.status, "failed");
     else {
-      assert.equal(await runs.claimById(run.id, "other", 60_000), null);
+      assert.equal(await inTestTenant(() => runs.claimById(run.id, "other", 60_000)), null);
       t.mock.timers.tick(60_000);
-      assert.ok(await runs.claimById(run.id, "other", 60_000));
+      assert.ok(await inTestTenant(() => runs.claimById(run.id, "other", 60_000)));
       await inTestTenant(async () =>
         runs.fail(run.id, (await runs.get(run.id))!.leaseToken!, "done", { retry: false }),
       );

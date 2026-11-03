@@ -152,12 +152,12 @@ test("processRun heartbeats the lease while the turn runs, and the beat stops wi
   const run = await withoutTenant(() => runs.claim("w1", 9_000));
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
-  t.mock.timers.tick(3_000);
+  inTestTenant(() => t.mock.timers.tick(3_000));
   await microtasks();
   assert.equal(beats.length, 1, "one heartbeat per interval");
   assert.deepEqual(beats[0], { runId: run!.id, token: run!.leaseToken!, ttl: 9_000, ok: true });
 
-  t.mock.timers.tick(6_000);
+  inTestTenant(() => t.mock.timers.tick(6_000));
   await microtasks();
   assert.equal(beats.length, 3, "the beat keeps firing for as long as the turn runs");
   assert.ok(
@@ -167,7 +167,7 @@ test("processRun heartbeats the lease while the turn runs, and the beat stops wi
 
   release({ status: "ok", reply: "done" });
   await pending;
-  t.mock.timers.tick(30_000);
+  inTestTenant(() => t.mock.timers.tick(30_000));
   await microtasks();
   assert.equal(
     beats.length,
@@ -191,7 +191,7 @@ test("a retryable turn failure requeues the run, rethrows, and stops the heartbe
   const run = await withoutTenant(() => runs.claim("w1", 9_000));
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
-  t.mock.timers.tick(3_000);
+  inTestTenant(() => t.mock.timers.tick(3_000));
   await microtasks();
   assert.equal(beats.length, 1);
 
@@ -204,7 +204,7 @@ test("a retryable turn failure requeues the run, rethrows, and stops the heartbe
   assert.deepEqual(requeued?.lastStop, { kind: "error" }, "an untyped error records no message, only that it failed");
 
   assert.equal(await withoutTenant(() => runs.claim("w2", 9_000)), null);
-  t.mock.timers.tick(30_000);
+  inTestTenant(() => t.mock.timers.tick(30_000));
   await microtasks();
   assert.equal(beats.length, 1, "no heartbeat leaks past the failure");
 
@@ -377,7 +377,7 @@ test("the heartbeat stops before complete(), so a late tick cannot spuriously ab
   const run = await withoutTenant(() => runs.claim("w1", 9_000));
   const pending = processRun({ runs, orchestrator, leaseTtlMs: 9_000 }, run!);
 
-  t.mock.timers.tick(3_000);
+  inTestTenant(() => t.mock.timers.tick(3_000));
   await microtasks();
   assert.equal(beats.length, 1);
 
@@ -385,7 +385,7 @@ test("the heartbeat stops before complete(), so a late tick cannot spuriously ab
   await pending;
 
   const beatsAtComplete = beats.length;
-  t.mock.timers.tick(30_000);
+  inTestTenant(() => t.mock.timers.tick(30_000));
   await microtasks();
   assert.equal(
     beats.length,

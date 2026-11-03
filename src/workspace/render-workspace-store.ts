@@ -135,7 +135,10 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
     const info = await lstat(abs).catch(absent);
     if (info && !info.isDirectory()) await rm(abs, { force: true });
   }
-  async function revisionOf(client: Pick<PoolClient, "query">, scope: ScopeId): Promise<number> {
+  async function revisionOf(
+    client: { query(text: string, params: unknown[]): Promise<{ rows: Record<string, unknown>[] }> },
+    scope: ScopeId,
+  ): Promise<number> {
     const rows = await client.query("SELECT revision FROM render_workspace_scopes WHERE scope_id=$1", [scope]);
     return Number(rows.rows[0]?.revision ?? 0);
   }
@@ -176,7 +179,7 @@ export function createRenderWorkspaceStore(rootDir: string, connectionString: st
     return queue(scope, async () => {
       const limit = opts ? Math.max(0, Math.floor(opts.limit)) : null;
       if (limit !== null && !Number.isFinite(limit)) throw new Error("workspace list limit must be finite");
-      const revision = await revisionOf(await db.pool(), scope);
+      const revision = await revisionOf(db, scope);
       await local.ensureScope(scope);
       if (synced.get(scope) === revision) {
         const rows = await db.q("SELECT path FROM render_workspace_files WHERE scope_id=$1 ORDER BY path LIMIT $2", [
