@@ -45,7 +45,7 @@ export interface FlyPortClaims {
   claim(appName: string, port: number, deploymentId: string): Promise<string>;
 }
 
-const FLY_DEPLOY_PORTS = {
+export const FLY_DEPLOY_PORTS = {
   id: "tenancy/fly_deploy_ports/0001-typed",
   statements: [
     `SET LOCAL lock_timeout = '5s'`,

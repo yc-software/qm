@@ -455,6 +455,10 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
   }
 }
 
+export function registerPgMigrations(connectionString: string, definitions: readonly PgMigrationDefinition[]): void {
+  for (const definition of definitions) registerPgMigration(connectionString, definePgMigration(definition));
+}
+
 export function createPgPool(
   connectionString: string,
   definitions: readonly PgMigrationDefinition[] = [],
