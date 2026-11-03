@@ -386,7 +386,7 @@ test("a conversation-owned cron keeps running as the conversation, whoever creat
     createdBy: "system:channel:C1",
     ownerScopeId: scopeId("channel", "C1"),
   });
-  await identity.deactivate("U1");
+  await inTestTenant(() => identity.deactivate("U1"));
   await inTestTenant(() => runNowSettled(scheduler, cron.id));
   assert.equal(calls[0]?.actor.externalId, "system:channel:C1");
   assert.equal((await crons.get(cron.id))?.enabled, true);
@@ -429,7 +429,7 @@ test("an owner cron still disables when its owner leaves (unchanged)", async () 
     ownerScopeId: scopeId("channel", "C1"),
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
-  await identity.deactivate("U1");
+  await inTestTenant(() => identity.deactivate("U1"));
   await inTestTenant(() => runNowSettled(scheduler, cron.id));
   assert.equal(calls.length, 0);
   assert.equal((await crons.get(cron.id))?.enabled, false);
@@ -1202,7 +1202,7 @@ test("queue mode: an authz-failed fire disables the cron but gives the slot back
     ownerScopeId: scopeId("channel", "C1"),
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
-  await identity.deactivate("U1");
+  await inTestTenant(() => identity.deactivate("U1"));
   await settle(async () => onFire !== undefined);
   await onFire!({ cronId: cron.id, scheduledAt: 1 });
   const after = (await crons.get(cron.id))!;

@@ -4,6 +4,7 @@ import { createIdentityService, createPostgresDeactivationStore } from "../src/i
 import { createPostgresExternalMemberStore, type ExternalMember } from "../src/identity/external-members.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testIdentityService } from "./support/typed-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const id = testIdentityService();
 
@@ -36,147 +37,158 @@ test("audienceIsAllInternal is false for an empty audience (unknown ≠ all-inte
   assert.equal(id.audienceIsAllInternal([]), false);
 });
 
-test("a deactivated principal classifies as non-internal (fail-closed source, §3)", async () => {
-  const svc = testIdentityService();
-  assert.equal(svc.classify("U-leaver").type, "internal");
-  await svc.deactivate("U-leaver");
-  const after = svc.classify("U-leaver");
-  assert.equal(after.type, "guest");
-  assert.equal(svc.isInternal(after), false);
-  await svc.reactivate("U-leaver");
-  assert.equal(svc.classify("U-leaver").type, "internal");
-});
+test("a deactivated principal classifies as non-internal (fail-closed source, §3)", () =>
+  inTestTenant(async () => {
+    const svc = testIdentityService();
+    assert.equal(svc.classify("U-leaver").type, "internal");
+    await svc.deactivate("U-leaver");
+    const after = svc.classify("U-leaver");
+    assert.equal(after.type, "guest");
+    assert.equal(svc.isInternal(after), false);
+    await svc.reactivate("U-leaver");
+    assert.equal(svc.classify("U-leaver").type, "internal");
+  }));
 
-test("deactivation folds email case: a leaver stays out under any casing of their address", async () => {
-  const svc = testIdentityService();
-  await svc.deactivate("Alice@Corp.com");
-  assert.equal(svc.classify("alice@corp.com").type, "guest");
-  assert.equal(svc.classify("ALICE@CORP.COM").type, "guest");
-  await svc.reactivate("alice@corp.com");
-  assert.equal(svc.classify("Alice@Corp.com").type, "internal");
-});
+test("deactivation folds email case: a leaver stays out under any casing of their address", () =>
+  inTestTenant(async () => {
+    const svc = testIdentityService();
+    await svc.deactivate("Alice@Corp.com");
+    assert.equal(svc.classify("alice@corp.com").type, "guest");
+    assert.equal(svc.classify("ALICE@CORP.COM").type, "guest");
+    await svc.reactivate("alice@corp.com");
+    assert.equal(svc.classify("Alice@Corp.com").type, "internal");
+  }));
 
-test("case fold does not merge distinct emails or touch non-email ids", async () => {
-  const svc = testIdentityService();
-  await svc.deactivate("bob@corp.com");
-  assert.equal(svc.classify("bobby@corp.com").type, "internal");
-  await svc.deactivate("U-Case");
-  assert.equal(svc.classify("u-case").type, "internal");
-});
+test("case fold does not merge distinct emails or touch non-email ids", () =>
+  inTestTenant(async () => {
+    const svc = testIdentityService();
+    await svc.deactivate("bob@corp.com");
+    assert.equal(svc.classify("bobby@corp.com").type, "internal");
+    await svc.deactivate("U-Case");
+    assert.equal(svc.classify("u-case").type, "internal");
+  }));
 
-test("durable rehydration folds a cased stored deactivation", async () => {
-  const url = testDatabaseUrl();
-  const first = testIdentityService({}, url);
-  await first.deactivate("Carol@Corp.com");
-  const second = testIdentityService({}, url);
-  await second.refresh();
-  assert.equal(second.classify("carol@corp.com").type, "guest");
-});
+test("durable rehydration folds a cased stored deactivation", () =>
+  inTestTenant(async () => {
+    const url = testDatabaseUrl();
+    const first = testIdentityService({}, url);
+    await first.deactivate("Carol@Corp.com");
+    const second = testIdentityService({}, url);
+    await second.refresh();
+    assert.equal(second.classify("carol@corp.com").type, "guest");
+  }));
 
-test("deactivation is durable: a fresh service over the same backing rehydrates it", async () => {
-  const url = testDatabaseUrl();
-  const first = testIdentityService({}, url);
-  await first.deactivate("U-leaver");
+test("deactivation is durable: a fresh service over the same backing rehydrates it", () =>
+  inTestTenant(async () => {
+    const url = testDatabaseUrl();
+    const first = testIdentityService({}, url);
+    await first.deactivate("U-leaver");
 
-  const second = testIdentityService({}, url);
-  assert.equal(second.classify("U-leaver").type, "internal");
-  await second.refresh();
-  assert.equal(second.classify("U-leaver").type, "guest");
-});
+    const second = testIdentityService({}, url);
+    assert.equal(second.classify("U-leaver").type, "internal");
+    await second.refresh();
+    assert.equal(second.classify("U-leaver").type, "guest");
+  }));
 
-test("a running instance refreshes deactivations written by another instance", async () => {
-  const url = testDatabaseUrl();
-  const writer = testIdentityService({}, url);
-  const reader = testIdentityService({}, url);
-  await reader.refresh();
-  await writer.deactivate("U-leaver");
-  assert.equal(reader.classify("U-leaver").type, "internal");
-  await reader.refresh(true);
-  assert.equal(reader.classify("U-leaver").type, "guest");
-});
+test("a running instance refreshes deactivations written by another instance", () =>
+  inTestTenant(async () => {
+    const url = testDatabaseUrl();
+    const writer = testIdentityService({}, url);
+    const reader = testIdentityService({}, url);
+    await reader.refresh();
+    await writer.deactivate("U-leaver");
+    assert.equal(reader.classify("U-leaver").type, "internal");
+    await reader.refresh(true);
+    assert.equal(reader.classify("U-leaver").type, "guest");
+  }));
 
-test("external members written by one instance reach another over the same backing", async () => {
-  const url = testDatabaseUrl();
-  const writer = testIdentityService({}, url);
-  const reader = testIdentityService({}, url);
-  await reader.refresh();
-  const now = Date.now();
-  const member = (expiresAt: number): ExternalMember => ({
-    email: "pat@partner.example",
-    role: "member",
-    expiresAt,
-    invitedBy: "admin-alice",
-    createdAt: now,
-    updatedAt: now,
-  });
-  await writer.putExternalMember(member(now + 60_000));
-  assert.equal(reader.externalMember("pat@partner.example"), undefined);
-  await reader.refresh(true);
-  assert.equal(reader.externalMember("Pat@Partner.example")?.expiresAt, now + 60_000);
-  assert.equal(reader.classify("pat@partner.example").type, "internal");
+test("external members written by one instance reach another over the same backing", () =>
+  inTestTenant(async () => {
+    const url = testDatabaseUrl();
+    const writer = testIdentityService({}, url);
+    const reader = testIdentityService({}, url);
+    await reader.refresh();
+    const now = Date.now();
+    const member = (expiresAt: number): ExternalMember => ({
+      email: "pat@partner.example",
+      role: "member",
+      expiresAt,
+      invitedBy: "admin-alice",
+      createdAt: now,
+      updatedAt: now,
+    });
+    await writer.putExternalMember(member(now + 60_000));
+    assert.equal(reader.externalMember("pat@partner.example"), undefined);
+    await reader.refresh(true);
+    assert.equal(reader.externalMember("Pat@Partner.example")?.expiresAt, now + 60_000);
+    assert.equal(reader.classify("pat@partner.example").type, "internal");
 
-  await writer.putExternalMember(member(now - 1));
-  await reader.refresh();
-  assert.equal(reader.classify("pat@partner.example").type, "internal", "within the TTL the cache is served");
-  await reader.refresh(true);
-  assert.equal(reader.classify("pat@partner.example").type, "guest", "a forced refresh reads the store");
-  const late = testIdentityService({}, url);
-  await late.refresh();
-  assert.equal(late.classify("pat@partner.example").type, "guest");
-});
+    await writer.putExternalMember(member(now - 1));
+    await reader.refresh();
+    assert.equal(reader.classify("pat@partner.example").type, "internal", "within the TTL the cache is served");
+    await reader.refresh(true);
+    assert.equal(reader.classify("pat@partner.example").type, "guest", "a forced refresh reads the store");
+    const late = testIdentityService({}, url);
+    await late.refresh();
+    assert.equal(late.classify("pat@partner.example").type, "guest");
+  }));
 
-test("a manual deactivation issued alongside a directory sync is not undone by it", async () => {
-  const svc = testIdentityService();
-  await svc.deactivate("alice", "directory-sync");
-  await Promise.all([svc.deactivate("alice", "manual"), svc.recordDirectorySync([], ["alice"])]);
-  assert.equal(svc.deactivationSource("alice"), "manual");
-  assert.equal(svc.classify("alice").type, "guest");
-});
+test("a manual deactivation issued alongside a directory sync is not undone by it", () =>
+  inTestTenant(async () => {
+    const svc = testIdentityService();
+    await svc.deactivate("alice", "directory-sync");
+    await Promise.all([svc.deactivate("alice", "manual"), svc.recordDirectorySync([], ["alice"])]);
+    assert.equal(svc.deactivationSource("alice"), "manual");
+    assert.equal(svc.classify("alice").type, "guest");
+  }));
 
-test("a deactivation written during a refresh survives that refresh", async () => {
-  const entered = Promise.withResolvers<void>();
-  const gate = Promise.withResolvers<void>();
-  const url = testDatabaseUrl();
-  const backing = createPostgresDeactivationStore(url);
-  const svc = createIdentityService(
-    {
-      ...backing,
-      list: async () => {
-        const rows = await backing.list();
-        entered.resolve();
-        await gate.promise;
-        return rows;
+test("a deactivation written during a refresh survives that refresh", () =>
+  inTestTenant(async () => {
+    const entered = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const url = testDatabaseUrl();
+    const backing = createPostgresDeactivationStore(url);
+    const svc = createIdentityService(
+      {
+        ...backing,
+        list: async () => {
+          const rows = await backing.list();
+          entered.resolve();
+          await gate.promise;
+          return rows;
+        },
       },
-    },
-    { externalMembers: createPostgresExternalMemberStore(url) },
-  );
-  const loading = svc.refresh(true);
-  await entered.promise;
-  const deactivating = svc.deactivate("U-leaver");
-  gate.resolve();
-  await Promise.all([loading, deactivating]);
-  assert.equal(svc.classify("U-leaver").type, "guest");
-});
+      { externalMembers: createPostgresExternalMemberStore(url) },
+    );
+    const loading = svc.refresh(true);
+    await entered.promise;
+    const deactivating = svc.deactivate("U-leaver");
+    gate.resolve();
+    await Promise.all([loading, deactivating]);
+    assert.equal(svc.classify("U-leaver").type, "guest");
+  }));
 
-test("a directory sync deactivates dropped members and self-heals when they reappear", async () => {
-  const svc = testIdentityService();
-  const out = await svc.recordDirectorySync(["U-gone"], ["U-here"]);
-  assert.deepEqual(out, { deactivated: ["U-gone"], reactivated: [] });
-  assert.equal(svc.classify("U-gone").type, "guest");
+test("a directory sync deactivates dropped members and self-heals when they reappear", () =>
+  inTestTenant(async () => {
+    const svc = testIdentityService();
+    const out = await svc.recordDirectorySync(["U-gone"], ["U-here"]);
+    assert.deepEqual(out, { deactivated: ["U-gone"], reactivated: [] });
+    assert.equal(svc.classify("U-gone").type, "guest");
 
-  const back = await svc.recordDirectorySync([], ["U-gone", "U-here"]);
-  assert.deepEqual(back, { deactivated: [], reactivated: ["U-gone"] });
-  assert.equal(svc.classify("U-gone").type, "internal");
-});
+    const back = await svc.recordDirectorySync([], ["U-gone", "U-here"]);
+    assert.deepEqual(back, { deactivated: [], reactivated: ["U-gone"] });
+    assert.equal(svc.classify("U-gone").type, "internal");
+  }));
 
-test("a manual deactivation survives roster churn — only reactivate() clears it", async () => {
-  const svc = testIdentityService();
-  await svc.deactivate("U-fired");
-  await svc.recordDirectorySync([], ["U-fired"]);
-  assert.equal(svc.classify("U-fired").type, "guest");
-  await svc.recordDirectorySync(["U-fired"], []);
-  await svc.recordDirectorySync([], ["U-fired"]);
-  assert.equal(svc.classify("U-fired").type, "guest");
-  await svc.reactivate("U-fired");
-  assert.equal(svc.classify("U-fired").type, "internal");
-});
+test("a manual deactivation survives roster churn — only reactivate() clears it", () =>
+  inTestTenant(async () => {
+    const svc = testIdentityService();
+    await svc.deactivate("U-fired");
+    await svc.recordDirectorySync([], ["U-fired"]);
+    assert.equal(svc.classify("U-fired").type, "guest");
+    await svc.recordDirectorySync(["U-fired"], []);
+    await svc.recordDirectorySync([], ["U-fired"]);
+    assert.equal(svc.classify("U-fired").type, "guest");
+    await svc.reactivate("U-fired");
+    assert.equal(svc.classify("U-fired").type, "internal");
+  }));

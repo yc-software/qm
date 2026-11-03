@@ -9,6 +9,7 @@ import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
@@ -53,85 +54,88 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   return { crons, cron, deliveries, idempotency, ask, deps };
 }
 
-test("cron credential resolution resumes in the original conversation exactly once", async () => {
-  const requests: TurnRequest[] = [];
-  const f = await fixture(async (request) => {
-    requests.push(request);
-    return { status: "ok", reply: "dummy scheduled result" };
-  });
-  const fireKey = `ask:${f.ask.id}:approved`;
+test("cron credential resolution resumes in the original conversation exactly once", () =>
+  inTestTenant(async () => {
+    const requests: TurnRequest[] = [];
+    const f = await fixture(async (request) => {
+      requests.push(request);
+      return { status: "ok", reply: "dummy scheduled result" };
+    });
+    const fireKey = `ask:${f.ask.id}:approved`;
 
-  const resumed = await fireAskResolution(f.deps, f.ask);
-  assert.equal(resumed.status, "ok");
-  assert.equal(requests[0]?.model, "gpt-6-luna");
-  assert.equal(requests[0]?.thinkingLevel, "low");
-  assert.equal(await f.idempotency.committed(fireKey), true);
-  await fireAskResolution(f.deps, f.ask);
+    const resumed = await fireAskResolution(f.deps, f.ask);
+    assert.equal(resumed.status, "ok");
+    assert.equal(requests[0]?.model, "gpt-6-luna");
+    assert.equal(requests[0]?.thinkingLevel, "low");
+    assert.equal(await f.idempotency.committed(fireKey), true);
+    await fireAskResolution(f.deps, f.ask);
 
-  assert.equal(requests.length, 1);
-  assert.ok(requests.every((request) => request.conversation.threadRef === f.ask.requesterThreadRef));
-  assert.ok(requests.every((request) => request.triggered === true));
-  const pending = await f.deliveries.pending("principal");
-  assert.equal(pending.length, 1);
-  assert.equal(pending[0]!.destination.target, "U_BOB");
-  assert.equal(pending[0]!.text, "dummy scheduled result");
-});
+    assert.equal(requests.length, 1);
+    assert.ok(requests.every((request) => request.conversation.threadRef === f.ask.requesterThreadRef));
+    assert.ok(requests.every((request) => request.triggered === true));
+    const pending = await f.deliveries.pending("principal");
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.destination.target, "U_BOB");
+    assert.equal(pending[0]!.text, "dummy scheduled result");
+  }));
 
-test("failed cron credential resolution notifies only the owner", async () => {
-  let runs = 0;
-  const f = await fixture(async () => {
-    runs++;
-    return { status: "failed", reason: "model unavailable" };
-  });
+test("failed cron credential resolution notifies only the owner", () =>
+  inTestTenant(async () => {
+    let runs = 0;
+    const f = await fixture(async () => {
+      runs++;
+      return { status: "failed", reason: "model unavailable" };
+    });
 
-  const failed = await fireAskResolution(f.deps, f.ask);
-  await fireAskResolution(f.deps, f.ask);
+    const failed = await fireAskResolution(f.deps, f.ask);
+    await fireAskResolution(f.deps, f.ask);
 
-  assert.equal(failed.status, "failed");
-  assert.equal(runs, 1);
-  const pending = await f.deliveries.pending("principal");
-  assert.equal(pending.length, 1);
-  assert.equal(pending[0]!.destination.target, "U_ALICE");
-  assert.equal(pending[0]!.destination.audienceScopeId, "personal:U_ALICE");
-  assert.match(pending[0]!.text, /^Access approved, but the task could not restart on its own\./);
-  assert.equal(pending.filter((delivery) => delivery.destination.target === "U_BOB").length, 0);
-});
+    assert.equal(failed.status, "failed");
+    assert.equal(runs, 1);
+    const pending = await f.deliveries.pending("principal");
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.destination.target, "U_ALICE");
+    assert.equal(pending[0]!.destination.audienceScopeId, "personal:U_ALICE");
+    assert.match(pending[0]!.text, /^Access approved, but the task could not restart on its own\./);
+    assert.equal(pending.filter((delivery) => delivery.destination.target === "U_BOB").length, 0);
+  }));
 
-test("a concurrent sweep cannot mark an in-flight resume notified before it finishes", async () => {
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<TurnResult>();
-  let runs = 0;
-  const f = await fixture(async () => {
-    runs++;
-    entered.resolve();
-    return release.promise;
-  });
-  const asks = testMap<KeychainAsk>();
-  await asks.put(f.ask.id, f.ask);
-  const keychain = createKeychain({
-    lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants: testMap(),
-    asks,
-    key: deriveConnectorKey("concurrent-cron-resume-test"),
-  });
-  const sweep = createAskExpirySweep({ keychain, fire: (ask) => fireAskResolution(f.deps, ask) });
-  const initial = fireAskResolution(f.deps, f.ask);
-  await entered.promise;
+test("a concurrent sweep cannot mark an in-flight resume notified before it finishes", () =>
+  inTestTenant(async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<TurnResult>();
+    let runs = 0;
+    const f = await fixture(async () => {
+      runs++;
+      entered.resolve();
+      return release.promise;
+    });
+    const asks = testMap<KeychainAsk>();
+    await asks.put(f.ask.id, f.ask);
+    const keychain = createKeychain({
+      lock: testAdvisoryLock(),
+      creds: testMap(),
+      grants: testMap(),
+      asks,
+      key: deriveConnectorKey("concurrent-cron-resume-test"),
+    });
+    const sweep = createAskExpirySweep({ keychain, fire: (ask) => fireAskResolution(f.deps, ask) });
+    const initial = fireAskResolution(f.deps, f.ask);
+    await entered.promise;
 
-  await sweep(Date.now());
-  assert.equal((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
-  release.resolve({ status: "ok", reply: "dummy scheduled result" });
-  assert.equal((await initial).status, "ok");
-  assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), true);
+    await sweep(Date.now());
+    assert.equal((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
+    release.resolve({ status: "ok", reply: "dummy scheduled result" });
+    assert.equal((await initial).status, "ok");
+    assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), true);
 
-  await sweep(Date.now());
-  await sweep(Date.now());
+    await sweep(Date.now());
+    await sweep(Date.now());
 
-  assert.equal(runs, 1);
-  assert.notEqual((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
-  assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), true);
-  const pending = await f.deliveries.pending("principal");
-  assert.equal(pending.length, 1);
-  assert.equal(pending[0]!.destination.target, "U_BOB");
-});
+    assert.equal(runs, 1);
+    assert.notEqual((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
+    assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), true);
+    const pending = await f.deliveries.pending("principal");
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.destination.target, "U_BOB");
+  }));

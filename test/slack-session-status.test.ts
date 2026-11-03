@@ -10,6 +10,7 @@ import type { Monitor } from "../src/triggers/types.ts";
 import { isTerminal, type Run } from "../src/runs/run-store.ts";
 import { testMap } from "./support/test-database.ts";
 import { testFeatureFlagStore } from "./support/typed-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 function deferred() {
   let resolve!: () => void;
@@ -105,8 +106,8 @@ function fixture() {
     add,
     background,
     watch,
-    enable: () => flags.setEnabled("slack_loading_indicator", "channel:C1", true, "admin"),
-    start: (id: string, account = "T1:B1") => status.start(client, account, id, "C1", "1.0"),
+    enable: () => inTestTenant(() => flags.setEnabled("slack_loading_indicator", "channel:C1", true, "admin")),
+    start: (id: string, account = "T1:B1") => inTestTenant(() => status.start(client, account, id, "C1", "1.0")),
     reconcile: () => status.reconcile(client, "T1:B1"),
     card: () => cards.at(-1)!.args.blocks as Array<Record<string, unknown>>,
     advance: (ms: number) => {
@@ -120,7 +121,7 @@ test("cards require opt-in, a reply thread and non-private engagement", async ()
   const run = f.add("r1");
   await f.start(run.id);
   await f.enable();
-  await f.status.start(f.client, "T1:B1", run.id, "D1");
+  await inTestTenant(() => f.status.start(f.client, "T1:B1", run.id, "D1"));
   run.deliveryState = null;
   await f.start(run.id);
   run.deliveryState = { replying: true };
@@ -237,7 +238,7 @@ test("opt-out settles only this account's card without cancelling work", async (
   await f.start("r1");
   await f.start("r1", "T2:B2");
   const job = f.background();
-  await f.flags.setEnabled("slack_loading_indicator", "channel:C1", false, "admin");
+  await inTestTenant(() => f.flags.setEnabled("slack_loading_indicator", "channel:C1", false, "admin"));
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "No active work");
   assert.equal(f.card()[0]?.status, "complete");
@@ -292,7 +293,7 @@ test("delayed insert after lease loss cannot replace a newer card", async () => 
     f.runs,
     f.flags,
   );
-  const pending = first.start(f.client, "T1:B1", old.id, "C1", "1.0");
+  const pending = inTestTenant(() => first.start(f.client, "T1:B1", old.id, "C1", "1.0"));
   await begun.promise;
   lost.resolve();
   old.status = "done";
@@ -326,7 +327,9 @@ for (const method of ["chat.postMessage", "chat.update"]) {
       },
     };
     const pending =
-      method === "chat.update" ? first.reconcile(delayed, "T1:B1") : first.start(delayed, "T1:B1", run.id, "C1", "1.0");
+      method === "chat.update"
+        ? first.reconcile(delayed, "T1:B1")
+        : inTestTenant(() => first.start(delayed, "T1:B1", run.id, "C1", "1.0"));
     await begun.promise;
     lost.resolve();
     if (method === "chat.update") {

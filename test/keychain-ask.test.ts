@@ -41,6 +41,7 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
+const tenantTest = (name: string, fn: () => Promise<void>) => test(name, () => inTestTenant(fn));
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -376,7 +377,7 @@ test("sweep isolates per-ask failures — one failed fire doesn't starve the bat
   assert.notEqual((await k.getAsk(a2.id))?.notifiedAt, undefined);
 });
 
-test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate claim)", async () => {
+tenantTest("runTrigger marks every trigger-fired turn `triggered` (the consent-gate claim)", async () => {
   let seen: TurnRequest | undefined;
   const outcome = await runTrigger(
     {
@@ -401,7 +402,7 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
   assert.equal(seen?.conversation.threadRef, "ch:C1-t1", "an explicit threadRef overrides the per-fire fireKey thread");
 });
 
-test("runTrigger: silent markers never silence a notification-shaped fire (keychain-ask)", async () => {
+tenantTest("runTrigger: silent markers never silence a notification-shaped fire (keychain-ask)", async () => {
   const deliveries = createDeliveryStore();
   const outcome = await runTrigger(
     {
@@ -423,7 +424,7 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
   assert.equal((await deliveries.pending("slack")).length, 1, "the sentinel is poll-only; an ask notice must deliver");
 });
 
-test("fireAskResolution: a turn that fires but doesn't land falls back to a plain delivery (once)", async () => {
+tenantTest("fireAskResolution: a turn that fires but doesn't land falls back to a plain delivery (once)", async () => {
   const ask: KeychainAsk = {
     id: "fa11bacc0000",
     credentialId: "c1",
