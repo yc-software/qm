@@ -2,6 +2,7 @@ import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import { reachEnqueue } from "../../reach/reach.ts";
 import type { ActorAssertion } from "../../types.ts";
 import type { Surface, SurfacePromptHints } from "../contract.ts";
+import type { SurfaceCache } from "../../surface-cache/types.ts";
 import { partnerChatMessageId, partnerChatRef, parsePartnerChatRef, type PartnerChatUser } from "./protocol.ts";
 
 const DEFAULT_LABEL = "Partner chat";
@@ -29,6 +30,7 @@ export function partnerChatPrincipal(user: PartnerChatUser, internal: boolean): 
 
 export function createPartnerChatSurface(deps: {
   deliveries: DeliveryStore;
+  surfaceCache: Pick<SurfaceCache, "readMessages">;
   label?: string;
   promptHints?: Partial<SurfacePromptHints>;
 }): Surface<null> {
@@ -57,11 +59,18 @@ export function createPartnerChatSurface(deps: {
         provenance: message.provenance,
       });
     },
-    threadTarget(target, threadTs) {
+    async threadTarget(target, threadTs) {
       const ref = parsePartnerChatRef(target);
-      const thread = partnerChatMessageId(threadTs);
-      if (!ref || !/^\d+$/.test(thread)) throw new Error(`can't reply under ${threadTs} in ${target}`);
-      return partnerChatRef({ ...ref, thread });
+      const id = partnerChatMessageId(threadTs);
+      if (!ref || !/^\d+$/.test(id)) throw new Error(`can't reply under ${threadTs} in ${target}`);
+      const container = partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat });
+      const [parent] = await deps.surfaceCache.readMessages(container, {
+        surface: "partner-chat",
+        timestamps: [threadTs],
+        limit: 1,
+        noFallback: true,
+      });
+      return partnerChatRef({ ...ref, thread: parent?.sub ?? id });
     },
     principalFor: (user) => user.principal,
     mention: (user) => `@${user.principal.displayName ?? user.id}`,

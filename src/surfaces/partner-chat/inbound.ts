@@ -108,12 +108,6 @@ export function createPartnerChatInbound(deps: {
       SURFACE,
     );
     if (!addressed) return { status: 200, body: { ok: true } };
-    const threadRef = partnerChatRef({
-      account: event.account,
-      kind: chat.kind,
-      chat: chat.id,
-      ...(thread ? { thread } : {}),
-    });
     const replyThread = thread ?? (chat.kind === "group" ? message.id : undefined);
     const replyTarget = partnerChatRef({
       account: event.account,
@@ -132,15 +126,14 @@ export function createPartnerChatInbound(deps: {
       },
       conversation: {
         kind: chat.kind,
-        threadRef,
+        threadRef: replyTarget,
         ...(chat.kind === "group" ? { channelRef: container, isPrivate: true } : {}),
         ...(chat.name ? { channelName: chat.name } : {}),
         audience: humans,
       },
       deliveryTarget: replyTarget,
       text: message.body,
-      liveActor: true,
-      triggerTs: ts,
+      origin: { kind: "human", messageTs: ts },
       async: true,
       redeliveryKey: `${SURFACE}:${event.account}:${chat.id}:${message.id}`,
     });

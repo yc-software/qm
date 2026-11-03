@@ -2069,6 +2069,7 @@ export function buildApp(
         ? [
             createPartnerChatSurface({
               deliveries,
+              surfaceCache: { readMessages: (container, opts) => surfaceCache.readMessages(container, opts) },
               ...(config.partnerChat.label ? { label: config.partnerChat.label } : {}),
               ...(config.partnerChat.promptHints ? { promptHints: config.partnerChat.promptHints } : {}),
             }),
@@ -2455,13 +2456,15 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
+  const partnerChatLiveReply = config.partnerChat ? createPartnerChatLiveReply({ deliveries }) : null;
+  if (partnerChatLiveReply) runs.onTerminal((run) => partnerChatLiveReply.settle(run));
   const partnerChatInbound = config.partnerChat
     ? createPartnerChatInbound({
         secret: config.partnerChat.secret,
         app,
         surfaceCache,
         isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
-        followReply: createPartnerChatLiveReply({ app, runs, deliveries }).follow,
+        ...(partnerChatLiveReply ? { followReply: partnerChatLiveReply.follow } : {}),
       })
     : null;
   const partnerChatOutbound = config.partnerChat
