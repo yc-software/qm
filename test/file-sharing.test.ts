@@ -31,6 +31,7 @@ import {
 import { environmentNote, senderNote, sharedFilesSystemSection } from "../src/core/orchestrator/prompt-blocks.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { TINY_PNG } from "./support/tiny-png.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {
   assert.equal(turnFileId("run-1", 1, 123), turnFileId("run-1", 1, 123));
@@ -368,7 +369,9 @@ test("materializeInbound caps inbound file count (core-side defense in depth)", 
 test("materializeInbound feeds supported images as vision, but not svg", async () => {
   const { sandbox, handle } = fakeSandbox();
   const transfer = createMemoryBlobTransferStore();
-  const png = await inFile(transfer, "chart.png", "PNGBYTES", "image/png");
+  const pngBytes = TINY_PNG;
+  const { blobId } = await transfer.put(pngBytes);
+  const png = { name: "chart.png", mimetype: "image/png", sizeBytes: pngBytes.length, blobId };
   const svg = await inFile(transfer, "logo.svg", "<svg/>", "image/svg+xml");
   const txt = await inFile(transfer, "notes.txt", "hello");
   const { metas, images } = await materializeInbound(sandbox, handle, [png, svg, txt], transfer);
@@ -378,7 +381,7 @@ test("materializeInbound feeds supported images as vision, but not svg", async (
     ["chart.png"],
   );
   assert.equal(images[0]!.mimeType, "image/png");
-  assert.equal(Buffer.from(images[0]!.dataBase64, "base64").toString("utf8"), "PNGBYTES");
+  assert.deepEqual(Buffer.from(images[0]!.dataBase64, "base64"), pngBytes);
 });
 
 test("materializeInbound tolerates a 0-byte file", async () => {

@@ -347,6 +347,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
           }
         : { ok: true, source: "cache", hits: [] };
     },
+    async readFile() {
+      return { ok: false, message: "no files here" };
+    },
     async readMembers() {
       return { ok: true, members: [{ displayName: "Ada" }, { displayName: "Bob" }] };
     },
@@ -1417,10 +1420,6 @@ test("an unknown action returns a crisp error text, not a throw", async () => {
   const out = (await call(slack, { action: "frobnicate" })) as { content: Array<{ text: string }> };
   assert.match(out.content[0]!.text, /unknown action "frobnicate"/);
   assert.match(out.content[0]!.text, /post, react, edit, delete/);
-  const removed = (await call(slack, { action: "read_file", ref: "a".repeat(32) })) as {
-    content: Array<{ text: string }>;
-  };
-  assert.match(removed.content[0]!.text, /unknown action "read_file"/);
 });
 
 test("the post delivery ack is never screened — a classifier false positive cannot quarantine a sent reply", async () => {

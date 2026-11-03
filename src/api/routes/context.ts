@@ -115,6 +115,7 @@ async function createSurfaceFileRequest(ctx: ApiCtx): Promise<void> {
   }
   const threadTs = typeof b.threadTs === "string" && b.threadTs.trim() ? b.threadTs.trim() : undefined;
   const name = typeof b.name === "string" && b.name.trim() ? b.name.trim() : undefined;
+  const index = typeof b.index === "number" && Number.isSafeInteger(b.index) && b.index > 0 ? b.index : undefined;
 
   const resolved = await resolveSurfaceTarget(ctx, b);
   if (!resolved) return;
@@ -122,7 +123,7 @@ async function createSurfaceFileRequest(ctx: ApiCtx): Promise<void> {
     ...resolved.target,
     count: 1,
     ...(await rateLimitRecipient(ctx)),
-    file: { ts, ...(threadTs ? { threadTs } : {}), ...(name ? { name } : {}) },
+    file: { ts, ...(threadTs ? { threadTs } : {}), ...(name ? { name } : {}), ...(index ? { index } : {}) },
   };
   const request = await app.createContextRequest(resolved.source, query);
   return awaitFileFulfillment(ctx, request.id);

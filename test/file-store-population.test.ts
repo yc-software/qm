@@ -7,11 +7,13 @@ import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { artifactImageLoader } from "../src/agent/replay-images.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TINY_PNG } from "./support/tiny-png.ts";
 
 const owner = scopeId("channel", "C1");
 const HANDLE = { id: "h", rootDir: "/workspace" } as SandboxHandle;
-const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
+const PNG = TINY_PNG;
 
 function memSandbox(seed: Record<string, Uint8Array | string> = {}): {
   sandbox: Sandbox;
@@ -128,6 +130,27 @@ test("materializeInbound registers an 'in' artifact, openable", async () => {
     page.files[0]!.id,
     "the exact model image carries the same durable ref for replay",
   );
+});
+
+test("a mislabelled inbound image is stored under its real type, so later turns can reload it", async () => {
+  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const transfer = createMemoryBlobTransferStore();
+  const { blobId } = await transfer.put(PNG);
+  const { sandbox } = memSandbox();
+  const inb = await materializeInbound(
+    sandbox,
+    HANDLE,
+    [{ name: "c.webp", mimetype: "application/octet-stream", sizeBytes: PNG.length, blobId }],
+    transfer,
+    reg(store),
+  );
+  assert.equal(inb.metas[0]!.mimetype, "image/png");
+  const image = inb.images[0]!;
+  const reloaded = await artifactImageLoader(store, () => true)(
+    { artifactId: image.artifactId!, mimeType: image.mimeType },
+    10_000_000,
+  );
+  assert.equal(reloaded && reloaded !== "over-budget" ? reloaded.data : reloaded, image.dataBase64);
 });
 
 test("materializeInbound omits artifactId when registration fails or is absent", async () => {

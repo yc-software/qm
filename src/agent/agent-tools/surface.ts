@@ -31,6 +31,7 @@ export function surfaceTool(kit: ToolKit) {
           Type.Literal("whats_new"),
           Type.Literal("search"),
           Type.Literal("read_members"),
+          Type.Literal("read_file"),
         ],
         {
           description:
@@ -38,7 +39,8 @@ export function surfaceTool(kit: ToolKit) {
             "(send to a DIFFERENT audience: a teammate DM, another channel, a group — the ONLY way to " +
             "leave this conversation), react (emoji on a message), edit/delete (revise/retract your " +
             "OWN message), read_thread (read stored thread messages, with live fallback for missing context), whats_new (pointers to what " +
-            "changed), search (find messages), read_members (the roster).",
+            "changed), search (find messages), read_members (the roster), read_file (see an image posted on any message in this " +
+            "conversation; other files come back as a pointer for your computer).",
         },
       ),
       text: Type.Optional(
@@ -78,9 +80,23 @@ export function surfaceTool(kit: ToolKit) {
       sandbox_id: outboundSandboxSchema,
       files: Type.Optional(outboundFilesSchema),
       emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
+      name: Type.Optional(
+        Type.String({
+          description:
+            "read_file: which file, by name (a unique part is enough), when the message at `ref` carries more than one.",
+        }),
+      ),
+      index: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          description:
+            "read_file: which file, by 1-based position on the message at `ref`; use this when names repeat.",
+        }),
+      ),
       ref: Type.Optional(
         Type.String({
-          description: "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread).",
+          description:
+            "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread). read_file: the `ts` (or `~id`) of the message carrying the file, as shown on each message by read_thread and the conversation context.",
         }),
       ),
       limit: Type.Optional(
@@ -394,12 +410,60 @@ export function surfaceTool(kit: ToolKit) {
             text(body),
           );
         }
+        case "read_file": {
+          if (params.ref === undefined) return missing("ref");
+          const pick = {
+            ...(typeof params.name === "string" && params.name.trim() ? { name: params.name.trim() } : {}),
+            ...(params.index !== undefined ? { index: params.index } : {}),
+          };
+          await recordCall(callId, { tool: surfaceName, action: "read_file", ref: params.ref, ...pick });
+          const r = await tc.readFile(params.ref, pick);
+          if (!r.ok)
+            return recordResult(
+              callId,
+              { tool: surfaceName, action: "read_file", ok: false, ...(r.message ? { error: r.message } : {}) },
+              text(`[couldn't read that file] ${r.message ?? "unavailable"}`),
+              true,
+            );
+          const summary = {
+            tool: surfaceName,
+            action: "read_file",
+            ok: true,
+            ...(r.name ? { name: r.name } : {}),
+            ...(r.sizeBytes !== undefined ? { sizeBytes: r.sizeBytes } : {}),
+          };
+          if (r.image) {
+            const label = `[image ${r.name ?? "file"} (${r.sizeBytes ?? "?"} bytes), shown below; images in tool results aren't kept across restarts, so if it's missing later, call read_file again with the same ref]`;
+            return recordExternalResult(
+              callId,
+              { ...summary, image: true, contentType: r.image.mimeType },
+              {
+                ...text(label),
+                content: [...text(label).content, { type: "image" as const, ...r.image }],
+              },
+              "surface file",
+            );
+          }
+          const kind = r.contentType ?? "binary";
+          const size = r.sizeBytes !== undefined ? ` (${r.sizeBytes} bytes)` : "";
+          return recordResult(
+            callId,
+            {
+              ...summary,
+              notShown: r.message ?? "not an image",
+              ...(r.contentType ? { contentType: r.contentType } : {}),
+            },
+            text(
+              `[${r.name ?? "file"}${size} — ${kind}; ${r.message ?? "not an image"}. To work with it on your computer, POST $AGENT_API_URL/v1/surface-file with the same ts and name or index, and follow the returned download note.]`,
+            ),
+          );
+        }
         default:
           return recordResult(
             callId,
             { tool: surfaceName, error: "unknown_action" },
             text(
-              `[error] unknown action "${(params as { action?: string }).action}" — valid actions: post, react, edit, delete, read_thread, whats_new, search, read_members.`,
+              `[error] unknown action "${(params as { action?: string }).action}" — valid actions: post, react, edit, delete, read_thread, whats_new, search, read_members, read_file.`,
             ),
             true,
           );
