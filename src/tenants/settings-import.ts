@@ -78,7 +78,7 @@ export interface TenantSettingsImportDeps {
   actor: string;
 }
 
-export function unknownTenantImportKeys(values: Readonly<Record<string, unknown>>): string[] {
+function unknownTenantImportKeys(values: Readonly<Record<string, unknown>>): string[] {
   const known = new Set(tenantImportKeys());
   return Object.keys(values).filter((key) => !known.has(key));
 }
@@ -141,7 +141,8 @@ export async function importTenantSettings(
   deps: TenantSettingsImportDeps,
 ): Promise<string[]> {
   const unknown = unknownTenantImportKeys(values);
-  if (unknown.length) throw new TenantSettingsInvalidError(`Not tenant settings: ${unknown.join(", ")}`);
+  if (unknown.length)
+    throw new TenantSettingsInvalidError(`Not tenant settings: ${unknown.join(", ")}`, "not_tenant_settings");
   const present = Object.keys(values).filter((key) => values[key] !== undefined);
   const { securityPosture, sharingPosture } = parsedPostures(values);
   await deps.settings.update(Object.fromEntries(present.filter(isTenantSettingKey).map((key) => [key, values[key]!])));

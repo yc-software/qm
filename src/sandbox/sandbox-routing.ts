@@ -40,6 +40,7 @@ export class NoDefaultSandboxError extends Error {
 export interface RoutingSandboxOptions {
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   defaultBackend: () => Promise<SandboxBackendName>;
+  usableBackends: () => Promise<readonly string[]>;
   resources: SandboxResources;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
@@ -274,8 +275,10 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       ? {
           async reapDeepIdle(idleMs: number, devIdleMs?: number) {
             let reaped = 0;
-            for (const s of Object.values(backends)) {
-              if (s?.reapDeepIdle) reaped += (await s.reapDeepIdle(idleMs, devIdleMs).catch(swallowReap)).reaped ?? 0;
+            const usable = await opts.usableBackends();
+            for (const [name, s] of Object.entries(backends)) {
+              if (usable.includes(name) && s?.reapDeepIdle)
+                reaped += (await s.reapDeepIdle(idleMs, devIdleMs).catch(swallowReap)).reaped ?? 0;
             }
             return { reaped };
           },

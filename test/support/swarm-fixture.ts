@@ -70,6 +70,7 @@ export async function swarmFixture(
     canUseScope: async (actorId, scopeId) => scopeId === `personal:${actorId}`,
   });
   const sandbox = createSandboxRouter({
+    usableBackends: async () => ["modal"],
     backends: { modal: backend },
     defaultBackend: async () => "modal",
     resources: sandboxes,

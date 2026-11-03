@@ -1178,6 +1178,7 @@ export function buildApp(
     resources: sandboxResources,
     backends: sandboxBackends,
     defaultBackend: tenantRouting.defaultBackend,
+    usableBackends: tenantRouting.usable,
     onError: sandboxOnError,
   });
   const resolveClient: OAuthClientResolver = withPublicOAuthClients(

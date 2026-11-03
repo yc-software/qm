@@ -28,7 +28,15 @@ type ResourceOptions = Parameters<typeof createSandboxResources>[0];
 function wired(options: ResourceOptions, backends: ResourceOptions["backends"], name: SandboxBackendName) {
   const defaultBackend = async () => name;
   const resources = createSandboxResources({ ...options, backends, defaultBackend });
-  return { resources, router: createSandboxRouter({ backends, defaultBackend, resources }) };
+  return {
+    resources,
+    router: createSandboxRouter({
+      usableBackends: async () => Object.keys(backends),
+      backends,
+      defaultBackend,
+      resources,
+    }),
+  };
 }
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
@@ -156,7 +164,12 @@ test("explicit sandbox profiles follow selected storage rather than the parent's
   const modal: Sandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };
   const backends = { local: backend, modal };
   const resources = createSandboxResources({ ...options, backends });
-  const router = createSandboxRouter({ backends, defaultBackend: async () => "local", resources });
+  const router = createSandboxRouter({
+    usableBackends: async () => Object.keys(backends),
+    backends,
+    defaultBackend: async () => "local",
+    resources,
+  });
   const worker = await resources.create("alice", "personal:alice", "modal", "Worker");
   assert.equal((await router.profileFor!("personal:alice")).backend, "local");
   assert.equal((await router.profileFor!("personal:alice", worker.id)).backend, "modal");
@@ -573,7 +586,12 @@ test("retirement waits for background startup to commit its live registry row", 
         throw new Error("live background work");
     },
   });
-  const router = createSandboxRouter({ resources, backends: { local: backend }, defaultBackend: async () => "local" });
+  const router = createSandboxRouter({
+    usableBackends: async () => ["local"],
+    resources,
+    backends: { local: backend },
+    defaultBackend: async () => "local",
+  });
   assert.ok(supportsProcessSessions(router));
   const record = await resources.create("alice", "personal:alice", "local");
   const handle = await router.provision(layers, { sandboxId: record.id });

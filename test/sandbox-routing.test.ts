@@ -114,6 +114,7 @@ function build(defaults: Record<string, SandboxResource | null>, extra: SandboxR
   const resources = stubResources(defaults, extra);
   const errors: Array<{ code: string; message: string; scopeLabel?: string }> = [];
   const router = createSandboxRouter({
+    usableBackends: async () => ["aws", "sprites"],
     backends: { aws, sprites },
     defaultBackend: async () => "aws",
     resources,
@@ -264,15 +265,23 @@ test("fleet sweeps are absent when no backend implements them", async () => {
   assert.equal(router.restartComputer, undefined);
 });
 
-test("reapDeepIdle is exposed when a backend implements it, and sums across backends", async () => {
+test("reapDeepIdle sums across the backends the tenant can use and skips the rest", async () => {
   const aws = fakeBackend("aws");
+  const sprites = fakeBackend("sprites");
   (aws as unknown as { reapDeepIdle: unknown }).reapDeepIdle = async () => ({ reaped: 3 });
+  let spritesReaps = 0;
+  (sprites as unknown as { reapDeepIdle: unknown }).reapDeepIdle = async () => ({ reaped: 2 * ++spritesReaps });
+  let usable = ["aws"];
   const router = createSandboxRouter({
-    backends: { aws, sprites: fakeBackend("sprites") },
+    usableBackends: async () => usable,
+    backends: { aws, sprites },
     defaultBackend: async () => "aws",
     resources: stubResources({}),
   });
   assert.deepEqual(await router.reapDeepIdle!(1000), { reaped: 3 });
+  assert.equal(spritesReaps, 0);
+  usable = ["aws", "sprites"];
+  assert.deepEqual(await router.reapDeepIdle!(1000), { reaped: 5 });
 });
 
 function capabilitySplit(onError?: (e: { code: string; message: string; scopeLabel?: string }) => void) {
@@ -281,6 +290,7 @@ function capabilitySplit(onError?: (e: { code: string; message: string; scopeLab
   const sprites = fakeBackend("sprites");
   delete (sprites as Partial<Sandbox>).exportFiles;
   const router = createSandboxRouter({
+    usableBackends: async () => ["aws", "sprites"],
     backends: { aws, sprites },
     defaultBackend: async () => "aws",
     resources: stubResources({
@@ -354,7 +364,12 @@ test("parking backends lock the computer exclusively only to park it, not to kee
 test("computer status/restart target the resource's backing scope under its lock", async () => {
   const { aws, sprites } = computerBackends();
   const resources = stubResources({ "personal:s": resource("s", "sprites") });
-  const router = createSandboxRouter({ backends: { aws, sprites }, defaultBackend: async () => "aws", resources });
+  const router = createSandboxRouter({
+    usableBackends: async () => ["aws", "sprites"],
+    backends: { aws, sprites },
+    defaultBackend: async () => "aws",
+    resources,
+  });
   assert.deepEqual(await router.computerStatus!("personal:s"), { machine: "started", guestResponsive: true });
   await router.restartComputer!("personal:s");
   assert.deepEqual(
@@ -370,6 +385,7 @@ test("computer status/restart target the resource's backing scope under its lock
 test("computer status/restart with no default resource refuse with NoDefaultSandboxError", async () => {
   const { aws, sprites } = computerBackends();
   const router = createSandboxRouter({
+    usableBackends: async () => ["aws", "sprites"],
     backends: { aws, sprites },
     defaultBackend: async () => "aws",
     resources: stubResources({}),
@@ -382,6 +398,7 @@ test("computer status/restart with no default resource refuse with NoDefaultSand
 test("computer status/restart on a backend without them is a typed refusal", async () => {
   const { aws, sprites } = computerBackends();
   const router = createSandboxRouter({
+    usableBackends: async () => ["aws", "sprites"],
     backends: { aws, sprites },
     defaultBackend: async () => "sprites",
     resources: stubResources({ "personal:a": resource("a", "aws") }),
@@ -411,6 +428,7 @@ for (const combined of [true, false]) {
         return ["keep/file"];
       };
     const router = createSandboxRouter({
+      usableBackends: async () => ["sprites"],
       backends: { sprites: backend },
       defaultBackend: async () => "sprites",
       resources,

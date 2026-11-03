@@ -26,7 +26,7 @@ import {
 } from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import {
   E2bCommandLostError,
   E2bSandboxGoneError,
@@ -114,7 +114,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
   const provisionQueue = <T>(scope: string, action: () => Promise<T>): Promise<T> =>
     localQueue(scope, () => advisoryLock.withLock(`e2b-provision:${scope}`, action));
 
-  const sessionByName = new Map<string, E2bSession>();
+  const sessionByName = tenantKeyedMap<E2bSession>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();

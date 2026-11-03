@@ -17,7 +17,7 @@ import {
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
+import { createExecSandboxBase, sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import {
@@ -28,7 +28,6 @@ import {
   type SnapshotBookkeeping,
 } from "./home-snapshot.ts";
 import { clientPerCredential } from "./tenant-credentials.ts";
-import { currentTenant } from "../tenants/context.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import type {
   AgentComputerProfile,
@@ -157,9 +156,8 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? CHECKPOINT_INTERVAL_MS;
 
   const ensured = new Set<string>();
-  const resourcesApplied = new Set<string>();
-  const egressPolicyByName = new Map<string, string>();
-  const tenantName = (name: string): string => `${currentTenant()}/${name}`;
+  const resourcesApplied = tenantKeyedMap<true>();
+  const egressPolicyByName = tenantKeyedMap<string>();
   const pressureEpisodes = new Set<string>();
   const checkpointBooks = new Map<string, SnapshotBookkeeping>();
 
@@ -315,7 +313,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   async function ensureEgressPolicy(name: string): Promise<void> {
     const rules = egressProxyHosts.map((domain) => ({ domain, action: "allow" as const }));
     const want = JSON.stringify(rules);
-    if (egressPolicyByName.get(tenantName(name)) === want) return;
+    if (egressPolicyByName.get(name) === want) return;
     const s = await sprite(name);
     await attempt(`egress policy ${name}`, () => retrySpritesControl(() => s.updateNetworkPolicy({ rules })));
     const got = await attempt(`egress policy readback ${name}`, () => retrySpritesControl(() => s.getNetworkPolicy()));
@@ -326,15 +324,15 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       JSON.stringify(actual.map((rule) => norm(rule.domain)).sort()) === JSON.stringify(egressProxyHosts);
     if (!bound)
       throw new Error(`sprites egress policy ${name}: readback mismatch (${JSON.stringify(got).slice(0, 200)})`);
-    egressPolicyByName.set(tenantName(name), want);
+    egressPolicyByName.set(name, want);
   }
 
   async function applyResources(name: string): Promise<void> {
-    if (opts.memoryMb === undefined || resourcesApplied.has(tenantName(name))) return;
+    if (opts.memoryMb === undefined || resourcesApplied.has(name)) return;
     await attempt(`resources policy ${name}`, async () =>
       (await sprite(name)).updateResourcesPolicy({ memory: { limitMB: opts.memoryMb! } }),
     );
-    resourcesApplied.add(tenantName(name));
+    resourcesApplied.set(name, true);
   }
 
   async function spriteExists(name: string): Promise<boolean> {
@@ -426,9 +424,9 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
 
   const forget = (name: string): void => {
     ensured.delete(name);
-    resourcesApplied.delete(tenantName(name));
+    resourcesApplied.delete(name);
     pressureEpisodes.delete(name);
-    egressPolicyByName.delete(tenantName(name));
+    egressPolicyByName.delete(name);
     checkpointBooks.delete(name);
   };
 

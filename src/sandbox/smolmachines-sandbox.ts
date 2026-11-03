@@ -14,7 +14,7 @@ import {
 } from "./exec-file-ops.ts";
 import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
+import { createExecSandboxBase, sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
@@ -105,8 +105,8 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
   const network: MachineNetwork = egressProxyHost ? { mode: "allowCidrs", hosts: [egressProxyHost] } : { mode: "open" };
 
-  const idByName = new Map<string, string>();
-  const egressVerified = new Set<string>();
+  const idByName = tenantKeyedMap<string>();
+  const egressVerified = tenantKeyedMap<true>();
 
   const isRunning = (info: MachineInfo): boolean => RUNNING_STATES.has(info.state.toLowerCase());
   const machinePath = (id: string): string => `/v1/machines/${encodeURIComponent(id)}`;
@@ -341,7 +341,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
         `smolmachines egress ${name}: machine network is ${JSON.stringify(got)}, expected ${JSON.stringify(network)}; destroy the sandbox so it is recreated with the allow list`,
       );
     }
-    egressVerified.add(id);
+    egressVerified.set(id, true);
   }
 
   const homeSnapshots = opts.snapshots

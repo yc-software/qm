@@ -15,6 +15,22 @@ import {
   tenantSdkClient,
 } from "../src/sandbox/tenant-credentials.ts";
 import { createSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
+import { createAgent37Sandbox } from "../src/sandbox/agent37-sandbox.ts";
+import { createE2bSandbox } from "../src/sandbox/e2b-sandbox.ts";
+import { createModalSandbox } from "../src/sandbox/modal-sandbox.ts";
+import { createSuperserveSandbox } from "../src/sandbox/superserve-sandbox.ts";
+import { createManagedAgentsSandbox } from "../src/sandbox/managed-agents-sandbox.ts";
+import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
+import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { currentTenant } from "../src/tenants/context.ts";
+import { installFakeSmolmachines } from "./support/fake-smolmachines.ts";
+import { installFakeAgent37 } from "./support/fake-agent37.ts";
+import { installFakeE2b } from "./support/fake-e2b.ts";
+import { installFakeModal } from "./support/fake-modal.ts";
+import { installFakeSuperserve } from "./support/fake-superserve.ts";
+import { installFakeManagedAgents } from "./support/fake-managed-agents.ts";
+import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
@@ -189,3 +205,79 @@ test("selecting a backend without egress enforcement warns once per tenant", asy
   assert.equal(warn.mock.callCount(), 1);
   assert.match(String(warn.mock.calls[0]!.arguments[0]), /uses sprites with NO egress enforcement \(fail-open\)/);
 });
+
+const ownIndex = (): number => (currentTenant() === OTHER_TENANT ? 1 : 0);
+
+const perTenant = <C extends object>(a: C, b: C): C =>
+  new Proxy(a, {
+    get: (_target, key) => {
+      const client = [a, b][ownIndex()]!;
+      const value = Reflect.get(client, key) as unknown;
+      return typeof value === "function" ? value.bind(client) : value;
+    },
+  });
+
+const workspace = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "tenant-cache-ws-")));
+const shared = () => ({
+  ...singleProcessDeps(),
+  store: testMap(),
+  snapshots: createMemorySnapshotStore(),
+  namePrefix: "qmt",
+});
+const credential = async () => "test-token";
+
+const matrix: Array<[string, () => { sandbox: Sandbox; has: Array<(name: string) => boolean> }]> = [
+  ...(
+    [
+      ["smolmachines", createSmolmachinesSandbox, installFakeSmolmachines],
+      ["agent37", createAgent37Sandbox, installFakeAgent37],
+    ] as const
+  ).map(([name, create, install]): (typeof matrix)[number] => [
+    name,
+    () => {
+      const fakes = [install(), install()];
+      const fetchImpl: typeof fetch = (input, init) => fakes[ownIndex()]!.fetchImpl(input, init);
+      return {
+        sandbox: (create as (w: unknown, o: unknown) => Sandbox)(workspace(), {
+          ...shared(),
+          token: credential,
+          apiKey: credential,
+          fetchImpl,
+        }),
+        has: fakes.map((f) => (n: string) => f.names().includes(n)),
+      };
+    },
+  ]),
+  ...(
+    [
+      ["e2b", createE2bSandbox, installFakeE2b],
+      ["modal", createModalSandbox, installFakeModal],
+      ["superserve", createSuperserveSandbox, installFakeSuperserve],
+      ["do-managed-agents", createManagedAgentsSandbox, installFakeManagedAgents],
+    ] as const
+  ).map(([name, create, install]): (typeof matrix)[number] => [
+    name,
+    () => {
+      const fakes = [install(), install()];
+      const client = perTenant(fakes[0]!.client as object, fakes[1]!.client as object);
+      return {
+        sandbox: (create as (w: unknown, o: unknown) => Sandbox)(workspace(), { ...shared(), configEpoch: 1, client }),
+        has: fakes.map((f) => (n: string) => f.current(n) !== null),
+      };
+    },
+  ]),
+];
+
+for (const [backend, build] of matrix) {
+  test(`${backend}: the same scope in two tenants gets a machine in each tenant's account`, async () => {
+    const { sandbox, has } = build();
+    const layers = [{ scopeId: "personal:ada@example.com", mountPath: "", mode: "rw" as const }];
+    await withTenant(TEST_TENANT, () => sandbox.provision(layers));
+    await withTenant(OTHER_TENANT, () => sandbox.provision(layers));
+    const name = sandboxScopeName("qmt", "personal:ada@example.com");
+    assert.deepEqual(
+      has.map((present) => present(name)),
+      [true, true],
+    );
+  });
+}

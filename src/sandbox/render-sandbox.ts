@@ -9,7 +9,7 @@ import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { AWS_CLI_ENSURE } from "./aws-cli.ts";
-import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
+import { createExecSandboxBase, sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import { createExecProcessSessions } from "./exec-process-session.ts";
 import {
   createExecFileOps,
@@ -78,7 +78,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? 5 * 60_000;
   const rotationMarginMs = (defaultTimeoutSec + 60) * 1000;
   const expiryCheckpointWindowMs = Math.max(rotationMarginMs, 20 * 60_000);
-  const scratch = new Map<string, RenderSandboxInfo>();
+  const scratch = tenantKeyedMap<RenderSandboxInfo>();
   const nameFor = (scope: string): string => sandboxScopeName(prefix, scope);
   const lifecycleKey = (name: string): string => `render-sandbox:${name}`;
   const useKey = (name: string): string => `render-sandbox-use:${name}`;

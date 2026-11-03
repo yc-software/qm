@@ -20,7 +20,7 @@ import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import type {
   AgentComputerProfile,
   ExecOptions,
@@ -138,7 +138,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
 
-  const idByName = new Map<string, string>();
+  const idByName = tenantKeyedMap<string>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();

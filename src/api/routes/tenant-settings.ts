@@ -1,6 +1,6 @@
 import { orgId } from "../../config.ts";
 import { withTenant } from "../../tenants/context.ts";
-import { importTenantSettings, unknownTenantImportKeys } from "../../tenants/settings-import.ts";
+import { importTenantSettings } from "../../tenants/settings-import.ts";
 import { PLUGIN_SETTING_KEYS } from "../../tenants/settings.ts";
 import { TenantSettingsInvalidError } from "../../tenants/settings-parse.ts";
 import { scopeId } from "../../types.ts";
@@ -19,9 +19,6 @@ async function putTenantSettings(ctx: ApiCtx): Promise<void> {
   const env = isObj(body) ? body.env : undefined;
   if (!isObj(env) || Object.values(env).some((value) => typeof value !== "string"))
     return sendJson(res, 400, { error: "bad_request", message: "env must be an object of string values" });
-  const unknown = unknownTenantImportKeys(env);
-  if (unknown.length)
-    return sendJson(res, 400, { error: "not_tenant_settings", message: `Not tenant settings: ${unknown.join(", ")}` });
   const slug = isObj(body) ? body.tenant : undefined;
   if (typeof slug !== "string" || !TENANT_SLUG.test(slug))
     return sendJson(res, 400, {
@@ -45,7 +42,7 @@ async function putTenantSettings(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { tenant, updated });
   } catch (error) {
     if (!(error instanceof TenantSettingsInvalidError)) throw error;
-    return sendJson(res, 400, { error: "invalid_tenant_settings", message: error.message });
+    return sendJson(res, 400, { error: error.code, message: error.message });
   }
 }
 

@@ -1595,7 +1595,10 @@ async function signInOidc(res: ServerResponse): Promise<TenantOidc | null> {
   const context = { publicUrl: PUBLIC_URL, brokerUpstream: AUTH_BROKER_UPSTREAM, brokerPrefix: AUTH_BROKER_PREFIX };
   const resolved = await pluginSettings().then(
     (values) => tenantOidc(values, { ...context, isProd: IS_PROD }),
-    (error: unknown) => errMessage(error),
+    (error: unknown) => {
+      reportBackendError(error, "portal:plugin_settings");
+      return errMessage(error);
+    },
   );
   if (typeof resolved !== "string" && !resolved.problems.length) return resolved;
   const problems = typeof resolved === "string" ? [resolved] : resolved.problems;

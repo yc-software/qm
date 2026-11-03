@@ -16,6 +16,11 @@ import type { TenantSettingValues } from "./settings.ts";
 
 export class TenantSettingsInvalidError extends Error {
   override name = "TenantSettingsInvalidError";
+  readonly code: string;
+  constructor(message: string, code = "invalid_tenant_settings") {
+    super(message);
+    this.code = code;
+  }
 }
 
 interface SecurityScreenProxySettings {

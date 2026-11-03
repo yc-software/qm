@@ -27,7 +27,7 @@ import {
 } from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import {
   SuperserveSandboxGoneError,
   type SuperserveClient,
@@ -154,7 +154,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
   const lockKey = (scope: string): string => `superserve-provision:${scope}`;
   const provisionQueue = createKeyedQueue<string>();
 
-  const liveByName = new Map<string, Live>();
+  const liveByName = tenantKeyedMap<Live>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
