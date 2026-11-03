@@ -89,9 +89,9 @@ test("a working session marks its same-scope ancestors working, skipping ancesto
     const elsewhere = await session("subagent:root:1", "channel:C1", root);
     const mid = await session("subagent:root:2", "personal:U1", elsewhere);
     const leaf = await session("subagent:root:3", "personal:U1", mid);
-    const ancestors = await built.sessions.sameScopeAncestorsOfThreads([leaf.threadRef, "web:U1:missing"]);
+    const ancestors = await built.sessions.sameScopeAncestors([leaf.threadRef, "web:U1:missing"]);
     assert.deepEqual(ancestors.map((a) => a.threadRef).sort(), [mid.threadRef, root.threadRef].sort());
-    assert.deepEqual(await built.sessions.sameScopeAncestorsOfThreads([root.threadRef]), []);
+    assert.deepEqual(await built.sessions.sameScopeAncestors([root.threadRef]), []);
   } finally {
     await built.runtime.stop();
   }

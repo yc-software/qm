@@ -990,18 +990,19 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return participantSession(sessionId, principalId);
     },
 
-    async sameScopeAncestorsOfThreads(threadRefs) {
+    async sameScopeAncestors(threadRefs) {
       const rows = await q(
-        `WITH RECURSIVE up(leaf_scope, id, thread_ref, scope_id, parent_id, path) AS (
-           SELECT l.scope_id, p.id, p.thread_ref, p.scope_id, p.parent_session_id, ARRAY[l.id, p.id]
+        `WITH RECURSIVE up(leaf_scope, id, scope_id, parent_id, depth, path) AS (
+           SELECT l.scope_id, p.id, p.scope_id, p.parent_session_id, 1, ARRAY[l.id, p.id]
              FROM sessions l JOIN sessions p ON p.id = l.parent_session_id WHERE l.thread_ref = ANY($1::text[])
            UNION ALL
-           SELECT u.leaf_scope, p.id, p.thread_ref, p.scope_id, p.parent_session_id, u.path || p.id FROM up u
+           SELECT u.leaf_scope, p.id, p.scope_id, p.parent_session_id, u.depth + 1, u.path || p.id FROM up u
              CROSS JOIN LATERAL (SELECT * FROM sessions WHERE id = u.parent_id OFFSET 0) p WHERE NOT p.id = ANY(u.path)
-         ) SELECT DISTINCT id, thread_ref FROM up WHERE scope_id = leaf_scope`,
+         ), hits AS (SELECT id, min(depth) AS depth FROM up WHERE scope_id = leaf_scope GROUP BY id)
+         SELECT s.* FROM hits JOIN sessions s ON s.id = hits.id ORDER BY hits.depth, s.id`,
         [[...threadRefs]],
       );
-      return rows.map((r) => ({ id: r.id as string, threadRef: r.thread_ref as string }));
+      return rows.map(rowToSession);
     },
 
     async updateParticipantView(sessionId, principalId, patch): Promise<void> {
