@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { stagingApiHeaders } from "../src/deployment/postdeploy-smoke.ts";
+import { stagingApiHeaders, withCoreTenant } from "../src/deployment/postdeploy-smoke.ts";
 
 const core = process.env.CORE_URL ?? "http://localhost:8081";
 const principal = process.env.PRINCIPAL ?? "managed-agents-smoke";
@@ -46,7 +46,7 @@ async function main(): Promise<void> {
   log("REAL QM TURN EXECUTED IN A Managed Agents SANDBOX");
 }
 
-main().catch((e: unknown) => {
+withCoreTenant(core, sourceSecret, main).catch((e: unknown) => {
   console.error("[managed-agents-turn] FAILED", e);
   process.exit(1);
 });

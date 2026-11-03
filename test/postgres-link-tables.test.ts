@@ -39,7 +39,8 @@ test("one-time links are redeemed once and only by their own tenant", { skip }, 
     const flows = createOAuthFlowStore(store.oauthFlows, { now: () => AT });
     const links = createConsentLinkStore(store.consentLinks, { now: () => AT });
     const drops = createSecretDropStore(store.secretDrops, { now: () => AT });
-    const claim = { provider: "github", principalId: "U1", redirectUri: "https://qm.example/cb" };
+    const claim = { provider: "github", principalId: "U1", redirectUri: "https://qm.example/cb", tenant };
+    await withTenant(otherTenant, () => assert.rejects(flows.start(claim), /different tenant/));
     const { flowId, linkId, dropId } = await withTenant(tenant, async () => ({
       flowId: await flows.start(claim),
       linkId: (await links.mint({ principalId: "U1", provider: "github", accountType: "default", redirectUri: "r" }))
@@ -60,6 +61,7 @@ test("one-time links are redeemed once and only by their own tenant", { skip }, 
         redirectUri: "https://qm.example/cb",
         issuedAt: AT,
         nonce: flowId,
+        tenant,
       });
       assert.equal(await flows.finish(flowId), null);
       assert.equal((await links.peek(linkId)).ok, true);
