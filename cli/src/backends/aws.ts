@@ -27,6 +27,7 @@ import {
 import { CliError, dim, errMessage, header, note, ok, step, warn } from "../log.ts";
 import {
   awsWorkloadArchitecture,
+  FARGATE_MAX_STOP_TIMEOUT_S,
   requiresAwsMicrovmImage,
   isDigestPinned,
   sandboxCoreEnv,
@@ -498,6 +499,22 @@ function workloadArchitecture(config: QmConfig, workload: string): "arm64" | "am
   return awsWorkloadArchitecture(config, workload);
 }
 
+const CORE_SHUTDOWN_DRAIN_MS = 30_000;
+const CORE_EXIT_AFTER_DRAIN_S = 30;
+
+function coreStopTimeout(environment: Record<string, string>): number {
+  const raw = environment.SHUTDOWN_DRAIN_MS?.trim();
+  const drainMs = raw ? Number(raw) : CORE_SHUTDOWN_DRAIN_MS;
+  if (!Number.isFinite(drainMs) || drainMs < 0)
+    throw new CliError(`env.core.SHUTDOWN_DRAIN_MS=${raw} is not a number of milliseconds`);
+  const seconds = Math.ceil(drainMs / 1_000) + CORE_EXIT_AFTER_DRAIN_S;
+  if (seconds > FARGATE_MAX_STOP_TIMEOUT_S)
+    throw new CliError(
+      `env.core.SHUTDOWN_DRAIN_MS=${raw} leaves core no time to hand turns back before Fargate stops it (at most ${FARGATE_MAX_STOP_TIMEOUT_S} s after SIGTERM); use at most ${(FARGATE_MAX_STOP_TIMEOUT_S - CORE_EXIT_AFTER_DRAIN_S) * 1_000}, or set aws.services.core.stopTimeout`,
+    );
+  return seconds;
+}
+
 export function renderTaskDefinition(
   config: QmConfig,
   service: string,
@@ -524,6 +541,8 @@ export function renderTaskDefinition(
       })),
     )
     .sort((a, b) => a.name.localeCompare(b.name));
+  const environment = workloadEnvironment(config, service, backgroundDeploymentId);
+  const stopTimeout = spec.stopTimeout ?? (service === "core" ? coreStopTimeout(environment) : undefined);
   const healthCheck = def
     ? {
         command: def.tcpIngress?.healthCheck ?? [
@@ -555,9 +574,7 @@ export function renderTaskDefinition(
         name: service,
         image,
         essential: true,
-        environment: Object.entries(workloadEnvironment(config, service, backgroundDeploymentId)).map(
-          ([name, value]) => ({ name, value }),
-        ),
+        environment: Object.entries(environment).map(([name, value]) => ({ name, value })),
         secrets,
         portMappings: [
           {
@@ -569,7 +586,7 @@ export function renderTaskDefinition(
           },
         ],
         ...(healthCheck ? { healthCheck } : {}),
-        ...(spec.stopTimeout !== undefined ? { stopTimeout: spec.stopTimeout } : {}),
+        ...(stopTimeout !== undefined ? { stopTimeout } : {}),
         logConfiguration: {
           logDriver: "awslogs",
           options: {

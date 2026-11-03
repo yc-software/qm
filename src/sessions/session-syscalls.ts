@@ -9,7 +9,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
@@ -214,7 +214,7 @@ interface SessionSyscallBinding {
 }
 
 export interface SessionSyscalls {
-  receive?(timeoutMs?: number): Promise<SessionMessage[]>;
+  receive?(timeoutMs?: number, signal?: AbortSignal): Promise<SessionMessage[]>;
   acknowledge?(ids: string[]): Promise<void>;
   open(input: SessionOpenInput): Promise<SessionOpenResult>;
   write(input: SessionWriteInput): Promise<SessionWriteResult>;
@@ -404,8 +404,11 @@ export async function sessionTreeRoot(sessions: Pick<SessionStore, "get">, sessi
   return (await sessionAncestors(sessions, session)).at(-1) ?? session;
 }
 
-export async function stoppableAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
-  return (await sessionAncestors(sessions, session)).filter((ancestor) => ancestor.scopeId === session.scopeId);
+export async function stoppableAncestors(
+  sessions: Pick<SessionStore, "sameScopeAncestors">,
+  session: Session,
+): Promise<Session[]> {
+  return session.parentSessionId ? sessions.sameScopeAncestors([session.threadRef]) : [];
 }
 
 export async function sessionTreeWorking(
@@ -420,22 +423,14 @@ export async function sessionTreeWorking(
 }
 
 export async function workingSessionThreadRefs(
-  sessions: Pick<SessionStore, "get" | "getByThread">,
+  sessions: Pick<SessionStore, "sameScopeAncestors">,
   runs: Pick<RunStore, "activeSessionIds">,
   awaitingSessionIds: ReadonlySet<string>,
 ): Promise<Set<string>> {
   const active = await runs.activeSessionIds();
   const working = new Set(active);
-  await Promise.all(
-    active
-      .map(async (threadRef) => {
-        const session = await sessions.getByThread(threadRef);
-        if (!session?.parentSessionId) return;
-        for (const ancestor of await stoppableAncestors(sessions, session))
-          if (!awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
-      })
-      .map((lookup) => lookup.catch(swallowAs("session list: working ancestors", undefined))),
-  );
+  for (const ancestor of await sessions.sameScopeAncestors(active))
+    if (!awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
   return working;
 }
 
@@ -587,7 +582,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       }
 
       return {
-        async receive(timeoutMs = 0) {
+        async receive(timeoutMs = 0, signal) {
           const deadline = Date.now() + Math.min(60_000, Math.max(0, timeoutMs));
           do {
             binding.request.cancel?.throwIfAborted();
@@ -624,7 +619,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 continue;
               }
             }
-            if (visible.length || Date.now() >= deadline) return visible;
+            if (visible.length || Date.now() >= deadline || signal?.aborted) return visible;
             await sleep(Math.min(250, deadline - Date.now()));
           } while (Date.now() <= deadline);
           return [];

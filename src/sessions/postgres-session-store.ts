@@ -36,7 +36,7 @@ import type {
   StoreOptions,
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
-import { DROP_ITEMS_SEARCH, MESSAGE_SEARCH_INDEX, SESSION_SCHEMA, SPEND_INDEXABLE } from "./session-schema.ts";
+import { SESSION_MIGRATIONS, SPEND_INDEXABLE } from "./session-schema.ts";
 import {
   cronIdOf,
   promptEnvelopeBody,
@@ -102,6 +102,7 @@ export function rowToSession(r: Record<string, unknown>): Session {
         }
       : {}),
     ...(r.parent_session_id != null ? { parentSessionId: r.parent_session_id as string } : {}),
+    ...(r.origin != null ? { origin: r.origin as SessionOrigin } : {}),
     ...(r.spawn_meta != null ? { spawnMeta: JSON.parse(r.spawn_meta as string) as Session["spawnMeta"] } : {}),
   };
 }
@@ -167,7 +168,7 @@ const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => 
 const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
 const TENANT = "qm_tenant_id()";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
-  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.side_chat`;
+  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
 const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
 const OWN_CHAT = (s: string): string =>
@@ -272,10 +273,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const participantScopes = async (principalId: string): Promise<ParticipantScope[]> => {
     const rows = await q(
       `SELECT s.scope_id, MAX(s.channel_name) AS channel_name,
-              COUNT(*) FILTER (WHERE ${HAS_CONTENT}) AS session_count,
-              MAX(${USER_ACTIVITY}) FILTER (WHERE ${HAS_CONTENT}) AS last_activity
-         FROM sessions s
-         JOIN participants p ON p.session_id = s.id
+              COUNT(*) FILTER (WHERE s.has_content) AS session_count,
+              MAX(s.activity) FILTER (WHERE s.has_content) AS last_activity
+         FROM participants p
+        CROSS JOIN LATERAL (
+          SELECT s.scope_id, s.channel_name, ${USER_ACTIVITY} AS activity, ${HAS_CONTENT} AS has_content
+            FROM sessions s WHERE s.id = p.session_id OFFSET 0
+        ) s
         WHERE p.principal_id = $1
         GROUP BY s.scope_id`,
       [principalId],
@@ -303,7 +307,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     if (query.pinned !== undefined) where.push(`COALESCE(p.pinned, false) = ${param(query.pinned)}`);
     if (query.surface !== undefined) where.push(`s.surface = ${param(query.surface)}`);
     if (query.scopeId !== undefined) where.push(`s.scope_id = ${param(query.scopeId)}`);
-    if (query.sessionIds !== undefined) where.push(`s.id = ANY(${param([...query.sessionIds])}::text[])`);
+    if (query.sessionIds !== undefined) where.push(`p.session_id = ANY(${param([...query.sessionIds])}::text[])`);
     if (query.titleQuery?.trim()) {
       const pattern = param(likeContains(query.titleQuery.trim()));
       where.push(`(COALESCE(p.title, s.title) ILIKE ${pattern} OR s.channel_name ILIKE ${pattern})`);
@@ -313,7 +317,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     const limit = Math.max(1, Math.min(Math.floor(query.limit), 200));
     const page = await q(
       `SELECT s.id, ${USER_ACTIVITY} AS activity
-         FROM participants p JOIN sessions s ON s.id = p.session_id
+         FROM participants p ${
+           query.scopeId === undefined
+             ? "CROSS JOIN LATERAL (SELECT * FROM sessions WHERE id = p.session_id OFFSET 0) s"
+             : "JOIN sessions s ON s.id = p.session_id"
+         }
         WHERE ${where.join(" AND ")}
         ORDER BY ${USER_ACTIVITY} DESC, s.id DESC
         LIMIT ${param(limit + 1)}`,
@@ -352,19 +360,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const hasOrigin = (alias: string, origin: SessionOrigin): string => `${alias}.origin = '${origin}'`;
   const originFilterClause = (alias: string, origin: SessionOriginFilter): string =>
     origin === "other_background" ? `${alias}.origin NOT IN ('conversation', 'cron')` : hasOrigin(alias, origin);
-  const spendSql = `WITH RECURSIVE ancestry AS (
+  const ancestry = (seed: string): string => `ancestry AS (
            SELECT s.id AS session_id, s.parent_session_id, s.origin AS origin, s.origin_id AS cron_id,
                   ARRAY[s.id] AS path
              FROM sessions s
-            WHERE s.parent_session_id IS NOT NULL AND s.origin = 'conversation'
-              AND EXISTS (SELECT 1 FROM session_llm_requests r
-                           WHERE r.session_id = s.id AND r.created_at >= $1 AND r.created_at < $2
-                             AND r.usage_json IS NOT NULL)
+            WHERE ${seed}
            UNION ALL
            SELECT a.session_id, p.parent_session_id, p.origin, p.origin_id, a.path || p.id
              FROM ancestry a JOIN sessions p ON p.id = a.parent_session_id
             WHERE a.origin = 'conversation' AND NOT p.id = ANY(a.path) AND cardinality(a.path) < 64
-         ), origins AS (
+         )`;
+  const spendSql = `WITH RECURSIVE ${ancestry(`s.parent_session_id IS NOT NULL AND s.origin = 'conversation'
+              AND EXISTS (SELECT 1 FROM session_llm_requests r
+                           WHERE r.session_id = s.id AND r.created_at >= $1 AND r.created_at < $2
+                             AND r.usage_json IS NOT NULL)`)}, origins AS (
            SELECT DISTINCT ON (session_id) session_id, origin, cron_id
              FROM ancestry ORDER BY session_id, cardinality(path) DESC
          ), rollup AS MATERIALIZED (
@@ -404,12 +413,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
-  const { pool, q, query } = createPgPool(connectionString, [
-    ...DIRECTORY_MIGRATIONS,
-    SESSION_SCHEMA,
-    MESSAGE_SEARCH_INDEX,
-    DROP_ITEMS_SEARCH,
-  ]);
+  const { pool, q, query } = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS]);
 
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
@@ -666,6 +670,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async forceReleaseLease(sessionId): Promise<void> {
       await q("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
+    },
+
+    async fenceTurnLease(sessionId, until): Promise<void> {
+      const t = now();
+      await q(
+        `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at)
+           SELECT $1, $2, $3, 'turn', $4 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $1)
+         ON CONFLICT (session_id) DO UPDATE SET token = $2, expires_at = $3, holder = 'turn', acquired_at = $4
+           WHERE session_leases.holder = 'turn' OR session_leases.expires_at <= $4`,
+        [sessionId, randomUUID(), until, t],
+      );
     },
 
     async append(lease, entry: NewEntry): Promise<SessionEntry> {
@@ -988,6 +1003,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return descendantsOf(rootIds);
     },
 
+    async inheritedOrigin(session): Promise<SessionOrigin> {
+      const rows = await q(
+        `WITH RECURSIVE ${ancestry("s.id = $1")} SELECT origin FROM ancestry ORDER BY cardinality(path) DESC LIMIT 1`,
+        [session.id],
+      );
+      return (rows[0]?.origin as SessionOrigin | undefined) ?? "conversation";
+    },
+
     async listDescendantsForParticipant(rootId, principalId, limit): Promise<Session[]> {
       const ids = (await descendantsOf([rootId])).map((d) => d.id).slice(0, Math.max(0, Math.floor(limit)));
       if (!ids.length) return [];
@@ -1000,6 +1023,21 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async getForParticipant(sessionId, principalId): Promise<Session | null> {
       return participantSession(sessionId, principalId);
+    },
+
+    async sameScopeAncestors(threadRefs) {
+      const rows = await q(
+        `WITH RECURSIVE up(leaf_scope, id, scope_id, parent_id, depth, path) AS (
+           SELECT l.scope_id, p.id, p.scope_id, p.parent_session_id, 1, ARRAY[l.id, p.id]
+             FROM sessions l JOIN sessions p ON p.id = l.parent_session_id AND p.id <> l.id WHERE l.thread_ref = ANY($1::text[])
+           UNION ALL
+           SELECT u.leaf_scope, p.id, p.scope_id, p.parent_session_id, u.depth + 1, u.path || p.id FROM up u
+             CROSS JOIN LATERAL (SELECT * FROM sessions WHERE id = u.parent_id OFFSET 0) p WHERE NOT p.id = ANY(u.path)
+         ), hits AS (SELECT id, min(depth) AS depth FROM up WHERE scope_id = leaf_scope GROUP BY id)
+         SELECT s.* FROM hits JOIN sessions s ON s.id = hits.id ORDER BY hits.depth, s.id`,
+        [[...threadRefs]],
+      );
+      return rows.map(rowToSession);
     },
 
     async updateParticipantView(sessionId, principalId, patch): Promise<void> {

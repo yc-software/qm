@@ -35,7 +35,6 @@ import { guard } from "lit/directives/guard.js";
 import {
   Activity,
   ArrowDown,
-  Ban,
   BookOpen,
   Search,
   Brain,
@@ -180,7 +179,7 @@ import {
   replacePendingSession,
   groupDmTitle,
   refreshSessions,
-  refreshSubagentRows,
+  refreshTree,
   renderList,
   sessionsState,
   sessionSlackUrl,
@@ -1638,7 +1637,7 @@ export function createChatSurface(
     if (activePendingApprovals().length) return "Needs your approval";
     if (agent.state.isStreaming || chatState.resolvingApprovals.size > 0) {
       const work = chatState.liveWork ?? { status: "thinking", activity: [] };
-      if (runSlot.stopGeneration === runSlot.generation) return "Stop requested";
+      if (runSlot.stopGeneration === runSlot.generation) return "Stopping…";
       if (currentTextPhase(work)?.phase === "final_answer") return "Responding…";
       const summary = liveWorkSummary(work);
       if (!summary) return "Thinking…";
@@ -2749,7 +2748,7 @@ export function createChatSurface(
   function syncSubagentRowsRefresh(rootId: string | null): void {
     if (subagentUi.rowsRoot === rootId) return;
     if (subagentUi.rowsTimer) clearInterval(subagentUi.rowsTimer);
-    subagentUi.rowsTimer = rootId ? setInterval(() => void refreshSubagentRows(rootId), SUBAGENT_POLL_MS) : null;
+    subagentUi.rowsTimer = rootId ? setInterval(() => refreshTree(rootId), SUBAGENT_POLL_MS) : null;
     subagentUi.rowsRoot = rootId;
   }
 
@@ -2988,12 +2987,14 @@ export function createChatSurface(
 
   function liveWorkStatus(agent: Agent): TemplateResult | typeof nothing {
     if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0) return nothing;
-    if (runSlot.stopGeneration === runSlot.generation)
-      return html`<div class="stopped-head" role="status">${icon(Ban, 13)}<span>Stop requested</span></div>`;
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
+    const streaming = agent.state.streamingMessage as AssistantWork | undefined;
+    if (runSlot.stopGeneration === runSlot.generation)
+      return shouldShowWork(streaming?.work ?? work, "")
+        ? nothing
+        : html`<div class="stopped-head" role="status">Stopping…</div>`;
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     if (currentTextPhase(work)?.phase === "final_answer" || shouldShowWork(work, "")) return nothing;
-    const streaming = agent.state.streamingMessage as AssistantWork | undefined;
     if (streaming && streaming.work === work && preStepWork(work)) return nothing;
     const summary = liveWorkSummary(work);
     const expandable = Boolean(summary?.detail);
@@ -3132,14 +3133,16 @@ export function createChatSurface(
       });
       const tail = active && last ? streamedAnswer(text, work) : "";
       const stopping = isStreaming && runSlot.stopGeneration === runSlot.generation;
+      const ending = last && (stopped || stopping);
       const animating = active && last && !stopping;
-      const oneStep = animating && !work.stale && !work.pendingApprovals?.length;
+      const live = active && last && !work.stale && !work.pendingApprovals?.length;
+      const oneStep = live && !stopping;
       const step = oneStep
         ? currentStep(timeline, work, (payload) => TOOL_META[toolCategory(payload)] ?? UNKNOWN_TOOL)
         : null;
       let label = last ? workLabel(work) : "Worked";
       if (step) label = step.label;
-      if (stopping && last) label = "Stop requested";
+      if (stopping && last) label = "Stopping…";
       if (stopped && last) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
       const elapsed = step ? liveWorkDuration(work) : "";
       if (last) liveStepLine.track(step);
@@ -3153,16 +3156,16 @@ export function createChatSurface(
       let fold =
         timeline.length || tail.trim() || (last && (active || work.pendingApprovals?.length))
           ? html`<details
-              class=${stopped && last ? "stopped-work" : `work work-fold work-${work.status}`}
-              ?open=${last && (oneStep ? liveFoldOpened : active || !!work.pendingApprovals?.length)}
+              class=${ending ? "stopped-work" : `work work-fold work-${work.status}`}
+              ?open=${last && (live ? liveFoldOpened : active || !!work.pendingApprovals?.length)}
               @toggle=${(event: Event) => {
-                if (oneStep) liveFoldOpened = (event.currentTarget as HTMLDetailsElement).open;
+                if (live) liveFoldOpened = (event.currentTarget as HTMLDetailsElement).open;
               }}
             >
-              <summary class=${stopped && last ? "stopped-head" : "work-head"}>
+              <summary class=${ending ? "stopped-head" : "work-head"}>
                 ${liveStepLine.line(step && last ? step : null, label, animating, elapsed)}
               </summary>
-              ${stopped && last ? nothing : html`<div class="work-divider"></div>`}
+              ${ending ? nothing : html`<div class="work-divider"></div>`}
               <div class="work-rows">
                 ${guard(
                   [
@@ -3206,7 +3209,7 @@ export function createChatSurface(
               </div>
             </details>`
           : nothing;
-      if (stopped && last && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
+      if (ending && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
       const said = tail.trim()
         ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}" dir="auto">
             ${markdown(tail, animating, streamedAnswer(baseline, work))}

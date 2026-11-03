@@ -222,11 +222,14 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       host.querySelector<HTMLButtonElement>('[aria-label="Stop"]')!.click();
       assert.equal(host.querySelector('[aria-label="Stop"]'), null);
       assert.equal(host.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.disabled, false);
-      assert.match(host.querySelector('[role="status"]')?.textContent ?? "", /Stop requested/);
+      assert.equal(host.querySelector<HTMLButtonElement>('[aria-label="Stopping…"]')?.disabled, true);
+      assert.deepEqual(
+        [...host.querySelectorAll(".stopped-head")].map((head) => head.textContent?.trim()),
+        ["Stopping…"],
+      );
       assert.equal(host.querySelector(".live-work-status"), null);
       assert.equal(host.querySelector(".thinking-sheen"), null);
       assert.equal(host.querySelector(".live-stream"), null);
-      assert.match(host.querySelector(".work-head")?.textContent ?? "", /Stop requested/);
       streaming.work.activity.push({
         seq: 2,
         parentSeq: null,

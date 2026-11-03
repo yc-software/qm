@@ -45,7 +45,6 @@ export DATABASE_URL="postgres://postgres:test-password@127.0.0.1:$direct_port/po
 export DATABASE_POOL_URL="postgres://postgres:test-password@127.0.0.1:$pooled_port/postgres"
 export DATABASE_POOL_CA_CERT
 DATABASE_POOL_CA_CERT=$(cat "$fixture/server.crt")
-export DATABASE_DIRECT_POOL_MAX=1 DATABASE_POOL_MAX=4
 for attempt in $(seq 1 60); do
   if docker logs "$name-pool" 2>&1 | grep -q 'process up'; then break; fi
   sleep 1
