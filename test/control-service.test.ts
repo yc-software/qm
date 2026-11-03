@@ -54,9 +54,10 @@ function setup(): { built: BuiltApp; control: ControlService } {
   return { built, control };
 }
 
+const withApp = (fn: (app: ReturnType<typeof setup>) => Promise<void>) => inTestTenant(() => fn(setup()));
+
 test("unattended cron grants require a live org-admin owner and protect later patches", () =>
-  inTestTenant(async () => {
-    const { control } = setup();
+  withApp(async ({ control }) => {
     const grant = ["admin.sessions.read"];
     const request = { schedule: { everyMs: 3_600_000 }, action: "scan failures", unattendedGrants: grant };
 
@@ -125,8 +126,7 @@ test("unattended cron grants require a live org-admin owner and protect later pa
   }));
 
 test("every unattended read grant type is accepted on create", () =>
-  inTestTenant(async () => {
-    const { control } = setup();
+  withApp(async ({ control }) => {
     const grants = [
       "admin.sessions.read",
       "admin.audit.read",
@@ -144,8 +144,7 @@ test("every unattended read grant type is accepted on create", () =>
   }));
 
 test("a grant-carrying cron lives in its owner's DM, and only the live owner chooses where its output goes", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     await built.app.upsertDirectory([
       { principalId: "admin-alice", displayName: "Alice", type: "internal" },
       { principalId: "U2", displayName: "User Two", type: "internal" },
@@ -181,8 +180,7 @@ test("a grant-carrying cron lives in its owner's DM, and only the live owner cho
   }));
 
 test("a raw unreaffirmed cron patch strips unattended grants; a live-owner patch reaffirms them", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     const created = await control.createCron(
       { schedule: { everyMs: 3_600_000 }, action: "scan failures", unattendedGrants: ["admin.sessions.read"] },
       claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
@@ -212,8 +210,7 @@ test("a raw unreaffirmed cron patch strips unattended grants; a live-owner patch
   }));
 
 test("cron create with a destinationKey resolves to that menu destination, and returns the created cron", () =>
-  inTestTenant(async () => {
-    const { control } = setup();
+  withApp(async ({ control }) => {
     const r = await control.createCron(
       {
         title: "Gmail digest",
@@ -235,8 +232,7 @@ test("cron create with a destinationKey resolves to that menu destination, and r
 
 for (const state of ["active", "paused", "archived", "completed"] as const) {
   test(`cron creation is not limited by 101 ${state} tasks owned by the same person`, () =>
-    inTestTenant(async () => {
-      const { built, control } = setup();
+    withApp(async ({ built, control }) => {
       const firstFireAt = Date.now() + 60_000;
       for (let i = 0; i < 101; i++) {
         const cron = await built.crons.create({
@@ -263,8 +259,7 @@ for (const state of ["active", "paused", "archived", "completed"] as const) {
 }
 
 test("a calendar cron without an explicit timezone inherits the turn's timezone (not the global default)", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     const r = await control.createCron(
       { title: "standup", schedule: { cron: "0 9 * * 1-5" }, action: "post standup" },
       claims("U1", scopeId("personal", "U1"), { timezone: "Europe/Berlin" }),
@@ -313,8 +308,7 @@ test("cron create rejects unfurlLinks when there is no delivery destination", as
 });
 
 test("cron create with `recipient` resolves a teammate by name and runs at the sender's personal scope", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     await built.app.upsertDirectory([
       { principalId: "U1", displayName: "Alice", type: "internal" },
       { principalId: "U2", displayName: "Bob Jones", type: "internal" },
@@ -333,8 +327,7 @@ test("cron create with `recipient` resolves a teammate by name and runs at the s
   }));
 
 test("a recurring cron addressed to a teammate targets them directly and sends nothing at creation", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     await built.app.upsertDirectory([
       { principalId: "U1", displayName: "Alice", type: "internal" },
       { principalId: "U2", displayName: "Bob Jones", type: "internal" },
@@ -354,8 +347,7 @@ test("a recurring cron addressed to a teammate targets them directly and sends n
   }));
 
 test("a recurring teammate cron stops delivering once the recipient is no longer an addressable teammate", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     await built.app.upsertDirectory([
       { principalId: "U1", displayName: "Alice", type: "internal" },
       { principalId: "U2", displayName: "Bob", type: "internal" },
@@ -380,8 +372,7 @@ test("a recurring teammate cron stops delivering once the recipient is no longer
   }));
 
 test("a teammate-addressed cron runs in the OWNER's scope; the recipient is delivery-only (run scope ⊆ owner-accessible)", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     await built.app.upsertDirectory([
       { principalId: "U1", displayName: "Alice", type: "internal" },
       { principalId: "U2", displayName: "Bob", type: "internal" },
@@ -401,8 +392,7 @@ test("a teammate-addressed cron runs in the OWNER's scope; the recipient is deli
   }));
 
 test("an ambiguous recipient name returns candidates, not a created cron", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     await built.app.upsertDirectory([
       { principalId: "U2", displayName: "Sam Lee", type: "internal" },
       { principalId: "U3", displayName: "Sam Park", type: "internal" },
@@ -417,8 +407,7 @@ test("an ambiguous recipient name returns candidates, not a created cron", () =>
   }));
 
 test("an unknown recipient is recipient_not_found", () =>
-  inTestTenant(async () => {
-    const { control } = setup();
+  withApp(async ({ control }) => {
     const r = await control.createCron(
       { schedule: { firstFireAt: Date.now() }, text: "hi", recipient: "Nobody" },
       claims("U1"),
@@ -428,8 +417,7 @@ test("an unknown recipient is recipient_not_found", () =>
   }));
 
 test("cron create with `channel` resolves a public channel; a private channel needs membership", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     await built.app.upsertDirectory([
       { principalId: "U1", displayName: "User One", type: "internal" },
       { principalId: "U2", displayName: "User Two", type: "internal" },
@@ -472,8 +460,7 @@ test("cron create with `channel` resolves a public channel; a private channel ne
   }));
 
 test('scope:"personal" runs at the invoking user\'s personal scope and DMs them, even from a channel', () =>
-  inTestTenant(async () => {
-    const { control } = setup();
+  withApp(async ({ control }) => {
     const chanScope = scopeId("channel", "C9");
     const r = await control.createCron(
       { title: "my private reminder", schedule: { everyMs: 3_600_000 }, action: "remind me", scope: "personal" },
@@ -506,8 +493,7 @@ test('scope:"personal" can\'t be combined with an addressed target or a destinat
 });
 
 test('scope:"personal" ignores an empty participants array (tool callers often send []), but a non-empty one conflicts', () =>
-  inTestTenant(async () => {
-    const { control } = setup();
+  withApp(async ({ control }) => {
     const ok = await control.createCron(
       { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal", participants: [] },
       claims("U1", scopeId("channel", "C9")),
@@ -637,8 +623,7 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
   }));
 
 test("app.turn forwards ownerKeychainUnion onto the persisted run request (else scheduled fires lose the union)", () =>
-  inTestTenant(async () => {
-    const { built } = setup();
+  withApp(async ({ built }) => {
     const base = {
       surface: "cron",
       actor: { externalId: "U1" },
@@ -685,8 +670,7 @@ test("app.turn forwards ownerKeychainUnion onto the persisted run request (else 
   }));
 
 test("cron list / get / patch / delete / run round-trip with owner authz", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     const updateCron = built.app.updateCron.bind(built.app);
     let updateCalls = 0;
     built.app.updateCron = async (id, patch) => {
@@ -763,8 +747,7 @@ test("cron list / get / patch / delete / run round-trip with owner authz", () =>
   }));
 
 test("cron get honors read-only visibility: a delivery-targeted viewer reads, never administers", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     const created = await control.createCron(
       { title: "digest", schedule: { everyMs: 3_600_000 }, action: "do x" },
       claims("U1"),
@@ -786,8 +769,7 @@ test("cron get honors read-only visibility: a delivery-targeted viewer reads, ne
   }));
 
 test("webhook create surfaces the inbound url + the secret verbatim; list elides; disable is owner-gated", () =>
-  inTestTenant(async () => {
-    const { control } = setup();
+  withApp(async ({ control }) => {
     const r = await control.createWebhook(
       {
         action: "handle the event",
@@ -817,8 +799,7 @@ test("webhook create surfaces the inbound url + the secret verbatim; list elides
   }));
 
 test("soul read returns the effective SOUL; write replaces this scope's SOUL and bumps the version", () =>
-  inTestTenant(async () => {
-    const { control } = setup();
+  withApp(async ({ control }) => {
     const before = control.readSoul(claims("U1"));
     assert.equal(before.soul, null);
 
@@ -840,8 +821,7 @@ test("soul write in a shared (channel) scope is allowed (allowSharedScope, like 
 });
 
 test("soul write separates a refused scope from a failed write", () =>
-  inTestTenant(async () => {
-    const { control } = setup();
+  withApp(async ({ control }) => {
     const denied = await control.writeSoul("Not my scope.", claims("U1", scopeId("personal", "U2")));
     assert.equal(denied.ok ? "" : denied.code, "soul_update_denied");
 
@@ -850,8 +830,7 @@ test("soul write separates a refused scope from a failed write", () =>
   }));
 
 test("noteCron stores a flattened shift-change note, overwriting the previous one, with owner authz", () =>
-  inTestTenant(async () => {
-    const { control } = setup();
+  withApp(async ({ control }) => {
     const created = await control.createCron(
       { title: "digest", schedule: { everyMs: 3_600_000 }, action: "check gmail" },
       claims("U1"),
@@ -882,8 +861,7 @@ test("noteCron stores a flattened shift-change note, overwriting the previous on
   }));
 
 test("a note from the cron's own fire is anonymous and stamped with that fire's start time; other writers are attributed and notified", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     const created = await control.createCron({ schedule: { everyMs: 3_600_000 }, action: "poll" }, claims("U1"));
     assert.ok(created.ok);
     const id = created.cron.id;
@@ -940,8 +918,7 @@ test("a note from the cron's own fire is anonymous and stamped with that fire's 
   }));
 
 test("noteCron rejects empty, over-cap (counted in code points), and marker-forging notes, leaving the stored note alone", () =>
-  inTestTenant(async () => {
-    const { control } = setup();
+  withApp(async ({ control }) => {
     const created = await control.createCron({ schedule: { everyMs: 3_600_000 }, action: "poll" }, claims("U1"));
     assert.ok(created.ok);
     const id = created.cron.id;
@@ -978,8 +955,7 @@ test("noteCron rejects empty, over-cap (counted in code points), and marker-forg
   }));
 
 test("noteCron refuses crons whose fires never read notes — archived, one-shot, loop-backed, bang tasks", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     const recurring = await control.createCron({ schedule: { everyMs: 3_600_000 }, action: "poll" }, claims("U1"));
     assert.ok(recurring.ok);
     await control.patchCron(recurring.cron.id, { archived: true }, claims("U1"));
@@ -1028,8 +1004,7 @@ test("noteCron refuses crons whose fires never read notes — archived, one-shot
   }));
 
 test("a privileged cron's note is writable by its own fire (grants intact) but refused to other unattended sessions", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     const grant = ["admin.sessions.read"];
     const created = await control.createCron(
       { schedule: { everyMs: 3_600_000 }, action: "scan failures", unattendedGrants: grant },
@@ -1064,8 +1039,7 @@ test("a privileged cron's note is writable by its own fire (grants intact) but r
   }));
 
 test("cron runtime create and patch retain ownership gates and refuse unavailable choices", () =>
-  inTestTenant(async () => {
-    const { built, control } = setup();
+  withApp(async ({ built, control }) => {
     const runtime = { modelId: "claude-sonnet-5" };
     const created = await control.createCron(
       { title: "runtime", schedule: { everyMs: 60_000 }, action: "check", runtime },
@@ -1089,8 +1063,7 @@ test("cron runtime create and patch retain ownership gates and refuse unavailabl
   }));
 
 test("scheduled runtime is refused before execution when its model is no longer enabled, including credential resumes", () =>
-  inTestTenant(async () => {
-    const { built } = setup();
+  withApp(async ({ built }) => {
     await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
     for (const surface of ["cron", "keychain-ask"]) {
       const result = await built.app.turn({
@@ -1107,8 +1080,7 @@ test("scheduled runtime is refused before execution when its model is no longer 
   }));
 
 test("queued cron rechecks its runtime after admission and preserves the override in durable work", (t) =>
-  inTestTenant(async () => {
-    const { built } = setup();
+  withApp(async ({ built }) => {
     const original = built.runs.enqueue.bind(built.runs);
     t.mock.method(built.runs, "enqueue", async (input: Parameters<typeof original>[0]) => {
       const result = await original(input);

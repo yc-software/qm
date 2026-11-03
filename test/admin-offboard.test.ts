@@ -168,7 +168,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
         `webhook:${webhook.id}:disable`,
       ].sort(),
     );
-    assert.equal(identity.classify("U1").type, "internal", "preview changes nothing");
+    assert.equal(inTestTenant(() => identity.classify("U1")).type, "internal", "preview changes nothing");
     assert.equal((await inTestTenant(() => app.getCron(personalCron.id)))!.enabled, true);
     assert.deepEqual(s.archivedApps, []);
 
@@ -179,7 +179,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       [["app-broken", "runtime destroy failed"]],
       "one failure is reported and does not stop the rest",
     );
-    assert.equal(identity.classify("U1").type, "guest", "sign-in is off");
+    assert.equal(inTestTenant(() => identity.classify("U1")).type, "guest", "sign-in is off");
     for (const id of [personalCron.id, channelCron.id]) {
       const cron = (await inTestTenant(() => app.getCron(id)))!;
       assert.equal(cron.enabled, false);
@@ -236,7 +236,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       headers: { ...testTenantHeaders(), ...ADMIN },
     });
     assert.equal(reactivated.status, 200);
-    assert.equal(identity.classify("U1").type, "internal");
+    assert.equal(inTestTenant(() => identity.classify("U1")).type, "internal");
     assert.equal(
       (await inTestTenant(() => app.getCron(personalCron.id)))!.archived,
       true,

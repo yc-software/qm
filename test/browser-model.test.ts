@@ -128,23 +128,25 @@ test("browser inference uses the company gateway with scoped model authorization
   const limited = await post(body);
   assert.equal(limited.status, 429);
   assert.ok(!(await limited.text()).includes(key));
-  await built.config.setSecurityPosture("personal:U1", "strict");
+  await inTestTenant(() => built.config.setSecurityPosture("personal:U1", "strict"));
   assert.equal((await post(body)).status, 403);
-  await built.config.setSecurityPosture("personal:U1", "auto");
-  await built.config.setPersonalModelAuth("U1", true, "openai");
+  await inTestTenant(() => built.config.setSecurityPosture("personal:U1", "auto"));
+  await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
   assert.equal((await post(body)).status, 409);
-  await built.userModelCredentials.setOAuth("U1", "anthropic", {
-    accessToken: "subscription-test",
-    expiresAt: Date.now() + 3600_000,
-  });
-  await built.config.setPersonalModelAuth("U1", true, "anthropic");
+  await inTestTenant(() =>
+    built.userModelCredentials.setOAuth("U1", "anthropic", {
+      accessToken: "subscription-test",
+      expiresAt: Date.now() + 3600_000,
+    }),
+  );
+  await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "anthropic"));
   const claudeToken = await inTestTenant(() =>
     mintCapabilityToken({ ...claims, browserAccount: "anthropic" }, TEST_CAPABILITY_SECRET),
   );
   const unsupported = await post(body, claudeToken);
   assert.equal(unsupported.status, 422);
   assert.match(await unsupported.text(), /Claude subscription/);
-  await built.config.setPersonalModelAuth("U1", false);
+  await inTestTenant(() => built.config.setPersonalModelAuth("U1", false));
   delete routes[model];
   assert.equal((await post(body)).status, 503);
   assert.equal(calls.length, 3);
