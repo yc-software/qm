@@ -151,7 +151,7 @@ export function createPostgresTeamStore(
         await db.query(
           `INSERT INTO teams (team_id, name, isolated_in_open, created_by, created_at)
            VALUES ($1, COALESCE($2, $1), COALESCE($3, FALSE), $4, $5)
-           ON CONFLICT (team_id) DO UPDATE SET
+           ON CONFLICT (tenant_id, team_id) DO UPDATE SET
              name = COALESCE($2, teams.name),
              isolated_in_open = COALESCE($3, teams.isolated_in_open)`,
           [c.id, c.name ?? null, c.isolatedInOpen ?? null, actorId, now],
@@ -164,7 +164,7 @@ export function createPostgresTeamStore(
           await db.query(
             `INSERT INTO team_members (team_id, principal_id, role, added_by, added_at)
              SELECT $1, p, r, $4, $5 FROM unnest($2::text[], $3::text[]) AS x(p, r)
-             ON CONFLICT (team_id, principal_id) DO UPDATE SET role = EXCLUDED.role`,
+             ON CONFLICT (tenant_id, team_id, principal_id) DO UPDATE SET role = EXCLUDED.role`,
             [c.id, people.map(([p]) => p), people.map(([, r]) => r), actorId, now],
           );
         if (c.drop?.length)

@@ -124,7 +124,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
         )
         INSERT INTO memory_fact_vectors(scope_id, model, fact_id, fact_hash, dimensions, embedding)
         SELECT scope, model, "factId", hash, jsonb_array_length(vector), vector::text::vector FROM live
-        ON CONFLICT (scope_id, model, fact_id) DO UPDATE
+        ON CONFLICT (tenant_id, scope_id, model, fact_id) DO UPDATE
         SET fact_hash = EXCLUDED.fact_hash, dimensions = EXCLUDED.dimensions, embedding = EXCLUDED.embedding`,
         [JSON.stringify([...latest.values()])],
         { signal, timeoutMs: 5000 },

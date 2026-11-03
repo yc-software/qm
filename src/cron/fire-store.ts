@@ -50,7 +50,7 @@ const ROW_OF = (prefix: string): string => `(${VALUE_COLUMN_DEFS.map((c) => `${p
 
 const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
    VALUES (${FIRE_COLUMN_DEFS.map((_c, i) => `$${i + 1}`).join(", ")})
-   ON CONFLICT (cron_id, fire_key) DO UPDATE
+   ON CONFLICT (tenant_id, cron_id, fire_key) DO UPDATE
      SET ${UPSERT_SET}`;
 
 const BACKFILL_CHUNK = 500;
@@ -209,7 +209,7 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
         await query(
           `INSERT INTO cron_fires (${FIRE_COLUMNS})
            SELECT * FROM unnest(${FIRE_COLUMN_DEFS.map((c, i) => `$${i + 1}::${c.cast}[]`).join(", ")})
-           ON CONFLICT (cron_id, fire_key) DO UPDATE
+           ON CONFLICT (tenant_id, cron_id, fire_key) DO UPDATE
              SET ${UPSERT_SET}
            WHERE EXCLUDED.fired_at >= cron_fires.fired_at
              AND (cron_fires.ended_at IS NULL OR EXCLUDED.ended_at IS NOT NULL)

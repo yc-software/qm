@@ -164,14 +164,14 @@ export function createSwarmStore(
         );
         if (!session.rowCount) throw new Error("capability session mismatch");
         await client.query(
-          "INSERT INTO durable_map_versions (tbl,v) VALUES ('swarms',1) ON CONFLICT (tbl) DO UPDATE SET v=durable_map_versions.v+1",
+          "INSERT INTO durable_map_versions (tbl,v) VALUES ('swarms',1) ON CONFLICT (tenant_id, tbl) DO UPDATE SET v=durable_map_versions.v+1",
         );
         const current = await client.query<{ json: SwarmStorage }>("SELECT json FROM swarms WHERE id=$1 FOR UPDATE", [
           id,
         ]);
         const next = mutate(current.rows[0]?.json ?? null);
         await client.query(
-          "INSERT INTO swarms (id,json) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET json=EXCLUDED.json",
+          "INSERT INTO swarms (id,json) VALUES ($1,$2) ON CONFLICT (tenant_id, id) DO UPDATE SET json=EXCLUDED.json",
           [id, jsonbStringify(next)],
         );
         assertSwarmRun(fence, run);
