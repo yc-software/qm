@@ -210,7 +210,7 @@ const LIVE_ORIGIN_REWRITES = [
       "runs",
       `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
        WHERE r.status IN ('done', 'failed')
-         AND r.finished_at >= (extract(epoch FROM clock_timestamp()) * 1000)::bigint - ${RECENTLY_FINISHED_MS}
+         AND r.finished_at >= (extract(epoch FROM now()) * 1000)::bigint - ${RECENTLY_FINISHED_MS}
          AND ${oldKeysIn("r.request")}`,
     ),
     ifTable(
@@ -294,7 +294,9 @@ const rewriteRuns = (rows: string) =>
     "runs",
     `UPDATE runs r SET request = pg_temp.qm_turn_origin_request_text(r.request) WHERE ${rows} AND ${runOriginChanges("r")}`,
   );
-const LIVE_RUNS = "(r.status IN ('pending', 'running') OR r.finished_at >= (extract(epoch FROM now()) * 1000)::bigint)";
+const LIVE_RUNS = "r.status IN ('pending', 'running')";
+const SETTLED_SINCE_START =
+  "r.status IN ('done', 'failed') AND r.finished_at >= (extract(epoch FROM now()) * 1000)::bigint";
 const REPLAYABLE_ORIGIN_REWRITES = [
   ifTable(
     "run_signals",
@@ -314,6 +316,7 @@ const REPLAYABLE_ORIGIN_REWRITES = [
 export const TURN_ORIGIN_MIGRATION = originMigration("surfaces/0005-turn-origin-backfill", [
   rewriteRuns("r.status NOT IN ('pending', 'running')"),
   rewriteRuns(LIVE_RUNS),
+  rewriteRuns(SETTLED_SINCE_START),
   ...REPLAYABLE_ORIGIN_REWRITES,
 ]);
 
