@@ -3,7 +3,6 @@ import type { Config } from "../../src/config.ts";
 import type { Agent, ScreenSecurityInput } from "../../src/agent/agent.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockAgent } from "./mock-agent.ts";
-import { tenantReady } from "../../src/tenants/context.ts";
 import { inTestTenant } from "./test-tenants.ts";
 
 const built: BuiltApp[] = [];
@@ -55,6 +54,6 @@ export async function buildLoadedApp(
   overrides: Parameters<typeof buildProductionApp>[1] = {},
 ): Promise<BuiltApp & { modelCalls: ModelCall[] }> {
   const app = buildApp(config, overrides);
-  await inTestTenant(() => tenantReady());
+  await inTestTenant(() => undefined);
   return app;
 }

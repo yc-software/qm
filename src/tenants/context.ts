@@ -3,12 +3,11 @@ import {
   isTenantId,
   onFirstBind,
   pinTenant,
-  tenantReady,
   withoutTenant,
   withTenant,
 } from "../../plugins/chassis/src/tenant.ts";
 
-export { boundTenant, isTenantId, onFirstBind, pinTenant, tenantReady, withoutTenant, withTenant };
+export { boundTenant, isTenantId, onFirstBind, pinTenant, withoutTenant, withTenant };
 
 export function tenantClaim(): { tenant?: string } {
   const tenant = boundTenant();

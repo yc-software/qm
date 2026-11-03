@@ -15,7 +15,7 @@ export function tenantBoundUrl(databaseUrl: string, tenant = testTenants()[0]): 
   return url.toString();
 }
 
-export function inTestTenant<T>(fn: () => T, tenant = testTenants()[0]): T {
+export function inTestTenant<T>(fn: () => T, tenant = testTenants()[0]): Promise<Awaited<T>> {
   return withTenant(tenant, fn);
 }
 

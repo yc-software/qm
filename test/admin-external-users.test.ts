@@ -839,7 +839,7 @@ tenantTest("invitation redemption requires source authentication before consumin
     assert.equal(unsigned.status, 401);
     const signed = await fetch(`${s.base}${path}`, {
       method: "POST",
-      headers: inTestTenant(() => signedHeaders(SECRET, "POST", path, body)),
+      headers: await inTestTenant(() => signedHeaders(SECRET, "POST", path, body)),
       body,
     });
     assert.equal(signed.status, 200);
@@ -847,7 +847,7 @@ tenantTest("invitation redemption requires source authentication before consumin
     const reusedPath = withSourceAuthNonce("/v1/auth/invitations/redeem", SECRET);
     const reused = await fetch(`${s.base}${reusedPath}`, {
       method: "POST",
-      headers: inTestTenant(() => signedHeaders(SECRET, "POST", reusedPath, body)),
+      headers: await inTestTenant(() => signedHeaders(SECRET, "POST", reusedPath, body)),
       body,
     });
     assert.equal(reused.status, 400);

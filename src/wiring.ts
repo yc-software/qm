@@ -36,7 +36,7 @@ import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
 import { createRunStreamBus, emitRunReasoning, emitRunText, serveRunStreamSync } from "./runs/run-stream-events.ts";
-import { onFirstBind, perTenant, withTenant } from "./tenants/context.ts";
+import { onFirstBind, perTenant } from "./tenants/context.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
@@ -1320,11 +1320,7 @@ export function buildApp(
     setCustomProviders(await customProviders.enabled());
   };
   const loadTenant = () =>
-    onFirstBind((tenant) =>
-      withTenant(tenant, () =>
-        Promise.all([identity.ready(), configStore.hydrate?.(), refreshCustomProviders(), seedTenant()]),
-      ),
-    );
+    onFirstBind(() => Promise.all([identity.ready(), configStore.hydrate?.(), refreshCustomProviders(), seedTenant()]));
   let stopTenantLoad: (() => void) | undefined = loadTenant();
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
