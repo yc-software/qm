@@ -193,25 +193,30 @@ test("workspace directories are tenant-scoped", async () => {
   assert.equal(await withTenant(A, () => store.read("personal:alice@example.com", "notes.md")), "a");
 });
 
-test("storage migration moves legacy objects under the instance tenant and keeps existing tenant copies", async () => {
+test("storage migration moves legacy objects under the instance tenant, keeps existing tenant copies and skips other tenants", async () => {
   const s3 = fakeS3();
   s3.objects.set("p/files/abc", { body: Buffer.from("file"), at: new Date(1) });
   s3.objects.set("p/files/uploads/0123", { body: Buffer.from("upload"), at: new Date(1) });
   s3.objects.set("modal-home/personal%3Aa.tar", { body: Buffer.from("old"), at: new Date(1) });
   s3.objects.set("modal-home/personal%3Ab.tar", { body: Buffer.from("legacy"), at: new Date(1) });
-  s3.objects.set("deploy-data/0123/litestream/generations/x", { body: Buffer.from("wal"), at: new Date(1) });
+  s3.objects.set(`deploy-data/11111111-2222-4333-8444-555555555555/litestream/generations/x`, {
+    body: Buffer.from("wal"),
+    at: new Date(1),
+  });
+  s3.objects.set(`modal-home/${B}/personal%3Ac.tar`, { body: Buffer.from("other install"), at: new Date(1) });
   s3.objects.set(`modal-home/${A}/personal%3Aa.tar`, { body: Buffer.from("new"), at: new Date(2) });
   const tenants = new Set([A]);
   const docstore = { client: s3.client, bucket: "b", from: "p/files/", to: "p/docstore/", under: "files/" };
   const homes = { client: s3.client, bucket: "b", from: "modal-home/", to: "modal-home/" };
   assert.equal(await migrateObjects(docstore, tenants, A), 2);
-  const data = { client: s3.client, bucket: "b", from: "deploy-data/", to: "deploy-data/" };
+  const data = { client: s3.client, bucket: "b", from: "deploy-data/", to: "deploy-data/", deploymentFolders: true };
   assert.equal(await migrateObjects(homes, tenants, A), 2);
   assert.equal(await migrateObjects(data, tenants, A), 1);
   assert.deepEqual([...s3.objects.keys()].sort(), [
-    `deploy-data/${A}/0123/litestream/generations/x`,
+    `deploy-data/${A}/11111111-2222-4333-8444-555555555555/litestream/generations/x`,
     `modal-home/${A}/personal%3Aa.tar`,
     `modal-home/${A}/personal%3Ab.tar`,
+    `modal-home/${B}/personal%3Ac.tar`,
     `p/docstore/${A}/files/abc`,
     `p/docstore/${A}/files/uploads/0123`,
   ]);

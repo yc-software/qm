@@ -19,6 +19,7 @@ import { FILES_AREA } from "../files/durable-byte-store.ts";
 import { HOME_SNAPSHOT_AREAS } from "../sandbox/home-snapshot.ts";
 import { deployDataArea } from "../deploy/aws-deploy-provider.ts";
 import { awsHomePrefix } from "../sandbox/aws-sandbox.ts";
+import { isTenantId } from "./context.ts";
 
 const COPY_PART_BYTES = 1024 ** 3;
 const SINGLE_COPY_MAX = 5 * 1024 ** 3;
@@ -29,6 +30,7 @@ export interface ObjectArea {
   from: string;
   to: string;
   under?: string;
+  deploymentFolders?: boolean;
 }
 
 interface Listed {
@@ -39,17 +41,17 @@ interface Listed {
 
 function storageAreas(config: Config, clientFor: (region?: string, endpoint?: string) => S3Send) {
   const objects: ObjectArea[] = [];
-  const add = (client: S3Send, bucket: string | undefined, from: string, to = from, under?: string): void => {
+  const add = (client: S3Send, bucket: string | undefined, from: string, extra: Partial<ObjectArea> = {}): void => {
     const slash = (path: string): string => `${path.replace(/\/+$/, "")}/`;
-    if (bucket) objects.push({ client, bucket, from: slash(from), to: slash(to), ...(under ? { under } : {}) });
+    if (bucket) objects.push({ client, bucket, from: slash(from), to: slash(extra.to ?? from), ...extra });
   };
   const p = config.s3Prefix ?? "";
   const main = clientFor(config.s3Region, config.s3Endpoint);
   add(main, config.s3Bucket, `${p}transfer`);
-  add(main, config.s3Bucket, `${p}files`, `${p}${FILES_AREA}`, "files/");
+  add(main, config.s3Bucket, `${p}files`, { to: `${p}${FILES_AREA}`, under: "files/" });
   add(main, config.s3Bucket, `${p}session-shares`);
   add(main, config.s3Bucket, `${p}deploy-git`);
-  add(main, config.s3Bucket, `${p}app-data`);
+  add(main, config.s3Bucket, `${p}app-data`, { deploymentFolders: true });
   const snapshots = clientFor();
   add(snapshots, config.spritesSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.sprites);
   add(snapshots, config.smolmachinesSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.smolmachines);
@@ -57,7 +59,10 @@ function storageAreas(config: Config, clientFor: (region?: string, endpoint?: st
   add(snapshots, config.managedAgentsSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.managedAgents);
   add(snapshots, config.modalSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.modal);
   add(clientFor(config.awsSandbox.region), config.awsSandbox.s3Bucket, awsHomePrefix(config.awsSandbox.s3Prefix));
-  add(clientFor(config.awsDeploy.region), config.awsDeploy.dataBucket, deployDataArea(config.awsDeploy.dataPrefix));
+  const deployData = config.awsDeploy.dataBucket || config.awsSandbox.s3Bucket;
+  add(clientFor(config.awsDeploy.region), deployData, deployDataArea(config.awsDeploy.dataPrefix), {
+    deploymentFolders: true,
+  });
   const dirs = ["transfer", FILES_AREA, "session-shares", "workspaces"].map((area) => join(config.dataDir, area));
   return { objects, dirs: [...dirs, config.deployGitDir] };
 }
@@ -96,7 +101,8 @@ async function* legacyObjects(area: ObjectArea, tenants: ReadonlySet<string>): A
   const folders: string[] = [];
   for await (const page of pages(area, area.from, "/")) {
     yield* page.objects;
-    folders.push(...page.folders.filter((folder) => !tenants.has(folder.slice(area.from.length, -1))));
+    const legacy = (name: string): boolean => !tenants.has(name) && (area.deploymentFolders || !isTenantId(name));
+    folders.push(...page.folders.filter((folder) => legacy(folder.slice(area.from.length, -1))));
   }
   for (const folder of folders) for await (const page of pages(area, folder)) yield* page.objects;
 }

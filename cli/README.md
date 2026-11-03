@@ -98,8 +98,9 @@ computer in its own container. `qm up` builds the local runtime from the CLI's
 pinned sandbox base, mounts the host Docker socket into trusted core, and connects
 core to each sandbox's private network. An explicit `sandbox.image` uses that
 runnable local image instead. Because core holds the host Docker socket, the local
-backend is for single-tenant development installs only: it refuses to provision
-while the database holds more than one tenant.
+backend is for single-tenant development installs only. Containers, volumes and
+networks are named per tenant, so after upgrading from an earlier release each
+scope starts with a fresh home volume.
 
 On AWS, `up` verifies under the deploy lease that RDS point-in-time recovery
 is current (its `LatestRestorableTime` must lag by at most
