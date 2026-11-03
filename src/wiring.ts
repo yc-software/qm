@@ -157,7 +157,7 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { inTenantOf } from "./tenants/claim.ts";
+import { forEachTenant, inTenantOf } from "./tenants/claim.ts";
 import { withoutTenant, withTenant } from "./tenants/context.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { ownerPgPool } from "./tenants/owner-pool.ts";
@@ -448,6 +448,7 @@ export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
   rewriteSurfaceOrigins: () => Promise<void>;
+  forEachTenant: (fn: () => Promise<unknown>) => Promise<void>;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   deploymentLayer: DeploymentLayerRuntime;
@@ -694,7 +695,11 @@ export function buildApp(
         }
       : {}),
   });
-  const deploymentLayerReady = deploymentLayerStore.hydrate();
+  const installTenant = pgArtifactMap.pool
+    .pool()
+    .then(() => ownerPgPool(pgArtifactMap.pool).q("SELECT qm_tenant_id()::text AS id"))
+    .then((rows) => String(rows[0]?.id));
+  const deploymentLayerReady = installTenant.then((tenant) => withTenant(tenant, () => deploymentLayerStore.hydrate()));
   const deploymentLayerRefresh = createUntrackedSweeper(
     () => withInstallTenant(() => deploymentLayerStore.hydrate()),
     30_000,
@@ -2989,16 +2994,17 @@ export function buildApp(
     deploymentLayerReady,
     deploymentLayerRefresh,
     loadTenants: async () => {
-      const owner = ownerPgPool(pgArtifactMap.pool);
-      const [install] = await owner.q("SELECT qm_tenant_id()::text AS id");
-      const tenants = (await owner.q("SELECT id::text AS id FROM tenants ORDER BY id")).map((row) => String(row.id));
-      registerTenants(String(install?.id), tenants.length === 1 ? tenants[0] : undefined);
+      const install = await installTenant;
+      const rows = await ownerPgPool(pgArtifactMap.pool).q("SELECT id::text AS id FROM tenants ORDER BY id");
+      const tenants = rows.map((row) => String(row.id));
+      registerTenants(install, tenants.length === 1 ? tenants[0] : undefined);
       for (const tenant of tenants)
         await withTenant(tenant, () => tenantLoader.load()).catch(
           reportFailureAs("startup: load tenant caches", undefined),
         );
     },
-    rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(pgArtifactMap.pool),
+    rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(ownerPgPool(pgArtifactMap.pool)),
+    forEachTenant: (fn) => forEachTenant(pgArtifactMap.pool, fn),
     sessions,
     runs,
     signals: runSignals,

@@ -22,7 +22,7 @@ await migrateRegisteredPgSchemas(config.databaseUrl);
 await built.tenancy.refreshSettings();
 built.tenancy.keepSettingsFresh();
 if (!config.backgroundDeploymentId) await built.rewriteSurfaceOrigins();
-await built.sandboxResources.initialize();
+await built.forEachTenant(() => built.sandboxResources.initialize());
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
