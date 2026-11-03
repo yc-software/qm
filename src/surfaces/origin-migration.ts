@@ -133,17 +133,34 @@ const LIVE_ORIGIN_REWRITES = [
   ]),
 ];
 
-export const SETTLED_ORIGIN_MIGRATION = migration("surfaces/0003-neutral-origin-settled-runs", [
+const SETTLED_CANDIDATES = "surface_origin_settled_candidates";
+
+export const SETTLED_CANDIDATES_MIGRATION = migration("surfaces/0003-settled-run-candidates", [
+  `CREATE TABLE IF NOT EXISTS ${SETTLED_CANDIDATES} (id TEXT PRIMARY KEY)`,
   ifTable(
     "runs",
-    `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
+    `INSERT INTO ${SETTLED_CANDIDATES} (id) SELECT r.id FROM runs r
        WHERE r.status IN ('done', 'failed')
          AND ${oldKeysIn("r.request")}
          AND (r.request LIKE '%"externalSlack"%'
            OR ${newerRun()}
-           OR ${newerRun(` AND (n.request NOT LIKE '%"privateSessionMessage"%' OR COALESCE(pg_temp.qm_jsonb_or_null(n.request) ->> 'privateSessionMessage', 'false') <> 'true')`)})`,
+           OR ${newerRun(` AND (n.request NOT LIKE '%"privateSessionMessage"%' OR COALESCE(pg_temp.qm_jsonb_or_null(n.request) ->> 'privateSessionMessage', 'false') <> 'true')`)})
+       ON CONFLICT DO NOTHING`,
   ),
 ]);
+
+export const SETTLED_ORIGIN_MIGRATION = {
+  ...migration("surfaces/0004-settled-runs-rewrite", [
+    ifTable(
+      SETTLED_CANDIDATES,
+      `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
+         FROM ${SETTLED_CANDIDATES} c
+         WHERE r.id = c.id AND ${oldKeysIn("r.request")}`,
+    ),
+    `DROP TABLE IF EXISTS ${SETTLED_CANDIDATES}`,
+  ]),
+  expectedChecksum: "a018b3bc62b6d8afcc262a776d436248ae9770c5db3caee54c0663d29bdff7e3",
+};
 
 export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
   const pool = await pg.pool();
@@ -154,5 +171,9 @@ export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
     }).catch((error: unknown) => {
       throw new Error(`surface origin rewrite ${migration.id} failed: ${errMessage(error)}`, { cause: error });
     });
-  await pg.migrate(SETTLED_ORIGIN_MIGRATION);
+  await pg.migrate(SETTLED_ORIGIN_MIGRATION).catch((error: unknown) => {
+    throw new Error(`surface origin rewrite ${SETTLED_ORIGIN_MIGRATION.id} failed: ${errMessage(error)}`, {
+      cause: error,
+    });
+  });
 }

@@ -8,7 +8,11 @@ import pg from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { rowToSession } from "../src/sessions/postgres-session-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { SETTLED_ORIGIN_MIGRATION, rewriteSurfaceOrigins } from "../src/surfaces/origin-migration.ts";
+import {
+  SETTLED_CANDIDATES_MIGRATION,
+  SETTLED_ORIGIN_MIGRATION,
+  rewriteSurfaceOrigins,
+} from "../src/surfaces/origin-migration.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -189,6 +193,7 @@ test(
           JSON.stringify({ id: "d1", [field]: { ...oldDestination, slackPolicyNamespace: "ns" } }),
         ]);
 
+      await admin.query("DELETE FROM qm_schema_migrations WHERE id = $1", [SETTLED_CANDIDATES_MIGRATION.id]);
       const beforeBoot = await snapshot(admin);
       await migrate(url);
       assert.deepEqual(await snapshot(admin), beforeBoot);
@@ -250,6 +255,7 @@ test(
           table,
         );
 
+      assert.equal((await admin.query("SELECT to_regclass('surface_origin_settled_candidates') AS t")).rows[0].t, null);
       const migrated = await snapshot(admin);
       await admin.query("DELETE FROM qm_schema_migrations WHERE id = $1", [SETTLED_ORIGIN_MIGRATION.id]);
       await rewrite(url);
