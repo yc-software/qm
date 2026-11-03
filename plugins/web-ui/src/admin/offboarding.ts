@@ -71,7 +71,7 @@ export function offboardingCard(page: AdminPage, principal: string, deactivatedA
         <div class="obactions">
           ${
             plan && !plan.applied && plan.changes.length
-              ? html`<button type="button" class="btn" ?disabled=${busy} @click=${apply}>Offboard</button>`
+              ? html`<button type="button" class="btn danger" ?disabled=${busy} @click=${apply}>Offboard</button>`
               : html`<button type="button" class="btn" ?disabled=${busy} @click=${preview}>Preview offboarding</button>`
           }
         </div>

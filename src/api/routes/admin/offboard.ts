@@ -5,6 +5,7 @@ import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { resolveAdminUser } from "./users.ts";
+import { syncLoopSchedule } from "../loops.ts";
 
 interface Change {
   kind: string;
@@ -43,7 +44,7 @@ async function plan(ctx: ApiCtx, actorId: string, principalId: string): Promise<
     if (l.state === "enabled" && (await owns(l.owner, l.ownerScopeId)))
       step("loop", l.id, l.name, "pause", async () => {
         await loops!.store.setState(l.id, "paused");
-        if (l.cronId) await loops!.crons?.setEnabled(l.cronId, false);
+        await syncLoopSchedule(loops!, l, "paused");
       });
   for (const w of await app.listWebhooks())
     if (w.enabled && (await owns(w.owner, w.ownerScopeId)))
