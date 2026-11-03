@@ -42,5 +42,5 @@ async function streamLoopItemEvents(ctx: BaseCtx): Promise<void> {
 }
 
 export const loopItemEventsRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "GET", path: "/v1/loop-items/events", auth: "source", unbound: true, handle: streamLoopItemEvents },
+  { method: "GET", path: "/v1/loop-items/events", auth: "source", handle: streamLoopItemEvents },
 ];

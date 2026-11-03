@@ -16,7 +16,6 @@ import { gzipAccepted, json as sendJson, sendBuffered } from "../plugins/chassis
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 interface RawResponse {
   status: number;
@@ -191,7 +190,7 @@ test(
 
 test("the core API server compresses a response written through Fastify's hijacked reply", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "compression-")) }));
-  const s = listen(createInsecureTestServer(TEST_TENANT, built.app));
+  const s = listen(createInsecureTestServer(built.app));
   try {
     const path = `/v1/${"x".repeat(1200)}`;
     const packed = await get(s.base, path, { "accept-encoding": "gzip" });

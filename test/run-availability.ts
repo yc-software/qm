@@ -10,6 +10,9 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { seedTestTenants } from "./support/tenant-seed.ts";
 import { tenantBoundUrl } from "./support/test-tenants.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+
+const sessions = createPostgresSessionStore(testDatabaseUrl());
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -67,6 +70,7 @@ for (const duringClaim of [false, true]) {
     };
     const worker = createWorker({
       runs,
+      sessions,
       orchestrator: {
         handleTurn: async () => {
           finished = true;
@@ -109,6 +113,7 @@ test("missed notifications recover and reconnect checks immediately", async () =
   };
   const worker = createWorker({
     runs,
+    sessions,
     orchestrator: {} as Orchestrator,
     leaseTtlMs: 5_000,
     pollMs: 10,
@@ -217,6 +222,7 @@ test(
     const workers = Array.from({ length: 2 }, () =>
       createWorker({
         runs: reader.runs,
+        sessions,
         orchestrator: {
           handleTurn: async (input: OrchestratorInput) => {
             const id = input.conversation.threadRef;
@@ -274,6 +280,7 @@ test(
     const workers = Array.from({ length: 16 }, () =>
       createWorker({
         runs: reader.runs,
+        sessions,
         orchestrator: {
           handleTurn: async (input: OrchestratorInput) => {
             observed.push({ id: input.text, at: Date.now() });

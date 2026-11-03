@@ -1,13 +1,13 @@
 import { createHmac } from "node:crypto";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
-import { currentTenant, isTenantId } from "../tenants/context.ts";
+import { isTenantId, tenantClaim } from "../tenants/context.ts";
 
 export function viewerIdentityKey(secret: string, deploymentId: string): string {
   return createHmac("sha256", secret).update(`viewer:${deploymentId}`).digest("base64url");
 }
 
 export interface DeployGitAccess {
-  tenant: string;
+  tenant?: string;
   deploymentId: string;
   permission: "read" | "write";
   principalId?: string;
@@ -19,7 +19,7 @@ export function mintDeployGitAccess(
   secret: string,
   access: Omit<DeployGitAccess, "version" | "tenant">,
 ): Promise<string> {
-  return mintSignedPayload({ ...access, tenant: currentTenant(), version: 1 }, secret);
+  return mintSignedPayload({ ...access, ...tenantClaim(), version: 1 }, secret);
 }
 
 export async function verifyDeployGitAccess(
@@ -31,7 +31,7 @@ export async function verifyDeployGitAccess(
   if (
     !access ||
     access.version !== 1 ||
-    !isTenantId(access.tenant) ||
+    (access.tenant !== undefined && !isTenantId(access.tenant)) ||
     typeof access.deploymentId !== "string" ||
     (access.permission !== "read" && access.permission !== "write")
   )

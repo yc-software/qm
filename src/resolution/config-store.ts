@@ -35,6 +35,7 @@ export interface PersistedSoulRevision {
   version: number;
   updatedAt: number;
   updatedBy?: string;
+  sessionId?: string;
 }
 type SoulSnapshot = PersistedSoul | null;
 type ScopedRow<K extends string, V> = { scopeId: ScopeId } & Record<K, V>;
@@ -91,8 +92,14 @@ export interface PersistedDeploymentIdentity {
 export interface ScopedConfigStore {
   refreshSecurity(ids: ScopeId[]): Promise<void>;
   getSoul(id: ScopeId): string | null;
-  setSoul(id: ScopeId, content: string, updatedBy?: string): Promise<number>;
-  setSoulIfVersion(id: ScopeId, expectedVersion: number, content: string, updatedBy?: string): Promise<number | null>;
+  setSoul(id: ScopeId, content: string, updatedBy?: string, sessionId?: string): Promise<number>;
+  setSoulIfVersion(
+    id: ScopeId,
+    expectedVersion: number,
+    content: string,
+    updatedBy?: string,
+    sessionId?: string,
+  ): Promise<number | null>;
   soulVersion(id: ScopeId): number;
   soulHistory(id: ScopeId): PersistedSoulRevision[];
   captureSoulSnapshot(id: ScopeId): Promise<SoulSnapshot>;
@@ -484,7 +491,7 @@ export function createConfigStore(
       return hydrated;
     },
     getSoul: (id) => souls.get(id)?.content ?? null,
-    setSoul(id, content, updatedBy) {
+    setSoul(id, content, updatedBy, sessionId) {
       return writeQueue(`soul:${id}`, async () => {
         const legacy = legacySoulHistory.get(id) ?? [];
         const append = (current: PersistedSoul): PersistedSoul => {
@@ -494,6 +501,7 @@ export function createConfigStore(
             version: current.version + 1,
             updatedAt: Date.now(),
             ...(updatedBy ? { updatedBy } : {}),
+            ...(sessionId ? { sessionId } : {}),
           };
           return {
             ...revision,
@@ -510,6 +518,7 @@ export function createConfigStore(
             version: baseVersion + 1,
             updatedAt: Date.now(),
             ...(updatedBy ? { updatedBy } : {}),
+            ...(sessionId ? { sessionId } : {}),
           };
           const mutationId = randomBytes(12).toString("hex");
           const candidate: PersistedSoul = { ...revision, history: [revision], mutationId };
@@ -522,7 +531,7 @@ export function createConfigStore(
         return saved.version;
       });
     },
-    async setSoulIfVersion(id, expectedVersion, content, updatedBy) {
+    async setSoulIfVersion(id, expectedVersion, content, updatedBy, sessionId) {
       return writeQueue(`soul:${id}`, async () => {
         const version = expectedVersion + 1;
         const revision: PersistedSoulRevision = {
@@ -531,6 +540,7 @@ export function createConfigStore(
           version,
           updatedAt: Date.now(),
           ...(updatedBy ? { updatedBy } : {}),
+          ...(sessionId ? { sessionId } : {}),
         };
         const legacyHistory = legacySoulHistory.get(id) ?? [];
         const mutationId = randomBytes(12).toString("hex");

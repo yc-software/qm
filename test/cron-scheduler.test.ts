@@ -15,6 +15,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
+import { boundTenant } from "../src/tenants/context.ts";
 
 function fakeLease(isLeader: () => boolean): LeaderLease {
   return {
@@ -1908,4 +1909,31 @@ test("a cron whose model can't run fires on the default model and is told why", 
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls[1]?.model, "claude-sonnet-5", "the stored model is used again once it can run");
   assert.doesNotMatch(calls[1]?.text ?? "", /default model because/);
+});
+
+test("each due cron fires under its own tenant", async () => {
+  const tenants: Record<string, string> = {
+    "post for tenant a": "00000000-0000-4000-8000-0000000000a1",
+    "post for tenant b": "00000000-0000-4000-8000-0000000000b2",
+  };
+  const seen: Array<[string, string | undefined]> = [];
+  const { crons, scheduler } = agent(async (req) => {
+    seen.push([req.text, boundTenant()]);
+    return { status: "ok", reply: "OUT" };
+  });
+  for (const action of Object.keys(tenants))
+    await crons.create({
+      schedule: { everyMs: 1000, firstFireAt: 1 },
+      action,
+      owner: "U1",
+      createdBy: "U1",
+      ownerScopeId: scopeId("personal", "U1"),
+    });
+  const due = crons.due;
+  crons.due = async (now) => (await due(now)).map((cron) => ({ ...cron, tenantId: tenants[cron.action!] }));
+  await scheduler.tick(2000);
+  assert.deepEqual(
+    seen.map(([text, tenant]) => [Object.keys(tenants).find((action) => text.includes(action)), tenant]).sort(),
+    Object.entries(tenants).sort(),
+  );
 });

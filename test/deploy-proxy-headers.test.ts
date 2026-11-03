@@ -9,8 +9,6 @@ import { createAdminService } from "../src/admin/admin-service.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { testAdminGrantStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
-import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;
@@ -26,7 +24,6 @@ test("/d/ proxy attaches the endpoint's proxyHeaders — the internal path authe
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const server = createInsecureTestServer(
-    TEST_TENANT,
     appWith({ host: "127.0.0.1", port: upstreamPort, proxyHeaders: { cookie: "dpl_access=tok" } }),
   );
   server.listen(0);
@@ -64,7 +61,6 @@ test("/d/ proxy multiplexes concurrent requests over one HTTP/2 session", async 
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const server = createInsecureTestServer(
-    TEST_TENANT,
     appWith({
       host: "127.0.0.1",
       port: upstreamPort,
@@ -120,10 +116,7 @@ test("/d/ proxy retires a GOAWAY session even while an SSE stream is open", asyn
   upstream.on("session", (session) => sessions.push(session));
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const server = createInsecureTestServer(
-    TEST_TENANT,
-    appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }),
-  );
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
@@ -194,13 +187,9 @@ test("/d/ proxy retries a GOAWAY-refused GET once but never replays a POST body"
   });
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const server = createInsecureTestServer(
-    TEST_TENANT,
-    appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }),
-    {
-      deployDialTimeoutMs: 30,
-    },
-  );
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }), {
+    deployDialTimeoutMs: 30,
+  });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
@@ -263,7 +252,7 @@ test("/d/ proxy keeps the shared HTTP/2 session when one request has invalid hea
       },
     }),
   } as unknown as App;
-  const server = createInsecureTestServer(TEST_TENANT, app);
+  const server = createInsecureTestServer(app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
@@ -301,13 +290,9 @@ test("/d/ proxy never retries after an HTTP/2 timeout has committed a 504", asyn
   });
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const server = createInsecureTestServer(
-    TEST_TENANT,
-    appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }),
-    {
-      deployDialTimeoutMs: 30,
-    },
-  );
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }), {
+    deployDialTimeoutMs: 30,
+  });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
@@ -338,10 +323,7 @@ test("/d/ proxy resets the downstream response when an HTTP/2 body is truncated"
   });
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
-  const server = createInsecureTestServer(
-    TEST_TENANT,
-    appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }),
-  );
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort, httpVersion: "2" }));
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
 
@@ -372,7 +354,7 @@ test("/d/ proxy returns 504 instead of hanging when the deployment accepts but n
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(TEST_TENANT, appWith({ host: "127.0.0.1", port: upstreamPort }), {
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), {
     deployDialTimeoutMs: 200,
   });
   server.listen(0);
@@ -397,7 +379,7 @@ test("/d/ proxy sends no extra headers when the endpoint declares none", async (
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(TEST_TENANT, appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -450,9 +432,8 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
     const res = await fetch(`${base}${path}`, {
       headers: {
         "x-admin-actor": actor,
-        ...TENANT_HEADERS,
         "x-timestamp": String(ts),
-        "x-signature": signRequest(SECRET, ts, canonicalPayload("GET", path, actor, TEST_TENANT)),
+        "x-signature": signRequest(SECRET, ts, `GET\n${path}\n${actor}`),
       },
     });
     assert.equal(res.status, 200);
@@ -492,7 +473,7 @@ test("/d/ proxy forwards the client's content-type and body with an explicit con
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(TEST_TENANT, appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -530,7 +511,7 @@ test("/d/ proxy buffers a chunked client body into an explicit content-length up
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(TEST_TENANT, appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
   try {
@@ -577,7 +558,6 @@ test("/d/ proxy forwards client cookies but scrubs the dpl_access gate token, an
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const server = createInsecureTestServer(
-    TEST_TENANT,
     appWith({ host: "127.0.0.1", port: upstreamPort, proxyHeaders: { "X-aws-proxy-auth": "vm-token" } }),
   );
   server.listen(0);
@@ -611,7 +591,7 @@ test("/d/ proxy strips headers the client names in its own Connection header (dy
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(TEST_TENANT, appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
   try {
@@ -654,7 +634,7 @@ test("/d/ proxy strips fixed and Connection-named hop-by-hop response headers", 
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(TEST_TENANT, appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
   try {
@@ -684,7 +664,7 @@ test("/d/ proxy scrubs the dpl_access gate cookie even with stray whitespace aro
   upstream.listen(0);
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
-  const server = createInsecureTestServer(TEST_TENANT, appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

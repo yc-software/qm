@@ -102,7 +102,6 @@ export interface LoopItemTriage {
 }
 
 export interface LoopItem {
-  previousLoopId?: string;
   triage?: LoopItemTriage;
   inboxPreview?: LoopSourcePayload;
   id: string;
