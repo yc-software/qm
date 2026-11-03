@@ -13,11 +13,12 @@ export const INBOX_LEDGER_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 const SOURCE_TEXT = {
   gmail: {
+    loopName: "Email",
     name: "Gmail",
     waiting: "every email",
     reread: "regardless of lastScanAt, age, read/unread state, or whether Gmail still labels it INBOX",
     owner: "their own address or a send-as alias in the From line, or the SENT label",
-    ignore: " Ignore Gmail drafts.",
+    ignore: "Ignore Gmail drafts. ",
     scan: `Use the google-workspace skill: INBOX threads where the LAST message is inbound and the user is in To or Cc. sourceKey = the Gmail threadId. Record gmail metadata: threadId, messageId, the RFC-2822 Message-ID header (rfcMessageId), subject, and the reply recipients (to = reply-all sender+others minus the user; cc as appropriate).`,
     voice: "follow the email-draft-in-voice skill (build the voice profile first if it is missing)",
     title: "subject",
@@ -26,6 +27,7 @@ const SOURCE_TEXT = {
     images: "up to 4",
   },
   slack: {
+    loopName: "Slack",
     name: "Slack",
     waiting: "every Slack message",
     reread: "regardless of lastScanAt, age, or read/unread state",
@@ -46,7 +48,7 @@ export function renderSourceInboxTask(loopId: string, source: string): string {
   return `Keep the user's QM ${text.name} inbox loop current: ${text.waiting} genuinely WAITING ON A REPLY FROM THEM gets a ledger item with a ready-to-send draft in their own voice. Read and ingest only ${text.name}. The inbox UI is the only delivery surface — never message the user, and NEVER send a reply yourself; you produce drafts only.
 
 1. GET $AGENT_API_URL/v1/loops/${loopId}/items (agent capability header) — note existing items: skip complete items already tracked; a newer message in a tracked conversation is reported as an event (below), never re-posted or redrafted here. Preserve human-edited drafts. Repair incomplete open items first: an existing dedupeKey with missing sourcePayload, title, snippet, source metadata, or proposal is unfinished work, not a reason to skip it. Re-read its original conversation using the dedupeKey and summary, then ingest the complete item and draft under that same dedupeKey even when no newer message arrived. Never invent message content from a summary; if the source is unavailable, leave the item pending for retry.
-   - Closed-loop detection: BEFORE scanning for new items, re-read the exact source conversation of EVERY unresolved item (held, pending, processed, or failed), ${text.reread}. The intake watermark is NOT a reconciliation watermark. Whenever the LATEST message in that conversation is newer than the item's sourceAt, report it as an event and let the Loop decide: POST $AGENT_API_URL/v1/loops/${loopId}/events with {"events":[{"sourceKey":"<item sourceKey>","author":"owner"|"other","at":<message timestamp in ms>,"text":"<the message, <=${EVENT_TEXT_CHARS} chars>","from":"<sender name, for other>"}]} (up to 20 events per call). author is "owner" when the user wrote it themselves (${text.owner}), else "other".${text.ignore} Never resolve, dismiss, or redraft these items yourself: the event is judged by the Loop, which closes answered conversations and redrafts reopened ones. If a source read fails or is incomplete, retain the item and retry later; do not treat it as resolved.
+   - Closed-loop detection: BEFORE scanning for new items, re-read the exact source conversation of EVERY unresolved item (held, pending, processed, or failed), ${text.reread}. The intake watermark is NOT a reconciliation watermark. Whenever the LATEST message in that conversation is newer than the item's sourceAt, report it as an event and let the Loop decide: POST $AGENT_API_URL/v1/loops/${loopId}/events with {"events":[{"sourceKey":"<item sourceKey>","author":"owner"|"other","at":<message timestamp in ms>,"text":"<the message, <=${EVENT_TEXT_CHARS} chars>","from":"<sender name, for other>"}]} (up to 20 events per call). author is "owner" when the user wrote it themselves (${text.owner}), else "other". ${text.ignore}Never resolve, dismiss, or redraft these items yourself: the event is judged by the Loop, which closes answered conversations and redrafts reopened ones. If a source read fails or is incomplete, retain the item and retry later; do not treat it as resolved.
 2. Keep a lastScanAt watermark for this Loop in a state file on your workspace (e.g. ~/workspace/inbox-sync/${source}-STATE.md); scan ${text.name} since that watermark (fall back to ~3 days on first run), and advance the watermark only after a successful pass, so outages and missed fires backfill instead of leaving silent gaps. If ${text.name} is not connected, finish silently. Judge "waiting on a reply" like a good chief of staff, with a deliberate asymmetry: (a) NEEDS REPLY: direct questions, requests, intros, and personal messages that expect acknowledgment; when in any doubt, this bucket. (b) PROBABLY RESOLVED: the transcript reads closed (a thanks, a "sounds good", a thread someone else already answered) but a reasonable person might still send a word; post the item anyway with "probablyResolved": true in the item body and a draft included; the UI shows these in a muted section. NEVER silently drop a human conversation you judged resolved; demote it instead. (c) SKIP entirely: only unmistakable machine noise (newsletters, receipts, calendar notices, bot chatter). Human words never skip; the lowest they go is probablyResolved.
    - ${text.scan}
 3. For each new or refreshed item, investigate before drafting: read the whole thread, and check whatever context makes the reply substantive (calendar for scheduling asks, earlier ${text.name} history for open questions). Draft the reply in the user's own voice: ${text.voice}. Punctuation hard rule: never use em dashes or en dashes in a draft; use a comma, period, or "..." instead, and re-read every draft before posting to strip any that slipped in.
@@ -56,10 +58,7 @@ export function renderSourceInboxTask(loopId: string, source: string): string {
 
 export async function ensureDefaultInboxLoops(store: LoopStore, owner: string): Promise<Loop[]> {
   const loops: Loop[] = [];
-  for (const [source, name] of [
-    ["gmail", "Email"],
-    ["slack", "Slack"],
-  ]) {
+  for (const [source, { loopName: name }] of Object.entries(SOURCE_TEXT)) {
     const existing = (await store.list()).find(
       (loop) => loop.ownerScopeId === scopeId("personal", owner) && loop.surface === `inbox:${source}`,
     );
@@ -71,11 +70,11 @@ export async function ensureDefaultInboxLoops(store: LoopStore, owner: string): 
       owner,
       createdBy: owner,
       ownerScopeId: scopeId("personal", owner),
-      name: name!,
+      name,
       surface: `inbox:${source}`,
-      sources: [source!],
+      sources: [source],
       purpose: `Messages in ${name} waiting on your reply.`,
-      playbook: renderSourceInboxTask("$LOOP_ID", source!),
+      playbook: renderSourceInboxTask("$LOOP_ID", source),
       successCondition: `Every ${name} conversation needing a reply has a draft for review.`,
       shipActions: [{ action: "send", gate: "hold" }],
     });

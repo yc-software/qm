@@ -189,7 +189,7 @@ export const slackAdapter: LoopSourceAdapter = {
       dedupeKey,
       summary: common.snippet,
       sourceAt: common.receivedAt,
-      sourcePayload: { source: "slack", ...common, slack } as LoopSourcePayload,
+      sourcePayload: { ...common, slack } as LoopSourcePayload,
       ...(draft ? { proposal: { data: draft as unknown as LoopSourcePayload } } : {}),
     };
     return entry;

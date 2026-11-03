@@ -55,6 +55,7 @@ function parseIngestEntry(loop: Loop, raw: unknown): IngestEntryInput | { error:
   if (typeof raw.source === "string" && raw.source.trim()) {
     return { error: `unknown source "${raw.source}"` };
   }
+  if (loop.sources) return { error: `items for this loop need a source: ${loop.sources.join(", ")}` };
   const dedupeKey = typeof raw.dedupeKey === "string" ? raw.dedupeKey.trim() : "";
   if (!dedupeKey || dedupeKey.length > 300) return { error: "dedupeKey (<=300 chars) required" };
   if (!isObj(raw.sourcePayload)) return { error: "sourcePayload must be an object" };

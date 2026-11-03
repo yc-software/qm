@@ -15,7 +15,7 @@ function entry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
     dedupeKey: "gmail:thread-1",
     source: "gmail",
     summary: "can you look at this?",
-    sourcePayload: { source: "gmail", title: "Budget", from: "Ada", snippet: "can you look at this?" },
+    sourcePayload: { title: "Budget", from: "Ada", snippet: "can you look at this?" },
     sourceAt: 1_000,
     ...over,
   };
@@ -60,7 +60,7 @@ test("a newer source event refreshes the payload and the proposal", async () => 
   const outcome = await ledger.ingest([
     entry({
       sourceAt: 2_000,
-      sourcePayload: { source: "gmail", title: "Budget", from: "Ada", snippet: "bumping this" },
+      sourcePayload: { title: "Budget", from: "Ada", snippet: "bumping this" },
       proposal: { data: { body: "second" }, by: "agent" },
     }),
   ]);
@@ -171,7 +171,6 @@ test("annotate merges into the source payload, leaving the item's state and prop
   assert.equal(ledgerState(annotated!), "held");
   assert.deepEqual(annotated?.proposal?.data, { body: "on it" });
   assert.deepEqual(annotated?.sourcePayload, {
-    source: "gmail",
     title: "Budget",
     from: "Ada",
     snippet: "can you look at this?",
