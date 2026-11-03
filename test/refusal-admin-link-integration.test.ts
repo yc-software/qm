@@ -84,9 +84,10 @@ function buildOrchestrator(sessions: SessionStore) {
 }
 
 test("a failed turn surfaces a refusal whose admin link points at the real session UUID", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
   const orchestrator = buildOrchestrator(sessions);
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(url);
   const leaseTtlMs = 60_000;
 
   const threadRef = "ch:C_UUID_FIXTURE:100.1";
