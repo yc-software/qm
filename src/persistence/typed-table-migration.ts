@@ -23,9 +23,7 @@ export function typedTableMigration(spec: TypedTableSpec): PgMigrationDefinition
       `CREATE TABLE IF NOT EXISTS ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
       `ALTER TABLE ${table} RENAME TO ${old}`,
       `ALTER INDEX ${table}_pkey RENAME TO ${old}_pkey`,
-      `CREATE TABLE ${table}(
-         ${[...spec.columns, ...(spec.constraints ?? []), `PRIMARY KEY (${spec.primaryKey.join(", ")})`].join(",\n         ")}
-       )`,
+      `CREATE TABLE ${table}(${[...spec.columns, ...(spec.constraints ?? [])].join(", ")})`,
       `INSERT INTO ${table}(${targets.join(", ")})
          SELECT ${targets.map((column) => spec.backfill[column]).join(", ")} FROM ${old}${spec.where ? ` WHERE ${spec.where}` : ""}`,
       `DROP TABLE ${old}`,
