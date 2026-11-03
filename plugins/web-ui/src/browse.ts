@@ -52,11 +52,18 @@ export function destinations(): Destination[] {
   return list;
 }
 
-/** Views that have their own sidebar row; Browse lists the rest (search still covers every destination). */
 const SIDEBAR_VIEWS: ReadonlySet<View> = new Set<View>(["contexts", "deploys"]);
 
+type SidebarDestination = Destination & { view: View };
+
+const inSidebar = (d: Destination): d is SidebarDestination => d.view !== null && SIDEBAR_VIEWS.has(d.view);
+
+export function sidebarDestinations(): SidebarDestination[] {
+  return destinations().filter(inSidebar);
+}
+
 function browseDestinations(): Destination[] {
-  return destinations().filter((d) => !d.view || !SIDEBAR_VIEWS.has(d.view));
+  return destinations().filter((d) => !inSidebar(d));
 }
 
 export function openBrowse(): void {

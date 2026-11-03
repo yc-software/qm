@@ -97,7 +97,7 @@ import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksH
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
-import { closeBrowse, openBrowse } from "./browse";
+import { closeBrowse, openBrowse, sidebarDestinations } from "./browse";
 import { attachTooltip, hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
 import { openDeployById, renderDeploys } from "./deploys";
@@ -669,7 +669,7 @@ export function renderSidebarTop(): void {
           hideTooltip();
           openChatSearch();
         })}
-        ${navRow("contexts", ICON.contexts, "Projects")} ${navRow("deploys", ICON.deploys, "Apps")}
+        ${sidebarDestinations().map((d) => navRow(d.view, d.glyph, d.label))}
         ${actionRow(ICON.browse, "Browse", () => {
           hideTooltip();
           openBrowse();
