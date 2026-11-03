@@ -213,6 +213,7 @@ export function createRecorder(ref: ToolContextRef) {
           };
         }
       }
+      if (stopped()) return ret;
       const mail = await deliverMessages(ret);
       result += mail.text;
       const goal = ref.goal;
