@@ -3,7 +3,7 @@ import { McpCallError, mcpEnvelope, mcpResultText, type McpClient } from "../mcp
 import { withTimeout } from "../util/async.ts";
 import { attestedPerson } from "../directory/person.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
-import { takeTurns, type MemoryCandidate } from "./facts.ts";
+import type { MemoryCandidate } from "./facts.ts";
 import { DENIED_CODES, reportEnvelope } from "./provider-outcome.ts";
 
 export interface McpMemoryOperation {
@@ -23,7 +23,6 @@ export interface McpMemoryOperation {
 }
 
 function resultText(result: CallToolResult): string {
-  if (DENIED_CODES.has(mcpEnvelope(result).code ?? "")) return "";
   const text = mcpResultText(result);
   if (text) return text;
   return result.structuredContent == null ? "" : JSON.stringify(result.structuredContent);
@@ -34,14 +33,15 @@ interface ProviderFact {
   text: string;
   date?: unknown;
   kind?: unknown;
-  arm?: unknown;
 }
 
 function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
   const facts = (result.structuredContent as { facts?: unknown } | undefined)?.facts;
   if (facts === undefined) return undefined;
   if (!Array.isArray(facts))
-    throw new McpCallError(`memory provider returned facts as ${typeof facts}, not a list`, { code: "malformed_fact" });
+    throw new McpCallError(`memory provider returned facts as ${facts === null ? "null" : typeof facts}, not a list`, {
+      code: "malformed_fact",
+    });
   facts.forEach((fact: Partial<ProviderFact> | null, index) => {
     if (typeof fact?.id !== "string" || typeof fact.text !== "string")
       throw new McpCallError(
@@ -49,9 +49,7 @@ function providerFacts(result: CallToolResult): ProviderFact[] | undefined {
         { code: "malformed_fact" },
       );
   });
-  return takeTurns(
-    Map.groupBy(facts as ProviderFact[], (fact) => (typeof fact.arm === "string" ? fact.arm : undefined)).values(),
-  );
+  return facts as ProviderFact[];
 }
 
 const stamped = (fact: ProviderFact) => {
@@ -86,13 +84,12 @@ export function createMcpMemoryProvider(opts: {
     if (maxChars && op.maxCharsArg) args[op.maxCharsArg] = maxChars;
     const result = await call(op, args, context?.actorId);
     const { code } = mcpEnvelope(result);
-    if (code && code !== "actor_unlinked" && DENIED_CODES.has(code))
-      throw new McpCallError(`memory provider refused the read (${code})`, { code });
+    if (code === "actor_unlinked") return { content: [] };
+    if (code && DENIED_CODES.has(code)) throw new McpCallError(`memory provider refused the read (${code})`, { code });
     return result;
   };
 
   const rows = (result: CallToolResult, maxChars: number | undefined, bullet: string): MemoryCandidate[] => {
-    if (DENIED_CODES.has(mcpEnvelope(result).code ?? "")) return [];
     const facts = providerFacts(result);
     if (!facts) {
       const text = resultText(result);
@@ -106,7 +103,7 @@ export function createMcpMemoryProvider(opts: {
     for (const fact of facts) {
       const text = `${bullet}${stamped(fact)}`;
       room -= text.length + 1;
-      if (room < 0) break;
+      if (room < 0 && fitting.length) break;
       fitting.push({ ref: fact.id, claim: fact.text, text });
     }
     return fitting;

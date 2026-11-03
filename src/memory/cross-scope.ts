@@ -1,7 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
 import { RECALL_MAX_CHARS } from "./notebook.ts";
-import { factLine, normalizeClaim, takeTurns, type MemoryCandidate, type MemorySource } from "./facts.ts";
+import { factLine, normalizeClaim, type MemoryCandidate, type MemorySource } from "./facts.ts";
 import { quotedData, untrustedText } from "../util/text.ts";
 
 export interface RecalledFact {
@@ -21,7 +21,10 @@ const claimOf = (row: ScopedRow) => normalizeClaim(row.claim ?? row.text);
 
 function copiesInTurn(rows: readonly ScopedRow[]): ScopedRow[][] {
   const copies = Map.groupBy(rows, claimOf);
-  const claims = new Set(takeTurns(Map.groupBy(rows, blockKey).values()).map(claimOf));
+  const lists = [...Map.groupBy(rows, blockKey).values()];
+  const rounds = Math.max(0, ...lists.map((list) => list.length));
+  const turns = Array.from({ length: rounds }, (_, i) => lists.flatMap((list) => list.slice(i, i + 1)));
+  const claims = new Set(turns.flat().map(claimOf));
   return [...claims].map((claim) => {
     const same = copies.get(claim)!;
     const kept = same.find((row) => row.id !== undefined) ?? same[0]!;

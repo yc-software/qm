@@ -15,15 +15,13 @@ dialogue; otherwise the newest facts come first. Each notebook and each provider
 order, and recall and search take one row from each of them in turn until the budget or limit is
 full; scores are never compared across sources. Later turns add only newly selected facts.
 Provider rows without fact ids are compared by content hash. An MCP provider whose answer carries
-`structuredContent.facts`, a list of `{ id, text, date?, kind?, arm? }` with string `id` and `text`
+`structuredContent.facts`, a list of `{ id, text, date?, kind? }` with string `id` and `text`
 (gbrain's `memory_recall` returns `id`, `text`, `date` and `kind`), gives one row per fact, and
-search shows it as `<provider id>:<fact id>`. Facts that carry an `arm` label take turns by label
-inside that provider's own list, so a run of one kind (such as a member's recent facts) can't push
-out the rest. A `facts` value that isn't such a list fails the read with `malformed_fact`. Without
+search shows it as `<provider id>:<fact id>`. A `facts` value that isn't such a list fails the read with `malformed_fact`. Without
 `structuredContent.facts`, the answer becomes one row per line, so it should return one
 self-contained fact per line; a `memorable` procedure block stays one row. A claim held by several
 sources (compared ignoring case and surrounding spaces) is shown once, as the first notebook's copy
-when there is one; search ends that line with the other copies' addresses, such as
+when there is one; search ends that line with the other provider copies' addresses, such as
 `(also acme-company:4821)`. Only new rows are added, a row already shown stays counted while its provider keeps
 answering (at most as many earlier rows as its latest answer showed, and at least one, so a later
 refusal is still noted), and a row that drops out is never announced as removed. When a provider

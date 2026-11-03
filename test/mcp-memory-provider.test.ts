@@ -95,12 +95,12 @@ test("a write that carries no member is not sent to an attested provider", async
   assert.deepEqual(calls, []);
 });
 
-test("MCP recall reads structured facts as rows with their fact id and raw claim, taking the provider's arms in turn", async () => {
+test("MCP recall reads structured facts as rows with their fact id and raw claim, in the provider's order", async () => {
   const facts = [
-    { id: "4821", text: "Dana prefers email", date: "2026-11-01", kind: "preference", arm: "own" },
-    { id: "4822", text: "Standup moved to 9", date: "2026-11-01", kind: "fact", arm: "own" },
-    { id: "17", text: "Launch moved to Friday", date: "2026-10-28", kind: "fact", arm: "ranked" },
-    { id: "9", text: "No arm yet", date: "2026-10-20", kind: "fact" },
+    { id: "4821", text: "Dana prefers email", date: "2026-11-01", kind: "preference" },
+    { id: "17", text: "Launch moved to Friday", date: "2026-10-28", kind: "fact" },
+    { id: "9", text: "Undated fact" },
+    { id: "4822", text: "Standup moved to 9", date: "2026-11-01", kind: "fact" },
   ];
   const memory = createMcpMemoryProvider({
     read: { client: structuredRecall(() => facts), tool: "memory_recall", timeoutMs: 100 },
@@ -109,13 +109,17 @@ test("MCP recall reads structured facts as rows with their fact id and raw claim
   assert.deepEqual(recalled, [
     { ref: "4821", claim: "Dana prefers email", text: "- (2026-11-01; preference) Dana prefers email" },
     { ref: "17", claim: "Launch moved to Friday", text: "- (2026-10-28; fact) Launch moved to Friday" },
-    { ref: "9", claim: "No arm yet", text: "- (2026-10-20; fact) No arm yet" },
+    { ref: "9", claim: "Undated fact", text: "- Undated fact" },
     { ref: "4822", claim: "Standup moved to 9", text: "- (2026-11-01; fact) Standup moved to 9" },
   ]);
   const fit = recalled[0]!.text.length + 1 + recalled[1]!.text.length;
   assert.deepEqual(
     (await memory.recall("personal:U1", { query: "dana", maxChars: fit })).map((row) => row.ref),
     ["4821", "17"],
+  );
+  assert.deepEqual(
+    (await memory.recall("personal:U1", { query: "dana", maxChars: 5 })).map((row) => row.ref),
+    ["4821"],
   );
   assert.deepEqual(
     (await memory.query("personal:U1", "dana", 2)).map((row) => row.text),

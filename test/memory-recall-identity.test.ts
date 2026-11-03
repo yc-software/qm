@@ -136,32 +136,15 @@ test("an id-less provider keeps its own lines and order, and an exact copy of a 
   );
 });
 
-test("a provider's arms take turns inside its own list, so many own-recent facts can't starve an older relevant one", async () => {
-  const notebook = createPostgresMemoryService(testDatabaseUrl());
-  const recent = Array.from({ length: 60 }, (_, i) => ({
-    id: String(i),
-    text: `recent chatter ${i} ${"x".repeat(110)}`,
-    arm: "own",
-  }));
-  const relevant = { id: "900", text: `Dana's board meeting is on the 14th ${"x".repeat(110)}`, arm: "ranked" };
-  const out = renderRecall(
-    await recallAcrossScopes(routed(notebook, { acme: gbrain(() => [...recent, relevant]) }), ["personal:a"], {
-      query: "board meeting",
-    }),
-    new Map(),
-  );
-  assert.match(out, /^- \(2026-10-30; fact\) recent chatter 0 x+\n- \(2026-10-30; fact\) Dana's board meeting/m);
-});
-
 test("a dual-written duplicate prints once as the notebook copy and gains no rank, and search names the brain copy", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   for (const [i, text] of ["alpha duplicate", "alpha one", "alpha two", "alpha three"].entries())
     await notebook.capture("personal:a", [text], AT + i);
   const memory = routed(notebook, {
     acme: gbrain(() => [
-      { id: "1", text: "alpha brain one", arm: "ranked" },
-      { id: "2", text: "alpha brain two", arm: "ranked" },
-      { id: "77", text: "alpha duplicate", arm: "ranked" },
+      { id: "1", text: "alpha brain one" },
+      { id: "2", text: "alpha brain two" },
+      { id: "77", text: "alpha duplicate" },
     ]),
   });
   const out = renderRecall(await recallAcrossScopes(memory, ["personal:a"], { query: "alpha" }), new Map());

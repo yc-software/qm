@@ -91,12 +91,6 @@ export interface MemoryCandidate {
 
 export const normalizeClaim = (text: string) => text.trim().toLowerCase();
 
-export function takeTurns<T>(lists: Iterable<readonly T[]>): T[] {
-  const queues = [...lists];
-  const rounds = Math.max(0, ...queues.map((list) => list.length));
-  return Array.from({ length: rounds }, (_, i) => queues.flatMap((list) => (i < list.length ? [list[i]!] : []))).flat();
-}
-
 export function recentCandidates(facts: readonly MemoryFact[]): MemoryCandidate[] {
   return facts.map(factCandidate).reverse();
 }
