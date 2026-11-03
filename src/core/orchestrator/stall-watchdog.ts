@@ -4,10 +4,16 @@ export interface StallWatchdog {
 }
 
 export function startStallWatchdog(stallMs: number, onStalled: () => void): StallWatchdog {
-  const timer = setTimeout(onStalled, stallMs);
+  let fired = false;
+  const timer = setTimeout(() => {
+    fired = true;
+    onStalled();
+  }, stallMs);
   timer.unref?.();
   return {
-    progress: () => void timer.refresh(),
+    progress: () => {
+      if (!fired) timer.refresh();
+    },
     stop: () => clearTimeout(timer),
   };
 }

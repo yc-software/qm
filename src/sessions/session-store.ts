@@ -49,6 +49,7 @@ interface ContextWindow {
 export interface SessionWriter {
   sessionId: string;
   turnId?: string;
+  runLeaseToken?: string;
 }
 
 export interface StoreOptions {

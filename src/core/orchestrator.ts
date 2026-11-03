@@ -1851,7 +1851,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (input.shutdown?.aborted)
         return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
       const turnStart = Date.now();
-      const writer: SessionWriter = { sessionId: session.id, ...(input.runId ? { turnId: input.runId } : {}) };
+      const writer: SessionWriter = {
+        sessionId: session.id,
+        ...(input.runId ? { turnId: input.runId } : {}),
+        ...(input.runLeaseToken ? { runLeaseToken: input.runLeaseToken } : {}),
+      };
       if (!ambientTurn) assignSessionTitle();
       const trackRevisions = input.surface === "slack" && Boolean(deps.surfaceCache);
       const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;
@@ -3824,7 +3828,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (!contextRecovered && !turnAbort.signal.aborted)
           scheduleBackgroundCompaction({
             sessionId: session.id,
-            ...(input.runId ? { runId: input.runId } : {}),
+            ...(input.runLeaseToken ? { runLeaseToken: input.runLeaseToken } : {}),
             scopeId,
             actorId: actor.id,
             ...(input.model ? { model: input.model } : {}),

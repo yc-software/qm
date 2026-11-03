@@ -414,9 +414,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
 
-  const withSessionLock = async <T>(sessionId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> =>
+  const withSessionLock = async <T>(writer: SessionWriter, fn: (client: PoolClient) => Promise<T>): Promise<T> =>
     withPgTransaction(await pool(), async (client) => {
-      await lockSession(client, sessionId);
+      await lockSession(client, writer.sessionId);
+      if (writer.turnId && writer.runLeaseToken) {
+        const held = await client.query(
+          "SELECT 1 FROM runs WHERE id = $1 AND lease_token = $2 AND status = 'running' FOR SHARE",
+          [writer.turnId, writer.runLeaseToken],
+        );
+        if (!held.rowCount) throw new Error(`run ${writer.turnId} no longer holds its claim; write refused`);
+      }
       return fn(client);
     });
 
@@ -605,9 +612,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async appendMany(writer: SessionWriter, entries: readonly NewEntry[]): Promise<SessionEntry[]> {
-      return withSessionLock(writer.sessionId, (client) =>
-        insertEntries(client, writer.sessionId, entries, writer.turnId),
-      );
+      return withSessionLock(writer, (client) => insertEntries(client, writer.sessionId, entries, writer.turnId));
     },
 
     async countEntriesBefore(sessionId, beforeSeq, principalId) {
@@ -655,7 +660,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async setGoal(writer, goal, notices = []) {
-      await withSessionLock(writer.sessionId, async (client) => {
+      await withSessionLock(writer, async (client) => {
         await insertEntries(client, writer.sessionId, notices, writer.turnId);
         await client.query(
           `INSERT INTO session_goals(session_id, objective, status, floor, token_cap, tokens_used, active_ms,

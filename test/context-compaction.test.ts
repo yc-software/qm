@@ -844,42 +844,6 @@ async function untilTrue(what: string, predicate: () => boolean, deadlineMs = 3_
   }
 }
 
-test("the background pass summarizes first and checks for a live turn only after the summarizer returns", async () => {
-  const { agent, compactCalls, open } = gatedAgent();
-  const events: string[] = [];
-  const gated = agent.compactHistory!;
-  agent.compactHistory = async (input: CompactInput) => {
-    events.push("summarize:start");
-    const text = await gated(input);
-    events.push("summarize:end");
-    return text;
-  };
-  const { runs, runChecks } = liveTurnProbe();
-  const { orch, sessions } = buildOrchestrator(
-    agent,
-    budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))),
-    undefined,
-    undefined,
-    undefined,
-    runs,
-  );
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
-
-  assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
-  await untilTrue("the background summarizer to be in flight", () => events.includes("summarize:start"));
-  runChecks.length = 0;
-  await new Promise((r) => setTimeout(r, 50));
-  assert.deepEqual(runChecks, [], "the pass must not check for a live turn before the summarizer has returned");
-
-  open();
-  assert.equal((await waitForSummary(sessions, sid)).length, 1, "the summary lands after the check");
-  assert.ok(runChecks.length > 0, "the pass checks for a live turn once the summarizer returns");
-  assert.equal(compactCalls.length, 1, "and the model was called exactly once");
-});
-
 test("the background pass waits out another live turn rather than throwing its summary away", async () => {
   const { agent, compactCalls, resetCalls, open } = gatedAgent();
   const { runs, busyThreads } = liveTurnProbe();

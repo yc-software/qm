@@ -173,19 +173,21 @@ const IDLE_POLL_MS = 250;
 export async function hasRunningRun(
   runs: Pick<RunStore, "inFlightForThread">,
   threadRef: string,
-  exceptRunId?: string,
+  exceptLeaseToken?: string,
 ): Promise<boolean> {
-  return (await runs.inFlightForThread(threadRef)).some((run) => run.status === "running" && run.id !== exceptRunId);
+  return (await runs.inFlightForThread(threadRef)).some(
+    (run) => run.status === "running" && (exceptLeaseToken === undefined || run.leaseToken !== exceptLeaseToken),
+  );
 }
 
 export async function waitForNoRunningRun(
   runs: Pick<RunStore, "inFlightForThread">,
   threadRef: string,
   budgetMs: number,
-  exceptRunId?: string,
+  exceptLeaseToken?: string,
 ): Promise<boolean> {
   const deadline = Date.now() + budgetMs;
-  while (await hasRunningRun(runs, threadRef, exceptRunId)) {
+  while (await hasRunningRun(runs, threadRef, exceptLeaseToken)) {
     if (Date.now() >= deadline) return false;
     await sleep(Math.min(IDLE_POLL_MS, deadline - Date.now()), { unref: true });
   }

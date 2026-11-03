@@ -47,7 +47,7 @@ export interface CompactionContext {
   compactRecent(input: CompactionInput): Promise<SessionEntry[]>;
   scheduleBackgroundCompaction(input: {
     sessionId: string;
-    runId?: string;
+    runLeaseToken?: string;
     scopeId: string;
     actorId: string;
     model?: string;
@@ -237,7 +237,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
 
   function scheduleBackgroundCompaction(input: {
     sessionId: string;
-    runId?: string;
+    runLeaseToken?: string;
     scopeId: string;
     actorId: string;
     model?: string;
@@ -273,7 +273,8 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
           ...(input.model ? { model: input.model } : {}),
         });
         if (!summarized) return;
-        if (deps.runs && !(await waitForNoRunningRun(deps.runs, session.threadRef, WRITE_WAIT_MS, input.runId))) return;
+        if (deps.runs && !(await waitForNoRunningRun(deps.runs, session.threadRef, WRITE_WAIT_MS, input.runLeaseToken)))
+          return;
         const since = await deps.sessions.getEntries(input.sessionId, { sinceSeq: snapshotSeq + 1 });
         if (!since.some((entry) => !!contextSummaryPayload(entry))) {
           await writeCompaction({ session, writer: { sessionId: input.sessionId }, summarized });

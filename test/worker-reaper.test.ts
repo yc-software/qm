@@ -189,20 +189,34 @@ test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling
   assert.equal((await runs.get(r.id))?.status, "pending");
 });
 
-test("reapExpired fences the dead attempt before it requeues, so a zombie cannot revive the run", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+test("reapExpired fences the dead attempt before it requeues, so a zombie can neither revive the run nor write", async () => {
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
+  const sessions = createPostgresSessionStore(url);
+  const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const r = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const claimed = await runs.claim("dead-worker", 10);
   await sleep(30);
 
   const swept = await runs.reapExpired();
+  const replacement = await runs.claimById(r.id, "live-worker", 60_000);
+  assert.ok(replacement?.leaseToken);
 
   assert.equal(swept.requeued, 1);
-  assert.equal((await runs.get(r.id))?.status, "pending");
   assert.equal(
     await runs.heartbeat(r.id, claimed!.leaseToken!, 10_000),
     false,
     "the dead attempt is fenced, so a zombie cannot revive the run",
+  );
+  const entry = (text: string) => ({ type: "assistant" as const, payload: { text }, scopeLabel: "personal:U1" });
+  await sessions.append({ sessionId: session.id, turnId: r.id, runLeaseToken: replacement.leaseToken }, entry("live"));
+  await assert.rejects(
+    sessions.append({ sessionId: session.id, turnId: r.id, runLeaseToken: claimed!.leaseToken! }, entry("zombie")),
+    /no longer holds its claim/,
+  );
+  assert.deepEqual(
+    (await sessions.getEntries(session.id)).map((e) => (e.payload as { text: string }).text),
+    ["live"],
   );
 });
 
@@ -282,19 +296,25 @@ test("shutdown cancels before handback and holds the run until the turn unwinds"
 });
 
 test("an uncooperative turn is handed back after the settle grace, and resumes once after the old process exits", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
+  const sessions = createPostgresSessionStore(url);
+  const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const started = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<void>();
   const attempts: OrchestratorInput[] = [];
-  const stale = Promise.withResolvers<void>();
+  const lateWrite = Promise.withResolvers<unknown>();
   const orchestrator = {
     async handleTurn(input: OrchestratorInput) {
       attempts.push(input);
       if (input.attempt === 1) {
         started.resolve();
         await gate.promise;
-        stale.resolve();
+        const writer = { sessionId: session.id, turnId: input.runId!, runLeaseToken: input.runLeaseToken! };
+        await sessions
+          .append(writer, { type: "system", payload: { kind: "checkpoint" }, scopeLabel: "personal:U1" })
+          .then(lateWrite.resolve, lateWrite.reject);
         return { status: "ok" as const, reply: "stale" };
       }
       return { status: "ok" as const, reply: "resumed" };
@@ -319,7 +339,7 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
   const staleToken = attempts[0]!.runLeaseToken!;
 
   gate.resolve();
-  await stale.promise;
+  await assert.rejects(lateWrite.promise, /no longer holds its claim/);
   assert.equal(await runs.complete(enq.id, staleToken, { status: "ok", sessionId: "t1" }), false);
 
   const fresh = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5, workerId: "fresh" });
@@ -338,6 +358,11 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
   assert.ok(
     Date.now() - shutdownAt >= SHUTDOWN_SETTLE_MS + SHUTDOWN_EXIT_MS,
     "the resume waited for the old process exit",
+  );
+  assert.equal(
+    (await sessions.getEntries(session.id)).some((entry) => (entry.payload as { kind?: string }).kind === "checkpoint"),
+    false,
+    "the handed-back attempt cannot write to the conversation",
   );
 });
 
