@@ -350,13 +350,9 @@ BEGIN
       spawn_meta = COALESCE(s.spawn_meta, facts.context::text)
   FROM (
     SELECT x.id,
-      NULLIF(latest.request->'slackSource', 'null') AS slack_binding,
-      NULLIF(latest.result->'runtime', 'null') AS runtime,
-      CASE WHEN public.request IS NOT NULL
-        AND COALESCE(public.request->>'sessionSenderId', '') = ''
-        AND COALESCE(public.request->>'delegatingRunId', '') = ''
-        AND COALESCE(public.request->'swarm', 'null') IN ('null', 'false')
-      THEN (
+      binding.value AS slack_binding,
+      label.value AS runtime,
+      CASE WHEN public.request IS NOT NULL THEN (
         SELECT COALESCE(jsonb_object_agg(key, value), '{}') FROM jsonb_each(public.request)
         WHERE key IN ('surfaceTools', 'deliveryCandidates', 'unattendedGrants', 'externalSlack', 'scopeVersion',
           'sessionParticipantIds', 'conversation', 'actor', 'deliveryTarget', 'timezone', 'readOnly', 'model',
@@ -377,13 +373,22 @@ BEGIN
         END)
       END AS context
     FROM sessions x
-    CROSS JOIN LATERAL (
-      SELECT request::jsonb AS request, result::jsonb AS result FROM runs
-      WHERE session_id = x.thread_ref ORDER BY created_at DESC, seq DESC LIMIT 1
-    ) latest
     LEFT JOIN LATERAL (
-      SELECT request::jsonb AS request FROM runs
-      WHERE session_id = x.thread_ref AND COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true'
+      SELECT request::jsonb->'slackSource' AS value FROM runs
+      WHERE session_id = x.thread_ref AND COALESCE(request::jsonb->'slackSource', 'null') <> 'null'
+      ORDER BY created_at DESC, seq DESC LIMIT 1
+    ) binding ON x.surface = 'slack'
+    LEFT JOIN LATERAL (
+      SELECT result::jsonb->'runtime' AS value FROM runs
+      WHERE session_id = x.thread_ref AND COALESCE(result::jsonb->'runtime', 'null') <> 'null'
+      ORDER BY created_at DESC, seq DESC LIMIT 1
+    ) label ON true
+    LEFT JOIN LATERAL (
+      SELECT request FROM (SELECT request::jsonb AS request, created_at, seq FROM runs WHERE session_id = x.thread_ref) owned
+      WHERE COALESCE(request->>'privateSessionMessage', 'false') <> 'true'
+        AND COALESCE(request->>'sessionSenderId', '') = ''
+        AND COALESCE(request->>'delegatingRunId', '') = ''
+        AND COALESCE(request->'swarm', 'null') IN ('null', 'false')
       ORDER BY created_at DESC, seq DESC LIMIT 1
     ) public ON x.thread_ref NOT LIKE 'agent:main:subagent:%' AND x.thread_ref NOT LIKE 'swarm:%'
     WHERE x.id = ANY(page)

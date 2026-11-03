@@ -254,6 +254,7 @@ export function definePgMigration({
   if (!/^[a-z0-9][a-z0-9._/-]*$/i.test(id) || id.includes("..")) {
     throw new Error(`pg-pool: invalid migration id ${JSON.stringify(id)}`);
   }
+  if (autocommit && legacyId) throw new Error(`pg-pool: autocommit migration ${id} cannot adopt a legacy id`);
   const normalized = statements.map((statement) => statement.trim()).filter((statement) => statement.length > 0);
   for (const statement of normalized) assertOneStatement(statement);
   const checksum = pgMigrationChecksum(normalized);

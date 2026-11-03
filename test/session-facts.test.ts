@@ -91,6 +91,10 @@ test("the session facts migration copies each conversation's facts from its late
     modelId: "m3",
   });
   const quiet = await sessions.getOrCreateByThread("web:U1:quiet", "dm", scope, undefined, "web");
+  const mixed = await sessions.getOrCreateByThread("slack:dm:mixed", "dm", scope, undefined, "slack");
+  const owning = request(mixed.threadRef, { slackSource });
+  await finish(mixed.threadRef, owning, { modelId: "m4" });
+  await finish(mixed.threadRef, request(mixed.threadRef, { sessionSenderId: "s1" }));
 
   const raw = new pg.Pool({ connectionString: url, max: 1 });
   try {
@@ -113,6 +117,10 @@ test("the session facts migration copies each conversation's facts from its late
   const sessionTurn = (await sessions.get(relayed.id))!;
   assert.deepEqual(sessionTurn.runtime, { modelId: "m3" });
   assert.equal(sessionTurn.spawnMeta, undefined);
+  const mixedFilled = (await sessions.get(mixed.id))!;
+  assert.deepEqual(mixedFilled.slackBinding, slackSource, "the binding comes from the newest run that has one");
+  assert.deepEqual(mixedFilled.runtime, { modelId: "m4" }, "the label comes from the newest run that reported one");
+  assert.deepEqual(mixedFilled.spawnMeta, sessionContextOf(owning), "context comes from the newest owning turn");
   const untouched = (await sessions.get(quiet.id))!;
   assert.equal(untouched.slackBinding ?? untouched.runtime ?? untouched.spawnMeta, undefined);
   await runtime.close?.();

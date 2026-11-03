@@ -635,7 +635,7 @@ export function createSessionMethods(
       return Promise.all(
         visible
           .filter((row): row is Session => row !== null)
-          .map(async (row) => ({ ...row, canContinue: await canContinueOnWeb(principalId, row) })),
+          .map(async (row) => ({ ...withoutStoredFacts(row), canContinue: await canContinueOnWeb(principalId, row) })),
       );
     },
 
@@ -643,7 +643,8 @@ export function createSessionMethods(
       const session = await sessionForViewer(sessionId, principalId);
       if (!session?.sideChat || !(await mayWriteSession(principalId, session))) return null;
       await deps.sessions.expandSideChat(sessionId);
-      return sessionForViewer(sessionId, principalId);
+      const expanded = await sessionForViewer(sessionId, principalId);
+      return expanded && withoutStoredFacts(expanded);
     },
 
     async sessionChildren(principalId, sessionId) {
@@ -1009,7 +1010,7 @@ export function createSessionMethods(
       if (!session) return null;
       await deps.sessions.updateParticipantView(sessionId, principalId, patch);
       const updated = await sessionForViewer(sessionId, principalId);
-      return updated && { ...updated, canContinue: await canContinueOnWeb(principalId, updated) };
+      return updated && { ...withoutStoredFacts(updated), canContinue: await canContinueOnWeb(principalId, updated) };
     },
 
     async detachSession(sessionId, principalId) {
