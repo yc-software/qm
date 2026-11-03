@@ -1346,8 +1346,14 @@ export function createSessionMethods(
           snapshot = await deps.config.captureSoulSnapshot(scopeIdValue);
           const version =
             opts?.expectedVersion === undefined
-              ? await deps.config.setSoul(scopeIdValue, content, actorId)
-              : await deps.config.setSoulIfVersion(scopeIdValue, opts.expectedVersion, content, actorId);
+              ? await deps.config.setSoul(scopeIdValue, content, actorId, opts?.sessionId)
+              : await deps.config.setSoulIfVersion(
+                  scopeIdValue,
+                  opts.expectedVersion,
+                  content,
+                  actorId,
+                  opts.sessionId,
+                );
           if (version === null) throw new SoulVersionConflictError();
           deps.auditLog.record({
             at: Date.now(),
