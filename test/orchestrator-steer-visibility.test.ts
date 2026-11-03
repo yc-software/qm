@@ -55,7 +55,6 @@ for (const mode of ["retry", "handoff"] as const) {
         await turn.emit({ kind: "UserMessage", text: turn.input });
       }
       await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
-      await turn.emit({ kind: "SteeringMessage", text: "private steer", body: { hidden: true } });
     };
     try {
       const result = await built.app.turn(request);
@@ -64,10 +63,9 @@ for (const mode of ["retry", "handoff"] as const) {
       const users = session!.items.filter(isUserItem);
       const steerAt = mode === "retry" ? 1 : 2;
       if (mode !== "retry") assert.equal(isHidden(users[1]!), true);
-      assert.equal(users.length, steerAt + 2);
+      assert.equal(users.length, steerAt + 1);
       assert.equal(users[steerAt]!.text, "Change of plan");
       assert.notEqual(isHidden(users[steerAt]!), true);
-      assert.equal(isHidden(users[steerAt + 1]!), true);
       const activity = (await built.app.getRun(runId!))!.activity ?? [];
       const liveSteer = activity.flatMap((entry) =>
         "item" in entry && isUserItem(entry.item) && entry.item.text === "Change of plan" ? [entry.item] : [],

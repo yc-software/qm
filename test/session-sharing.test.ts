@@ -37,6 +37,7 @@ const transcript = [
   at({ kind: "ToolCall", callId: "post", body: { action: "post", text: "Published reply", secret: "POST_SECRET" } }, 9),
   at({ kind: "ToolResult", callId: "post", body: { ok: true, secret: "POST_RESULT_SECRET" } }, 10),
   at({ kind: "AgentMessage", text: "UNPUBLISHED_SECRET" }, 11),
+  at({ kind: "SteeringMessage", text: "COPIED_HIDDEN_STEER_SECRET", body: { hidden: true } }, 12),
 ];
 
 test("shared transcript allowlists visible message fields and published replies", () => {
