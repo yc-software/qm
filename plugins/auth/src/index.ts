@@ -1,3 +1,4 @@
+import { coreHostTenants, inHostTenant } from "../../chassis/src/host-tenant.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { coreRememberedSessions } from "./sessions.ts";
@@ -54,8 +55,9 @@ export async function startServer(
       return branding.current().selfLabel || CFG.brandName;
     },
   });
+  const hostTenants = coreHostTenants(CFG.coreApiUrl, CFG.coreSigningSecret);
   const server = createServer((req, res) => {
-    void handle(req, res).catch((err: unknown) => {
+    void inHostTenant(hostTenants, req, res, () => handle(req, res), false).catch((err: unknown) => {
       reportBackendError(err);
       console.error("[auth] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
       if (!res.headersSent) json(res, 500, { error: "internal_error" });
