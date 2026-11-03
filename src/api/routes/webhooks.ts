@@ -4,6 +4,7 @@ import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
 import { errMessage } from "../../util/errors.ts";
 import { canAdministerWebhook, editWebhookTask } from "../control-service.ts";
 import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
+import { withRowTenant } from "../tenant-ingress.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
@@ -66,16 +67,19 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
       return sendJson(res, 413, { error: "payload_too_large", message: errMessage(e) });
     throw e;
   }
-  const out = await deps.webhookReceiver.deliver(id, { headers: req.headers, rawBody });
-  if (out.status === 200) {
-    res.writeHead(200, { "content-type": "text/plain" });
-    res.end(out.body);
-    return;
-  }
-  if (out.status === 202) return sendJson(res, 202, { ok: true });
-  if (out.status === 401)
-    return sendJson(res, 401, { error: "unauthorized", message: "signature verification failed" });
-  return sendJson(res, 404, { error: "not_found" });
+  const receiver = deps.webhookReceiver;
+  return withRowTenant(res, deps.rowTenants, { table: "webhooks", columns: ["id"], id }, async () => {
+    const out = await receiver.deliver(id, { headers: req.headers, rawBody });
+    if (out.status === 200) {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(out.body);
+      return;
+    }
+    if (out.status === 202) return sendJson(res, 202, { ok: true });
+    if (out.status === 401)
+      return sendJson(res, 401, { error: "unauthorized", message: "signature verification failed" });
+    return sendJson(res, 404, { error: "not_found" });
+  });
 }
 
 const WEBHOOK_ERROR_STATUS: Record<string, number> = {

@@ -1,6 +1,6 @@
 import type { BaseCtx, Route } from "./route.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
-import { verifyOrReject } from "../http.ts";
+import { tenantHeader, verifyOrReject } from "../http.ts";
 
 const HEARTBEAT_MS = 25_000;
 
@@ -12,7 +12,7 @@ async function streamSessionStates(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, ""),
+      canonicalPayload(method, pathname + url.search, "", tenantHeader(req)),
       false,
       ctx.allowUnsignedSourceAuth,
     ))
@@ -42,5 +42,5 @@ async function streamSessionStates(ctx: BaseCtx): Promise<void> {
 }
 
 export const sessionStateRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "GET", path: "/v1/session-state/events", auth: "source", handle: streamSessionStates },
+  { method: "GET", path: "/v1/session-state/events", auth: "source", unbound: true, handle: streamSessionStates },
 ];

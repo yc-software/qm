@@ -62,5 +62,12 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
 }
 
 export const deploymentLiveSmokeRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/deployment/live-session", actor: "system", auth: "source", handle: deploymentLiveSmoke },
+  {
+    method: "POST",
+    path: "/v1/deployment/live-session",
+    actor: "system",
+    auth: "source",
+    tenantFromHost: true,
+    handle: deploymentLiveSmoke,
+  },
 ];

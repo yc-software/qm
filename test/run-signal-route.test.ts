@@ -18,6 +18,7 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -59,16 +60,18 @@ function request(text: string, threadRef = "t-signal"): OrchestratorInput {
   };
 }
 
-async function coreSignal(runId: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
-  const path = `/v1/runs/${encodeURIComponent(runId)}/signal`;
+async function corePost(path: string, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
   const raw = JSON.stringify(body);
-  const r = await fetch(`${coreBase}${path}`, {
-    method: "POST",
-    headers: signedHeaders(SECRET, "POST", path, raw),
-    body: raw,
-  });
+  const named = body as { request?: { actor?: { externalId?: unknown } }; actor?: { externalId?: unknown } };
+  const id = named.request?.actor?.externalId ?? named.actor?.externalId;
+  const p = typeof id === "string" ? id : actor.id;
+  const identity = mintPortalIdentity({ t: TEST_TENANT, p, exp: Date.now() + 60_000 }, SECRET);
+  const headers = { ...signedHeaders(SECRET, "POST", path, raw), [PORTAL_IDENTITY_HEADER]: identity };
+  const r = await fetch(`${coreBase}${path}`, { method: "POST", headers, body: raw });
   return { status: r.status, json: (await r.json()) as Record<string, unknown> };
 }
+const coreSignal = (runId: string, body: unknown) => corePost(`/v1/runs/${encodeURIComponent(runId)}/signal`, body);
+const coreTurn = (body: unknown) => corePost("/v1/turns", body);
 
 function asUser(user: string, init: RequestInit = {}): RequestInit {
   return {
@@ -76,7 +79,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
     headers: {
       "content-type": "application/json",
       cookie: `webuiuser=${encodeURIComponent(user)}`,
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
+      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ t: TEST_TENANT, p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
   };
@@ -119,12 +122,19 @@ test("core route: a steer's ts and request thread through to the signal store", 
 });
 
 test("core route: another person's steer is attributed with their display name", async () => {
-  const { run } = await built.runs.enqueue({ sessionId: "t-foreign", request: request("hi", "t-foreign") });
+  const eve: Principal = { id: "web-eve", type: "internal" };
+  const members = [actor, eve].map((p) => ({ channelId: "C-foreign", principalId: p.id }));
+  await built.directory.replaceChannels([{ channelId: "C-foreign", name: "foreign", isPrivate: false }], members);
+  const room = { kind: "channel" as const, channelRef: "C-foreign", threadRef: "t-foreign" };
+  const { run } = await built.runs.enqueue({
+    sessionId: "t-foreign",
+    request: { ...request("hi", "t-foreign"), conversation: { ...room, audience: [actor, eve] } },
+  });
   const r = await coreSignal(run.id, {
     kind: "steer",
     text: "go right",
     ts: "1712.002",
-    request: steererRequest("web-eve", "t-foreign", "go right", "Eve Example"),
+    request: { ...steererRequest("web-eve", "t-foreign", "go right", "Eve Example"), conversation: room },
   });
   assert.equal(r.status, 200);
   const [signal] = await built.signals.takePending(run.id);
@@ -214,7 +224,7 @@ test("core route: a portal identity that does not match the request actor is ref
     method: "POST",
     headers: {
       ...signedHeaders(SECRET, "POST", path, raw),
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "eve", exp: Date.now() + 60_000 }, SECRET),
+      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ t: TEST_TENANT, p: "eve", exp: Date.now() + 60_000 }, SECRET),
     },
     body: raw,
   });
@@ -767,17 +777,6 @@ test("web steering atomically transfers file-only queues and deduplicates retrie
   assert.equal(signals.length, 1);
   assert.deepEqual(signals[0]?.request?.attachments, attachments);
 });
-
-async function coreTurn(body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
-  const path = "/v1/turns";
-  const raw = JSON.stringify(body);
-  const r = await fetch(`${coreBase}${path}`, {
-    method: "POST",
-    headers: signedHeaders(SECRET, "POST", path, raw),
-    body: raw,
-  });
-  return { status: r.status, json: (await r.json()) as Record<string, unknown> };
-}
 
 const pageTool = (name: string, extra: Record<string, unknown> = {}) => ({
   name,
