@@ -496,6 +496,64 @@ for (const stopBeforeIntake of [false, true]) {
   });
 }
 
+test("a steer wakes a waiting background poll and lands without waiting out the poll", async () => {
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const agent = createAgent({ apiKey: "sk-test", signals });
+  const sink: Sink = { entries: [] };
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    if (++calls > 1) return sse(textReplyEvents("done"));
+    const events = textReplyEvents("");
+    events[1] = {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "poll-job", name: "background", input: {} },
+    };
+    events[2] = {
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "input_json_delta",
+        partial_json: JSON.stringify({ action: "poll", process_id: "job-1", wait_seconds: 30 }),
+      },
+    };
+    events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
+    return sse(events);
+  }) as typeof fetch;
+  const waits: Array<number | undefined> = [];
+  try {
+    const started = Date.now();
+    const result = await agent.runTurn(
+      turnInput("steer-poll", sink, {
+        runId: "steer-poll",
+        tools: {
+          backgroundPoll: async (processId: string, opts?: { waitSeconds?: number }) => {
+            waits.push(opts?.waitSeconds);
+            if (opts?.waitSeconds) {
+              await signals.send("steer-poll", { kind: "steer", text: "check the other job", ts: "poll.1" });
+              await new Promise((resolve) => setTimeout(resolve, opts.waitSeconds! * 1000).unref());
+            }
+            return { processId, chunks: "still building", cursor: 14, status: { state: "running" } };
+          },
+        } as unknown as AgentTurnInput["tools"],
+      }),
+    );
+    assert.ok(Date.now() - started < 10_000, "the steer does not wait out the 30 s poll");
+    assert.equal(result.reply, "done");
+    assert.deepEqual(waits, [30, undefined]);
+    assert.deepEqual(
+      sink.entries.map((entry) => entry.type),
+      ["user", "tool_call", "tool_result", "user", "assistant"],
+    );
+    assert.equal((sink.entries[3]!.payload as { ts?: string }).ts, "poll.1");
+    assert.match(String((sink.entries[2]!.payload as { result?: unknown }).result), /still building/);
+  } finally {
+    globalThis.fetch = realFetch;
+    await agent.close?.();
+  }
+});
+
 test("a consumed steer is recorded when its acknowledgement fails", async () => {
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   signals.acknowledge = async () => {

@@ -57,6 +57,7 @@ export interface ToolContextRef {
   onModelRequest?: () => void;
   fast?: boolean;
   abortSignal?: AbortSignal;
+  steered?: AbortSignal;
   shutdown?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
