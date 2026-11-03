@@ -200,7 +200,7 @@ test("real browser SDK preserves page URLs, request data and child spans when sa
     assert.equal(loaded.contexts.trace.data.prefetched, "false");
     assert.equal(loaded.contexts.trace.data.cached, "false");
     assert.equal(loaded.contexts.trace.data.tracked, "true");
-    assert.equal(loaded.contexts.trace.data.entries, "12");
+    assert.equal(loaded.contexts.trace.data.items, "12");
     assert.deepEqual(loaded.measurements, {
       fetch: { value: 60, unit: "millisecond" },
       render: { value: 30, unit: "millisecond" },
