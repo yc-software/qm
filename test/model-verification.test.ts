@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const spec = {
   id: "verify-future",
@@ -178,7 +179,11 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+  const headers = {
+    "content-type": "application/json",
+    "x-admin-actor": "admin-alice@default-org",
+    ...testTenantHeaders(),
+  };
   const path = base + "/v1/admin/model-registry/" + spec.id;
   const put = (body: object, actor = headers["x-admin-actor"]) =>
     fetch(path, { method: "PUT", headers: { ...headers, "x-admin-actor": actor }, body: JSON.stringify(body) });
@@ -238,17 +243,19 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     const beforeEdit = upstream.requests.length;
     assert.equal((await put({ ...spec, name: "Verified edit", verify: true })).status, 200);
     assert.equal(upstream.requests.length, beforeEdit + 1);
-    await built.config.setRuntimeSelection("personal:admin-alice@default-org", {
-      modelId: spec.id,
-    });
-    await built.modelCredentials.set("openai", "rotated-test-key", "admin-alice");
+    await inTestTenant(() =>
+      built.config.setRuntimeSelection("personal:admin-alice@default-org", {
+        modelId: spec.id,
+      }),
+    );
+    await inTestTenant(() => built.modelCredentials.set("openai", "rotated-test-key", "admin-alice"));
     const stale = await runtime();
     assert.equal(stale.effective.modelId, spec.id);
     assert.equal(stale.modelCatalog[spec.id], undefined);
     assert.match(stale.unavailableReason, /credentials changed/);
     assert.equal((await put({ ...spec, verify: true })).status, 200);
     assert.equal(upstream.requests.at(-1)?.authorization, "Bearer rotated-test-key");
-    await built.modelCredentials.delete("openai", "admin-alice");
+    await inTestTenant(() => built.modelCredentials.delete("openai", "admin-alice"));
     const calls = upstream.requests.length;
     const missing = await put({ ...spec, verify: true });
     assert.equal(missing.status, 422);
@@ -352,7 +359,7 @@ test("endpoint, template metadata, credential revision, and model edits change v
     setProviderBaseUrls({ openai: "http://127.0.0.1:19999/v1" });
     assert.notEqual((await verifier(parseModelOverlay(spec))).fingerprint, original);
     setProviderBaseUrls({});
-    await built.modelCredentials.set("openai", "test-key", "admin");
+    await inTestTenant(() => built.modelCredentials.set("openai", "test-key", "admin"));
     assert.notEqual((await verifier(parseModelOverlay(spec))).fingerprint, original);
   } finally {
     setProviderBaseUrls({});

@@ -26,6 +26,7 @@ import {
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 import { testModelTables } from "./support/credential-stores.ts";
 
 const definition = {
@@ -168,20 +169,26 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   const put = (body: object) =>
     fetch(url, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" },
+      headers: {
+        "content-type": "application/json",
+        "x-admin-actor": "admin-alice@default-org",
+        ...testTenantHeaders(),
+      },
       body: JSON.stringify(body),
     });
   assert.equal((await put({ modelId: definition.id })).status, 200);
-  assert.equal(await built.config.getEmbeddingModelDurable(), definition.id);
+  assert.equal(await inTestTenant(() => built.config.getEmbeddingModelDurable()), definition.id);
   const models = await fetch(url.replace(/\/memory-embedding-model$/, "?view=models"), {
-    headers: { "x-admin-actor": "admin-alice@default-org" },
+    headers: { "x-admin-actor": "admin-alice@default-org", ...testTenantHeaders() },
   });
   const view = (await models.json()) as { memoryEmbeddingModel: string; memoryEmbeddingOptions: { id: string }[] };
   assert.equal(view.memoryEmbeddingModel, definition.id);
   assert.ok(view.memoryEmbeddingOptions.some((model) => model.id === definition.id));
-  await built.memory.capture("personal:test", ["first fact"], Date.now());
-  assert.match(recallText(await built.memory.recall("personal:test", { query: "first" })), /first fact/);
+  await inTestTenant(async () => {
+    await built.memory.capture("personal:test", ["first fact"], Date.now());
+    assert.match(recallText(await built.memory.recall("personal:test", { query: "first" })), /first fact/);
+  });
   assert.equal((await put({ modelId: "gpt-5.5" })).status, 400);
   assert.equal((await put({ modelId: null })).status, 200);
-  assert.equal(await built.config.getEmbeddingModelDurable(), null);
+  assert.equal(await inTestTenant(() => built.config.getEmbeddingModelDurable()), null);
 });

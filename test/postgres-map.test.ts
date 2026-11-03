@@ -1,28 +1,27 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import pg, { type Pool } from "pg";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { Webhook, Cron } from "../src/triggers/types.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
-import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { migrateTestDatabase, ownerUrlOf, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
 
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query(
-    "DROP TABLE IF EXISTS map_webhooks, map_webhook_history, map_widgets, map_wide_widgets, map_scoped_widgets, map_crons, map_owned_crons, process_sessions, durable_map_versions CASCADE",
-  );
-  await p.end();
-});
+async function asOwner(fn: (owner: Pool) => Promise<unknown>): Promise<void> {
+  const owner = new pg.Pool({ connectionString: ownerUrlOf(URL!), max: 1 });
+  try {
+    await fn(owner);
+  } finally {
+    await owner.end();
+  }
+}
 
 interface Widget {
   name: string;
@@ -32,6 +31,7 @@ interface Widget {
 
 test("pg map: put/get/all/upsert/delete with a JSONB value round-trip", { skip }, async () => {
   const m = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
+  await migrateTestDatabase(URL);
   assert.deepEqual(await m.all(), []);
   assert.equal(await m.get("a"), null);
 
@@ -63,6 +63,7 @@ test("pg map: a value persists across map instances (no per-process cache to div
   const writer = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
   await writer.put("shared", { name: "shared", tags: ["s"], nested: { n: 9 } });
   const reader = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
+  await migrateTestDatabase(URL);
   assert.equal((await reader.get("shared"))!.nested.n, 9);
 });
 
@@ -70,6 +71,7 @@ test("pg map: an artifact store rides the map (a cron round-trips through Postgr
   const store = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"), {
     fires: createPostgresCronFireStore(testDatabaseUrl()),
   });
+  await migrateTestDatabase(URL);
   const c = await store.create({
     schedule: { everyMs: 60_000 },
     action: "digest",
@@ -81,6 +83,7 @@ test("pg map: an artifact store rides the map (a cron round-trips through Postgr
   const reader = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"), {
     fires: createPostgresCronFireStore(testDatabaseUrl()),
   });
+  await migrateTestDatabase(URL);
   const got = await reader.get(c.id);
   assert.equal(got?.action, "digest");
   assert.equal(got?.lastFiredAt, 123);
@@ -91,6 +94,7 @@ test(
   { skip },
   async () => {
     const m = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
+    await migrateTestDatabase(URL);
     const first: Widget = { name: "first", tags: ["a"], nested: { n: 1 } };
     const won = await m.putIfAbsent("dedupe", first);
     assert.deepEqual(won, first, "the first writer's value is stored and returned");
@@ -112,6 +116,7 @@ test(
   { skip },
   async () => {
     const m = createPostgresMapFactory(URL!).map<Widget & { note?: string }>("map_widgets");
+    await migrateTestDatabase(URL);
     await m.put("mw", { name: "mw", tags: ["a"], nested: { n: 1 }, note: "hi" });
     const merged = await m.merge("mw", { name: "mw2", note: undefined });
     assert.equal(merged?.name, "mw2");
@@ -125,6 +130,7 @@ test(
 test("pg map: all()/entries() stay coherent across instances despite the read cache", { skip }, async () => {
   const writer = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
   const reader = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
+  await migrateTestDatabase(URL);
   await writer.put("c1", { name: "c1", tags: [], nested: { n: 1 } });
   assert.deepEqual(
     (await reader.all()).map((w) => w.name).filter((n) => n === "c1"),
@@ -151,6 +157,7 @@ test("pg map: all()/entries() stay coherent across instances despite the read ca
 
 test("pg map: a caller mutating an all() result cannot poison the cache", { skip }, async () => {
   const m = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
+  await migrateTestDatabase(URL);
   await m.put("mut", { name: "mut", tags: ["a"], nested: { n: 1 } });
   const first = (await m.all()).find((w) => w.name === "mut")!;
   first.tags.push("EVIL");
@@ -162,6 +169,7 @@ test("pg map: a caller mutating an all() result cannot poison the cache", { skip
 
 test("pg map: update transforms a row under a lock", { skip }, async () => {
   const m = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
+  await migrateTestDatabase(URL);
   await m.put("upd", { name: "upd", tags: [], nested: { n: 0 } });
   await Promise.all(
     Array.from({ length: 5 }, (_, i) =>
@@ -182,12 +190,14 @@ test("pg map: select mirrors the memory map — folded field filter, projection,
   ];
   const factory = createPostgresMapFactory(URL!);
   let pgMap = factory.map<Owned>("map_widgets");
+  await migrateTestDatabase(URL);
   const memMap = testMap<Owned>();
   for (const [id, row] of rows) {
     await pgMap.put(id, row);
     await memMap.put(id, row);
   }
   pgMap = factory.map<Owned>("map_widgets", ["owner"]);
+  await migrateTestDatabase(URL);
   try {
     const mine = await pgMap.select({ omit: ["secretEnc"], where: { field: "owner", anyOfFold: ["U7"] } });
     assert.deepEqual(mine, await memMap.select({ omit: ["secretEnc"], where: { field: "owner", anyOfFold: ["U7"] } }));
@@ -270,9 +280,11 @@ test("pg map: indexed fields accept wide values through migration and later writ
   const first = randomBytes(3000).toString("hex");
   const second = randomBytes(3000).toString("hex");
   const unindexed = factory.map<{ owner: string }>("map_wide_widgets");
+  await migrateTestDatabase(URL);
   try {
     await unindexed.put("existing", { owner: first });
     const indexed = factory.map<{ owner: string }>("map_wide_widgets", ["owner"]);
+    await migrateTestDatabase(URL);
     const select = (owner: string) => indexed.select({ where: { field: "owner", anyOfFold: [owner.toUpperCase()] } });
     assert.deepEqual(await select(first), [{ owner: first }]);
     await indexed.put("later", { owner: second });
@@ -289,6 +301,7 @@ test("pg map: indexed fields accept wide values through migration and later writ
 test("pg map: original folded-index migration upgrades without changing its ledger", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const unindexed = factory.map<{ owner: string }>("map_wide_widgets");
+  await migrateTestDatabase(URL);
   await unindexed.put("legacy", { owner: "short" });
   const legacy = definePgMigration({
     id: "durable-map/map_wide_widgets/select-owner",
@@ -300,13 +313,16 @@ test("pg map: original folded-index migration upgrades without changing its ledg
     ],
   });
   try {
-    await factory.pool.q("DROP INDEX IF EXISTS map_wide_widgets_owner_fold, map_wide_widgets_owner_unicode");
-    await factory.pool.q(
-      "DELETE FROM qm_schema_migrations WHERE id LIKE 'durable-map/map_wide_widgets/%' AND id <> 'durable-map/map_wide_widgets/0001'",
-    );
-    await applyPgMigrations(await factory.pool.pool(), [legacy]);
+    await asOwner(async (owner) => {
+      await owner.query("DROP INDEX IF EXISTS map_wide_widgets_owner_fold, map_wide_widgets_owner_unicode");
+      await owner.query(
+        "DELETE FROM qm_schema_migrations WHERE id LIKE 'durable-map/map_wide_widgets/%' AND id <> 'durable-map/map_wide_widgets/0001'",
+      );
+      await applyPgMigrations(owner, [legacy]);
+    });
     const ledger = await factory.pool.q("SELECT * FROM qm_schema_migrations WHERE id = $1", [legacy.id]);
     const indexed = factory.map<{ owner: string }>("map_wide_widgets", ["owner"]);
+    await migrateTestDatabase(URL);
     const owner = randomBytes(3000).toString("hex");
     await indexed.put("legacy", { owner });
     assert.deepEqual(await indexed.select({ where: { field: "owner", anyOfFold: [owner] } }), [{ owner }]);
@@ -327,6 +343,7 @@ test("pg map: webhook history retains concurrent deliveries across store instanc
     createWebhookStore(factory.map<Webhook>("map_webhooks"), factory.map<WebhookHistory>("map_webhook_history"));
   const a = makeStore();
   const b = makeStore();
+  await migrateTestDatabase(URL);
   const webhook = await a.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -364,6 +381,7 @@ for (const postgres of [false, true]) {
       type Row = { owner: string; secret: string; payload?: Record<string, unknown> | null };
       const factory = postgres ? createPostgresMapFactory(URL!) : undefined;
       const map = factory ? factory.map<Row>("map_widgets") : testMap<Row>();
+      if (factory) await migrateTestDatabase(URL);
       const payload = { source: "gmail", automated: true, body: "x".repeat(64_000), nil: null };
       const rows: Row[] = [
         { owner: "projection", secret: "hidden", payload },
@@ -407,13 +425,14 @@ test("pg map: an indexed select plans both branches through their indexes", { sk
   const factory = createPostgresMapFactory(URL!);
   const pg = factory.pool;
   const indexed = factory.map<{ owner: string; blob: string }>("map_scoped_widgets", ["owner"]);
+  await migrateTestDatabase(URL);
   await indexed.put("seed", { owner: "seed", blob: "" });
   await pg.q(
     `INSERT INTO map_scoped_widgets (id, json)
      SELECT 'w' || g, jsonb_build_object('owner', 'owner-' || (g % 40), 'blob', repeat(md5(g::text), 200))
      FROM generate_series(1, 4000) g`,
   );
-  await pg.q("ANALYZE map_scoped_widgets");
+  await asOwner((owner) => owner.query("ANALYZE map_scoped_widgets"));
   const captured: Array<{ sql: string; params: unknown[] }> = [];
   const original = pg.q.bind(pg);
   pg.q = (async (sql: string, params?: unknown[]) => {
@@ -453,7 +472,7 @@ test("pg map: an indexed select plans both branches through their indexes", { sk
     }
   } finally {
     pg.q = original;
-    await pg.q("DROP TABLE IF EXISTS map_scoped_widgets");
+    await asOwner((owner) => owner.query("DROP TABLE IF EXISTS map_scoped_widgets"));
     await factory.pool.close();
   }
 });
@@ -463,6 +482,7 @@ test("pg map: trigger stores list only the owner's rows", { skip }, async () => 
   const crons = createCronStore(f.map<Cron>("map_owned_crons", ["ownerScopeId"]), {
     fires: createPostgresCronFireStore(URL!),
   });
+  await migrateTestDatabase(URL);
   const upper = scopeId("personal", "OwnerU");
   const lower = scopeId("personal", "owneru");
   for (const owner of [upper, lower, scopeId("personal", "other")])

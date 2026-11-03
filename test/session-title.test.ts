@@ -1,6 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,21 +20,26 @@ function freshApp() {
   return buildApp(config);
 }
 
+function test(name: string, fn: (built: ReturnType<typeof freshApp>) => Promise<void>): void {
+  nodeTest(name, () => {
+    const built = freshApp();
+    return inTestTenant(() => fn(built));
+  });
+}
+
 const actor = { externalId: "U1" };
 function dm(text: string, thread: string): TurnRequest {
   return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
 }
 
-test("names a conversation from its first completed turn (auto-title)", async () => {
-  const { app } = freshApp();
+test("names a conversation from its first completed turn (auto-title)", async ({ app }) => {
   const r = await app.turn(dm("How do I roll back a bad deploy", "web:U1:t1"));
   assert.equal(r.status, "ok");
   const got = await app.getSession(r.sessionId!);
   assert.equal(got?.session.title, "Chat: How do I roll back");
 });
 
-test("the title and its sidebar refresh land before the turn's computer is ready", async () => {
-  const built = freshApp();
+test("the title and its sidebar refresh land before the turn's computer is ready", async (built) => {
   await selectDefaultSandbox(built, "U1", "personal:U1");
   const computerReady = Promise.withResolvers<void>();
   const provision = built.sandbox.provision.bind(built.sandbox);
@@ -59,8 +65,7 @@ test("the title and its sidebar refresh land before the turn's computer is ready
   assert.equal((await turn).status, "ok");
 });
 
-test("concurrent completed turns keep durable titles when title generation is unavailable", async () => {
-  const { app } = freshApp();
+test("concurrent completed turns keep durable titles when title generation is unavailable", async ({ app }) => {
   const turns = await Promise.all(
     Array.from({ length: 4 }, (_, i) =>
       app.turn(dm(`Simulate four-way title outage ${i + 1}`, `web:U1:title-load-${i + 1}`)),
@@ -73,8 +78,8 @@ test("concurrent completed turns keep durable titles when title generation is un
   }
 });
 
-test("a title provider exception is recorded before the completed turn gets its fallback title", async () => {
-  const { app, errors } = freshApp();
+test("a title provider exception is recorded before the completed turn gets its fallback title", async (built) => {
+  const { app, errors } = built;
   const turn = await app.turn(dm("Simulate title provider exception", "web:U1:title-error"));
 
   assert.equal(turn.status, "ok");
@@ -86,8 +91,8 @@ test("a title provider exception is recorded before the completed turn gets its 
   assert.match(failures[0]!.message, /title model overloaded/);
 });
 
-test("a rejected title answer is recorded with the rule that rejected it before the fallback title lands", async () => {
-  const { app, errors } = freshApp();
+test("a rejected title answer is recorded with the rule that rejected it before the fallback title lands", async (built) => {
+  const { app, errors } = built;
   const turn = await app.turn(dm("Simulate reply-shaped title", "web:U1:title-rejected"));
 
   assert.equal(turn.status, "ok");
@@ -102,32 +107,34 @@ test("a rejected title answer is recorded with the rule that rejected it before 
   assert.equal(recorded[0]!.message, 'reply_opener: "Sorry, I can\'t title this one"');
 });
 
-test("POST /v1/sessions/:id/title answers 200 with the fallback title and records why the answer was rejected", async () => {
-  const { app, errors, config, admin, auditLog } = freshApp();
-  const server = createInsecureTestServer(app, { config, admin, auditLog });
-  server.listen(0);
-  try {
-    const turn = await app.turn(dm("Simulate reply-shaped title", "web:U1:title-route"));
-    const port = (server.address() as AddressInfo).port;
-    const res = await fetch(`http://localhost:${port}/v1/sessions/${turn.sessionId!}/title`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "U1" }),
-    });
+nodeTest(
+  "POST /v1/sessions/:id/title answers 200 with the fallback title and records why the answer was rejected",
+  async () => {
+    const { app, errors, config, admin, auditLog } = freshApp();
+    const server = createInsecureTestServer(app, { config, admin, auditLog });
+    server.listen(0);
+    try {
+      const turn = await inTestTenant(() => app.turn(dm("Simulate reply-shaped title", "web:U1:title-route")));
+      const port = (server.address() as AddressInfo).port;
+      const res = await fetch(`http://localhost:${port}/v1/sessions/${turn.sessionId!}/title`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...testTenantHeaders() },
+        body: JSON.stringify({ principalId: "U1" }),
+      });
 
-    assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { title: "Simulate reply-shaped title" });
-    const codes = (await errors.list({ sessionId: turn.sessionId! }))
-      .filter((error) => error.category === "session_title")
-      .map((error) => error.code);
-    assert.deepEqual(codes, ["rejected_reply_opener", "rejected_reply_opener"]);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { title: "Simulate reply-shaped title" });
+      const codes = (await inTestTenant(() => errors.list({ sessionId: turn.sessionId! })))
+        .filter((error) => error.category === "session_title")
+        .map((error) => error.code);
+      assert.deepEqual(codes, ["rejected_reply_opener", "rejected_reply_opener"]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  },
+);
 
-test("the durable fallback strips turn boilerplate and stays within the generated title limit", async () => {
-  const { app } = freshApp();
+test("the durable fallback strips turn boilerplate and stays within the generated title limit", async ({ app }) => {
   const turn = await app.turn(
     dm(
       "[browser context that must not become the title]\n\nSimulate four-way title outage with deliberately long distinguishing words for truncation",
@@ -143,8 +150,7 @@ test("the durable fallback strips turn boilerplate and stays within the generate
   assert.doesNotMatch(title!, /browser context/);
 });
 
-test("the shared fallback covers approval pauses and manual regeneration", async () => {
-  const { app } = freshApp();
+test("the shared fallback covers approval pauses and manual regeneration", async ({ app }) => {
   const turn = await app.turn(dm("!paused-approval Simulate four-way title outage deploy", "web:U1:title-paused"));
 
   assert.ok(turn.pendingApprovals?.length);
@@ -158,8 +164,7 @@ test("the shared fallback covers approval pauses and manual regeneration", async
   );
 });
 
-test("the title is generated ONCE — a later turn does not rewrite it", async () => {
-  const { app } = freshApp();
+test("the title is generated ONCE — a later turn does not rewrite it", async ({ app }) => {
   const r1 = await app.turn(dm("First topic about pricing tiers", "web:U1:t2"));
   const sid = r1.sessionId!;
   const first = (await app.getSession(sid))?.session.title;
@@ -168,8 +173,7 @@ test("the title is generated ONCE — a later turn does not rewrite it", async (
   assert.equal((await app.getSession(sid))?.session.title, first);
 });
 
-test("the title ignores assembled-turn boilerplate (conversation header / manifests)", async () => {
-  const { app } = freshApp();
+test("the title ignores assembled-turn boilerplate (conversation header / manifests)", async ({ app }) => {
   const r = await app.turn({
     surface: "test",
     actor,
@@ -181,8 +185,8 @@ test("the title ignores assembled-turn boilerplate (conversation header / manife
   assert.equal((await app.getSession(r.sessionId!))?.session.title, "Chat: Optimize the checkout flow");
 });
 
-test("a per-participant rename overrides the LLM title, and clearing it reveals the LLM title again", async () => {
-  const { app } = freshApp();
+test("a per-participant rename overrides the LLM title, and clearing it reveals the LLM title again", async (built) => {
+  const { app } = built;
   const r = await app.turn(dm("Set up the staging database", "web:U1:t4"));
   const sid = r.sessionId!;
   const llm = (await app.getSession(sid))?.session.title;
@@ -194,8 +198,7 @@ test("a per-participant rename overrides the LLM title, and clearing it reveals 
   assert.equal(cleared?.title, llm);
 });
 
-test("regenerateTitle retitles from the visible transcript; a stranger gets null", async () => {
-  const { app } = freshApp();
+test("regenerateTitle retitles from the visible transcript; a stranger gets null", async ({ app }) => {
   const r = await app.turn(dm("Investigate the flaky CI job", "web:U1:t3"));
   const sid = r.sessionId!;
   const refreshed = await app.regenerateTitle(sid, "U1");
@@ -204,15 +207,14 @@ test("regenerateTitle retitles from the visible transcript; a stranger gets null
   assert.equal(await app.regenerateTitle("does-not-exist", "U1"), null);
 });
 
-test("the title lands even when the turn pauses on approval (early titling off the first message)", async () => {
-  const { app } = freshApp();
+test("the title lands even when the turn pauses on approval (early titling off the first message)", async ({ app }) => {
   const r = await app.turn(dm("!paused-approval rm -rf /keys", "web:U1:t5"));
   assert.equal(r.status, "ok", "the preamble reply is still delivered");
   assert.ok(r.pendingApprovals?.length, "the pause surfaces its approval");
   assert.equal((await app.getSession(r.sessionId!))?.session.title, "Chat: !paused-approval rm -rf /keys");
 });
 
-test("sanitizeTitle rejects reply-shaped output and names the rule plus a sample of what it rejected", async () => {
+nodeTest("sanitizeTitle rejects reply-shaped output and names the rule plus a sample of what it rejected", async () => {
   const { sanitizeTitle, titleUserPrompt } = await import("../src/agent/agent-run.ts");
   const rejects = (out: string, rule: string) =>
     assert.throws(() => sanitizeTitle(out), {

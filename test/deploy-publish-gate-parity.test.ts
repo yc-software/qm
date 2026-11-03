@@ -14,6 +14,18 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
@@ -22,8 +34,8 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
   const deployStore = createDeployStore(
     testDeployBackings({ git: { repoRoot: mkdtempSync(join(tmpdir(), "parity-repo-")) } }),
   );
-  const acl: AclStore = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const directory: DirectoryStore = createPostgresDirectoryStore(testDatabaseUrl());
+  const acl: AclStore = tenantBound(createAclStore(createPostgresGrantStore(testDatabaseUrl())));
+  const directory: DirectoryStore = tenantBound(createPostgresDirectoryStore(testDatabaseUrl()));
   const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   await directory.replaceChannels(
     [
@@ -37,24 +49,26 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
       { channelId: CH_OTHER, principalId: "U3" },
     ],
   );
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 19996 }),
-      destroy: async () => {},
-    },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl,
-    deployDir: mkdtempSync(join(tmpdir(), "parity-deploy-")),
-    ...(opts.withResolver
-      ? {
-          canReadScope: createCanReadScope({ directory, identity }),
-          canWriteScope: createCanWriteScope({ directory, identity }),
-        }
-      : {}),
-  });
+  const deploy = tenantBound(
+    createDeployService({
+      ...singleProcessDeps(),
+      deployStore,
+      provider: {
+        profile: { managedScaleToZero: false },
+        apply: async () => ({ host: "127.0.0.1", port: 19996 }),
+        destroy: async () => {},
+      },
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      acl,
+      deployDir: mkdtempSync(join(tmpdir(), "parity-deploy-")),
+      ...(opts.withResolver
+        ? {
+            canReadScope: createCanReadScope({ directory, identity }),
+            canWriteScope: createCanWriteScope({ directory, identity }),
+          }
+        : {}),
+    }),
+  );
   const d = await deploy.deployOrUpdate({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",

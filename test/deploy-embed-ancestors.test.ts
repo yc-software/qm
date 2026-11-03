@@ -10,21 +10,35 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 function svc() {
-  const deployStore = createDeployStore(testDeployBackings());
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore,
-    provider: {
-      profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 5000 }),
-      destroy: async () => {},
-    },
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-    deployDir: mkdtempSync(join(tmpdir(), "embed-ancestors-")),
-  });
+  const deployStore = tenantBound(createDeployStore(testDeployBackings()));
+  const deploy = tenantBound(
+    createDeployService({
+      ...singleProcessDeps(),
+      deployStore,
+      provider: {
+        profile: { managedScaleToZero: false },
+        apply: async () => ({ host: "127.0.0.1", port: 5000 }),
+        destroy: async () => {},
+      },
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      deployDir: mkdtempSync(join(tmpdir(), "embed-ancestors-")),
+    }),
+  );
   return { deploy, deployStore };
 }
 

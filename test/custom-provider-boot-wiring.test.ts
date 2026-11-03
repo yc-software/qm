@@ -11,8 +11,13 @@ import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { defaultModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
+import { testTenantHeaders } from "./support/test-tenants.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 
 afterEach(() => setCustomProviders([]));
 

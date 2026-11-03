@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import type { EventEmitter } from "node:events";
+import type { Socket } from "node:net";
 import type { ClientConfig, Pool, PoolClient, QueryResult } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
 import { boundTenant, pinTenant } from "../tenants/context.ts";
@@ -26,6 +28,7 @@ export function configurePgPooling(config: PgPoolingConfig): void {
 }
 
 const migrationQueue = createKeyedQueue();
+const connectionTimeoutMs = 10_000;
 
 const sharedPools = new Map<string, { pool: Pool; users: number }>();
 
@@ -46,9 +49,9 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     new pg.Pool({
       ...connection,
       max,
-      connectionTimeoutMillis: 10_000,
+      connectionTimeoutMillis: connectionTimeoutMs,
       allowExitOnIdle: true,
-      pipeline: kind === "query",
+      pipeline: true,
     }),
   );
   sharedPools.set(key, { pool, users: 1 });
@@ -114,7 +117,6 @@ export interface PgPool {
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
   query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
   registerMigration(migration: PgMigrationDefinition): void;
-  migrate(migration: PgMigrationDefinition): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -140,16 +142,45 @@ async function pipelinedTransaction(
   settings: readonly PgSetting[],
   text: string,
   values: unknown[],
-  commitAfterResult: boolean,
+  signal: AbortSignal | undefined,
 ): Promise<QueryResult> {
-  if (!settings.length) return client.query({ text, values });
-  const prefix = [client.query("BEGIN"), client.query(settingsQuery(settings))];
-  const query = client.query({ text, values });
-  const [result] = await Promise.all([query, ...prefix, ...(commitAfterResult ? [] : [client.query("COMMIT")])]);
-  if (commitAfterResult) await client.query("COMMIT");
+  const settled = await withAbort(() => {
+    const statements = [
+      client.query("BEGIN"),
+      ...(settings.length ? [client.query(settingsQuery(settings))] : []),
+      client.query({ text, values }),
+    ];
+    return Promise.allSettled(signal ? statements : [...statements, client.query("COMMIT")]);
+  }, signal);
+  if (signal) {
+    signal.throwIfAborted();
+    settled.push(...(await Promise.allSettled([client.query("COMMIT")])));
+  }
+  const failed = settled.find((outcome) => outcome.status === "rejected");
+  if (failed) throw failed.reason;
   const status = client.getTransactionStatus();
   if (status !== "I") throw new Error(`pg-pool: pipelined query left its connection in transaction status ${status}`);
-  return result;
+  return (settled[settings.length ? 2 : 1] as PromiseFulfilledResult<QueryResult>).value;
+}
+
+type CancelConnection = EventEmitter & {
+  stream: Socket;
+  connect(...target: [string] | [number, string]): void;
+  cancel(processID: number, secretKey: number): void;
+};
+
+function cancelThenClose(pg: typeof import("pg").default, client: PoolClient): void {
+  const { processID, secretKey, connection } = client as PoolClient & { processID: number; secretKey: number };
+  const stream = connection.stream as Socket;
+  const cancel = new pg.Connection() as unknown as CancelConnection;
+  cancel.on("connect", () => cancel.cancel(processID, secretKey));
+  cancel.on("error", (error) => swallow("pg-pool: cancel request", error));
+  cancel.once("end", () => stream.destroy());
+  cancel.stream.setTimeout(connectionTimeoutMs, () =>
+    cancel.stream.destroy(new Error(`cancel request got no reply within ${connectionTimeoutMs}ms`)),
+  );
+  if (client.host.startsWith("/")) cancel.connect(`${client.host}/.s.PGSQL.${client.port}`);
+  else cancel.connect(client.port, stream.remoteAddress ?? client.host);
 }
 
 async function rollbackOrReport(client: PoolClient, context: string): Promise<Error | undefined> {
@@ -275,14 +306,6 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
   try {
     const pending = await pendingPgMigrations(client, migrations);
     if (!pending.length) return;
-    const creator = await client.query<{ login: string; creates: boolean }>(
-      "SELECT current_user AS login, has_schema_privilege(current_schema(), 'CREATE') AS creates",
-    );
-    if (!creator.rows[0]?.creates) {
-      throw new Error(
-        `pg-pool: ${creator.rows[0]?.login} cannot apply pending migrations ${pending.map((migration) => migration.id).join(", ")}; run migrations as the database owner first`,
-      );
-    }
     await lockSchema(client, "qm:schema-migrations");
     locked = true;
     await client.query(
@@ -411,27 +434,21 @@ export function registeredPgMigrations(connectionString: string): readonly PgMig
   return [...(registeredMigrations.get(connectionString)?.values() ?? [])].sort((a, b) => a.id.localeCompare(b.id));
 }
 
-async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[]): Promise<void> {
-  if (!maintenance.length) return;
-  const client = await pool.connect();
-  let discard: Error | undefined;
-  try {
-    await lockSchema(client, "qm:schema-maintenance");
-    for (const operation of maintenance) {
-      await client.query("BEGIN");
-      try {
-        for (const statement of operation.statements) await client.query(statement);
-        await client.query("COMMIT");
-      } catch (error) {
-        discard = await rollbackOrReport(client, `pg-pool: rollback maintenance ${operation.id}`);
-        throw error;
-      }
+export async function verifyRegisteredPgSchemas(connectionString?: string): Promise<void> {
+  const databases = connectionString ? [connectionString] : [...registeredMigrations.keys()];
+  for (const databaseUrl of databases) {
+    const pool = await retainPool(databaseUrl, "migration");
+    const client = await pool.connect();
+    try {
+      const pending = await pendingPgMigrations(client, registeredPgMigrations(databaseUrl));
+      if (pending.length)
+        throw new Error(
+          `pg-pool: migrations ${pending.map((migration) => migration.id).join(", ")} are pending; run the release migration step first`,
+        );
+    } finally {
+      client.release();
+      await releasePool(databaseUrl, pool, "migration");
     }
-  } finally {
-    await client
-      .query("SELECT pg_advisory_unlock(hashtext('qm:schema-maintenance'))")
-      .catch(swallowAs("pg-pool: schema-maintenance unlock", undefined));
-    client.release(discard);
   }
 }
 
@@ -455,48 +472,25 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
   }
 }
 
-export function createPgPool(
-  connectionString: string,
-  definitions: readonly PgMigrationDefinition[] = [],
-  maintenanceDefinitions: readonly PgMigrationDefinition[] = [],
-): PgPool {
-  const migrations = definitions.map(definePgMigration);
-  for (const migration of migrations) registerPgMigration(connectionString, migration);
-  const maintenance = maintenanceDefinitions.map(definePgMigration);
-  let readyP: Promise<void> | null = null;
+export function registerPgMigrations(connectionString: string, definitions: readonly PgMigrationDefinition[]): void {
+  for (const definition of definitions) registerPgMigration(connectionString, definePgMigration(definition));
+}
+
+export function createPgPool(connectionString: string, definitions: readonly PgMigrationDefinition[] = []): PgPool {
+  registerPgMigrations(connectionString, definitions);
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
   let closed = false;
   const queryUrl = pooledDatabaseUrl(connectionString);
-  async function withMigrationPool<T>(fn: (pool: Pool) => Promise<T>): Promise<T> {
-    return migrationQueue(connectionString, async () => {
-      const instance = await retainPool(connectionString, "migration");
-      try {
-        return await fn(instance);
-      } finally {
-        await releasePool(connectionString, instance, "migration");
-      }
-    });
-  }
-  async function ready(): Promise<void> {
-    if (closed) throw new Error("Postgres store is closed");
-    await (readyP ??= withMigrationPool(async (instance) => {
-      await applyPgMigrations(instance, migrations);
-      await applyPgMaintenance(instance, maintenance);
-    }).catch((error) => {
-      readyP = null;
-      throw error;
-    }));
+  function ready(): void {
     if (closed) throw new Error("Postgres store is closed");
   }
   async function pool(): Promise<Pool> {
-    await ready();
-    if (closed) throw new Error("Postgres store is closed");
+    ready();
     return (queryPoolP ??= retainPool(queryUrl, "query"));
   }
   async function sessionPool(): Promise<Pool> {
-    await ready();
-    if (closed) throw new Error("Postgres store is closed");
+    ready();
     return (sessionPoolP ??= retainPool(connectionString, "session"));
   }
   async function query(
@@ -522,16 +516,19 @@ export function createPgPool(
       );
       throw error;
     }
-    let queryError: Error | undefined;
+    let discard: Error | undefined;
     try {
-      const res = await withAbort(() => pipelinedTransaction(client, settings, text, params, Boolean(signal)), signal);
+      const res = await pipelinedTransaction(client, settings, text, params, signal);
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     } catch (error) {
-      queryError = error instanceof Error ? error : new Error(String(error));
+      const aborted = signal?.aborted === true && error === signal.reason;
+      const pg = (await import("pg")).default;
+      if (aborted) cancelThenClose(pg, client);
+      if (aborted || !(error instanceof pg.DatabaseError) || error.code === "57014")
+        discard = error instanceof Error ? error : new Error(String(error));
       throw error;
     } finally {
-      if (queryError && signal?.aborted) client.connection.stream.destroy();
-      client.release(queryError);
+      client.release(discard);
     }
   }
   async function q(text: string, params: unknown[] = [], options?: PgQueryOptions): Promise<Rows> {
@@ -540,21 +537,13 @@ export function createPgPool(
   async function close(): Promise<void> {
     if (closed) return;
     closed = true;
-    await readyP?.catch(() => {});
     await Promise.all([
       queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
       sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),
     ]);
   }
-  async function migrate(definition: PgMigrationDefinition): Promise<void> {
-    const migration = definePgMigration(definition);
-    registerPgMigration(connectionString, migration);
-    if (closed) throw new Error("Postgres store is closed");
-    await ready();
-    await withMigrationPool((instance) => applyPgMigrations(instance, [migration]));
-  }
   function registerMigration(definition: PgMigrationDefinition): void {
     registerPgMigration(connectionString, definePgMigration(definition));
   }
-  return { pool, sessionPool, q, query, registerMigration, migrate, close };
+  return { pool, sessionPool, q, query, registerMigration, close };
 }

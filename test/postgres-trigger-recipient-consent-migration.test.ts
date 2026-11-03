@@ -10,7 +10,7 @@ test(
   { skip },
   async () => {
     const pg = (await import("pg")).default;
-    const pool = new pg.Pool({ connectionString: URL });
+    const pool = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
     const tables = ["crons", "webhooks", "loops"];
     try {
       await pool.query(`DROP TABLE IF EXISTS ${tables.join(", ")}`);

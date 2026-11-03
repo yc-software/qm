@@ -24,6 +24,7 @@ import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { livePersonCapability, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
+import { withTenant } from "../../tenants/context.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
@@ -1233,6 +1234,19 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
       return sendJson(ctx.res, 403, { error: "forbidden", message: "token is for a different deployment" });
     if (isPush && access.permission !== "write")
       return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git token is read-only" });
+  }
+  return access?.tenant
+    ? withTenant(access.tenant, () => serveAuthorizedDeploymentGit(ctx, parts, isPush, access))
+    : serveAuthorizedDeploymentGit(ctx, parts, isPush, access);
+}
+
+async function serveAuthorizedDeploymentGit(
+  ctx: BaseCtx,
+  parts: { id: string; tail: string },
+  isPush: boolean,
+  access: Awaited<ReturnType<typeof verifyDeployGitAccess>>,
+): Promise<void> {
+  if (access) {
     if (
       access.principalId &&
       !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, access.permission))

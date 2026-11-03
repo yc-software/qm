@@ -344,7 +344,6 @@ export function createPostgresKeychainRows(connectionString: string): KeychainRo
       },
       async claimSweepable(prunedBefore) {
         const { rows } = await claimAcrossTenants(
-          connectionString,
           `SELECT tenant_id, ${ASK.names} FROM keychain_asks
            WHERE notified_at IS NULL OR notified_at < $1 ORDER BY created_at DESC, id DESC`,
           [prunedBefore],

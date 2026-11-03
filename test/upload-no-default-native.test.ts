@@ -5,6 +5,7 @@ import * as mockAgent from "./support/mock-agent.ts";
 import type { AgentTurnInput, AgentTurnResult } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 let exercise: ((turn: AgentTurnInput) => Promise<AgentTurnResult | void>) | undefined;
 mock.module("./support/mock-agent.ts", {
@@ -53,41 +54,43 @@ async function artifactText(built: Awaited<ReturnType<typeof scopeWithoutDefault
   return Buffer.concat(chunks);
 }
 
-test("without a default sandbox, native images and documents still reach the agent", async () => {
-  const { built, base, files } = await scopeWithoutDefault();
-  let seen: AgentTurnInput | undefined;
-  exercise = async (turn) => {
-    seen = turn;
-  };
-  try {
-    const result = await built.app.turn({ ...base, text: "look", attachments: await files() });
-    assert.equal(result.status, "ok");
-    assert.equal(await built.sandboxResources.resolve("channel:C1"), null);
-    assert.equal(Buffer.from(seen!.images![0]!.dataBase64, "base64").length > 0, true);
-    assert.equal(Buffer.from(seen!.documents![0]!.dataBase64, "base64").toString(), "SYNTHETIC-42");
-    assert.deepEqual(await artifactText(built, seen!.images![0]!.artifactId!), PNG);
-    assert.equal((await artifactText(built, seen!.documents![0]!.artifactId!)).toString(), "SYNTHETIC-42");
-  } finally {
-    exercise = undefined;
-  }
-});
+test("without a default sandbox, native images and documents still reach the agent", () =>
+  inTestTenant(async () => {
+    const { built, base, files } = await scopeWithoutDefault();
+    let seen: AgentTurnInput | undefined;
+    exercise = async (turn) => {
+      seen = turn;
+    };
+    try {
+      const result = await built.app.turn({ ...base, text: "look", attachments: await files() });
+      assert.equal(result.status, "ok");
+      assert.equal(await built.sandboxResources.resolve("channel:C1"), null);
+      assert.equal(Buffer.from(seen!.images![0]!.dataBase64, "base64").length > 0, true);
+      assert.equal(Buffer.from(seen!.documents![0]!.dataBase64, "base64").toString(), "SYNTHETIC-42");
+      assert.deepEqual(await artifactText(built, seen!.images![0]!.artifactId!), PNG);
+      assert.equal((await artifactText(built, seen!.documents![0]!.artifactId!)).toString(), "SYNTHETIC-42");
+    } finally {
+      exercise = undefined;
+    }
+  }));
 
-test("without a default sandbox, a steered upload is registered and surfaced without a computer", async () => {
-  const { built, base, files } = await scopeWithoutDefault();
-  let steered: Awaited<ReturnType<NonNullable<AgentTurnInput["prepareSteer"]>>> | undefined;
-  exercise = async (turn) => {
-    steered = await turn.prepareSteer!("also this", { ...base, text: "also this", attachments: await files() });
-  };
-  try {
-    const result = await built.app.turn({ ...base, text: "start" });
-    assert.equal(result.status, "ok");
-    assert.equal(await built.sandboxResources.resolve("channel:C1"), null);
-    assert.match(steered!.text, /not yet on a computer/);
-    assert.equal(steered!.images?.length, 1);
-    assert.equal(Buffer.from(steered!.documents![0]!.dataBase64, "base64").toString(), "SYNTHETIC-42");
-    const doc = steered!.attachments!.find((a) => a.name === "notes.txt")!;
-    assert.equal((await artifactText(built, doc.artifactId!)).toString(), "SYNTHETIC-42");
-  } finally {
-    exercise = undefined;
-  }
-});
+test("without a default sandbox, a steered upload is registered and surfaced without a computer", () =>
+  inTestTenant(async () => {
+    const { built, base, files } = await scopeWithoutDefault();
+    let steered: Awaited<ReturnType<NonNullable<AgentTurnInput["prepareSteer"]>>> | undefined;
+    exercise = async (turn) => {
+      steered = await turn.prepareSteer!("also this", { ...base, text: "also this", attachments: await files() });
+    };
+    try {
+      const result = await built.app.turn({ ...base, text: "start" });
+      assert.equal(result.status, "ok");
+      assert.equal(await built.sandboxResources.resolve("channel:C1"), null);
+      assert.match(steered!.text, /not yet on a computer/);
+      assert.equal(steered!.images?.length, 1);
+      assert.equal(Buffer.from(steered!.documents![0]!.dataBase64, "base64").toString(), "SYNTHETIC-42");
+      const doc = steered!.attachments!.find((a) => a.name === "notes.txt")!;
+      assert.equal((await artifactText(built, doc.artifactId!)).toString(), "SYNTHETIC-42");
+    } finally {
+      exercise = undefined;
+    }
+  }));

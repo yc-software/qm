@@ -9,6 +9,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 
@@ -33,7 +34,7 @@ test("admin list endpoints accept fractional limit values", { skip: !URL }, asyn
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const headers = { "x-admin-actor": "admin-alice@default-org" };
+  const headers = { "x-admin-actor": "admin-alice@default-org", ...testTenantHeaders() };
   try {
     const dm: TurnRequest = {
       surface: "test",
@@ -41,7 +42,7 @@ test("admin list endpoints accept fractional limit values", { skip: !URL }, asyn
       conversation: { kind: "dm", threadRef: "dm:U1:paging" },
       text: "hello",
     };
-    assert.equal((await built.app.turn(dm)).status, "ok");
+    assert.equal((await inTestTenant(() => built.app.turn(dm))).status, "ok");
     for (const path of [
       "/v1/admin/sessions?scope=org:default-org&limit=1.5",
       "/v1/admin/sessions?scope=org:default-org&cursor=not-a-cursor",

@@ -19,9 +19,14 @@ import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { createCustomProviderStore } from "../src/model/model-credential-store.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
+import { testTenantHeaders } from "./support/test-tenants.ts";
 import { testModelTables } from "./support/credential-stores.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 
 test("QA: full custom-provider lifecycle against a live fake upstream", async () => {
   // --- fake OpenAI-compatible upstream ---

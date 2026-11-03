@@ -15,6 +15,7 @@ import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const DAY = 86_400_000;
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
@@ -34,7 +35,8 @@ function start(sessions?: SessionStore) {
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const get = (base: string, path: string, headers: Record<string, string> = ALICE) => fetch(base + path, { headers });
+const get = (base: string, path: string, headers: Record<string, string> = ALICE) =>
+  fetch(base + path, { headers: { ...testTenantHeaders(), ...headers } });
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
   (await get(base, path, headers)).json();
 
@@ -46,10 +48,12 @@ const dm = (principal: string, text: string): TurnRequest => ({
 });
 
 async function seedPricedFixture(sessions: SessionStore): Promise<void> {
-  await bill(sessions, "dm:alice:priced", "dm", scopeId("personal", "alice"), { costUsd: 2 });
-  await bill(sessions, "cron:nightly:fire:abc123", "dm", scopeId("personal", "alice"), { costUsd: 0.5 });
-  await bill(sessions, "dm:bob:priced", "dm", scopeId("personal", "bob"), { costUsd: 1.25 });
-  await bill(sessions, "ch:C1:priced", "channel", scopeId("channel", "C1"), { costUsd: 3 });
+  await inTestTenant(() => bill(sessions, "dm:alice:priced", "dm", scopeId("personal", "alice"), { costUsd: 2 }));
+  await inTestTenant(() =>
+    bill(sessions, "cron:nightly:fire:abc123", "dm", scopeId("personal", "alice"), { costUsd: 0.5 }),
+  );
+  await inTestTenant(() => bill(sessions, "dm:bob:priced", "dm", scopeId("personal", "bob"), { costUsd: 1.25 }));
+  await inTestTenant(() => bill(sessions, "ch:C1:priced", "channel", scopeId("channel", "C1"), { costUsd: 3 }));
 }
 
 const conserved = (report: any, column: string): number =>
@@ -80,8 +84,8 @@ test("spend: uses the saved report and exposes its freshness", async () => {
 test("spend: live and cron dollars land on the owning person, shared scopes on their own rows", async () => {
   const s = start();
   try {
-    assert.equal((await s.built.app.turn(dm("alice", "hello there"))).status, "ok");
-    assert.equal((await s.built.app.turn(dm("bob", "hello there"))).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm("alice", "hello there")))).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm("bob", "hello there")))).status, "ok");
     await seedPricedFixture(s.built.sessions);
 
     const body = await getJson(s.base, "/v1/admin/spend");
@@ -111,7 +115,7 @@ test("spend: live and cron dollars land on the owning person, shared scopes on t
 test("spend: people plus shared scopes reconcile to the org totals", async () => {
   const s = start();
   try {
-    assert.equal((await s.built.app.turn(dm("alice", "hello there"))).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm("alice", "hello there")))).status, "ok");
     await seedPricedFixture(s.built.sessions);
 
     const body = await getJson(s.base, "/v1/admin/spend");
@@ -137,7 +141,7 @@ test("spend: people plus shared scopes reconcile to the org totals", async () =>
 test("spend: a mock-agent turn shows zero dollars with its tokens intact", async () => {
   const s = start();
   try {
-    assert.equal((await s.built.app.turn(dm("codexlike", "hello there"))).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm("codexlike", "hello there")))).status, "ok");
     const body = await getJson(s.base, "/v1/admin/spend");
     const row = body.people.find((p: any) => p.principalId === "codexlike");
     assert.ok(row, "a scope whose agent books no dollars is still listed");
@@ -152,7 +156,7 @@ test("spend: a mock-agent turn shows zero dollars with its tokens intact", async
 test("spend: a window in the past excludes today's rows entirely", async () => {
   const s = start();
   try {
-    assert.equal((await s.built.app.turn(dm("alice", "hello there"))).status, "ok");
+    assert.equal((await inTestTenant(() => s.built.app.turn(dm("alice", "hello there")))).status, "ok");
     await seedPricedFixture(s.built.sessions);
 
     const now = await getJson(s.base, "/v1/admin/spend");
@@ -174,11 +178,13 @@ test("spend: from/to and bucket=week reshape the series over backdated rows", as
   const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => clock.at });
   const s = start(store);
   try {
-    await bill(store, "dm:alice:d1", "dm", scopeId("personal", "alice"), { costUsd: 2 });
-    await bill(store, "ch:C1:d1", "channel", scopeId("channel", "C1"), { costUsd: 1 });
+    await inTestTenant(() => bill(store, "dm:alice:d1", "dm", scopeId("personal", "alice"), { costUsd: 2 }));
+    await inTestTenant(() => bill(store, "ch:C1:d1", "channel", scopeId("channel", "C1"), { costUsd: 1 }));
     clock.at += DAY;
-    await bill(store, "dm:alice:d2", "dm", scopeId("personal", "alice"), { costUsd: 4 });
-    await bill(store, "cron:nightly:fire:abc123", "dm", scopeId("personal", "alice"), { costUsd: 0.5 });
+    await inTestTenant(() => bill(store, "dm:alice:d2", "dm", scopeId("personal", "alice"), { costUsd: 4 }));
+    await inTestTenant(() =>
+      bill(store, "cron:nightly:fire:abc123", "dm", scopeId("personal", "alice"), { costUsd: 0.5 }),
+    );
 
     const both = await getJson(s.base, "/v1/admin/spend?from=2026-01-05&to=2026-01-07");
     assert.deepEqual(
@@ -258,14 +264,14 @@ test("spend: a caller with no admin grant gets 403 and writes no audit event, JS
       assert.deepEqual(Object.keys(body).sort(), ["error", "message"]);
     }
     assert.equal(
-      (await s.built.auditLog.events()).filter((e) => e.action === "spend.read").length,
+      (await inTestTenant(() => s.built.auditLog.events())).filter((e) => e.action === "spend.read").length,
       0,
       "a rejected read leaves no spend.read trail",
     );
 
     assert.equal((await get(s.base, "/v1/admin/spend")).status, 200);
     assert.equal((await get(s.base, "/v1/admin/spend?format=csv")).status, 200);
-    const audited = (await s.built.auditLog.events()).filter((e) => e.action === "spend.read");
+    const audited = (await inTestTenant(() => s.built.auditLog.events())).filter((e) => e.action === "spend.read");
     assert.equal(audited.length, 2, "both formats audit under the same action");
     for (const event of audited) assert.equal(event.resource, "spend");
   } finally {
@@ -322,15 +328,17 @@ test("spend: cron JSON and CSV name each billed cron, giving admins the task an 
   const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => clock.at });
   const s = start(store);
   try {
-    const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:alice",
-      owner: "alice",
-      createdBy: "alice",
-      schedule: { everyMs: 3_600_000 },
-      action: "check the build",
-    });
-    await bill(store, `cron:${cron.id}:fire:1`, "dm", scopeId("personal", "alice"), { costUsd: 3 });
-    await bill(store, "dm:alice:priced", "dm", scopeId("personal", "alice"), { costUsd: 2 });
+    const cron = await inTestTenant(() =>
+      s.built.app.createCron({
+        ownerScopeId: "personal:alice",
+        owner: "alice",
+        createdBy: "alice",
+        schedule: { everyMs: 3_600_000 },
+        action: "check the build",
+      }),
+    );
+    await inTestTenant(() => bill(store, `cron:${cron.id}:fire:1`, "dm", scopeId("personal", "alice"), { costUsd: 3 }));
+    await inTestTenant(() => bill(store, "dm:alice:priced", "dm", scopeId("personal", "alice"), { costUsd: 2 }));
     const query = "from=2026-01-05&to=2026-01-06";
     const json = await getJson(s.base, `/v1/admin/spend?${query}`);
     assert.deepEqual(
@@ -374,7 +382,9 @@ test("spend: model CSV selects the model breakdown with its own filename", async
   const s = start(store);
   try {
     await seedPricedFixture(store);
-    await bill(store, "dm:alice:priced", "dm", scopeId("personal", "alice"), { costUsd: 4 }, "other-model");
+    await inTestTenant(() =>
+      bill(store, "dm:alice:priced", "dm", scopeId("personal", "alice"), { costUsd: 4 }, "other-model"),
+    );
     const query = "from=2026-01-05&to=2026-01-06&breakdown=model";
     const json = await getJson(s.base, `/v1/admin/spend?${query}`);
     assert.deepEqual(
