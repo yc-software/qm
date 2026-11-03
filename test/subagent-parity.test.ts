@@ -41,6 +41,7 @@ import {
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {
@@ -218,72 +219,76 @@ function script(turn: Turn, subagent: boolean): Call | undefined {
   return calls[turn.results.length];
 }
 
-test("the sessions tool lists, starts and messages sessions through the real tool context", async () => {
-  const w = await world(["persistent_subagents"], script);
-  const { parent } = await w.parentTurn("web", "web:U1:sessions");
-  assert.equal(parent.results.length, 4);
-  assert.deepEqual(parent.results.map(failed), [false, false, false, false], JSON.stringify(parent.results));
-});
+test("the sessions tool lists, starts and messages sessions through the real tool context", () =>
+  inTestTenant(async () => {
+    const w = await world(["persistent_subagents"], script);
+    const { parent } = await w.parentTurn("web", "web:U1:sessions");
+    assert.equal(parent.results.length, 4);
+    assert.deepEqual(parent.results.map(failed), [false, false, false, false], JSON.stringify(parent.results));
+  }));
 
 for (const [surface, flags] of [
   ["web", ["persistent_subagents"]],
   ["slack", ["responsive_spine"]],
 ] as const) {
-  test(`a ${surface} subagent can do what its parent could, except SUBAGENT_EXCEPTIONS`, async () => {
-    const w = await world([...flags], script);
-    const { parent, child } = await w.parentTurn(surface, `${surface}:U1:parity`);
-    const omit = (options: AgentToolsOptions) =>
-      Object.fromEntries(Object.entries(options).filter(([key]) => !(key in SUBAGENT_EXCEPTIONS)));
-    assert.deepEqual(omit(child.options), omit(parent.options));
-    assert.deepEqual(
-      parent.options.mcpTools?.map((tool) => tool.name),
-      ["orders_search"],
-      "the turn's actor gets the MCP tools resolved for them",
-    );
-    for (const turn of [parent, child]) {
-      assert.ok(turn.tools.includes("tool_search") && turn.tools.includes("mcp_call"));
-      assert.ok(!turn.tools.includes("orders_search"));
-      assert.ok(turn.systemPrompt.endsWith("\n- Orders [orders] (1 tool)\n  - search // Search orders"));
-    }
-    assert.equal(parent.ref.current?.humanTurn, true);
-    assert.equal(child.ref.current?.humanTurn, undefined);
-    assert.equal(parent.requestedRuntime?.fastMode, true);
-    assert.equal(child.requestedRuntime?.fastMode, undefined);
-    const asParent = { ...child.options, ...Object.fromEntries(exceptions.map((key) => [key, parent.options[key]])) };
-    assert.deepEqual(
-      createAgentTools(child.ref, asParent)
-        .map((t) => t.name)
-        .sort(),
-      parent.tools,
-    );
-    assert.deepEqual(
-      child.results.map(failed),
-      parent.results.slice(0, child.results.length).map(failed),
-      JSON.stringify(child.results),
-    );
-  });
+  test(`a ${surface} subagent can do what its parent could, except SUBAGENT_EXCEPTIONS`, () =>
+    inTestTenant(async () => {
+      const w = await world([...flags], script);
+      const { parent, child } = await w.parentTurn(surface, `${surface}:U1:parity`);
+      const omit = (options: AgentToolsOptions) =>
+        Object.fromEntries(Object.entries(options).filter(([key]) => !(key in SUBAGENT_EXCEPTIONS)));
+      assert.deepEqual(omit(child.options), omit(parent.options));
+      assert.deepEqual(
+        parent.options.mcpTools?.map((tool) => tool.name),
+        ["orders_search"],
+        "the turn's actor gets the MCP tools resolved for them",
+      );
+      for (const turn of [parent, child]) {
+        assert.ok(turn.tools.includes("tool_search") && turn.tools.includes("mcp_call"));
+        assert.ok(!turn.tools.includes("orders_search"));
+        assert.ok(turn.systemPrompt.endsWith("\n- Orders [orders] (1 tool)\n  - search // Search orders"));
+      }
+      assert.equal(parent.ref.current?.humanTurn, true);
+      assert.equal(child.ref.current?.humanTurn, undefined);
+      assert.equal(parent.requestedRuntime?.fastMode, true);
+      assert.equal(child.requestedRuntime?.fastMode, undefined);
+      const asParent = { ...child.options, ...Object.fromEntries(exceptions.map((key) => [key, parent.options[key]])) };
+      assert.deepEqual(
+        createAgentTools(child.ref, asParent)
+          .map((t) => t.name)
+          .sort(),
+        parent.tools,
+      );
+      assert.deepEqual(
+        child.results.map(failed),
+        parent.results.slice(0, child.results.length).map(failed),
+        JSON.stringify(child.results),
+      );
+    }));
 }
 
-test("human-descended tasks cannot finish silently without surface tools", async () => {
-  const w = await world(["persistent_subagents"], (turn, child) => {
-    if (turn.results.length) return;
-    return child
-      ? { tool: "finish_silently", args: {} }
-      : { tool: "subagents", args: { action: "open", task: "report the result" } };
-  });
-  const { child } = await w.parentTurn("web", "web:U1:silence");
-  assert.equal(child.results[0]?.isError, true);
-});
+test("human-descended tasks cannot finish silently without surface tools", () =>
+  inTestTenant(async () => {
+    const w = await world(["persistent_subagents"], (turn, child) => {
+      if (turn.results.length) return;
+      return child
+        ? { tool: "finish_silently", args: {} }
+        : { tool: "subagents", args: { action: "open", task: "report the result" } };
+    });
+    const { child } = await w.parentTurn("web", "web:U1:silence");
+    assert.equal(child.results[0]?.isError, true);
+  }));
 
-test("human-descended tasks can change their runtime but not scope defaults", async () => {
-  const w = await world(["persistent_subagents"], script);
-  const { parent, child } = await w.parentTurn("web", "web:U1:runtime");
-  const active = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
-  assert.ok(child.runtime);
-  assert.equal((await child.runtime(active, { action: "set", model: "Astra", lifetime: "task" })).ok, true);
-  assert.deepEqual(await child.runtime(active, { action: "set", model: "Astra", lifetime: "scope" }), {
-    ok: false,
-    error: "live_actor_required",
-  });
-  assert.equal((await parent.runtime!(active, { action: "set", model: "Astra", lifetime: "scope" })).ok, true);
-});
+test("human-descended tasks can change their runtime but not scope defaults", () =>
+  inTestTenant(async () => {
+    const w = await world(["persistent_subagents"], script);
+    const { parent, child } = await w.parentTurn("web", "web:U1:runtime");
+    const active = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
+    assert.ok(child.runtime);
+    assert.equal((await child.runtime(active, { action: "set", model: "Astra", lifetime: "task" })).ok, true);
+    assert.deepEqual(await child.runtime(active, { action: "set", model: "Astra", lifetime: "scope" }), {
+      ok: false,
+      error: "live_actor_required",
+    });
+    assert.equal((await parent.runtime!(active, { action: "set", model: "Astra", lifetime: "scope" })).ok, true);
+  }));

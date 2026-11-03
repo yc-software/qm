@@ -12,6 +12,7 @@ import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "turns-union-")) }));
@@ -48,12 +49,15 @@ test("POST /v1/turns strips ownerKeychainUnion from the external body but keeps 
   });
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    headers: {
+      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      "content-type": "application/json",
+    },
     body,
   });
   assert.equal(r.status, 202);
   const { runId } = (await r.json()) as { runId: string };
-  const run = await built.runs.get(runId);
+  const run = await inTestTenant(() => built.runs.get(runId));
   assert.deepEqual(
     run?.request.origin,
     { kind: "automation" },
@@ -80,12 +84,15 @@ test("POST /v1/turns strips unattendedGrants from the external body", async () =
   });
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    headers: {
+      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      "content-type": "application/json",
+    },
     body,
   });
   assert.equal(r.status, 202);
   const { runId } = (await r.json()) as { runId: string };
-  const run = await built.runs.get(runId);
+  const run = await inTestTenant(() => built.runs.get(runId));
   assert.equal(
     run?.request.unattendedGrants,
     undefined,
@@ -109,12 +116,15 @@ test("POST /v1/turns strips nested owner-keychain union from typed automation or
   });
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    headers: {
+      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      "content-type": "application/json",
+    },
     body,
   });
   assert.equal(r.status, 202);
   const { runId } = (await r.json()) as { runId: string };
-  const run = await built.runs.get(runId);
+  const run = await inTestTenant(() => built.runs.get(runId));
   assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
@@ -131,12 +141,15 @@ test("POST /v1/turns does not let a typed origin override legacy automation prov
   });
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    headers: {
+      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      "content-type": "application/json",
+    },
     body,
   });
   assert.equal(r.status, 202);
   const { runId } = (await r.json()) as { runId: string };
-  const run = await built.runs.get(runId);
+  const run = await inTestTenant(() => built.runs.get(runId));
   assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
@@ -152,12 +165,15 @@ test("POST /v1/turns does not let legacy liveness override typed automation prov
   });
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    headers: {
+      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      "content-type": "application/json",
+    },
     body,
   });
   assert.equal(r.status, 202);
   const { runId } = (await r.json()) as { runId: string };
-  const run = await built.runs.get(runId);
+  const run = await inTestTenant(() => built.runs.get(runId));
   assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
@@ -174,12 +190,15 @@ test("POST /v1/turns preserves legacy screen data omitted from a matching typed 
   });
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    headers: {
+      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      "content-type": "application/json",
+    },
     body,
   });
   assert.equal(r.status, 202);
   const { runId } = (await r.json()) as { runId: string };
-  const run = await built.runs.get(runId);
+  const run = await inTestTenant(() => built.runs.get(runId));
   assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "hostile external event" });
 });
 
@@ -196,7 +215,10 @@ test("POST /v1/turns rejects conflicting typed and legacy automation screen data
   });
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    headers: {
+      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      "content-type": "application/json",
+    },
     body,
   });
   assert.equal(r.status, 400);
@@ -222,7 +244,10 @@ test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn 
   const post = async (body: string): Promise<{ runId: string }> => {
     const r = await fetch(`${base}/v1/turns`, {
       method: "POST",
-      headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+      headers: {
+        ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+        "content-type": "application/json",
+      },
       body,
     });
     assert.equal(r.status, 202);
@@ -246,7 +271,10 @@ test("POST /v1/turns strips redeliveryKey: an external body cannot borrow Slack'
   const post = async (body: string): Promise<{ http: number; runId?: string }> => {
     const r = await fetch(`${base}/v1/turns`, {
       method: "POST",
-      headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+      headers: {
+        ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+        "content-type": "application/json",
+      },
       body,
     });
     const json = (await r.json()) as { runId?: string };
@@ -273,7 +301,10 @@ test("POST /v1/turns rejects a client idempotencyKey in the reserved slack: name
   });
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
-    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    headers: {
+      ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+      "content-type": "application/json",
+    },
     body,
   });
   assert.equal(r.status, 400);
