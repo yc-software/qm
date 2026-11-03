@@ -555,8 +555,6 @@ export function buildApp(
     databaseUrl,
     ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
-    ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
-    ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
   });
   configurePgCaTrust({
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),

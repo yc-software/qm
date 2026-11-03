@@ -11,8 +11,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     ...loadConfig({}),
     databaseUrl: overrides.databaseUrl ?? testMigratedDatabaseUrl(),
     adminGrants: TEST_ADMIN_GRANTS,
-    databasePoolMax: 4,
-    databaseDirectPoolMax: 8,
     securityScreen: "enforce",
     port: 0,
     pluginSkillDirs: [],
