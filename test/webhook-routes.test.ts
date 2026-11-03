@@ -9,9 +9,10 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createHmac } from "node:crypto";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenantHeaders } from "./support/test-tenants.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
@@ -32,12 +33,10 @@ function start(signingSecret?: string, publicUrl?: string): { base: string; clos
 }
 
 function sign(method: string, pathWithQuery: string, body: string): Record<string, string> {
-  const ts = Math.floor(Date.now() / 1000);
-  return {
+  return signedRequestHeaders(SECRET, method, pathWithQuery, body, {
     "content-type": "application/json",
-    "x-timestamp": String(ts),
-    "x-signature": signRequest(SECRET, ts, `${method}\n${pathWithQuery}\n${body}`),
-  };
+    ...testTenantHeaders(),
+  });
 }
 
 const githubSig = (rawBody: string) => "sha256=" + createHmac("sha256", HOOK_SECRET).update(rawBody).digest("hex");
@@ -221,7 +220,7 @@ test("inbound per-webhook auth holds even in core dev mode (no core secret)", as
     const reg = regBody();
     const created = await fetch(`${srv.base}/v1/webhooks`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...testTenantHeaders() },
       body: reg,
     });
     const { webhook } = (await created.json()) as { webhook: { id: string } };

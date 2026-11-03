@@ -3,7 +3,8 @@ import pg from "pg";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { createSlackTables, type SlackTables } from "../../src/slack/slack-tables.ts";
 import { type AppLogin, createAppLogin } from "./app-login.ts";
-import { testDatabaseUrl } from "./test-database.ts";
+import { ownerUrlOf, testDatabaseUrl } from "./test-database.ts";
+import { useOwnerDatabase } from "../../src/tenants/claim.ts";
 
 export const skipWithoutPg = process.env.DATABASE_URL
   ? false
@@ -23,12 +24,13 @@ export async function withSlackDb(
 ): Promise<void> {
   const id = randomUUID().replaceAll("-", "");
   const schema = `slack_${id}`;
-  const ownerUrl = new URL(process.env.DATABASE_URL!);
+  const ownerUrl = new URL(ownerUrlOf(process.env.DATABASE_URL!));
   ownerUrl.searchParams.set("options", `-c search_path=${schema}`);
   const admin = new pg.Pool({ connectionString: ownerUrl.toString() });
   await admin.query(`CREATE SCHEMA ${schema}`);
   await admin.query(`GRANT CREATE ON SCHEMA ${schema} TO PUBLIC`);
   const owner = createSlackTables(ownerUrl.toString());
+  useOwnerDatabase(ownerUrl.toString());
   let store: SlackTables | undefined;
   let login: AppLogin | undefined;
   try {
@@ -46,6 +48,7 @@ export async function withSlackDb(
   } finally {
     await store?.pool.close();
     await owner.pool.close();
+    useOwnerDatabase(process.env.DATABASE_OWNER_URL);
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
     await login?.drop();
     await admin.end();

@@ -1,4 +1,4 @@
-import { boundTenant, currentTenant } from "../tenants/context.ts";
+import { boundTenant } from "../tenants/context.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
 import { sleep } from "./util.ts";
@@ -30,9 +30,9 @@ export function botIdentityFromEnv(env: Record<string, string | undefined>): Bot
 }
 
 const tenantIdentities = new Map<string, BotIdentityOverride>();
-export function setDefaultBotIdentity(identity: BotIdentityOverride | undefined): void {
-  if (identity && Object.keys(identity).length) tenantIdentities.set(currentTenant(), identity);
-  else tenantIdentities.delete(currentTenant());
+export function setDefaultBotIdentity(tenant: string, identity: BotIdentityOverride | undefined): void {
+  if (identity && Object.keys(identity).length) tenantIdentities.set(tenant, identity);
+  else tenantIdentities.delete(tenant);
 }
 
 export function botIdentityArgs(): BotIdentityOverride {

@@ -6,6 +6,7 @@ import { createScopedEventSink } from "../src/admin/scoped-event-sink.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const s1 = scopeId("personal", "u1");
 const s2 = scopeId("personal", "u2");
@@ -51,30 +52,32 @@ test("scoped sink filters by scope and applies an extra predicate + limit", () =
   );
 });
 
-test("error log records and lists scope-filtered newest-first", async () => {
-  const log = createPostgresErrorLog(testDatabaseUrl());
-  log.record({ category: "turn", code: "error", message: "shape-only", scopeLabel: s1 });
-  log.record({ category: "egress", code: "denied", message: "shape-only", scopeLabel: s2 });
-  const mine = await log.list({ scopeId: s1 });
-  assert.equal(mine.length, 1);
-  assert.equal(mine[0]?.category, "turn");
-  assert.ok(typeof mine[0]?.ts === "number");
-  assert.equal(await log.count(), 2, "count totals every event");
-  assert.equal(await log.count({ scopeId: s1 }), 1, "count honors the scope filter");
-});
+test("error log records and lists scope-filtered newest-first", () =>
+  inTestTenant(async () => {
+    const log = createPostgresErrorLog(testDatabaseUrl());
+    log.record({ category: "turn", code: "error", message: "shape-only", scopeLabel: s1 });
+    log.record({ category: "egress", code: "denied", message: "shape-only", scopeLabel: s2 });
+    const mine = await log.list({ scopeId: s1 });
+    assert.equal(mine.length, 1);
+    assert.equal(mine[0]?.category, "turn");
+    assert.ok(typeof mine[0]?.ts === "number");
+    assert.equal(await log.count(), 2, "count totals every event");
+    assert.equal(await log.count({ scopeId: s1 }), 1, "count honors the scope filter");
+  }));
 
-test("error log pages beyond the former 200-record window after filtering", async () => {
-  const log = createPostgresErrorLog(testDatabaseUrl());
-  for (let i = 0; i < 260; i++) {
-    log.record({ category: "turn", code: String(i), message: "failure", scopeLabel: s1, sessionId: "one" });
-    await log.flush();
-  }
-  log.record({ category: "turn", code: "other", message: "failure", scopeLabel: s2 });
-  const page = await log.list({ scopeId: s1, sessionId: "one", offset: 200, limit: 50 });
-  assert.equal(page.length, 50);
-  assert.equal(page[0]?.code, "59");
-  assert.equal(page.at(-1)?.code, "10");
-  assert.equal((await log.list({ scopeId: s1, offset: 250, limit: 50 })).length, 10);
-  assert.equal((await log.list({ scopeId: s1, offset: 260, limit: 50 })).length, 0);
-  assert.equal(await log.count({ scopeId: s1 }), 260);
-});
+test("error log pages beyond the former 200-record window after filtering", () =>
+  inTestTenant(async () => {
+    const log = createPostgresErrorLog(testDatabaseUrl());
+    for (let i = 0; i < 260; i++) {
+      log.record({ category: "turn", code: String(i), message: "failure", scopeLabel: s1, sessionId: "one" });
+      await log.flush();
+    }
+    log.record({ category: "turn", code: "other", message: "failure", scopeLabel: s2 });
+    const page = await log.list({ scopeId: s1, sessionId: "one", offset: 200, limit: 50 });
+    assert.equal(page.length, 50);
+    assert.equal(page[0]?.code, "59");
+    assert.equal(page.at(-1)?.code, "10");
+    assert.equal((await log.list({ scopeId: s1, offset: 250, limit: 50 })).length, 10);
+    assert.equal((await log.list({ scopeId: s1, offset: 260, limit: 50 })).length, 0);
+    assert.equal(await log.count({ scopeId: s1 }), 260);
+  }));

@@ -13,14 +13,14 @@ import { slackPluginConfigFromEnv } from "./slack/index.ts";
 import { createSlackRuntime } from "./slack/runtime.ts";
 import { slackTeamTenant } from "./slack/slack-tables.ts";
 import { useOwnerDatabase } from "./tenants/claim.ts";
-import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { verifyRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { deriveConnectorKey } from "./connectors/connector-client-store.ts";
 
 const config = loadConfig();
 useOwnerDatabase(config.databaseOwnerUrl);
 
 const built = buildApp(config);
-await migrateRegisteredPgSchemas(config.databaseUrl);
+await verifyRegisteredPgSchemas(config.databaseUrl);
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
@@ -30,11 +30,10 @@ const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLA
 let slackEnvironmentState: "absent" | "configured" | "partial" = "absent";
 if (slackConfig) slackEnvironmentState = "configured";
 else if (envSlackAttempted) slackEnvironmentState = "partial";
-const teamTenant = slackTeamTenant(built.slackTables.databaseUrl);
+const teamTenant = slackTeamTenant();
 const slackRuntime = createSlackRuntime({
   env: process.env,
   core: built.slackCore,
-  tables: built.slackTables,
   installation: built.slackInstallation,
   teamTenant,
   managed: Boolean(process.env.QM_SLACK_SERVICE_URL),

@@ -4,6 +4,7 @@ import { test, type TestContext } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SUBSCRIPTION_TOKEN = "sk-ant-oat01-personal-e2e";
 
@@ -95,18 +96,19 @@ async function assertSubscriptionTurn(built: ReturnType<typeof buildApp>, seen: 
     assert.match(JSON.stringify(call.body.system), /You are Claude Code/);
   }
   const session = await built.sessions.getByThread(finished.sessionId);
-  const entries = session ? await built.sessions.getEntries(session.id) : [];
+  const items = session ? await built.sessions.getItems(session.id) : [];
   assert.ok(
-    entries.some((e) => e.type === "tool_result" && (e.payload as { tool?: string }).tool === "history"),
+    items.some((item) => item.kind === "ToolResult" && item.tool === "history"),
     "the history tool ran",
   );
   assert.ok(
-    entries.some(
-      (e) =>
-        e.type === "assistant" &&
-        /pong from the Claude subscription/.test(String((e.payload as { text?: string }).text)),
+    items.some(
+      (item) =>
+        item.kind === "AgentMessage" &&
+        item.variant === null &&
+        /pong from the Claude subscription/.test(item.text ?? ""),
     ),
-    JSON.stringify(entries.map((e) => e.type)),
+    JSON.stringify(items.map((item) => item.kind)),
   );
 }
 
@@ -116,23 +118,27 @@ test("a personal Claude subscription turn runs end to end on Pi with OAuth beare
   const built = buildApp(testConfig({ anthropicApiKey: "sk-ant-api03-company" }), {
     agent: createAgent({ captureRequests: false, resolveProviderKeys: async () => ({}) }),
   });
-  await built.userModelCredentials.setOAuth("U1", "anthropic", {
-    accessToken: SUBSCRIPTION_TOKEN,
-    refreshToken: "refresh-e2e",
-    expiresAt: Date.now() + 3_600_000,
-  });
-  await built.config.setPersonalModelAuth("U1", true, "anthropic");
-  const submitted = await built.app.turn({
-    surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "claude-subscription-e2e" },
-    text: "ping",
-    liveActor: true,
-    async: true,
-  });
+  await inTestTenant(() =>
+    built.userModelCredentials.setOAuth("U1", "anthropic", {
+      accessToken: SUBSCRIPTION_TOKEN,
+      refreshToken: "refresh-e2e",
+      expiresAt: Date.now() + 3_600_000,
+    }),
+  );
+  await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "anthropic"));
+  const submitted = await inTestTenant(() =>
+    built.app.turn({
+      surface: "slack",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "claude-subscription-e2e" },
+      text: "ping",
+      liveActor: true,
+      async: true,
+    }),
+  );
   built.runtime.start();
   try {
-    await assertSubscriptionTurn(built, seen, submitted.runId!, SUBSCRIPTION_TOKEN);
+    await inTestTenant(() => assertSubscriptionTurn(built, seen, submitted.runId!, SUBSCRIPTION_TOKEN));
     assert.ok(
       !seen.some((call) => (call.headers.get("x-api-key") ?? "").includes("company")),
       "no request in the personal turn used the company key",
@@ -146,17 +152,19 @@ test("a company Claude subscription token in ANTHROPIC_API_KEY serves company tu
   const seen = fakeAnthropic(t);
   const companyToken = "sk-ant-oat01-company-e2e";
   const built = buildApp(testConfig({ anthropicApiKey: companyToken }), { agent: undefined });
-  const submitted = await built.app.turn({
-    surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "claude-company-subscription-e2e" },
-    text: "ping",
-    liveActor: true,
-    async: true,
-  });
+  const submitted = await inTestTenant(() =>
+    built.app.turn({
+      surface: "slack",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "claude-company-subscription-e2e" },
+      text: "ping",
+      liveActor: true,
+      async: true,
+    }),
+  );
   built.runtime.start();
   try {
-    await assertSubscriptionTurn(built, seen, submitted.runId!, companyToken);
+    await inTestTenant(() => assertSubscriptionTurn(built, seen, submitted.runId!, companyToken));
   } finally {
     await built.runtime.stop();
   }

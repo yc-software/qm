@@ -8,7 +8,8 @@ import pg from "pg";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { createConfiguredMemoryService } from "../../src/memory/provider-factory.ts";
-import { scopeId, type ScopeId, type SessionEntry } from "../../src/types.ts";
+import { scopeId, type EntryType, type ScopeId } from "../../src/types.ts";
+import { itemFromEntry, storedItem, type Item } from "../../src/sessions/items.ts";
 import { recallText } from "../support/recall-text.ts";
 
 /**
@@ -39,11 +40,11 @@ type Step =
   | { read: string }
   | { search: string };
 
-function session(id: string, steps: Step[]): SessionEntry[] {
-  const out: SessionEntry[] = [];
+function session(id: string, steps: Step[]): Item[] {
+  const out: Item[] = [];
   let seq = 0;
-  const push = (type: SessionEntry["type"], payload: unknown) =>
-    out.push({ sessionId: id, seq: ++seq, parentSeq: null, type, payload, scopeLabel: "personal:U1", createdAt: seq });
+  const push = (type: EntryType, payload: unknown) =>
+    out.push(storedItem(itemFromEntry({ type, payload }), { sessionId: id, seq: ++seq, createdAt: seq }));
   let n = 0;
   for (const step of steps) {
     const callId = `${id}-${++n}`;
@@ -71,7 +72,7 @@ function session(id: string, steps: Step[]): SessionEntry[] {
   return out;
 }
 
-const SESSIONS: Record<string, SessionEntry[]> = {
+const SESSIONS: Record<string, Item[]> = {
   "s-orders": session("s-orders", [
     { user: "Fix the failing order validation tests" },
     { exec: `TOKEN=${SECRET} ./test.sh orders`, ok: false },
@@ -199,7 +200,7 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
     memory = createConfiguredMemoryService({
       defaultMemory: createPostgresMemoryService(DB!),
       config,
-      sessionEntries: async (id) => SESSIONS[id] ?? [],
+      sessionItems: async (id) => SESSIONS[id] ?? [],
       onError: (error, providerId, operation) => errors.push(`${providerId}:${operation}:${String(error)}`),
     });
   });

@@ -6,6 +6,7 @@ import type { ProcessSandbox, ProcessSession, SandboxHandle, StartProcessOptions
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SCOPE = "personal:U1";
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root", resourceId: "sandbox-1" };
@@ -130,396 +131,426 @@ function build(opts?: { ttlMs?: number; ttlMaxMs?: number; scopeId?: string; see
   return { broker, registry, ...fake };
 }
 
-test("start registers a REDACTED background row and returns an id + initial output + cursor", async () => {
-  const { broker, registry, starts } = build();
-  const r = await broker.start(handle, "npm run build", "Run background tests");
-  assert.equal(r.reattached, false);
-  assert.ok(r.processId);
-  assert.equal(starts.length, 1);
+test("start registers a REDACTED background row and returns an id + initial output + cursor", () =>
+  inTestTenant(async () => {
+    const { broker, registry, starts } = build();
+    const r = await broker.start(handle, "npm run build", "Run background tests");
+    assert.equal(r.reattached, false);
+    assert.ok(r.processId);
+    assert.equal(starts.length, 1);
 
-  const rows = await registry.listByScope(SCOPE);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]!.kind, "background");
-  assert.equal(rows[0]!.command, redactCommand("bg: npm run build"));
-});
+    const rows = await registry.listByScope(SCOPE);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.kind, "background");
+    assert.equal(rows[0]!.command, redactCommand("bg: npm run build"));
+  }));
 
-test("start does not leak the foreground turn's env to a durable background job", async () => {
-  const { broker, starts } = build();
-  await broker.start({ ...handle, env: { AGENT_API_TOKEN: "turn-token" } }, "long-job", "Run background tests");
-  assert.deepEqual(starts[0]!.opts?.env, { PYTHONUNBUFFERED: "1" });
-});
+test("start does not leak the foreground turn's env to a durable background job", () =>
+  inTestTenant(async () => {
+    const { broker, starts } = build();
+    await broker.start({ ...handle, env: { AGENT_API_TOKEN: "turn-token" } }, "long-job", "Run background tests");
+    assert.deepEqual(starts[0]!.opts?.env, { PYTHONUNBUFFERED: "1" });
+  }));
 
-test("write forwards data to the job's stdin and reports byte count + liveness", async () => {
-  const { broker, writes } = build();
-  const r = await broker.start(handle, "aws sso login --use-device-code", "Run background tests");
-  const w = await broker.write(handle, r.processId, "ABCD-1234\n");
-  assert.equal(w.processId, r.processId);
-  assert.equal(w.bytes, 10);
-  assert.equal(w.status.state, "running");
-  assert.deepEqual(writes, [{ id: r.processId, data: "ABCD-1234\n" }]);
-});
+test("write forwards data to the job's stdin and reports byte count + liveness", () =>
+  inTestTenant(async () => {
+    const { broker, writes } = build();
+    const r = await broker.start(handle, "aws sso login --use-device-code", "Run background tests");
+    const w = await broker.write(handle, r.processId, "ABCD-1234\n");
+    assert.equal(w.processId, r.processId);
+    assert.equal(w.bytes, 10);
+    assert.equal(w.status.state, "running");
+    assert.deepEqual(writes, [{ id: r.processId, data: "ABCD-1234\n" }]);
+  }));
 
-test("write to an unknown / foreign-scope job is rejected", async () => {
-  const { broker } = build();
-  await assert.rejects(broker.write(handle, "nope", "x"), /no such background job/);
-});
+test("write to an unknown / foreign-scope job is rejected", () =>
+  inTestTenant(async () => {
+    const { broker } = build();
+    await assert.rejects(broker.write(handle, "nope", "x"), /no such background job/);
+  }));
 
-test("start surfaces output produced during the brief initial poll (fails if the poll loop is removed)", async () => {
-  const { broker, starts } = build({ seedOutput: "hello from the job\n" });
-  const r = await broker.start(handle, "echo hi; sleep 5", "Run background tests");
-  assert.equal(starts.length, 1);
-  assert.equal(r.status.state, "running");
-  assert.match(r.output, /hello from the job/);
-  assert.ok(r.cursor > 0, "the initial poll advanced the cursor past the seeded bytes");
-});
+test("start surfaces output produced during the brief initial poll (fails if the poll loop is removed)", () =>
+  inTestTenant(async () => {
+    const { broker, starts } = build({ seedOutput: "hello from the job\n" });
+    const r = await broker.start(handle, "echo hi; sleep 5", "Run background tests");
+    assert.equal(starts.length, 1);
+    assert.equal(r.status.state, "running");
+    assert.match(r.output, /hello from the job/);
+    assert.ok(r.cursor > 0, "the initial poll advanced the cursor past the seeded bytes");
+  }));
 
-test("poll paginates by cursor and a second poll drains the next slice past max_bytes", async () => {
-  const { broker, appendOutput } = build();
-  const { processId } = await broker.start(handle, "long-job", "Run background tests");
-  appendOutput(processId, "ABCDEFGHIJ");
+test("poll paginates by cursor and a second poll drains the next slice past max_bytes", () =>
+  inTestTenant(async () => {
+    const { broker, appendOutput } = build();
+    const { processId } = await broker.start(handle, "long-job", "Run background tests");
+    appendOutput(processId, "ABCDEFGHIJ");
 
-  const first = await broker.poll(handle, processId, { sinceCursor: 0, maxBytes: 4 });
-  assert.equal(first.chunks, "ABCD");
-  assert.equal(first.cursor, 4);
-  assert.equal(first.status.state, "running");
+    const first = await broker.poll(handle, processId, { sinceCursor: 0, maxBytes: 4 });
+    assert.equal(first.chunks, "ABCD");
+    assert.equal(first.cursor, 4);
+    assert.equal(first.status.state, "running");
 
-  const second = await broker.poll(handle, processId, { sinceCursor: first.cursor, maxBytes: 4 });
-  assert.equal(second.chunks, "EFGH");
-  assert.equal(second.cursor, 8);
+    const second = await broker.poll(handle, processId, { sinceCursor: first.cursor, maxBytes: 4 });
+    assert.equal(second.chunks, "EFGH");
+    assert.equal(second.cursor, 8);
 
-  const third = await broker.poll(handle, processId, { sinceCursor: second.cursor });
-  assert.equal(third.chunks, "IJ");
-  assert.equal(third.cursor, 10);
-});
+    const third = await broker.poll(handle, processId, { sinceCursor: second.cursor });
+    assert.equal(third.chunks, "IJ");
+    assert.equal(third.cursor, 10);
+  }));
 
-test("on exit, poll markStatus('exited') but does NOT delete the row (final output stays readable)", async () => {
-  const { broker, registry, appendOutput, finish } = build();
-  const { processId } = await broker.start(handle, "quick-job", "Run background tests");
-  appendOutput(processId, "done\n");
-  finish(processId, 0);
+test("on exit, poll markStatus('exited') but does NOT delete the row (final output stays readable)", () =>
+  inTestTenant(async () => {
+    const { broker, registry, appendOutput, finish } = build();
+    const { processId } = await broker.start(handle, "quick-job", "Run background tests");
+    appendOutput(processId, "done\n");
+    finish(processId, 0);
 
-  const r = await broker.poll(handle, processId, { sinceCursor: 0 });
-  assert.equal(r.status.state, "exited");
-  const row = await registry.get(processId);
-  assert.ok(row);
-  assert.equal(row!.status, "exited");
-  const again = await broker.poll(handle, processId, { sinceCursor: 0 });
-  assert.equal(again.chunks, "done\n");
-});
+    const r = await broker.poll(handle, processId, { sinceCursor: 0 });
+    assert.equal(r.status.state, "exited");
+    const row = await registry.get(processId);
+    assert.ok(row);
+    assert.equal(row!.status, "exited");
+    const again = await broker.poll(handle, processId, { sinceCursor: 0 });
+    assert.equal(again.chunks, "done\n");
+  }));
 
-test("stop signals then re-reads status: stopped:true only when the re-read shows exited", async () => {
-  const { broker, registry, signals } = build();
-  const { processId } = await broker.start(handle, "server", "Run background tests");
+test("stop signals then re-reads status: stopped:true only when the re-read shows exited", () =>
+  inTestTenant(async () => {
+    const { broker, registry, signals } = build();
+    const { processId } = await broker.start(handle, "server", "Run background tests");
 
-  const r = await broker.stop(handle, processId);
-  assert.equal(signals.length, 1);
-  assert.equal(signals[0]!.signal, "TERM");
-  assert.equal(r.stopped, true);
-  assert.equal(r.status.state, "exited");
-  assert.equal((await registry.get(processId))!.status, "exited");
-});
+    const r = await broker.stop(handle, processId);
+    assert.equal(signals.length, 1);
+    assert.equal(signals[0]!.signal, "TERM");
+    assert.equal(r.stopped, true);
+    assert.equal(r.status.state, "exited");
+    assert.equal((await registry.get(processId))!.status, "exited");
+  }));
 
-test("stop is idempotent — re-stopping a dead pid is a no-op (still stopped:true)", async () => {
-  const { broker } = build();
-  const { processId } = await broker.start(handle, "server", "Run background tests");
-  await broker.stop(handle, processId);
-  const again = await broker.stop(handle, processId);
-  assert.equal(again.stopped, true);
-});
+test("stop is idempotent — re-stopping a dead pid is a no-op (still stopped:true)", () =>
+  inTestTenant(async () => {
+    const { broker } = build();
+    const { processId } = await broker.start(handle, "server", "Run background tests");
+    await broker.stop(handle, processId);
+    const again = await broker.stop(handle, processId);
+    assert.equal(again.stopped, true);
+  }));
 
-test("stop reports stopped:false while the process is still winding down", async () => {
-  const fake = fakeSandbox();
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
-  const sandbox: ProcessSandbox = { ...fake.sandbox, async signalProcess() {} };
-  const broker = createBackgroundBroker({
-    sandbox,
-    registry,
-    scopeId: SCOPE,
-    pollMs: 20,
-    termGraceMs: 30,
-    killGraceMs: 30,
-  });
-  const { processId } = await broker.start(handle, "stubborn-server", "Run background tests");
-  const r = await broker.stop(handle, processId);
-  assert.equal(r.stopped, false);
-  assert.equal(r.status.state, "running");
-});
+test("stop reports stopped:false while the process is still winding down", () =>
+  inTestTenant(async () => {
+    const fake = fakeSandbox();
+    const registry = createPostgresProcessRegistry(testDatabaseUrl());
+    const sandbox: ProcessSandbox = { ...fake.sandbox, async signalProcess() {} };
+    const broker = createBackgroundBroker({
+      sandbox,
+      registry,
+      scopeId: SCOPE,
+      pollMs: 20,
+      termGraceMs: 30,
+      killGraceMs: 30,
+    });
+    const { processId } = await broker.start(handle, "stubborn-server", "Run background tests");
+    const r = await broker.stop(handle, processId);
+    assert.equal(r.stopped, false);
+    assert.equal(r.status.state, "running");
+  }));
 
-test("stop actually waits the TERM grace: a process exiting shortly after TERM is never KILLed, even with buffered output", async () => {
-  const fake = fakeSandbox({ seedOutput: "lots of buffered output\n" });
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
-  const signals: string[] = [];
-  const sandbox: ProcessSandbox = {
-    ...fake.sandbox,
-    async signalProcess(_h, id, signal) {
-      signals.push(signal);
-      setTimeout(() => fake.finish(id, 143), 50);
-    },
-  };
-  const broker = createBackgroundBroker({
-    sandbox,
-    registry,
-    scopeId: SCOPE,
-    pollMs: 20,
-    termGraceMs: 2_000,
-    killGraceMs: 100,
-  });
-  const { processId } = await broker.start(handle, "graceful-server", "Run background tests");
+test("stop actually waits the TERM grace: a process exiting shortly after TERM is never KILLed, even with buffered output", () =>
+  inTestTenant(async () => {
+    const fake = fakeSandbox({ seedOutput: "lots of buffered output\n" });
+    const registry = createPostgresProcessRegistry(testDatabaseUrl());
+    const signals: string[] = [];
+    const sandbox: ProcessSandbox = {
+      ...fake.sandbox,
+      async signalProcess(_h, id, signal) {
+        signals.push(signal);
+        setTimeout(() => fake.finish(id, 143), 50);
+      },
+    };
+    const broker = createBackgroundBroker({
+      sandbox,
+      registry,
+      scopeId: SCOPE,
+      pollMs: 20,
+      termGraceMs: 2_000,
+      killGraceMs: 100,
+    });
+    const { processId } = await broker.start(handle, "graceful-server", "Run background tests");
 
-  const r = await broker.stop(handle, processId);
-  assert.deepEqual(signals, ["TERM"], "the grace period elapsed for real — no instant KILL escalation");
-  assert.equal(r.stopped, true);
-  assert.equal(r.status.state, "exited");
-  assert.equal((await registry.get(processId))!.status, "exited");
-});
+    const r = await broker.stop(handle, processId);
+    assert.deepEqual(signals, ["TERM"], "the grace period elapsed for real — no instant KILL escalation");
+    assert.equal(r.stopped, true);
+    assert.equal(r.status.state, "exited");
+    assert.equal((await registry.get(processId))!.status, "exited");
+  }));
 
-test("CROSS-SCOPE GUARD: poll/stop of another scope's processId is refused (invariant 1)", async () => {
-  const fake = fakeSandbox();
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
-  const brokerA = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: "personal:A", pollMs: 20 });
-  const brokerB = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: "personal:B", pollMs: 20 });
+test("CROSS-SCOPE GUARD: poll/stop of another scope's processId is refused (invariant 1)", () =>
+  inTestTenant(async () => {
+    const fake = fakeSandbox();
+    const registry = createPostgresProcessRegistry(testDatabaseUrl());
+    const brokerA = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: "personal:A", pollMs: 20 });
+    const brokerB = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: "personal:B", pollMs: 20 });
 
-  const { processId } = await brokerA.start(handle, "secret-job", "Run background tests");
-  await assert.rejects(brokerB.poll(handle, processId), /no such background job/);
-  await assert.rejects(brokerB.stop(handle, processId), /no such background job/);
-  await assert.rejects(brokerA.poll(handle, "p-does-not-exist"), /no such background job/);
-  const ok = await brokerA.poll(handle, processId);
-  assert.equal(ok.processId, processId);
+    const { processId } = await brokerA.start(handle, "secret-job", "Run background tests");
+    await assert.rejects(brokerB.poll(handle, processId), /no such background job/);
+    await assert.rejects(brokerB.stop(handle, processId), /no such background job/);
+    await assert.rejects(brokerA.poll(handle, "p-does-not-exist"), /no such background job/);
+    const ok = await brokerA.poll(handle, processId);
+    assert.equal(ok.processId, processId);
 
-  assert.equal((await brokerB.list()).length, 0);
-  assert.equal((await brokerA.list()).length, 1);
-});
+    assert.equal((await brokerB.list()).length, 0);
+    assert.equal((await brokerA.list()).length, 1);
+  }));
 
-test("reattach by FULL command key: a second start of the same command reattaches to ONE process", async () => {
-  const { broker, registry, starts } = build();
-  const first = await broker.start(handle, "npm test", "Run background tests");
-  const second = await broker.start(handle, "npm test", "Run background tests");
-  assert.equal(starts.length, 1, "no second startProcess");
-  assert.equal(second.processId, first.processId);
-  assert.equal(second.reattached, true);
-  assert.equal((await registry.listByScope(SCOPE)).filter((r) => r.kind === "background").length, 1);
-});
+test("reattach by FULL command key: a second start of the same command reattaches to ONE process", () =>
+  inTestTenant(async () => {
+    const { broker, registry, starts } = build();
+    const first = await broker.start(handle, "npm test", "Run background tests");
+    const second = await broker.start(handle, "npm test", "Run background tests");
+    assert.equal(starts.length, 1, "no second startProcess");
+    assert.equal(second.processId, first.processId);
+    assert.equal(second.reattached, true);
+    assert.equal((await registry.listByScope(SCOPE)).filter((r) => r.kind === "background").length, 1);
+  }));
 
-test("start does NOT reattach to a matching command whose process has already exited", async () => {
-  const { broker, registry, starts, appendOutput, finish } = build();
-  const first = await broker.start(handle, "glab auth login --device", "Run background tests");
-  appendOutput(first.processId, "Waiting for authorization...\nDevice authorization failed\n");
-  finish(first.processId, 1);
+test("start does NOT reattach to a matching command whose process has already exited", () =>
+  inTestTenant(async () => {
+    const { broker, registry, starts, appendOutput, finish } = build();
+    const first = await broker.start(handle, "glab auth login --device", "Run background tests");
+    appendOutput(first.processId, "Waiting for authorization...\nDevice authorization failed\n");
+    finish(first.processId, 1);
 
-  const second = await broker.start(handle, "glab auth login --device", "Run background tests");
-  assert.equal(second.reattached, false, "an expired device-code flow must start fresh");
-  assert.notEqual(second.processId, first.processId);
-  assert.equal(starts.length, 2);
-  assert.equal((await registry.get(first.processId))!.status, "exited");
-  assert.equal((await registry.get(second.processId))!.status, "running");
-});
+    const second = await broker.start(handle, "glab auth login --device", "Run background tests");
+    assert.equal(second.reattached, false, "an expired device-code flow must start fresh");
+    assert.notEqual(second.processId, first.processId);
+    assert.equal(starts.length, 2);
+    assert.equal((await registry.get(first.processId))!.status, "exited");
+    assert.equal((await registry.get(second.processId))!.status, "running");
+  }));
 
-test("two commands sharing a long prefix do NOT reattach to each other (Bugbot rule)", async () => {
-  const { broker, starts } = build();
-  const a = await broker.start(handle, "npm test -- --grep alpha", "Run background tests");
-  const b = await broker.start(handle, "npm test -- --grep beta", "Run background tests");
-  assert.notEqual(a.processId, b.processId);
-  assert.equal(b.reattached, false);
-  assert.equal(starts.length, 2);
-});
+test("two commands sharing a long prefix do NOT reattach to each other (Bugbot rule)", () =>
+  inTestTenant(async () => {
+    const { broker, starts } = build();
+    const a = await broker.start(handle, "npm test -- --grep alpha", "Run background tests");
+    const b = await broker.start(handle, "npm test -- --grep beta", "Run background tests");
+    assert.notEqual(a.processId, b.processId);
+    assert.equal(b.reattached, false);
+    assert.equal(starts.length, 2);
+  }));
 
-test("a known injected env value in the command is stored value-masked", async () => {
-  const { broker, registry } = build();
-  const envHandle: SandboxHandle = { ...handle, env: { GITHUB_TOKEN: "ghp_secretvalue12345" } };
-  await broker.start(
-    envHandle,
-    "git clone https://x:ghp_secretvalue12345@github.com/org/repo.git",
-    "Run background tests",
-  );
-  const row = (await registry.listByScope(SCOPE))[0]!;
-  assert.ok(!row.command.includes("ghp_secretvalue12345"), `leaked in: ${row.command}`);
-  assert.match(row.command, /<redacted:GITHUB_TOKEN>/);
-});
+test("a known injected env value in the command is stored value-masked", () =>
+  inTestTenant(async () => {
+    const { broker, registry } = build();
+    const envHandle: SandboxHandle = { ...handle, env: { GITHUB_TOKEN: "ghp_secretvalue12345" } };
+    await broker.start(
+      envHandle,
+      "git clone https://x:ghp_secretvalue12345@github.com/org/repo.git",
+      "Run background tests",
+    );
+    const row = (await registry.listByScope(SCOPE))[0]!;
+    assert.ok(!row.command.includes("ghp_secretvalue12345"), `leaked in: ${row.command}`);
+    assert.match(row.command, /<redacted:GITHUB_TOKEN>/);
+  }));
 
-test("whitespace is normalized before keying so spacing differences reattach to one job", async () => {
-  const { broker, starts } = build();
-  const a = await broker.start(handle, "npm   run   build", "Run background tests");
-  const b = await broker.start(handle, "npm run build", "Run background tests");
-  assert.equal(a.processId, b.processId);
-  assert.equal(starts.length, 1);
-});
+test("whitespace is normalized before keying so spacing differences reattach to one job", () =>
+  inTestTenant(async () => {
+    const { broker, starts } = build();
+    const a = await broker.start(handle, "npm   run   build", "Run background tests");
+    const b = await broker.start(handle, "npm run build", "Run background tests");
+    assert.equal(a.processId, b.processId);
+    assert.equal(starts.length, 1);
+  }));
 
-test("a secret-bearing command is stored REDACTED but does NOT reattach (a redacted key aliases distinct secrets)", async () => {
-  const { broker, registry, starts } = build();
-  const cmd = "deploy --token sekret123 --target prod";
-  await broker.start(handle, cmd, "Run background tests");
-  const row = (await registry.listByScope(SCOPE))[0]!;
-  assert.equal(row.command, redactCommand("bg: deploy --token sekret123 --target prod"));
-  assert.match(row.command, /<redacted>/);
-  const again = await broker.start(handle, cmd, "Run background tests");
-  assert.equal(again.reattached, false);
-  assert.equal(starts.length, 2);
-});
+test("a secret-bearing command is stored REDACTED but does NOT reattach (a redacted key aliases distinct secrets)", () =>
+  inTestTenant(async () => {
+    const { broker, registry, starts } = build();
+    const cmd = "deploy --token sekret123 --target prod";
+    await broker.start(handle, cmd, "Run background tests");
+    const row = (await registry.listByScope(SCOPE))[0]!;
+    assert.equal(row.command, redactCommand("bg: deploy --token sekret123 --target prod"));
+    assert.match(row.command, /<redacted>/);
+    const again = await broker.start(handle, cmd, "Run background tests");
+    assert.equal(again.reattached, false);
+    assert.equal(starts.length, 2);
+  }));
 
-test("two commands differing only in a redacted secret VALUE launch TWO distinct jobs (no alias reattach)", async () => {
-  const { broker, starts } = build();
-  const a = await broker.start(handle, "deploy --token AAA --target prod", "Run background tests");
-  const b = await broker.start(handle, "deploy --token BBB --target prod", "Run background tests");
-  assert.notEqual(a.processId, b.processId);
-  assert.equal(b.reattached, false);
-  assert.equal(starts.length, 2);
-});
+test("two commands differing only in a redacted secret VALUE launch TWO distinct jobs (no alias reattach)", () =>
+  inTestTenant(async () => {
+    const { broker, starts } = build();
+    const a = await broker.start(handle, "deploy --token AAA --target prod", "Run background tests");
+    const b = await broker.start(handle, "deploy --token BBB --target prod", "Run background tests");
+    assert.notEqual(a.processId, b.processId);
+    assert.equal(b.reattached, false);
+    assert.equal(starts.length, 2);
+  }));
 
-test("liveness probe: a row whose backend process is gone is deleted and a fresh process launched", async () => {
-  const { broker, registry, starts, vanish } = build();
-  const first = await broker.start(handle, "long-build", "Run background tests");
-  vanish(first.processId);
+test("liveness probe: a row whose backend process is gone is deleted and a fresh process launched", () =>
+  inTestTenant(async () => {
+    const { broker, registry, starts, vanish } = build();
+    const first = await broker.start(handle, "long-build", "Run background tests");
+    vanish(first.processId);
 
-  const second = await broker.start(handle, "long-build", "Run background tests");
-  assert.equal(second.reattached, false, "stale row dropped → a fresh launch, not a reattach");
-  assert.notEqual(second.processId, first.processId);
-  assert.equal(starts.length, 2);
-  const rows = (await registry.listByScope(SCOPE)).filter((r) => r.kind === "background");
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]!.processId, second.processId);
-});
+    const second = await broker.start(handle, "long-build", "Run background tests");
+    assert.equal(second.reattached, false, "stale row dropped → a fresh launch, not a reattach");
+    assert.notEqual(second.processId, first.processId);
+    assert.equal(starts.length, 2);
+    const rows = (await registry.listByScope(SCOPE)).filter((r) => r.kind === "background");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.processId, second.processId);
+  }));
 
-test("liveness probe: a transient backend error preserves the running process and registry row", async () => {
-  const { broker, registry, starts, failNextRead } = build();
-  const first = await broker.start(handle, "long-build", "Run background tests");
-  const error = new Error("backend unavailable");
-  failNextRead(first.processId, error);
+test("liveness probe: a transient backend error preserves the running process and registry row", () =>
+  inTestTenant(async () => {
+    const { broker, registry, starts, failNextRead } = build();
+    const first = await broker.start(handle, "long-build", "Run background tests");
+    const error = new Error("backend unavailable");
+    failNextRead(first.processId, error);
 
-  await assert.rejects(broker.start(handle, "long-build", "Run background tests"), error);
-  assert.equal(starts.length, 1);
-  assert.equal((await registry.get(first.processId))?.status, "running");
-});
+    await assert.rejects(broker.start(handle, "long-build", "Run background tests"), error);
+    assert.equal(starts.length, 1);
+    assert.equal((await registry.get(first.processId))?.status, "running");
+  }));
 
-test("TTL clamp: a requested lifetime above the max is clamped (mirrors PR C's ceiling clamp)", async () => {
-  const ttlMaxMs = 60 * 60_000;
-  const { broker, registry } = build({ ttlMs: 30 * 60_000, ttlMaxMs });
-  const before = Date.now();
-  const r = await broker.start(handle, "huge-job", "Run background tests", 10 * 60 * 60_000);
-  const row = await registry.get(r.processId);
-  assert.ok(row);
-  assert.ok(row!.expiresAt <= before + ttlMaxMs + 1000);
-  assert.ok(row!.expiresAt >= before + ttlMaxMs - 1000);
-});
+test("TTL clamp: a requested lifetime above the max is clamped (mirrors PR C's ceiling clamp)", () =>
+  inTestTenant(async () => {
+    const ttlMaxMs = 60 * 60_000;
+    const { broker, registry } = build({ ttlMs: 30 * 60_000, ttlMaxMs });
+    const before = Date.now();
+    const r = await broker.start(handle, "huge-job", "Run background tests", 10 * 60 * 60_000);
+    const row = await registry.get(r.processId);
+    assert.ok(row);
+    assert.ok(row!.expiresAt <= before + ttlMaxMs + 1000);
+    assert.ok(row!.expiresAt >= before + ttlMaxMs - 1000);
+  }));
 
-test("TTL default: omitting a lifetime uses the configured default", async () => {
-  const ttlMs = 30 * 60_000;
-  const { broker, registry } = build({ ttlMs, ttlMaxMs: 60 * 60_000 });
-  const before = Date.now();
-  const r = await broker.start(handle, "default-ttl-job", "Run background tests");
-  const row = await registry.get(r.processId);
-  assert.ok(row!.expiresAt >= before + ttlMs - 1000);
-  assert.ok(row!.expiresAt <= before + ttlMs + 1000);
-});
+test("TTL default: omitting a lifetime uses the configured default", () =>
+  inTestTenant(async () => {
+    const ttlMs = 30 * 60_000;
+    const { broker, registry } = build({ ttlMs, ttlMaxMs: 60 * 60_000 });
+    const before = Date.now();
+    const r = await broker.start(handle, "default-ttl-job", "Run background tests");
+    const row = await registry.get(r.processId);
+    assert.ok(row!.expiresAt >= before + ttlMs - 1000);
+    assert.ok(row!.expiresAt <= before + ttlMs + 1000);
+  }));
 
-test("list reports the scope's background jobs from the registry (id, status, startedAt, command)", async () => {
-  const { broker, finish } = build();
-  const a = await broker.start(handle, "job-a", "Run background tests");
-  const b = await broker.start(handle, "job-b", "Run background tests");
-  finish(b.processId, 0);
-  await broker.poll(handle, b.processId);
+test("list reports the scope's background jobs from the registry (id, status, startedAt, command)", () =>
+  inTestTenant(async () => {
+    const { broker, finish } = build();
+    const a = await broker.start(handle, "job-a", "Run background tests");
+    const b = await broker.start(handle, "job-b", "Run background tests");
+    finish(b.processId, 0);
+    await broker.poll(handle, b.processId);
 
-  const jobs = await broker.list();
-  assert.equal(jobs.length, 2);
-  const byId = new Map(jobs.map((j) => [j.processId, j]));
-  assert.equal(byId.get(a.processId)!.status.state, "running");
-  assert.equal(byId.get(b.processId)!.status.state, "exited");
-  assert.match(byId.get(a.processId)!.command, /job-a/);
-});
+    const jobs = await broker.list();
+    assert.equal(jobs.length, 2);
+    const byId = new Map(jobs.map((j) => [j.processId, j]));
+    assert.equal(byId.get(a.processId)!.status.state, "running");
+    assert.equal(byId.get(b.processId)!.status.state, "exited");
+    assert.match(byId.get(a.processId)!.command, /job-a/);
+  }));
 
-test("list distinguishes a TTL-reaped row from a clean exit (registry view, not 'exited 0')", async () => {
-  const { broker, registry } = build();
-  const clean = await broker.start(handle, "clean-job", "Run background tests");
-  const killed = await broker.start(handle, "ttl-job", "Run background tests");
-  await registry.markStatus(killed.processId, "reaped");
+test("list distinguishes a TTL-reaped row from a clean exit (registry view, not 'exited 0')", () =>
+  inTestTenant(async () => {
+    const { broker, registry } = build();
+    const clean = await broker.start(handle, "clean-job", "Run background tests");
+    const killed = await broker.start(handle, "ttl-job", "Run background tests");
+    await registry.markStatus(killed.processId, "reaped");
 
-  const byId = new Map((await broker.list()).map((j) => [j.processId, j]));
-  assert.equal(byId.get(clean.processId)!.registryStatus, "running");
-  assert.equal(byId.get(killed.processId)!.registryStatus, "reaped");
-  const ks = byId.get(killed.processId)!.status;
-  assert.equal(ks.state, "exited");
-  assert.notEqual(ks.state === "exited" ? ks.code : 0, 0, "a reaped job is NOT surfaced as a clean exit-0");
-});
+    const byId = new Map((await broker.list()).map((j) => [j.processId, j]));
+    assert.equal(byId.get(clean.processId)!.registryStatus, "running");
+    assert.equal(byId.get(killed.processId)!.registryStatus, "reaped");
+    const ks = byId.get(killed.processId)!.status;
+    assert.equal(ks.state, "exited");
+    assert.notEqual(ks.state === "exited" ? ks.code : 0, 0, "a reaped job is NOT surfaced as a clean exit-0");
+  }));
 
-test("start stamps the conversation's sessionRef on the registry row", async () => {
-  const fake = fakeSandbox();
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
-  const broker = createBackgroundBroker({
-    sandbox: fake.sandbox,
-    registry,
-    scopeId: SCOPE,
-    sessionRef: "web:U1:thread-9",
-    pollMs: 20,
-  });
-  const { processId } = await broker.start(handle, "sleep 60", "Run background tests");
-  assert.equal((await registry.get(processId))?.sessionRef, "web:U1:thread-9");
+test("start stamps the conversation's sessionRef on the registry row", () =>
+  inTestTenant(async () => {
+    const fake = fakeSandbox();
+    const registry = createPostgresProcessRegistry(testDatabaseUrl());
+    const broker = createBackgroundBroker({
+      sandbox: fake.sandbox,
+      registry,
+      scopeId: SCOPE,
+      sessionRef: "web:U1:thread-9",
+      pollMs: 20,
+    });
+    const { processId } = await broker.start(handle, "sleep 60", "Run background tests");
+    assert.equal((await registry.get(processId))?.sessionRef, "web:U1:thread-9");
 
-  const bare = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: SCOPE, pollMs: 20 });
-  const { processId: p2 } = await bare.start(handle, "sleep 61", "Run background tests");
-  assert.equal((await registry.get(p2))?.sessionRef, undefined);
-});
+    const bare = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: SCOPE, pollMs: 20 });
+    const { processId: p2 } = await bare.start(handle, "sleep 61", "Run background tests");
+    assert.equal((await registry.get(p2))?.sessionRef, undefined);
+  }));
 
-test("background jobs retain sandbox identity across default changes and reattach only on that sandbox", async () => {
-  const { sandbox } = fakeSandbox();
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
-  const a = { ...handle, id: "a", resourceId: "resource-a" };
-  const b = { ...handle, id: "b", resourceId: "resource-b" };
-  const selected: string[] = [];
-  const broker = createBackgroundBroker({
-    sandbox,
-    registry,
-    scopeId: SCOPE,
-    pollMs: 0,
-    provisionSandbox: async (id) => {
-      selected.push(id);
-      return id === a.resourceId ? a : b;
-    },
-  });
-  const first = await broker.start(a, "work", "Run background tests");
-  const second = await broker.start(b, "work", "Run background tests");
-  assert.notEqual(first.processId, second.processId);
-  assert.equal((await registry.get(first.processId))?.sandboxId, a.resourceId);
-  assert.equal((await broker.handleFor!(first.processId))?.id, a.id);
-  await broker.poll(b, first.processId);
-  await broker.write(b, first.processId, "hello");
-  await broker.stop(b, first.processId);
-  assert.deepEqual(selected, [a.resourceId, a.resourceId, a.resourceId, a.resourceId]);
-});
+test("background jobs retain sandbox identity across default changes and reattach only on that sandbox", () =>
+  inTestTenant(async () => {
+    const { sandbox } = fakeSandbox();
+    const registry = createPostgresProcessRegistry(testDatabaseUrl());
+    const a = { ...handle, id: "a", resourceId: "resource-a" };
+    const b = { ...handle, id: "b", resourceId: "resource-b" };
+    const selected: string[] = [];
+    const broker = createBackgroundBroker({
+      sandbox,
+      registry,
+      scopeId: SCOPE,
+      pollMs: 0,
+      provisionSandbox: async (id) => {
+        selected.push(id);
+        return id === a.resourceId ? a : b;
+      },
+    });
+    const first = await broker.start(a, "work", "Run background tests");
+    const second = await broker.start(b, "work", "Run background tests");
+    assert.notEqual(first.processId, second.processId);
+    assert.equal((await registry.get(first.processId))?.sandboxId, a.resourceId);
+    assert.equal((await broker.handleFor!(first.processId))?.id, a.id);
+    await broker.poll(b, first.processId);
+    await broker.write(b, first.processId, "hello");
+    await broker.stop(b, first.processId);
+    assert.deepEqual(selected, [a.resourceId, a.resourceId, a.resourceId, a.resourceId]);
+  }));
 
-test("start requires a purpose before launching, and persists a trimmed, redacted label", async () => {
-  const { sandbox, starts } = fakeSandbox();
-  const registry = createPostgresProcessRegistry(testDatabaseUrl());
-  const broker = createBackgroundBroker({ sandbox, registry, scopeId: SCOPE, pollMs: 0 });
-  for (const purpose of [undefined, "", " \n "]) {
-    await assert.rejects(broker.start(handle, "node server.js", purpose as string), /requires a short purpose/);
-  }
-  assert.equal(starts.length, 0);
-  const result = await broker.start(
-    { ...handle, env: { TOKEN: "secretvalue12345" } },
-    "node server.js",
-    "  Preview\nsecretvalue12345   server  ",
-  );
-  const row = await registry.get(result.processId);
-  assert.equal(row?.purpose, redactCommand("Preview secretvalue12345 server", { TOKEN: "secretvalue12345" }));
-  assert.equal(row?.command, "bg: node server.js");
-  assert.equal((await broker.list())[0]?.purpose, row?.purpose);
-  await broker.start(handle, "node server.js", "Another description");
-  assert.equal(starts.length, 1, "labels must not alter command-based reattachment");
-  assert.equal((await registry.get(result.processId))?.purpose, row?.purpose);
-});
+test("start requires a purpose before launching, and persists a trimmed, redacted label", () =>
+  inTestTenant(async () => {
+    const { sandbox, starts } = fakeSandbox();
+    const registry = createPostgresProcessRegistry(testDatabaseUrl());
+    const broker = createBackgroundBroker({ sandbox, registry, scopeId: SCOPE, pollMs: 0 });
+    for (const purpose of [undefined, "", " \n "]) {
+      await assert.rejects(broker.start(handle, "node server.js", purpose as string), /requires a short purpose/);
+    }
+    assert.equal(starts.length, 0);
+    const result = await broker.start(
+      { ...handle, env: { TOKEN: "secretvalue12345" } },
+      "node server.js",
+      "  Preview\nsecretvalue12345   server  ",
+    );
+    const row = await registry.get(result.processId);
+    assert.equal(row?.purpose, redactCommand("Preview secretvalue12345 server", { TOKEN: "secretvalue12345" }));
+    assert.equal(row?.command, "bg: node server.js");
+    assert.equal((await broker.list())[0]?.purpose, row?.purpose);
+    await broker.start(handle, "node server.js", "Another description");
+    assert.equal(starts.length, 1, "labels must not alter command-based reattachment");
+    assert.equal((await registry.get(result.processId))?.purpose, row?.purpose);
+  }));
 
-test("a computer discarded at the end of the turn cannot host a background job", async () => {
-  const { broker, registry, starts } = build();
-  const { resourceId: _resourceId, ...scratch } = handle;
-  await assert.rejects(broker.start(scratch, "npm run dev", "Run dev server"), /lasting computer/);
-  assert.equal(starts.length, 0);
-  assert.deepEqual(await registry.listByScope(SCOPE), []);
-});
+test("a computer discarded at the end of the turn cannot host a background job", () =>
+  inTestTenant(async () => {
+    const { broker, registry, starts } = build();
+    const { resourceId: _resourceId, ...scratch } = handle;
+    await assert.rejects(broker.start(scratch, "npm run dev", "Run dev server"), /lasting computer/);
+    assert.equal(starts.length, 0);
+    assert.deepEqual(await registry.listByScope(SCOPE), []);
+  }));
 
-test("every registered background job records the computer it runs on", async () => {
-  const { broker, registry } = build();
-  await broker.start(handle, "npm run dev", "Run dev server");
-  assert.deepEqual(
-    (await registry.listByScope(SCOPE)).map((row) => row.sandboxId),
-    ["sandbox-1"],
-  );
-});
+test("every registered background job records the computer it runs on", () =>
+  inTestTenant(async () => {
+    const { broker, registry } = build();
+    await broker.start(handle, "npm run dev", "Run dev server");
+    assert.deepEqual(
+      (await registry.listByScope(SCOPE)).map((row) => row.sandboxId),
+      ["sandbox-1"],
+    );
+  }));

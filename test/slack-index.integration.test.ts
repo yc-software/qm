@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 
 const [TEST_TENANT] = testTenants();
 
@@ -405,18 +405,20 @@ async function fixture(
 ) {
   const core = new FakeCore();
   core.externalParticipants = options.externalParticipants ?? false;
-  const started = startSlackPlugin(
-    {
-      botToken: "xoxb-test",
-      appToken: "xapp-test",
-      identityEmail: options.identityEmail ?? "0",
-      ...(options.allowFrom ? { allowFrom: options.allowFrom } : {}),
-      ...(options.denyMessage ? { denyMessage: options.denyMessage } : {}),
-      ...(options.coreSingleton === undefined ? {} : { coreSingleton: options.coreSingleton }),
-      ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
-    },
-    core,
-    teamTenant,
+  const started = inTestTenant(() =>
+    startSlackPlugin(
+      {
+        botToken: "xoxb-test",
+        appToken: "xapp-test",
+        identityEmail: options.identityEmail ?? "0",
+        ...(options.allowFrom ? { allowFrom: options.allowFrom } : {}),
+        ...(options.denyMessage ? { denyMessage: options.denyMessage } : {}),
+        ...(options.coreSingleton === undefined ? {} : { coreSingleton: options.coreSingleton }),
+        ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
+      },
+      core,
+      teamTenant,
+    ),
   );
   const app = FakeApp.instances.at(-1)!;
   app.client.membershipDelayMs = options.membershipDelayMs ?? 0;

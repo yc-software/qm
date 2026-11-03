@@ -6,13 +6,12 @@ import { useOwnerDatabase } from "./tenants/claim.ts";
 
 const config = loadConfig();
 useOwnerDatabase(config.databaseOwnerUrl);
-const { runtime, slackTables, slackInstallation } = buildApp(config);
+const { runtime, slackInstallation } = buildApp(config);
 try {
   await migrateRegisteredPgSchemas(config.databaseUrl);
   console.log("[qm:migrate] database migrations applied");
   const adopted = await adoptEnvironmentSlack({
     env: process.env,
-    databaseUrl: slackTables.databaseUrl,
     installation: slackInstallation,
     workspaceOf: slackWorkspaceOf(process.env),
   });

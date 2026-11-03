@@ -246,7 +246,7 @@ export async function startSlackPlugin(
       if (!ids.ownTeamId || teamId !== ids.ownTeamId) return;
       await next();
     });
-  if (CORE_SINGLETON) setDefaultBotIdentity(cfg.botIdentity);
+  if (CORE_SINGLETON) setDefaultBotIdentity(TENANT, cfg.botIdentity);
   const devIntrospection = installDevIntrospection(
     app,
     cfg.devIntrospection ? { enabled: true, port: cfg.devIntrospection.port } : {},
@@ -603,7 +603,7 @@ export async function startSlackPlugin(
       }
       stopped = true;
       forgetAccount(TENANT, ACCOUNT_LABEL, app.client);
-      if (CORE_SINGLETON) setDefaultBotIdentity(undefined);
+      if (CORE_SINGLETON) setDefaultBotIdentity(TENANT, undefined);
       try {
         await app.stop();
       } finally {

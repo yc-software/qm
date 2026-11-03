@@ -21,19 +21,16 @@ export function slackWorkspaceOf(env: Record<string, string | undefined>): Slack
 
 export async function adoptEnvironmentSlack(opts: {
   env: Record<string, string | undefined>;
-  databaseUrl: string;
   installation: SlackInstallationStore;
   workspaceOf: SlackWorkspaceOf;
 }): Promise<string | null> {
   const environment = slackPluginConfigFromEnv(opts.env);
   if (!environment) return null;
-  const [presence] = (
-    await claimAcrossTenants(opts.databaseUrl, "SELECT to_regclass('qm_tenant') IS NOT NULL AS present")
-  ).rows;
+  const [presence] = (await claimAcrossTenants("SELECT to_regclass('qm_tenant') IS NOT NULL AS present")).rows;
   if (!presence?.present) return null;
-  const [original] = (await claimAcrossTenants(opts.databaseUrl, "SELECT id::text AS id FROM qm_tenant")).rows;
+  const [original] = (await claimAcrossTenants("SELECT id::text AS id FROM qm_tenant")).rows;
   if (!original) return null;
-  if ((await claimAcrossTenants(opts.databaseUrl, "SELECT 1 FROM slack_installation LIMIT 1")).rowCount) return null;
+  if ((await claimAcrossTenants("SELECT 1 FROM slack_installation LIMIT 1")).rowCount) return null;
   const { teamId, teamName } = await opts.workspaceOf(environment.botToken);
   if (!teamId) throw new Error("The Slack bot token in the environment names no workspace");
   const tenant = String(original.id);

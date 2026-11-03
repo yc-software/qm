@@ -24,67 +24,69 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 
-test("an ambient message whose reply detection fails stays silent and leaves the failure in the error and audit logs", async () => {
-  const base = createMockAgent();
-  let ran = false;
-  const agent: Agent = {
-    ...base,
-    runTurn: async () => {
-      ran = true;
-      return { reply: "spurious" };
-    },
-    shouldRespond: async () => {
-      throw new Error("401 invalid x-api-key");
-    },
-  };
-  const config = testConfigStore("default-org");
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const auditLog = createPostgresAuditLog(testDatabaseUrl());
-  const errors = createPostgresErrorLog(testDatabaseUrl());
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "rdf-")));
-  const orch = createOrchestrator({
-    ...singleProcessDeps(),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    resolution: createResolutionService("default-org", config, acl),
-    sessions: createPostgresSessionStore(testDatabaseUrl()),
-    workspace,
-    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
-    sandbox: {
-      profile: { backend: "fake", writablePersistence: "snapshot_to_workspace", processSessions: false },
-    } as Sandbox,
-    auditLog,
-    errors,
-    agent,
-    memory: createPostgresMemoryService(testDatabaseUrl()),
-    deploy: createDeployService({
+test("an ambient message whose reply detection fails stays silent and leaves the failure in the error and audit logs", () =>
+  inTestTenant(async () => {
+    const base = createMockAgent();
+    let ran = false;
+    const agent: Agent = {
+      ...base,
+      runTurn: async () => {
+        ran = true;
+        return { reply: "spurious" };
+      },
+      shouldRespond: async () => {
+        throw new Error("401 invalid x-api-key");
+      },
+    };
+    const config = testConfigStore("default-org");
+    const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+    const auditLog = createPostgresAuditLog(testDatabaseUrl());
+    const errors = createPostgresErrorLog(testDatabaseUrl());
+    const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "rdf-")));
+    const orch = createOrchestrator({
       ...singleProcessDeps(),
-      deployStore: createDeployStore(testDeployBackings()),
-      provider: createDockerDeployProvider(),
-      deployDir: join(tmpdir(), "rdf-deploy"),
+      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+      resolution: createResolutionService("default-org", config, acl),
+      sessions: createPostgresSessionStore(testDatabaseUrl()),
+      workspace,
+      files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
+      sandbox: {
+        profile: { backend: "fake", writablePersistence: "snapshot_to_workspace", processSessions: false },
+      } as Sandbox,
       auditLog,
+      errors,
+      agent,
+      memory: createPostgresMemoryService(testDatabaseUrl()),
+      deploy: createDeployService({
+        ...singleProcessDeps(),
+        deployStore: createDeployStore(testDeployBackings()),
+        provider: createDockerDeployProvider(),
+        deployDir: join(tmpdir(), "rdf-deploy"),
+        auditLog,
+        acl,
+      }),
       acl,
-    }),
-    acl,
-  });
+    });
 
-  const result = await orch.handleTurn({
-    surface: "slack",
-    actor,
-    conversation: { kind: "channel", threadRef: "ch:C1:200.1", channelRef: "C1", audience: [actor] } as Conversation,
-    origin: { kind: "ambient" },
-    text: "anyone know why the deploy is stuck?",
-  });
+    const result = await orch.handleTurn({
+      surface: "slack",
+      actor,
+      conversation: { kind: "channel", threadRef: "ch:C1:200.1", channelRef: "C1", audience: [actor] } as Conversation,
+      origin: { kind: "ambient" },
+      text: "anyone know why the deploy is stuck?",
+    });
 
-  assert.equal(result.status, "silent");
-  assert.equal(ran, false);
-  const [failure] = await errors.list({ sessionId: result.sessionId! });
-  assert.deepEqual(
-    { category: failure?.category, code: failure?.code, message: failure?.message },
-    { category: "turn", code: "detection_failed", message: "401 invalid x-api-key" },
-  );
-  const silent = (await auditLog.events()).find((e) => e.action === "turn.silent");
-  assert.equal(silent?.detail, "detection failed: 401 invalid x-api-key");
-});
+    assert.equal(result.status, "silent");
+    assert.equal(ran, false);
+    const [failure] = await errors.list({ sessionId: result.sessionId! });
+    assert.deepEqual(
+      { category: failure?.category, code: failure?.code, message: failure?.message },
+      { category: "turn", code: "detection_failed", message: "401 invalid x-api-key" },
+    );
+    const silent = (await auditLog.events()).find((e) => e.action === "turn.silent");
+    assert.equal(silent?.detail, "detection failed: 401 invalid x-api-key");
+  }));

@@ -6,6 +6,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 function setup() {
   const map = testMap<TaskAckState>();
@@ -145,23 +146,25 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
     const { runs } = createPostgresRunStore(testDatabaseUrl());
     const deliveries = createDeliveryStore();
     const actor = { id: "person", type: "internal" as const };
-    const { run } = await runs.enqueue({
-      sessionId: "task-session",
-      request: {
-        actor,
-        conversation: { kind: "dm", threadRef: "dm:D1", audience: [actor] },
-        origin: { kind: "human" },
-        surface: "slack",
-        surfaceTools: outbound !== "run",
-        deliveryTarget: "D1",
-        text: "Do the task",
-      } as OrchestratorInput,
-    });
+    const { run } = await inTestTenant(() =>
+      runs.enqueue({
+        sessionId: "task-session",
+        request: {
+          actor,
+          conversation: { kind: "dm", threadRef: "dm:D1", audience: [actor] },
+          origin: { kind: "human" },
+          surface: "slack",
+          surfaceTools: outbound !== "run",
+          deliveryTarget: "D1",
+          text: "Do the task",
+        } as OrchestratorInput,
+      }),
+    );
     await manager.move(client, run.id, "D1", "10.1");
     const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), { runs, deliveries });
-    await restarted.reconcile(client);
+    await inTestTenant(() => restarted.reconcile(client));
     assert.equal((await store.get(run.id))?.finished, false);
-    const claimed = await runs.claimById(run.id, "test", 10000);
+    const claimed = await inTestTenant(() => runs.claimById(run.id, "test", 10000));
     assert.ok(claimed);
     const finalDelivery =
       outbound === "silent"
@@ -171,19 +174,21 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
             text: "Done",
             idempotencyKey: outbound === "post" ? `post:${run.id}:slack:D1:0` : `${outbound}:${run.id}`,
           });
-    await runs.complete(
-      run.id,
-      claimed.leaseToken!,
-      outbound === "silent" ? { status: "silent" } : { status: "ok", reply: "Done" },
+    await inTestTenant(() =>
+      runs.complete(
+        run.id,
+        claimed.leaseToken!,
+        outbound === "silent" ? { status: "silent" } : { status: "ok", reply: "Done" },
+      ),
     );
     if (finalDelivery) {
-      await restarted.reconcile(client);
+      await inTestTenant(() => restarted.reconcile(client));
       assert.equal((await store.get(run.id))?.finished, false);
       assert.ok(!events.some((event) => event.startsWith("remove:")));
-      if (outbound === "run") await restarted.finish(client, run.id);
+      if (outbound === "run") await inTestTenant(() => restarted.finish(client, run.id));
       await deliveries.ack(finalDelivery.id, Date.now());
     }
-    await restarted.reconcile(client);
+    await inTestTenant(() => restarted.reconcile(client));
     assert.equal((await store.get(run.id))?.finished, true);
     assert.equal(events.at(-1), "remove:10.1:eyes");
   });

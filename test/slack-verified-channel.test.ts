@@ -7,7 +7,7 @@ import { createDeferredAckReceiver, type AckGate } from "../src/slack/deferred-a
 import { createHttpEventsReceiver } from "../src/slack/http-events.ts";
 import { createDeduper, dedupedRun } from "../src/slack/message-gating.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { createDirectory } from "../src/slack/directory.ts";
 import { testTenants } from "./support/test-tenants.ts";
 
@@ -16,6 +16,11 @@ import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantTest(name: string, fn: (t: TestContext) => void | Promise<void>): void {
+  test(name, (t) => inTestTenant(() => fn(t)));
+}
 
 function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite?: boolean } = {}) {
   const store = createPostgresDirectoryStore(testDatabaseUrl());
@@ -68,7 +73,7 @@ function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite
   return { store, state, observe };
 }
 
-test("verified channel membership persists before admission without deleting another room", async () => {
+tenantTest("verified channel membership persists before admission without deleting another room", async () => {
   const { store, observe } = fixture();
   await store.replaceChannels([{ channelId: "C_OTHER", name: "other" }], [], 1);
   const result = await observe();
@@ -78,7 +83,7 @@ test("verified channel membership persists before admission without deleting ano
   assert.equal(await store.channelPrivacy("C_OTHER"), false);
 });
 
-test("live observation repairs stale privacy", async () => {
+tenantTest("live observation repairs stale privacy", async () => {
   const { store, observe } = fixture();
   await store.replaceChannels([{ channelId: "C_ONE", name: "old", isPrivate: true }], [], 1);
   await observe({ name: "room", is_private: false });
@@ -86,20 +91,20 @@ test("live observation repairs stale privacy", async () => {
   assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
 });
 
-test("secondary accounts never publish live channels", async () => {
+tenantTest("secondary accounts never publish live channels", async () => {
   const { state, observe } = fixture({ secondary: true });
   assert.ok((await observe()).publishMembers);
   assert.equal(state.writes, 0);
 });
 
-test("failed persistence propagates to envelope recovery instead of declaring an external audience", async () => {
+tenantTest("failed persistence propagates to envelope recovery instead of declaring an external audience", async () => {
   for (const options of [{ failWrite: true }, { throwWrite: true }]) {
     const { observe } = fixture(options);
     await assert.rejects(observe(), /not persisted before admission|directory transport unavailable/);
   }
 });
 
-test("removed speakers and failed member classification do not publish", async () => {
+tenantTest("removed speakers and failed member classification do not publish", async () => {
   for (const failure of ["removed", "members", "user"]) {
     const { state, observe } = fixture();
     if (failure === "removed") state.memberIds = [];
@@ -110,7 +115,7 @@ test("removed speakers and failed member classification do not publish", async (
   }
 });
 
-test("unknown, external and group metadata never publish an ordinary channel", async () => {
+tenantTest("unknown, external and group metadata never publish an ordinary channel", async () => {
   for (const info of [
     {},
     { name: "room" },
@@ -124,14 +129,14 @@ test("unknown, external and group metadata never publish an ordinary channel", a
   }
 });
 
-test("newer removal rejects an older in-flight live observation", async () => {
+tenantTest("newer removal rejects an older in-flight live observation", async () => {
   const { store, observe } = fixture();
   await store.replaceChannels([], [], Date.now() + 60_000);
   await assert.rejects(observe(), /not persisted before admission/);
   assert.equal(await store.channelPrivacy("C_ONE"), undefined);
 });
 
-test("equal observation stamps trigger recovery without changing the internal roster", async (t) => {
+tenantTest("equal observation stamps trigger recovery without changing the internal roster", async (t) => {
   t.mock.method(Date, "now", () => 100_000);
   const { store, observe } = fixture();
   assert.ok((await observe()).publishMembers);
@@ -261,9 +266,11 @@ for (const mode of ["socket", "http"] as const)
         const staged = await map.entries();
         assert.equal(staged.length, 1);
         const [key, row] = staged[0]!;
-        await staging.replay(
-          { tenantId: TEST_TENANT, key, body: row.body, account: row.account, attempts: 1 },
-          (replayed, ackGate) => processEvent({ body: replayed, ack: async () => {}, customProperties: { ackGate } }),
+        await inTestTenant(() =>
+          staging.replay(
+            { tenantId: TEST_TENANT, key, body: row.body, account: row.account, attempts: 1 },
+            (replayed, ackGate) => processEvent({ body: replayed, ack: async () => {}, customProperties: { ackGate } }),
+          ),
         );
       } else {
         assert.equal((await map.entries()).length, 0);

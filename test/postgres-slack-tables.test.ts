@@ -133,7 +133,7 @@ test(
           finished: false,
         }),
       );
-      const teamTenant = slackTeamTenant(store.databaseUrl);
+      const teamTenant = slackTeamTenant();
       assert.equal(await withTenant(otherTenant, () => teamTenant("TA")), tenant);
       assert.equal(await teamTenant("TB"), otherTenant);
       assert.equal(await teamTenant("TZ"), null);
@@ -145,14 +145,12 @@ test(
         installs.set({ botToken: "xoxb", appToken: "xapp", teamId: "TB", updatedBy: "admin" }),
       );
       assert.deepEqual(
-        (await withoutTenant(() => installedSlackTenants(store.databaseUrl))).map((row) => row.tenant_id).sort(),
+        (await withoutTenant(() => installedSlackTenants())).map((row) => row.tenant_id).sort(),
         [tenant, otherTenant].sort(),
       );
-      assert.deepEqual(await withoutTenant(() => tenantsWithUnsettledAcks(store.databaseUrl)), [{ tenant_id: tenant }]);
+      assert.deepEqual(await withoutTenant(() => tenantsWithUnsettledAcks()), [{ tenant_id: tenant }]);
       assert.deepEqual(
-        (await withoutTenant(() => tenantsWithSessionStatus(store.databaseUrl))).sort((a, b) =>
-          a.account.localeCompare(b.account),
-        ),
+        (await withoutTenant(() => tenantsWithSessionStatus())).sort((a, b) => a.account.localeCompare(b.account)),
         [
           { tenant_id: tenant, account: "TA:UB" },
           { tenant_id: otherTenant, account: "TB:UB" },
@@ -160,7 +158,7 @@ test(
       );
       const claim = () =>
         withoutTenant(() =>
-          claimStagedEnvelopes(store.databaseUrl, {
+          claimStagedEnvelopes({
             now,
             ...replay,
             accounts: [{ tenantId: tenant, account: "default" }],
@@ -179,7 +177,7 @@ test(
       assert.equal(abandoned[0]!.n, 0, "rows older than a day are dropped for every tenant");
       const later = () =>
         withoutTenant(() =>
-          claimStagedEnvelopes(store.databaseUrl, {
+          claimStagedEnvelopes({
             now: now + 120_000,
             ...replay,
             accounts: [
@@ -215,7 +213,7 @@ test("concurrent claimers never receive the same staged envelope", { skip }, asy
     });
     const claim = () =>
       withoutTenant(() =>
-        claimStagedEnvelopes(store.databaseUrl, {
+        claimStagedEnvelopes({
           now: 100_000,
           ...replay,
           accounts: [{ tenantId: tenant, account: "default" }],
@@ -345,12 +343,9 @@ test(
           asked.push(token);
           return { teamId: "TENV", teamName: "Env" };
         };
-        const adopt = () =>
-          withoutTenant(() =>
-            adoptEnvironmentSlack({ env, databaseUrl: store.databaseUrl, installation: installs, workspaceOf }),
-          );
+        const adopt = () => withoutTenant(() => adoptEnvironmentSlack({ env, installation: installs, workspaceOf }));
         assert.equal(await adopt(), INSTANCE);
-        assert.equal(await slackTeamTenant(store.databaseUrl)("TENV"), INSTANCE);
+        assert.equal(await slackTeamTenant()("TENV"), INSTANCE);
         const stored = await withTenant(INSTANCE, () => installs.get());
         assert.deepEqual([stored?.botToken, stored?.appToken, stored?.teamName], ["xoxb-env", "xapp-env", "Env"]);
         assert.equal(await withTenant(otherTenant, () => installs.get()), null);

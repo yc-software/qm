@@ -13,6 +13,8 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
+import { testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SECRET = "test-signing-secret".repeat(3);
 
@@ -39,8 +41,9 @@ function sign(method: string, pathWithQuery: string, body: string): Record<strin
   const ts = Math.floor(Date.now() / 1000);
   return {
     "content-type": "application/json",
+    ...testTenantHeaders(),
     "x-timestamp": String(ts),
-    "x-signature": signRequest(SECRET, ts, `${method}\n${pathWithQuery}\n${body}`),
+    "x-signature": signRequest(SECRET, ts, canonicalPayload(method, pathWithQuery, body, testTenants()[0])),
   };
 }
 
@@ -158,7 +161,7 @@ test("the explicit insecure test server leaves the boundary open", async () => {
   try {
     const res = await fetch(`${srv.base}/v1/turns`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...testTenantHeaders() },
       body: turnBody("U1"),
     });
     assert.equal(res.status, 200);

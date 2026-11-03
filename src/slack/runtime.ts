@@ -16,7 +16,6 @@ import {
   installedSlackTenants,
   tenantsWithSessionStatus,
   tenantsWithUnsettledAcks,
-  type SlackTables,
   type SlackTeamTenant,
 } from "./slack-tables.ts";
 import { createSlackTenants } from "./tenant-runtimes.ts";
@@ -24,12 +23,11 @@ import { createSlackTenants } from "./tenant-runtimes.ts";
 export function createSlackRuntime(opts: {
   env: Record<string, string | undefined>;
   core: SlackCoreClient;
-  tables: SlackTables;
   installation: SlackInstallationStore;
   teamTenant: SlackTeamTenant;
   managed: boolean;
 }) {
-  const { env, installation, teamTenant, tables } = opts;
+  const { env, installation, teamTenant } = opts;
   const extraAccounts = slackAccountConfigsFromEnv(env);
   const witness = slackPluginConfigFromEnv(env) ?? extraAccounts[0];
   const teams = new Map<string, Promise<string | undefined>>();
@@ -58,13 +56,12 @@ export function createSlackRuntime(opts: {
     claims: {
       async installedTenants() {
         const environmentOwner = await tenantOfEnvironment().catch(() => null);
-        const installed = (await installedSlackTenants(tables.databaseUrl)).map((row) => row.tenant_id);
+        const installed = (await installedSlackTenants()).map((row) => row.tenant_id);
         return environmentOwner ? [...installed, environmentOwner] : installed;
       },
-      dueEnvelopes: (accounts) =>
-        claimStagedEnvelopes(tables.databaseUrl, { now: Date.now(), ...ENVELOPE_REPLAY, accounts }),
-      statusAccounts: () => tenantsWithSessionStatus(tables.databaseUrl),
-      ackTenants: () => tenantsWithUnsettledAcks(tables.databaseUrl),
+      dueEnvelopes: (accounts) => claimStagedEnvelopes({ now: Date.now(), ...ENVELOPE_REPLAY, accounts }),
+      statusAccounts: () => tenantsWithSessionStatus(),
+      ackTenants: () => tenantsWithUnsettledAcks(),
     },
     async load() {
       const owned = (await tenantOfEnvironment().catch(() => null)) === currentTenant();

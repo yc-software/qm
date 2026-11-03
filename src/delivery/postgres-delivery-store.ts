@@ -97,7 +97,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
 
   const enqueueListeners = new Set<() => void>();
   type Rows = (text: string, params: unknown[]) => Promise<Record<string, unknown>[]>;
-  const acrossTenants: Rows = async (text, params) => (await claimAcrossTenants(connectionString, text, params)).rows;
+  const acrossTenants: Rows = async (text, params) => (await claimAcrossTenants(text, params)).rows;
 
   async function expireOveraged(rowsOf: Rows): Promise<void> {
     const rows = await rowsOf(
