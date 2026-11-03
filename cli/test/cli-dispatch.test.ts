@@ -261,6 +261,7 @@ test("successful check --json --live reports the live-drift clause", async (t) =
   const raw = {
     contract: 1,
     deploymentId: "acme",
+    tenant: "00000000-0000-4000-8000-0000000000c1",
     publicUrl: "https://acme.example.com",
     target: "aws",
     services: ["core"],

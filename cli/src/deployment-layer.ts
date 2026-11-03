@@ -149,9 +149,9 @@ export function signingHeaders(
   };
 }
 
-function defaultCoreUrl(config: QmConfig): URL {
-  const url = new URL(config.publicUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/deployment-layer`;
+export function coreUrl(base: URL, path: string): URL {
+  const url = new URL(base);
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}${path}`;
   return url;
 }
 
@@ -188,6 +188,8 @@ interface DeploymentLayerTransportOpts {
   config: QmConfig;
   configDir: string;
   method: "GET" | "PUT";
+  path: string;
+  tenant?: string;
   body: string;
   envFile?: string;
 }
@@ -203,7 +205,7 @@ export type DeploymentLayerTransport = (
 /** Signed-HTTP transport used by providers whose core is reachable over plain HTTPS. */
 export function httpDeploymentLayerTransport(
   o: {
-    urlOf?: (config: QmConfig) => URL;
+    baseOf?: (config: QmConfig) => URL;
     secretFallback?: (config: QmConfig, name: string) => string | undefined;
     timeoutMs?: number;
     request?: (config: QmConfig, url: URL, init: RequestInit) => Promise<{ status: number; body: string }>;
@@ -216,11 +218,12 @@ export function httpDeploymentLayerTransport(
     const secret = read("CORE_SIGNING_SECRET");
     if (!secret) throw new CliError(`CORE_SIGNING_SECRET is required locally to access the deployment layer`);
     const control = read("DEPLOYMENT_CONTROL_SECRET");
-    const url = (o.urlOf ?? defaultCoreUrl)(opts.config);
+    const url = coreUrl((o.baseOf ?? ((config) => new URL(config.publicUrl)))(opts.config), opts.path);
     const init: RequestInit = {
       method: opts.method,
       headers: {
-        ...signingHeaders(secret, opts.method, url.pathname + url.search, opts.body),
+        ...signingHeaders(secret, opts.method, url.pathname + url.search, opts.body, opts.tenant),
+        ...(opts.tenant ? { "x-qm-tenant": opts.tenant } : {}),
         ...(control ? { authorization: `Bearer ${control}` } : {}),
       },
       ...(opts.method === "PUT" ? { body: opts.body } : {}),
@@ -241,13 +244,26 @@ export async function deploymentLayerRequest(opts: {
   envFile?: string;
   transport: DeploymentLayerTransport;
 }): Promise<{ status: number; body: string }> {
-  return opts.transport({
-    config: opts.config,
-    configDir: opts.configDir,
-    method: opts.method,
-    body: opts.body ?? "",
-    ...(opts.envFile ? { envFile: opts.envFile } : {}),
-  });
+  const tenant = opts.config.tenant;
+  if (!tenant)
+    throw new CliError(
+      '"tenant" is not set in the deployment config; run `qm up` or `qm settings push` to create this deployment\'s tenant',
+    );
+  const send = (method: "GET" | "PUT", path: string, body: string, bound?: string) =>
+    opts.transport({
+      config: opts.config,
+      configDir: opts.configDir,
+      method,
+      path,
+      body,
+      ...(bound ? { tenant: bound } : {}),
+      ...(opts.envFile ? { envFile: opts.envFile } : {}),
+    });
+  if (opts.method === "PUT") {
+    const created = await send("PUT", `/v1/tenants/${tenant}`, "{}");
+    if (created.status < 200 || created.status >= 300) return created;
+  }
+  return send(opts.method, "/v1/deployment-layer", opts.body ?? "", tenant);
 }
 
 export async function syncDeploymentLayer(opts: {

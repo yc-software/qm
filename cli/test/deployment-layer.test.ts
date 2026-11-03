@@ -10,6 +10,7 @@ import {
   DEPLOYMENT_LAYER_UNAVAILABLE_ATTEMPTS,
   currentDeploymentLayerState,
   deploymentLayerBundle,
+  deploymentLayerRequest,
   syncDeploymentLayer,
   httpDeploymentLayerTransport,
   type DeploymentLayerTransport,
@@ -91,6 +92,7 @@ test("the deployment layer sync rejects a bundle over the core's 1 MB limit befo
     const config: QmConfig = {
       contract: 1,
       deploymentId: "acme",
+      tenant: TENANT,
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
@@ -137,12 +139,15 @@ test("a missing sandbox directory skips sync instead of replacing the deployed l
   }
 });
 
+const TENANT = "00000000-0000-4000-8000-0000000000c1";
+
 interface CapturedRequest {
   method: string;
   url: string;
   timestamp: string;
   signature: string;
   authorization: string;
+  tenant: string;
   body: string;
 }
 
@@ -164,6 +169,7 @@ function startCoreStub(
       timestamp: headers.get("x-timestamp") ?? "",
       signature: headers.get("x-signature") ?? "",
       authorization: headers.get("authorization") ?? "",
+      tenant: headers.get("x-qm-tenant") ?? "",
       body: typeof init?.body === "string" ? init.body : "",
     });
     const result = response();
@@ -184,6 +190,7 @@ function makeConfig(publicUrl: string): QmConfig {
   return {
     contract: 1,
     deploymentId: "acme",
+    tenant: TENANT,
     publicUrl,
     target: "docker",
     services: ["core"],
@@ -235,13 +242,18 @@ test("the docker sync PUTs the bundle to the base port with verifiable v0 HMAC s
         sandboxDir: join(dir, "sandbox"),
       }),
     );
-    assert.equal(captured.length, 1);
-    const request = captured[0]!;
+    assert.equal(captured.length, 2);
+    const [created, request] = captured as [CapturedRequest, CapturedRequest];
+    assert.deepEqual(
+      [created.method, created.url, created.tenant, created.body],
+      ["PUT", `/v1/tenants/${TENANT}`, "", "{}"],
+    );
     assert.equal(request.method, "PUT");
     assert.equal(request.url, "/v1/deployment-layer");
+    assert.equal(request.tenant, TENANT);
     assert.equal(request.body, JSON.stringify(deploymentLayerBundle(join(dir, "sandbox"))));
     const expected = createHmac("sha256", SECRET)
-      .update(`v0:${request.timestamp}:PUT\n/v1/deployment-layer\n\n${request.body}`)
+      .update(`v0:${request.timestamp}:PUT\n/v1/deployment-layer\n${TENANT}\n${request.body}`)
       .digest("hex");
     assert.equal(request.signature, `v0=${expected}`);
   } finally {
@@ -289,6 +301,7 @@ test("conformance passes against a live core: base-port override, signed request
       JSON.stringify({
         contract: 1,
         deploymentId: "acme",
+        tenant: TENANT,
         publicUrl: "http://localhost:8080",
         target: "docker",
         services: ["core"],
@@ -312,9 +325,10 @@ test("conformance passes against a live core: base-port override, signed request
     const request = captured[0]!;
     assert.equal(request.method, "GET");
     assert.equal(request.url, "/v1/deployment-layer");
+    assert.equal(request.tenant, TENANT);
     assert.match(request.timestamp, /^\d+$/, "x-timestamp is unix seconds");
     const expected = createHmac("sha256", SECRET)
-      .update(`v0:${request.timestamp}:GET\n/v1/deployment-layer\n\n`)
+      .update(`v0:${request.timestamp}:GET\n/v1/deployment-layer\n${TENANT}\n`)
       .digest("hex");
     assert.equal(request.signature, `v0=${expected}`, "v0 HMAC over METHOD\\npath\\ntenant\\nbody");
     assert.equal(request.authorization, `Bearer ${CONTROL}`);
@@ -348,6 +362,7 @@ test("conformance fails when the stored layer matches but the core still serves 
       JSON.stringify({
         contract: 1,
         deploymentId: "acme",
+        tenant: TENANT,
         publicUrl: "http://localhost:8080",
         target: "docker",
         services: ["core"],
@@ -392,6 +407,7 @@ test("conformance reports a non-JSON layer response as a contract failure, not a
       JSON.stringify({
         contract: 1,
         deploymentId: "acme",
+        tenant: TENANT,
         publicUrl: "http://localhost:8080",
         target: "docker",
         services: ["core"],
@@ -467,10 +483,11 @@ test("a publicUrl with a base path keeps it in the request path and the signed c
         sandboxDir: join(dir, "sandbox"),
       }),
     );
-    const request = captured[0]!;
+    assert.equal(captured[0]!.url, `/base/v1/tenants/${TENANT}`);
+    const request = captured[1]!;
     assert.equal(request.url, "/base/v1/deployment-layer");
     const expected = createHmac("sha256", SECRET)
-      .update(`v0:${request.timestamp}:PUT\n/base/v1/deployment-layer\n\n${request.body}`)
+      .update(`v0:${request.timestamp}:PUT\n/base/v1/deployment-layer\n${TENANT}\n${request.body}`)
       .digest("hex");
     assert.equal(request.signature, `v0=${expected}`);
   } finally {
@@ -692,8 +709,9 @@ test("fly sync carries the exact bundle in bounded exec arguments", async () => 
       `QM_LAYER_RESPONSE=${JSON.stringify({ status: 200, body: JSON.stringify({ version: 7, contentHash: "abcdef123456" }) })}`,
       async (captured) => {
         await withEnv({ FLY_BIN: bin, FLY_API_TOKEN: "test-token" }, () => syncDeploymentLayer(flySyncOpts(dir)));
-        assert.equal(captured.length, 1);
-        const request = captured[0]!;
+        assert.equal(captured.length, 2);
+        assert.match((captured[0]!.body.command as string[])[2] ?? "", /path="\/v1\/tenants\/[0-9a-f-]{36}",tenant=""/);
+        const request = captured[1]!;
         assert.equal(request.url, "https://api.machines.dev/v1/apps/acme-core/machines/machine-core/exec");
         assert.equal(request.authorization, "Bearer test-token");
         assert.equal(request.body.stdin, undefined, "the transport does not rely on Machines exec stdin");
@@ -702,6 +720,8 @@ test("fly sync carries the exact bundle in bounded exec arguments", async () => 
         assert.deepEqual((request.body.command as string[]).slice(0, 2), ["node", "-e"]);
         const remoteScript = (request.body.command as string[])[2] ?? "";
         assert.match(remoteScript, /createHmac\("sha256"/, "the signing script is passed to node -e directly");
+        assert.match(remoteScript, new RegExp(`path="/v1/deployment-layer",tenant="${TENANT}"`));
+        assert.match(remoteScript, /"x-qm-tenant":tenant/);
         assert.equal(
           Buffer.from((request.body.command as string[]).slice(3).join(""), "base64").toString("utf8"),
           bundle,
@@ -802,7 +822,7 @@ test("allowUnavailable retries an unreachable PUT until the core comes back", as
       allowUnavailable: true,
       wait: async () => {},
     });
-    assert.equal(calls, 3);
+    assert.equal(calls, 4, "two refused attempts, then the tenant creation and the layer write");
     assert.ok(lines.some((line) => /deployment layer: v4 abc123def456/.test(line)));
     assert.equal(lines.filter((line) => /sync is deferred/.test(line)).length, 0);
   } finally {
@@ -987,4 +1007,19 @@ test("the bundle carries every file a tool declares under install.files and fail
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a deployment without a recorded tenant id refuses to read or write the layer before any request", async () => {
+  let calls = 0;
+  const transport: DeploymentLayerTransport = async () => {
+    calls += 1;
+    return { status: 200, body: "{}" };
+  };
+  const config = { ...makeConfig("http://example.invalid"), tenant: undefined };
+  for (const method of ["GET", "PUT"] as const)
+    await assert.rejects(
+      deploymentLayerRequest({ config, configDir: tmpdir(), method, transport }),
+      /"tenant" is not set in the deployment config/,
+    );
+  assert.equal(calls, 0);
 });

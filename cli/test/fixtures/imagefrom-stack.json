@@ -1,4 +1,5 @@
 {
+  "tenant": "90579f26-562d-47d2-acc1-3db636d73f35",
   "contract": 1,
   "deploymentId": "beta",
   "publicUrl": "https://beta.example.com",

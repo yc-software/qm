@@ -64,7 +64,7 @@ import type { Backend } from "./types.ts";
 function layerTransport(originOf: (config: QmConfig) => string): DeploymentLayerTransport {
   return httpDeploymentLayerTransport({
     timeoutMs: 60_000,
-    urlOf: (config) => new URL("/v1/deployment-layer", originOf(config)),
+    baseOf: (config) => new URL(originOf(config)),
   });
 }
 export const renderDeploymentLayerTransport = layerTransport((config) => {

@@ -176,11 +176,10 @@ export async function awsCoreRequest(
 }
 
 export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
-  urlOf: (config) => {
+  baseOf: (config) => {
     const url = new URL(config.apiUrl ?? config.publicUrl);
     if (url.protocol !== "https:" || url.username || url.password || url.hash)
       throw new CliError("AWS deployment-layer URL must be HTTPS without credentials or a fragment");
-    url.pathname = `${url.pathname.replace(/\/+$/, "")}/v1/deployment-layer`;
     return url;
   },
   request: awsCoreRequest,

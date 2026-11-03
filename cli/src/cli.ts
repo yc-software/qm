@@ -35,7 +35,7 @@ import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
 import { scopeStorageKey } from "./scope-storage-key.ts";
 import { runAdminLogin } from "./commands/admin-login.ts";
 import { syncDeploymentLayer } from "./deployment-layer.ts";
-import { seedTenantSettings, type TenantSettingsTarget } from "./tenant-settings.ts";
+import { deploymentTenant, seedTenantSettings, type TenantSettingsTarget } from "./tenant-settings.ts";
 
 interface Parsed {
   positionals: string[];
@@ -522,6 +522,7 @@ async function dispatch(argv: string[]): Promise<void> {
       rejectExtraPositionals(positionals, 1);
       if (positionals[0] !== "sync") throw new CliError(`usage: ${CLI_NAME} layer sync`);
       const ctx = deployContext(flags);
+      deploymentTenant(ctx);
       await syncDeploymentLayer({ ...ctx, transport: hostingProvider(ctx.target).deploymentLayerTransport });
       return;
     }
@@ -547,6 +548,7 @@ async function dispatch(argv: string[]): Promise<void> {
       rejectUnknownFlags(flags, [...common, ...provider.upFlags]);
       const upOptions = provider.upOptions(ctx, flags, dryRun);
       runChecks(ctx.config, ctx.configDir, ctx.sandboxDir, { report: false });
+      if (!dryRun) deploymentTenant(ctx);
       await provider.createBackend(ctx).up(upOptions);
       const deploysCore = !upOptions.only || upOptions.only.includes("core");
       if (!dryRun && !upOptions.buildOnly && !upOptions.candidate && !upOptions.inactive && deploysCore)

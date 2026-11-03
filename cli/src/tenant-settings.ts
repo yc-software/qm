@@ -106,7 +106,7 @@ function readStoredValues(
   }
 }
 
-function deploymentTenant(opts: { config: QmConfig; configPath: string }): string {
+export function deploymentTenant(opts: { config: QmConfig; configPath: string }): string {
   if (opts.config.tenant) return opts.config.tenant;
   const tenant = randomUUID();
   writeFileSync(opts.configPath, updateConfigFields(readFileSync(opts.configPath, "utf8"), { tenant }));

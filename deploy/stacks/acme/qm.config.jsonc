@@ -1,4 +1,5 @@
 {
+  "tenant": "4f78c79b-71af-4a17-a07a-01eb64d7370e",
   "contract": 1,
   "deploymentId": "acme",
   "publicUrl": "https://agent.example.com",

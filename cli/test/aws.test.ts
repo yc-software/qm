@@ -540,6 +540,7 @@ else console.log("");`,
 const config: QmConfig = {
   contract: 1,
   deploymentId: "acme",
+  tenant: "00000000-0000-4000-8000-0000000000c1",
   publicUrl: "https://agent.acme.example",
   target: "aws",
   services: ["core", "slack", "web-ui", "portal"],
@@ -3639,10 +3640,11 @@ test("AWS rollback restores the recorded layer without reading the broken curren
   const priorSecret = process.env.CORE_SIGNING_SECRET;
   const bodies: string[] = [];
   process.env.CORE_SIGNING_SECRET = "test-signing-secret";
-  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     if (init?.method !== "PUT") {
       return new Response("current release is broken", { status: 503 });
     }
+    if (String(input).includes("/v1/tenants/")) return new Response("{}", { status: 200 });
     const body = String(init.body ?? "");
     bodies.push(body);
     return new Response(
@@ -5182,6 +5184,7 @@ test("AWS layer GET and PUT bind the selected ALB while retaining API Host, TLS 
       const result = await awsDeploymentLayerTransport({
         config: configured,
         configDir: dir,
+        path: "/v1/deployment-layer",
 
         method,
         body,
@@ -5265,6 +5268,7 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
           await awsDeploymentLayerTransport({
             config: configured,
             configDir: dir,
+            path: "/v1/deployment-layer",
 
             method,
             body,
@@ -5348,6 +5352,7 @@ test("AWS layer transport uses the HTTPS front door when an HTTP ALB origin is c
           awsDeploymentLayerTransport({
             config: configured,
             configDir: dir,
+            path: "/v1/deployment-layer",
 
             method: "PUT",
             body: "{}",
@@ -5443,6 +5448,7 @@ test("AWS layer transport rejects invalid targets and propagates TLS and body fa
     awsDeploymentLayerTransport({
       config: configured,
       configDir: dir,
+      path: "/v1/deployment-layer",
 
       method: "GET",
       body: "",
@@ -5497,7 +5503,8 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
   );
   try {
     await assert.rejects(
-      () => awsDeploymentLayerTransport({ config, configDir: dir, method: "GET", body: "" }),
+      () =>
+        awsDeploymentLayerTransport({ config, configDir: dir, path: "/v1/deployment-layer", method: "GET", body: "" }),
       /abort/i,
     );
     assert.equal(calls, 1);

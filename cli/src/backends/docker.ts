@@ -54,7 +54,7 @@ import {
 
 /** Deployment-layer transport for docker: signed HTTP to the locally published core port. */
 export const dockerDeploymentLayerTransport: DeploymentLayerTransport = httpDeploymentLayerTransport({
-  urlOf: (config) => new URL(`http://127.0.0.1:${dockerBasePort(config)}/v1/deployment-layer`),
+  baseOf: (config) => new URL(`http://127.0.0.1:${dockerBasePort(config)}`),
 });
 
 const safe = (s: string): string => s.replace(/[^A-Za-z0-9_.-]/g, "-");

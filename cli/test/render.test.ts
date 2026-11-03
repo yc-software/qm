@@ -45,6 +45,7 @@ function deployment(t: TestContext, portal = false) {
     renderScaffold.renderConfig("acme", "anthropic", "resend", { repo: "https://github.com/acme/qm", branch: "main" }),
   ) as Record<string, any>;
   raw.render.workspaceId = "tea-acme";
+  raw.tenant = "00000000-0000-4000-8000-0000000000c1";
   raw.services = portal ? ["core", "web-ui", "portal", "auth"] : ["core", "web-ui"];
   raw.sandbox = {
     ...raw.sandbox,
@@ -164,7 +165,10 @@ function cloud(t: TestContext, d: Deployment) {
     if (intercepted) return intercepted;
     if (url.origin !== "https://api.render.com") {
       if (path === "/healthz") return new Response("ok");
+      if (path === `/v1/tenants/${d.ctx.config.tenant}` && method === "PUT")
+        return Response.json({ tenant: d.ctx.config.tenant, created: false });
       if (path === "/v1/deployment-layer") {
+        assert.equal(new Headers(init?.headers).get("x-qm-tenant"), d.ctx.config.tenant);
         assert.ok([state.services.get("srv-acme-core")!.serviceDetails.url, d.ctx.config.apiUrl].includes(url.origin));
         return Response.json({ status: "applied", durable: true, version: 1 });
       }
@@ -702,6 +706,7 @@ test("Render config rejects retired compute plan names and names their replaceme
     renderScaffold.renderConfig("acme", "anthropic", "resend", { repo: "https://github.com/acme/qm", branch: "main" }),
   ) as Record<string, any>;
   raw.render.workspaceId = "tea-acme";
+  raw.tenant = "00000000-0000-4000-8000-0000000000c1";
   raw.render.postgresPlan = "standard";
   delete raw.modelProvider;
   delete raw.secretEnv;
@@ -1546,6 +1551,7 @@ test("Render layer transport rejects missing or invalid core URLs before sending
         renderDeploymentLayerTransport({
           config: d.ctx.config,
           configDir: d.ctx.configDir,
+          path: "/v1/deployment-layer",
           method: "GET",
           body: "",
         }),
