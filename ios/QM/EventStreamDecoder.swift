@@ -26,13 +26,17 @@ struct EventStreamDecoder {
     }
     let text = String(decoding: line, as: UTF8.self)
     guard let colon = text.firstIndex(of: ":") else {
-      if text == "data" { data = (data ?? []) + [""] }
+      if text == "data" {
+        data = data ?? []
+        data?.append("")
+      }
       return nil
     }
     guard text[..<colon] == "data" else { return nil }
     var value = text[text.index(after: colon)...]
     if value.first == " " { value = value.dropFirst() }
-    data = (data ?? []) + [String(value)]
+    data = data ?? []
+    data?.append(String(value))
     return nil
   }
 }

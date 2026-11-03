@@ -11,6 +11,7 @@ extension Logger {
     guard !Task.isCancelled, !(error is CancellationError),
       (error as? URLError)?.code != .cancelled
     else { return }
-    self.error("\(action, privacy: .public) failed: \(error.localizedDescription)")
+    self.error(
+      "\(action, privacy: .public) failed: \(String(describing: error), privacy: .public)")
   }
 }

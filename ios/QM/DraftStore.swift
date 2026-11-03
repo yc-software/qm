@@ -26,35 +26,34 @@ struct DraftStore {
     var runtime: RuntimeSelection?
   }
 
+  private static func hashKey(_ value: String) -> String {
+    SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+  }
+
   private static func directory(_ account: String) -> URL {
-    let key = SHA256.hash(data: Data(account.utf8)).map { String(format: "%02x", $0) }.joined()
-    return URL.applicationSupportDirectory.appendingPathComponent("Drafts/\(key)")
+    URL.applicationSupportDirectory.appendingPathComponent("Drafts/\(hashKey(account))")
   }
 
   var file: URL {
-    let key = SHA256.hash(data: Data(thread.utf8)).map { String(format: "%02x", $0) }.joined()
-    return Self.directory(account).appendingPathComponent(key + ".json")
+    Self.directory(account).appendingPathComponent(Self.hashKey(thread) + ".json")
   }
 
   func read() -> Record {
-    let data: Data
+    (try? Self.load(file)) ?? Record()
+  }
+
+  private static func load(_ file: URL) throws -> Record? {
     do {
-      data = try Data(contentsOf: file)
+      return try JSONDecoder().decode(Record.self, from: Data(contentsOf: file))
     } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-      return Record()
+      return nil
     } catch {
-      Log.drafts.error("Could not read draft: \(String(describing: error), privacy: .public)")
-      return Record()
-    }
-    do {
-      return try JSONDecoder().decode(Record.self, from: data)
-    } catch {
-      setAside(error)
-      return Record()
+      setAside(file, error)
+      throw error
     }
   }
 
-  private func setAside(_ error: Error) {
+  private static func setAside(_ file: URL, _ error: Error) {
     let stamp = Int(Date().timeIntervalSince1970 * 1000)
     let destination = file.appendingPathExtension("corrupt-\(stamp)")
     Log.drafts.error(
@@ -98,8 +97,7 @@ struct DraftStore {
   static func conversations(_ account: String) -> [Conversation] {
     let files = records(account)
     return files.compactMap { file in
-      guard let data = try? Data(contentsOf: file),
-        let record = try? JSONDecoder().decode(Record.self, from: data),
+      guard let record = try? load(file),
         !record.text.isEmpty || record.pending != nil || !(record.attachments ?? []).isEmpty,
         var conversation = record.conversation
       else { return nil }
@@ -116,9 +114,7 @@ struct DraftStore {
     let files = records(account)
     var referenced: Set<String> = []
     for file in files {
-      guard let data = try? Data(contentsOf: file),
-        let record = try? JSONDecoder().decode(Record.self, from: data)
-      else { continue }
+      guard let record = try load(file) else { continue }
       referenced.formUnion(
         ((record.attachments ?? []) + (record.pending?.attachments ?? [])).compactMap(\.localSHA))
     }
@@ -128,8 +124,18 @@ struct DraftStore {
   static func removeAccount(_ account: String) {
     Self.epochs.withLock { epochs in
       epochs[account] = UUID()
-      try? FileManager.default.removeItem(at: directory(account))
-      try? AttachmentCache.removeAccount(account: account)
+      do {
+        try FileManager.default.removeItem(at: directory(account))
+      } catch {
+        if (error as? CocoaError)?.code != .fileNoSuchFile {
+          Log.drafts.failure("Removing account drafts", error)
+        }
+      }
+      do {
+        try AttachmentCache.removeAccount(account: account)
+      } catch {
+        Log.drafts.failure("Removing account attachments", error)
+      }
     }
   }
 }
