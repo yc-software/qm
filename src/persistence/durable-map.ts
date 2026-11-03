@@ -1,6 +1,7 @@
 import { createPgPool, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
+import { boundTenant } from "../tenants/context.ts";
 
 export interface TenantEntry<T> {
   tenantId: string;
@@ -110,14 +111,17 @@ export function createPostgresMap<T>(
     });
   }
   const CACHE_MAX_AGE_MS = 15_000;
-  let cache: { v: string; fetchedAt: number; entries: Array<[string, T]> } | null = null;
+  const caches = new Map<string, { v: string; fetchedAt: number; entries: Array<[string, T]> }>();
   async function snapshot(): Promise<Array<[string, T]>> {
     await ready();
+    const tenant = boundTenant() ?? "";
     const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
     const v = vRows.length ? String(vRows[0]!.v) : "";
+    let cache = caches.get(tenant);
     if (!cache || cache.v !== v || Date.now() - cache.fetchedAt > CACHE_MAX_AGE_MS) {
       const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
       cache = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
+      caches.set(tenant, cache);
     }
     return structuredClone(cache.entries);
   }
