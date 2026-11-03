@@ -355,7 +355,10 @@ test("a chat with any member the deployment does not vouch for is neither mirror
     const unlisted = event({ body: "!post hi", mentions: true, eventId: "ev-unlisted", messageId: "1041" });
     unlisted.message.user = { id: "8", email: "ada@example.com", name: "Not A Member" };
     assert.equal((await deliver(unlisted)).status, 200);
-    assert.deepEqual(await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true }), []);
+    assert.deepEqual(
+      await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true }),
+      [],
+    );
   } finally {
     await partnerChat.close();
   }
