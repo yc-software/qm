@@ -41,6 +41,7 @@ async function deliver(
   const uploads: Record<string, unknown>[] = [];
   const posts: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
+  const failures: Array<[string, string]> = [];
   const marks: Array<{ channel: string; ts: string }> = [];
   const probes: Record<string, unknown>[] = [];
   const history = row.history ?? [];
@@ -56,6 +57,7 @@ async function deliver(
     getApproval: async () => row.approval ?? null,
     readBlob: async (id: string) => Buffer.from(id),
     claimDeliveries: async (type: string) => queues.get(type)?.splice(0) ?? [],
+    failDelivery: async (id: string, code: string) => void failures.push([id, code]),
     ackDelivery: async (id: string) => {
       if (row.loseAck) throw new Error("acknowledgement lost");
       acknowledgements.push(id);
@@ -104,7 +106,7 @@ async function deliver(
   });
 
   await poller.pollDeliveries(client);
-  return { acknowledgements, uploads, posts, updates, marks, probes, conversationsOpened };
+  return { acknowledgements, uploads, posts, updates, failures, marks, probes, conversationsOpened };
 }
 
 for (const type of ["slack", "group", "principal"]) {
@@ -434,8 +436,8 @@ test("an explicit edit rewrites the target message in place and posts nothing ne
   assert.deepEqual(acknowledgements, ["D1"]);
 });
 
-test("a failed explicit edit never falls back to posting the text as a new message", async () => {
-  const { updates, posts, uploads } = await deliver(
+test("an edit Slack refuses fails the delivery instead of posting the text as a new message", async () => {
+  const { updates, posts, failures } = await deliver(
     { target: "C1", edit: { messageTs: "99.100" } },
     undefined,
     undefined,
@@ -444,5 +446,5 @@ test("a failed explicit edit never falls back to posting the text as a new messa
   );
   assert.equal(updates.length, 1);
   assert.deepEqual(posts, []);
-  assert.deepEqual(uploads, []);
+  assert.deepEqual(failures, [["D1", "cant_update_message"]]);
 });

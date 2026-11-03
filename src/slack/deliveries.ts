@@ -46,7 +46,7 @@ const PERMANENT_POST_ERRORS = new Set([
   "message_not_found",
 ]);
 
-const TERMINAL_POST_ERRORS = new Set(["cannot_dm_bot"]);
+const TERMINAL_POST_ERRORS = new Set(["cannot_dm_bot", "cant_update_message", "edit_window_closed"]);
 
 const SETTLED_PIN_ERRORS = new Set(["already_pinned", "no_pin", "not_pinned"]);
 
@@ -286,31 +286,27 @@ export function createDeliveryPoller(deps: {
                 return undefined;
               }
               if (d.destination.edit) {
-                const { messageTs } = d.destination.edit;
                 const text = toSlackMrkdwn(stripSlackDirectives(d.text));
                 if (!text.trim()) {
                   console.error(`[slack-plugin] delivery ${d.id} edit skipped: no text left to write`);
                   return undefined;
                 }
-                const footer = deliveryFooter(d);
+                const footer = [
+                  ...deliveryFooter(d),
+                  ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
+                ];
                 const unfurlLinks = d.destination.unfurlLinks;
-                try {
-                  await client.chat.update({
-                    channel,
-                    ts: messageTs,
-                    text,
-                    blocks: [
-                      ...slackSectionBlocks(text),
-                      ...(footer.length ? [{ type: "context", elements: footer }] : []),
-                    ],
-                    ...botIdentityArgs(),
-                    ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
-                  });
-                } catch (err) {
-                  console.error(
-                    `[slack-plugin] delivery ${d.id} edit failed: ${slackErrorCode(err) ?? (err as Error).message} (own messages only)`,
-                  );
-                }
+                await client.chat.update({
+                  channel,
+                  ts: d.destination.edit.messageTs,
+                  text,
+                  blocks: [
+                    ...slackSectionBlocks(text),
+                    ...(footer.length ? [{ type: "context", elements: footer }] : []),
+                  ],
+                  ...botIdentityArgs(),
+                  ...(unfurlLinks !== undefined ? { unfurl_links: unfurlLinks, unfurl_media: unfurlLinks } : {}),
+                });
                 return undefined;
               }
               let editRef = d.destination.editRef;

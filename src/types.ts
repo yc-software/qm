@@ -213,7 +213,6 @@ export interface Destination {
   unfurlLinks?: boolean;
   react?: { messageTs: string; emoji: string };
   delete?: { messageTs: string };
-  /** Rewrite this already-posted message in place; never falls back to a new post. */
   edit?: { messageTs: string };
   pin?: { messageTs: string; remove?: boolean };
   identity?: string;
