@@ -2,22 +2,20 @@ import {
   CUSTOM_PROVIDER_PROTOCOLS,
   type CustomProviderSpec,
   type CustomProviderProtocol,
+  validateCustomProviderSpec,
 } from "../../../model/custom-providers.ts";
+import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { rejectUnusableKey } from "./model-providers.ts";
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
   return authorizeAdmin(ctx, scope);
 }
 
-/**
- * Key validation against the registered endpoint, protocol-appropriate.
- * A gateway may not implement a models listing, so callers can skip
- * with {"validate": false} — the registration is admin-only either way.
- */
-async function validateKey(
+function rejectUnusableCustomKey(
   ctx: ApiCtx,
   protocol: CustomProviderProtocol,
   baseUrl: string,
@@ -28,15 +26,7 @@ async function validateKey(
     protocol === "anthropic"
       ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
       : { authorization: `Bearer ${apiKey}` };
-  try {
-    const response = await (ctx.deps.modelCredentialFetch ?? fetch)(url, {
-      headers,
-      signal: AbortSignal.timeout(5_000),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
+  return rejectUnusableKey(ctx, baseUrl, url, headers);
 }
 
 export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
@@ -82,14 +72,14 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
     baseUrl: body.baseUrl.trim().replace(/\/+$/, ""),
     models: Array.isArray(body.models) ? (body.models as CustomProviderSpec["models"]) : [],
   };
+  try {
+    validateCustomProviderSpec(spec);
+  } catch (e) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: errMessage(e) });
+  }
   const apiKey = typeof body.apiKey === "string" && body.apiKey.trim() ? body.apiKey.trim() : undefined;
   const shouldValidate = body.validate !== false && apiKey !== undefined;
-  if (shouldValidate && !(await validateKey(ctx, spec.protocol, spec.baseUrl, apiKey!))) {
-    return sendJson(ctx.res, 400, {
-      error: "invalid_api_key",
-      message: `${spec.baseUrl} rejected this API key (pass "validate": false to skip for endpoints without a models listing)`,
-    });
-  }
+  if (shouldValidate && (await rejectUnusableCustomKey(ctx, spec.protocol, spec.baseUrl, apiKey))) return;
   try {
     await ctx.deps.customProviders.upsert(spec, apiKey, authorized.id);
   } catch (e) {

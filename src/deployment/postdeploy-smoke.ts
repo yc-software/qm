@@ -5,6 +5,8 @@ import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
 import { mintSignedPayload } from "../auth/signed-token.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { loadConfig, type Config } from "../config.ts";
+import { withTenant } from "../tenants/context.ts";
+import { createTenantSettingsStore, type TenantSettingsStore } from "../tenants/settings.ts";
 import { errMessage } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 
@@ -112,7 +114,7 @@ export async function stagingApiHeaders(
   );
 }
 
-type LiveSessionConfig = Pick<Config, "adminGrants" | "orgId" | "portalIdentitySecret" | "signingSecret">;
+type LiveSessionConfig = Pick<Config, "orgId" | "portalIdentitySecret" | "signingSecret"> & { adminGrants?: string };
 
 export async function checkLiveSession(
   config: LiveSessionConfig,
@@ -263,22 +265,22 @@ async function checkApi(
   if (!Array.isArray(parsed.sessions)) throw new Error("staging session API response has no sessions array");
 }
 
-type PostdeployConfig = Pick<
-  Config,
-  | "adminGrants"
-  | "databaseUrl"
-  | "databaseCaCert"
-  | "databaseCaCertFile"
-  | "flyAppName"
-  | "orgId"
-  | "port"
-  | "portalIdentitySecret"
-  | "publicWebUrl"
-  | "signingSecret"
-  | "slack"
->;
+type PostdeployConfig = LiveSessionConfig &
+  Pick<
+    Config,
+    | "databaseUrl"
+    | "databaseCaCert"
+    | "databaseCaCertFile"
+    | "flyAppName"
+    | "orgId"
+    | "port"
+    | "portalIdentitySecret"
+    | "publicWebUrl"
+    | "signingSecret"
+    | "slack"
+  >;
 
-async function checkDatabase(config: PostdeployConfig): Promise<void> {
+async function connect(config: PostdeployConfig) {
   const { databaseUrl } = config;
   if (!databaseUrl) throw new Error("postdeploy smoke requires DATABASE_URL");
   const pg = (await import("pg")).default;
@@ -292,6 +294,22 @@ async function checkDatabase(config: PostdeployConfig): Promise<void> {
     statement_timeout: 30_000,
   });
   await client.connect();
+  return client;
+}
+
+async function installTenant(config: PostdeployConfig): Promise<string> {
+  const client = await connect(config);
+  try {
+    const [row] = (await client.query("SELECT id::text AS id FROM qm_tenant")).rows;
+    if (!row) throw new Error("postdeploy smoke found no install tenant in qm_tenant");
+    return String(row.id);
+  } finally {
+    await client.end();
+  }
+}
+
+async function checkDatabase(config: PostdeployConfig): Promise<void> {
+  const client = await connect(config);
   try {
     const unsafe = await client.query(PARALLEL_EXCEPTION_QUERY);
     if (unsafe.rows.length) {
@@ -324,8 +342,13 @@ async function runPostdeploySmoke(config: PostdeployConfig): Promise<void> {
   console.log("deployed staging database, API, services, public route, and Slack smoke passed");
 }
 
-export async function runSessionSmoke(config: PostdeployConfig, baseUrl: string): Promise<void> {
-  await checkLiveSession(config, baseUrl, (input, init) => {
+export async function runSessionSmoke(
+  config: PostdeployConfig,
+  baseUrl: string,
+  settings?: Pick<TenantSettingsStore, "get">,
+): Promise<void> {
+  const adminGrants = settings ? (await settings.get()).values.ADMIN_GRANTS : config.adminGrants;
+  await checkLiveSession({ ...config, adminGrants }, baseUrl, (input, init) => {
     const timeout = AbortSignal.timeout(
       init?.method === "POST" && new URL(String(input)).pathname === "/v1/turns" ? 300_000 : 30_000,
     );
@@ -335,11 +358,20 @@ export async function runSessionSmoke(config: PostdeployConfig, baseUrl: string)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const config = loadConfig();
-  if (process.argv[2] === "session") {
-    await runSessionSmoke(config, process.argv[3] ?? `http://127.0.0.1:${config.port}`);
-    console.log("database and live session smoke passed");
-  } else {
-    await runPostdeploySmoke(config);
-  }
+  const loaded = loadConfig();
+  if (!loaded.databaseUrl || !loaded.connectorSecretKey)
+    throw new Error("postdeploy smoke needs DATABASE_URL and CONNECTOR_SECRET_KEY to read the tenant's settings");
+  const settings = createTenantSettingsStore({
+    databaseUrl: loaded.databaseUrl,
+    keyMaterial: loaded.connectorSecretKey,
+  });
+  await withTenant(await installTenant(loaded), async () => {
+    const config = { ...loaded, adminGrants: (await settings.get()).values.ADMIN_GRANTS };
+    if (process.argv[2] === "session") {
+      await runSessionSmoke(config, process.argv[3] ?? `http://127.0.0.1:${config.port}`);
+      console.log("database and live session smoke passed");
+    } else {
+      await runPostdeploySmoke(config);
+    }
+  });
 }

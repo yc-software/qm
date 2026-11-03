@@ -338,14 +338,14 @@ test("observed screening returns immediately and audits each verdict once it set
   });
   const events: AuditEvent[] = [];
   const classify = createSecurityClassifier({
-    securityScreener: {
+    securityScreener: async () => ({
       provider: "example-screen",
       async classify() {
         await pending;
         return { verdict: { decision: "strict", reason: "example-screen:injection" }, score: 0.9, threshold: 0.5 };
       },
-    },
-    agent: { models: {} },
+    }),
+    agent: {},
     auditLog: { record: (event: AuditEvent) => events.push(event) },
   } as unknown as OrchestratorDeps);
   const verdicts = await Promise.all(

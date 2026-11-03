@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
 import { createGoalRecord, type GoalRecord } from "../src/agent/goal.ts";
@@ -6,6 +5,7 @@ import { createAgent } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { test } from "./support/test-tenants.ts";
 
 function cancelTurn(
   sessionId: string,
@@ -40,7 +40,7 @@ function abortShapedError(): Error {
 }
 
 test("a mid-prompt cancel takes the stopped exit and persists the stopped partial", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
   const realFetch = globalThis.fetch;
@@ -73,7 +73,7 @@ test("a mid-prompt cancel takes the stopped exit and persists the stopped partia
 });
 
 test("a cancel that lands before the model request starts still stops the turn", { timeout: 10_000 }, async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   controller.abort();
   const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
@@ -98,7 +98,7 @@ test("a cancel that lands before the model request starts still stops the turn",
 });
 
 test("a genuine provider error racing a cancel still fails the turn instead of completing it as stopped", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
   const realFetch = globalThis.fetch;
@@ -158,7 +158,7 @@ function textReplyEvents(text: string): Array<Record<string, unknown>> {
 }
 
 test("a cancel landing after the turn completed takes the normal exit, not the stopped hijack", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
   const realFetch = globalThis.fetch;
@@ -184,7 +184,7 @@ test("a cancel landing after the turn completed takes the normal exit, not the s
 });
 
 test("Pi preserves the session's active goal when the worker cancels", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
   const realFetch = globalThis.fetch;
@@ -240,7 +240,7 @@ function toolUseEvents(): Array<Record<string, unknown>> {
 
 for (const shutdown of [false, true]) {
   test(`a cancel mid-tool ${shutdown ? "from shutdown leaves the turn open for resume" : "without shutdown records the stop marker"}`, async () => {
-    const agent = createAgent({ apiKey: "sk-test" });
+    const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
     const cancel = new AbortController();
     const shutdownSignal = new AbortController();
     const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
@@ -317,7 +317,7 @@ function thinkingThenStall(signal: AbortSignal | null | undefined): Response {
 }
 
 test("reasoning streams before its thinking entry is persisted, and a cancel mid-reasoning persists it under the streamed id", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
   const streamed: Array<{ step: string; index: number; chunk: string; persistedSoFar: number }> = [];

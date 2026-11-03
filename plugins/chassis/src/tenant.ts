@@ -2,15 +2,44 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 const binding = new AsyncLocalStorage<string | undefined>();
 const pinned = new AsyncLocalStorage<{ tenant: string | undefined; open: boolean }>();
+const loading = new AsyncLocalStorage<string>();
 const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function isTenantId(value: unknown): value is string {
   return typeof value === "string" && TENANT_ID.test(value);
 }
 
-export function withTenant<T>(id: string, fn: () => T): T {
+type BindHook = (tenant: string) => Promise<unknown>;
+const bindHooks = new Map<BindHook, Map<string, Promise<void> | true>>();
+
+export function onFirstBind(hook: BindHook): () => void {
+  bindHooks.set(hook, new Map());
+  return () => bindHooks.delete(hook);
+}
+
+function prepare(tenant: string): Promise<void> | undefined {
+  const pending: Array<Promise<void>> = [];
+  for (const [hook, done] of bindHooks) {
+    const existing = done.get(tenant);
+    if (existing === true) continue;
+    if (existing) {
+      pending.push(existing);
+      continue;
+    }
+    const run = Promise.resolve()
+      .then(() => pinned.exit(() => loading.run(tenant, () => binding.run(tenant, () => hook(tenant)))))
+      .then(() => void done.set(tenant, true));
+    done.set(tenant, run);
+    run.catch(() => done.get(tenant) === run && done.delete(tenant));
+    pending.push(run);
+  }
+  return pending.length ? Promise.all(pending).then(() => undefined) : undefined;
+}
+
+export async function withTenant<T>(id: string, fn: () => T): Promise<Awaited<T>> {
   if (!isTenantId(id)) throw new Error(`Tenant id must be a lowercase uuid, got ${JSON.stringify(id)}`);
-  return bind(id, fn);
+  if (loading.getStore() !== id) await prepare(id);
+  return await bind(id, fn);
 }
 
 export function withoutTenant<T>(fn: () => T): T {

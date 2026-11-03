@@ -5,7 +5,7 @@ import * as modalClient from "../src/sandbox/modal-client.ts";
 import * as mockAgent from "./support/mock-agent.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { testConfig } from "./support/test-config.ts";
-import { ownerUrlOf, testDatabaseUrl } from "./support/test-database.ts";
+import { ownerUrlOf, testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { createServer } from "../src/api/server.ts";
@@ -51,8 +51,11 @@ mock.module("./support/mock-agent.ts", {
 });
 const wiring = await import("./support/build-app.ts");
 const { orgId } = await import("../src/config.ts");
-const buildApp = (...args: Parameters<typeof wiring.buildApp>): ReturnType<typeof wiring.buildApp> => {
-  const built = wiring.buildApp(...args);
+const buildApp = (...[config, overrides]: Parameters<typeof wiring.buildApp>): ReturnType<typeof wiring.buildApp> => {
+  const built = wiring.buildApp(config, {
+    tenantSettings: wiring.testTenantSettings({ MODAL_TOKEN_ID: "test-id", MODAL_TOKEN_SECRET: "test-secret" }),
+    ...overrides,
+  });
   void inTestTenant(() => built.featureFlags.setEnabled("swarms", `org:${orgId()}`, true, "test"));
   return built;
 };
@@ -60,7 +63,8 @@ test.after(() => fake.cleanup());
 
 for (const kind of ["command", "security-screen"] as const) {
   test(`workers require their own approval instead of inheriting root-session ${kind} grants`, async () => {
-    const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+    const built = buildApp(testConfig());
+    await inTestTenant(() => built.identity.ready());
     const request: TurnRequest = {
       surface: "swarm",
       actor: { externalId: "U1" },
@@ -133,11 +137,8 @@ for (const kind of ["command", "security-screen"] as const) {
 }
 
 test("wired swarm outbox drives the real orchestrator, durable runs, and authenticated session viewer", async () => {
-  const built = buildApp(
-    testConfig({
-      modalSandbox: { tokenId: "test-id", tokenSecret: "test-secret" },
-    }),
-  );
+  const built = buildApp(testConfig());
+  await inTestTenant(() => built.identity.ready());
   try {
     const rootTurn = await inTestTenant(() =>
       built.app.turn({
@@ -215,18 +216,18 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
 });
 
 test("HTTP root spawns three peers and receives their replies using real orchestrator-issued credentials", async () => {
-  const databaseUrl = testDatabaseUrl();
+  const databaseUrl = testMigratedDatabaseUrl();
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: ownerUrlOf(databaseUrl) });
   const config = testConfig({
     databaseUrl,
-    modalSandbox: { tokenId: "test", tokenSecret: "test" },
     signingSecret: "swarm-http-source-signing-key-distinct",
     portalIdentitySecret: "swarm-http-portal-identity-key-distinct",
     apiBaseUrl: "http://core.test",
   });
   let errorsAfterStop: number;
   let built = buildApp(config);
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
   const tokenCommand = "printf '%s' \"$AGENT_API_TOKEN\"";
   const issuedTokens = new Map<string, string>();
   const captureIssuedTokens = () => {
@@ -451,6 +452,7 @@ test("HTTP root spawns three peers and receives their replies using real orchest
 
 test("unbound request fields cannot claim verified swarm provenance", async () => {
   const built = buildApp(testConfig());
+  await inTestTenant(() => built.identity.ready());
   const before = screenedPayloads.length;
   try {
     const request: TurnRequest & { verifiedSwarm: boolean } = {
@@ -478,6 +480,8 @@ test("unbound request fields cannot claim verified swarm provenance", async () =
 
 test("a resolved command approval informs the model without changing its requested command", async () => {
   const built = buildApp(testConfig());
+  await inTestTenant(() => built.identity.ready());
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
   const sandbox = await inTestTenant(() => built.sandboxResources.create("U1", "personal:U1", "sprites"));
   await inTestTenant(() => built.sandboxResources.setDefault("U1", "personal:U1", sandbox.id));
   const request: TurnRequest = {
@@ -533,6 +537,7 @@ test("a resolved command approval informs the model without changing its request
 
 test("disabled swarms park queued notifications once without running the model or writing failures", async () => {
   const built = buildApp(testConfig({ swarmsEnabled: false }));
+  await inTestTenant(() => built.identity.ready());
   try {
     const rootTurn = await inTestTenant(() =>
       built.app.turn({
@@ -616,7 +621,8 @@ test("swarms stay off for a person until the swarms flag names their personal sc
 });
 
 test("a goal assigned at spawn becomes the worker's session goal and its turn has no swarm deadline", async () => {
-  const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  const built = buildApp(testConfig());
+  await inTestTenant(() => built.identity.ready());
   try {
     const rootComputer = await inTestTenant(() =>
       built.sandboxResources.create("U1", "personal:U1", "sprites", "Root"),
@@ -665,7 +671,8 @@ test("a goal assigned at spawn becomes the worker's session goal and its turn ha
 });
 
 test("a worker with an open goal answers messages as a goal turn without the swarm turnMs deadline", async () => {
-  const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  const built = buildApp(testConfig());
+  await inTestTenant(() => built.identity.ready());
   try {
     const rootComputer = await inTestTenant(() =>
       built.sandboxResources.create("U1", "personal:U1", "sprites", "Root"),
@@ -721,7 +728,8 @@ test("a worker with an open goal answers messages as a goal turn without the swa
 });
 
 test("a worker's wake:false reply waits in the root's mailbox and reaches the root's next human turn once", async () => {
-  const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  const built = buildApp(testConfig());
+  await inTestTenant(() => built.identity.ready());
   try {
     const rootComputer = await inTestTenant(() =>
       built.sandboxResources.create("U1", "personal:U1", "sprites", "Root"),

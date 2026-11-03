@@ -1,5 +1,5 @@
 import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { claimAcrossTenants, rowTenant, type Claimed } from "../tenants/claim.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
@@ -89,36 +89,38 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
   };
 }
 
+export const PROCESS_REGISTRY_MIGRATIONS: readonly PgMigrationDefinition[] = [
+  TENANCY_BASE,
+  {
+    id: "processes/registry/0001",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS process_sessions(
+      process_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, kind TEXT NOT NULL,
+      command TEXT NOT NULL, started_at BIGINT NOT NULL, expires_at BIGINT NOT NULL,
+      status TEXT NOT NULL
+    )`,
+      `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS session_ref TEXT`,
+      `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS run_id TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_proc_scope_status ON process_sessions(scope_id, status)`,
+    ],
+  },
+  {
+    id: "processes/registry/0002",
+    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS sandbox_id TEXT"],
+  },
+  {
+    id: "processes/registry/0003",
+    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS purpose TEXT"],
+  },
+  {
+    id: "processes/registry/0004",
+    statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS credential_files JSONB"],
+  },
+  tenantTables("processes/registry/0005-tenants", [{ table: "process_sessions", primaryKey: "process_id" }]),
+];
+
 export function createPostgresProcessRegistry(connectionString: string): ProcessRegistry {
-  const pg = createPgPool(connectionString, [
-    TENANCY_BASE,
-    {
-      id: "processes/registry/0001",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS process_sessions(
-        process_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, kind TEXT NOT NULL,
-        command TEXT NOT NULL, started_at BIGINT NOT NULL, expires_at BIGINT NOT NULL,
-        status TEXT NOT NULL
-      )`,
-        `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS session_ref TEXT`,
-        `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS run_id TEXT`,
-        `CREATE INDEX IF NOT EXISTS idx_proc_scope_status ON process_sessions(scope_id, status)`,
-      ],
-    },
-    {
-      id: "processes/registry/0002",
-      statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS sandbox_id TEXT"],
-    },
-    {
-      id: "processes/registry/0003",
-      statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS purpose TEXT"],
-    },
-    {
-      id: "processes/registry/0004",
-      statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS credential_files JSONB"],
-    },
-    tenantTables("processes/registry/0005-tenants", [{ table: "process_sessions", primaryKey: "process_id" }]),
-  ]);
+  const pg = createPgPool(connectionString, PROCESS_REGISTRY_MIGRATIONS);
   const { q } = pg;
   return {
     async register(rec) {

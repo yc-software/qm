@@ -1,5 +1,4 @@
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,7 +10,7 @@ import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const org = scopeId("org", "default-org");
 const internalActor = { externalId: "U1" };

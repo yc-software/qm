@@ -1,8 +1,8 @@
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
+import { testTenants, inTestTenant } from "./support/test-tenants.ts";
 import { testConfig } from "./support/test-config.ts";
 import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
 import { resolveBrowserModel } from "../src/model/browser-model.ts";
@@ -10,6 +10,9 @@ import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/br
 import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
 import { zeroUsage } from "../src/model/model-runtime.ts";
 import { stopAtEnd } from "./support/build-app.ts";
+import { test } from "./support/test-tenants.ts";
+
+const [TEST_TENANT] = testTenants();
 
 test("browser follows durable user AI access and personal model defaults", async () => {
   const built = stopAtEnd(buildApp(testConfig()));
@@ -162,8 +165,11 @@ test("Claude subscription browser requests fail without deriving or sending cred
 
 test("personal API keys bypass organization provider endpoint overrides", async (t) => {
   const built = stopAtEnd(buildApp(testConfig()));
-  setProviderBaseUrls({ openai: "https://organization.invalid/v1", anthropic: "https://organization.invalid" });
-  t.after(() => setProviderBaseUrls({}));
+  setProviderBaseUrls(TEST_TENANT, {
+    openai: "https://organization.invalid/v1",
+    anthropic: "https://organization.invalid",
+  });
+  t.after(() => setProviderBaseUrls(TEST_TENANT, {}));
   for (const provider of ["openai", "anthropic"] as const) {
     await built.userModelCredentials.setApiKey("U1", provider, `personal-${provider}`);
     await built.config.setPersonalModelAuth("U1", true, provider);
@@ -209,18 +215,13 @@ test("company ChatGPT subscription auth uses the native subscription transport w
   const claims = Buffer.from(
     JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company" } }),
   ).toString("base64url");
-  const built = stopAtEnd(
-    buildApp(
-      testConfig({
-        codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL,
-        openaiApiKey: "must-not-fallback",
-      }),
-    ),
-  );
+  const built = stopAtEnd(buildApp(testConfig()));
   await saveCompanyChatGPTLogin(built.keychain, {
     auth_mode: "chatgpt",
     tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
   });
+  await inTestTenant(() => built.tenantSettings.update({ CODEX_AUTH_CREDENTIAL: COMPANY_CHATGPT_CREDENTIAL }));
+  await inTestTenant(() => built.modelCredentials.set("openai", "must-not-fallback", "admin"));
   const selection = { account: "company" as const, model: "gpt-5.6-sol", routing: null };
   const keys = await built.resolveBrowserCompanyKeys();
   assert.equal(keys["openai-codex"], "company-access");

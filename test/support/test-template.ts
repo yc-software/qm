@@ -9,7 +9,7 @@ if (import.meta.main) {
   if (mode === "tenants") {
     await seedTestTenants(databaseUrl);
   } else {
-    const { runtime } = buildApp({ anthropicApiKey: "test-anthropic-key", ...testConfig({ databaseUrl }) });
+    const { runtime } = buildApp(testConfig({ databaseUrl }));
     await migrateRegisteredPgSchemas(databaseUrl);
     await runtime.stop();
   }

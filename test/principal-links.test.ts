@@ -1,6 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 
-import { describe, it, before, after, afterEach } from "node:test";
+import { describe, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,7 +32,7 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+import { it, inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
@@ -206,7 +206,12 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     });
     const saved = await keychain.save({ ownerId: OIDC, service: "github", secret: "ghp_x", envKey: "GITHUB_TOKEN" });
     assert.equal(saved.ownerId, EMAIL);
-    const rotated = await keychain.save({ ownerId: EMAIL, service: "github", secret: "ghp_y", envKey: "GITHUB_TOKEN" });
+    const rotated = await keychain.save({
+      ownerId: EMAIL,
+      service: "github",
+      secret: "ghp_y",
+      envKey: "GITHUB_TOKEN",
+    });
     assert.equal(rotated.id, saved.id, "the same person saving the same service rotates one record");
     assert.equal(await keychain.readOwnSecret(OIDC, saved.id), "ghp_y");
     const legacy = await keychain.save({ ownerId: EMAIL, service: "linear", secret: "lin_x", envKey: "LINEAR_KEY" });
@@ -489,7 +494,7 @@ describe("link mutation serialization", () => {
         const identity = createIdentityService(store, {
           externalMembers: testMap(),
           principalLinks: links,
-          directorySyncProtected: ["B"],
+          directorySyncProtected: async () => ["B"],
         });
         await identity.refresh();
         assert.equal(identity.classify("B").type, "guest");

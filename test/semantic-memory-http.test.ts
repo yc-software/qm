@@ -9,7 +9,7 @@ import type { MemoryService } from "../src/memory/memory-service.ts";
 import assert from "node:assert/strict";
 import { createServer as httpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
@@ -90,16 +90,13 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   });
   const providerUrl = await listen(provider);
   t.after(() => close(provider));
-  const built = buildApp(
-    testConfig({
-      memoryStrategy: "agent-only",
-      databaseUrl,
-      providerBaseUrls: { openai: providerUrl },
-      openaiApiKey: "test-key",
-    }),
-  );
+  const built = buildApp(testConfig({ memoryStrategy: "agent-only", databaseUrl }), {
+    tenantSettings: testTenantSettings({ OPENAI_BASE_URL: providerUrl }),
+  });
   databaseFixture.stop = () => built.runtime.stop();
   await migrateRegisteredPgSchemas(databaseUrl);
+  await inTestTenant(() => built.tenantSettings.get());
+  await inTestTenant(() => built.modelCredentials.set("openai", "test-key", "admin"));
   await inTestTenant(async () => {
     await built.memory.capture("personal:unconfigured", ["a fact before model configuration"], Date.now());
     await built.memory.recall("personal:unconfigured", { query: "no model configured" });
@@ -225,16 +222,14 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   });
   const providerUrl = await listen(provider);
   t.after(() => close(provider));
-  const built = buildApp(
-    testConfig({
-      sharingPosture: "open",
-      memoryStrategy: "agent-only",
-      databaseUrl,
-      providerBaseUrls: { openai: providerUrl },
-      openaiApiKey: "test",
-    }),
-  );
+  const built = buildApp(testConfig({ memoryStrategy: "agent-only", databaseUrl }), {
+    tenantSettings: testTenantSettings({ OPENAI_BASE_URL: providerUrl }),
+  });
   databaseFixture.stop = () => built.runtime.stop();
+  await migrateRegisteredPgSchemas(databaseUrl);
+  await inTestTenant(() => built.tenantSettings.get());
+  await inTestTenant(() => built.modelCredentials.set("openai", "test", "admin"));
+  await built.config.setSharingPosture("org:default-org", "open");
   const personal = "personal:U1",
     room = "channel:C1",
     denied = "channel:C2";

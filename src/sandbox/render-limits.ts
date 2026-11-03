@@ -21,3 +21,10 @@ export function parseRenderSandboxImage(ref: string): RenderBaseImage {
     throw new Error(`Render sandbox image must be <repository>:<tag>@sha256:<digest>, got ${ref}`);
   return { ref, source, digest, name: `qm-${repository.slice(repository.lastIndexOf("/") + 1)}-${tag.slice(0, 7)}` };
 }
+
+export function renderSandboxProblem(workspaceStore: string, defaultTimeoutSec = 600): string | undefined {
+  if (workspaceStore !== "postgres") return "render requires WORKSPACE_STORE=postgres";
+  if (defaultTimeoutSec + 60 >= RENDER_SANDBOX_TTL_SEC)
+    return `SANDBOX_TIMEOUT_SEC must stay more than 60 seconds below the ${RENDER_SANDBOX_TTL_SEC} second Render sandbox lifetime`;
+  return undefined;
+}

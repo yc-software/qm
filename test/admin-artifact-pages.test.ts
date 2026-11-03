@@ -484,6 +484,7 @@ test("the skills list + detail link an imported skill to its pack; built-in/pers
 test("admin cron runtime edits preserve task authority and reject unavailable or out-of-scope choices", async () => {
   const s = start();
   try {
+    await inTestTenant(() => s.built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
     const cron = await inTestTenant(() =>
       s.built.crons.create({
         ownerScopeId: "personal:U1",

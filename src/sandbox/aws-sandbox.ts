@@ -1,3 +1,4 @@
+import { tenantKeyedMap } from "./exec-sandbox-base.ts";
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { orgId as configOrgId } from "../config.ts";
@@ -85,8 +86,8 @@ export interface AwsSandboxOptions extends BlobStagingOptions {
   diskGb?: number;
   store: DurableMap<StoredMicrovm>;
   advisoryLock: AdvisoryLock;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
   api?: AwsMicrovmApi;
   s3?: Pick<S3Client, "send">;
@@ -127,12 +128,12 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
   const cpus = opts.cpus ?? 4;
   const memoryMb = opts.memoryMb ?? 8192;
   const diskGb = opts.diskGb ?? 8;
-  const credentialPaths = opts.credentialPaths ?? [];
+  const credentialPaths = () => opts.credentialPaths?.() ?? [];
 
-  const endpointById = new Map<string, string>();
-  const scopeByMicrovm = new Map<string, string>();
-  const scratchByKey = new Map<string, BodyRef>();
-  const activeByMicrovm = new Map<string, number>();
+  const endpointById = tenantKeyedMap<string>();
+  const scopeByMicrovm = tenantKeyedMap<string>();
+  const scratchByKey = tenantKeyedMap<BodyRef>();
+  const activeByMicrovm = tenantKeyedMap<number>();
 
   function reportError(category: string, code: string, message: string, scopeLabel?: string): void {
     onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
@@ -179,7 +180,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     label: "aws",
     homeDir: HOME_DIR,
     homeTarPath: HOME_TAR,
-    prunePaths: [...SNAPSHOT_PRUNE, ...ephemeralCredLinkPaths(credentialPaths).map(({ rel }) => `./${rel}`)],
+    prunePaths: () => [...SNAPSHOT_PRUNE, ...ephemeralCredLinkPaths(credentialPaths()).map(({ rel }) => `./${rel}`)],
     store: createS3SnapshotStore({ bucket: opts.s3Bucket, prefix: s3Prefix, s3, keyFor: s3KeyFor }),
     io: {
       runCommand: async (id, script, timeoutMs) => {
@@ -337,11 +338,11 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
           "python3",
           "gh",
           "aws (CLI v2)",
-          ...(opts.extraTools ?? []),
+          ...(opts.extraTools?.() ?? []),
         ]);
       },
       get notInstalled() {
-        return visibleNotInstalled(["gcloud", "kubectl", "glab"], opts.extraTools ?? []);
+        return visibleNotInstalled(["gcloud", "kubectl", "glab"], opts.extraTools?.() ?? []);
       },
       cpus,
       memoryMb,
@@ -371,7 +372,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: HOME_DIR,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(credentialPaths).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(credentialPaths()).map(({ rel }) => rel),
   });
 
   const blobStaging = createBackendBlobStaging("aws", (id, script, t) => execRaw(id, script, t), opts);
@@ -439,7 +440,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       try {
         const prepared = await execRaw(
           id,
-          `mkdir -p ${shq(WORKSPACE_DIR)} && ${ephemeralCredLinkScript(HOME_DIR, credentialPaths)}`,
+          `mkdir -p ${shq(WORKSPACE_DIR)} && ${ephemeralCredLinkScript(HOME_DIR, credentialPaths())}`,
           PREP_TIMEOUT_SEC,
         );
         if (prepared.code !== 0)
@@ -502,7 +503,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       activeByMicrovm.delete(handle.id);
 
       if (handle.scratch) {
-        for (const [k, ref] of scratchByKey) if (ref.microvmId === handle.id) scratchByKey.delete(k);
+        for (const [k, ref] of scratchByKey.entries()) if (ref.microvmId === handle.id) scratchByKey.delete(k);
         if (tdOpts?.destroy) await api.terminate(handle.id);
         else await api.terminate(handle.id).catch(swallowAs("aws-sandbox: scratch terminate", undefined));
         client.evict(handle.id);

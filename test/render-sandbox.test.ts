@@ -380,11 +380,16 @@ test("Render turns share one computer through the sandbox router", { timeout: 60
     records: testMap(),
     defaults: testMap(),
     backends: { render },
-    defaultBackend: "render",
+    defaultBackend: async () => "render",
     lock: advisoryLock,
     canUseScope: async () => true,
   });
-  const router = createSandboxRouter({ backends: { render }, defaultBackend: "render", resources });
+  const router = createSandboxRouter({
+    usableBackends: async () => ["render"],
+    backends: { render },
+    defaultBackend: async () => "render",
+    resources,
+  });
   const record = await resources.create("tester", scope, "render");
   await resources.setDefault("tester", scope, record.id);
   const first = await router.provision(layers);

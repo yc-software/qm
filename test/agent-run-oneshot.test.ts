@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { createServer } from "node:http";
@@ -23,12 +22,15 @@ import {
 } from "../src/agent/agent-run.ts";
 import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel, resolveModel } from "../src/model/pi-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
+import { defaultModelFor } from "../src/model/tenant-models.ts";
+import { parseTenantSettings } from "../src/tenants/settings-parse.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import type { SessionEntry } from "../src/types.ts";
 import type { DetectInput, TurnLlmRequestRecord } from "../src/agent/agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 import { sanitizeLlmPayload, trimPayloadToByteBudget, transportFromModel } from "../src/agent/provider-payload.ts";
+import { test } from "./support/test-tenants.ts";
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
@@ -112,16 +114,6 @@ test("seedRawMessagesIntoSession is a no-op for empty input and degrades gracefu
 test("agentConfigOptions maps every Config knob the agent consumes, field by field", () => {
   const opts = agentConfigOptions(
     testConfig({
-      modelId: "model-base",
-      detectModelId: "model-detect",
-      titleModelId: "model-title",
-      anthropicApiKey: "sk-test",
-      modelGateway: {
-        url: "http://gateway.internal:8080",
-        apiKey: "gateway-key",
-        apiKeyHeader: "api-key",
-        models: { "claude-opus-5": "router/opus" },
-      },
       captureLlmRequests: false,
 
       signingSecret: "sek",
@@ -135,16 +127,6 @@ test("agentConfigOptions maps every Config knob the agent consumes, field by fie
     }),
   );
   assert.deepEqual(opts, {
-    defaultModelId: "model-base",
-    detectModelId: "model-detect",
-    titleModelId: "model-title",
-    apiKey: "sk-test",
-    modelGateway: {
-      url: "http://gateway.internal:8080",
-      apiKey: "gateway-key",
-      apiKeyHeader: "api-key",
-      models: { "claude-opus-5": "router/opus" },
-    },
     captureRequests: false,
     sandboxResources: true,
     controlTools: true,
@@ -175,10 +157,10 @@ test("agentConfigOptions leaves controlTools off unless a self-API (signing secr
   );
 });
 
-test("agentConfigOptions carries the deployment provider into Pi auxiliary model selection", () => {
-  const opts = agentConfigOptions(testConfig({ modelProvider: "openai", openaiApiKey: "sk-openai-test" }));
-  assert.equal(opts.defaultModelId, "gpt-6.1-sol");
-  assert.equal(auxiliaryModelFor(opts.defaultModelId!), "gpt-5.6-luna");
+test("the tenant's model provider carries into Pi auxiliary model selection", () => {
+  const defaultModelId = defaultModelFor(parseTenantSettings({ MODEL_PROVIDER: "openai" }));
+  assert.equal(defaultModelId, "gpt-6.1-sol");
+  assert.equal(auxiliaryModelFor(defaultModelId), "gpt-5.6-luna");
 });
 
 test("Pi title generation returns no title without an auxiliary-model credential", async () => {
@@ -209,12 +191,12 @@ test("Pi title generation surfaces provider failures to its caller", async (t) =
   const agent = createAgent({
     defaultModelId: "claude-opus-4-8",
     titleModelId: "claude-haiku-4-5",
-    modelGateway: {
+    resolveModelGateway: async () => ({
       url: `http://127.0.0.1:${address.port}`,
       apiKey: "gateway-key",
       apiKeyHeader: "api-key",
       models: { "claude-haiku-4-5": "title-model" },
-    },
+    }),
   });
 
   await assert.rejects(agent.generateTitle!("User:\nInvestigate the deploy"));
@@ -240,7 +222,11 @@ test("Pi title generation rejects a reply-shaped answer with the rule that fired
           },
         },
         { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sorry, I can't summarize that" } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Sorry, I can't summarize that" },
+        },
         { type: "content_block_stop", index: 0 },
         {
           type: "message_delta",
@@ -269,12 +255,12 @@ test("Pi title generation rejects a reply-shaped answer with the rule that fired
   const agent = createAgent({
     defaultModelId: "claude-opus-4-8",
     titleModelId: "claude-haiku-4-5",
-    modelGateway: {
+    resolveModelGateway: async () => ({
       url: `http://127.0.0.1:${address.port}`,
       apiKey: "gateway-key",
       apiKeyHeader: "api-key",
       models: { "claude-haiku-4-5": "title-model" },
-    },
+    }),
   });
 
   await assert.rejects(agent.generateTitle!("User:\nInvestigate the deploy"), {
@@ -333,12 +319,12 @@ test("Pi title generation accepts the prompted NONE sentinel without reporting a
   const agent = createAgent({
     defaultModelId: "claude-opus-4-8",
     titleModelId: "claude-haiku-4-5",
-    modelGateway: {
+    resolveModelGateway: async () => ({
       url: `http://127.0.0.1:${address.port}`,
       apiKey: "gateway-key",
       apiKeyHeader: "api-key",
       models: { "claude-haiku-4-5": "title-model" },
-    },
+    }),
   });
 
   assert.equal(await agent.generateTitle!("User:\nHello"), undefined);
@@ -403,12 +389,12 @@ async function detectAgainst(
   const agent = createAgent({
     defaultModelId: "claude-opus-4-8",
     detectModelId: "claude-haiku-4-5",
-    modelGateway: {
+    resolveModelGateway: async () => ({
       url: `http://127.0.0.1:${address.port}`,
       apiKey: "gateway-key",
       apiKeyHeader: "api-key",
       models: { "claude-haiku-4-5": "detect-model" },
-    },
+    }),
   });
   const rows: TurnLlmRequestRecord[] = [];
   const outcome = await agent.shouldRespond!({
@@ -455,7 +441,13 @@ test(
 
 test("agentConfigOptions omits the optional fields when the config leaves them unset", () => {
   const opts = agentConfigOptions(testConfig());
-  for (const key of ["defaultModelId", "detectModelId", "titleModelId", "apiKey"] as const) {
+  for (const key of [
+    "defaultModelId",
+    "detectModelId",
+    "titleModelId",
+    "resolveProviderKeys",
+    "resolveModelGateway",
+  ] as const) {
     assert.equal(key in opts, false, `${key} must be omitted, not undefined`);
   }
 });
@@ -625,7 +617,10 @@ test("oneShot routes configured models through the model gateway without mutatin
     modelId: "claude-haiku-4-5",
     headers: { "x-model-marker": "preserved" },
   });
-  const agent = createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway });
+  const agent = createAgent({
+    defaultModelId: "claude-haiku-4-5",
+    resolveModelGateway: async () => modelGateway,
+  });
   const compact = agent.compactHistory!;
   const input: Parameters<typeof compact>[0] = {
     session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],

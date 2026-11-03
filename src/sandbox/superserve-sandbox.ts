@@ -27,7 +27,7 @@ import {
 } from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import {
   SuperserveSandboxGoneError,
   type SuperserveClient,
@@ -116,8 +116,8 @@ export interface SuperserveSandboxOptions extends BlobStagingOptions {
   retentionSec?: number;
   egressAllow?: string[];
   egressDeny?: string[];
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
   store: DurableMap<StoredSuperserveSandbox>;
   advisoryLock: AdvisoryLock;
@@ -154,7 +154,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
   const lockKey = (scope: string): string => `superserve-provision:${scope}`;
   const provisionQueue = createKeyedQueue<string>();
 
-  const liveByName = new Map<string, Live>();
+  const liveByName = tenantKeyedMap<Live>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
@@ -471,11 +471,11 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
           "claude",
           "codex",
           "x-api",
-          ...(opts.extraTools ?? []),
+          ...(opts.extraTools?.() ?? []),
         ]);
       },
       get notInstalled() {
-        return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+        return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools?.() ?? []);
       },
       homeDir: configuredHome,
       workdir: workspaceDirOf(configuredHome),
@@ -507,7 +507,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: configuredHome,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => rel),
   });
 
   const blobStaging = createBackendBlobStaging("superserve", (id, script, t) => execRaw(id, script, t), opts);
@@ -582,7 +582,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
           const prepare = async (): Promise<SandboxHandle> => {
             assertCurrent(handle);
             if (!(await ownsGuest(name))) return handle;
-            const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? [])}`;
+            const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths?.() ?? [])}`;
             const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, PREP_TIMEOUT_SEC);
             if (prep.code !== 0)
               throw new Error(`superserve provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);

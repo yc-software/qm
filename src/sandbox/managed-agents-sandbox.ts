@@ -25,7 +25,7 @@ import {
 } from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { hasParentPathSegment, visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import {
   ManagedAgentsCommandLostError,
   ManagedAgentsSandboxGoneError,
@@ -89,8 +89,8 @@ export interface ManagedAgentsSandboxOptions extends BlobStagingOptions {
   defaultTimeoutSec?: number;
   snapshotIntervalMs?: number;
   egressProxyUrl?: string;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
   store: DurableMap<StoredManagedAgentsSandbox>;
   snapshots?: HomeSnapshotStore;
@@ -106,7 +106,7 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
   const store = opts.store;
   const provisionQueue = createKeyedQueue<string>();
 
-  const sessionByName = new Map<string, ManagedAgentsSession>();
+  const sessionByName = tenantKeyedMap<ManagedAgentsSession>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
@@ -120,9 +120,9 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
         label: "do-managed-agents",
         homeDir: HOME_DIR,
         homeTarPath: HOME_TAR,
-        prunePaths: [
+        prunePaths: () => [
           ...SNAPSHOT_PRUNE,
-          ...ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => `./${rel}`),
+          ...ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => `./${rel}`),
         ],
         store: opts.snapshots,
         io: {
@@ -314,12 +314,12 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
       os: "Linux — DigitalOcean Managed Agents Firecracker microVM (provider pause preserves state; publish durable work to git or Files)",
       runtimes: ["Node", "Python 3"],
       get tools() {
-        return visibleTools(["git", "curl", "tar", "python3", ...(opts.extraTools ?? [])]);
+        return visibleTools(["git", "curl", "tar", "python3", ...(opts.extraTools?.() ?? [])]);
       },
       get notInstalled() {
         return visibleNotInstalled(
           ["jq", "rg", "unzip", "wget", "gh", "aws", "gcloud", "kubectl", "flyctl", "glab"],
-          opts.extraTools ?? [],
+          opts.extraTools?.() ?? [],
         );
       },
       homeDir: HOME_DIR,
@@ -375,7 +375,7 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: HOME_DIR,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => rel),
   });
 
   const blobStaging = createBackendBlobStaging("do-managed-agents", (id, script, t) => execRaw(id, script, t), opts);
@@ -441,7 +441,7 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
       };
 
       try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
+        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths?.() ?? [])}`;
         const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
           throw new Error(`do-managed-agents provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);

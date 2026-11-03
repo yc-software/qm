@@ -1,4 +1,5 @@
 import { swallowAs } from "../util/errors.ts";
+import { foldPrincipalId } from "../types.ts";
 
 export interface PrincipalLinkResolver {
   canonical(key: string): string | undefined;
@@ -9,11 +10,6 @@ let links: PrincipalLinkResolver | null = null;
 
 export function installPrincipalLinks(resolver: PrincipalLinkResolver | null): void {
   links = resolver;
-}
-
-export function foldPrincipalId(id: string | null | undefined): string {
-  const s = (id ?? "").trim();
-  return s.includes("@") ? s.toLowerCase() : s;
 }
 
 export function canonicalPerson(id: string): string {

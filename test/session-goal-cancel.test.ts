@@ -51,6 +51,7 @@ for (const status of ["active", "paused"] as const) {
     await inTestTenant(async () => {
       const session = await sessionWithGoal(built, `web:U1:${status}`, status);
 
+      await built.identity.ready();
       assert.equal(await built.app.cancelSessionGoal(session.id, "U2"), null, "a non-participant cannot cancel");
       await built.sessions.addParticipant(session.id, "U2");
       assert.equal(
@@ -99,6 +100,7 @@ for (const status of ["active", "paused"] as const) {
 for (const status of ["active", "paused"] as const) {
   test(`cancelling a ${status} goal while a turn runs lands after that turn's own final goal save`, async () => {
     const built = freshApp();
+    await inTestTenant(() => built.identity.ready());
     const ref = `web:U1:running-${status}`;
     const session = await inTestTenant(async () => {
       const session = await sessionWithGoal(built, ref, status);
@@ -141,6 +143,7 @@ for (const status of ["active", "paused"] as const) {
 
 test("cancelling with no open goal touches nothing", async () => {
   const built = freshApp();
+  await inTestTenant(() => built.identity.ready());
   const ref = "web:U1:none";
   const session = await inTestTenant(async () => {
     const session = await built.sessions.getOrCreateByThread(ref, "dm", "personal:U1");

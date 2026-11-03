@@ -1,4 +1,5 @@
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { misconfiguredSandboxError, type MisconfiguredSandboxBackends } from "./tenant-credentials.ts";
 import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -6,6 +7,7 @@ import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } fro
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
+import { perTenant } from "../tenants/context.ts";
 
 export interface SandboxResource {
   id: string;
@@ -44,10 +46,11 @@ interface SandboxProviderProfile {
   spec?: AgentComputerSpec;
   egressEnforcement?: EgressEnforcement;
   actions: string[];
+  unavailable?: string;
 }
 
 export interface SandboxResources {
-  profiles(): SandboxProviderProfile[];
+  profiles(): Promise<SandboxProviderProfile[]>;
   forTurn(turn: { actorId: string; scopeId: ScopeId; isCurrent: () => Promise<boolean> }): SandboxResources;
   initialize(): Promise<void>;
   list(
@@ -79,7 +82,7 @@ export interface SandboxResources {
   setDefault(actorId: string, scopeId: ScopeId, id: string | null): Promise<void>;
   resolve(scopeId: ScopeId): Promise<SandboxResource | null>;
   get(id: string): Promise<SandboxResource>;
-  defaultBackend(): SandboxBackendName;
+  defaultBackend(): Promise<SandboxBackendName>;
 }
 
 export class SandboxAccessError extends Error {}
@@ -105,21 +108,24 @@ export function createSandboxResources(opts: {
   records: DurableMap<SandboxResource>;
   defaults: DurableMap<SandboxDefault>;
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
-  defaultBackend: SandboxBackendName;
+  defaultBackend: () => Promise<SandboxBackendName>;
+  usableBackends?: () => Promise<readonly SandboxBackendName[]>;
+  misconfigured?: MisconfiguredSandboxBackends;
   provisionOptions?: (scopeId: string) => Promise<ProvisionOptions>;
   beforeDefaultChange?: (scopeId: string) => Promise<void>;
   beforeRetire?: (record: SandboxResource) => Promise<void>;
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
 }): SandboxResources {
-  let upgraded: Promise<void> | undefined;
+  const upgrade = perTenant<{ done?: Promise<void> }>(() => ({}));
   const initialize = async (): Promise<void> => {
     if (!opts.upgrade) return;
-    upgraded ??= opts.upgrade().catch((error: unknown) => {
-      upgraded = undefined;
+    const state = upgrade();
+    state.done ??= opts.upgrade().catch((error: unknown) => {
+      state.done = undefined;
       throw error;
     });
-    await upgraded;
+    await state.done;
   };
   const actionsFor = (backend: Sandbox | undefined): string[] => {
     if (!backend) return [];
@@ -167,15 +173,24 @@ export function createSandboxResources(opts: {
       return action();
     });
   };
-  const profiles = (): SandboxProviderProfile[] =>
-    (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
-      .filter(([, backend]) => !!backend)
+  const usable = async (): Promise<readonly SandboxBackendName[]> =>
+    (await opts.usableBackends?.()) ?? (Object.keys(opts.backends) as SandboxBackendName[]);
+  const profiles = async (): Promise<SandboxProviderProfile[]> => {
+    const allowed = await usable();
+    return (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
+      .filter(([name, backend]) => !!backend && allowed.includes(name))
       .map(([name, backend]) => ({
         name,
         ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
         ...(backend.profile.egressEnforcement ? { egressEnforcement: backend.profile.egressEnforcement } : {}),
         actions: actionsFor(backend),
-      }));
+      }))
+      .concat(
+        (Object.entries(opts.misconfigured ?? {}) as Array<[SandboxBackendName, string]>)
+          .filter(([name]) => allowed.includes(name))
+          .map(([name, unavailable]) => ({ name, actions: [], unavailable })),
+      );
+  };
   return {
     profiles,
     forTurn: (turn) =>
@@ -184,7 +199,7 @@ export function createSandboxResources(opts: {
         canUseScope: async (actorId, scopeId) =>
           withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
-    defaultBackend: () => opts.defaultBackend,
+    defaultBackend: opts.defaultBackend,
     initialize,
     get,
     use,
@@ -274,13 +289,19 @@ export function createSandboxResources(opts: {
         sandboxes,
         defaultSandboxId: route?.sandboxId ?? null,
         defaultMode: route?.sandboxId ? "selected" : "none",
-        providers: profiles(),
+        providers: await profiles(),
       };
     },
     async create(actorId, scopeId, backend, name, reservationId, jobOnly) {
       await initialize();
       await authorize(actorId, scopeId);
-      if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
+      const misconfigured = opts.misconfigured?.[backend as SandboxBackendName];
+      if (misconfigured) throw misconfiguredSandboxError(backend, misconfigured);
+      if (
+        !Object.hasOwn(opts.backends, backend) ||
+        !opts.backends[backend as SandboxBackendName] ||
+        !(await usable()).includes(backend as SandboxBackendName)
+      )
         throw new Error(`sandbox backend unavailable: ${backend}`);
       if (jobOnly && !opts.backends[backend as SandboxBackendName]?.destroyScope)
         throw new Error(

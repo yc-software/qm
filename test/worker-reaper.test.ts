@@ -1,5 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,8 +20,7 @@ import { testConfig } from "./support/test-config.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { tenantTest as test } from "./support/test-tenants.ts";
-import { withoutTenant } from "../src/tenants/context.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -43,14 +43,14 @@ const turn: OrchestratorInput = {
 test("reaper requeues a run whose lease expired (crashed worker)", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
-  await withoutTenant(() => runs.claim("dead-worker", 10));
+  await runs.claim("dead-worker", 10);
   await sleep(30);
 
   const reaper = createReaper(runs, {
     ...singleProcessDeps(),
     intervalMs: 60_000,
   });
-  const swept = await withoutTenant(() => reaper.sweep());
+  const swept = await reaper.sweep();
   assert.equal(swept.requeued, 1);
   assert.equal(swept.parked, 0);
   assert.equal((await runs.get(r.id))?.status, "pending", "expired run is back on the queue");
@@ -60,13 +60,13 @@ test("a run parks once the ERROR budget (error_attempts) is exhausted", async ()
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 })).run;
 
-  let claimed = await withoutTenant(() => runs.claim("w1", 10_000));
+  let claimed = await runs.claim("w1", 10_000);
   let failed = await runs.fail(r.id, claimed!.leaseToken!, "boom", { retry: true });
   assert.equal(failed.requeued, true, "first error requeues");
   assert.equal((await runs.get(r.id))?.status, "pending");
   assert.equal((await runs.get(r.id))?.errorAttempts, 1);
 
-  claimed = await withoutTenant(() => runs.claim("w2", 10_000));
+  claimed = await runs.claim("w2", 10_000);
   failed = await runs.fail(r.id, claimed!.leaseToken!, "boom again", { retry: true });
   assert.equal(failed.requeued, false, "second error parks");
   const parked = await runs.get(r.id);
@@ -85,9 +85,9 @@ test("repeated lease-expiry reaps requeue forever without spending the error bud
   });
 
   for (let i = 0; i < 5; i++) {
-    await withoutTenant(() => runs.claim("dead-worker", 10));
+    await runs.claim("dead-worker", 10);
     await sleep(20);
-    const swept = await withoutTenant(() => reaper.sweep());
+    const swept = await reaper.sweep();
     assert.equal(swept.requeued, 1, `reap ${i} requeues`);
     assert.equal(swept.parked, 0, `reap ${i} does not park`);
     const after = await runs.get(r.id);
@@ -106,17 +106,17 @@ test("with maxClaims set, repeated lease-expiry reaps PARK the poison pill inste
   });
 
   for (let i = 1; i <= 2; i++) {
-    await withoutTenant(() => runs.claim("dead-worker", 10));
+    await runs.claim("dead-worker", 10);
     await sleep(20);
-    const swept = await withoutTenant(() => reaper.sweep());
+    const swept = await reaper.sweep();
     assert.deepEqual(swept, { requeued: 1, parked: 0 }, `claim ${i} under the cap requeues`);
     assert.equal((await runs.get(r.id))?.errorAttempts, 0, "a reap never spends the error budget");
   }
 
-  await withoutTenant(() => runs.claim("dead-worker", 10));
+  await runs.claim("dead-worker", 10);
   assert.equal((await runs.get(r.id))?.attempts, 3, "third claim reaches the cap");
   await sleep(20);
-  const swept = await withoutTenant(() => reaper.sweep());
+  const swept = await reaper.sweep();
   assert.deepEqual(swept, { requeued: 0, parked: 1 }, "at the claim cap the poison pill is parked");
   const parked = await runs.get(r.id);
   assert.equal(parked?.status, "failed", "parked run is terminal failed (loud)");
@@ -128,11 +128,11 @@ test("a concrete error parks with its own message even when over the claim cap",
   const { runs } = createPostgresRunStore(testDatabaseUrl(), { maxClaims: 2 });
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 })).run;
 
-  let claimed = await withoutTenant(() => runs.claim("w1", 10_000));
+  let claimed = await runs.claim("w1", 10_000);
   let failed = await runs.fail(r.id, claimed!.leaseToken!, "first boom", { retry: true });
   assert.equal(failed.requeued, true);
 
-  claimed = await withoutTenant(() => runs.claim("w2", 10_000));
+  claimed = await runs.claim("w2", 10_000);
   assert.equal(claimed?.attempts, 2, "second claim reaches the cap");
   failed = await runs.fail(r.id, claimed!.leaseToken!, "real boom", { retry: true });
   assert.equal(failed.requeued, false, "over the claim cap, the error parks instead of requeuing");
@@ -145,7 +145,7 @@ test("a concrete error parks with its own message even when over the claim cap",
 test("only the leader instance's interval sweep reaps expired leases", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
-  await withoutTenant(() => runs.claim("dead-worker", 10));
+  await runs.claim("dead-worker", 10);
   await sleep(30);
 
   let leader = false;
@@ -174,7 +174,7 @@ test("only the leader instance's interval sweep reaps expired leases", async () 
 test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling)", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
-  await withoutTenant(() => runs.claim("dead-worker", 10));
+  await runs.claim("dead-worker", 10);
   await sleep(30);
   const denyAll: LeaderLease = {
     async hold() {
@@ -185,7 +185,7 @@ test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling
     intervalMs: 60_000,
     leaderLease: denyAll,
   });
-  const swept = await withoutTenant(() => reaper.sweep());
+  const swept = await reaper.sweep();
   assert.equal(swept.requeued, 1, "direct sweep() runs regardless of leadership");
   assert.equal((await runs.get(r.id))?.status, "pending");
 });
@@ -196,10 +196,10 @@ test("reapExpired fences the dead attempt before it requeues, so a zombie can ne
   const sessions = createPostgresSessionStore(url);
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const r = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
-  const claimed = await withoutTenant(() => runs.claim("dead-worker", 10));
+  const claimed = await runs.claim("dead-worker", 10);
   await sleep(30);
 
-  const swept = await withoutTenant(() => runs.reapExpired());
+  const swept = await runs.reapExpired();
   const replacement = await runs.claimById(r.id, "live-worker", 60_000);
   assert.ok(replacement?.leaseToken);
 
@@ -225,14 +225,14 @@ test("a heartbeat landing between SELECT and retire leaves the run untouched", a
   const { runs } = createPostgresRunStore(testDatabaseUrl());
 
   const r = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
-  const claimed = await withoutTenant(() => runs.claim("live-worker", 10));
+  const claimed = await runs.claim("live-worker", 10);
   assert.ok(claimed?.leaseToken);
   await sleep(30);
 
   assert.equal(await runs.heartbeat(r.id, claimed!.leaseToken!, 10_000), true, "live worker renews its lease");
 
   const reaper = createReaper(runs, { ...singleProcessDeps(), intervalMs: 60_000 });
-  const swept = await withoutTenant(() => reaper.sweep());
+  const swept = await reaper.sweep();
 
   assert.equal(swept.requeued, 0, "the renewed run is not requeued");
   assert.equal(swept.parked, 0, "the renewed run is not parked");
@@ -282,13 +282,13 @@ test("shutdown cancels before handback and holds the run until the turn unwinds"
   assert.equal(shutdownSignal?.aborted, true, "the turn can tell this cancellation apart from a user Stop");
   assert.equal(released, false, "handback waits for the cancellation checkpoint and finally block");
   assert.equal((await runs.get(enq.id))?.status, "running");
-  assert.equal(await withoutTenant(() => runs.claim("replacement", 5_000)), null);
+  assert.equal(await runs.claim("replacement", 5_000), null);
   const second = worker.releaseInFlight();
   unwind();
   await Promise.all([handback, second]);
   assert.equal((await runs.get(enq.id))?.status, "pending");
   assert.equal((await runs.get(enq.id))?.errorAttempts, 0);
-  const replacement = await withoutTenant(() => runs.claim("replacement", 5_000));
+  const replacement = await runs.claim("replacement", 5_000);
   assert.ok(replacement);
   await worker.releaseInFlight();
   assert.equal((await runs.get(enq.id))?.status, "running", "late shutdown cannot hand back the replacement's claim");
@@ -335,11 +335,7 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
   assert.equal(handedBack.leaseToken, null);
   assert.equal(handedBack.errorAttempts, 0);
   assert.deepEqual(handedBack.lastStop, { kind: "shutdown" });
-  assert.equal(
-    await withoutTenant(() => runs.claim("too-early", 5_000)),
-    null,
-    "nothing resumes the turn while the old process may live",
-  );
+  assert.equal(await runs.claim("too-early", 5_000), null, "nothing resumes the turn while the old process may live");
   const staleToken = attempts[0]!.runLeaseToken!;
 
   gate.resolve();
@@ -474,7 +470,7 @@ test("a thrown claim neither kills the worker loop nor blocks the drain handback
     ...store.runs,
     async claim(workerId: string, ttl: number) {
       if (explode-- > 0) throw new Error("pg down");
-      return withoutTenant(() => store.runs.claim(workerId, ttl));
+      return store.runs.claim(workerId, ttl);
     },
   };
   const enq = (await store.runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
@@ -886,7 +882,7 @@ test("buildApp captures human run outcomes through the shared terminal hook", as
     const request: OrchestratorInput = { ...turn, origin: { kind: "human" }, surface: "slack" };
     for (const result of [{ status: "ok" }, { status: "failed" }, { status: "ok", stopped: true }] as const) {
       await built.runs.enqueue({ sessionId: "t1", request });
-      const run = (await withoutTenant(() => built.runs.claim("worker", 10_000)))!;
+      const run = (await built.runs.claim("worker", 10_000))!;
       await built.runs.complete(run.id, run.leaseToken!, result);
     }
     assert.deepEqual(events, ["response_completed", "response_failed"]);
@@ -902,6 +898,7 @@ test("web admission and replay preserve analytics exclusions", async (t) => {
     return new Response("ok");
   });
   const built = buildApp(testConfig({ productAnalytics: { apiKey: "test-token" } }));
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
   try {
     for (const flag of ["analyticsSuppressed", "proactiveOpener"] as const) {
       for (const status of ["ok", "failed"] as const) {
@@ -963,7 +960,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
     await sleep(300);
     assert.equal(stopped, false, "stop waits for the inline step to unwind");
     assert.equal((await built.runs.get(running.id))?.leaseToken, running.leaseToken);
-    assert.equal(await withoutTenant(() => built.runs.claim("replacement", 5_000)), null);
+    assert.equal(await built.runs.claim("replacement", 5_000), null);
     gate.resolve();
     const result = await inline;
     await stopping;
@@ -975,7 +972,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
       assert.equal(handedBack.leaseToken, null);
       assert.equal(handedBack.errorAttempts, 0);
       assert.equal(handedBack.attempts, 1);
-      assert.equal((await withoutTenant(() => runs.claim("replacement", 5_000)))?.id, running.id);
+      assert.equal((await runs.claim("replacement", 5_000))?.id, running.id);
     });
   } finally {
     gate.resolve();

@@ -24,7 +24,9 @@ async function setup() {
   const built = buildApp(
     testConfig({ dataDir: mkdtempSync(join(tmpdir(), "own-cred-automation-")), signingSecret: "own-cred-test" }),
   );
+  await inTestTenant(() => built.identity.ready());
   await inTestTenant(() => selectDefaultSandbox(built, "U1", scopeId("personal", "U1"), scopeId("channel", "C1")));
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
   const credential = await inTestTenant(() =>
     built.keychain!.save({
       ownerId: "U1",

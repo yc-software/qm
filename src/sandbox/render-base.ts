@@ -5,6 +5,7 @@ import { sleep } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import type { RenderClient, RenderSnapshot } from "./render-client.ts";
 import { parseRenderSandboxImage } from "./render-limits.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 const BUILDER_LIFETIME_SEC = 3600;
 const PREPARE_POLL_MS = 15_000;
@@ -54,12 +55,13 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
   const waitMs = opts.waitMs ?? READY_WAIT_MS;
   const prepareMs = opts.prepareMs ?? PREPARE_POLL_MS;
   const retryMs = opts.retryMs ?? PREPARE_RETRY_MS;
-  let ownGolden: RenderGolden | undefined;
+  const ownGoldens = new Map<string, RenderGolden>();
+  const key = (): string => `${currentTenant()}/${image.digest}`;
 
   async function finish(snapshot: RenderSnapshot): Promise<Progress> {
     try {
       const available = await client.waitSnapshot(snapshot);
-      await store.merge(image.digest, { snapshot: available, readyAtMs: Date.now() });
+      await store.merge(key(), { snapshot: available, readyAtMs: Date.now() });
       return "ready";
     } catch (error) {
       const current = await client
@@ -78,7 +80,7 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
       await store
         .mutateMany([
           {
-            id: image.digest,
+            id: key(),
             apply: (value) => ({ ...value!, ...(value?.snapshot?.id === snapshot.id ? { snapshot: undefined } : {}) }),
           },
         ])
@@ -95,7 +97,7 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
     let progress: Progress = "failed";
     try {
       const staged = await client.createSnapshot(builder.id, image.name);
-      await store.merge(image.digest, { snapshot: staged });
+      await store.merge(key(), { snapshot: staged });
       progress = await finish(staged);
       return progress;
     } finally {
@@ -105,10 +107,10 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
   }
 
   async function step(): Promise<Progress> {
-    const record = (await store.get(image.digest)) ?? (await store.putIfAbsent(image.digest, { ref: image.ref }));
+    const record = (await store.get(key())) ?? (await store.putIfAbsent(key(), { ref: image.ref }));
     if (isReady(record)) return "ready";
     try {
-      if (record.error) await store.merge(image.digest, { error: undefined });
+      if (record.error) await store.merge(key(), { error: undefined });
       if (record.snapshot) return await finish(record.snapshot);
       const imported = await client.importImage(image.source, image.name);
       if (imported.status === "failed")
@@ -120,9 +122,7 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
     } catch (error) {
       const message = errMessage(error);
       opts.onError?.({ category: "sandbox_image", code: "base_image_failed", message });
-      await store
-        .merge(image.digest, { error: message })
-        .catch(swallowAs("render-base: record the build error", undefined));
+      await store.merge(key(), { error: message }).catch(swallowAs("render-base: record the build error", undefined));
       return "failed";
     }
   }
@@ -140,12 +140,17 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
       }
     },
     async ready(onStatus) {
-      if (ownGolden) return ownGolden;
+      const cached = ownGoldens.get(currentTenant());
+      if (cached) return cached;
       const deadline = Date.now() + waitMs;
       for (let announced = false; ; announced = true) {
-        const entries = await store.entries();
-        const own = entries.find(([digest]) => digest === image.digest)?.[1];
-        if (own && isReady(own)) return (ownGolden = { ref: own.ref, snapshotId: own.snapshot!.id });
+        const entries = (await store.entries()).filter(([id]) => id.startsWith(`${currentTenant()}/`));
+        const own = entries.find(([id]) => id === key())?.[1];
+        if (own && isReady(own)) {
+          const golden = { ref: own.ref, snapshotId: own.snapshot!.id };
+          ownGoldens.set(currentTenant(), golden);
+          return golden;
+        }
         const older = entries
           .map(([, record]) => record)
           .filter(isReady)

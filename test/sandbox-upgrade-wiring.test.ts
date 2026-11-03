@@ -1,9 +1,8 @@
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 test("startup adopts a cold environment target even when it has no session", async () => {
   const built = buildApp(testConfig());

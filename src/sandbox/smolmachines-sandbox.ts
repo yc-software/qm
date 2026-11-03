@@ -14,7 +14,7 @@ import {
 } from "./exec-file-ops.ts";
 import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
+import { createExecSandboxBase, sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
@@ -66,7 +66,7 @@ export interface StoredSmolmachinesSandbox {
 }
 
 export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
-  token?: string;
+  token: () => Promise<string>;
   baseUrl?: string;
   namePrefix?: string;
   image?: string;
@@ -80,15 +80,14 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   store: DurableMap<StoredSmolmachinesSandbox>;
   advisoryLock: AdvisoryLock;
   snapshots?: HomeSnapshotStore;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
   fetchImpl?: typeof fetch;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
 export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: SmolmachinesSandboxOptions): Sandbox {
-  if (!opts.token && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=smolmachines requires SMOLMACHINES_TOKEN");
   const fetchImpl = opts.fetchImpl ?? fetch;
   const baseUrl = (opts.baseUrl ?? DEFAULT_SMOLMACHINES_BASE_URL).replace(/\/+$/, "");
   const prefix = opts.namePrefix ?? "qm";
@@ -106,13 +105,13 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
   const network: MachineNetwork = egressProxyHost ? { mode: "allowCidrs", hosts: [egressProxyHost] } : { mode: "open" };
 
-  const idByName = new Map<string, string>();
-  const egressVerified = new Set<string>();
+  const idByName = tenantKeyedMap<string>();
+  const egressVerified = tenantKeyedMap<true>();
 
   const isRunning = (info: MachineInfo): boolean => RUNNING_STATES.has(info.state.toLowerCase());
   const machinePath = (id: string): string => `/v1/machines/${encodeURIComponent(id)}`;
 
-  function send(
+  async function send(
     method: string,
     path: string,
     body?: unknown,
@@ -122,7 +121,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     return fetchImpl(`${baseUrl}${path}`, {
       method,
       headers: {
-        authorization: `Bearer ${opts.token ?? ""}`,
+        authorization: `Bearer ${await opts.token()}`,
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -293,11 +292,12 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
 
   async function writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void> {
     const id = await machineIdFor(name);
+    const token = await opts.token();
     const res = await fetchWithRetry(
       (signal) =>
         fetchImpl(`${baseUrl}${filesUrl(id, absPath)}`, {
           method: "PUT",
-          headers: { authorization: `Bearer ${opts.token ?? ""}`, "content-type": "application/octet-stream" },
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/octet-stream" },
           body: Buffer.from(data),
           signal,
         }),
@@ -311,10 +311,11 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
 
   async function readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null> {
     const id = await machineIdFor(name);
+    const token = await opts.token();
     const res = await fetchWithRetry(
       (signal) =>
         fetchImpl(`${baseUrl}${filesUrl(id, absPath)}`, {
-          headers: { authorization: `Bearer ${opts.token ?? ""}` },
+          headers: { authorization: `Bearer ${token}` },
           signal,
         }),
       "idempotent",
@@ -340,7 +341,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
         `smolmachines egress ${name}: machine network is ${JSON.stringify(got)}, expected ${JSON.stringify(network)}; destroy the sandbox so it is recreated with the allow list`,
       );
     }
-    egressVerified.add(id);
+    egressVerified.set(id, true);
   }
 
   const homeSnapshots = opts.snapshots
@@ -348,9 +349,9 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
         label: "smolmachines",
         homeDir: HOME_DIR,
         homeTarPath: HOME_TAR,
-        prunePaths: [
+        prunePaths: () => [
           ...HOME_SNAPSHOT_PRUNE,
-          ...ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => `./${rel}`),
+          ...ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => `./${rel}`),
         ],
         store: opts.snapshots,
         io: {
@@ -434,7 +435,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     prefix,
     homeDir: HOME_DIR,
     defaultTimeoutSec,
-    credentialPaths: opts.credentialPaths ?? [],
+    credentialPaths: () => opts.credentialPaths?.() ?? [],
     ...(opts.layerToolFiles ? { installLayerTools: createLayerToolInstaller(opts.layerToolFiles) } : {}),
     egressProxyUrl: opts.egressProxyUrl,
     deleteFailureCode: "machine_delete_failed",
@@ -464,10 +465,10 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       os: `smolmachines microVM booted from the ${image} image (the whole disk persists across stops${idleNote})`,
       runtimes: ["Node", "Python 3"],
       get tools() {
-        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
+        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools?.() ?? [])]);
       },
       get notInstalled() {
-        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools?.() ?? []);
       },
       cpus: opts.cpus ?? DEFAULT_CPUS,
       memoryMb: opts.memoryMb ?? DEFAULT_MEMORY_MB,
@@ -498,7 +499,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: HOME_DIR,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => rel),
   });
 
   async function recoveryFor(scopeId: string): Promise<Pick<ComputerStatus, "recovery">> {

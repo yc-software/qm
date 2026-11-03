@@ -33,7 +33,6 @@ const coreUrl = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_API_URL = coreUrl;
 const SECRET = "deploy-open-test-secret";
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler } = await import("../server/index.ts");
 

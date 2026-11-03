@@ -115,9 +115,10 @@ async function assertSubscriptionTurn(built: ReturnType<typeof buildApp>, seen: 
 test("a personal Claude subscription turn runs end to end on Pi with OAuth bearer auth, including a tool round trip", async (t) => {
   const seen = fakeAnthropic(t);
 
-  const built = buildApp(testConfig({ anthropicApiKey: "sk-ant-api03-company" }), {
+  const built = buildApp(testConfig(), {
     agent: createAgent({ captureRequests: false, resolveProviderKeys: async () => ({}) }),
   });
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "sk-ant-api03-company", "admin"));
   await inTestTenant(() =>
     built.userModelCredentials.setOAuth("U1", "anthropic", {
       accessToken: SUBSCRIPTION_TOKEN,
@@ -151,7 +152,8 @@ test("a personal Claude subscription turn runs end to end on Pi with OAuth beare
 test("a company Claude subscription token in ANTHROPIC_API_KEY serves company turns on the wired agent", async (t) => {
   const seen = fakeAnthropic(t);
   const companyToken = "sk-ant-oat01-company-e2e";
-  const built = buildApp(testConfig({ anthropicApiKey: companyToken }), { agent: undefined });
+  const built = buildApp(testConfig(), { agent: undefined });
+  await inTestTenant(() => built.modelCredentials.set("anthropic", companyToken, "admin"));
   const submitted = await inTestTenant(() =>
     built.app.turn({
       surface: "slack",

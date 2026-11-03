@@ -5,6 +5,7 @@ import { AdminError } from "../../admin/admin-service.ts";
 import { sendJson } from "../http.ts";
 import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
+import { tenantAllowsEmail } from "../../tenants/settings-parse.ts";
 import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -61,9 +62,7 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   await deps.identity.refresh();
   if (deps.identity.deactivationSource(email) === "manual") return sendJson(res, 200, { allowed: false });
   const member = deps.identity.externalMember(email);
-  const configured =
-    deps.emailAuthPrincipals?.includes(email) ||
-    Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`));
+  const configured = tenantAllowsEmail(await deps.tenantSettings?.get(), email);
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
   if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });

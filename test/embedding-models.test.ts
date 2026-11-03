@@ -6,7 +6,6 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { AddressInfo } from "node:net";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
@@ -26,7 +25,7 @@ import {
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { afterEach, inTestTenant, test, testTenantHeaders } from "./support/test-tenants.ts";
 
 const definition = {
   kind: "embedding",
@@ -43,8 +42,8 @@ test("verified embedding definitions survive registry reload but never become ch
   const credentials = createModelCredentialStore({
     backing: testMap(),
     keyMaterial: "test-key",
-    fallback: { openai: "test-key" },
   });
+  await credentials.set("openai", "test-key", "admin");
   const requests: unknown[] = [];
   const verifier = createModelVerifier({
     credentials,
@@ -155,10 +154,11 @@ test("org embedding selection is durable and survives chat runtime replacement a
 });
 
 test("HTTP embedding selection accepts only known embedding models and survives a new recall", async (t) => {
-  const config = testConfig({ openaiApiKey: "test-key" });
+  const config = testConfig();
   const built = buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [{ index: 0, embedding: [1, 0] }] }),
   });
+  await inTestTenant(() => built.modelCredentials.set("openai", "test-key", "admin"));
   await built.modelRegistry.upsert(definition, "admin");
   await built.refreshModels();
   const server = createInsecureTestServer(built.app, serverDeps(config, built));

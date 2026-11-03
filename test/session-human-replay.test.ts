@@ -5,11 +5,17 @@ import { projectGroupRef } from "../src/projects/project-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenantSettings } from "./support/build-app.ts";
+
+function tenantApp() {
+  return buildApp(testConfig(), { tenantSettings: testTenantSettings() });
+}
 import { inTestTenant } from "./support/test-tenants.ts";
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {
-  const built = buildApp(testConfig({ openaiApiKey: "test-openai-key" }));
+  const built = tenantApp();
   t.after(() => built.runtime.stop());
+  await inTestTenant(() => built.modelCredentials.set("openai", "test-openai-key", "test"));
   await inTestTenant(async () => {
     await built.app.upsertDirectory(
       ["owner", "sender", "new-member"].map((principalId) => ({
@@ -105,7 +111,7 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
 });
 
 test("late child signals remain pending behind approval and requestless steers replay once", async (t) => {
-  const built = buildApp(testConfig());
+  const built = tenantApp();
   t.after(() => built.runtime.stop());
   await inTestTenant(async () => {
     const actor: Principal = { id: "sender", type: "internal" };

@@ -27,7 +27,6 @@ export function testEnv(overrides: Record<string, string | undefined> = {}): Nod
     AUTH_TOKEN_SECRET: TOKEN_SECRET,
     AUTH_REDIRECT_URI: REDIRECT_URI,
     AUTH_SIGNING_JWK: signingJwk(),
-    AUTH_ALLOWED_EMAILS: "admin@example.com,ops@example.com",
     AUTH_EMAIL_FROM: "qm <no-reply@example.com>",
     AUTH_EMAIL_TRANSPORT: "resend",
     RESEND_API_KEY: "re_test_key",
@@ -135,7 +134,8 @@ export async function startHarness(
     sessions,
     mailer: emailConfigured(cfg) ? mailer : null,
     ...(options.brandName ? { brandName: options.brandName } : {}),
-    emailAllowed: options.emailAllowed ?? (async () => false),
+    emailAllowed:
+      options.emailAllowed ?? (async (email: string) => ["admin@example.com", "ops@example.com"].includes(email)),
     now: () => now.ms,
     onBackgroundTask: (task) => pending.push(task),
   });

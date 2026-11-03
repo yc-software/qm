@@ -21,7 +21,7 @@ test("trusted entry is opt-in and cannot inherit primary provider credentials", 
   for (const invalid of [
     { PORTAL_TRUSTED_OIDC: env.PORTAL_TRUSTED_OIDC },
     { PORTAL_TRUSTED_OIDC_CLIENT_SECRET: env.PORTAL_TRUSTED_OIDC_CLIENT_SECRET },
-    { ...env, OIDC_CLIENT_SECRET: env.PORTAL_TRUSTED_OIDC_CLIENT_SECRET },
+    { ...env, PORTAL_SESSION_SECRET: env.PORTAL_TRUSTED_OIDC_CLIENT_SECRET },
   ])
     assert.throws(() => trustedEntryConfig(invalid, "https://portal.example.com"));
   const parsed = trustedEntryConfig(env, "https://portal.example.com")!;

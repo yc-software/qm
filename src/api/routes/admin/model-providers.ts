@@ -3,7 +3,7 @@ import { providerBaseUrl } from "../../../model/provider-endpoints.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 
 const VALIDATION_REQUESTS: Record<
   ModelProvider,
@@ -36,16 +36,35 @@ async function actor(ctx: ApiCtx) {
   return authorizeAdmin(ctx, scope);
 }
 
-export async function validateProviderApiKey(ctx: ApiCtx, provider: ModelProvider, apiKey: string): Promise<boolean> {
+export async function rejectUnusableKey(
+  ctx: ApiCtx,
+  name: string,
+  url: string,
+  headers: Record<string, string>,
+): Promise<boolean> {
+  let response: Response;
   try {
-    const response = await (ctx.deps.modelCredentialFetch ?? fetch)(validationUrl(provider), {
-      headers: VALIDATION_REQUESTS[provider].headers(apiKey),
-      signal: AbortSignal.timeout(5_000),
+    response = await (ctx.deps.modelCredentialFetch ?? fetch)(url, { headers, signal: AbortSignal.timeout(5_000) });
+  } catch (error) {
+    sendJson(ctx.res, 502, {
+      error: "provider_unreachable",
+      message: `could not reach ${name} to check this API key: ${error instanceof Error ? error.message : String(error)}`,
     });
-    return response.ok;
-  } catch {
-    return false;
+    return true;
   }
+  if (response.ok) return false;
+  if (response.status === 401 || response.status === 403)
+    sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${name} rejected this API key` });
+  else
+    sendJson(ctx.res, 502, {
+      error: "provider_unreachable",
+      message: `${name} could not check this API key: HTTP ${response.status}`,
+    });
+  return true;
+}
+
+export function rejectUnusableApiKey(ctx: ApiCtx, provider: ModelProvider, apiKey: string): Promise<boolean> {
+  return rejectUnusableKey(ctx, provider, validationUrl(provider), VALIDATION_REQUESTS[provider].headers(apiKey));
 }
 
 export async function getModelProviders(ctx: ApiCtx): Promise<void> {
@@ -65,11 +84,12 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
     ctx.deps.modelCredentials.statuses(),
     cached?.models ?? selectableModelCatalog(ctx.deps.modelCredentialFetch),
   ]);
+  const subscriptionAuth = await ctx.deps.companySubscriptionAuth?.();
   return sendJson(ctx.res, 200, {
     providers,
     models,
     ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
-    ...(ctx.deps.companySubscriptionAuth ? { subscriptionAuth: { provider: ctx.deps.companySubscriptionAuth } } : {}),
+    ...(subscriptionAuth ? { subscriptionAuth: { provider: subscriptionAuth } } : {}),
   });
 }
 
@@ -83,9 +103,10 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
   if (typeof apiKey !== "string" || !apiKey.trim()) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "API key is required" });
   }
-  if (!(await validateProviderApiKey(ctx, provider, apiKey.trim()))) {
-    return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
-  }
+  const current = async () => (await ctx.deps.modelCredentials!.statuses()).find((item) => item.provider === provider);
+  if (isObj(ctx.body) && ctx.body.ifUnset === true && (await current())?.configured)
+    return sendJson(ctx.res, 200, { ok: true, status: await current(), unchanged: true });
+  if (await rejectUnusableApiKey(ctx, provider, apiKey.trim())) return;
   await ctx.deps.modelCredentials.set(provider, apiKey.trim(), authorized.id);
   audit(ctx.deps, {
     principalId: authorized.id,
@@ -93,8 +114,7 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
     resource: provider,
     scopeLabel: orgScope(ctx.deps),
   });
-  const status = (await ctx.deps.modelCredentials.statuses()).find((item) => item.provider === provider);
-  return sendJson(ctx.res, 200, { ok: true, status });
+  return sendJson(ctx.res, 200, { ok: true, status: await current() });
 }
 
 export async function deleteModelProvider(ctx: ApiCtx): Promise<void> {

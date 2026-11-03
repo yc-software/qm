@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -13,6 +13,7 @@ import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 async function withDefaultComputer(built: ReturnType<typeof buildApp>) {
+  await inTestTenant(() => built.identity.ready());
   const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
   await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
   return built;
@@ -221,5 +222,5 @@ appTest(
       /assemble a morning digest/,
     );
   },
-  () => buildApp(testConfig({ securityScreen: "off" })),
+  () => buildApp(testConfig(), { tenantSettings: testTenantSettings({ SECURITY_SCREEN: "off" }) }),
 );

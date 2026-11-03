@@ -20,7 +20,7 @@ import {
   createIsCurrentSharedScopeMember,
   createMembershipControlsScope,
 } from "../src/resolution/scope-membership.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -54,6 +54,7 @@ test("ProjectStore atomically maintains a managed-group roster", () =>
 
 test("session lists check each project once per request and observe membership changes", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-list-membership-")) }));
+  await inTestTenant(() => built.identity.ready());
   await inTestTenant(async () => {
     try {
       const project = await built.projects.create({ name: "Shared history", ownerId: "owner" });
@@ -247,6 +248,7 @@ test("managed groups override Slack membership and historical sessions grant no 
 
 test("capability scope checks follow current shared rosters", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "capability-roster-")) }));
+  await inTestTenant(() => built.identity.ready());
   await inTestTenant(async () => {
     await built.app.upsertDirectory([{ principalId: "member", displayName: "Member", type: "internal" }]);
     await built.directory.replaceChannels(
@@ -286,6 +288,7 @@ test("capability scope checks follow current shared rosters", async () => {
 
 test("capability scope checks honor a linked identity's room membership", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "capability-linked-")) }));
+  await inTestTenant(() => built.identity.ready());
   await inTestTenant(async () => {
     await built.app.upsertDirectory([
       { principalId: "slack-person@example.com", displayName: "Person", type: "internal" },
@@ -318,6 +321,7 @@ test("capability scope checks honor a linked identity's room membership", async 
 
 test("channel capabilities bridge legacy public rosters but still honor deactivation", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "capability-transition-")) }));
+  await inTestTenant(() => built.identity.ready());
   await inTestTenant(async () => {
     await built.app.upsertDirectory([{ principalId: "member", displayName: "Member", type: "internal" }]);
     await built.directory.replaceChannels([{ channelId: "C-public", name: "public" }], []);
@@ -336,6 +340,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
   const deployAcl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
+  await inTestTenant(() => built.identity.ready());
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "test"));
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -724,6 +730,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
 test("a member added mid-turn sees the thread but never the prior roster's output", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-roster-race-")) }));
+  await inTestTenant(() => built.identity.ready());
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "test"));
   await inTestTenant(async () => {
     await built.app.upsertDirectory([
       { principalId: "owner", displayName: "Owner", type: "internal" },
@@ -798,6 +806,8 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
 
 test("Project turns rebuild the full thread for a member who joined later", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-tenure-")) }));
+  await inTestTenant(() => built.identity.ready());
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "test"));
   await inTestTenant(async () => {
     await built.app.upsertDirectory([
       { principalId: "owner", displayName: "Owner", type: "internal" },
@@ -835,6 +845,8 @@ test("Project turns rebuild the full thread for a member who joined later", asyn
 
 test("Auto quarantine honors the current Project roster epoch", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-auto-race-")) }));
+  await inTestTenant(() => built.identity.ready());
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "test"));
   await inTestTenant(async () => {
     await built.app.upsertDirectory([
       { principalId: "owner", displayName: "Owner", type: "internal" },
@@ -921,6 +933,8 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
 
 test("a member added to a Project inherits the chats that predate them", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-backfill-")) }));
+  await inTestTenant(() => built.identity.ready());
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "test"));
   await inTestTenant(async () => {
     await built.app.upsertDirectory([
       { principalId: "owner", displayName: "Owner", type: "internal" },
@@ -974,6 +988,8 @@ test("a member added to a Project inherits the chats that predate them", async (
 
 test("leaving a Project still cuts off everything after the member left", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-departure-")) }));
+  await inTestTenant(() => built.identity.ready());
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "test"));
   await inTestTenant(async () => {
     await built.app.upsertDirectory([
       { principalId: "owner", displayName: "Owner", type: "internal" },
@@ -1003,6 +1019,7 @@ test("leaving a Project still cuts off everything after the member left", async 
 });
 test("linking a just-created channel refreshes the surface directory and retries", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-fresh-chan-")) }));
+  await inTestTenant(() => built.identity.ready());
   await inTestTenant(async () => {
     await built.app.upsertDirectory([{ principalId: "owner", displayName: "Owner", type: "internal" }]);
     await built.app.upsertChannels(
@@ -1039,6 +1056,8 @@ test("linking a just-created channel refreshes the surface directory and retries
 
 test("Project slack-channel routes gate on visibility and workspace use, and sync the channel roster", async (t) => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-slack-")) }));
+  await inTestTenant(() => built.identity.ready());
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "test"));
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -1169,12 +1188,10 @@ test("Project slack-channel routes gate on visibility and workspace use, and syn
 });
 
 test("a project can add a signed-in principal on a deployment whose directory is never populated", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "projects-web-only-")),
-      emailAuthPrincipals: ["dana@acme.com"],
-    }),
-  );
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-web-only-")) }), {
+    tenantSettings: testTenantSettings({ AUTH_ALLOWED_EMAILS: "dana@acme.com" }),
+  });
+  await inTestTenant(() => built.identity.ready());
   await inTestTenant(async () => {
     const session = await built.sessions.getOrCreateByThread("web:rex", "dm", "personal:rex@acme.com");
     await built.sessions.addParticipant(session.id, "rex@acme.com");
@@ -1189,6 +1206,8 @@ test("a project can add a signed-in principal on a deployment whose directory is
 
 test("Slack-linked project turns use the inherited channel roster", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-linked-roster-")) }));
+  await inTestTenant(() => built.identity.ready());
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "test"));
   await inTestTenant(async () => {
     await built.app.upsertDirectory([
       { principalId: "owner", displayName: "Owner", type: "internal" },

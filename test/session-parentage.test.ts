@@ -11,6 +11,7 @@ import { inTestTenant } from "./support/test-tenants.ts";
 
 test("detaching a subagent session requires current channel membership", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-parentage-")) }));
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
   await inTestTenant(async () => {
     await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
     const channels = [{ channelId: "C1", name: "private", isPrivate: true }];
@@ -33,6 +34,7 @@ test("detaching a subagent session requires current channel membership", async (
 
 test("direct child enqueues share the tree cap across concurrent callers", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-cap-")) }));
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
   await inTestTenant(async () => {
     const root = await built.sessions.getOrCreateByThread("web:U1:root", "dm", "personal:U1");
     const children = await Promise.all(
@@ -65,6 +67,7 @@ test("direct child enqueues share the tree cap across concurrent callers", async
 
 test("a late child steer remains pending when admission fails, then replays once", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-signal-retry-")) }));
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
   await inTestTenant(async () => {
     const root = await built.sessions.getOrCreateByThread("web:U1:signal-root", "dm", "personal:U1");
     const child = await built.sessions.getOrCreateByThread("agent:main:subagent:signal-child", "dm", "personal:U1");
@@ -112,6 +115,7 @@ test("a late child steer remains pending when admission fails, then replays once
 
 test("late human child messages retain their sender and revalidate access", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-human-replay-")) }));
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
   await inTestTenant(async () => {
     await built.app.upsertDirectory([
       { principalId: "U1", displayName: "User One", type: "internal" },
@@ -165,6 +169,7 @@ test("late human child messages retain their sender and revalidate access", asyn
 
 test("ordinary sessions are not subject to the subagent tree queue limit", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ordinary-queue-")) }));
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
   await inTestTenant(async () => {
     const actor = { id: "U1", type: "internal" as const };
     const session = await built.sessions.getOrCreateByThread("web:U1:ordinary-queue", "dm", "personal:U1");

@@ -63,6 +63,8 @@ export interface AdminResource {
   label?: string;
   enumValues?: readonly unknown[];
   refreshesModels?: true;
+  operator?: true;
+  isSet?: (deps: ServerDeps, scope: string, body: unknown) => Promise<boolean>;
 }
 
 function generic<V>(
@@ -101,6 +103,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label: "Security posture. The org value is a minimum; narrower scopes may tighten it but cannot weaken it.",
     readKey: "securityPosture",
     enumValues: SECURITY_POSTURES,
+    operator: true,
+    isSet: async (deps, scope) => Boolean(await deps.config!.getSecurityPostureOwnDurable(scope)),
     get: (deps, scope) => deps.config!.getSecurityPostureDurable(scope),
     apply: generic<SecurityPosture>(
       (body) => {
@@ -120,6 +124,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       "Cross-context read posture. The organization is a ceiling; personal and room scopes may opt out. Isolated wins.",
     readKey: "sharingPosture",
     enumValues: SHARING_POSTURES,
+    operator: true,
+    isSet: async (deps, scope) => Boolean(await deps.config!.getSharingPostureOwnDurable(scope)),
     get: (deps, scope) => deps.config!.getSharingPostureDurable(scope),
     apply: generic<SharingPosture | null>(
       (body) => {
@@ -263,6 +269,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     kind: "custom",
     target: "org",
     readKey: "featureFlags",
+    operator: true,
     label: "Live feature rollout table. Each feature maps to the scopes where it is enabled.",
     get: async (deps) => {
       if (!deps.featureFlags) return undefined;
@@ -451,8 +458,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { error: "base-model requires { modelId: string } (empty string clears the override)" };
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
+      const managedKeys = ctx.deps.modelCredentials
+        ? await ctx.deps.modelCredentials.availability()
+        : ALL_PROVIDERS_AVAILABLE;
       const runtime = await ctx.deps.config!.getRuntimeSelectionDurable(scope);
       if (!modelId) await ctx.deps.config!.setRuntimeSelection(scope, null);
       else {
@@ -464,7 +472,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         const current =
           runtime ??
           (await resolveRuntimeChoice(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
-            modelId: defaultModel(ctx.deps.baseModelDefault),
+            modelId: defaultModel(ctx.deps.baseModelDefault?.()),
           }));
         await ctx.deps.config!.setRuntimeSelection(scope, {
           modelId,
@@ -510,8 +518,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { error: "runtime requires fastMode (boolean)" };
       if (purpose && fastMode === true && !fastModeModelIds().includes(modelId))
         return { error: `fast mode is not supported by ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
+      const managedKeys = ctx.deps.modelCredentials
+        ? await ctx.deps.modelCredentials.availability()
+        : ALL_PROVIDERS_AVAILABLE;
       if (!modelServiceable(modelId, managedKeys))
         return {
           error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured`,
@@ -590,6 +599,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     target: "org",
     clearable: true,
     readKey: "branding",
+    operator: true,
+    isSet: async (deps, scope) => Boolean(await deps.config!.getBrandingDurable(scope)),
     get: (deps, scope) => deps.config!.getBranding(scope),
     apply: async (ctx, _actor, scope) => {
       const bad = orgOnly(scope, "branding is org-wide");
@@ -636,8 +647,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
+      const managedKeys = ctx.deps.modelCredentials
+        ? await ctx.deps.modelCredentials.availability()
+        : ALL_PROVIDERS_AVAILABLE;
       if (modelId && !modelServiceable(modelId, managedKeys)) {
         return { error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured` };
       }
@@ -687,6 +699,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     id: "connectors",
     kind: "custom",
     readKey: "connectors",
+    operator: true,
+    isSet: async (deps, scope, body) =>
+      Boolean(await deps.config!.getConnectorClientSecret(scope, String((body as { provider?: unknown }).provider))),
     get: (deps, scope) => deps.config!.listConnectorClients(scope),
     apply: async (ctx, actor, scope) => {
       const { deps } = ctx;
@@ -755,12 +770,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const ref = encodeRef(serviceCredRef(slug));
       const allCreds = await deps.serviceCreds.listServiceCredentials(scope);
       const existing = allCreds.find((c) => c.slug === slug);
-      if (existing?.source === "deployment")
-        return {
-          error: `"${slug}" is supplied by this deployment's configuration and can't be edited, deleted or reused here.`,
-          code: "deployment_credential",
-          status: 409,
-        };
       const conflict = () => ({
         error: "Credential changed after this editor was loaded. Reload it before continuing.",
         code: "version_conflict",

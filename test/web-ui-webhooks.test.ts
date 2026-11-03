@@ -1,7 +1,7 @@
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
 
-import { test, after } from "node:test";
+import { after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,7 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const PUBLIC = "https://core.public.example";
@@ -21,6 +21,7 @@ const PUBLIC = "https://core.public.example";
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-wh-")) }));
 const core = createServer(built.app, {
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+  featureFlags: built.featureFlags,
   signingSecret: SECRET,
   webhookReceiver: built.webhookReceiver,
   publicUrl: PUBLIC,
@@ -30,7 +31,6 @@ const corePort = (core.address() as AddressInfo).port;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
 const web = createHttpServer((req, res) => inTestTenant(() => handler(req, res)));
 web.listen(0);

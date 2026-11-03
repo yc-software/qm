@@ -1,4 +1,4 @@
-import { mock, test } from "node:test";
+import { mock } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent, EMPTY_ENDING_NOTE } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
@@ -14,7 +14,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -112,7 +112,10 @@ async function runTurn(
   signals?: RunSignalStore,
   onHistory?: () => Promise<void>,
 ) {
-  const agent = createAgent({ apiKey: "sk-test", ...(signals ? { signals } : {}) });
+  const agent = createAgent({
+    resolveProviderKeys: async () => ({ anthropic: "sk-test" }),
+    ...(signals ? { signals } : {}),
+  });
   const emitted: SessionEntry[] = [];
   const bodies: Body[] = [];
   let seq = (history.at(-1)?.seq ?? 0) + 1;

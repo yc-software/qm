@@ -1,6 +1,5 @@
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
 import { composioRoutes, composioUserId } from "../src/api/routes/composio.ts";
@@ -14,7 +13,7 @@ import { orgId } from "../src/config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 function fixture() {
   const keychain = createKeychain({

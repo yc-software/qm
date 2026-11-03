@@ -8,7 +8,7 @@ import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
+import { createExecSandboxBase, sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import { createExecProcessSessions } from "./exec-process-session.ts";
 import {
   createExecFileOps,
@@ -67,8 +67,8 @@ export interface RenderSandboxOptions extends BlobStagingOptions {
   homeDir?: string;
   defaultTimeoutSec?: number;
   checkpointIntervalMs?: number;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
@@ -80,7 +80,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const rotationMarginMs = (defaultTimeoutSec + 60) * 1000;
   const checkpointIntervalMs = opts.checkpointIntervalMs ?? 5 * 60_000;
-  const scratch = new Map<string, RenderSandboxInfo>();
+  const scratch = tenantKeyedMap<RenderSandboxInfo>();
   const nameFor = (scope: string): string => sandboxScopeName(prefix, scope);
   const lifecycleKey = (name: string): string => `render-sandbox:${name}`;
   const useKey = (name: string): string => `render-sandbox-use:${name}`;
@@ -424,7 +424,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     prefix,
     homeDir,
     defaultTimeoutSec,
-    credentialPaths: opts.credentialPaths ?? [],
+    credentialPaths: () => opts.credentialPaths?.() ?? [],
     deleteFailureCode: "render_destroy_failed",
     onError: opts.onError,
     exec,
@@ -469,7 +469,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     exec,
     readAbsBytes,
     defaultHomeDir: homeDir,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => rel),
   });
 
   return {
@@ -497,11 +497,11 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
             "python3",
             "gh",
             "aws (CLI v2)",
-            ...(opts.extraTools ?? []),
+            ...(opts.extraTools?.() ?? []),
           ]);
         },
         get notInstalled() {
-          return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+          return visibleNotInstalled(["gcloud", "kubectl", "flyctl", "glab"], opts.extraTools?.() ?? []);
         },
       },
     },

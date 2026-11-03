@@ -1,9 +1,9 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { getRequiredModel, modelRequestOverrides } from "../src/model/pi-models.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { test } from "./support/test-tenants.ts";
 
 // Exercise the real AgentSession and SDK serializer, not just the effort setter.
 for (const [modelId, upper, allowed, off, minimal] of [
@@ -119,12 +119,12 @@ for (const [modelId, upper, allowed, off, minimal] of [
     const originalMap = structuredClone(getRequiredModel(modelId).thinkingLevelMap);
     const agent = createAgent({
       defaultModelId: modelId,
-      modelGateway: {
+      resolveModelGateway: async () => ({
         url: `http://127.0.0.1:${address.port}`,
         apiKey: "test-key",
         apiKeyHeader: "api-key",
         models: { [modelId]: modelRequestOverrides(modelId)?.model ?? modelId },
-      },
+      }),
     });
     t.after(() => agent.close?.());
     // Repeat turns in the same conversation with different effort selections.

@@ -53,7 +53,7 @@ async function fixture(t: TestContext) {
   const b = buildApp(testConfig({ signingSecret: SECRET, memoryCapture: "off" }));
   await b.config.hydrate?.();
   await b.identity.refresh();
-  await b.startup();
+  await inTestTenant(() => undefined);
   await inTestTenant(() =>
     b.app.upsertDirectory(
       ["alice", "bob", "stranger"].map((principalId) => ({
@@ -88,7 +88,6 @@ async function fixture(t: TestContext) {
   t.after(async () => {
     await new Promise<void>((r) => server.close(() => r()));
     inTestTenant(() => b.scheduler.stop());
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   const cap = (actorId: string, scopeId: CapabilityClaims["scopeId"] = "channel:public-room") =>
@@ -151,7 +150,7 @@ async function fixture(t: TestContext) {
     const response = await fetch(base + "/v1/turns", {
       method: "POST",
       headers: {
-        ...inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body)),
+        ...(await inTestTenant(() => signedHeaders(SECRET, "POST", "/v1/turns", body))),
         "content-type": "application/json",
       },
       body,

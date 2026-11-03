@@ -35,15 +35,6 @@ if [[ "$service" == "portal" ]]; then
     -e AUTH_CLIENT_SECRET=runtime-smoke-client-secret-0123456789 \
     -e AUTH_TOKEN_SECRET=runtime-smoke-auth-token-secret-0123456789 \
     -e AUTH_SIGNING_JWK="$signing_jwk" \
-    -e AUTH_ALLOWED_EMAIL_DOMAIN=example.com \
-    -e OIDC_CLIENT_ID=qm-portal \
-    -e OIDC_ISSUER=https://portal.example.com/idp \
-    -e OIDC_AUTH_ENDPOINT=https://portal.example.com/idp/authorize \
-    -e OIDC_TOKEN_ENDPOINT=http://127.0.0.1:8099/token \
-    -e OIDC_USERINFO_ENDPOINT=http://127.0.0.1:8099/userinfo \
-    -e OIDC_JWKS_URI=http://127.0.0.1:8099/.well-known/jwks.json \
-    -e OIDC_CLIENT_SECRET=runtime-smoke-client-secret-0123456789 \
-    -e OIDC_ALLOWED_EMAIL_DOMAIN=example.com \
     -e PORTAL_PUBLIC_URL=https://portal.example.com \
     "$image" >/dev/null
 elif [[ "$service" == "auth" ]]; then
@@ -56,7 +47,6 @@ elif [[ "$service" == "auth" ]]; then
     -e AUTH_CLIENT_SECRET=runtime-smoke-auth-client-secret-0123456789 \
     -e AUTH_TOKEN_SECRET=runtime-smoke-auth-token-secret-0123456789 \
     -e AUTH_SIGNING_JWK="$signing_jwk" \
-    -e AUTH_ALLOWED_EMAIL_DOMAIN=example.com \
     -e AUTH_EMAIL_FROM="qm <no-reply@example.com>" \
     -e AUTH_EMAIL_TRANSPORT=resend \
     -e RESEND_API_KEY=re_runtime_smoke \

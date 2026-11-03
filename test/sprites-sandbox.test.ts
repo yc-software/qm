@@ -24,6 +24,10 @@ import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./supp
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { APIError, SpriteCommand } from "@fly/sprites";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testTenants } from "./support/test-tenants.ts";
+import { withTenant } from "../src/tenants/context.ts";
+
+const [, OTHER_TENANT] = testTenants();
 
 let fake: FakeSprites;
 let sandbox: Sandbox;
@@ -34,7 +38,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-ws-"))), {
     initializationStore: testMap(),
     advisoryLock: testAdvisoryLock(),
-    token: FAKE_SPRITES_TOKEN,
+    token: async () => FAKE_SPRITES_TOKEN,
     namePrefix: "qmt",
     baseUrl: fake.baseUrl,
     ...extra,
@@ -302,6 +306,16 @@ test("a recreated sprite gets the egress policy re-pinned, never served from a s
   const b = await s.provision(layers, { scratch: { key: "job-pol" }, egressToken: token });
   assert.equal(b.id, a.id);
   assert.deepEqual(fake.policy(b.id), [{ domain: "proxy.example.com", action: "allow" }]);
+});
+
+test("a sprite name pinned for one tenant is pinned again for another tenant", async () => {
+  const s = make({ egressProxyUrl: "https://proxy.example.com" });
+  const token = await proxyToken();
+  const pins = () => fake.calls.filter((call) => call.method !== "GET" && call.path.endsWith("/policy/network")).length;
+  await s.provision(layers, { egressToken: token });
+  const pinned = pins();
+  await withTenant(OTHER_TENANT, () => s.provision(layers, { egressToken: token }));
+  assert.equal(pins(), pinned + 1);
 });
 
 test("a failed egress setup releases the scratch lease instead of wedging the key", async () => {

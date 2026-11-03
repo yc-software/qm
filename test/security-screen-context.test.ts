@@ -8,11 +8,13 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
+import { scopeId } from "../src/types.ts";
 
 for (const surface of ["web", "slack", "swarm"]) {
   test(`HTTP ${surface} tool screening carries current request on every output chunk`, async () => {
     const calls: Parameters<SecurityScreener["classify"]>[0][] = [];
-    const built = buildApp(testConfig({ securityPosture: "auto" }), {
+    const config = testConfig();
+    const built = buildApp(config, {
       securityScreener: {
         provider: "context-spy",
         async classify(input) {
@@ -21,6 +23,9 @@ for (const surface of ["web", "slack", "swarm"]) {
         },
       },
     });
+    await inTestTenant(() => built.identity.ready());
+    await built.config.setSecurityPosture(scopeId("org", config.orgId), "auto");
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "test"));
     await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
     const server = createInsecureTestServer(built.app);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

@@ -5,7 +5,7 @@ import { createMockAgent } from "./support/mock-agent.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { emitEntry } from "../src/agent/turn-support.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import type { TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -79,7 +79,8 @@ function request(threadRef = "fixture-thread"): TurnRequest {
 for (const securityPosture of ["auto", "strict"] as const) {
   test(`${securityPosture}: real wrapper releases exact saved output without rerunning or widening permissions`, async () => {
     executions = 0;
-    const built = buildApp(testConfig({ securityPosture }), {
+    const config = testConfig();
+    const built = buildApp(config, {
       securityScreener: {
         provider: "fixture-screen",
         async classify() {
@@ -87,6 +88,7 @@ for (const securityPosture of ["auto", "strict"] as const) {
         },
       },
     });
+    await built.config.setSecurityPosture(scopeId("org", config.orgId), securityPosture);
     const req = request();
     let blocked = await inTestTenant(() => built.app.turn(req));
     if (securityPosture === "strict") {
@@ -131,7 +133,8 @@ for (const securityPosture of ["auto", "strict"] as const) {
 
 for (const failure of ["error", "timeout"] as const) {
   test(`real tool output is marked and audited when the proxy ${failure}s`, async () => {
-    const built = buildApp(testConfig({ securityPosture: "auto", securityScreenTimeoutMs: 10 }), {
+    const config = testConfig({ securityScreenTimeoutMs: 10 });
+    const built = buildApp(config, {
       securityScreener: {
         provider: "fixture-screen",
         async classify() {
@@ -140,6 +143,7 @@ for (const failure of ["error", "timeout"] as const) {
         },
       },
     });
+    await built.config.setSecurityPosture(scopeId("org", config.orgId), "auto");
     const result = await inTestTenant(() => built.app.turn(request()));
     assert.equal(result.status, "ok");
     assert.match(result.reply ?? "", /NOT security-screened/);

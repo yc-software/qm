@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import { SlackClient, sleep, type SlackMessage } from "./slack.ts";
 import { CoreClient } from "./core.ts";
-import { modelGatewayFromEnv } from "../../src/config.ts";
+import { parseModelGateway } from "../../src/tenants/settings-parse.ts";
 import { modelGatewayRequest } from "../../src/model/provider-endpoints.ts";
 
 export interface Scenario {
@@ -58,7 +58,7 @@ export interface JudgeEndpoint {
 }
 
 export function judgeEndpoint(env: NodeJS.ProcessEnv, model: string): JudgeEndpoint {
-  const gateway = modelGatewayFromEnv(env);
+  const gateway = parseModelGateway(env);
   if (gateway) {
     const request = modelGatewayRequest(gateway, { id: model, baseUrl: gateway.url, api: "anthropic-messages" });
     if (!request) throw new Error(`MODEL_GATEWAY_MODELS has no route for judge model ${model}`);

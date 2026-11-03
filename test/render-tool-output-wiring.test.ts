@@ -18,6 +18,7 @@ mock.module("../src/sessions/tool-output.ts", {
 });
 
 const { buildApp } = await import("../src/wiring.ts");
+const { testTenantSettings } = await import("./support/build-app.ts");
 
 test("parked tool output uses the configured S3 endpoint and bucket path", async (t) => {
   const requests: Array<{ hostname: string; path: string }> = [];
@@ -34,13 +35,14 @@ test("parked tool output uses the configured S3 endpoint and bucket path", async
     return Reflect.apply(send, this, [command]);
   });
   const config = testConfig({
-    sandboxBackend: "local",
     snapshotStore: "s3",
     s3Bucket: "qm-storage",
     s3Region: "us-east-1",
     s3Endpoint: "http://minio.internal:9000",
   });
-  const built = buildApp(config);
+  const built = buildApp(config, {
+    tenantSettings: testTenantSettings({ SANDBOX_BACKEND: "local" }, config.databaseUrl),
+  });
   try {
     assert.ok(bytesFor);
     const result = await bytesFor("tool-output/test/").put(Buffer.from("complete tool output"));

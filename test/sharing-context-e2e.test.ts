@@ -4,7 +4,8 @@ import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
+import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { Config } from "../src/config.ts";
@@ -14,14 +15,15 @@ import { inTestTenant } from "./support/test-tenants.ts";
 
 // Full application/tool/materializer path, with deterministic model commands and
 // the repo's host-backed Sprites transport. This does not test VM isolation.
-async function fixture(t: TestContext, config: Partial<Config> = {}) {
-  const built = buildApp(testConfig({ memoryCapture: "off", ...config }));
+async function fixture(t: TestContext, config: Partial<Config> = {}, settings: TenantSettingValues = {}) {
+  const built = buildApp(testConfig({ memoryCapture: "off", ...config }), {
+    tenantSettings: testTenantSettings(settings),
+  });
   await built.config.hydrate?.();
   await built.identity.refresh();
-  await built.startup();
+  await inTestTenant(() => undefined);
   t.after(async () => {
     built.scheduler.stop();
-    built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
   let members = ["U1", "U2", "U3"];
@@ -111,9 +113,10 @@ function fixtureTest(
   name: string,
   fn: (b: Awaited<ReturnType<typeof fixture>>) => Promise<void>,
   config: Partial<Config> = {},
+  settings: TenantSettingValues = {},
 ): void {
   test(name, async (t) => {
-    const b = await fixture(t, config);
+    const b = await inTestTenant(() => fixture(t, config, settings));
     await inTestTenant(() => fn(b));
   });
 }
@@ -153,7 +156,9 @@ fixtureTest(
 );
 
 test("sharing e2e: a delegated turn shares its live parent's access under current sharing permission", async (t) => {
-  const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "test-ingress-secret" });
+  const b = await inTestTenant(() =>
+    fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "test-ingress-secret" }),
+  );
   const { parent, parentSession, child } = await inTestTenant(async () => {
     await b.file("personal:U1", "notes.txt", "DELEGATED_PERSONAL_FILE");
     await b.turn("inspect my personal notes", true);
@@ -510,7 +515,8 @@ fixtureTest(
     );
     assert.equal(b.modelCalls.filter((rec) => rec.model === "mock-security").length, 0);
   },
-  { securityScreen: "off" },
+  {},
+  { SECURITY_SCREEN: "off" },
 );
 
 fixtureTest(

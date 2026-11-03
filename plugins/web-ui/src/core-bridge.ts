@@ -777,7 +777,6 @@ export class ApiError extends Error {
 
 export interface SigninRequired {
   mode?: "portal" | "dev";
-  reason?: "unauthenticated" | "not_allowed";
 }
 
 let onSigninRequired: ((detail: SigninRequired) => void) | null = null;

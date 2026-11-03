@@ -5,10 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config.ts";
 import { buildApp } from "../../src/wiring.ts";
+import { TENANT_SETTING_KEYS, type TenantSettingValues } from "../../src/tenants/settings.ts";
+import { testTenantSettings } from "../support/build-app.ts";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
 import { entryFromItem } from "../../src/sessions/items.ts";
+import { inTestTenant } from "../support/test-tenants.ts";
 
 async function main(): Promise<void> {
   assert.ok(
@@ -21,15 +24,22 @@ async function main(): Promise<void> {
   assert.equal(process.env.GIT_SHA, process.env.EXPECTED_SOURCE_SHA, "candidate image does not match the source pin");
   assert.ok(process.env.DATABASE_URL, "DATABASE_URL must point at a Postgres server");
   const config = loadConfig();
-  const built = buildApp({
-    ...config,
-    dataDir: mkdtempSync(join(tmpdir(), "provider-qualification-")),
-    databaseUrl: process.env.DATABASE_URL,
-    sandboxBackend: "local",
+  const fromEnv: TenantSettingValues = Object.fromEntries(
+    TENANT_SETTING_KEYS.flatMap((key) => (process.env[key] ? [[key, process.env[key]]] : [])),
+  );
+  const built = buildApp(
+    {
+      ...config,
+      dataDir: mkdtempSync(join(tmpdir(), "provider-qualification-")),
+      databaseUrl: process.env.DATABASE_URL,
 
-    backgroundWorkEnabled: false,
-    turnWallClockMs: 180_000,
-  });
+      backgroundWorkEnabled: false,
+      turnWallClockMs: 180_000,
+    },
+    { tenantSettings: testTenantSettings({ ...fromEnv, SANDBOX_BACKEND: "local" }, process.env.DATABASE_URL) },
+  );
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (anthropicKey) await inTestTenant(() => built.modelCredentials.set("anthropic", anthropicKey, "qualification"));
   const actorId = `provider-qualification-${randomUUID()}`;
   const scopeId = `personal:${actorId}`;
   const name = `local-${randomUUID()}`;
@@ -37,7 +47,7 @@ async function main(): Promise<void> {
   try {
     await migrateRegisteredPgSchemas(process.env.DATABASE_URL);
     await built.identity.refresh();
-    await built.startup();
+    await inTestTenant(() => undefined);
     await built.sandboxResources.initialize();
     await setOnboardingStatus(built.memory, scopeId, "completed", new Date().toISOString().slice(0, 10), actorId);
     const sandbox = await built.sandboxResources.create(actorId, scopeId, "local", name);

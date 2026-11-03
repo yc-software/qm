@@ -84,7 +84,6 @@ import { type AmbientDecision } from "../surface-cache/ambient-judge.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { Deployment } from "../deploy/deploy-store.ts";
-import type { DeploymentLayerRuntime } from "../deployment/load-layer.ts";
 import { type ArtifactHome, type ArtifactType } from "./artifact-share.ts";
 import type {
   DeployService,
@@ -97,7 +96,6 @@ import type {
 import { type DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Environment, EnvironmentAttachment, EnvironmentStore } from "../environments/environment-store.ts";
-import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectStore } from "../projects/project-store.ts";
@@ -681,12 +679,11 @@ export interface AppDeps {
   deliveries: DeliveryStore;
   directory: DirectoryStore;
   teams?: Pick<TeamStore, "isMember">;
-  emailAuthMembers?: DirectoryMember[];
+  emailAuthMembers?: () => Promise<readonly string[]>;
   projects?: ProjectStore;
   deploy: DeployService;
   deployAppsDomain?: string;
   deploymentGitPrincipals?: DeploymentGitPrincipals;
-  deploymentLayer?: DeploymentLayerRuntime;
   files: FileArtifactStore;
   approvals?: DurableMap<PendingApprovalRecord>;
   sessionStateBus?: SessionStateBus;
@@ -704,9 +701,7 @@ export interface AppDeps {
   ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;
-  judgeModelId?: () => string;
-  modelProviders?: ModelProviderAvailability;
-  providerKeys?: ModelProviderAvailability;
+  judgeModelId?: () => Promise<string>;
   runtimeFallback?: RuntimeChoice;
 }
 

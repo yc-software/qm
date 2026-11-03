@@ -1,4 +1,4 @@
-import { after, test } from "node:test";
+import { after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:http";
@@ -11,7 +11,7 @@ import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { storedItem } from "../src/sessions/items.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const transactions: Record<string, any>[] = [];
 const collector = createServer(async (req, res) => {
@@ -83,7 +83,7 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
   t.after(() => {
     globalThis.fetch = realFetch;
   });
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   t.after(() => agent.close?.());
   let seq = 0;
   const result = await traceQueued(undefined, "run", { "qm.origin": "human" }, () =>
@@ -144,6 +144,7 @@ test("a human web turn persists its entries inside step.persist spans of the run
   inTestTenant(async () => {
     transactions.length = 0;
     const built = buildApp(testConfig());
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "sk-test", "test"));
     const result = await built.app.turn({
       surface: "web",
       actor: { externalId: "U1" },
@@ -165,6 +166,7 @@ test("a turn whose agent fails still sends its dispatch span", () =>
   inTestTenant(async () => {
     transactions.length = 0;
     const built = buildApp(testConfig());
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "sk-test", "test"));
     await assert.rejects(
       built.app.turn({
         surface: "web",

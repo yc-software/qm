@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe } from "node:test";
 import assert from "node:assert/strict";
 
 import {
@@ -15,6 +15,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { it } from "./support/test-tenants.ts";
 
 function fakeDirectory(): ReachDirectory & {
   get(id: string): Promise<{ displayName: string } | null>;

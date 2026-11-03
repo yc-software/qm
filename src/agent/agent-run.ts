@@ -37,7 +37,7 @@ import {
   type ToolResultMessage,
   type Usage,
 } from "@earendil-works/pi-ai";
-import { baseModelProviders, configuredModel, CONFIG_DEFAULTS, type Config } from "../config.ts";
+import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 
 type LegacyThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 const TURN_EFFORT_LEVELS = new Set<string>([
@@ -63,7 +63,6 @@ import {
   DEFAULT_AGENT_MODEL_ID,
   auxiliaryModelFor,
   auxiliaryModelForProvider,
-  defaultModel,
   defaultInteractiveThinkingLevel,
   modelSupportsAdaptiveThinking,
   modelSupportsProviderDefault,
@@ -131,20 +130,27 @@ import {
   type GovernorVerdict,
 } from "./goal.ts";
 
+type ModelIdSetting = string | (() => string | undefined);
+
+const modelIdSetting = (value: ModelIdSetting | undefined): string | undefined =>
+  typeof value === "function" ? value() : value;
+
+interface TurnModels {
+  keys: ProviderKeys;
+  gateway?: ModelGatewayTransportConfig;
+}
+
 export interface AgentOptions {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
-  defaultModelId?: string;
+  defaultModelId?: ModelIdSetting;
   resolveBaseModelId?: () => string | undefined;
   resolveFallbackRuntime?: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
   companyModelId?: (id: string) => string;
-  detectModelId?: string;
-  titleModelId?: string;
-  judgeModelId?: string;
-  apiKey?: string;
-  openaiApiKey?: string;
-  openrouterApiKey?: string;
-  modelGateway?: ModelGatewayTransportConfig;
+  detectModelId?: ModelIdSetting;
+  titleModelId?: ModelIdSetting;
+  judgeModelId?: ModelIdSetting;
   resolveProviderKeys?: () => Promise<ProviderKeys>;
+  resolveModelGateway?: () => Promise<ModelGatewayTransportConfig | undefined>;
   tempDirPrefix?: string;
   captureRequests?: boolean;
   controlTools?: boolean;
@@ -158,17 +164,7 @@ export interface AgentOptions {
 }
 
 export function agentConfigOptions(config: Config): AgentOptions {
-  const defaultModelId =
-    configuredModel(config) ?? (config.modelProvider ? defaultModel(undefined, baseModelProviders(config)) : undefined);
   return {
-    ...(defaultModelId ? { defaultModelId } : {}),
-    ...(config.detectModelId ? { detectModelId: config.detectModelId } : {}),
-    ...(config.titleModelId ? { titleModelId: config.titleModelId } : {}),
-    ...(config.judgeModelId ? { judgeModelId: config.judgeModelId } : {}),
-    ...(config.anthropicApiKey ? { apiKey: config.anthropicApiKey } : {}),
-    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
-    ...(config.openrouterApiKey ? { openrouterApiKey: config.openrouterApiKey } : {}),
-    ...(config.modelGateway ? { modelGateway: config.modelGateway } : {}),
     captureRequests: config.captureLlmRequests,
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,
@@ -860,35 +856,27 @@ export function createAgent(opts?: AgentOptions): Agent {
   const resolveModelId = (scope?: ScopeId): string =>
     resolveConfiguredModelId(
       typeof configuredModelId === "function" ? configuredModelId(scope) : configuredModelId,
-      opts?.defaultModelId,
+      modelIdSetting(opts?.defaultModelId),
     );
   const auxiliaryModelId = (): string =>
     auxiliaryModelFor(
       resolveConfiguredModelId(
         opts?.resolveBaseModelId?.() ?? (typeof configuredModelId === "string" ? configuredModelId : undefined),
-        opts?.defaultModelId,
+        modelIdSetting(opts?.defaultModelId),
       ),
     );
-  const detectModelId = (): string => opts?.detectModelId ?? auxiliaryModelId();
-  const titleModelId = (): string => opts?.titleModelId ?? auxiliaryModelId();
-  const judgeModelId = (): string => opts?.judgeModelId ?? auxiliaryModelId();
+  const detectModelId = (): string => modelIdSetting(opts?.detectModelId) ?? auxiliaryModelId();
+  const titleModelId = (): string => modelIdSetting(opts?.titleModelId) ?? auxiliaryModelId();
+  const judgeModelId = (): string => modelIdSetting(opts?.judgeModelId) ?? auxiliaryModelId();
   const tempDirPrefix = opts?.tempDirPrefix ?? "pi";
-  const configuredProviderKeys: ProviderKeys = opts?.resolveProviderKeys
-    ? {}
-    : {
-        ...(opts?.apiKey ? { anthropic: opts.apiKey } : {}),
-        ...(opts?.openaiApiKey ? { openai: opts.openaiApiKey } : {}),
-        ...(opts?.openrouterApiKey ? { openrouter: opts.openrouterApiKey } : {}),
-      };
-  const resolveProviderKeys = async (): Promise<ProviderKeys> => ({
-    ...configuredProviderKeys,
-    ...(await opts?.resolveProviderKeys?.()),
-  });
-  const modelGateway = opts?.modelGateway;
+  const resolveModels = async (): Promise<TurnModels> => {
+    const [keys, gateway] = await Promise.all([opts?.resolveProviderKeys?.(), opts?.resolveModelGateway?.()]);
+    return { keys: keys ?? {}, ...(gateway ? { gateway } : {}) };
+  };
   const companyServedId = (id: string) => (opts?.companyModelId ? opts.companyModelId(id) : id);
   const requiredModel = (id: string, company = true) => getRequiredModel(company ? companyServedId(id) : id, company);
-  const keyForModel = (keys: ProviderKeys, model: Model<Api>): string | undefined =>
-    modelGatewayRequest(modelGateway, model)?.apiKey ?? keys[String(model.provider)];
+  const keyForModel = ({ keys, gateway }: TurnModels, model: Model<Api>): string | undefined =>
+    modelGatewayRequest(gateway, model)?.apiKey ?? keys[String(model.provider)];
   const captureRequests = opts?.captureRequests ?? true;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
@@ -916,19 +904,14 @@ export function createAgent(opts?: AgentOptions): Agent {
     systemPrompt: string,
     history: SessionEntry[],
     priorTurns: ConversationTurn[] | undefined,
-    turnProviderKeys: ProviderKeys | undefined,
+    turnModels: TurnModels,
     ref: TurnSession["ref"],
     tools: ToolDefinition[],
     loadImage: ReplayImageLoader | undefined,
   ): Promise<{ entry: TurnSession }> {
     const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
 
-    const modelRuntime = await buildModelRuntime(
-      turnProviderKeys ?? (await resolveProviderKeys()),
-      turnProviderKeys ? undefined : modelGateway,
-      "turn",
-      "long",
-    );
+    const modelRuntime = await buildModelRuntime(turnModels.keys, turnModels.gateway, "turn", "long");
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
       systemPrompt,
@@ -995,7 +978,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             );
           }
           try {
-            const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
+            const gateway = modelGatewayRequest(turnModels.gateway, model as Model<Api>);
             finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? 9_000_000 : undefined);
           } catch (e) {
             swallow("pi: request byte budget", e);
@@ -1026,9 +1009,10 @@ export function createAgent(opts?: AgentOptions): Agent {
 
   const agent: Agent = {
     async runTurn(dispatched: AgentTurnInput): Promise<AgentTurnResult> {
+      const turnModels = dispatched.providerKeys ? { keys: dispatched.providerKeys } : await resolveModels();
+      const turnModelGateway = turnModels.gateway;
       const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId(dispatched.scopeLabel);
       const baseModel = requiredModel(desiredModelId, !dispatched.providerKeys);
-      const turnModelGateway = dispatched.providerKeys ? undefined : modelGateway;
       const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
       const ref: TurnSession["ref"] = {
         current: dispatched.tools,
@@ -1061,7 +1045,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         turn.systemPrompt,
         turn.history,
         turn.priorTurns,
-        turn.providerKeys,
+        turnModels,
         ref,
         tools,
         turn.loadImage,
@@ -1602,10 +1586,10 @@ export function createAgent(opts?: AgentOptions): Agent {
     },
 
     async shouldRespond(detect: DetectInput): Promise<DetectResult> {
+      const models = await resolveModels();
       const modelId = detectModelId();
       const model = requiredModel(modelId);
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return { respond: true };
+      if (!keyForModel(models, model)) return { respond: true };
       const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
       const prompt = renderDetectPrompt(detect);
       detect.recordModelCall({
@@ -1614,8 +1598,8 @@ export function createAgent(opts?: AgentOptions): Agent {
         entryCount: detect.history.length,
       });
       const out = (
-        (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, {
-          modelGateway,
+        (await oneShot("pi-detect", model, models.keys, detectSystemPrompt, prompt, {
+          modelGateway: models.gateway,
           purpose: "detect",
           ...(detect.recordLlmRequest ? { recordLlmRequest: detect.recordLlmRequest } : {}),
         })) ?? ""
@@ -1624,9 +1608,9 @@ export function createAgent(opts?: AgentOptions): Agent {
     },
 
     async compactHistory(input: CompactInput): Promise<string> {
+      const models = await resolveModels();
       const primaryId = resolveModelId();
-      const providerKeys = await resolveProviderKeys();
-      const runtime = await buildModelRuntime(providerKeys, modelGateway, "compaction");
+      const runtime = await buildModelRuntime(models.keys, models.gateway, "compaction");
       const summarize = (compactModelId: string) =>
         summarizeHistory(input.history, requiredModel(compactModelId), (summaryModel, context, options) => {
           input.recordModelCall({
@@ -1665,10 +1649,10 @@ export function createAgent(opts?: AgentOptions): Agent {
     },
 
     async oneShot(systemPrompt: string, prompt: string, purpose?: ModelRequestPurpose): Promise<string | undefined> {
+      const models = await resolveModels();
       const model = requiredModel(resolveModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
-      return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway, purpose });
+      if (!keyForModel(models, model)) return undefined;
+      return oneShot("pi-oneshot", model, models.keys, systemPrompt, prompt, { modelGateway: models.gateway, purpose });
     },
 
     async judge(
@@ -1677,11 +1661,11 @@ export function createAgent(opts?: AgentOptions): Agent {
       signal?: AbortSignal,
       purpose: ModelRequestPurpose = "judge",
     ): Promise<string | undefined> {
+      const models = await resolveModels();
       const model = requiredModel(judgeModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
-      return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
-        modelGateway,
+      if (!keyForModel(models, model)) return undefined;
+      return oneShot("pi-judge", model, models.keys, systemPrompt, prompt, {
+        modelGateway: models.gateway,
         purpose,
         signal,
         thinkingLevel: "low",
@@ -1691,10 +1675,10 @@ export function createAgent(opts?: AgentOptions): Agent {
     async screenSecurity({ payload, signal, recordModelCall, recordLlmRequest }) {
       const systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT;
       try {
+        const models = await resolveModels();
         const modelId = detectModelId();
         const model = requiredModel(modelId);
-        const providerKeys = await resolveProviderKeys();
-        if (!keyForModel(providerKeys, model)) return undefined;
+        if (!keyForModel(models, model)) return undefined;
         recordModelCall({
           model: modelId,
           inputTokens: countTokens(systemPrompt) + countTokens(payload),
@@ -1708,9 +1692,9 @@ export function createAgent(opts?: AgentOptions): Agent {
           truncated: false,
         });
         return parseSecurityScreenVerdict(
-          await oneShot("pi-security-screen", model, providerKeys, systemPrompt, payload, {
+          await oneShot("pi-security-screen", model, models.keys, systemPrompt, payload, {
             signal,
-            modelGateway,
+            modelGateway: models.gateway,
             purpose: "security_screen",
           }),
         );
@@ -1725,10 +1709,10 @@ export function createAgent(opts?: AgentOptions): Agent {
       const ackModelId = auxiliaryModelForProvider("anthropic");
       if (!ackModelId) return undefined;
       const model = requiredModel(ackModelId);
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
+      const models = await resolveModels();
+      if (!keyForModel(models, model)) return undefined;
       const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-      const runtime = await buildModelRuntime(providerKeys, modelGateway, "ack_emoji");
+      const runtime = await buildModelRuntime(models.keys, models.gateway, "ack_emoji");
       const reply = await runtime.completeSimple(
         model,
         { systemPrompt: ACK_EMOJI_PROMPT, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
@@ -1743,11 +1727,11 @@ export function createAgent(opts?: AgentOptions): Agent {
 
     async generateTitle(transcript: string): Promise<string | undefined> {
       if (!transcript.trim()) return undefined;
+      const models = await resolveModels();
       const model = requiredModel(titleModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
-      const out = await oneShot("pi-title", model, providerKeys, TITLE_GENERATION_PROMPT, titleUserPrompt(transcript), {
-        modelGateway,
+      if (!keyForModel(models, model)) return undefined;
+      const out = await oneShot("pi-title", model, models.keys, TITLE_GENERATION_PROMPT, titleUserPrompt(transcript), {
+        modelGateway: models.gateway,
         purpose: "title",
       });
       return sanitizeTitle(out);
@@ -1755,9 +1739,9 @@ export function createAgent(opts?: AgentOptions): Agent {
 
     async summarizeApproval(command: string, reason: string, purpose?: string): Promise<string | undefined> {
       if (!command.trim()) return undefined;
+      const models = await resolveModels();
       const model = requiredModel(titleModelId());
-      const providerKeys = await resolveProviderKeys();
-      if (!keyForModel(providerKeys, model)) return undefined;
+      if (!keyForModel(models, model)) return undefined;
       const prompt = [
         `Policy flagged this as: ${reason}`,
         purpose ? `Agent's stated purpose: ${purpose}` : "",
@@ -1766,8 +1750,8 @@ export function createAgent(opts?: AgentOptions): Agent {
         command.slice(0, 4000),
       ].join("\n");
       const out = (
-        await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, {
-          modelGateway,
+        await oneShot("pi-approval-summary", model, models.keys, APPROVAL_SUMMARY_PROMPT, prompt, {
+          modelGateway: models.gateway,
           purpose: "approval_summary",
         })
       )?.trim();

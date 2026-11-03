@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenantSettings } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -33,13 +34,11 @@ function reply(): Response {
 
 for (const warm of [false, true]) {
   test(`${warm ? "existing" : "fresh"} human thread includes the approval referent in the provider request and deduplicates after agent reset`, async () => {
-    const config = testConfig({
-      anthropicApiKey: "sk-test",
-      securityScreen: "off",
-      memoryStrategy: "agent-only",
-    });
-    let built = buildApp(config);
-    await built.startup();
+    const config = testConfig({ memoryStrategy: "agent-only" });
+    const app = () => buildApp(config, { tenantSettings: testTenantSettings({ SECURITY_SCREEN: "off" }) });
+    let built = app();
+    await inTestTenant(() => undefined);
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "sk-test", "test"));
     const requests: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
@@ -85,8 +84,8 @@ for (const warm of [false, true]) {
       assert.match(requestText, /The worker needs restarting/);
       assert.match(requestText, /Alex, can you approve/);
       await built.runtime.stop();
-      built = buildApp(config);
-      await built.startup();
+      built = app();
+      await inTestTenant(() => undefined);
       const second = await inTestTenant(() => built.app.turn({ ...input, text: "yes, go ahead" }));
       assert.equal(second.status, "ok", second.reason);
       const next = JSON.stringify(JSON.parse(requests.at(-1)!).messages);

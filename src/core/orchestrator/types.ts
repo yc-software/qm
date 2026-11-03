@@ -18,7 +18,7 @@ import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reac
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
-import type { ModelAccount, OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
+import type { ModelAccount, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { UserModelCredentialStore } from "../../model/user-model-credential-store.ts";
 import type { IsCurrentSharedScopeMember, ManagedGroupDirectory } from "../../resolution/scope-membership.ts";
 import type { ProjectStore } from "../../projects/project-store.ts";
@@ -119,7 +119,6 @@ export interface OrchestratorDeps {
   config?: ScopedConfigStore;
   defaultTurnWallClockMs?: number;
   userModelCredentials?: UserModelCredentialStore;
-  brandingDefault?: OrgBranding;
   resolveBaseModelId?: () => string | undefined;
   sessions: SessionStore;
   sessionStateBus?: SessionStateBus;
@@ -136,7 +135,7 @@ export interface OrchestratorDeps {
   execTimeoutCeilingMs?: number;
   approvalSummaryTimeoutMs?: number;
   securityScreenTimeoutMs?: number;
-  securityScreener?: SecurityScreener;
+  securityScreener?: () => Promise<SecurityScreener | undefined>;
   backgroundJobTtlMs?: number;
   sandboxCapabilityTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
@@ -145,7 +144,7 @@ export interface OrchestratorDeps {
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
-  sandboxModels?: boolean;
+  sandboxModels?: () => Promise<boolean>;
   publicWebUrl?: string;
   webhookPublicUrl?: string;
   deploy: DeployService;
@@ -157,7 +156,6 @@ export interface OrchestratorDeps {
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
-  skillsReady?: Promise<void>;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
   errors?: ErrorLog;
@@ -197,8 +195,7 @@ export interface OrchestratorDeps {
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
   environments?: EnvironmentStore;
   layerBrokerFor?: (tool: BrokeredLayerTool) => AwsRoleBroker | undefined;
-  brokeredTools?: readonly BrokeredLayerTool[];
-  deploymentLayer?: DeploymentLayerRuntime;
+  deploymentLayer?: () => DeploymentLayerRuntime;
   surfaceContext?: SurfaceContextPuller;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;

@@ -18,7 +18,9 @@ import { inTestTenant } from "./support/test-tenants.ts";
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-cron-")) }));
+await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
 const core = createServer(built.app, {
+  featureFlags: built.featureFlags,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
   scheduler: built.scheduler,
@@ -28,7 +30,6 @@ const corePort = (core.address() as AddressInfo).port;
 
 process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
 const web = createHttpServer((req, res) => inTestTenant(() => handler(req, res)));
 web.listen(0);

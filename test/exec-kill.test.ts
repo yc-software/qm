@@ -39,7 +39,7 @@ function sprites(): Sandbox {
   return createSpritesSandbox(createLocalWorkspaceStore(dir), {
     initializationStore: testMap(),
     advisoryLock: testAdvisoryLock(),
-    token: "test-token",
+    token: async () => "test-token",
     baseUrl: ff.baseUrl,
   });
 }

@@ -12,7 +12,10 @@ const idp = createServer((_req, res) => {
 });
 await new Promise<void>((resolve) => idp.listen(0, "127.0.0.1", resolve));
 const issuer = `http://127.0.0.1:${(idp.address() as AddressInfo).port}`;
-const core = createServer((_req, res) => res.end("{}"));
+const core = createServer((req, res) => {
+  const settings = { OIDC_ISSUER: issuer, OIDC_AUTH_ENDPOINT: `${issuer}/authorize`, OIDC_CLIENT_ID: "primary-client" };
+  res.end(req.url?.startsWith("/v1/plugin-settings") ? JSON.stringify({ values: settings }) : "{}");
+});
 await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
 const origin = "http://127.0.0.1:19996";
 const secret = "logout-route-fixture-secret-at-least-32-characters";
@@ -22,9 +25,6 @@ Object.assign(process.env, {
   PORTAL_SESSION_SECRET: secret,
   CORE_ORG_ID: "logout",
   CORE_API_URL: `http://127.0.0.1:${(core.address() as AddressInfo).port}`,
-  OIDC_ISSUER: issuer,
-  OIDC_AUTH_ENDPOINT: `${issuer}/authorize`,
-  OIDC_CLIENT_ID: "primary-client",
   PORTAL_LOCAL_AUTH_BYPASS: "0",
   AUTH_BROKER_UPSTREAM: "",
 });

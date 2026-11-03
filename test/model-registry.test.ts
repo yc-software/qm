@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   SELECTABLE_BASE_MODELS,
@@ -14,6 +13,7 @@ import {
 } from "../src/model/pi-models.ts";
 import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
+import { test } from "./support/test-tenants.ts";
 
 test("registry model identifiers are unique", () => {
   const ids = MODEL_REGISTRY.map((model) => model.id);

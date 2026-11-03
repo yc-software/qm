@@ -29,7 +29,7 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
     sendJson(res, 403, { error: { message: "sandbox model grant required" } });
     return true;
   }
-  if (!deps.modelGatewayTransport?.actorKey) {
+  if (!(await deps.modelGatewayTransport?.())?.actorKey) {
     sendJson(res, 503, { error: { message: "no model gateway is configured" } });
     return true;
   }
@@ -51,7 +51,7 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
 async function proxy(ctx: ApiCtx): Promise<void> {
   if (await denied(ctx)) return;
   const { deps, body, req, res, capability, url, pathname, method } = ctx;
-  const gateway = deps.modelGatewayTransport!;
+  const gateway = (await deps.modelGatewayTransport!())!;
   const path = pathname.slice(SANDBOX_MODEL_PREFIX.length);
   await gateway.refresh?.();
   if (method === "GET" && path === "/v1/models")

@@ -6,7 +6,6 @@ import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 process.env.CORE_API_URL = "http://localhost:1";
-process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
 const web = createHttpServer(handler);
 web.listen(0);

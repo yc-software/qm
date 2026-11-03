@@ -10,6 +10,10 @@ let claimCalls = 0;
 let refuseClaims = false;
 
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (req.url?.startsWith("/v1/plugin-settings")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ values: { OIDC_CLIENT_ID: "test-client" } }));
+  }
   if (req.method === "POST" && req.url?.startsWith("/v1/auth/broker/claim")) {
     claimCalls++;
     const chunks: Buffer[] = [];

@@ -55,15 +55,17 @@ test("empty when there is nothing to say", () => {
   assert.equal(renderGatewayContext("  ", { location: "  ", details: { "": "x", k: "  " } }), "");
 });
 
-function freshApp() {
+async function freshApp() {
   const config: Config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
   });
-  return buildApp(config);
+  const built = buildApp(config);
+  await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
+  return built;
 }
 
 test("gateway context flows into the system prompt the agent sees", async () => {
-  const { app } = freshApp();
+  const { app } = await freshApp();
   const res = await inTestTenant(() =>
     app.turn({
       surface: "slack",
@@ -80,7 +82,7 @@ test("gateway context flows into the system prompt the agent sees", async () => 
 });
 
 test("no gateway context: prompt names the surface but adds no identifier lines", async () => {
-  const { app } = freshApp();
+  const { app } = await freshApp();
   const res = await inTestTenant(() =>
     app.turn({
       surface: "slack",
@@ -95,7 +97,7 @@ test("no gateway context: prompt names the surface but adds no identifier lines"
 });
 
 test("web prompt tells cron creators to use a real notification destination", async () => {
-  const { app } = freshApp();
+  const { app } = await freshApp();
   const res = await inTestTenant(() =>
     app.turn({
       surface: "web",
@@ -110,7 +112,7 @@ test("web prompt tells cron creators to use a real notification destination", as
 });
 
 test("triggered destination turns tell the agent to return the deliverable, not self-send it", async () => {
-  const { app } = freshApp();
+  const { app } = await freshApp();
   const res = await inTestTenant(() =>
     app.turn({
       surface: "cron",

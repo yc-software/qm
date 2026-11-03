@@ -1,10 +1,10 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createGoalRecord, type GoalRecord } from "../src/agent/goal.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { entryFromItem, storedItem } from "../src/sessions/items.ts";
+import { test } from "./support/test-tenants.ts";
 
 const sessionGoals = new Map<string, GoalRecord>();
 const savedGoal = (sessionId: string) => sessionGoals.get(sessionId) ?? null;
@@ -39,7 +39,7 @@ function goalTurn(
 }
 
 test("an active goal stops continuing once a model round fails at the provider", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const entries: Array<{ type: string; payload: unknown }> = [];
   const realFetch = globalThis.fetch;
@@ -105,7 +105,7 @@ function textStream(text: string, stopReason = "end_turn"): Response {
 }
 
 test("a refused goal round falls back to another model and the goal keeps going", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const entries: Array<{ type: string; payload: unknown }> = [];
   const realFetch = globalThis.fetch;
@@ -130,7 +130,7 @@ test("a refused goal round falls back to another model and the goal keeps going"
 });
 
 test("a goal never falls back to a model that already refused in the same turn", async () => {
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const controller = new AbortController();
   const entries: Array<{ type: string; payload: unknown }> = [];
   const realFetch = globalThis.fetch;

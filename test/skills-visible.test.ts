@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, buildLoadedApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -19,12 +19,12 @@ function freshApp() {
     orgId: "acme",
     seedSkills: false,
   });
-  return buildApp(config);
+  return buildLoadedApp(config);
 }
 
-function appTest(name: string, fn: (built: ReturnType<typeof buildApp>) => Promise<void>): void {
+function appTest(name: string, fn: (built: Awaited<ReturnType<typeof freshApp>>) => Promise<void>): void {
   test(name, async () => {
-    const built = freshApp();
+    const built = await inTestTenant(() => freshApp());
     await inTestTenant(() => fn(built));
   });
 }

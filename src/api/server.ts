@@ -29,6 +29,9 @@ import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, tenantHeader, verifyOrReject } from "./http.ts";
 import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
+import { requireOperatorControl } from "./routes/background-work.ts";
+import { operatorTenantKnown } from "./routes/tenant-settings.ts";
+import { orgScope } from "../config.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
@@ -79,6 +82,7 @@ interface GateResult {
   body: unknown;
   capability: CapabilityClaims | null;
   actor: PortalIdentity | null;
+  operator?: true;
 }
 
 interface Wiring {
@@ -186,7 +190,7 @@ async function gate(
   pathname: string,
   url: URL,
   raw: string,
-  route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict"> | undefined,
+  route: Pick<Route, "auth" | "actor" | "admin" | "allowedInStrict" | "operator"> | undefined,
   params: Record<string, string>,
 ): Promise<GateResult | null> {
   const routeAuth = route?.auth;
@@ -251,6 +255,11 @@ async function gate(
     return null;
   }
 
+  if (route?.operator && !capability && req.headers.authorization !== undefined) {
+    return requireOperatorControl({ secret, auth, deps, req, res })
+      ? { body, capability, actor: null, operator: true }
+      : null;
+  }
   let actor: PortalIdentity | null = null;
   if (!capability) {
     const psecret = deps.portalIdentitySecret ?? secret;
@@ -342,6 +351,14 @@ function paramsSchema(path: string): object {
   };
 }
 
+const TENANT_ROOT_SCOPE_ALIAS = "tenant";
+
+async function runApi(route: Route<ApiCtx>, params: Record<string, string>, ctx: ApiCtx): Promise<void> {
+  if (!ctx.operator) return run(route, params, ctx);
+  if (!(await operatorTenantKnown(ctx))) return;
+  await run(route, params.scope === TENANT_ROOT_SCOPE_ALIAS ? { ...params, scope: orgScope() } : params, ctx);
+}
+
 function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstance; routing: RequestListener } {
   const matchRoutes = apiRoutes.filter(
     (route): route is Route<ApiCtx> & { match: (m: string, p: string) => boolean } => !("path" in route),
@@ -373,8 +390,9 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
           body: g.body,
           capability: g.capability,
           actor: g.actor,
+          operator: g.operator,
         };
-        await run(found.route, found.params, ctx);
+        await runApi(found.route, found.params, ctx);
         return;
       }
       sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
@@ -439,9 +457,10 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
       body: g.body,
       capability: g.capability,
       actor: g.actor,
+      operator: g.operator,
     };
     try {
-      await run(route, request.params as Record<string, string>, ctx);
+      await runApi(route, request.params as Record<string, string>, ctx);
     } catch (err) {
       respondError(request.raw, reply.raw, err);
     }

@@ -1,5 +1,5 @@
 import "./support/auto-fake-sprites.ts";
-import { describe, it, before, after } from "node:test";
+import { describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
@@ -16,7 +16,7 @@ import { Readable } from "node:stream";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { it, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const body = async (r: Response | Promise<Response>): Promise<any> => (await r).json();
 
@@ -73,6 +73,7 @@ describe("ui canvas and ui observe", () => {
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
     const deps = {
       sessions: built.sessions,
       uiState: built.uiState,
@@ -98,9 +99,11 @@ describe("ui canvas and ui observe", () => {
       text: "hello",
     };
     sessionId = (await inTestTenant(() => built.app.turn(turn))).sessionId!;
-    built.sessionStateBus.subscribe((event) => {
-      if (event.state === "ui") events.push(event);
-    });
+    await inTestTenant(() =>
+      built.sessionStateBus.subscribe((event) => {
+        if (event.state === "ui") events.push(event);
+      }),
+    );
   });
 
   after(async () => {

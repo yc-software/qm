@@ -19,7 +19,7 @@ import {
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
-import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { activePrincipal, adminActorFrom, audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { ADMIN_RESOURCES, ADMIN_RESOURCE_BY_ID, adminResourceManifest } from "../admin-resources.ts";
 import { type ApiCtx } from "../route.ts";
 import {
@@ -40,6 +40,8 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const actor = await authorizeAdmin(ctx, targetScope);
   if (!actor) return;
+  if (ctx.operator && !ADMIN_RESOURCE_BY_ID.get(resource)?.operator)
+    return sendJson(res, 403, { error: "forbidden", message: `${resource} is not set by the operator` });
   const withScopeMutationLock = async <T>(fn: () => Promise<T>): Promise<T> =>
     deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();
 
@@ -84,8 +86,13 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const desc = ADMIN_RESOURCE_BY_ID.get(resource);
   if (!desc) return sendJson(res, 404, { error: "not_found", message: `unknown admin resource: ${resource}` });
+  const ifUnset = isObj(body) && body.ifUnset === true;
+  if (ifUnset && !desc.isSet)
+    return sendJson(res, 400, { error: "bad_request", message: `${resource} does not support ifUnset` });
   if (desc.refreshesModels) await deps.refreshModels?.();
   return withScopeMutationLock(async () => {
+    if (ifUnset && (await desc.isSet!(deps, targetScope, body)))
+      return sendJson(res, 200, { ok: true, scopeId: targetScope, resource, unchanged: true });
     try {
       const result = await desc.apply(ctx, actor, targetScope);
       if ("error" in result) {
@@ -325,8 +332,7 @@ async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
 }
 
 async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, unknown>, nonblocking: boolean) {
-  const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
+  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : ALL_PROVIDERS_AVAILABLE;
   const cached =
     deps.modelCredentials && managedKeys.openrouter && nonblocking
       ? cachedModelCatalog(deps.modelCredentialFetch)
@@ -337,7 +343,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
       ? await selectableModelCatalog(deps.modelCredentialFetch)
       : builtInModelCatalog());
   const runtime = values.runtime as { modelId?: unknown } | null | undefined;
-  let currentId = defaultModel(deps.baseModelDefault);
+  let currentId = defaultModel(deps.baseModelDefault?.());
   if (typeof values.baseModel === "string") currentId = values.baseModel;
   if (typeof runtime?.modelId === "string") currentId = runtime.modelId;
   const resolvedCurrent = resolveModel(currentId);
@@ -368,7 +374,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
   );
   return {
     ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
-    baseModelDefault: defaultModel(deps.baseModelDefault),
+    baseModelDefault: defaultModel(deps.baseModelDefault?.()),
     baseModelOptions,
     modelCatalog: modelCatalogFor(baseModelOptions.map((model) => model.id)),
     fastModeModelIds: FAST_MODE_MODEL_IDS,

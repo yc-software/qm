@@ -1,7 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import assert from "node:assert/strict";
-import test from "node:test";
 import {
   checkRuleSet,
   parseDecisionRule,
@@ -14,6 +13,7 @@ import {
 import { createDecisionBackend } from "../src/decisions/providers.ts";
 import { withModelRequestContext } from "../src/model/request-context.ts";
 import { turnStartState } from "../src/decisions/hooks.ts";
+import { test } from "./support/test-tenants.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);
@@ -209,7 +209,12 @@ test("gateway provider sends the native typesafe body to the model gateway", asy
   });
   const backend = createDecisionBackend({
     providers: () => PROVIDERS,
-    gateway: { url: "http://gateway:8080/", apiKey: "gk", apiKeyHeader: "api-key", actorKey: "test-actor-key" },
+    gateway: async () => ({
+      url: "http://gateway:8080/",
+      apiKey: "gk",
+      apiKeyHeader: "api-key",
+      actorKey: "test-actor-key",
+    }),
     credential: async () => null,
     fetch: fetchImpl,
   });

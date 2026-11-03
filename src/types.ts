@@ -30,8 +30,13 @@ export function scopeId(kind: ScopeKind, ref: string): ScopeId {
   return `${kind}:${ref}`;
 }
 
+export function foldPrincipalId(id: string | null | undefined): string {
+  const s = (id ?? "").trim();
+  return s.includes("@") ? s.toLowerCase() : s;
+}
+
 export function personalScope(principalId: string): ScopeId {
-  return scopeId("personal", principalId);
+  return scopeId("personal", foldPrincipalId(principalId));
 }
 
 export function scopeActor(scope: ScopeId): string {

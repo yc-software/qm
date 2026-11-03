@@ -21,8 +21,6 @@ export interface AuthConfig {
   redirectUri: string;
   signingJwk: Record<string, unknown> | null;
   tokenSecret: string;
-  allowedEmails: readonly string[];
-  allowedEmailDomain: string | undefined;
   passwordUsers: ReadonlyMap<string, string>;
   passwordUserProblems: readonly string[];
   passwordLimitPerEmail: number;
@@ -51,13 +49,6 @@ const MAX_RATE_LIMIT_SLOTS = 64;
 function numberFrom(raw: string | undefined, fallback: number): number {
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function listFrom(raw: string | undefined): string[] {
-  return (raw ?? "")
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
 }
 
 function issuerPath(issuer: string): string {
@@ -97,8 +88,6 @@ export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
     redirectUri: env.AUTH_REDIRECT_URI?.trim() ?? "",
     signingJwk: parseJwk(env.AUTH_SIGNING_JWK),
     tokenSecret: env.AUTH_TOKEN_SECRET ?? "",
-    allowedEmails: listFrom(env.AUTH_ALLOWED_EMAILS),
-    allowedEmailDomain: env.AUTH_ALLOWED_EMAIL_DOMAIN?.trim().toLowerCase() || undefined,
     passwordUsers: passwordUsers.users,
     passwordUserProblems: passwordUsers.problems,
     passwordLimitPerEmail: numberFrom(env.AUTH_PASSWORD_LIMIT_PER_EMAIL, 10),
@@ -127,15 +116,6 @@ export function readConfig(env: NodeJS.ProcessEnv): AuthConfig {
     coreApiUrl: (env.CORE_API_URL ?? "http://localhost:8080").replace(/\/$/, ""),
     coreSigningSecret: env.CORE_SIGNING_SECRET,
   };
-}
-
-function validEmailDomain(value: string): boolean {
-  if (value.length > 253 || !value.includes(".")) return false;
-  return value
-    .split(".")
-    .every(
-      (label) => label.length > 0 && label.length <= 63 && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label),
-    );
 }
 
 export function validEmail(value: string): boolean {
@@ -210,21 +190,6 @@ export function bootProblems(cfg: AuthConfig, isProd: boolean): string[] {
   if (!cfg.signingJwk) problems.push("AUTH_SIGNING_JWK is required and must be a JSON Web Key object");
   else if (cfg.signingJwk.kty !== "EC" || cfg.signingJwk.crv !== "P-256" || typeof cfg.signingJwk.d !== "string") {
     problems.push("AUTH_SIGNING_JWK must be a P-256 private JSON Web Key (kty EC, crv P-256, with d)");
-  }
-
-  if (!cfg.allowedEmails.length && !cfg.allowedEmailDomain) {
-    problems.push(
-      "AUTH_ALLOWED_EMAILS or AUTH_ALLOWED_EMAIL_DOMAIN is required; without one, anybody with an inbox could sign in",
-    );
-  }
-  const badEmail = cfg.allowedEmails.find((email) => !validEmail(email) || isMissingOrPlaceholder(email));
-  if (badEmail)
-    problems.push("AUTH_ALLOWED_EMAILS must be a comma-separated list of valid, non-placeholder email addresses");
-  if (
-    cfg.allowedEmailDomain &&
-    (isMissingOrPlaceholder(cfg.allowedEmailDomain) || !validEmailDomain(cfg.allowedEmailDomain))
-  ) {
-    problems.push("AUTH_ALLOWED_EMAIL_DOMAIN must be a valid, non-placeholder email domain when set");
   }
 
   if (emailConfigured(cfg)) {

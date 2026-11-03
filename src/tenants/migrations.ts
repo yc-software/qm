@@ -127,3 +127,103 @@ export function tenantTables(
     ],
   };
 }
+
+export const FEATURE_FLAGS_MIGRATION: PgMigrationDefinition = {
+  id: "tenants/0002-feature-flags",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `DO $qm_flags$ BEGIN
+       IF to_regclass('feature_flags') IS NOT NULL AND NOT EXISTS (
+         SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('feature_flags') AND attname = 'feature_name'
+       ) THEN
+         ALTER TABLE feature_flags RENAME TO feature_flags_json;
+       END IF;
+     END $qm_flags$`,
+    `CREATE TABLE IF NOT EXISTS feature_flags(
+       tenant_id UUID NOT NULL,
+       feature_name TEXT NOT NULL,
+       enabled_scopes TEXT[] NOT NULL DEFAULT '{}',
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+       updated_by TEXT NOT NULL,
+       PRIMARY KEY (tenant_id, feature_name)
+     )`,
+    `DO $qm_flags_copy$ BEGIN
+       IF to_regclass('feature_flags_json') IS NOT NULL THEN
+         IF to_regclass('qm_tenant') IS NOT NULL THEN
+           INSERT INTO feature_flags(tenant_id, feature_name, enabled_scopes, updated_at, updated_by)
+             SELECT (SELECT id FROM qm_tenant), id,
+                    ARRAY(SELECT jsonb_array_elements_text(COALESCE(json->'enabledScopes', '[]'::jsonb))),
+                    to_timestamp(COALESCE((json->>'updatedAt')::double precision, 0) / 1000),
+                    COALESCE(json->>'updatedBy', '')
+             FROM feature_flags_json
+             ON CONFLICT DO NOTHING;
+         END IF;
+         DROP TABLE feature_flags_json;
+         IF to_regclass('durable_map_versions') IS NOT NULL THEN
+           DELETE FROM durable_map_versions WHERE tbl = 'feature_flags';
+         END IF;
+       END IF;
+     END $qm_flags_copy$`,
+    ...tenantPolicies("feature_flags"),
+  ],
+};
+
+export const TENANT_SETTINGS_MIGRATION: PgMigrationDefinition = {
+  id: "tenants/0001-settings",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `CREATE TABLE tenant_settings(
+         tenant_id UUID PRIMARY KEY,
+         model_provider TEXT,
+         pi_model TEXT,
+         pi_detect_model TEXT,
+         pi_title_model TEXT,
+         pi_judge_model TEXT,
+         anthropic_base_url TEXT,
+         openai_base_url TEXT,
+         openrouter_base_url TEXT,
+         model_gateway_url TEXT,
+         model_gateway_api_key TEXT,
+         model_gateway_api_key_header TEXT,
+         model_gateway_models TEXT,
+         codex_auth_credential TEXT,
+         claude_auth_credential TEXT,
+         sandbox_backend TEXT,
+         sprites_token TEXT,
+         e2b_api_key TEXT,
+         modal_token_id TEXT,
+         modal_token_secret TEXT,
+         do_agents_api_token TEXT,
+         smolmachines_token TEXT,
+         agent37_api_key TEXT,
+         superserve_api_key TEXT,
+         render_sandbox_api_key TEXT,
+         render_sandbox_workspace_id TEXT,
+         security_screen TEXT,
+         security_screen_classifier TEXT,
+         security_screen_proxy_provider TEXT,
+         security_screen_proxy_endpoint TEXT,
+         security_screen_proxy_token TEXT,
+         auth_allowed_emails TEXT,
+         auth_allowed_email_domain TEXT,
+         trusted_oidc_admin_issuer TEXT,
+         suggested_activities_context TEXT,
+         admin_grants TEXT,
+         oidc_issuer TEXT,
+         oidc_auth_endpoint TEXT,
+         oidc_token_endpoint TEXT,
+         oidc_userinfo_endpoint TEXT,
+         oidc_jwks_uri TEXT,
+         oidc_client_id TEXT,
+         oidc_scopes TEXT,
+         oidc_prompt TEXT,
+         oidc_principal_claim TEXT,
+         oidc_allowed_email_domain TEXT,
+         oidc_allowed_emails TEXT,
+         portal_expected_team_id TEXT,
+         oidc_client_secret TEXT,
+         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+       )`,
+    ...tenantPolicies("tenant_settings"),
+  ],
+};

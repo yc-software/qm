@@ -46,6 +46,7 @@ describe("agent conversations self-API", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
+    await inTestTenant(() => built.modelCredentials.set("anthropic", "test-anthropic-key", "admin"));
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,

@@ -4,6 +4,7 @@ import { mintSignedPayload } from "../../../auth/signed-token.ts";
 import { scopeId as makeScopeId } from "../../../types.ts";
 import { adminStatusFromGrants, AdminError } from "../../../admin/admin-service.ts";
 import { personKey, samePerson } from "../../../directory/person.ts";
+import { tenantAllowsEmail } from "../../../tenants/settings-parse.ts";
 import type { AdminRole } from "../../../admin/admin-grant-store.ts";
 import type { DirectoryMember } from "../../../directory/directory-store.ts";
 import { computeUsers } from "../../../admin/users.ts";
@@ -60,7 +61,7 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
     ...(deps.inviteMailer ? {} : { problem: INVITE_EMAIL_NOT_CONFIGURED }),
     ...(signInUrl ? { signInUrl } : {}),
   };
-  const actorKey = deps.modelGatewayTransport?.actorKey;
+  const actorKey = (await deps.modelGatewayTransport?.())?.actorKey;
   return sendJson(res, 200, {
     scopeId: scope,
     users: actorKey
@@ -70,7 +71,7 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
     externalUsers,
     inviteEmail,
     access: {
-      emailDomain: deps.emailAuthDomain ?? null,
+      emailDomain: (await deps.tenantSettings?.get())?.emailAuthDomain ?? null,
       slackAllowFrom: deps.slackAllowFrom ?? null,
     },
   });
@@ -91,8 +92,7 @@ function grantError(res: ApiCtx["res"], error: string, e: unknown): void {
 
 async function orgMember(ctx: ApiCtx, email: string, includeSessions: boolean): Promise<boolean> {
   const { deps } = ctx;
-  if (deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`)) return true;
-  if ((deps.emailAuthPrincipals ?? []).some((principal) => samePerson(principal, email))) return true;
+  if (tenantAllowsEmail(await deps.tenantSettings?.get(), email)) return true;
   if (await deps.directory?.get(email)) return true;
   if (!includeSessions) return false;
   const participants = (await deps.sessions?.listParticipants()) ?? [];
@@ -205,7 +205,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     else if (!signInUrl)
       emailProblem = "no sign-in URL is configured on core (set PUBLIC_WEB_URL) — share the portal address by hand";
     else {
-      const branding = await resolveBranding(deps.config, scope, deps.brandingDefault);
+      const branding = await resolveBranding(deps.config, scope);
       try {
         await deps.inviteMailer.send({
           to: email,

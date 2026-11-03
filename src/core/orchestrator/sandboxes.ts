@@ -328,7 +328,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   });
   const provisionJobComputer = async (): Promise<SandboxHandle> => {
     const resources = deps.sandboxResources!;
-    const backend = (await resources.resolve(memoryScopeId))?.backend ?? resources.defaultBackend();
+    const backend = (await resources.resolve(memoryScopeId))?.backend ?? (await resources.defaultBackend());
     const resource = await resources.create(actor.id, memoryScopeId, backend, "background job", undefined, true);
     return provisionResource(jobComputerPlan(resource));
   };

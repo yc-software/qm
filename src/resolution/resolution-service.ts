@@ -37,7 +37,7 @@ export function createResolutionService(
   orgId: string,
   config: ScopedConfigStore,
   acl: AclStore,
-  screening: SecurityScreenMode = "enforce",
+  screening: () => Promise<SecurityScreenMode> = async () => "enforce",
 ): ResolutionService {
   const orgScope = scopeId("org", orgId);
 
@@ -74,7 +74,7 @@ export function createResolutionService(
       const orgPolicy = config.getCommandPolicy(orgScope) ?? defaultOrgPolicy();
       const scopePolicy = config.getCommandPolicy(scope) ?? undefined;
       const commandPolicy = composePolicy(orgPolicy, scopePolicy);
-      const securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope), screening);
+      const securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope), await screening());
       const sharingPosture = external
         ? "isolated"
         : await config.resolveSharingPostureDurable(scopeId("personal", actor.id), scope);

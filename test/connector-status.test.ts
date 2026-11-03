@@ -1,8 +1,8 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { providerTokenStatuses } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "../src/credentials/keychain.ts";
 import { setPublicOAuthClients } from "../src/connectors/oauth.ts";
+import { test } from "./support/test-tenants.ts";
 
 function fakeTokens(status: (host: string, accountType?: string) => OAuthTokenStatus): ConnectorTokenStore {
   return {

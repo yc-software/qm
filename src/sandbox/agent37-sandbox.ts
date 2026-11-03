@@ -20,7 +20,7 @@ import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import type {
   AgentComputerProfile,
   ExecOptions,
@@ -103,7 +103,7 @@ interface InstanceExecResponse {
 }
 
 export interface Agent37SandboxOptions {
-  apiKey?: string;
+  apiKey: () => Promise<string>;
   baseUrl?: string;
   namePrefix?: string;
   template?: string;
@@ -116,15 +116,14 @@ export interface Agent37SandboxOptions {
   signingSecret?: string;
   capabilitySecret?: string;
   apiBaseUrl?: string;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   fetchImpl?: typeof fetch;
   advisoryLock: AdvisoryLock;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
 export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37SandboxOptions): Sandbox {
-  if (!opts.apiKey && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=agent37 requires AGENT37_API_KEY");
   const fetchImpl = opts.fetchImpl ?? fetch;
   const baseUrl = (opts.baseUrl ?? DEFAULT_AGENT37_BASE_URL).replace(/\/+$/, "");
   const prefix = opts.namePrefix ?? "qm";
@@ -139,12 +138,12 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
 
-  const idByName = new Map<string, string>();
+  const idByName = tenantKeyedMap<string>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
 
-  function send(
+  async function send(
     method: string,
     path: string,
     body?: unknown,
@@ -154,7 +153,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     return fetchImpl(`${baseUrl}${path}`, {
       method,
       headers: {
-        authorization: `Bearer ${opts.apiKey ?? ""}`,
+        authorization: `Bearer ${await opts.apiKey()}`,
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -452,10 +451,10 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       os: "Debian 12, Agent37 sandbox (the whole disk persists)",
       runtimes: ["Node 24", "Python 3"],
       get tools() {
-        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
+        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools?.() ?? [])]);
       },
       get notInstalled() {
-        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools?.() ?? []);
       },
       cpus: resources.cpu,
       memoryMb: resources.memory * 1024,
@@ -486,7 +485,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: HOME_DIR,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => rel),
   });
 
   const sandbox: Sandbox = {
@@ -528,7 +527,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       };
 
       try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
+        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths?.() ?? [])}`;
         const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
           throw new Error(`agent37 provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);

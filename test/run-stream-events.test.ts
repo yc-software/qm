@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
 import { emitRunText, type RunStreamEvent } from "../src/runs/run-stream-events.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { MAX_NOTIFY_PAYLOAD_BYTES } from "../src/persistence/postgres-notify-bus.ts";
+import { test } from "./support/test-tenants.ts";
 
 test("text publications push exact offsets immediately, including block boundaries and the buffer cap", () => {
   const changes: string[] = [];

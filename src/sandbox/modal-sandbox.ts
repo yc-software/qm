@@ -28,7 +28,7 @@ import {
 } from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { sandboxScopeName, tenantKeyedMap } from "./exec-sandbox-base.ts";
 import { ModalNameConflictError, ModalSandboxGoneError, type ModalClient, type ModalSession } from "./modal-client.ts";
 import {
   createHomeSnapshotOps,
@@ -85,8 +85,8 @@ export interface ModalSandboxOptions extends BlobStagingOptions {
   rotateAfterMs?: number;
   reapIdleMs?: number;
   egressProxyUrl?: string;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
+  extraTools?: () => readonly string[];
+  credentialPaths?: () => readonly CredentialPathSpec[];
   connectorSdk?: () => Promise<ConnectorSdkBundle>;
   layerToolFiles?: () => readonly LayerInstallFile[];
   fileChunkBytes?: number;
@@ -127,7 +127,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   const provisionQueue = <T>(scope: string, action: () => Promise<T>): Promise<T> =>
     localQueue(scope, () => advisoryLock.withLock(`modal-provision:${scope}`, action));
 
-  const sessionByName = new Map<string, ModalSession>();
+  const sessionByName = tenantKeyedMap<ModalSession>();
   const scopeByName = new Map<string, string>();
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
@@ -141,9 +141,9 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         label: "modal",
         homeDir: HOME_DIR,
         homeTarPath: HOME_TAR,
-        prunePaths: [
+        prunePaths: () => [
           ...SNAPSHOT_PRUNE,
-          ...ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => `./${rel}`),
+          ...ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => `./${rel}`),
         ],
         store: opts.snapshots,
         io: {
@@ -465,10 +465,10 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       os: "Debian 12 — Modal sandbox (24h max lifetime; home checkpoints have limited retention; publish durable work to git or Files)",
       runtimes: ["Node 24", "Python 3"],
       get tools() {
-        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
+        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools?.() ?? [])]);
       },
       get notInstalled() {
-        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
+        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools?.() ?? []);
       },
       homeDir: HOME_DIR,
       workdir: workspaceDir,
@@ -512,7 +512,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     exec: (id, script, t) => execRaw(id, script, t),
     readAbsBytes,
     defaultHomeDir: HOME_DIR,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
+    ephemeralCredentialPrefixes: () => ephemeralCredLinkPaths(opts.credentialPaths?.() ?? []).map(({ rel }) => rel),
   });
 
   const blobStaging = createBackendBlobStaging("modal", (id, script, t) => execRaw(id, script, t), opts);
@@ -704,7 +704,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       };
 
       try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
+        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths?.() ?? [])}`;
         await installLayerTools(
           {
             exec: (script, t) => execRaw(name, script, t),

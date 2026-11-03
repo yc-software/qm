@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createServer } from "../src/api/server.ts";
@@ -69,7 +69,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
       assert.equal((await fetch(`${base}${path}`)).status, 401);
       assert.equal((await get(path)).status, 403);
       const response = await fetch(`${base}${path}`, {
-        headers: inTestTenant(() => signedRequestHeaders(SECRET, "GET", path)),
+        headers: signedRequestHeaders(SECRET, "GET", path, "", testTenantHeaders()),
       });
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), { member });
@@ -153,7 +153,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
       return fetch(`${base}/v1/directory`, {
         method: "POST",
         headers: {
-          ...inTestTenant(() => signedRequestHeaders(SECRET, "POST", "/v1/directory", raw)),
+          ...signedRequestHeaders(SECRET, "POST", "/v1/directory", raw, testTenantHeaders()),
           "content-type": "application/json",
         },
         body: raw,
@@ -192,13 +192,10 @@ describe("a deployment without the Slack surface (the directory store is never p
   );
 
   before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "dir-web-only-")),
-        signingSecret: SECRET,
-        emailAuthPrincipals: ["dana@acme.com"],
-      }),
-    );
+    const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "dir-web-only-")), signingSecret: SECRET });
+    built = buildApp(config, {
+      tenantSettings: testTenantSettings({ AUTH_ALLOWED_EMAILS: "dana@acme.com" }, config.databaseUrl),
+    });
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -296,7 +293,7 @@ describe("qualification membership readiness with signed portal identity enforce
     try {
       const path = "/v1/directory/resolve?q=UQA";
       const unsigned = await fetch(`${base}${path}`, {
-        headers: inTestTenant(() => signedRequestHeaders(SECRET, "GET", path)),
+        headers: signedRequestHeaders(SECRET, "GET", path, "", testTenantHeaders()),
       });
       assert.equal(unsigned.status, 401);
       process.env.PORTAL_IDENTITY_SECRET = portalSecret;

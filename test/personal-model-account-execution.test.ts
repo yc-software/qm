@@ -7,6 +7,8 @@ import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
+import type { ModelProvider } from "../src/model/model-credential-store.ts";
+import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 const turns: AgentTurnInput[] = [];
@@ -29,244 +31,277 @@ mock.module("../src/agent/agent-run.ts", {
   namedExports: { ...agentRun, createAgent: observedCreateAgent },
 });
 const { buildApp } = await import("../src/wiring.ts");
+const { stopAtEnd, testTenantSettings } = await import("./support/build-app.ts");
+
+async function build(keys: Partial<Record<ModelProvider, string>> = {}, settings: TenantSettingValues = {}) {
+  const built = stopAtEnd(buildApp(testConfig(), { tenantSettings: testTenantSettings(settings) }));
+  for (const [provider, key] of Object.entries(keys))
+    await inTestTenant(() => built.modelCredentials.set(provider as ModelProvider, key, "admin"));
+  await inTestTenant(() => built.tenantSettings.get());
+  return built;
+}
 
 for (const provider of ["anthropic", "openai"] as const) {
-  test(`queued personal ${provider} turns use only that provider's credentials after switching to company`, async () => {
+  test(`queued personal ${provider} turns use only that provider's credentials after switching to company`, () =>
+    inTestTenant(async () => {
+      turns.length = 0;
+      const built = await build({ anthropic: "company-anthropic", openai: "company-openai" });
+      await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic"));
+      await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "personal-openai"));
+      await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, provider));
+      const submitted = await inTestTenant(() =>
+        built.app.turn({
+          surface: "slack",
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef: `execute-personal-${provider}` },
+          text: "hello",
+          liveActor: true,
+          async: true,
+        }),
+      );
+      await inTestTenant(() => built.config.setPersonalModelAuth("U1", false));
+      built.runtime.start();
+      try {
+        const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
+        assert.equal(finished.status, "done", JSON.stringify(finished.result));
+        assert.equal(turns.length, 1);
+        assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
+        assert.equal(resolveModel(turns[0]!.runtime!.modelId!)?.provider, provider);
+      } finally {
+        await built.runtime.stop();
+      }
+    }));
+}
+
+test("disconnecting a queued personal account fails without invoking any main agent or another connected provider", () =>
+  inTestTenant(async () => {
     turns.length = 0;
-    const built = buildApp(testConfig({ anthropicApiKey: "company-anthropic", openaiApiKey: "company-openai" }));
+    const built = await build({ anthropic: "company-anthropic", openai: "company-openai" });
     await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic"));
     await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "personal-openai"));
-    await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, provider));
+    await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
     const submitted = await inTestTenant(() =>
       built.app.turn({
         surface: "slack",
         actor: { externalId: "U1" },
-        conversation: { kind: "dm", threadRef: `execute-personal-${provider}` },
+        conversation: { kind: "dm", threadRef: "execute-disconnected-personal" },
         text: "hello",
         liveActor: true,
         async: true,
       }),
     );
+    await inTestTenant(() => built.userModelCredentials.delete("U1", "openai"));
     await inTestTenant(() => built.config.setPersonalModelAuth("U1", false));
     built.runtime.start();
     try {
       const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
-      assert.equal(finished.status, "done", JSON.stringify(finished.result));
-      assert.equal(turns.length, 1);
-      assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
-      assert.equal(resolveModel(turns[0]!.runtime!.modelId!)?.provider, provider);
+      assert.equal(finished.status, "failed");
+      assert.match(JSON.stringify(finished), /personal AI account is unavailable/);
+      assert.equal(turns.length, 0);
     } finally {
       await built.runtime.stop();
     }
-  });
-}
-
-test("disconnecting a queued personal account fails without invoking any main agent or another connected provider", async () => {
-  turns.length = 0;
-  const built = buildApp(testConfig({ anthropicApiKey: "company-anthropic", openaiApiKey: "company-openai" }));
-  await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic"));
-  await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "personal-openai"));
-  await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
-  const submitted = await inTestTenant(() =>
-    built.app.turn({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "execute-disconnected-personal" },
-      text: "hello",
-      liveActor: true,
-      async: true,
-    }),
-  );
-  await inTestTenant(() => built.userModelCredentials.delete("U1", "openai"));
-  await inTestTenant(() => built.config.setPersonalModelAuth("U1", false));
-  built.runtime.start();
-  try {
-    const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
-    assert.equal(finished.status, "failed");
-    assert.match(JSON.stringify(finished), /personal AI account is unavailable/);
-    assert.equal(turns.length, 0);
-  } finally {
-    await built.runtime.stop();
-  }
-});
+  }));
 
 for (const account of ["personal", "openai", "anthropic"] as const) {
-  test(`web ${account} account honors the chosen model, effort and fast mode`, async () => {
+  test(`web ${account} account honors the chosen model, effort and fast mode`, () =>
+    inTestTenant(async () => {
+      turns.length = 0;
+      const provider = account === "anthropic" ? "anthropic" : "openai";
+      const model = provider === "anthropic" ? "claude-sonnet-5" : "gpt-5.6-terra";
+      const built = await build({ openai: "company-openai" });
+      await inTestTenant(() => built.userModelCredentials.setApiKey("U1", provider, `personal-${provider}`));
+      await inTestTenant(() =>
+        built.config.setPersonalModelAuth("U1", true, account === "personal" ? undefined : account),
+      );
+      const submitted = await inTestTenant(() =>
+        built.app.turn({
+          surface: "web",
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef: `web:U1:picker-${account}` },
+          text: "hello",
+          liveActor: true,
+          async: true,
+          model,
+          thinkingLevel: "high",
+          fastMode: true,
+        }),
+      );
+      assert.ok(submitted.runId, JSON.stringify(submitted));
+      const queued = await inTestTenant(() => built.runs.get(submitted.runId!));
+      assert.equal(queued?.request.model, model);
+      built.runtime.start();
+      try {
+        const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
+        assert.equal(finished.status, "done", JSON.stringify(finished.result));
+        assert.equal(turns.length, 1);
+        assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
+        assert.deepEqual(turns[0]!.runtime, {
+          modelId: model,
+          effortLevel: "high",
+          fastMode: true,
+        });
+      } finally {
+        await built.runtime.stop();
+      }
+    }));
+}
+
+test("personal web selections reject wrong providers, policy exclusions and disconnected keys", (t) =>
+  inTestTenant(async () => {
+    const built = await build({ openai: "company-openai", anthropic: "company-anthropic" });
+    t.after(() => built.runtime.stop());
+    await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "personal-openai"));
+    await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
+    const submit = (model: string) =>
+      inTestTenant(() =>
+        built.app.turn({
+          surface: "web",
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef: `web:U1:invalid-${crypto.randomUUID()}` },
+          text: "hello",
+          liveActor: true,
+          async: true,
+          model,
+        }),
+      );
+    for (const model of ["claude-sonnet-5", "unknown"]) assert.equal((await submit(model)).status, "refused");
+    await inTestTenant(() => built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]));
+    assert.equal((await submit("gpt-5.6-terra")).status, "refused");
+    await inTestTenant(() => built.userModelCredentials.delete("U1", "openai"));
+    assert.equal((await submit("gpt-5.6-sol")).status, "refused");
+  }));
+
+test("a queued web selection cannot fall back to another personal provider after disconnect", () =>
+  inTestTenant(async () => {
     turns.length = 0;
-    const provider = account === "anthropic" ? "anthropic" : "openai";
-    const model = provider === "anthropic" ? "claude-sonnet-5" : "gpt-5.6-terra";
-    const built = buildApp(testConfig({ openaiApiKey: "company-openai" }));
-    await inTestTenant(() => built.userModelCredentials.setApiKey("U1", provider, `personal-${provider}`));
-    await inTestTenant(() =>
-      built.config.setPersonalModelAuth("U1", true, account === "personal" ? undefined : account),
-    );
+    const built = await build();
+    await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic"));
+    await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "personal-openai"));
+    await inTestTenant(() => built.config.setPersonalModelAuth("U1", true));
     const submitted = await inTestTenant(() =>
       built.app.turn({
         surface: "web",
         actor: { externalId: "U1" },
-        conversation: { kind: "dm", threadRef: `web:U1:picker-${account}` },
+        conversation: { kind: "dm", threadRef: "web:U1:disconnect-after-pick" },
         text: "hello",
         liveActor: true,
         async: true,
-        model,
-        thinkingLevel: "high",
-        fastMode: true,
+        model: "gpt-5.6-terra",
       }),
     );
     assert.ok(submitted.runId, JSON.stringify(submitted));
-    const queued = await inTestTenant(() => built.runs.get(submitted.runId!));
-    assert.equal(queued?.request.model, model);
+    await inTestTenant(() => built.userModelCredentials.delete("U1", "openai"));
+    built.runtime.start();
+    try {
+      const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
+      assert.equal(finished.status, "failed");
+      assert.match(JSON.stringify(finished), /cannot serve this model/);
+      assert.equal(turns.length, 0);
+    } finally {
+      await built.runtime.stop();
+    }
+  }));
+
+test("web subscription selections use the namespaced model and personal OAuth on Pi", () =>
+  inTestTenant(async () => {
+    turns.length = 0;
+    const built = await build();
+    await inTestTenant(() =>
+      built.userModelCredentials.setOAuth("U1", "openai", {
+        accessToken: "personal-oauth",
+        expiresAt: Date.now() + 3_600_000,
+      }),
+    );
+    await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
+    const submitted = await inTestTenant(() =>
+      built.app.turn({
+        surface: "web",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "web:U1:oauth-picker" },
+        text: "hello",
+        liveActor: true,
+        async: true,
+        model: "codex/gpt-5.6-terra",
+        thinkingLevel: "high",
+        fastMode: false,
+      }),
+    );
+    assert.ok(submitted.runId, JSON.stringify(submitted));
     built.runtime.start();
     try {
       const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
       assert.equal(finished.status, "done", JSON.stringify(finished.result));
       assert.equal(turns.length, 1);
-      assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
+      assert.deepEqual(turns[0]!.providerKeys, { "openai-codex": "personal-oauth" });
       assert.deepEqual(turns[0]!.runtime, {
-        modelId: model,
+        modelId: "codex/gpt-5.6-terra",
         effortLevel: "high",
-        fastMode: true,
+        fastMode: false,
       });
     } finally {
       await built.runtime.stop();
     }
-  });
-}
+  }));
 
-test("personal web selections reject wrong providers, policy exclusions and disconnected keys", async (t) => {
-  const built = buildApp(testConfig({ openaiApiKey: "company-openai", anthropicApiKey: "company-anthropic" }));
-  t.after(() => built.runtime.stop());
-  await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "personal-openai"));
-  await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
-  const submit = (model: string) =>
-    inTestTenant(() =>
+test("a company ChatGPT login feeds pi's subscription provider while personal ChatGPT OAuth turns use their own token", () =>
+  inTestTenant(async () => {
+    const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
+    const companyToken = `e30.${claims.toString("base64url")}.sig`;
+    turns.length = 0;
+    const built = await build({}, { CODEX_AUTH_CREDENTIAL: COMPANY_CHATGPT_CREDENTIAL });
+    await inTestTenant(() =>
+      saveCompanyChatGPTLogin(built.keychain, {
+        auth_mode: "chatgpt",
+        tokens: { access_token: companyToken, refresh_token: "r" },
+      }),
+    );
+    assert.deepEqual(await piOptions?.resolveProviderKeys?.(), { "openai-codex": companyToken });
+    assert.equal(piOptions?.companyModelId?.("gpt-5.6-sol"), "codex/gpt-5.6-sol");
+    assert.equal(piOptions?.companyModelId?.("gpt-6-astra-ultrafast"), "gpt-6-astra-ultrafast");
+    assert.equal(piOptions?.companyModelId?.("claude-opus-5"), "claude-opus-5");
+    await inTestTenant(() =>
+      built.userModelCredentials.setOAuth("U1", "openai", {
+        accessToken: "personal-oauth",
+        expiresAt: Date.now() + 3_600_000,
+      }),
+    );
+    await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
+    const submitted = await inTestTenant(() =>
       built.app.turn({
-        surface: "web",
+        surface: "slack",
         actor: { externalId: "U1" },
-        conversation: { kind: "dm", threadRef: `web:U1:invalid-${crypto.randomUUID()}` },
+        conversation: { kind: "dm", threadRef: "legacy-bare-pin" },
         text: "hello",
         liveActor: true,
         async: true,
-        model,
       }),
     );
-  for (const model of ["claude-sonnet-5", "unknown"]) assert.equal((await submit(model)).status, "refused");
-  await inTestTenant(() => built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]));
-  assert.equal((await submit("gpt-5.6-terra")).status, "refused");
-  await inTestTenant(() => built.userModelCredentials.delete("U1", "openai"));
-  assert.equal((await submit("gpt-5.6-sol")).status, "refused");
-});
+    assert.ok(submitted.runId, JSON.stringify(submitted));
+    built.runtime.start();
+    try {
+      const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
+      assert.equal(finished.status, "done", JSON.stringify(finished.result));
+      assert.deepEqual(turns[0]!.providerKeys, { "openai-codex": "personal-oauth" });
+      assert.equal(turns[0]!.runtime!.modelId, "codex/gpt-6.1-sol");
+    } finally {
+      await built.runtime.stop();
+    }
+  }));
 
-test("a queued web selection cannot fall back to another personal provider after disconnect", async () => {
-  turns.length = 0;
-  const built = buildApp(testConfig());
-  await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic"));
-  await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "personal-openai"));
-  await inTestTenant(() => built.config.setPersonalModelAuth("U1", true));
-  const submitted = await inTestTenant(() =>
-    built.app.turn({
-      surface: "web",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "web:U1:disconnect-after-pick" },
-      text: "hello",
-      liveActor: true,
-      async: true,
-      model: "gpt-5.6-terra",
-    }),
-  );
-  assert.ok(submitted.runId, JSON.stringify(submitted));
-  await inTestTenant(() => built.userModelCredentials.delete("U1", "openai"));
-  built.runtime.start();
-  try {
-    const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
-    assert.equal(finished.status, "failed");
-    assert.match(JSON.stringify(finished), /cannot serve this model/);
-    assert.equal(turns.length, 0);
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("web subscription selections use the namespaced model and personal OAuth on Pi", async () => {
-  turns.length = 0;
-  const built = buildApp(testConfig());
-  await inTestTenant(() =>
-    built.userModelCredentials.setOAuth("U1", "openai", {
-      accessToken: "personal-oauth",
-      expiresAt: Date.now() + 3_600_000,
-    }),
-  );
-  await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
-  const submitted = await inTestTenant(() =>
-    built.app.turn({
-      surface: "web",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "web:U1:oauth-picker" },
-      text: "hello",
-      liveActor: true,
-      async: true,
-      model: "codex/gpt-5.6-terra",
-      thinkingLevel: "high",
-      fastMode: false,
-    }),
-  );
-  assert.ok(submitted.runId, JSON.stringify(submitted));
-  built.runtime.start();
-  try {
-    const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
-    assert.equal(finished.status, "done", JSON.stringify(finished.result));
-    assert.equal(turns.length, 1);
-    assert.deepEqual(turns[0]!.providerKeys, { "openai-codex": "personal-oauth" });
-    assert.deepEqual(turns[0]!.runtime, {
-      modelId: "codex/gpt-5.6-terra",
-      effortLevel: "high",
-      fastMode: false,
+test("a configured company subscription whose keychain credential is unavailable cannot fall back to the metered key", (t) =>
+  inTestTenant(async () => {
+    await build({ openai: "metered" }, { CODEX_AUTH_CREDENTIAL: "unavailable", PI_MODEL: "gpt-5.6-sol" });
+    const urls: string[] = [];
+    t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+      urls.push(String(input));
+      return new Response("unexpected provider request", { status: 400 });
     });
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("a company ChatGPT login feeds pi's subscription provider while personal ChatGPT OAuth turns use their own token", async () => {
-  const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
-  const companyToken = `e30.${claims.toString("base64url")}.sig`;
-  turns.length = 0;
-  const built = buildApp(testConfig({ codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL }));
-  await inTestTenant(() =>
-    saveCompanyChatGPTLogin(built.keychain, {
-      auth_mode: "chatgpt",
-      tokens: { access_token: companyToken, refresh_token: "r" },
-    }),
-  );
-  assert.deepEqual(await piOptions?.resolveProviderKeys?.(), { "openai-codex": companyToken });
-  assert.equal(piOptions?.companyModelId?.("gpt-5.6-sol"), "codex/gpt-5.6-sol");
-  assert.equal(piOptions?.companyModelId?.("gpt-6-astra-ultrafast"), "gpt-6-astra-ultrafast");
-  assert.equal(piOptions?.companyModelId?.("claude-opus-5"), "claude-opus-5");
-  await inTestTenant(() =>
-    built.userModelCredentials.setOAuth("U1", "openai", {
-      accessToken: "personal-oauth",
-      expiresAt: Date.now() + 3_600_000,
-    }),
-  );
-  await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
-  const submitted = await inTestTenant(() =>
-    built.app.turn({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "legacy-bare-pin" },
-      text: "hello",
-      liveActor: true,
-      async: true,
-    }),
-  );
-  assert.ok(submitted.runId, JSON.stringify(submitted));
-  built.runtime.start();
-  try {
-    const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
-    assert.equal(finished.status, "done", JSON.stringify(finished.result));
-    assert.deepEqual(turns[0]!.providerKeys, { "openai-codex": "personal-oauth" });
-    assert.equal(turns[0]!.runtime!.modelId, "codex/gpt-6.1-sol");
-  } finally {
-    await built.runtime.stop();
-  }
-});
+    const agent = agentRun.createAgent({ ...piOptions, captureRequests: false });
+    try {
+      assert.equal(await agent.oneShot?.("system", "hello"), undefined);
+      assert.deepEqual(urls, []);
+    } finally {
+      await agent.close?.();
+    }
+  }));

@@ -24,7 +24,7 @@ const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createAgent37Sandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "a37-ws-"))), {
     ...singleProcessDeps(),
-    apiKey: FAKE_AGENT37_API_KEY,
+    apiKey: async () => FAKE_AGENT37_API_KEY,
     namePrefix: "qmt",
     fetchImpl: fake.fetchImpl,
     ...extra,

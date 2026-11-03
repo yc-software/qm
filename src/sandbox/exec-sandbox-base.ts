@@ -6,6 +6,7 @@ import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { shortHash } from "../util/crypto.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { DROPPED_PROXY_ENV, forceThroughProxyEnv, nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import type { LayerToolInstaller } from "./layer-tool-install.ts";
@@ -23,6 +24,26 @@ const PREP_TIMEOUT_SEC = 60;
 // Provider instance names are DNS-style labels; Sprites rejects anything over 63 chars.
 const MAX_SANDBOX_NAME = 63;
 const HASH_LEN = 6;
+
+export function tenantKeyedMap<V>() {
+  const byTenant = new Map<string, Map<string, V>>();
+  const own = (): Map<string, V> => {
+    const tenant = currentTenant();
+    const existing = byTenant.get(tenant);
+    if (existing) return existing;
+    const created = new Map<string, V>();
+    byTenant.set(tenant, created);
+    return created;
+  };
+  return {
+    get: (key: string): V | undefined => own().get(key),
+    has: (key: string): boolean => own().has(key),
+    set: (key: string, value: V): void => void own().set(key, value),
+    delete: (key: string): boolean => own().delete(key),
+    values: (): IterableIterator<V> => own().values(),
+    entries: (): IterableIterator<[string, V]> => own().entries(),
+  };
+}
 
 export const sandboxScopeName = (prefix: string, id: string): string => {
   const cleaned = id
@@ -48,7 +69,7 @@ export interface ExecSandboxBaseDeps {
   prefix: string;
   homeDir: string;
   defaultTimeoutSec: number;
-  credentialPaths: CredentialPathSpec[];
+  credentialPaths: () => readonly CredentialPathSpec[];
   egressProxyUrl?: string;
   deleteFailureCode: string;
   onError?(e: { category: string; code: string; message: string; scopeLabel?: string }): void;
@@ -189,7 +210,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
       );
       const env = forceEgress ? forceThroughProxyEnv(deps.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
       if (Object.keys(env).length) handle.env = env;
-      const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
+      const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths())}`;
       const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;
       const toolIo = {
         exec: (script: string, t: number) => deps.exec(name, script, t),

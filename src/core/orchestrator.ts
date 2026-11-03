@@ -163,7 +163,7 @@ import {
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../agent/replay.ts";
-import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { headSlice, pgTextSafe } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
@@ -234,6 +234,7 @@ import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tool
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
+import { perTenant } from "../tenants/context.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -263,8 +264,6 @@ const TURN_STALL_MS = 50 * 60_000;
 
 const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 
-const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
-
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const config = deps.config;
   const spendReport = deps.sessions.spendReport?.bind(deps.sessions);
@@ -283,19 +282,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const memoryStrategy = deps.memoryStrategy ?? createPerTurnStrategy({ agent: deps.agent, memory: deps.memory });
   const blobTransfer = deps.blobTransfer;
 
-  const pendingCaptures = new Map<ScopeId, Promise<void>>();
+  const pendingCaptures = perTenant(() => new Map<ScopeId, Promise<void>>());
 
   const DIRECTORY_INDEX_TTL_MS = 5 * 60_000;
-  const directoryIndexCache = new LRUCache<string, Map<string, DirectoryMember>>({
-    max: DIRECTORY_INDEX_CACHE_MAX_ENTRIES,
-    ttl: DIRECTORY_INDEX_TTL_MS,
-  });
+  const directoryIndexCache = perTenant(
+    () => new LRUCache<"index", Map<string, DirectoryMember>>({ max: 1, ttl: DIRECTORY_INDEX_TTL_MS }),
+  );
   async function directoryIndexFor(directory: DirectoryStore): Promise<Map<string, DirectoryMember>> {
-    const cached = directoryIndexCache.get("org");
+    const cached = directoryIndexCache().get("index");
     if (cached) return cached;
     const byId = new Map<string, DirectoryMember>();
     for (const m of await directory.list()) byId.set(personKey(m.principalId), m);
-    directoryIndexCache.set("org", byId);
+    directoryIndexCache().set("index", byId);
     return byId;
   }
 
@@ -336,6 +334,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   const classifySecurityData = createSecurityClassifier(deps);
+  const screenerAvailable = async (): Promise<boolean> =>
+    Boolean(deps.agent.screenSecurity) || Boolean(await deps.securityScreener?.());
 
   const titles = createSessionTitles({
     sessions: deps.sessions,
@@ -393,7 +393,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         return "block";
       };
-      if (!deps.securityScreener && !deps.agent.screenSecurity) return block("no-screener");
+      if (!(await screenerAvailable())) return block("no-screener");
       if (deps.budget && !(await deps.budget.check(actor.id)).allowed) return block("over-budget");
       if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
       if (!bounded || bounded.truncated) return block("oversize-input");
@@ -852,8 +852,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } else if (screenInbound) {
         const { hasUnscreenableAttachment, externalPromptData, screenPayload } = await buildInboundScreen();
         if (screenPayload || hasUnscreenableAttachment) {
-          const canScreenText =
-            !!screenPayload && !screenPayload.truncated && (!!deps.securityScreener || !!deps.agent.screenSecurity);
+          const canScreenText = !!screenPayload && !screenPayload.truncated && (await screenerAvailable());
           const verdict = canScreenText
             ? await screenChunks(
                 [screenPayload!.content],
@@ -863,7 +862,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let unscreenableCause: "unscreenable-attachment" | "oversize-input" | "no-screener" | undefined;
           if (hasUnscreenableAttachment || !screenPayload) unscreenableCause = "unscreenable-attachment";
           else if (screenPayload.truncated) unscreenableCause = "oversize-input";
-          else if (!deps.securityScreener && !deps.agent.screenSecurity) unscreenableCause = "no-screener";
+          else if (!(await screenerAvailable())) unscreenableCause = "no-screener";
           if (verdict?.decision === "strict") {
             const sources = externalPromptData.map((item) => item.source);
             flaggedScreenedInput = {
@@ -977,7 +976,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isWeb = input.surface === "web";
       const isSlack = input.surface === "slack";
       const surfaceTool = input.surface ?? "slack";
-      const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
+      const branding = await resolveBranding(deps.config, resolution.orgScopeId);
       const botName = branding.selfLabel ?? "QM";
       const orgName = branding.orgName ?? "this organization";
       const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""), 40);
@@ -1079,7 +1078,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
           : "";
 
-      await deps.skillsReady;
       const configuredProviders =
         !external && deps.resolveConnectorClient
           ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(
@@ -1169,8 +1167,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const turnFilesDir = `${turnSessionDir}/${transferId}`;
       const turnInboxDir = `${turnFilesDir}/${INBOX_DIR}`;
 
-      if (!external && deps.deploymentLayer?.hints.length) {
-        systemPrompt += `\n\n## Deployment tool hints\n${deps.deploymentLayer.hints.map((hint) => `- ${hint}`).join("\n")}`;
+      const layerHints = deps.deploymentLayer?.().hints ?? [];
+      if (!external && layerHints.length) {
+        systemPrompt += `\n\n## Deployment tool hints\n${layerHints.map((hint) => `- ${hint}`).join("\n")}`;
       }
       const gatewayBlock = renderGatewayContext(
         input.surface,
@@ -1317,7 +1316,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const cleaned = payload.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").trim();
         return cleaned.length > 16_000 ? `${cleaned.slice(0, 16_000)}…` : cleaned;
       };
-      const brokeredTools = external ? [] : (deps.brokeredTools ?? []);
+      const brokeredTools = external ? [] : (deps.deploymentLayer?.().brokeredTools ?? []);
       const openSpeakerKeychain =
         liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
       const openAutomationKeychain =
@@ -1462,10 +1461,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   )
                 : await tokens.connectorTokenStatus(host, actor.id, accountType);
               const healthy = status?.connected && !status.needsReconnect;
-              const operatorFallback =
-                accountType === undefined &&
-                tokens.operatorFallbackHosts?.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
-              if (!healthy && !operatorFallback) continue;
+              if (!healthy) continue;
               addCredential(
                 {
                   handle: connectorHandle(host, accountType),
@@ -1476,12 +1472,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     return { env: [{ key: envKey(host), value: token }] };
                   },
                 },
-                !healthy && operatorFallback
-                  ? `${host}, configured operator fallback${status?.refreshError ? ` (own connection's refresh failed: ${status.refreshError})` : ""}; availability checked on use; env \`${envKey(host)}\``
-                  : credentialLineText(connectorLine(host, accountType)),
-                healthy && status && "credentialId" in status ? status.credentialId : undefined,
+                credentialLineText(connectorLine(host, accountType)),
+                status && "credentialId" in status ? status.credentialId : undefined,
                 actor.id,
-                healthy && status && "credentialId" in status ? status.credentialId : undefined,
+                status && "credentialId" in status ? status.credentialId : undefined,
               );
             }
           }
@@ -1500,35 +1494,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             )
           ).map((g) => parseRef(g.ref).id),
         );
-      const orgWideAudience =
-        conversation.audience.length > 0 &&
-        conversation.audience.every((p) =>
-          principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId),
-        );
-      const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
-        const granted = await aclGrantedServiceCredSlugs();
-        if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
-        return granted;
-      };
       let serviceCredRecords: PublicServiceCredential[] = [];
       let grantedCredSlugs = new Set<string>();
       if (!strictReadOnly && deps.serviceCreds) {
         serviceCredRecords = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
           serviceAllowed(record.slug),
         );
-        if (serviceCredRecords.length > 0) grantedCredSlugs = await grantedServiceCredSlugs(serviceCredRecords);
+        if (serviceCredRecords.length > 0) grantedCredSlugs = await aclGrantedServiceCredSlugs();
       }
       const authorizeServiceCredential = async (slug: string): Promise<void> => {
         if (!serviceAllowed(slug)) throw new Error("Service is not approved for external Slack.");
-        if ((await aclGrantedServiceCredSlugs()).has(slug)) return;
-        const supplied =
-          orgWideAudience &&
-          ((await deps.serviceCreds?.listServiceCredentials(resolution.orgScopeId)) ?? []).some(
-            (record) => record.slug === slug && record.source === "deployment",
-          );
-        if (!supplied) {
+        if (!(await aclGrantedServiceCredSlugs()).has(slug))
           throw new Error(`Service credential is no longer authorized: ${slug}`);
-        }
       };
       if (!strictReadOnly && allInternal && deps.serviceCreds) {
         const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
@@ -1635,7 +1612,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             deps.capabilitySecret ?? deps.signingSecret,
           );
         }
-        if (deps.sandboxModels && allInternal && securityPolicy.posture !== "strict") {
+        if (allInternal && securityPolicy.posture !== "strict" && (await deps.sandboxModels?.())) {
           connectorEnv.MODEL_GATEWAY_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`;
           connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
             { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
@@ -1681,7 +1658,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
             serviceAllowed(record.slug),
           );
-        const granted = current?.granted ?? (await grantedServiceCredSlugs(records));
+        const granted = current?.granted ?? (await aclGrantedServiceCredSlugs());
         const available = records.filter(
           (record) => !isBackendCredential(record) && record.enabled && record.hasSecret && granted.has(record.slug),
         );
@@ -1816,7 +1793,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       let toolCalls = 0;
       const commandPolicy = resolution.commandPolicy;
-      const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
+      const layerCommandRules = [...(deps.deploymentLayer?.().commandRules ?? [])];
       const turnSandboxResources = external
         ? deps.sandboxResources?.forTurn({
             actorId: actor.id,
@@ -1835,11 +1812,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               )),
           })
         : deps.sandboxResources;
-      const providerProfiles = turnSandboxResources?.profiles() ?? [];
+      const providerProfiles = turnSandboxResources ? await turnSandboxResources.profiles() : [];
       turnContextBlocks["Sandboxes"] = turnSandboxResources
         ? renderSandboxProviders(
             providerProfiles.map((profile) => profile.name),
-            turnSandboxResources.defaultBackend(),
+            await turnSandboxResources
+              .defaultBackend()
+              .catch(reportFailureAs("orchestrator: default sandbox backend", undefined)),
             true,
             providerProfiles.filter((profile) => profile.egressEnforcement === "domain").map((profile) => profile.name),
           )
@@ -2628,8 +2607,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.deploymentLayer
             ? {
                 layerAuth: {
-                  credentialPaths: deps.deploymentLayer.credentialPaths,
-                  splitEnvTemplates: deps.deploymentLayer.splitEnvTemplates,
+                  credentialPaths: deps.deploymentLayer().credentialPaths,
+                  splitEnvTemplates: deps.deploymentLayer().splitEnvTemplates,
                 },
               }
             : {}),
@@ -2777,7 +2756,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (securityPolicy.screening !== "off") {
             for (const document of documentInputs.documents.slice()) {
               documentsUnscreened ||= !isTextDocument(document);
-              if (!(deps.securityScreener || deps.agent.screenSecurity)) {
+              if (!(await screenerAvailable())) {
                 documentsUnscreened = true;
                 continue;
               }
@@ -3663,7 +3642,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserItem)?.seq;
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
         if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
-          const prior = pendingCaptures.get(memoryScopeId);
+          const prior = pendingCaptures().get(memoryScopeId);
           const capture = (async () => {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
             try {
@@ -3691,9 +3670,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               );
             }
           })();
-          pendingCaptures.set(memoryScopeId, capture);
+          pendingCaptures().set(memoryScopeId, capture);
           void capture.finally(() => {
-            if (pendingCaptures.get(memoryScopeId) === capture) pendingCaptures.delete(memoryScopeId);
+            if (pendingCaptures().get(memoryScopeId) === capture) pendingCaptures().delete(memoryScopeId);
           });
         }
 

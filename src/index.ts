@@ -19,7 +19,6 @@ useOwnerDatabase(config.databaseOwnerUrl);
 
 const built = buildApp(config);
 await verifyRegisteredPgSchemas(config.databaseUrl);
-await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
@@ -43,11 +42,6 @@ const server = createServer(built.app, {
   managedSlack,
 });
 
-await built.config.hydrate?.();
-await built.refreshCustomProviders();
-await built.identity.refresh();
-await built.startup();
-built.deploymentLayerRefresh.start();
 built.runtime.start();
 
 server.listen(config.port, () => {
@@ -66,12 +60,6 @@ if (config.deployAppsDomain) {
         `add a wildcard DNS record for *.${domain} pointing at this instance's ingress, or apps will only be reachable at /d/<app>/`,
     );
   });
-}
-
-if (!config.adminGrants) {
-  console.warn(
-    "[qm] ADMIN_GRANTS is unset with a durable store — if this deployment has never named an admin, the admin console is unreachable and cannot be unlocked from inside the product; set ADMIN_GRANTS=<email>:org_admin (ignore this if an admin was already promoted in the Users tab).",
-  );
 }
 
 if (config.deployProvider === "docker") {
@@ -186,7 +174,6 @@ function shutdown(signal: string): void {
   for (const runtime of slackAccountRuntimes)
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
   void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
-  built.deploymentLayerRefresh.stop();
   server.close();
   server.closeIdleConnections();
   stopWithBackstop(
