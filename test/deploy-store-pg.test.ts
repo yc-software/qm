@@ -105,7 +105,7 @@ test(
       const app = new pg.Client({ connectionString: url });
       await app.connect();
       try {
-        const { rows } = await app.query("SELECT current_user AS login");
+        const { rows } = await app.query(`SELECT current_user AS login`);
         assert.notEqual(rows[0].login, owned[0].owner);
         await app.query("BEGIN");
         await app.query("SELECT set_config('qm.tenant_id', $1, true)", [tenant]);
