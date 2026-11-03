@@ -1,14 +1,18 @@
-import { after } from "node:test";
+import { after, afterEach, beforeEach } from "node:test";
 import type { Config } from "../../src/config.ts";
 import type { Agent, ScreenSecurityInput } from "../../src/agent/agent.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockAgent } from "./mock-agent.ts";
 
-const built: BuiltApp[] = [];
-after(() => Promise.all(built.splice(0).map((app) => app.runtime.stop())));
+const stopAll = (apps: BuiltApp[]) => Promise.all(apps.map((app) => app.runtime.stop()));
+const builtForFile: BuiltApp[] = [];
+const builtInTest: BuiltApp[][] = [];
+beforeEach(() => void builtInTest.push([]));
+afterEach(() => stopAll(builtInTest.pop() ?? []));
+after(() => stopAll(builtForFile.splice(0)));
 
 export function stopAtEnd(app: BuiltApp): BuiltApp {
-  built.push(app);
+  (builtInTest.at(-1) ?? builtForFile).push(app);
   return app;
 }
 

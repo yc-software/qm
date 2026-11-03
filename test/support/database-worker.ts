@@ -25,13 +25,8 @@ let dropping = Promise.resolve();
 async function dropIdle(): Promise<void> {
   const dropper = await (dropClient ??= connect());
   for (const name of released) {
-    const { rows } = await dropper.query<{ n: number }>(
-      "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1",
-      [name],
-    );
-    if (rows[0]!.n > 0) continue;
     released.delete(name);
-    await dropper.query(`DROP DATABASE IF EXISTS ${quoted(name)}`).catch(() => released.add(name));
+    await dropper.query(`DROP DATABASE IF EXISTS ${quoted(name)} WITH (FORCE)`).catch(() => released.add(name));
   }
 }
 
