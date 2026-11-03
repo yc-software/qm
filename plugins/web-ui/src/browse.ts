@@ -52,10 +52,17 @@ export function destinations(): Destination[] {
   return list;
 }
 
+/** Views that have their own sidebar row; Browse lists the rest (search still covers every destination). */
+const SIDEBAR_VIEWS: ReadonlySet<View> = new Set<View>(["contexts", "deploys"]);
+
+function browseDestinations(): Destination[] {
+  return destinations().filter((d) => !d.view || !SIDEBAR_VIEWS.has(d.view));
+}
+
 export function openBrowse(): void {
   if (browseState.open) return;
   browseState.open = true;
-  const current = destinations().findIndex((d) => d.view === appState.currentView);
+  const current = browseDestinations().findIndex((d) => d.view === appState.currentView);
   browseState.sel = current >= 0 ? current : 0;
   draw();
   requestAnimationFrame(() => host?.querySelector<HTMLElement>(".browse-tile.selected")?.focus());
@@ -91,7 +98,7 @@ function go(d: Destination): void {
 }
 
 function onGridKeydown(e: KeyboardEvent): void {
-  const list = destinations();
+  const list = browseDestinations();
   if (e.key === "Escape") {
     e.preventDefault();
     closeBrowse();
@@ -150,7 +157,7 @@ function paletteTpl(): TemplateResult {
           <span class="browse-title">Browse</span>
           <span class="chat-search-kbd">esc</span>
         </div>
-        <div class="browse-grid" role="group" aria-label="Destinations">${destinations().map(tile)}</div>
+        <div class="browse-grid" role="group" aria-label="Destinations">${browseDestinations().map(tile)}</div>
       </div>
     </div>
   `;

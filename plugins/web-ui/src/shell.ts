@@ -669,6 +669,7 @@ export function renderSidebarTop(): void {
           hideTooltip();
           openChatSearch();
         })}
+        ${navRow("contexts", ICON.contexts, "Projects")} ${navRow("deploys", ICON.deploys, "Apps")}
         ${actionRow(ICON.browse, "Browse", () => {
           hideTooltip();
           openBrowse();
