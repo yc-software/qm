@@ -97,6 +97,10 @@ test("the session facts migration copies each conversation's facts from its late
   await finish(relayed.threadRef, request(relayed.threadRef, { surface: "web", sessionSenderId: "s1" }), {
     modelId: "m3",
   });
+  const garbled = await sessions.getOrCreateByThread("slack:dm:garbled", "dm", scope, undefined, "slack");
+  const readable = request(garbled.threadRef, previousRelease);
+  await finish(garbled.threadRef, readable, { modelId: "m5" });
+  await finish(garbled.threadRef, request(garbled.threadRef, previousRelease), { modelId: "m6" });
   const quiet = await sessions.getOrCreateByThread("web:U1:quiet", "dm", scope, undefined, "web");
   const mixed = await sessions.getOrCreateByThread("slack:dm:mixed", "dm", scope, undefined, "slack");
   const owning = request(mixed.threadRef, previousRelease);
@@ -107,6 +111,18 @@ test("the session facts migration copies each conversation's facts from its late
   try {
     await raw.query(
       "ALTER TABLE sessions DROP COLUMN slack_binding, DROP COLUMN runtime; UPDATE sessions SET spawn_meta = NULL; DELETE FROM qm_schema_migrations WHERE id LIKE 'sessions/store/005_-session-facts%'",
+    );
+    // Valid JSON text that jsonb rejects: a \u0000 escape, as in a stored TLS error message.
+    const nul = await raw.query(
+      `UPDATE runs SET request = left(request, -1) || $2, result = left(result, -1) || $2
+       WHERE id = (SELECT id FROM runs WHERE session_id = $1 ORDER BY created_at DESC, seq DESC LIMIT 1)`,
+      [garbled.threadRef, ', "error": "Markets error: \\u0015\\u0003\\u0000"}'],
+    );
+    assert.equal(nul.rowCount, 1);
+    assert.equal(
+      (await raw.query("SELECT pg_input_is_valid(result, 'jsonb') AS ok FROM runs WHERE result LIKE '%u0000%'")).rows[0]
+        .ok,
+      false,
     );
     await applyPgMigrations(
       raw,
@@ -122,11 +138,11 @@ test("the session facts migration copies each conversation's facts from its late
   try {
     const bindings = await copied.query<{ id: string; slack_binding: unknown }>(
       "SELECT id, slack_binding FROM sessions WHERE id = ANY($1)",
-      [[slack.id, mixed.id]],
+      [[slack.id, mixed.id, garbled.id]],
     );
     assert.deepEqual(
       Object.fromEntries(bindings.rows.map((r) => [r.id, r.slack_binding])),
-      { [slack.id]: slackSource, [mixed.id]: slackSource },
+      { [slack.id]: slackSource, [mixed.id]: slackSource, [garbled.id]: slackSource },
       "boot copies each binding from the newest run that has one, in the previous release's shape",
     );
   } finally {
@@ -141,6 +157,9 @@ test("the session facts migration copies each conversation's facts from its late
   const mixedFilled = (await sessions.get(mixed.id))!;
   assert.deepEqual(mixedFilled.runtime, { modelId: "m4" }, "the label comes from the newest run that reported one");
   assert.deepEqual(mixedFilled.spawnMeta, sessionContextOf(owning), "context comes from the newest owning turn");
+  const garbledFilled = (await sessions.get(garbled.id))!;
+  assert.deepEqual(garbledFilled.runtime, { modelId: "m5" }, "a run jsonb can't hold is skipped, not fatal");
+  assert.deepEqual(garbledFilled.spawnMeta, sessionContextOf(readable));
   const untouched = (await sessions.get(quiet.id))!;
   assert.equal(untouched.surfaceBinding ?? untouched.runtime ?? untouched.spawnMeta, undefined);
   await runtime.close?.();
