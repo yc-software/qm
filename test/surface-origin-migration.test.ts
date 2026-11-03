@@ -7,7 +7,8 @@ import { promisify } from "node:util";
 import pg from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { rowToSession } from "../src/sessions/postgres-session-store.ts";
-import { SURFACE_ORIGIN_MIGRATIONS, rewriteSurfaceOrigins } from "../src/surfaces/origin-migration.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { SETTLED_ORIGIN_MIGRATION, rewriteSurfaceOrigins } from "../src/surfaces/origin-migration.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -44,6 +45,15 @@ const migrate = (url: string) =>
       CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",
     },
   });
+
+async function rewrite(url: string): Promise<void> {
+  const pg = createPgPool(url);
+  try {
+    await rewriteSurfaceOrigins(pg);
+  } finally {
+    await pg.close();
+  }
+}
 
 const access = { companyDomains: ["company.example"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["search"] };
 const ids = { accountId: "partner", teamId: "TPARTNER", userId: "U1" };
@@ -83,7 +93,7 @@ async function snapshot(admin: pg.Pool): Promise<unknown> {
 }
 
 test(
-  "boot rewrites settled Slack origins, and the live pass rewrites live origins and destination accounts",
+  "boot leaves stored Slack origins untouched, and the ownership-time rewrite converts them once to the neutral shape",
   { skip },
   async () => {
     await withDatabase(async (url, admin) => {
@@ -179,15 +189,10 @@ test(
           JSON.stringify({ id: "d1", [field]: { ...oldDestination, slackPolicyNamespace: "ns" } }),
         ]);
 
-      await admin.query("DELETE FROM qm_schema_migrations WHERE id = ANY($1)", [
-        SURFACE_ORIGIN_MIGRATIONS.map((m) => m.id),
-      ]);
+      const beforeBoot = await snapshot(admin);
       await migrate(url);
-      const [bootPending] = (await admin.query("SELECT request FROM runs WHERE id = 'pending'")).rows;
-      assert.deepEqual(JSON.parse(bootPending.request).slackSource, internalSource);
-      const [bootDelivery] = (await admin.query("SELECT destination FROM deliveries WHERE id = 'undelivered'")).rows;
-      assert.deepEqual(bootDelivery.destination, oldDestination);
-      await rewriteSurfaceOrigins(admin);
+      assert.deepEqual(await snapshot(admin), beforeBoot);
+      await rewrite(url);
 
       const { runs, close } = createPostgresRunStore(url);
       try {
@@ -246,37 +251,9 @@ test(
         );
 
       const migrated = await snapshot(admin);
-      await admin.query("DELETE FROM qm_schema_migrations WHERE id = ANY($1)", [
-        SURFACE_ORIGIN_MIGRATIONS.map((m) => m.id),
-      ]);
-      await migrate(url);
-      await rewriteSurfaceOrigins(admin);
+      await admin.query("DELETE FROM qm_schema_migrations WHERE id = $1", [SETTLED_ORIGIN_MIGRATION.id]);
+      await rewrite(url);
       assert.deepEqual(await snapshot(admin), migrated);
-    });
-  },
-);
-
-test(
-  "old-shape rows written after the boot migration are rewritten by the live pass that runs when the process takes background ownership",
-  { skip },
-  async () => {
-    await withDatabase(async (url, admin) => {
-      await migrate(url);
-      await admin.query(
-        "INSERT INTO runs (id, session_id, status, request, created_at) VALUES ('late', 'late', 'pending', $1, 1)",
-        [JSON.stringify(request({ slackSource: internalSource }))],
-      );
-      await admin.query(
-        "INSERT INTO deliveries (id, idempotency_key, destination, text, created_at) VALUES ('late', 'late', $1, 'x', 1)",
-        [JSON.stringify(oldDestination)],
-      );
-      await rewriteSurfaceOrigins(admin);
-      const [run] = (await admin.query("SELECT request FROM runs WHERE id = 'late'")).rows;
-      const stored = JSON.parse(run.request);
-      assert.deepEqual(stored.surfaceOrigin, internalOrigin);
-      assert.equal("slackSource" in stored, false);
-      const [delivery] = (await admin.query("SELECT destination FROM deliveries WHERE id = 'late'")).rows;
-      assert.deepEqual(delivery.destination, newDestination);
     });
   },
 );

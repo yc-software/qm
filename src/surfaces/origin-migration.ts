@@ -1,5 +1,5 @@
-import type { Pool } from "pg";
-import { withPgTransaction } from "../persistence/pg-pool.ts";
+import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
+import { errMessage } from "../util/errors.ts";
 
 const DESTINATION_FIELDS: [table: string, field: string][] = [
   ["crons", "destination"],
@@ -87,7 +87,7 @@ const migration = (id: string, statements: string[]) => ({
 });
 
 const LIVE_ORIGIN_REWRITES = [
-  migration("surfaces/live-origin-and-account", [
+  migration("surface-origin-rewrite/live-runs-and-destinations", [
     ifTable(
       "runs",
       `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
@@ -125,7 +125,7 @@ const LIVE_ORIGIN_REWRITES = [
       ),
     ),
   ]),
-  migration("surfaces/live-origin-spawn-meta", [
+  migration("surface-origin-rewrite/spawn-meta", [
     ifTable(
       "sessions",
       `UPDATE sessions SET spawn_meta = pg_temp.qm_surface_request_text(spawn_meta) WHERE ${oldKeysIn("spawn_meta")}`,
@@ -133,26 +133,26 @@ const LIVE_ORIGIN_REWRITES = [
   ]),
 ];
 
-export const SURFACE_ORIGIN_MIGRATIONS = [
-  migration("surfaces/0003-neutral-origin-settled-runs", [
-    ifTable(
-      "runs",
-      `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
+export const SETTLED_ORIGIN_MIGRATION = migration("surfaces/0003-neutral-origin-settled-runs", [
+  ifTable(
+    "runs",
+    `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
        WHERE r.status IN ('done', 'failed')
          AND ${oldKeysIn("r.request")}
          AND (r.request LIKE '%"externalSlack"%'
            OR ${newerRun()}
            OR ${newerRun(` AND (n.request NOT LIKE '%"privateSessionMessage"%' OR COALESCE(pg_temp.qm_jsonb_or_null(n.request) ->> 'privateSessionMessage', 'false') <> 'true')`)})`,
-    ),
-  ]),
-];
+  ),
+]);
 
-export async function rewriteSurfaceOrigins(pool: Pool): Promise<void> {
+export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
+  const pool = await pg.pool();
   for (const migration of LIVE_ORIGIN_REWRITES)
     await withPgTransaction(pool, async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('qm:surface-origin-rewrite'))");
       for (const statement of migration.statements) await client.query(statement);
     }).catch((error: unknown) => {
-      throw new Error(`surface origin live rewrite ${migration.id} failed`, { cause: error });
+      throw new Error(`surface origin rewrite ${migration.id} failed: ${errMessage(error)}`, { cause: error });
     });
+  await pg.migrate(SETTLED_ORIGIN_MIGRATION);
 }
