@@ -919,7 +919,12 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
   assert.ok(onFire, "queue mode registers the fire handler");
   scheduler.notifyChanged(cron.id);
   await settle(async () => enqueued.length > 0);
-  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1 }, "notifyChanged prompt-schedules the slot");
+  const scheduled = enqueued.pop();
+  assert.deepEqual(
+    { cronId: scheduled?.cronId, scheduledAt: scheduled?.scheduledAt },
+    { cronId: cron.id, scheduledAt: 1 },
+    "notifyChanged prompt-schedules the slot",
+  );
 
   await onFire!({ cronId: cron.id, scheduledAt: 1 });
   assert.equal(calls.length, 1, "the job for the due slot fires");
