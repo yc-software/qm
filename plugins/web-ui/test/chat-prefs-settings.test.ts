@@ -90,6 +90,11 @@ test("chat preference rows persist to per-user ui-state", async (t) => {
 
     await t.test("defaults keep today's behavior", () => {
       renderSettings();
+      assert.deepEqual(
+        [...document.querySelectorAll(".settings-nav-item")].map((el) => el.textContent?.trim()),
+        ["General", "My spend"],
+        "people who aren't admins see their own spend next to General",
+      );
       assert.deepEqual(checked("Pin my last message"), ["Pinned"]);
       assert.deepEqual(checked("Sending while QM is working"), ["Queue"]);
       assert.equal(prefs.pinLatestPrompt(), true);

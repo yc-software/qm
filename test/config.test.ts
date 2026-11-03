@@ -12,6 +12,8 @@ import {
 import { boolEnv, numEnv } from "../src/util/env.ts";
 import { enabledSandboxBackends } from "../src/sandbox/sandbox-settings.ts";
 
+const RENDER_IMAGE = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
+
 const productionEnv = {
   NODE_ENV: "production",
   CORE_SIGNING_SECRET: "core-signing-secret-0123456789abcdef",
@@ -180,19 +182,19 @@ test("boolEnv: one vocabulary for every boolean env knob", () => {
 test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   const off = loadConfig({
     SEED_SKILLS: "off",
-    REACH_EXEC: "off",
+    SURFACE_DEBUG_FOOTER: "off",
     PI_CAPTURE_REQUESTS: "off",
   });
   assert.equal(off.seedSkills, false);
-  assert.equal(off.reachExecEnabled, false);
+  assert.equal(off.surfaceDebugFooter, false);
   assert.equal(off.captureLlmRequests, false);
 
   const on = loadConfig({
     SEED_SKILLS: "yes",
-    REACH_EXEC: "1",
+    SURFACE_DEBUG_FOOTER: "1",
   });
   assert.equal(on.seedSkills, true);
-  assert.equal(on.reachExecEnabled, true);
+  assert.equal(on.surfaceDebugFooter, true);
 
   const unset = loadConfig({});
   assert.equal(unset.captureLlmRequests, true, "capture defaults on");
@@ -208,10 +210,13 @@ test("numEnv: empty and non-numeric values fall back instead of poisoning config
 test("a set-but-unparseable env value refuses to boot instead of silently taking the default", () => {
   assert.throws(() => loadConfig({ WORKERS: "not-a-number" }), /WORKERS="not-a-number" is not a number/);
   assert.throws(() => loadConfig({ BUDGET_USD_PER_WINDOW: "10$" }), /BUDGET_USD_PER_WINDOW="10\$" is not a number/);
-  assert.throws(() => loadConfig({ REACH_EXEC: "2" }), /REACH_EXEC="2" is not a recognized boolean/);
+  assert.throws(
+    () => loadConfig({ SURFACE_DEBUG_FOOTER: "2" }),
+    /SURFACE_DEBUG_FOOTER="2" is not a recognized boolean/,
+  );
   assert.throws(() => loadConfig({ SANDBOX_BACKEND: "docker" }), /SANDBOX_BACKEND="docker" is not recognized/);
   assert.equal(loadConfig({ WORKERS: "  " }).workers, CONFIG_DEFAULTS.workers);
-  assert.equal(loadConfig({ REACH_EXEC: "" }).reachExecEnabled, false);
+  assert.equal(loadConfig({ SURFACE_DEBUG_FOOTER: "" }).surfaceDebugFooter, false);
 });
 
 test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
@@ -239,6 +244,7 @@ for (const primary of ["render", "local"] as const) {
       WORKSPACE_STORE: "postgres",
       RENDER_API_KEY: "test-key",
       RENDER_WORKSPACE_ID: "tea-test",
+      RENDER_SANDBOX_IMAGE: RENDER_IMAGE,
     };
     for (const database of [undefined, "", "  "])
       assert.throws(() => loadConfig({ ...env, DATABASE_URL: database }), /required core secrets: DATABASE_URL/);
@@ -254,6 +260,7 @@ for (const primary of ["render", "local"] as const) {
       WORKSPACE_STORE: "postgres",
       RENDER_API_KEY: "test-key",
       RENDER_WORKSPACE_ID: "tea-test",
+      RENDER_SANDBOX_IMAGE: RENDER_IMAGE,
     };
     for (const timeout of ["86340", "86400"])
       assert.throws(() => loadConfig({ ...env, SANDBOX_TIMEOUT_SEC: timeout }), /SANDBOX_TIMEOUT_SEC must stay/);
@@ -301,8 +308,6 @@ test("defaults come from CONFIG_DEFAULTS, set exactly once", () => {
   const def = loadConfig({});
   assert.equal(CONFIG_DEFAULTS.workers, 16);
   assert.equal(def.workers, CONFIG_DEFAULTS.workers);
-  assert.equal(def.rateLimitPerWindow, CONFIG_DEFAULTS.rateLimitPerWindow);
-  assert.equal(def.rateLimitWindowMs, CONFIG_DEFAULTS.rateLimitWindowMs);
   assert.equal(def.monitorPollMs, CONFIG_DEFAULTS.monitorPollMs);
   assert.equal(def.approvalSummaryTimeoutMs, CONFIG_DEFAULTS.approvalSummaryTimeoutMs);
   assert.equal(def.deployDialTimeoutMs, CONFIG_DEFAULTS.deployDialTimeoutMs);
@@ -924,7 +929,32 @@ test("Render app publishing needs a complete source, project, and environment", 
 });
 
 test("The Render sandbox backend needs the Postgres workspace store", () => {
-  const env = { SANDBOX_BACKEND: "render", RENDER_API_KEY: "rnd_key", RENDER_WORKSPACE_ID: "tea-test" };
+  const env = {
+    SANDBOX_BACKEND: "render",
+    RENDER_API_KEY: "rnd_key",
+    RENDER_WORKSPACE_ID: "tea-test",
+    RENDER_SANDBOX_IMAGE: RENDER_IMAGE,
+  };
   assert.throws(() => loadConfig(env), /SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres/);
   assert.equal(loadConfig({ ...env, WORKSPACE_STORE: "postgres" }).sandboxBackend, "render");
+});
+
+test("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IMAGE", () => {
+  const env = {
+    SANDBOX_BACKEND: "render",
+    WORKSPACE_STORE: "postgres",
+    RENDER_API_KEY: "rnd_key",
+    RENDER_WORKSPACE_ID: "tea-test",
+  };
+  assert.throws(() => loadConfig(env), /SANDBOX_BACKEND=render requires RENDER_SANDBOX_IMAGE/);
+  assert.equal(loadConfig({ ...env, RENDER_SANDBOX_IMAGE: RENDER_IMAGE }).renderSandbox.image, RENDER_IMAGE);
+  assert.throws(
+    () => loadConfig({ ...env, RENDER_SANDBOX_IMAGE: RENDER_IMAGE.replace(/:[0-9a-f]{40}@/, "@") }),
+    /must be <repository>:<tag>@sha256:<digest>/,
+  );
+  const secondary = { RENDER_API_KEY: "rnd_key", RENDER_WORKSPACE_ID: "tea-test" };
+  assert.ok(!enabledSandboxBackends(loadConfig(secondary)).includes("render"));
+  assert.ok(
+    enabledSandboxBackends(loadConfig({ ...secondary, RENDER_SANDBOX_IMAGE: RENDER_IMAGE })).includes("render"),
+  );
 });

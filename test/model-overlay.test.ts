@@ -8,6 +8,7 @@ import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
+import { storedItem } from "../src/sessions/items.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -370,13 +371,8 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
       tools: {} as import("../src/agent/agent.ts").AgentTurnInput["tools"],
       scopeLabel: "personal:alice" as const,
       orgScopeId: "org:default-org" as const,
-      emit: async (entry: Parameters<import("../src/agent/agent.ts").AgentTurnInput["emit"]>[0]) => ({
-        ...entry,
-        seq: 1,
-        sessionId: "overlay-runtime",
-        parentSeq: null,
-        createdAt: Date.now(),
-      }),
+      emit: async (item: Parameters<import("../src/agent/agent.ts").AgentTurnInput["emit"]>[0]) =>
+        storedItem(item, { sessionId: "overlay-runtime", seq: 1, createdAt: Date.now() }),
     };
     await agent.runTurn(turn);
     assert.equal(received?.model, MODEL_ID);

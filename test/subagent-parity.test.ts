@@ -13,7 +13,7 @@ import { createResolutionService } from "../src/resolution/resolution-service.ts
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Agent } from "../src/agent/agent.ts";
-import { turnToolOptions } from "../src/agent/turn-support.ts";
+import { emitEntry, turnToolOptions } from "../src/agent/turn-support.ts";
 import { createAgentTools, type AgentToolsOptions } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -30,7 +30,6 @@ import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import {
   testConfigStore,
@@ -98,9 +97,9 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       const ref = {
         current: turn.tools,
         scopeLabel: turn.scopeLabel,
-        emit: async (entry: Parameters<typeof turn.emit>[0]) => {
+        emit: async (entry: Parameters<typeof emitEntry>[1]) => {
           if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
-          return turn.emit(entry);
+          return emitEntry(turn, entry);
         },
         screenToolResult: turn.screenToolResult,
         pendingApprovals: [],
@@ -152,7 +151,6 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy: createDeployService({
