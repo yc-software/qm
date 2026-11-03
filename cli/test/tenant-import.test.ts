@@ -44,15 +44,13 @@ test("the import writes settings, then each admin value only if the tenant has n
     const [path = "", query = ""] = signed.split("?");
     assert.match(query, /^nonce=[0-9a-f-]{36}$/);
     calls.push({ path, body, ...(tenant ? { tenant } : {}) });
-    if (path === "/v1/install/tenant")
-      return { status: 200, body: JSON.stringify({ tenant: "00000000-0000-4000-8000-00000000000a", created: true }) };
     return { status: 200, body: JSON.stringify(existing.has(path) && body.ifUnset ? { unchanged: true } : {}) };
   };
   const warnings: string[] = [];
-  const { tenant, applied, unsaved } = await applyTenantImport(tenantImport(env), call, (message) =>
+  const tenant = "00000000-0000-4000-8000-00000000000a";
+  const { applied, unsaved } = await applyTenantImport(tenantImport(env), tenant, call, (message) =>
     warnings.push(message),
   );
-  assert.equal(tenant, "00000000-0000-4000-8000-00000000000a");
   assert.deepEqual(unsaved, []);
   assert.deepEqual(applied, [
     "ADMIN_GRANTS",
@@ -73,7 +71,7 @@ test("the import writes settings, then each admin value only if the tenant has n
   assert.deepEqual(
     calls.map((entry) => entry.path),
     [
-      "/v1/install/tenant",
+      `/v1/tenants/${tenant}`,
       "/v1/tenant-settings",
       "/v1/admin/scopes/tenant/branding",
       "/v1/admin/scopes/tenant/security-posture",
@@ -105,10 +103,11 @@ test("a model key core could not check warns with core's answer and the import g
   const call: OperatorCall = async (path) =>
     path.split("?")[0] === failing.path
       ? { status: 400, body: '{"error":"invalid_api_key","message":"anthropic rejected this API key"}' }
-      : { status: 200, body: JSON.stringify({ tenant: "00000000-0000-4000-8000-00000000000a" }) };
+      : { status: 200, body: "{}" };
   const warnings: string[] = [];
   const { applied, unsaved } = await applyTenantImport(
     tenantImport({ ANTHROPIC_API_KEY: "sk", OPENAI_API_KEY: "sk2" }),
+    "00000000-0000-4000-8000-00000000000a",
     call,
     (message) => warnings.push(message),
   );
@@ -119,15 +118,7 @@ test("a model key core could not check warns with core's answer and the import g
   assert.deepEqual(unsaved, ["ANTHROPIC_API_KEY"]);
   failing.path = "/v1/tenant-settings";
   await assert.rejects(
-    applyTenantImport(tenantImport({ PI_MODEL: "m" }), call, () => {}),
+    applyTenantImport(tenantImport({ PI_MODEL: "m" }), "00000000-0000-4000-8000-00000000000a", call, () => {}),
     /\/v1\/tenant-settings failed \(400\): \{"error":"invalid_api_key"/,
-  );
-  await assert.rejects(
-    applyTenantImport(
-      tenantImport({}),
-      async () => ({ status: 200, body: "{}" }),
-      () => {},
-    ),
-    /\/v1\/install\/tenant answered without a tenant id/,
   );
 });

@@ -28,6 +28,9 @@
 {{- with .Values.tenantSettings.AUTH_ALLOWED_EMAIL_DOMAIN }}{{ $_ := set $settings "OIDC_ALLOWED_EMAIL_DOMAIN" . }}{{ end }}
 {{- end }}
 {{- $settings = mergeOverwrite $settings (deepCopy (.Values.tenantSettings | default dict)) }}
+{{- if not (regexMatch "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" (toString .Values.tenant)) }}
+{{- fail "tenant must be this deployment's tenant id: generate a lowercase UUID once (uuidgen | tr A-F a-f) and keep it in your values" }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Secret
@@ -41,7 +44,7 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation
 type: Opaque
 stringData:
-  settings.json: {{ dict "env" $settings | toJson | quote }}
+  settings.json: {{ dict "tenant" .Values.tenant "env" $settings | toJson | quote }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -99,13 +102,13 @@ spec:
               import { readFileSync } from "node:fs";
               import { signedRequestHeaders } from "/app/plugins/chassis/src/source-auth-sign.ts";
               import { applyTenantImport, tenantImport } from "/app/cli/src/tenant-import.ts";
-              const { env } = JSON.parse(readFileSync("/tenant/settings.json", "utf8"));
-              async function call(path, body, tenant) {
+              const { tenant, env } = JSON.parse(readFileSync("/tenant/settings.json", "utf8"));
+              async function call(path, body, bound) {
                 const text = JSON.stringify(body);
                 const headers = signedRequestHeaders(process.env.CORE_SIGNING_SECRET, "PUT", path, text, {
                   "content-type": "application/json",
                   authorization: `Bearer ${process.env.DEPLOYMENT_CONTROL_SECRET}`,
-                  ...(tenant ? { "x-qm-tenant": tenant } : {}),
+                  ...(bound ? { "x-qm-tenant": bound } : {}),
                 });
                 const response = await fetch(`${process.env.QM_CORE_URL}${path}`, {
                   method: "PUT",
@@ -117,6 +120,6 @@ spec:
                 return { status: response.status, body: await response.text() };
               }
               const warn = (message) => console.warn(`[tenant-settings] ${message}`);
-              const { tenant, applied } = await applyTenantImport(tenantImport(env), call, warn);
+              const { applied } = await applyTenantImport(tenantImport(env), tenant, call, warn);
               console.log(`[tenant-settings] wrote ${applied.join(", ") || "nothing new"} to tenant ${tenant}`);
 {{- end }}

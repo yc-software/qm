@@ -63,6 +63,12 @@ test("required fields: deploymentId, target, services (must include core), valid
     );
   }
   withConfig({ target: "k8s" }, ({ path }) => assert.throws(() => loadConfigAt(path), /"target" must be/));
+  const tenant = "00000000-0000-4000-8000-00000000000a";
+  withConfig({ tenant }, ({ path }) => assert.equal(loadConfigAt(path).config.tenant, tenant));
+  for (const bad of ["main", tenant.toUpperCase(), 7])
+    withConfig({ tenant: bad }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), /"tenant" must be the deployment's tenant id/),
+    );
   withConfig({ services: undefined }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /"services" must be an array/),
   );

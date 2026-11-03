@@ -121,7 +121,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     service: "core",
     required: true,
     description:
-      "Operator credential held only by core and the deployment operator: background ownership, the install tenant and its settings.",
+      "Operator credential held only by core and the deployment operator: background ownership, creating the deployment's tenant and writing its settings.",
     generate: MINT_LOCALLY,
   },
   {

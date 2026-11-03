@@ -42,11 +42,13 @@ type Resource = {
   };
 };
 
+const HELM_TENANT = "00000000-0000-4000-8000-0000000000a1";
+
 function render(values: object = {}, explicitImages = true): Resource[] {
   const dir = mkdtempSync(join(tmpdir(), "qm-helm-test-"));
   try {
     const valuesFile = join(dir, "values.json");
-    writeFileSync(valuesFile, JSON.stringify(values));
+    writeFileSync(valuesFile, JSON.stringify({ tenant: HELM_TENANT, ...values }));
     const result = spawnSync(
       helm,
       ["template", "test", chart, ...(explicitImages ? ["--set", "image.tag=fixture"] : []), "-f", valuesFile],
@@ -213,22 +215,21 @@ test("Helm rejects services it does not know", options, () => {
   assert.throws(() => render({ services: { unknown: { enabled: true } } }), /unknown service "unknown" in services/);
 });
 
-function tenantImport(resources: Resource[]): { env: Record<string, string> } {
+function tenantImport(resources: Resource[]): { tenant: string; env: Record<string, string> } {
   const secret = resources.find((r) => r.kind === "Secret" && r.metadata.name === "test-qm-tenant-settings");
   assert.ok(secret?.stringData?.["settings.json"], "missing tenant settings secret");
-  return JSON.parse(secret.stringData["settings.json"]) as { env: Record<string, string> };
+  return JSON.parse(secret.stringData["settings.json"]) as { tenant: string; env: Record<string, string> };
 }
 
 const tenantSettings = (resources: Resource[]): Record<string, string> => tenantImport(resources).env;
 
-test("Helm names no tenant and the hook sends core's install tenant id on every later call", options, () => {
-  const resources = render();
-  assert.deepEqual(Object.keys(tenantImport(resources)), ["env"]);
-  const job = resources.find((r) => r.kind === "Job" && r.metadata.name === "test-qm-tenant-settings");
-  assert.match(JSON.stringify(job), /x-qm-tenant/);
+test("Helm sends the deployment's configured tenant id and refuses a missing or malformed one", options, () => {
+  assert.equal(tenantImport(render()).tenant, HELM_TENANT);
+  for (const tenant of ["", "main", HELM_TENANT.toUpperCase()])
+    assert.throws(() => render({ tenant }), /tenant must be this deployment's tenant id/);
 });
 
-test("Helm pushes sign-in and admin settings to the install tenant instead of any service env", options, () => {
+test("Helm pushes sign-in and admin settings to the deployment's tenant instead of any service env", options, () => {
   const resources = render({
     publicUrl: "https://qm.example.com",
     secretEnv: { AUTH_CLIENT_ID: "qm-portal", AUTH_CLIENT_SECRET: "client-secret" },

@@ -30,6 +30,8 @@ export const FARGATE_MAX_STOP_TIMEOUT_S = 120;
 
 export const CONFIG_FILENAME = "qm.config.jsonc";
 
+const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 export const CONTRACT_VERSION = 1 as const;
 
 export const validDeploymentId = (value: string): boolean =>
@@ -173,6 +175,7 @@ export interface QmConfig {
   botName?: string;
   orgName?: string;
   appPrefix?: string;
+  tenant?: string;
   region?: string;
   flyOrg?: string;
   imageFrom?: string;
@@ -535,6 +538,7 @@ const VALID_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "botName",
   "orgName",
   "appPrefix",
+  "tenant",
   "region",
   "flyOrg",
   "imageFrom",
@@ -768,6 +772,11 @@ function validate(raw: unknown, path: string): QmConfig {
   const orgName = identityName("orgName", 40, "it is how the bot refers to your organization");
   if (orgName) out.orgName = orgName;
   if (typeof o["appPrefix"] === "string") out.appPrefix = o["appPrefix"];
+  if (o["tenant"] !== undefined) {
+    if (typeof o["tenant"] !== "string" || !TENANT_ID.test(o["tenant"]))
+      throw new CliError(`${path}: "tenant" must be the deployment's tenant id, a lowercase UUID`);
+    out.tenant = o["tenant"];
+  }
   if (typeof o["region"] === "string") out.region = o["region"];
   if (typeof o["flyOrg"] === "string") out.flyOrg = o["flyOrg"];
   if (typeof o["imageFrom"] === "string") out.imageFrom = o["imageFrom"];
@@ -1567,7 +1576,7 @@ function validateRender(raw: unknown, path: string): RenderConfig {
   };
 }
 
-export function updateConfigUrls(raw: string, updates: { publicUrl: string; apiUrl: string }): string {
+export function updateConfigFields(raw: string, updates: Record<string, string>): string {
   const root = objectProps(stripJsonComments(raw), 0);
   const edits: ConfigEdit[] = [];
   for (const [key, value] of Object.entries(updates)) {

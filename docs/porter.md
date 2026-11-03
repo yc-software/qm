@@ -79,8 +79,8 @@ any other way.
    prefer in-cluster Postgres when in doubt.
 5. **Name the administrator at first boot.** `ADMIN_GRANTS=<email>:org_admin` and the
    sign-in allowlist (`AUTH_ALLOWED_EMAILS=<email>`) are tenant settings, not app
-   environment: once core is up, create the deployment's tenant with
-   `PUT /v1/install/tenant`, which answers with its id, and write both with
+   environment: once core is up, pick the deployment's tenant id (a lowercase UUID you
+   keep), create the tenant with `PUT /v1/tenants/<tenant>`, and write both with
    `PUT /v1/tenant-settings {"env":{…}}` naming that id in `x-qm-tenant`
    (source-signed over the header, with `Authorization: Bearer <DEPLOYMENT_CONTROL_SECRET>`); the Helm chart's hook Job does
    this from `tenantSettings`. Do not skip this step: with Postgres and no

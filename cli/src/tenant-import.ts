@@ -103,17 +103,17 @@ const personal = (id: string): string => `personal:${id.includes("@") ? id.toLow
 
 export async function applyTenantImport(
   plan: TenantImport,
+  tenant: string,
   call: OperatorCall,
   warn: (message: string) => void,
-): Promise<{ tenant: string; applied: string[]; unsaved: string[] }> {
-  const send = async (path: string, body: Record<string, unknown>, tenant?: string) => {
-    const response = await call(`${path}?nonce=${randomUUID()}`, body, tenant);
+): Promise<{ applied: string[]; unsaved: string[] }> {
+  const send = async (path: string, body: Record<string, unknown>, bound?: string) => {
+    const response = await call(`${path}?nonce=${randomUUID()}`, body, bound);
     if (response.status < 200 || response.status >= 300)
       throw new OperatorRouteError(`${path} failed (${response.status}): ${response.body}`);
-    return response.body ? (JSON.parse(response.body) as { unchanged?: boolean; tenant?: string }) : {};
+    return response.body ? (JSON.parse(response.body) as { unchanged?: boolean }) : {};
   };
-  const { tenant } = await send("/v1/install/tenant", {});
-  if (!tenant) throw new OperatorRouteError("/v1/install/tenant answered without a tenant id");
+  await send(`/v1/tenants/${tenant}`, {});
   const unique: OperatorCall = (path, body) => call(`${path}?nonce=${randomUUID()}`, body, tenant);
   const put = (path: string, body: Record<string, unknown>) => send(path, body, tenant);
   const applied: string[] = [];
@@ -140,5 +140,5 @@ export async function applyTenantImport(
       unsaved.push(MODEL_KEY_ENV[provider as ModelProvider]);
     } else if (!(JSON.parse(response.body) as { unchanged?: boolean }).unchanged) applied.push(`${provider} API key`);
   }
-  return { tenant, applied, unsaved };
+  return { applied, unsaved };
 }

@@ -12,9 +12,12 @@ import type { CoreLink } from "../src/operator-request.ts";
 import { createHmac } from "node:crypto";
 import { runtimeSecretNames, computedSecrets } from "../src/secrets.ts";
 
+const TENANT = "00000000-0000-4000-8000-00000000000a";
+
 const config = (overrides: Partial<QmConfig> = {}): QmConfig => ({
   contract: 1,
   deploymentId: "acme",
+  tenant: TENANT,
   publicUrl: "https://agent.example.com",
   target: "docker",
   model: "claude-opus-4-8",
@@ -97,9 +100,8 @@ function quietly<T>(fn: (lines: string[]) => Promise<T>): Promise<T> {
 
 const signing = "core-signing-secret".repeat(3);
 const control = "deployment-control-secret".repeat(3);
-const TENANT = "00000000-0000-4000-8000-00000000000a";
 
-test("seeding creates the install tenant, then pushes its settings with the operator credential", async () => {
+test("seeding creates the deployment's tenant, then pushes its settings with the operator credential", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-tenant-seed-"));
   try {
     writeFileSync(
@@ -111,18 +113,22 @@ test("seeding creates the install tenant, then pushes its settings with the oper
     const link = async (): Promise<CoreLink> => ({
       request: async (path, init) => {
         seen.push({ path: path.split("?")[0]!, signed: path, init });
-        return { status: 200, body: JSON.stringify({ tenant: TENANT }) };
+        return { status: 200, body: "{}" };
       },
       close: () => void (closed = true),
     });
     await quietly(async (lines) => {
-      await seedTenantSettings({ config: config(), configDir: dir }, { coreLink: link }, "push");
+      await seedTenantSettings(
+        { config: config(), configDir: dir, configPath: join(dir, "qm.config.jsonc") },
+        { coreLink: link },
+        "push",
+      );
       assert.ok(!lines.join("\n").includes("sk-ant"), "values are never printed");
     });
     assert.deepEqual(
       seen.map((entry) => entry.path),
       [
-        "/v1/install/tenant",
+        `/v1/tenants/${TENANT}`,
         "/v1/tenant-settings",
         "/v1/admin/scopes/tenant/branding",
         "/v1/admin/model-providers/anthropic",
@@ -147,6 +153,43 @@ test("seeding creates the install tenant, then pushes its settings with the oper
   }
 });
 
+test("the first import records a new tenant id in the deployment config, and later imports reuse it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-tenant-seed-"));
+  try {
+    writeFileSync(join(dir, ".env"), `CORE_SIGNING_SECRET=${signing}\nDEPLOYMENT_CONTROL_SECRET=${control}\n`);
+    const configPath = join(dir, "qm.config.jsonc");
+    writeFileSync(configPath, '{\n  // the deployment\n  "deploymentId": "acme"\n}\n');
+    const created: string[] = [];
+    const link = async (): Promise<CoreLink> => ({
+      request: async (path) => {
+        if (path.startsWith("/v1/tenants/")) created.push(path.split("?")[0]!.slice("/v1/tenants/".length));
+        return { status: 200, body: "{}" };
+      },
+      close: () => {},
+    });
+    const first = config({ tenant: undefined });
+    await quietly(async (lines) => {
+      await seedTenantSettings({ config: first, configDir: dir, configPath }, { coreLink: link }, "push");
+      assert.match(lines.join("\n"), /recorded this deployment's new tenant id .* commit it/);
+    });
+    const raw = readFileSync(configPath, "utf8");
+    assert.match(raw, /\/\/ the deployment/);
+    const recorded = (JSON.parse(raw.replace(/^\s*\/\/.*$/m, "")) as { tenant: string }).tenant;
+    assert.match(recorded, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    await quietly(() =>
+      seedTenantSettings(
+        { config: config({ tenant: recorded }), configDir: dir, configPath },
+        { coreLink: link },
+        "push",
+      ),
+    );
+    assert.deepEqual(created, [recorded, recorded]);
+    assert.equal(readFileSync(configPath, "utf8"), raw);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("seeding reads missing operator and tenant secrets from the target's secret store", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-tenant-seed-"));
   try {
@@ -154,7 +197,7 @@ test("seeding reads missing operator and tenant secrets from the target's secret
     const link = async (): Promise<CoreLink> => ({
       request: async (_path, init) => {
         bodies.push(String(init.body));
-        return { status: 200, body: JSON.stringify({ tenant: TENANT }) };
+        return { status: 200, body: "{}" };
       },
       close: () => {},
     });
@@ -165,7 +208,7 @@ test("seeding reads missing operator and tenant secrets from the target's secret
     };
     await quietly(() =>
       seedTenantSettings(
-        { config: config(), configDir: dir },
+        { config: config(), configDir: dir, configPath: join(dir, "qm.config.jsonc") },
         { coreLink: link, operatorSecret: (name) => stored[name] },
         "push",
       ),
@@ -180,16 +223,24 @@ test("seeding refuses without a distinct operator credential, surfaces rejection
   const dir = mkdtempSync(join(tmpdir(), "qm-tenant-seed-"));
   try {
     const ok = async (): Promise<CoreLink> => ({
-      request: async () => ({ status: 200, body: JSON.stringify({ tenant: TENANT }) }),
+      request: async () => ({ status: 200, body: "{}" }),
       close: () => {},
     });
     writeFileSync(join(dir, ".env"), `CORE_SIGNING_SECRET=${signing}\nDEPLOYMENT_CONTROL_SECRET=${signing}\n`);
     await assert.rejects(
-      seedTenantSettings({ config: config(), configDir: dir }, { coreLink: ok }, "push"),
+      seedTenantSettings(
+        { config: config(), configDir: dir, configPath: join(dir, "qm.config.jsonc") },
+        { coreLink: ok },
+        "push",
+      ),
       /must differ/,
     );
     await quietly(async (lines) => {
-      await seedTenantSettings({ config: config(), configDir: dir }, { coreLink: ok }, "up");
+      await seedTenantSettings(
+        { config: config(), configDir: dir, configPath: join(dir, "qm.config.jsonc") },
+        { coreLink: ok },
+        "up",
+      );
       assert.match(lines.join("\n"), /tenant settings: skipped \(DEPLOYMENT_CONTROL_SECRET is required locally/);
     });
     writeFileSync(join(dir, ".env"), `CORE_SIGNING_SECRET=${signing}\nDEPLOYMENT_CONTROL_SECRET=${control}\n`);
@@ -197,16 +248,20 @@ test("seeding refuses without a distinct operator credential, surfaces rejection
       request: async (path) =>
         path.startsWith("/v1/tenant-settings?")
           ? { status: 400, body: '{"error":"not_tenant_settings"}' }
-          : { status: 200, body: JSON.stringify({ tenant: TENANT }) },
+          : { status: 200, body: "{}" },
       close: () => {},
     });
     await assert.rejects(
-      seedTenantSettings({ config: config(), configDir: dir }, { coreLink: rejected }, "push"),
+      seedTenantSettings(
+        { config: config(), configDir: dir, configPath: join(dir, "qm.config.jsonc") },
+        { coreLink: rejected },
+        "push",
+      ),
       /\/v1\/tenant-settings failed \(400\): \{"error":"not_tenant_settings"\}$/,
     );
     await quietly(async (lines) => {
       await seedTenantSettings(
-        { config: config(), configDir: dir },
+        { config: config(), configDir: dir, configPath: join(dir, "qm.config.jsonc") },
         {
           coreLink: async () => {
             throw new CoreUnreachableError("could not open a private fly proxy to acme-core");
@@ -225,14 +280,22 @@ test("seeding refuses without a distinct operator credential, surfaces rejection
       close: () => {},
     });
     await quietly(async (lines) => {
-      await seedTenantSettings({ config: config(), configDir: dir }, { coreLink: dropped }, "up");
+      await seedTenantSettings(
+        { config: config(), configDir: dir, configPath: join(dir, "qm.config.jsonc") },
+        { coreLink: dropped },
+        "up",
+      );
       assert.match(
         lines.join("\n"),
-        /core did not answer \/v1\/install\/tenant: .*run `qm settings push` once core is reachable/,
+        /core did not answer \/v1\/tenants\/[0-9a-f-]{36}: .*run `qm settings push` once core is reachable/,
       );
     });
     await assert.rejects(
-      seedTenantSettings({ config: config(), configDir: dir }, { coreLink: dropped }, "push"),
+      seedTenantSettings(
+        { config: config(), configDir: dir, configPath: join(dir, "qm.config.jsonc") },
+        { coreLink: dropped },
+        "push",
+      ),
       CoreUnreachableError,
     );
   } finally {
@@ -255,7 +318,7 @@ test("the target retires only the pushed names, and only after core accepts them
           events.push(`${path.split("?")[0]} ${String(init.body)}`);
           return {
             status: path.startsWith("/v1/tenant-settings?") ? settingsStatus : 200,
-            body: JSON.stringify({ tenant: TENANT }),
+            body: "{}",
           };
         },
         close: () => {},
@@ -266,14 +329,22 @@ test("the target retires only the pushed names, and only after core accepts them
       },
     };
     await assert.rejects(
-      seedTenantSettings({ config: config(), configDir: dir }, target, "push"),
+      seedTenantSettings(
+        { config: config(), configDir: dir, configPath: join(dir, "qm.config.jsonc") },
+        target,
+        "push",
+      ),
       /\/v1\/tenant-settings failed \(400\)/,
     );
     assert.ok(!events.some((event) => event.startsWith("retire")), "a rejected import retires nothing");
     events.length = 0;
     settingsStatus = 200;
     await quietly(async (lines) => {
-      await seedTenantSettings({ config: config(), configDir: dir }, target, "up");
+      await seedTenantSettings(
+        { config: config(), configDir: dir, configPath: join(dir, "qm.config.jsonc") },
+        target,
+        "up",
+      );
       assert.match(lines.join("\n"), /removing OPENAI_API_KEY from the service env at the next deploy/);
       assert.ok(!lines.join("\n").includes("sk-local"), "values are never printed");
     });
@@ -293,7 +364,7 @@ test("a secret-store read that fails for any reason but a missing secret is repo
       coreLink: async (): Promise<CoreLink> => ({
         request: async (_path: string, init: RequestInit) => {
           bodies.push(String(init.body));
-          return { status: 200, body: JSON.stringify({ tenant: TENANT }) };
+          return { status: 200, body: "{}" };
         },
         close: () => {},
       }),
@@ -305,11 +376,19 @@ test("a secret-store read that fails for any reason but a missing secret is repo
       },
     };
     await assert.rejects(
-      seedTenantSettings({ config: config(), configDir: dir }, target, "push"),
+      seedTenantSettings(
+        { config: config(), configDir: dir, configPath: join(dir, "qm.config.jsonc") },
+        target,
+        "push",
+      ),
       /could not read ANTHROPIC_API_KEY from the deployment's secret store: AccessDeniedException: not authorized/,
     );
     await quietly(async (lines) => {
-      await seedTenantSettings({ config: config(), configDir: dir }, target, "up");
+      await seedTenantSettings(
+        { config: config(), configDir: dir, configPath: join(dir, "qm.config.jsonc") },
+        target,
+        "up",
+      );
       assert.match(lines.join("\n"), /could not read ANTHROPIC_API_KEY .*AccessDeniedException/);
     });
     assert.equal(JSON.parse(bodies[1]!).env.ANTHROPIC_API_KEY, undefined);

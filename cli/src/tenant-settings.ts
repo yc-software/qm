@@ -1,4 +1,4 @@
-import { sandboxConfigBackend, securityScreenEnv, type QmConfig } from "./config.ts";
+import { sandboxConfigBackend, securityScreenEnv, updateConfigFields, type QmConfig } from "./config.ts";
 import { CoreUnreachableError, isCoreUnreachable } from "./deployment-layer.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { operatorCredentials, operatorInit, type CoreLink } from "./operator-request.ts";
@@ -6,7 +6,8 @@ import { computedSecrets } from "./secrets.ts";
 import { portalBrokerSignIn } from "./services.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue, readEnvFile } from "./util.ts";
-import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isTenantSetting } from "./tenant-setting-names.ts";
 import { applyTenantImport, OperatorRouteError, tenantImport, type OperatorCall } from "./tenant-import.ts";
@@ -105,8 +106,17 @@ function readStoredValues(
   }
 }
 
+function deploymentTenant(opts: { config: QmConfig; configPath: string }): string {
+  if (opts.config.tenant) return opts.config.tenant;
+  const tenant = randomUUID();
+  writeFileSync(opts.configPath, updateConfigFields(readFileSync(opts.configPath, "utf8"), { tenant }));
+  opts.config.tenant = tenant;
+  step(`tenant settings: recorded this deployment's new tenant id ${tenant} in ${opts.configPath}; commit it`);
+  return tenant;
+}
+
 export async function seedTenantSettings(
-  opts: { config: QmConfig; configDir: string; envFile?: string },
+  opts: { config: QmConfig; configDir: string; configPath: string; envFile?: string },
   target: TenantSettingsTarget,
   mode: "up" | "push",
 ): Promise<void> {
@@ -139,7 +149,9 @@ export async function seedTenantSettings(
   };
   let result: Awaited<ReturnType<typeof applyTenantImport>>;
   try {
-    result = await applyTenantImport(plan, call, (message) => warn(`tenant settings: ${message}`));
+    result = await applyTenantImport(plan, deploymentTenant(opts), call, (message) =>
+      warn(`tenant settings: ${message}`),
+    );
   } catch (error) {
     if (error instanceof OperatorRouteError) throw new CliError(error.message);
     if (mode === "push" || !(error instanceof CoreUnreachableError)) throw error;

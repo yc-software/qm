@@ -110,7 +110,7 @@ import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling, createPgPool } from "./persistence/pg-pool.ts";
 import { installRowTenants, type RowTenants } from "./tenants/row-tenant.ts";
 import { inInstallTenant, pgTenants, type TenantList } from "./tenants/resolver.ts";
-import { ensureInstallTenant } from "./tenants/install.ts";
+import { createTenant } from "./tenants/create.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
@@ -3009,7 +3009,7 @@ export function serverDeps(
       : {}),
     ...(config.deploymentControlSecret ? { deploymentControlSecret: config.deploymentControlSecret } : {}),
     ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
-    installTenant: () => ensureInstallTenant(config.databaseUrl!),
+    createTenant: (tenant) => createTenant(config.databaseUrl!, tenant),
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,

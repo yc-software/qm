@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { appPrefixOf, isDigestPinned, renderPlanId, updateConfigUrls, type QmConfig } from "../config.ts";
+import { appPrefixOf, isDigestPinned, renderPlanId, updateConfigFields, type QmConfig } from "../config.ts";
 import {
   deploymentLayerRequest,
   httpDeploymentLayerTransport,
@@ -751,7 +751,7 @@ export function createRenderBackend(ctx: DeployContext): Backend {
           ),
         };
         const current = readFileSync(ctx.configPath, "utf8");
-        const updated = updateConfigUrls(current, urls);
+        const updated = updateConfigFields(current, urls);
         if (updated !== current) writeFileSync(ctx.configPath, updated);
         Object.assign(ctx.config, urls);
         state.updateInProgress = true;

@@ -33,6 +33,11 @@ export function completeDevSecuritySecrets(env: Record<string, string>, seed: st
   }
 }
 
+export function devTenantId(databaseUrl: string): string {
+  const hex = sha256Hex(`qm-dev\0${databaseUrl}\0tenant`);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
 export function repoRoot(cwd = process.cwd()): string {
   const res = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" });
   if (res.status !== 0) throw new Error("not inside a git worktree");

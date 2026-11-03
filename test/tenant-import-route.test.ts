@@ -31,7 +31,7 @@ test("the CLI import lands in the named tenant through core's operator routes an
     featureFlags: built.featureFlags,
     admin: built.admin,
     replayDedupe: built.replayDedupe,
-    installTenant: async () => ({ tenant: TEST_TENANT, created: false }),
+    createTenant: async (tenant) => ({ tenant, created: false }),
   });
   server.listen(0);
   const origin = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -62,7 +62,9 @@ test("the CLI import lands in the named tenant through core's operator routes an
   };
   try {
     const warnings: string[] = [];
-    const { applied: first } = await applyTenantImport(tenantImport(env), call, (message) => warnings.push(message));
+    const { applied: first } = await applyTenantImport(tenantImport(env), TEST_TENANT, call, (message) =>
+      warnings.push(message),
+    );
     assert.deepEqual(warnings, []);
     assert.deepEqual(first, [
       "PI_MODEL",
@@ -95,12 +97,13 @@ test("the CLI import lands in the named tenant through core's operator routes an
     });
     const { applied: again } = await applyTenantImport(
       tenantImport({ ...env, HARNESS_SECURITY_POSTURE: "dangerous", ANTHROPIC_API_KEY: "sk-ant-other" }),
+      TEST_TENANT,
       call,
       () => {},
     );
     assert.deepEqual(again, ["PI_MODEL", "inbox_loops for personal:ada@example.com"]);
     const repeated = tenantImport({ ...env, HARNESS_SECURITY_POSTURE: "dangerous", ANTHROPIC_API_KEY: "sk-ant-other" });
-    const { applied: immediate } = await applyTenantImport(repeated, call, () => {});
+    const { applied: immediate } = await applyTenantImport(repeated, TEST_TENANT, call, () => {});
     assert.deepEqual(immediate, again, "an identical import right after the last one is not refused as a replay");
     await withTenant(TEST_TENANT, async () => {
       assert.equal(await built.config.getSecurityPostureOwnDurable(orgScope()), "auto");

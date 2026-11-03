@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { operatorInit } from "../../../cli/src/operator-request.ts";
 import { isTenantSetting } from "../../../cli/src/tenant-setting-names.ts";
 import { applyTenantImport, tenantImport, type OperatorCall } from "../../../cli/src/tenant-import.ts";
-import { envFileGet } from "../lib/envctx.ts";
+import { devTenantId, envFileGet } from "../lib/envctx.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
 import { run } from "../lib/proc.ts";
 import type { ChildSpec } from "../lib/types.ts";
@@ -69,7 +69,12 @@ export async function prepareDurability(opts: {
 }
 
 export async function prepareDevTenant(
-  inputs: { adminGrantsSeed: string; baseEnv: Record<string, string>; ports: { core: number } },
+  inputs: {
+    databaseUrl: string;
+    adminGrantsSeed: string;
+    baseEnv: Record<string, string>;
+    ports: { core: number };
+  },
   phase: Phase,
 ): Promise<void> {
   phase("tenant", "start");
@@ -89,12 +94,13 @@ export async function prepareDevTenant(
     );
     return { status: response.status, body: await response.text() };
   };
-  const { tenant, applied } = await applyTenantImport(tenantImport(env), call, (message) =>
+  const tenant = devTenantId(inputs.databaseUrl);
+  const { applied } = await applyTenantImport(tenantImport(env), tenant, call, (message) =>
     phase("tenant", "warn", message),
   ).catch((error) => {
     throw new Error(`tenant settings: ${errMessage(error)}`, { cause: error });
   });
-  phase("tenant", "ok", `wrote ${applied.join(", ") || "nothing new"} to the install tenant ${tenant}`);
+  phase("tenant", "ok", `wrote ${applied.join(", ") || "nothing new"} to the dev tenant ${tenant}`);
 }
 
 export async function runDatabaseRelease(spec: ChildSpec, phase: Phase): Promise<void> {

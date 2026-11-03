@@ -64,10 +64,11 @@ tokens), and the values the hook imports into the tenant's admin settings:
 `HARNESS_SECURITY_POSTURE`, `HARNESS_SHARING_POSTURE`, the
 `<PROVIDER>_OAUTH_CLIENT_ID`/`_SECRET` pairs with `GOOGLE_WORKSPACE_DOMAIN`, and
 `LOOPS_USERS`. The chart refuses all of them in `env`, `secretEnv` or
-`services.<name>.env`. After each install or upgrade, a hook Job running the core
-image creates the install's one tenant on a fresh install (`PUT /v1/install/tenant`
-answers with its id; a database with several tenants fails the Job with
-`ambiguous_install_tenant`), writes the settings to it (`PUT /v1/tenant-settings`)
+`services.<name>.env`. Set `tenant` to this deployment's tenant id: generate a
+lowercase UUID once (`uuidgen | tr A-F a-f`) and keep it in your values; the chart
+refuses to render without one. After each install or upgrade, a hook Job running the core
+image creates the deployment's tenant (`PUT /v1/tenants/<tenant>`, a no-op once it
+exists), writes the settings to it (`PUT /v1/tenant-settings`)
 and imports the rest through the admin routes, keeping any branding, posture,
 OAuth client or model key the tenant already has; each `LOOPS_USERS` entry turns on
 `inbox_loops` for that person. Every call is signed with `CORE_SIGNING_SECRET` and
