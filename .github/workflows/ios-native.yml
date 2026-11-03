@@ -1,0 +1,33 @@
+name: iOS native checks
+
+on:
+  pull_request:
+    paths:
+      - "ios/**"
+      - "desktop/assets/becalmed-off-halfway-rock.webp"
+      - ".github/workflows/ios-native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    name: iOS build and tests
+    runs-on: macos-26
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - run: brew install xcodegen
+      - run: xcrun swift-format lint --strict --recursive QM QMTests
+      - run: xcodegen generate
+      - name: Test on an available iPhone simulator
+        run: |
+          device=$(xcrun simctl list devices available -j |
+            jq -r '[.devices | to_entries[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith("iPhone"))][0].udid')
+          xcodebuild -project QM.xcodeproj -scheme QM -destination "id=$device" test
