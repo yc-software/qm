@@ -521,7 +521,7 @@ export interface SessionStore {
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;
-  latestToolPurpose(sessionId: string, turnId: string): Promise<string | null>;
+  latestToolPurposes(turnIds: readonly string[]): Promise<Map<string, string>>;
   goals(sessionIds: readonly string[]): Promise<Map<string, GoalRecord>>;
   setGoal(lease: Lease, goal: GoalRecord, notices?: readonly NewEntry[]): Promise<void>;
 

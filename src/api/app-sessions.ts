@@ -348,18 +348,20 @@ export function createSessionMethods(
           ...(goal.floor ? { floor: { ...goal.floor } } : {}),
         });
     }
-    const workingChildren = new Map<string, { workingSince: number; purpose?: string }>();
-    await Promise.all(
-      working
-        .filter((s) => s.parentSessionId)
-        .map(async (s) => {
-          const run = latestRuns.get(s.threadRef);
-          if (!run) return;
-          const purpose = await deps.sessions
-            .latestToolPurpose(s.id, run.id)
-            .catch(swallowAs("app sessions: subagent purpose", null));
-          workingChildren.set(s.id, { workingSince: run.startedAt ?? run.createdAt, ...(purpose ? { purpose } : {}) });
-        }),
+    const childRuns = working.flatMap((s) => {
+      const run = s.parentSessionId ? latestRuns.get(s.threadRef) : undefined;
+      return run ? [{ id: s.id, run }] : [];
+    });
+    const purposes = childRuns.length
+      ? await deps.sessions
+          .latestToolPurposes(childRuns.map(({ run }) => run.id))
+          .catch(swallowAs("app sessions: subagent purposes", new Map<string, string>()))
+      : new Map<string, string>();
+    const workingChildren = new Map(
+      childRuns.map(({ id, run }) => {
+        const purpose = purposes.get(run.id.toLowerCase());
+        return [id, { workingSince: run.startedAt ?? run.createdAt, ...(purpose ? { purpose } : {}) }];
+      }),
     );
     const subagents = new Map<string, { running: number; waiting: number }>();
     for (const d of descendants) {
