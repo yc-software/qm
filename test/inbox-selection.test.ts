@@ -75,6 +75,23 @@ test("default Loops are distinct, stable, and deliberate empty selections surviv
   assert.deepEqual((await w.call()).data.selected, []);
 });
 
+test("archived Loops are neither offered nor selectable in the Inbox", async () => {
+  const w = world();
+  const { loop } = await w.deps.store.create({
+    owner: "alice",
+    createdBy: "alice",
+    ownerScopeId: "personal:alice",
+    name: "Retired",
+    playbook: "Read messages",
+    successCondition: "Messages reviewed",
+  });
+  await w.deps.items.ingest([{ loopId: loop.id, dedupeKey: "old", source: "gmail", sourcePayload: {} }]);
+  assert.ok((await w.call()).data.available.some((entry: any) => entry.id === loop.id));
+  await w.deps.store.setState(loop.id, "archived");
+  assert.ok((await w.call()).data.available.every((entry: any) => entry.id !== loop.id));
+  assert.equal((await w.call("PUT", { loopIds: [loop.id] })).status, 403);
+});
+
 test("selection reuses original items, counts items, omits heavy fields, and enforces access", async () => {
   const w = world();
   const { loop } = await w.deps.store.create({
