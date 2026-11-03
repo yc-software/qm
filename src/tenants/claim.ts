@@ -1,6 +1,8 @@
 import type { PgPool, PgQueryOptions } from "../persistence/pg-pool.ts";
 import { boundTenant, withoutTenant, withTenant } from "./context.ts";
 
+export type Claimed<T> = T & { tenantId?: string };
+
 export function claimAcrossTenants(
   pg: Pick<PgPool, "query">,
   text: string,
