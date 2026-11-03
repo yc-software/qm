@@ -102,14 +102,12 @@ export function installFakeMicrovm(): FakeMicrovm {
       const v = body.fs.get(sized[1]!);
       return v ? { ...ok, stdout: `${v.length}\n` } : { ...ok, code: 1, stderr: "no such file" };
     }
-    const cut = cmd.match(/^dd if='([^']+)' of='([^']+)' bs=(\d+) skip=(\d+) count=1$/);
-    if (cut) {
-      const src = body.fs.get(cut[1]!);
-      if (!src) return { ...ok, code: 1, stderr: "dd: no such file" };
-      const bs = Number(cut[3]);
-      const skip = Number(cut[4]);
-      body.fs.set(cut[2]!, src.subarray(skip * bs, Math.min((skip + 1) * bs, src.length)));
-      return ok;
+    const awaited = cmd.match(/^while \[ ! -e '([^']+)' \] && \[ ! -e '([^']+)' \]; do sleep/);
+    if (awaited) {
+      const part = body.fs.get(awaited[1]!);
+      if (part) return { ...ok, stdout: `${part.length}\n` };
+      const done = body.fs.get(awaited[2]!);
+      return done ? { ...ok, stdout: `done\n${Buffer.from(done).toString("utf8")}` } : { ...ok, code: 124 };
     }
     const appended = cmd.match(/^cat '([^']+)' >> '([^']+)' && rm -f '\1'$/);
     if (appended) {
@@ -123,11 +121,12 @@ export function installFakeMicrovm(): FakeMicrovm {
       body.fs.set(truncated[1]!, new Uint8Array(0));
       return ok;
     }
-    if (cmd.includes("-cf '/tmp/agent-home.tar'")) {
+    const produced = cmd.match(/tar --no-recursion --null -T '\\''([^']+)\/list'\\'' -cf -/);
+    if (produced) {
       const dump: Record<string, string> = {};
-      for (const [p, v] of body.fs)
-        if (p.startsWith("/root") && p !== "/tmp/agent-home.tar") dump[p] = Buffer.from(v).toString("base64");
-      body.fs.set("/tmp/agent-home.tar", enc(JSON.stringify(dump)));
+      for (const [p, v] of body.fs) if (p.startsWith("/root")) dump[p] = Buffer.from(v).toString("base64");
+      body.fs.set(`${produced[1]}/0.part`, enc(JSON.stringify(dump)));
+      body.fs.set(`${produced[1]}/done`, enc("0\n"));
       return ok;
     }
     if (cmd.includes("tar -xf '/tmp/agent-home.tar'")) {
@@ -140,8 +139,11 @@ export function installFakeMicrovm(): FakeMicrovm {
       return ok;
     }
     if (cmd.includes("tar -xf '.ro-layers.tar'")) return ok;
-    if (cmd.startsWith("mkdir -p") || cmd.startsWith("rm -f") || cmd.startsWith("rm -rf")) {
-      if (cmd.startsWith("rm -f ")) for (const [, path] of cmd.matchAll(/'([^']+)'/g)) body.fs.delete(path!);
+    if (cmd.startsWith("mkdir -p") || cmd.includes("rm -f") || cmd.includes("rm -rf")) {
+      for (const [, path, glob] of cmd.slice(cmd.lastIndexOf("rm -")).matchAll(/'([^']+)'(\.\*)?/g)) {
+        body.fs.delete(path!);
+        if (glob) for (const p of body.fs.keys()) if (p.startsWith(`${path}.`)) body.fs.delete(p);
+      }
       return ok;
     }
     if (cmd.includes("find ") && cmd.includes("-type f")) {
