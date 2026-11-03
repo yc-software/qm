@@ -1,7 +1,7 @@
 import type { SurfaceContextQuery, SurfaceContextResult } from "../reach/reach.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import { isUserItem, type Item } from "../sessions/items.ts";
+import { isHidden, isUserItem, type Item } from "../sessions/items.ts";
 
 const WEB_CONTEXT_MESSAGE_CHARS = 600;
 const WEB_CONTEXT_READ_CAP = 500;
@@ -37,7 +37,7 @@ export function webConversationWindow(
   for (const e of items) {
     const p = e.body;
     const time = new Date(e.createdAt).toISOString().slice(0, 16).replace("T", " ");
-    if (isUserItem(e) && !e.hidden) {
+    if (isUserItem(e) && !isHidden(e)) {
       const text = e.text ?? "";
       const display = typeof p.display === "string" && p.display.trim() ? p.display : text;
       if (display.trim()) {

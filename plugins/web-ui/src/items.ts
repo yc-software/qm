@@ -70,6 +70,9 @@ export const isUserMessage = (item: Pick<Item, "kind">): boolean =>
 export const isNarration = (item: Pick<Item, "kind" | "variant">): boolean =>
   item.kind === "AgentMessage" && item.variant === "narration";
 
+export const isHidden = (item: Pick<Item, "hidden" | "body">): boolean =>
+  item.hidden === true || item.body.hidden === true;
+
 export const messageTs = (item: Pick<Item, "kind" | "externalId" | "body">): string | null => {
   if (item.kind === "UserMessage") return item.externalId;
   return item.kind === "SteeringMessage" && typeof item.body.ts === "string" && item.body.ts ? item.body.ts : null;

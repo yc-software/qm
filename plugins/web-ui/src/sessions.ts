@@ -2148,7 +2148,7 @@ export async function openSessionInto(
       prefetched,
       cached: false,
       tracked,
-      items: transcriptRes?.items?.length ?? 0,
+      items: transcriptRes?.items.length ?? 0,
     });
 
   if (tracked) {
@@ -2197,7 +2197,7 @@ function mountTranscript(
   approvals: Promise<{ approvals: PendingApproval[] } | null> | null,
 ): void {
   if (s.canContinue === true) {
-    const split = inheritedTranscript(s, page.items ?? []);
+    const split = inheritedTranscript(s, page.items);
     conv.mountContinuable(
       s.threadRef,
       s.id,

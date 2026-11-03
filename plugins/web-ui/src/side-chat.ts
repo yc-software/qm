@@ -4,8 +4,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { ArrowUp, ArrowUpRight, Maximize2, Minimize2, MessageSquare, X } from "lucide";
 import { tip } from "./tooltip";
-import { api, forkCutSeq, forkSession, type CoreSession } from "./core-bridge";
-import type { Item } from "./items";
+import { api, fetchTranscript, forkCutSeq, forkSession, type CoreSession } from "./core-bridge";
 import { createConversation, disposeConversation, ensureDeliveryStream } from "./conversations";
 import { openSession, openSessionInto, refreshSessions } from "./sessions";
 import type { Conversation, ConvCtx } from "./conv-types";
@@ -415,7 +414,7 @@ export function createSideChatController(ctx: ConvCtx) {
         await show(created, true);
         return;
       }
-      const { items } = await api<{ items: Item[] }>(`/api/sessions/${encodeURIComponent(id)}`);
+      const { items } = await fetchTranscript(id);
       const floor = Math.max(
         ctx.chat.state.forkSession?.forkBoundarySeq ?? -1,
         (ctx.chat.state.transcriptAnchorSeq ?? 0) - 1,

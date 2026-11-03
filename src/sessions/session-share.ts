@@ -1,4 +1,4 @@
-import { isAgentReply, isOverheard, isUserItem, type Item } from "./items.ts";
+import { isAgentReply, isHidden, isOverheard, isUserItem, type Item } from "./items.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 
 export interface SharedAttachment {
@@ -56,7 +56,7 @@ export function sharedMessages(
     if (isUserItem(item)) {
       posted = false;
       posts.clear();
-      if (item.hidden || isOverheard(item)) continue;
+      if (isHidden(item) || isOverheard(item)) continue;
       const text = typeof body.display === "string" && body.display.trim() ? body.display : (item.text ?? "");
       emit("user", text, attachmentIds(body.attachments));
     } else if (item.kind === "ToolCall" && body.action === "post") {

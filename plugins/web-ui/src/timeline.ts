@@ -2,6 +2,7 @@ import { postCallText, postResultOk } from "./surface-post.ts";
 import type { PendingApproval, WorkBlock } from "./core-bridge.ts";
 import {
   activityItems,
+  isHidden,
   isNarration,
   isUserMessage,
   reasoningStepKey,
@@ -113,7 +114,7 @@ export function toolCategory(tool: string | null, payload: ToolPayload): string 
 }
 
 export function toolExecutionOutput(result: Item | null): string | null {
-  return result && typeof result.body.code === "number" ? result.text : null;
+  return result && typeof result.body.code === "number" ? (result.text ?? "") : null;
 }
 
 export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): ToolRowKind {
@@ -209,7 +210,7 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   let open: ToolRowModel | null = null;
   for (const a of activityItems(work.activity)) {
     if (isUserMessage(a)) {
-      if (a.kind === "SteeringMessage") items.push({ kind: "steer", item: a });
+      if (a.kind === "SteeringMessage" && !isHidden(a)) items.push({ kind: "steer", item: a });
       open = null;
     } else if (a.kind === "Reasoning") {
       if (a.body.redacted !== true)

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { captureSession, type MemorableToolCall } from "../src/memory/memorable/capture.ts";
+import { captureSession, worthOffering, type MemorableToolCall } from "../src/memory/memorable/capture.ts";
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 
 const WORKER_WORKFLOW_ID = /^[A-Za-z0-9._-]{1,200}$/;
@@ -251,4 +251,19 @@ test("captureSession preserves unified exec exit codes without treating manageme
   const calls = capture.workflows[0]!.tool_calls;
   assert.deepEqual(calls[0]?.result, { ok: true, exit_code: 1 });
   assert.deepEqual(calls[1]?.result, { ok: true });
+});
+
+test("captured tool input is the call's arguments, so repeating one call is not a workflow worth offering", () => {
+  const call = (callId: string, seq: number, id: string) =>
+    at({ kind: "ToolCall", tool: "execute", callId, body: { command: "ls", wire: { message: { id } } } }, seq);
+  const { workflows } = captureSession("s1", "personal:U1", [
+    at({ kind: "UserMessage", text: "check the folder twice" }, 1),
+    call("c1", 2, "m1"),
+    call("c2", 3, "m2"),
+  ]);
+  assert.deepEqual(
+    workflows[0]!.tool_calls.map((c) => c.input),
+    [{ command: "ls" }, { command: "ls" }],
+  );
+  assert.equal(worthOffering(workflows[0]!), false);
 });

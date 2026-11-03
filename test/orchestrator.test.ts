@@ -24,7 +24,7 @@ import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
-import { isAgentReply, isUserItem, messageTs, type Item, USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { isAgentReply, isHidden, isUserItem, messageTs, type Item, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
@@ -225,7 +225,7 @@ test("a proactive-opener turn greets with no user text and records the seeding e
     ["UserMessage", "AgentMessage"],
   );
   const userEntry = found!.items.find(isUserItem)!;
-  assert.equal(userEntry.hidden, true, "the opener seed is hidden so no surface renders it");
+  assert.equal(isHidden(userEntry), true, "the opener seed is hidden so no surface renders it");
 });
 
 test("a proactiveOpener turn that carries real text keeps the user entry visible", async () => {
@@ -234,7 +234,7 @@ test("a proactiveOpener turn that carries real text keeps the user entry visible
   assert.equal(res.status, "ok", res.reason);
   const found = await app.getSession(res.sessionId!);
   const userEntry = found!.items.find(isUserItem)!;
-  assert.notEqual(userEntry.hidden, true, "a real typed message stays visible even on an opener-flagged turn");
+  assert.notEqual(isHidden(userEntry), true, "a real typed message stays visible even on an opener-flagged turn");
 });
 
 test("a triggered turn records its synthetic wake prompt hidden so the chat never shows it as a user message", async () => {
@@ -247,7 +247,7 @@ test("a triggered turn records its synthetic wake prompt hidden so the chat neve
   assert.equal(res.status, "ok", res.reason);
   const found = await app.getSession(res.sessionId!);
   const userEntry = found!.items.find(isUserItem)!;
-  assert.equal(userEntry.hidden, true, "the wake prompt is hidden so no surface renders it as a user message");
+  assert.equal(isHidden(userEntry), true, "the wake prompt is hidden so no surface renders it as a user message");
 });
 
 test("a 1:1 names the authenticated human in the prompt so the agent never asks who they are", async () => {
@@ -428,7 +428,7 @@ test("a retry of an attempt that recorded NO work continues from the recorded re
     ["UserMessage", "AgentMessage"],
     "the human's request is recorded once and nothing else is added",
   );
-  assert.notEqual(found!.items[0]!.hidden, true, "the original stays visible");
+  assert.notEqual(isHidden(found!.items[0]!), true, "the original stays visible");
 });
 
 test("a guest actor is refused (internal-only, input side)", async () => {
@@ -2382,9 +2382,9 @@ test("dangerous command pauses for HiLO approval, then proceeds when approved", 
   const userEntries = found!.items.filter(isUserItem);
   assert.equal(userEntries.length, 2, "the approval continuation re-records the turn input");
   const [original, replay] = userEntries as [(typeof userEntries)[0], (typeof userEntries)[0]];
-  assert.notEqual(original.hidden, true, "the human's original message stays visible");
+  assert.notEqual(isHidden(original), true, "the human's original message stays visible");
   assert.equal(
-    replay.hidden,
+    isHidden(replay),
     true,
     "the continuation's replay is hidden so the chat never shows the human saying it twice",
   );
@@ -3944,7 +3944,7 @@ test("a RETRYABLE error that exhausts its budget leaves one durable turn_failure
   assert.match(turnFailure(failures[0]!)!, /couldn't be completed/);
   const logged = (await errors.list()).find((e) => e.category === "turn" && e.code === "error");
   assert.match(logged!.message, /boom: simulated turn fault/, "operators still get the raw detail on the error rail");
-  const visibleBoom = found!.items.filter((e) => isUserItem(e) && e.text === "!boom-always" && !e.hidden);
+  const visibleBoom = found!.items.filter((e) => isUserItem(e) && e.text === "!boom-always" && !isHidden(e));
   assert.equal(visibleBoom.length, 1, "the failed message renders once above its error, never per attempt");
 });
 

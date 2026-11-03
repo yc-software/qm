@@ -20,6 +20,7 @@ import type { GoalStripState } from "./goal-strip.ts";
 import {
   activityCreatedAt,
   activityItems,
+  isHidden,
   isNarration,
   isUserMessage,
   messageTs,
@@ -262,7 +263,7 @@ export async function loadInheritedTranscript(
   let inherited: Item[] = [];
   for (;;) {
     const page = await fetcher(session.id, { beforeSeq, tailTurns: TAIL_TURNS });
-    const items = inheritedTranscript(session, page.items ?? []).inherited;
+    const items = inheritedTranscript(session, page.items).inherited;
     inherited = [...items, ...inherited];
     const earliestSeq = items[0]?.seq;
     if (!(page.earlierItems ?? 0) || earliestSeq === undefined || earliestSeq <= 0 || earliestSeq >= beforeSeq) break;
@@ -358,10 +359,12 @@ export async function forkSession(
   upToSeq?: number,
   sideChat?: { entrySeq: number; quote: string; occurrence: number },
 ): Promise<{ session: CoreSession; items: Item[] }> {
-  return api<{ session: CoreSession; items: Item[] }>(`/api/sessions/${encodeURIComponent(id)}/fork`, {
-    method: "POST",
-    body: JSON.stringify({ upToSeq, sideChat }),
-  });
+  return withItems(
+    await api<{ session: CoreSession; items: Item[] }>(`/api/sessions/${encodeURIComponent(id)}/fork`, {
+      method: "POST",
+      body: JSON.stringify({ upToSeq, sideChat }),
+    }),
+  );
 }
 
 export function forkCutSeq(
@@ -386,7 +389,7 @@ export function forkCutSeq(
   }
   if (isUser(messages[index]) && !unsaved) return base;
   const later = items.flatMap((item) =>
-    item.kind === "UserMessage" && item.seq > base && userItemMessage(item) ? [item.seq] : [],
+    isUserMessage(item) && item.seq > base && userItemMessage(item) ? [item.seq] : [],
   );
   if (isUser(messages[index])) return later[unsaved - 1];
   const nextUser = later[unsaved];
@@ -422,7 +425,12 @@ export async function fetchTranscript(
   if (window?.sinceSeq !== undefined) qs.set("sinceSeq", String(window.sinceSeq));
   if (window?.beforeSeq !== undefined) qs.set("beforeSeq", String(window.beforeSeq));
   const suffix = qs.size ? `?${qs.toString()}` : "";
-  return api<TranscriptPage>(`/api/sessions/${encodeURIComponent(id)}${suffix}`);
+  return withItems(await api<TranscriptPage>(`/api/sessions/${encodeURIComponent(id)}${suffix}`));
+}
+
+function withItems<T extends { items: Item[] }>(page: T): T {
+  if (!Array.isArray(page.items)) throw new Error("Unexpected transcript response");
+  return page;
 }
 
 const resolvedCredentialApprovals = new Set<string>();
@@ -1463,7 +1471,7 @@ function isRenderableThinking(item: Item): boolean {
 function isWorkItem(item: Item): boolean {
   if (item.kind === "Reasoning") return isRenderableThinking(item);
   if (item.kind === "AgentMessage") return item.variant === "narration";
-  if (item.kind === "SteeringMessage") return true;
+  if (item.kind === "SteeringMessage") return !isHidden(item);
   return ACTIVITY_KINDS.has(item.kind);
 }
 
@@ -2028,7 +2036,7 @@ function userItemText(item: Item): string | null {
 type UserAttachment = { name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string };
 
 export function userItemMessage(item: Item): HistoryUserMessage | null {
-  if (item.hidden || isAgentEcho(item)) return null;
+  if (isHidden(item) || isAgentEcho(item)) return null;
   const text = userItemText(item) ?? "";
   const attachments = Array.isArray(item.body.attachments) ? (item.body.attachments as UserAttachment[]) : [];
   if (!text && !attachments.length) return null;
@@ -2233,9 +2241,9 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
       const steered = e.kind === "SteeringMessage";
       if (!steered) {
         stoppedShown = false;
-        hiddenPrompt = e.hidden === true;
+        hiddenPrompt = isHidden(e);
       }
-      if (e.hidden) continue;
+      if (isHidden(e)) continue;
       if (!steered) {
         posted = false;
         spillHeldPosts();

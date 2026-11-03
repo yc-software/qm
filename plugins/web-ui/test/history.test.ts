@@ -3,7 +3,7 @@ import { item } from "./item-fixture.ts";
 import { activityItems, activitySeq, type RunActivityEntry } from "../src/items.ts";
 
 const kinds = (work: { activity: RunActivityEntry[] } | undefined) =>
-  activityItems(work?.activity ?? []).map((a) => a.kind);
+  activityItems(work?.activity ?? []).map((a) => (a.variant ? `${a.kind}:${a.variant}` : a.kind));
 import { buildTimeline, messageWorkTimeline } from "../src/timeline.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -899,7 +899,7 @@ test("interstitial text items fold into the work timeline; the final reply stays
   const msg = itemsToMessages(items, MODEL)[1] as AssistantWork;
   assert.deepEqual(
     kinds(msg.work),
-    ["AgentMessage", "ToolCall", "ToolResult"],
+    ["AgentMessage:narration", "ToolCall", "ToolResult"],
     "narration is woven into the work block in seq order",
   );
   assert.equal(
@@ -1161,7 +1161,7 @@ test("a turn that closed empty after narrating surfaces the last narration as th
   );
   assert.deepEqual(
     kinds(msg.work),
-    ["AgentMessage", "ToolCall", "ToolResult", "ToolCall", "ToolResult"],
+    ["AgentMessage:narration", "ToolCall", "ToolResult", "ToolCall", "ToolResult"],
     "the promoted segment moves out of the work block; earlier narration stays",
   );
 });
@@ -1236,7 +1236,7 @@ test("a visible turn that finishes silently still shows the finish_silently call
   const msgs = itemsToMessages(items, MODEL);
   const msg = msgs[msgs.length - 1] as AssistantWork;
   assert.equal((msg.content[0] as { text: string }).text, "", "intentional silence is not turned into a message");
-  assert.deepEqual(kinds(msg.work), ["AgentMessage", "ToolCall", "ToolResult"]);
+  assert.deepEqual(kinds(msg.work), ["AgentMessage:narration", "ToolCall", "ToolResult"]);
 });
 
 test("a no-op finish_silently (non-poll, no silent:true) does NOT suppress promotion", () => {
@@ -1322,7 +1322,7 @@ test("a still-running turn (no closing entry yet) is not promoted", () => {
     "",
     "an in-flight turn keeps streaming live; the rebuild doesn't fake a reply",
   );
-  assert.deepEqual(kinds(msg.work), ["AgentMessage", "ToolCall"]);
+  assert.deepEqual(kinds(msg.work), ["AgentMessage:narration", "ToolCall"]);
 });
 
 test("a closed empty turn with no narration stays a bare work row", () => {
@@ -1620,6 +1620,16 @@ test("steering retains intake identity, authors and attachments after history re
   assert.equal(steer.entrySeq, 4);
   assert.equal(steer.speaker, "Alex");
   assert.equal(steer.attachments[0]?.artifactId, "image-1");
+});
+
+test("hidden steering never creates a history row or work marker", () => {
+  const messages = itemsToMessages([
+    item("UserMessage", { seq: 1, createdAt: 1, text: "start" }),
+    item("SteeringMessage", { seq: 2, createdAt: 2, text: "private instruction", body: { hidden: true } }),
+    item("AgentMessage", { seq: 3, createdAt: 3, text: "Done" }),
+  ]);
+  assert.equal(messages.length, 2);
+  assert.equal((messages[1] as AssistantWork).work, undefined);
 });
 
 test("live consumed steers join canonical history once and survive stopped/error fork accounting", () => {

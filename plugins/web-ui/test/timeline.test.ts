@@ -676,10 +676,13 @@ test("assistant text between steps splits visible work like a steer does", () =>
   );
 });
 
-test("ordinary user events do not become steering markers", () => {
+test("ordinary and hidden user events do not become steering markers", () => {
   const work: WorkBlock = {
     status: "complete",
-    activity: [{ item: item("UserMessage", { seq: 1, createdAt: 1, text: "ordinary" }) }],
+    activity: [
+      { item: item("UserMessage", { seq: 1, createdAt: 1, text: "ordinary" }) },
+      { item: item("SteeringMessage", { seq: 2, createdAt: 2, text: "hidden", body: { hidden: true } }) },
+    ],
   };
   assert.deepEqual(buildTimeline(work), []);
 });

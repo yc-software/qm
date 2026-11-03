@@ -937,7 +937,7 @@ export function createChatSurface(
   }
 
   function pageMessages(page: TranscriptPage): AgentMessage[] {
-    const split = inheritedTranscript(chatState.forkSession ?? {}, page.items ?? []);
+    const split = inheritedTranscript(chatState.forkSession ?? {}, page.items);
     return itemsToMessages(split.current, transcriptModel());
   }
 
@@ -946,7 +946,7 @@ export function createChatSurface(
     chatState.pins = page.pins ?? [];
     chatState.goal = page.goal ?? null;
     if (page.runtime) chatState.turnRuntime = page.runtime;
-    const refreshedInherited = inheritedRefreshItems(fork, page.items ?? [], chatState.inheritedLoaded);
+    const refreshedInherited = inheritedRefreshItems(fork, page.items, chatState.inheritedLoaded);
     if (refreshedInherited) chatState.inheritedMessages = itemsToMessages(refreshedInherited, transcriptModel());
     agent.state.messages = messages;
     approvalsEpoch++;
@@ -1024,7 +1024,7 @@ export function createChatSurface(
       const anchor = chatState.transcriptAnchorSeq;
       const page = await transcriptFetcher(sessionId, anchor !== null ? { sinceSeq: anchor } : undefined);
       if (!isCurrent()) return;
-      if (last?.stopReason === "error" && !hasRecordedRunReply(page.items ?? [], last.interruptedRunId!))
+      if (last?.stopReason === "error" && !hasRecordedRunReply(page.items, last.interruptedRunId!))
         return drawActiveChat(agent);
       const messages = pageMessages(page);
       await syncPendingApprovals(agent, messages);
@@ -1317,7 +1317,7 @@ export function createChatSurface(
                               const priorTop = scroller?.scrollTop ?? 0;
                               const rawRemaining = page.earlierItems ?? 0;
                               const remaining = currentEarlierCount(s, rawRemaining);
-                              const split = inheritedTranscript(s, page.items ?? []);
+                              const split = inheritedTranscript(s, page.items);
                               mountReadOnly(
                                 s,
                                 [...itemsToMessages(split.current, transcriptModel()), ...messages],
@@ -1404,7 +1404,7 @@ export function createChatSurface(
   }
 
   function mountReadOnlyPage(s: CoreSession, page: TranscriptPage): void {
-    const split = inheritedTranscript(s, page.items ?? []);
+    const split = inheritedTranscript(s, page.items);
     mountReadOnly(
       s,
       itemsToMessages(split.current, transcriptModel()),
@@ -1565,7 +1565,7 @@ export function createChatSurface(
       const page = await fetchTranscript(sessionId, { beforeSeq: anchor, tailTurns: TAIL_TURNS });
       if (agent !== chatState.agent || sessionId !== chatState.sessionId || anchor !== chatState.transcriptAnchorSeq)
         return;
-      const split = inheritedTranscript(chatState.forkSession ?? {}, page.items ?? []);
+      const split = inheritedTranscript(chatState.forkSession ?? {}, page.items);
       const earlierMessages = itemsToMessages(split.current, transcriptModel());
       if (!chatState.inheritedLoaded)
         chatState.inheritedMessages = [
@@ -2269,13 +2269,13 @@ export function createChatSurface(
     renderList();
     drawActiveChat();
     try {
-      const { items } = await api<{ items: Item[] }>(`/api/sessions/${encodeURIComponent(sessionId)}`);
-      const upToSeq = forkCutSeq(items ?? [], messages, index, floorSeq);
+      const { items } = await fetchTranscript(sessionId);
+      const upToSeq = forkCutSeq(items, messages, index, floorSeq);
       if (upToSeq === undefined) throw new Error("That message is still saving. Try forking again in a moment.");
       const forked = await forkSession(sessionId, upToSeq);
       replacePendingSession(pendingRef, forked.session);
       if (chatState.agent !== agent || chatState.sessionId !== sessionId) return;
-      const split = inheritedTranscript(forked.session, forked.items ?? []);
+      const split = inheritedTranscript(forked.session, forked.items);
       ctx.composer.carryModelPick(sourceThreadRef, forked.session.threadRef);
       mountContinuable(
         forked.session.threadRef,

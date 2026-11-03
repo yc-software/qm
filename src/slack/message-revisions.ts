@@ -4,7 +4,7 @@ import { parseSlackThreadRef, slackThreadRefCandidates } from "./message-gating.
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
 import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { sleep } from "../util/async.ts";
-import { isAgentReply, isUserItem, type Item, messageTs } from "../sessions/items.ts";
+import { isAgentReply, isHidden, isUserItem, type Item, messageTs } from "../sessions/items.ts";
 
 export interface MessageRevisionPayload {
   action: "edited" | "deleted";
@@ -67,7 +67,7 @@ function findOriginal(items: readonly Item[], ts: string): OriginalMessage | nul
   let found: OriginalMessage | null = null;
   for (const e of items) {
     if (!isUserItem(e) || messageTs(e) !== ts) continue;
-    if (e.hidden) return null;
+    if (isHidden(e)) return null;
     const { name, sourceRole } = e.body;
     found = {
       text: e.text ?? "",

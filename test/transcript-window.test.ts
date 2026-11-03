@@ -124,6 +124,13 @@ test("windowedTranscript: a fat tool payload is previewed, and the entry says so
   assert.equal(w.items[0]!.truncated, undefined, "a small entry is shipped whole and unmarked");
 });
 
+test("windowedTranscript: a long tool result text is previewed, and the item says so", () => {
+  const log = [user(0), at(1, { kind: "ToolResult", callId: "c1", tool: "execute", text: "o".repeat(50_000) })];
+  const result = windowedTranscript(log).items[1]!;
+  assert.equal(result.text!.length, ENTRY_STRING_BUDGET);
+  assert.equal(result.truncated, true);
+});
+
 test("windowedTranscript: conversation text is never truncated — only tool payloads are", () => {
   const said = "y".repeat(50_000);
   const log = [
