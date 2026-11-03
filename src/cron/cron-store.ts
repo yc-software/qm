@@ -8,6 +8,7 @@ import {
   contentPart,
   createDeduped,
   type CreateTriggerInput,
+  ownedBy,
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
 import { hashId } from "../util/crypto.ts";
@@ -84,6 +85,10 @@ export function cronTiedTo(cron: Pick<Cron, "destination" | "sessionRef">, threa
   return cron.destination?.target === threadRef || cron.sessionRef === threadRef;
 }
 
+export function deliversInto(cron: Pick<Cron, "destination">, scopeId: string): boolean {
+  return cron.destination?.audienceScopeId === scopeId;
+}
+
 export function isDeferred(cron: Pick<Cron, "deferUntil">, now: number): boolean {
   return cron.deferUntil !== undefined && now < cron.deferUntil;
 }
@@ -137,8 +142,13 @@ export function createCronStore(
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
-    scheduledIn: async (scopeId) =>
-      (await backing.all()).filter((c) => c.ownerScopeId === scopeId || c.destination?.audienceScopeId === scopeId),
+    async scheduledIn(scopeId) {
+      const [owned, delivered] = await Promise.all([
+        ownedBy(backing, scopeId),
+        backing.select({ where: { field: "destination.audienceScopeId", anyOfFold: [scopeId] } }),
+      ]);
+      return [...owned, ...delivered.filter((c) => deliversInto(c, scopeId) && c.ownerScopeId !== scopeId)];
+    },
     async update(id, patch) {
       const before = await backing.get(id);
       if (!before) return null;

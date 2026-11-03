@@ -772,7 +772,8 @@ test("a cron delivering into a conversation is readable there without its task, 
     threadRef: "slack:G7",
     firedAt: Date.now() - 1000,
     endedAt: Date.now(),
-    status: "silent",
+    status: "ok",
+    reply: "posted to the owner's DM before the move",
   });
 
   const listed = await control.listCrons(inGroup("U3"));
@@ -786,8 +787,8 @@ test("a cron delivering into a conversation is readable there without its task, 
   const runs = await control.getCronRuns(id, {}, inGroup("U3"));
   assert.ok(runs.ok);
   assert.deepEqual(
-    runs.runs.map((r) => r.status),
-    ["silent"],
+    runs.runs.map((r) => [r.status, r.reply]),
+    [["ok", undefined]],
   );
   assert.equal(runs.cron.lastFireNote, undefined);
 

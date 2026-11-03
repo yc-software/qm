@@ -1583,7 +1583,10 @@ test("scheduled work lists crons that deliver into this conversation from anothe
       destination: { type: "slack", target: "D1", audienceScopeId },
     });
   assert.equal((await orchestrator.handleTurn(dm("dm:U1:delivered-here", "hello"))).status, "ok");
-  assert.match(seen[0]!.systemPrompt, /- Team digest — every 5 min \(delivers here, owned elsewhere: read-only\)/);
+  assert.match(
+    seen[0]!.systemPrompt,
+    /\nDelivering here from crons managed elsewhere \(only their owners can change them\):\n- Team digest — every 5 min\n/,
+  );
   assert.doesNotMatch(seen[0]!.systemPrompt, /Someone else's digest|summarize my private inbox/);
 });
 

@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Destination } from "../types.ts";
 import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "../triggers/types.ts";
 import { cronScriptFrom, type CronScriptTrial } from "../cron/script.ts";
-import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
+import { deliversInto, type CreateCronInput, type CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import {
@@ -207,10 +207,6 @@ async function ownsCron(
   if (actsAsScope(cron.owner, cron.ownerScopeId)) return app.isCurrentSharedScopeMember(actorId, cron.ownerScopeId);
   if (!(await (isActor ? isActor(cron.owner) : app.samePerson(cron.owner, actorId)))) return false;
   return !(await app.membershipControlsScope(cron.ownerScopeId)) || app.managesScope(actorId, cron.ownerScopeId);
-}
-
-function deliversTo(cron: Cron, capability: CapabilityClaims): boolean {
-  return cron.destination?.audienceScopeId === capability.scopeId;
 }
 
 function audienceView(cron: Cron): Cron {
@@ -533,7 +529,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       const ids = new Set(administered.map((c) => c.id));
       const shared = visible.filter((c) => !ids.has(c.id));
       for (const c of shared) ids.add(c.id);
-      const deliveredHere = all.filter((c) => !ids.has(c.id) && deliversTo(c, capability)).map(audienceView);
+      const deliveredHere = all.filter((c) => !ids.has(c.id) && deliversInto(c, capability.scopeId)).map(audienceView);
       return { crons: administered, visible: [...shared, ...deliveredHere] };
     },
 
@@ -543,23 +539,22 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (await canAdministerCron(app, cron, capability.actorId)) return { ok: true, cron };
       const { visible } = await app.listCronsForViewer(capability.actorId);
       if (visible.some((c) => c.id === id)) return { ok: true, cron };
-      if (deliversTo(cron, capability)) return { ok: true, cron: audienceView(cron) };
+      if (deliversInto(cron, capability.scopeId)) return { ok: true, cron: audienceView(cron) };
       return { ok: false, code: "forbidden", message: "not your cron" };
     },
 
     async getCronRuns(id, req, capability) {
-      const found = await app.getCron(id);
-      if (!found) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      let cron = found;
-      if (!(await canAdministerCron(app, found, capability.actorId))) {
-        if (!deliversTo(found, capability)) return { ok: false, code: "forbidden", message: "not your cron" };
-        cron = audienceView(found);
-      }
+      const cron = await app.getCron(id);
+      if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
+      const owner = await canAdministerCron(app, cron, capability.actorId);
+      if (!owner && !deliversInto(cron, capability.scopeId))
+        return { ok: false, code: "forbidden", message: "not your cron" };
       if (req.limit !== undefined && (!Number.isInteger(req.limit) || req.limit < 1)) {
         return { ok: false, code: "bad_request", message: "limit must be a positive integer" };
       }
       const { runs, total } = await app.listCronFires(id, req.limit !== undefined ? { limit: req.limit } : {});
-      return { ok: true, cron, runs, total };
+      if (owner) return { ok: true, cron, runs, total };
+      return { ok: true, cron: audienceView(cron), runs: runs.map(({ reply: _reply, ...run }) => run), total };
     },
 
     async patchCron(id, req, capability, trial) {

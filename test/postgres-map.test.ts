@@ -585,7 +585,7 @@ test("pg map: an indexed select plans both branches through their indexes", { sk
 
 test("pg map: a scope's crons are the ones it owns or receives", { skip }, async () => {
   const f = createPostgresMapFactory(URL!);
-  const crons = createCronStore(f.map<Cron>("map_owned_crons"), {
+  const crons = createCronStore(f.map<Cron>("map_owned_crons", ["ownerScopeId", "destination.audienceScopeId"]), {
     fires: createPostgresCronFireStore(URL!),
   });
   const upper = scopeId("personal", "OwnerU");

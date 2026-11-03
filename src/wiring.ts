@@ -107,7 +107,7 @@ import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
-import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+import { createPostgresMapFactory, type DurableMap, type MapField } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
@@ -583,7 +583,7 @@ export function buildApp(
     resolveFiles: (refs) => files.resolveByIds(refs),
   });
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);
-  const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
+  const artifactMap = <T>(table: string, indexedFields?: readonly MapField<T>[]): DurableMap<T> =>
     pgArtifactMap.map<T>(table, indexedFields);
   setProviderBaseUrls(config.providerBaseUrls);
   const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
@@ -1875,7 +1875,7 @@ export function buildApp(
   const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
   const cronChanged: { notify?: (id: string) => void } = {};
   const cronFires = createPostgresCronFireStore(databaseUrl);
-  const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
+  const cronsBase = createCronStore(artifactMap<Cron>("crons", ["ownerScopeId", "destination.audienceScopeId"]), {
     staleRunningMs: config.runMaxAgeMs,
     fires: cronFires,
   });

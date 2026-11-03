@@ -271,19 +271,24 @@ export function renderStandingObligations(
     .toSorted((a, b) => a.id.localeCompare(b.id))
     .map((c) => ({
       title: c.title || "Untitled scheduled task",
-      ...scheduleLabel(c),
       owned: c.ownerScopeId === scopeId,
+      ...scheduleLabel(c),
     }));
   const zones = [...new Set(schedules.flatMap((s) => (s.timezone ? [s.timezone] : [])))];
+  const scheduleLines = (owned: boolean) =>
+    schedules
+      .filter((s) => s.owned === owned)
+      .map((s) => `- ${s.title} — ${s.label}${zones.length > 1 && s.timezone ? ` (${s.timezone})` : ""}`);
+  const delivered = scheduleLines(false);
   const lines = [
-    ...schedules.map(
-      (s) =>
-        `- ${s.title} — ${s.label}${zones.length > 1 && s.timezone ? ` (${s.timezone})` : ""}${s.owned ? "" : " (delivers here, owned elsewhere: read-only)"}`,
-    ),
+    ...scheduleLines(true),
     ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.action)}`),
     ...monitors
       .toSorted((a, b) => a.id.localeCompare(b.id))
       .map((m) => `- Job watch: ${summary(m.purpose ?? m.command)}`),
+    ...(delivered.length
+      ? ["Delivering here from crons managed elsewhere (only their owners can change them):", ...delivered]
+      : []),
   ];
   return [
     `## Scheduled here${zones.length === 1 ? ` (${zones[0]})` : ""}`,
