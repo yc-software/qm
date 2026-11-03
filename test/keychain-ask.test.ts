@@ -37,7 +37,7 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testMap, testDatabaseUrl, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
@@ -309,7 +309,7 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   const idStore = createIdempotencyStore(testMap<IdempotencyRecord>());
   const scheduler = createScheduler({
     ...singleProcessDeps(),
-    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) }),
     deliveries: createDeliveryStore(),
     idempotency: idStore,
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),

@@ -9,7 +9,7 @@ import type { RunStore } from "../../src/runs/run-store.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap, testFileDatabaseUrl } from "./test-database.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 
 export async function swarmFixture(
@@ -23,7 +23,7 @@ export async function swarmFixture(
   } = {},
 ) {
   const sessions = options.sessions ?? createPostgresSessionStore(testDatabaseUrl());
-  const runs = options.runs ?? createPostgresRunStore(testDatabaseUrl()).runs;
+  const runs = options.runs ?? createPostgresRunStore(testFileDatabaseUrl()).runs;
   const lock = options.lock ?? testAdvisoryLock();
   const store = options.store ?? createSwarmStore(testMap(), { runs, sessions });
   const records = testMap<SandboxResource>();

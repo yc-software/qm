@@ -8,7 +8,7 @@ import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
@@ -28,8 +28,8 @@ interface Rig {
 
 async function rig(opts?: { treeRunCap?: number }): Promise<Rig> {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
+  const signals = createPostgresRunSignalStore(testFileDatabaseUrl());
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({

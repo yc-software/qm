@@ -8,11 +8,11 @@ import { createAskExpirySweep, fireAskResolution, type AskResolutionDeps } from 
 import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import type { TurnRequest, TurnResult } from "../src/types.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",

@@ -11,7 +11,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { artifactImageLoader } from "../src/agent/replay-images.ts";
 import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sessions/tool-output.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
@@ -341,7 +341,7 @@ test("the next turn's OpenAI Responses request replays the previous turn's reaso
 });
 
 test("a steer and an empty-ending re-prompt replay as the exact user messages the model saw", async () => {
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const signals = createPostgresRunSignalStore(testFileDatabaseUrl());
   const first = await runTurn(
     "where is the budget doc?",
     [],
@@ -403,7 +403,7 @@ test("user and steer images replay as the exact image blocks the model saw, rest
       direction: "in",
       createdAt: 1,
     });
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const signals = createPostgresRunSignalStore(testFileDatabaseUrl());
   const first = await runTurn(
     "what is in this photo?",
     [],

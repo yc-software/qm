@@ -18,7 +18,7 @@ import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fakeIdentity() {
@@ -57,7 +57,7 @@ function service(
   },
 ) {
   const loops = createLoopStore(testMap());
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) });
   const items = createLoopItemLedger(testMap());
   const outputs = createLoopOutputStore(testMap());
   const grants = overrides?.grants ?? createShipGrantStore(testMap());

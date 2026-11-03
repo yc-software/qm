@@ -37,6 +37,7 @@ import {
   testMap,
   testDeployBackings,
   testAdvisoryLock,
+  testFileDatabaseUrl,
 } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -64,7 +65,7 @@ const exceptions = Object.keys(SUBAGENT_EXCEPTIONS) as (keyof AgentToolsOptions)
 
 async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean) => Call | undefined) {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const featureFlags = createFeatureFlagStore(testMap());
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
   const sidebar: Session[] = [];
@@ -73,7 +74,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     sessions,
     runs,
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals: createPostgresRunSignalStore(testFileDatabaseUrl()),
     maxAttempts: 1,
     conversations: {
       list: async () => sidebar,

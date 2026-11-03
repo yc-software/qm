@@ -12,7 +12,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
 import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { holdThread, testRuns } from "./support/live-run.ts";
 
@@ -228,7 +228,7 @@ test("runResultDelivery skips terminal results that cannot be safely replayed", 
 });
 
 test("wired stores: a completed turn lands in the outbox unless the live path acked it", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const deliveries = createDeliveryStore();
   wireRunResultDeliveries(runs, deliveries);
 
@@ -256,7 +256,7 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
 });
 
 test("sweep enqueues the recovery delivery for a terminal run whose outbox row never landed", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const deliveries = createDeliveryStore();
   const bypassed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
   const claimed = await runs.claim("w1", 5_000);
@@ -274,7 +274,7 @@ test("sweep enqueues the recovery delivery for a terminal run whose outbox row n
 });
 
 test("sweep leaves runs alone when their delivery already exists, was acked live, or is still inside the grace window", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const deliveries = createDeliveryStore();
   const recovery = wireRunResultDeliveries(runs, deliveries);
   const finish = async (threadRef: string, reply: string): Promise<Run> => {
@@ -311,7 +311,7 @@ test("sweep leaves runs alone when their delivery already exists, was acked live
 });
 
 test("sweep pages through terminal runs by (finishedAt, id) without skipping ties", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const deliveries = createDeliveryStore();
   const recovery = wireRunResultDeliveries(runs, deliveries);
   const finished = new Set<string>();
@@ -330,7 +330,7 @@ test("sweep pages through terminal runs by (finishedAt, id) without skipping tie
 });
 
 test("wired stores: a parked run lands a durable, non-ackable failure note", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const deliveries = createDeliveryStore();
   wireRunResultDeliveries(runs, deliveries);
 
@@ -434,7 +434,7 @@ test("a done run records nothing", async () => {
 
 test("wired stores: a parked Slack run gets both the durable session entry and the recovery note", async () => {
   const { sessions, session } = await failureSessions();
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const deliveries = createDeliveryStore();
   wireRunResultDeliveries(runs, deliveries, undefined, sessions);
 

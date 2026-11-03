@@ -9,7 +9,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { scopeId, type Principal } from "../src/types.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
@@ -36,12 +36,12 @@ test("session search reuses indexed search with participant intersection, tenure
     payload: { text: "memo shared" },
     scopeLabel: source.scopeId,
   });
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   let members: Principal[] | undefined;
   const factory = createSessionSyscalls({
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals: createPostgresRunSignalStore(testFileDatabaseUrl()),
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     maxAttempts: 1,
     advisoryLock: testAdvisoryLock(),

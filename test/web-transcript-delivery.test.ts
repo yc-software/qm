@@ -12,7 +12,7 @@ import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
 const THREAD = "web:alice@example.com:conv-1";
@@ -274,7 +274,7 @@ async function terminalRun(
   result: TurnResult | { fail: string },
   duringTurn?: () => Promise<void>,
 ): Promise<string> {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   wireRunResultDeliveries(runs, deliveries);
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
   const claimed = await runs.claim("w1", 5_000);
@@ -306,7 +306,7 @@ test("a parked web run's failure note lands as a turn_failure entry the web tran
 test("an onTerminal-recorded failure entry suppresses the web drain's duplicate for the same run", async () => {
   const { sessions, inner, deliveries } = wired();
   const session = await webSession(sessions);
-  const runs = createPostgresRunStore(testDatabaseUrl()).runs;
+  const runs = createPostgresRunStore(testFileDatabaseUrl()).runs;
   wireRunResultDeliveries(runs, inner, undefined, sessions);
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
   const claimed = await runs.claim("w1", 5_000);

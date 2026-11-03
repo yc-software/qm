@@ -43,6 +43,7 @@ import {
   testAdvisoryLock,
   testDeployBackings,
   testMap,
+  testFileDatabaseUrl,
 } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
@@ -527,7 +528,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
 });
 
 test("standing obligations: this scope's pending triggers render; other scopes' and immediate one-shots don't", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) });
   const base = { owner: actor.id, createdBy: actor.id, ownerScopeId: scopeId("personal", actor.id) };
   await crons.create({
     ...base,
@@ -931,7 +932,7 @@ test("a steer delivered by notification is screened in the context of the turn i
       screens.push(contextHeaders(headers));
     return new Response(anthropicStream('{"decision":"auto"}'), { headers: { "content-type": "text/event-stream" } });
   }) as typeof fetch;
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const signals = createPostgresRunSignalStore(testFileDatabaseUrl());
   const { orchestrator } = buildOrchestrator({
     agent: createAgent({
       defaultModelId: "claude-haiku-4-5",
@@ -1385,7 +1386,7 @@ for (const surfaceTools of [false, true]) {
 }
 
 test("scheduled-work changes update the next turn's system block without rewriting history", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) });
   const sandbox = fakeSandbox();
   const seen: AgentTurnInput[] = [];
   const agent = createMockAgent();

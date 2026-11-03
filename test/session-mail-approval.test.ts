@@ -32,6 +32,7 @@ import {
   testDatabaseUrl,
   testMap,
   testDeployBackings,
+  testFileDatabaseUrl,
 } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -63,7 +64,7 @@ let callSeq = 0;
 
 async function scenario() {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const featureFlags = createFeatureFlagStore(testMap());
   await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
@@ -71,7 +72,7 @@ async function scenario() {
     sessions,
     runs,
     mailbox,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals: createPostgresRunSignalStore(testFileDatabaseUrl()),
     maxAttempts: 3,
     advisoryLock: testAdvisoryLock(),
   });

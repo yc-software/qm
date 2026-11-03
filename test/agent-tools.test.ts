@@ -12,7 +12,7 @@ import { createPostgresToolOutputStore, parkedOutputKey } from "../src/sessions/
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testFileDatabaseUrl } from "./support/test-database.ts";
 import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
@@ -3676,7 +3676,7 @@ test("declared client tools follow qm's own tools, in name order whatever the de
   assert.deepEqual(reversed, forward, "the tools array is stable from one turn to the next");
 });
 
-function clientToolRef(store = createPostgresRunSignalStore(testDatabaseUrl())) {
+function clientToolRef(store = createPostgresRunSignalStore(testFileDatabaseUrl())) {
   const emitted: Emitted[] = [];
   const cancel = new AbortController();
   const ref: ToolContextRef = {

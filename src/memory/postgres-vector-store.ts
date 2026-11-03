@@ -128,7 +128,6 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
     },
     async missing(model, limit, dimensions, signal, afterId) {
       const { rows } = await claimAcrossTenants(
-        db,
         `SELECT f.scope_id, f.id, f.text, f.text_hash AS hash
          FROM memory_facts f LEFT JOIN memory_fact_vectors v
            ON v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
@@ -149,7 +148,6 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
     },
     async prune(model, limit, dimensions, signal) {
       const { rowCount } = await claimAcrossTenants(
-        db,
         `DELETE FROM memory_fact_vectors v USING (
           SELECT s.scope_id, s.model, s.fact_id FROM memory_fact_vectors s
           WHERE s.model <> $1 OR ($3::integer IS NOT NULL AND s.dimensions <> $3) OR NOT EXISTS (

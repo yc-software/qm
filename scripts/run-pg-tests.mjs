@@ -102,7 +102,7 @@ function runFile(file, env) {
 async function runIsolated(file, index) {
   const name = `${runId}_${index}`;
   try {
-    await admin.query(`CREATE DATABASE ${name}`);
+    await admin.query(`CREATE DATABASE ${name} TEMPLATE ${templateName}`);
     if (stopping) return { file, ok: false, ms: 0, output: "" };
     return await runFile(file, {
       DATABASE_URL: databaseUrl(name),

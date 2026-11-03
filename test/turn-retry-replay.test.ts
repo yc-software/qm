@@ -21,7 +21,13 @@ import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import {
+  testConfigStore,
+  testDatabaseUrl,
+  testDeployBackings,
+  testMap,
+  testFileDatabaseUrl,
+} from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
@@ -92,7 +98,7 @@ function buildScenario(interruptAfterToolResult = false) {
     },
   };
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "retry-replay-")));

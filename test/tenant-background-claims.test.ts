@@ -18,7 +18,7 @@ import { scopeId, type Principal } from "../src/types.ts";
 import { createSweeper } from "../src/util/sweeper.ts";
 import { createAskExpirySweep } from "../src/triggers/keychain-ask.ts";
 import type { KeychainAsk } from "../src/credentials/keychain.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testFileDatabaseUrl } from "./support/test-database.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -48,13 +48,10 @@ async function withTenantColumn(url: string, table: string, tenants: Record<stri
 }
 
 test("a cross-tenant claim refuses to run under a bound tenant", async () => {
-  let opened = 0;
-  const store = { pool: async () => assert.fail(`opened ${++opened}`) };
   await assert.rejects(
-    withTenant(A, () => claimAcrossTenants(store, "SELECT 1")),
+    withTenant(A, () => claimAcrossTenants("SELECT 1")),
     /A cross-tenant claim cannot run while a tenant is bound/,
   );
-  assert.equal(opened, 0);
 });
 
 test("startup fails without an owner database url", () => {
@@ -77,7 +74,7 @@ test(
   "under the restricted app login, one claim returns both tenants' due rows and each row's work runs bound",
   { skip },
   async () => {
-    const url = testDatabaseUrl();
+    const url = testFileDatabaseUrl();
     const role = `qmt_app_${randomBytes(6).toString("hex")}`;
     const owner = new pg.Pool({ connectionString: url, max: 1 });
     for (const statement of TENANCY_BASE.statements) await owner.query(statement);
@@ -104,7 +101,7 @@ test(
     const app = createPgPool(appUrl.toString());
     try {
       await assert.rejects(app.q("SELECT * FROM due_work"), /No tenant is bound/);
-      const { rows } = await claimAcrossTenants(app, "SELECT * FROM due_work WHERE due ORDER BY id");
+      const { rows } = await claimAcrossTenants("SELECT * FROM due_work WHERE due ORDER BY id");
       assert.deepEqual(
         rows.map((row) => [row.id, row.tenant_id]),
         [
@@ -161,12 +158,13 @@ test(
   "under the restricted app login, one worker claims runs across tenants and runs each turn under its run's tenant",
   { skip },
   async () => {
-    const url = testDatabaseUrl();
+    const url = testFileDatabaseUrl();
     const owner = createPostgresRunStore(url);
     const role = `qmt_app_${randomBytes(6).toString("hex")}`;
     const admin = new pg.Pool({ connectionString: url, max: 1 });
     let app: ReturnType<typeof createPostgresRunStore> | undefined;
     try {
+      await admin.query("TRUNCATE runs");
       const first = (await owner.runs.enqueue({ sessionId: "s-a", request: turn("a"), maxAttempts: 1 })).run;
       const second = (await owner.runs.enqueue({ sessionId: "s-b", request: turn("b"), maxAttempts: 1 })).run;
       await withTenantColumn(url, "runs", { [first.id]: A, [second.id]: B });
@@ -205,6 +203,9 @@ test(
     } finally {
       await app?.close();
       await owner.close();
+      await admin.query("DROP POLICY IF EXISTS runs_tenant ON runs");
+      await admin.query("ALTER TABLE runs DISABLE ROW LEVEL SECURITY");
+      await admin.query("TRUNCATE runs");
       await admin.query(`DROP OWNED BY ${role}`);
       await admin.query(`DROP ROLE ${role}`);
       await admin.end();
@@ -213,7 +214,7 @@ test(
 );
 
 test("once run signals carry tenant_id, the orphan sweep reports each run with its tenant", { skip }, async () => {
-  const url = testDatabaseUrl();
+  const url = testFileDatabaseUrl();
   const signals = createPostgresRunSignalStore(url);
   try {
     await signals.send("run-a", { kind: "steer", text: "hi" });

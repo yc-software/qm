@@ -6,7 +6,7 @@ import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 
 for (const backend of ["memory", "postgres"] as const) {
   const skip = backend === "postgres" && !process.env.DATABASE_URL;
@@ -157,7 +157,7 @@ for (const backend of ["memory", "postgres"] as const) {
   test(`latest runs batch matches single reads including private messages and ties: ${backend}`, { skip }, async () => {
     const runtime =
       backend === "memory"
-        ? createPostgresRunStore(testDatabaseUrl())
+        ? createPostgresRunStore(testFileDatabaseUrl())
         : createPostgresRunStore(process.env.DATABASE_URL!);
     const { runs } = runtime;
     const ids = [`batch:${randomUUID()}`, `batch:${randomUUID()}`];

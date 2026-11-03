@@ -24,7 +24,13 @@ import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import {
+  testConfigStore,
+  testDatabaseUrl,
+  testDeployBackings,
+  testMap,
+  testFileDatabaseUrl,
+} from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
@@ -84,7 +90,7 @@ function buildOrchestrator(sessions: SessionStore) {
 }
 
 test("a failed turn surfaces a refusal whose admin link points at the real session UUID", async () => {
-  const url = testDatabaseUrl();
+  const url = testFileDatabaseUrl();
   const sessions = createPostgresSessionStore(url);
   const orchestrator = buildOrchestrator(sessions);
   const { runs } = createPostgresRunStore(url);

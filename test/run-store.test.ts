@@ -4,7 +4,7 @@ import type { RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testFileDatabaseUrl } from "./support/test-database.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 function turn(text: string, surface?: string): OrchestratorInput {
@@ -18,7 +18,7 @@ function turn(text: string, surface?: string): OrchestratorInput {
 }
 
 type Backend = { name: string; make: () => { runs: RunStore } };
-const backends: Backend[] = [{ name: "memory", make: () => createPostgresRunStore(testDatabaseUrl()) }];
+const backends: Backend[] = [{ name: "memory", make: () => createPostgresRunStore(testFileDatabaseUrl()) }];
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -465,7 +465,7 @@ for (const backend of backends) {
 }
 
 test("editing pending text preserves identity, order, attachments and rejects stale or started edits", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const request = {
     ...turn("original"),
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: 5, blobId: "notes-blob" }],

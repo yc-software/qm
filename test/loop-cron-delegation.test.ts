@@ -6,12 +6,12 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 
 const base = { owner: "josh", createdBy: "josh", ownerScopeId: scopeId("personal", "josh") };
 
 function deps(fired: string[], turns: TurnRequest[]) {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) });
   return {
     crons,
     scheduler: createScheduler({
@@ -59,7 +59,7 @@ test("a plain cron still runs a turn and never touches the loop path", async () 
 
 test("a failing loop fire is recorded on the cron's fire log and the schedule advances", async () => {
   const turns: TurnRequest[] = [];
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) });
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
@@ -86,7 +86,7 @@ test("a failing loop fire is recorded on the cron's fire log and the schedule ad
 
 test("a loop-backed cron fails closed when the loop service is unavailable", async () => {
   const turns: TurnRequest[] = [];
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) });
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
@@ -107,7 +107,7 @@ test("a loop-backed cron fails closed when the loop service is unavailable", asy
 });
 
 test("creating the same loop-backed cron twice dedupes, and loopId distinguishes content", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) });
   const a = await crons.create({ ...base, schedule: { everyMs: 60_000 }, action: "fire", loopId: "L1" });
   const b = await crons.create({ ...base, schedule: { everyMs: 60_000 }, action: "fire", loopId: "L1" });
   const c = await crons.create({ ...base, schedule: { everyMs: 60_000 }, action: "fire", loopId: "L2" });

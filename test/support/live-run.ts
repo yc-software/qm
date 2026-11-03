@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 import type { RunStore } from "../../src/runs/run-store.ts";
-import { testDatabaseUrl } from "./test-database.ts";
+import { testFileDatabaseUrl } from "./test-database.ts";
 
 export function testRuns(): RunStore {
-  return createPostgresRunStore(testDatabaseUrl()).runs;
+  return createPostgresRunStore(testFileDatabaseUrl()).runs;
 }
 
 export async function holdThread(runs: RunStore, threadRef: string): Promise<() => Promise<void>> {

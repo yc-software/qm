@@ -14,7 +14,7 @@ import {
 } from "../src/sandbox/sandbox-resource-upgrade.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
@@ -881,7 +881,7 @@ test("two concurrent turns on one parking computer: only the last turn to finish
   parking.teardown = async (_handle, opts) => {
     teardowns.push(opts ?? {});
   };
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const start = async (sessionId: string) => {
     await runs.enqueue({ sessionId, request: { origin: { kind: "direct" }, text: "x" } as never });
     return (await runs.claim("worker", 60_000))!;

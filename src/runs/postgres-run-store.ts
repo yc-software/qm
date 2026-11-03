@@ -58,7 +58,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
   const events = new EventEmitter();
   events.setMaxListeners(0);
 
-  const pg = createPgPool(connectionString, [
+  const { query: q, close: closePool } = createPgPool(connectionString, [
     {
       id: "runs/store/0011-base-schema",
       expectedChecksum: "77ca2d1c3ec5253374c0eadbf47d91d53c6d2c3fc7232079b33006bc9233a24e",
@@ -112,7 +112,6 @@ END $base_schema$`,
       ],
     },
   ]);
-  const { query: q, close: closePool } = pg;
 
   const availabilityListeners = new Map<() => void, number>();
   let availabilityTimer: ReturnType<typeof setTimeout> | undefined;
@@ -125,7 +124,6 @@ END $base_schema$`,
       crossTenantLoop(() => {
         availabilityTimer = undefined;
         availabilityProbe = claimAcrossTenants(
-          pg,
           `SELECT EXISTS (
           SELECT 1 FROM runs r WHERE r.status='pending' AND r.retry_after <= $1
           AND NOT EXISTS (
@@ -285,13 +283,12 @@ END $base_schema$`,
       return rows[0] ? rowToRun(rows[0]) : null;
     },
 
-    claim: (workerId, ttlMs) => claimWith((text, params) => claimAcrossTenants(pg, text, params), workerId, ttlMs),
+    claim: (workerId, ttlMs) => claimWith((text, params) => claimAcrossTenants(text, params), workerId, ttlMs),
 
     claimById: (runId, workerId, ttlMs) => claimWith(q, workerId, ttlMs, runId),
     claimForSession: (sessionId, workerId, ttlMs) => claimWith(q, workerId, ttlMs, undefined, sessionId),
     async personWaiting(createdBefore) {
       const { rows } = await claimAcrossTenants(
-        pg,
         `SELECT EXISTS (
            SELECT 1 FROM runs candidate WHERE ${claimable("$2")}
              AND candidate.claim_priority=0 AND candidate.created_at <= $1
@@ -393,7 +390,6 @@ END $base_schema$`,
     },
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await claimAcrossTenants(
-        pg,
         `SELECT * FROM (
            SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
            AND session_id LIKE 'agent:main:subagent:%' AND id > $2
@@ -411,7 +407,6 @@ END $base_schema$`,
     },
     async terminalFinished(after, beforeMs, limit) {
       const { rows } = await claimAcrossTenants(
-        pg,
         `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
            AND (finished_at > $2 OR (finished_at = $2 AND id > $3))
          ORDER BY finished_at, id LIMIT $4`,
@@ -515,7 +510,6 @@ END $base_schema$`,
     }): Promise<{ requeued: number; parked: number }> {
       const now = Date.now();
       const { rows } = await claimAcrossTenants(
-        pg,
         "SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1",
         [now],
       );

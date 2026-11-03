@@ -10,14 +10,14 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { MemoryFact } from "../src/memory/facts.ts";
 import { scopeId, type ScopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fixture() {
   const notebooks = new Map<ScopeId, MemoryFact[]>();
   const timezones = new Map<string, string>();
   const store = testMap<MemoryTidyProfile>();
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) });
   const calls: TurnRequest[] = [];
   const fact = (updatedAt: number): MemoryFact => ({
     id: String(updatedAt),

@@ -11,7 +11,7 @@ import type { PersistedUiState } from "../src/surfaces/ui-state.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
-import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testConfigStore, testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
@@ -20,7 +20,7 @@ function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefres
     items: createLoopItemLedger(testMap()),
     outputs: createLoopOutputStore(testMap()),
     grants: createShipGrantStore(testMap()),
-    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) }),
     config: testConfigStore("org"),
   };
   const uiState = testMap<PersistedUiState>();

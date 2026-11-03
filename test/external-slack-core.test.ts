@@ -12,7 +12,7 @@ import type { ToolContext } from "../src/tools/primitives.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
 const policy = { companyDomains: ["example.com"], companyTeamIds: ["TCOMPANY"], serviceCredentials: ["safe"] };
@@ -163,7 +163,7 @@ test("external native tool ceiling cannot delegate, switch sandboxes, read confi
 test("external broker requires the current run lease and both external-safe and ordinary grants", async () => {
   const { externalSlackCapabilityAllowed } = await import("../src/api/external-slack-capability.ts");
   const { createAclStore } = await import("../src/acl/acl-store.ts");
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const req = request("test");
   const { run: queued } = await runs.enqueue({

@@ -14,7 +14,7 @@ import type { Loop, LoopItem } from "../src/loops/types.ts";
 import type { LedgerItemView } from "../src/loops/ledger-view.ts";
 import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
 import { sleep } from "../src/util/async.ts";
-import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testConfigStore, testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fakeRes() {
@@ -54,7 +54,7 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
       items: createLoopItemLedger(testMap()),
       outputs: createLoopOutputStore(testMap()),
       grants: createShipGrantStore(testMap()),
-      crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+      crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) }),
       config: testConfigStore("org"),
     },
     crons: new Map(),

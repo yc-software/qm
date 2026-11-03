@@ -6,7 +6,7 @@ import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts
 import { promptEnvelopeBody, type NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 type Sink = {
@@ -80,7 +80,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
   const withImages = variant !== "text";
   const finishDuringPreparation = variant === "finished during preparation";
   test(`steered input lands in consumption order, including steered ${variant}`, { timeout: 60_000 }, async () => {
-    const signals = createPostgresRunSignalStore(testDatabaseUrl());
+    const signals = createPostgresRunSignalStore(testFileDatabaseUrl());
     const agent = createAgent({ apiKey: "sk-test", signals });
     const sink: Sink = { entries: [] };
     const documentBase64 = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString(
@@ -411,7 +411,7 @@ test("Pi Responses captures exclude history and document text without changing r
 for (const stopBeforeIntake of [false, true]) {
   const name = `steering during a tool ${stopBeforeIntake ? "survives Stop without fabricated intake" : "lands after its result in live and stored order"}`;
   test(name, { timeout: 60_000 }, async () => {
-    const signals = createPostgresRunSignalStore(testDatabaseUrl());
+    const signals = createPostgresRunSignalStore(testFileDatabaseUrl());
     let stopTaken = () => {};
     const stopped = new Promise<void>((resolve) => (stopTaken = resolve));
     const pending = signals.pending.bind(signals);
@@ -505,7 +505,7 @@ for (const stopBeforeIntake of [false, true]) {
 }
 
 test("a steer wakes a waiting background poll and lands without waiting out the poll", async () => {
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const signals = createPostgresRunSignalStore(testFileDatabaseUrl());
   const agent = createAgent({ apiKey: "sk-test", signals });
   const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
@@ -566,7 +566,7 @@ test("a steer wakes a waiting background poll and lands without waiting out the 
 });
 
 test("a consumed steer is recorded when its acknowledgement fails", { timeout: 60_000 }, async () => {
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const signals = createPostgresRunSignalStore(testFileDatabaseUrl());
   signals.acknowledge = async () => {
     throw new Error("signal store unavailable");
   };

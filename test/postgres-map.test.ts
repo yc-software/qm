@@ -17,7 +17,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -78,7 +78,7 @@ test("pg map: a value persists across map instances (no per-process cache to div
 
 test("pg map: an artifact store rides the map (a cron round-trips through Postgres)", { skip }, async () => {
   const store = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"), {
-    fires: createPostgresCronFireStore(testDatabaseUrl()),
+    fires: createPostgresCronFireStore(testFileDatabaseUrl()),
   });
   const c = await store.create({
     schedule: { everyMs: 60_000 },
@@ -89,7 +89,7 @@ test("pg map: an artifact store rides the map (a cron round-trips through Postgr
   });
   await store.markFired(c.id, 123);
   const reader = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"), {
-    fires: createPostgresCronFireStore(testDatabaseUrl()),
+    fires: createPostgresCronFireStore(testFileDatabaseUrl()),
   });
   const got = await reader.get(c.id);
   assert.equal(got?.action, "digest");

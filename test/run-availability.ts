@@ -1,4 +1,3 @@
-import { useOwnerDatabase } from "../src/tenants/claim.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -8,7 +7,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testFileDatabaseUrl } from "./support/test-database.ts";
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -25,22 +24,31 @@ async function until(predicate: () => boolean): Promise<void> {
   }
 }
 
+async function emptyRuns(admin: pg.Pool): Promise<void> {
+  const { rows } = await admin.query("SELECT to_regclass('runs') IS NOT NULL AS present");
+  if (rows[0]?.present) await admin.query("TRUNCATE runs");
+}
+
+async function emptyFileRuns(): Promise<string> {
+  const url = testFileDatabaseUrl();
+  const admin = new pg.Pool({ connectionString: url });
+  try {
+    await emptyRuns(admin);
+  } finally {
+    await admin.end();
+  }
+  return url;
+}
+
 async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanup(): Promise<void> }> {
-  const admin = new pg.Pool({ connectionString: process.env.DATABASE_URL! });
-  const schema = `run_availability_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new URL(process.env.DATABASE_URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
-  url.searchParams.set("application_name", schema);
-  const owner = new URL(process.env.DATABASE_OWNER_URL!);
-  owner.searchParams.set("options", `-c search_path=${schema}`);
-  useOwnerDatabase(owner.toString());
+  const url = testFileDatabaseUrl();
+  const admin = new pg.Pool({ connectionString: url });
+  await emptyRuns(admin);
   return {
-    url: url.toString(),
+    url,
     admin,
     async cleanup() {
-      useOwnerDatabase(process.env.DATABASE_OWNER_URL);
-      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+      await emptyRuns(admin);
       await admin.end();
     },
   };
@@ -48,7 +56,7 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
 
 for (const duringClaim of [false, true]) {
   test(`notification wakes idle worker without a lost wakeup (during claim: ${duringClaim})`, async () => {
-    const { runs } = createPostgresRunStore(testDatabaseUrl());
+    const { runs } = createPostgresRunStore(await emptyFileRuns());
     const bus = createMemoryEventBus<null>("availability test");
     runs.subscribeAvailable = (listener, options) => {
       const off = bus.subscribe(listener, options);
@@ -97,7 +105,7 @@ for (const duringClaim of [false, true]) {
 }
 
 test("missed notifications recover and reconnect checks immediately", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(await emptyFileRuns());
   const bus = createMemoryEventBus<null>("availability test");
   runs.subscribeAvailable = (listener, options) => {
     const off = bus.subscribe(listener, options);

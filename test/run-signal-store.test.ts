@@ -2,11 +2,11 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { startSignalPoll, waitForClientResult, type RunSignalStore } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testFileDatabaseUrl } from "./support/test-database.ts";
 
 const stores: RunSignalStore[] = [];
 const signalStore = (): RunSignalStore => {
-  const store = createPostgresRunSignalStore(testDatabaseUrl());
+  const store = createPostgresRunSignalStore(testFileDatabaseUrl());
   stores.push(store);
   return store;
 };
@@ -292,7 +292,7 @@ test("store: onSignal doorbell fires on send for that run only; unsubscribe stop
 });
 
 test("store: NOTIFY doorbell reaches a listener on a different connection", async () => {
-  const url = testDatabaseUrl();
+  const url = testFileDatabaseUrl();
   const sender = createPostgresRunSignalStore(url);
   const receiver = createPostgresRunSignalStore(url);
   const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;

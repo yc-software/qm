@@ -23,7 +23,7 @@ import type { Run, RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
@@ -45,7 +45,7 @@ async function rig(opts?: {
   treeRunCap?: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }): Promise<Rig> {
-  const url = testDatabaseUrl();
+  const url = testFileDatabaseUrl();
   const sessions = createPostgresSessionStore(url);
   const { runs } = createPostgresRunStore(url);
   const signals = createPostgresRunSignalStore(url);
@@ -1745,7 +1745,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const policies = { ext: access };
   const admitted = (request: OrchestratorInput) =>
     externalSlackRequestAllowed({ ...request, surface: request.surface ?? "" }, policies);
-  const url = testDatabaseUrl();
+  const url = testFileDatabaseUrl();
   const sessions = createPostgresSessionStore(url);
   const { runs } = createPostgresRunStore(url);
   const factory = createSessionSyscalls({
@@ -1790,7 +1790,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
 });
 
 test("sessions list shows only sidebar sessions the whole audience can see and create needs a live turn", async () => {
-  const url = testDatabaseUrl();
+  const url = testFileDatabaseUrl();
   const sessions = createPostgresSessionStore(url);
   const { runs } = createPostgresRunStore(url);
   const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];

@@ -9,7 +9,7 @@ import { createSkillStore } from "../src/skills/skill-store.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testAdvisoryLock, testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
@@ -21,7 +21,7 @@ const orgScope = scopeId("org", ORG);
 
 function makeDeps() {
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) });
   const webhooks = createWebhookStore(testMap(), testMap());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
     resolveFiles: (refs) => files.resolveByIds(refs),

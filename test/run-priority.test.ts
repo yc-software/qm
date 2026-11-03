@@ -5,7 +5,7 @@ import { createRunPreemption, createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { handbackStop, PARKED, type Run, type RunStore } from "../src/runs/run-store.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testFileDatabaseUrl } from "./support/test-database.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -22,7 +22,7 @@ const subagentOf = (parent: Run, text: string) =>
 const swarm = { swarmId: "s", messageId: "m", recipientId: "r" };
 
 const backends: Array<{ name: string; skip: string | false; make: () => Promise<RunStore> }> = [
-  { name: "postgres", skip: false, make: async () => createPostgresRunStore(testDatabaseUrl()).runs },
+  { name: "postgres", skip: false, make: async () => createPostgresRunStore(testFileDatabaseUrl()).runs },
 ];
 
 async function claimAll(runs: RunStore): Promise<string[]> {
@@ -119,7 +119,7 @@ async function withWorkers(
   maxClaims?: number,
   setup?: (runs: RunStore) => Promise<void>,
 ): Promise<void> {
-  const { runs } = createPostgresRunStore(testDatabaseUrl(), maxClaims ? { maxClaims } : undefined);
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl(), maxClaims ? { maxClaims } : undefined);
   await setup?.(runs);
   const log: string[] = [];
   const workers = Array.from({ length: count }, () =>

@@ -19,7 +19,7 @@ import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testFileDatabaseUrl } from "./support/test-database.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -40,7 +40,7 @@ const turn: OrchestratorInput = {
 };
 
 test("reaper requeues a run whose lease expired (crashed worker)", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
   await runs.claim("dead-worker", 10);
   await sleep(30);
@@ -56,7 +56,7 @@ test("reaper requeues a run whose lease expired (crashed worker)", async () => {
 });
 
 test("a run parks once the ERROR budget (error_attempts) is exhausted", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 })).run;
 
   let claimed = await runs.claim("w1", 10_000);
@@ -76,7 +76,7 @@ test("a run parks once the ERROR budget (error_attempts) is exhausted", async ()
 });
 
 test("repeated lease-expiry reaps requeue forever without spending the error budget", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 })).run;
   const reaper = createReaper(runs, {
     ...singleProcessDeps(),
@@ -97,7 +97,7 @@ test("repeated lease-expiry reaps requeue forever without spending the error bud
 });
 
 test("with maxClaims set, repeated lease-expiry reaps PARK the poison pill instead of requeuing forever", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl(), { maxClaims: 3 });
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl(), { maxClaims: 3 });
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 })).run;
   const reaper = createReaper(runs, {
     ...singleProcessDeps(),
@@ -124,7 +124,7 @@ test("with maxClaims set, repeated lease-expiry reaps PARK the poison pill inste
 });
 
 test("a concrete error parks with its own message even when over the claim cap", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl(), { maxClaims: 2 });
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl(), { maxClaims: 2 });
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 })).run;
 
   let claimed = await runs.claim("w1", 10_000);
@@ -142,7 +142,7 @@ test("a concrete error parks with its own message even when over the claim cap",
 });
 
 test("only the leader instance's interval sweep reaps expired leases", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
   await runs.claim("dead-worker", 10);
   await sleep(30);
@@ -171,7 +171,7 @@ test("only the leader instance's interval sweep reaps expired leases", async () 
 });
 
 test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling)", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
   await runs.claim("dead-worker", 10);
   await sleep(30);
@@ -190,7 +190,7 @@ test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling
 });
 
 test("reapExpired fences the dead attempt before it requeues, so a zombie can neither revive the run nor write", async () => {
-  const url = testDatabaseUrl();
+  const url = testFileDatabaseUrl();
   const { runs } = createPostgresRunStore(url);
   const sessions = createPostgresSessionStore(url);
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
@@ -221,7 +221,7 @@ test("reapExpired fences the dead attempt before it requeues, so a zombie can ne
 });
 
 test("a heartbeat landing between SELECT and retire leaves the run untouched", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
 
   const r = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const claimed = await runs.claim("live-worker", 10);
@@ -239,7 +239,7 @@ test("a heartbeat landing between SELECT and retire leaves the run untouched", a
 });
 
 test("shutdown cancels before handback and holds the run until the turn unwinds", async () => {
-  const url = testDatabaseUrl();
+  const url = testFileDatabaseUrl();
   const { runs } = createPostgresRunStore(url);
   const sessions = createPostgresSessionStore(url);
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
@@ -297,7 +297,7 @@ test("shutdown cancels before handback and holds the run until the turn unwinds"
 });
 
 test("an uncooperative turn is handed back after the settle grace, and resumes once after the old process exits", async () => {
-  const url = testDatabaseUrl();
+  const url = testFileDatabaseUrl();
   const { runs } = createPostgresRunStore(url);
   const sessions = createPostgresSessionStore(url);
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
@@ -368,7 +368,7 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
 });
 
 test("shutdown aborts the blocked step before the handback, and the next worker resumes it exactly once", async () => {
-  const store = createPostgresRunStore(testDatabaseUrl());
+  const store = createPostgresRunStore(testFileDatabaseUrl());
   const events: string[] = [];
   const runs: RunStore = {
     ...store.runs,
@@ -465,7 +465,7 @@ test("shutdown mid-turn through the agent leaves no stop marker, and the resumed
 });
 
 test("a thrown claim neither kills the worker loop nor blocks the drain handback", async () => {
-  const store = createPostgresRunStore(testDatabaseUrl());
+  const store = createPostgresRunStore(testFileDatabaseUrl());
   let explode = 2;
   const runs = {
     ...store.runs,
@@ -516,7 +516,7 @@ function gatedOrchestrator(
 }
 
 test("stop() lets an in-flight turn finish inside the drain budget — the run completes instead of being handed back", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const { orchestrator, started, unblock } = gatedOrchestrator();
 
@@ -628,7 +628,7 @@ test("runtime.start() leaves queued runs idle when background work is disabled",
 });
 
 test("timed-out stop cannot resurrect a worker while its previous turn drains", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const first = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const { orchestrator, started, unblock } = gatedOrchestrator();
   const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
@@ -650,7 +650,7 @@ test("timed-out stop cannot resurrect a worker while its previous turn drains", 
 });
 
 test("stopClaims relinquishes new work while keeping an active turn and its heartbeats alive", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const first = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const { orchestrator, started, unblock } = gatedOrchestrator();
   let beats = 0;
@@ -677,7 +677,7 @@ test("stopClaims relinquishes new work while keeping an active turn and its hear
 });
 
 test("stopClaims waits for an outstanding claim to be handed back before acknowledging", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const pending = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const claim = runs.claim.bind(runs);
   const gate = Promise.withResolvers<void>();
@@ -981,7 +981,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
 });
 
 test("worker survives sustained claim failures and processes work after recovery", async (t) => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testFileDatabaseUrl());
   const queued = (await runs.enqueue({ sessionId: "claim-recovery", request: turn })).run;
   const claim = runs.claim.bind(runs);
   let attempts = 0;

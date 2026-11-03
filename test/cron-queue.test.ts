@@ -11,7 +11,7 @@ import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
@@ -64,7 +64,7 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const fires = createPostgresCronFireStore(testDatabaseUrl());
+    const fires = createPostgresCronFireStore(testFileDatabaseUrl());
     const a = instance(calls, 12_000, fires);
     const b = instance(calls, 12_000, fires);
     a.scheduler.start(1000);
@@ -97,7 +97,7 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const fireStore = createPostgresCronFireStore(testDatabaseUrl());
+    const fireStore = createPostgresCronFireStore(testFileDatabaseUrl());
     const a = instance(calls, 0, fireStore);
     const b = instance(calls, 0, fireStore);
     a.scheduler.start(1000);
@@ -135,7 +135,7 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const fires = createPostgresCronFireStore(testDatabaseUrl());
+    const fires = createPostgresCronFireStore(testFileDatabaseUrl());
     const a = instance(calls, 0, fires);
     const b = instance(calls, 0, fires);
     const cron = await a.crons.create({

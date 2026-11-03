@@ -10,7 +10,7 @@ import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keych
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import type { Principal, ScopeId, TurnRequest } from "../src/types.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testMap, testFileDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function keychain(now = Date.now) {
@@ -33,7 +33,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
     secret: "dummy-only-secret",
     envKey: "DUMMY_TOKEN",
   });
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testFileDatabaseUrl()) });
   const cron = await crons.create({
     owner: `system:${scope}`,
     createdBy: `system:${scope}`,

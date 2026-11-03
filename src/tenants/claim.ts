@@ -11,15 +11,14 @@ export function useOwnerDatabase(url: string | undefined): void {
   ownerPool = createPgPool(url);
 }
 
-export async function claimAcrossTenants(
-  store: Pick<PgPool, "pool">,
+export function claimAcrossTenants(
   text: string,
   params: unknown[] = [],
   options?: PgQueryOptions,
 ): ReturnType<PgPool["query"]> {
-  if (boundTenant() !== undefined) throw new Error("A cross-tenant claim cannot run while a tenant is bound");
-  if (!ownerPool) throw new Error("Cross-tenant claims need useOwnerDatabase at startup");
-  await store.pool();
+  if (boundTenant() !== undefined)
+    return Promise.reject(new Error("A cross-tenant claim cannot run while a tenant is bound"));
+  if (!ownerPool) return Promise.reject(new Error("Cross-tenant claims need useOwnerDatabase at startup"));
   return ownerPool.query(text, params, options);
 }
 

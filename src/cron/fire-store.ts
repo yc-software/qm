@@ -169,7 +169,6 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
     },
     async sweepStranded(now, staleRunningMs, note) {
       const result = await claimAcrossTenants(
-        { pool },
         `UPDATE cron_fires
             SET status = 'failed', ended_at = $1, note = $2
           WHERE status = 'running' AND fired_at <= $3`,
@@ -204,7 +203,6 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
           return result.rowCount ?? 0;
         });
       const { rows } = await claimAcrossTenants(
-        { pool },
         "SELECT DISTINCT ON (cron_id) * FROM cron_fires WHERE ended_at IS NOT NULL AND ended_at < $1",
         [endedBefore],
       );

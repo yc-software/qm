@@ -1,11 +1,21 @@
-import { useOwnerDatabase } from "../src/tenants/claim.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import type { Pool } from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testFileDatabaseUrl } from "./support/test-database.ts";
+
+async function emptyRunsDatabase(): Promise<string> {
+  const pg = (await import("pg")).default;
+  const url = testFileDatabaseUrl();
+  const admin = new pg.Pool({ connectionString: url });
+  try {
+    await admin.query("TRUNCATE runs");
+  } finally {
+    await admin.end();
+  }
+  return url;
+}
 
 const request: OrchestratorInput = {
   actor: { id: "retry-test", type: "internal" },
@@ -21,22 +31,7 @@ for (const backend of ["memory", "postgres"] as const) {
       skip: backend === "postgres" && !process.env.DATABASE_URL,
     },
     async (t) => {
-      let connectionString = process.env.DATABASE_URL!;
-      let admin: Pool | undefined;
-      const schema = `retry_${randomUUID().replaceAll("-", "")}`;
-      if (backend === "postgres") {
-        const pg = (await import("pg")).default;
-        admin = new pg.Pool({ connectionString });
-        await admin.query(`CREATE SCHEMA ${schema}`);
-        const url = new URL(connectionString);
-        url.searchParams.set("options", `-c search_path=${schema}`);
-        connectionString = url.toString();
-        const owner = new URL(process.env.DATABASE_OWNER_URL!);
-        owner.searchParams.set("options", `-c search_path=${schema}`);
-        useOwnerDatabase(owner.toString());
-      }
-      const runtime =
-        backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
+      const runtime = createPostgresRunStore(await emptyRunsDatabase());
       let { runs } = runtime;
       const sessionId = randomUUID();
       try {
@@ -48,7 +43,7 @@ for (const backend of ["memory", "postgres"] as const) {
         await runs.fail(first.id, lease.leaseToken, "temporary outage", { retryAfterMs: 30_000 });
         if (backend === "postgres") {
           await runs.close?.();
-          runs = createPostgresRunStore(connectionString).runs;
+          runs = createPostgresRunStore(testFileDatabaseUrl()).runs;
         }
         const later = (await runs.enqueue({ sessionId, request })).run;
         const other = (await runs.enqueue({ sessionId: randomUUID(), request })).run;
@@ -73,14 +68,6 @@ for (const backend of ["memory", "postgres"] as const) {
       } finally {
         t.mock.timers.reset();
         await runs.close?.();
-        if (admin) {
-          try {
-            useOwnerDatabase(process.env.DATABASE_OWNER_URL);
-            await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-          } finally {
-            await admin.end();
-          }
-        }
       }
     },
   );
@@ -89,22 +76,7 @@ for (const backend of ["memory", "postgres"] as const) {
     `${backend}: failed returns wait durably without delaying new work or acknowledging results`,
     { skip: backend === "postgres" && !process.env.DATABASE_URL },
     async (t) => {
-      let connectionString = process.env.DATABASE_URL!;
-      let admin: Pool | undefined;
-      const schema = `return_retry_${randomUUID().replaceAll("-", "")}`;
-      if (backend === "postgres") {
-        const pg = (await import("pg")).default;
-        admin = new pg.Pool({ connectionString });
-        await admin.query(`CREATE SCHEMA ${schema}`);
-        const url = new URL(connectionString);
-        url.searchParams.set("options", `-c search_path=${schema}`);
-        connectionString = url.toString();
-        const owner = new URL(process.env.DATABASE_OWNER_URL!);
-        owner.searchParams.set("options", `-c search_path=${schema}`);
-        useOwnerDatabase(owner.toString());
-      }
-      let { runs } =
-        backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
+      let { runs } = createPostgresRunStore(await emptyRunsDatabase());
       try {
         const child = (await runs.enqueue({ sessionId: `agent:main:subagent:${randomUUID()}`, request })).run;
         await runs.deferReturn(child.id, 60_000);
@@ -118,7 +90,7 @@ for (const backend of ["memory", "postgres"] as const) {
         await runs.deferReturn(child.id, 60_000);
         if (backend === "postgres") {
           await runs.close?.();
-          runs = createPostgresRunStore(connectionString).runs;
+          runs = createPostgresRunStore(testFileDatabaseUrl()).runs;
         }
         assert.deepEqual(await runs.pendingReturns(), []);
         assert.deepEqual(await runs.get(child.id), completed);
@@ -147,14 +119,6 @@ for (const backend of ["memory", "postgres"] as const) {
       } finally {
         t.mock.timers.reset();
         await runs.close?.();
-        if (admin) {
-          try {
-            useOwnerDatabase(process.env.DATABASE_OWNER_URL);
-            await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-          } finally {
-            await admin.end();
-          }
-        }
       }
     },
   );
@@ -214,7 +178,7 @@ test(
 );
 
 test("memory: one claim uses one clock snapshot across the retry boundary", async (t) => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(await emptyRunsDatabase());
   const first = (await runs.enqueue({ sessionId: "same", request })).run;
   const claimed = await runs.claim("w1", 60_000);
   const now = Date.now();
