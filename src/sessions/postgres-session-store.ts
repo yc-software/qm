@@ -653,12 +653,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToSession);
     },
 
-    async fillFacts(sessionId, facts): Promise<void> {
-      await q(
+    async fillFacts(sessionId, facts): Promise<boolean> {
+      const rows = await q(
         `UPDATE sessions SET slack_binding = COALESCE(slack_binding, $2::jsonb), runtime = COALESCE(runtime, $3::jsonb),
            spawn_meta = COALESCE(spawn_meta, $4)
          WHERE id = $1 AND (($2::jsonb IS NOT NULL AND slack_binding IS NULL) OR ($3::jsonb IS NOT NULL AND runtime IS NULL)
-           OR ($4::text IS NOT NULL AND spawn_meta IS NULL))`,
+           OR ($4::text IS NOT NULL AND spawn_meta IS NULL))
+         RETURNING id`,
         [
           sessionId,
           facts.slackBinding ? JSON.stringify(facts.slackBinding) : null,
@@ -666,6 +667,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           facts.spawnMeta ? JSON.stringify(facts.spawnMeta) : null,
         ],
       );
+      return rows.length > 0;
     },
 
     async childrenOf(parentSessionId): Promise<Session[]> {

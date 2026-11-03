@@ -1,30 +1,15 @@
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { SessionStore } from "./session-store.ts";
-import {
-  delegatedAuthorizationOrigin,
-  isSubagentThreadRef,
-  ownsSessionContext,
-  sessionContextOf,
-} from "./session-syscalls.ts";
+import { ownsSessionContext, sessionContextOf } from "./session-syscalls.ts";
 import type { Session } from "../types.ts";
 
 const BACKFILL_PAGE = 200;
 const BACKFILL_CONCURRENCY = 8;
 
 export type SessionFactsBackfillDeps = {
-  sessions: Pick<
-    SessionStore,
-    | "sessionFactsCursor"
-    | "saveSessionFactsCursor"
-    | "sessionsAfter"
-    | "fillFacts"
-    | "setSpawnMeta"
-    | "get"
-    | "getByThread"
-    | "getForParticipant"
-  >;
-  runs: Pick<RunStore, "latestForThreads" | "getByDedupKey" | "get">;
+  sessions: Pick<SessionStore, "sessionFactsCursor" | "saveSessionFactsCursor" | "sessionsAfter" | "fillFacts">;
+  runs: Pick<RunStore, "latestForThreads">;
 };
 
 export async function pruneRunsAfterFactsBackfill(
@@ -44,6 +29,12 @@ export async function backfillSessionFacts(
   while (Date.now() < opts.deadline && !opts.stop()) {
     const page = await deps.sessions.sessionsAfter(cursor, BACKFILL_PAGE);
     if (!page.length) {
+      if (cursor?.copied) {
+        console.log(`[session-facts] pass copied facts for ${cursor.copied} session(s); checking again`);
+        cursor = { id: "", copied: 0 };
+        await deps.sessions.saveSessionFactsCursor(cursor);
+        continue;
+      }
       await deps.sessions.saveSessionFactsCursor("done");
       console.log("[session-facts] backfill complete");
       return true;
@@ -53,8 +44,9 @@ export async function backfillSessionFacts(
       deps.runs.latestForThreads(refs),
       deps.runs.latestForThreads(refs, { excludePrivateMessages: true }),
     ]);
+    let copied = 0;
     for (let i = 0; i < page.length; i += BACKFILL_CONCURRENCY)
-      await Promise.all(
+      for (const wrote of await Promise.all(
         page.slice(i, i + BACKFILL_CONCURRENCY).map((session) =>
           fillSession(deps, session, latest.get(session.threadRef), latestPublic.get(session.threadRef)).catch(
             (cause: unknown) => {
@@ -62,8 +54,9 @@ export async function backfillSessionFacts(
             },
           ),
         ),
-      );
-    cursor = { id: page[page.length - 1]!.id };
+      ))
+        if (wrote) copied++;
+    cursor = { id: page[page.length - 1]!.id, copied: (cursor?.copied ?? 0) + copied };
     await deps.sessions.saveSessionFactsCursor(cursor);
   }
   return false;
@@ -74,23 +67,15 @@ async function fillSession(
   session: Session,
   latest: Run | undefined,
   latestPublic: Run | undefined,
-): Promise<void> {
-  const subagent = isSubagentThreadRef(session.threadRef);
-  if (subagent && session.spawnMeta && !session.spawnMeta.authority) {
-    const first = (await deps.runs.getByDedupKey(`subagent-open:${session.threadRef}`)) ?? latestPublic;
-    const authority = first
-      ? await delegatedAuthorizationOrigin({ ...first.request, origin: resolveTurnOrigin(first.request) }, deps)
-      : undefined;
-    if (authority) await deps.sessions.setSpawnMeta(session.id, { ...session.spawnMeta, authority });
-  }
+): Promise<boolean> {
   const context =
     latestPublic && ownsSessionContext(session.threadRef, latestPublic.request)
       ? sessionContextOf({ ...latestPublic.request, origin: resolveTurnOrigin(latestPublic.request) })
       : undefined;
   const slackBinding = latest?.request.slackSource;
   const runtime = latest?.result?.runtime;
-  if (!context && !slackBinding && !runtime) return;
-  await deps.sessions.fillFacts(session.id, {
+  if (!context && !slackBinding && !runtime) return false;
+  return deps.sessions.fillFacts(session.id, {
     ...(slackBinding ? { slackBinding } : {}),
     ...(runtime ? { runtime } : {}),
     ...(context ? { spawnMeta: context } : {}),

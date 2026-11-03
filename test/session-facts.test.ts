@@ -81,8 +81,22 @@ test("the one-time backfill copies each session's facts from its latest runs bef
 
   const budget = { deadline: Date.now() + 60_000, stop: () => false };
   assert.equal(await backfillSessionFacts({ sessions, runs }, { ...budget, stop: () => true }), false);
+  let steps = 0;
+  assert.equal(await backfillSessionFacts({ sessions, runs }, { ...budget, stop: () => ++steps > 2 }), false);
+  assert.deepEqual(
+    await sessions.sessionFactsCursor(),
+    { id: "", copied: 0 },
+    "a pass that copied anything is repeated",
+  );
+  const late = await sessions.getOrCreateByThread("slack:dm:late", "dm", scope, undefined, "slack");
+  await finish(late.threadRef, { slackSource }, { modelId: "m3" });
   assert.equal(await backfillSessionFacts({ sessions, runs }, budget), true);
   assert.equal(await sessions.sessionFactsCursor(), "done");
+  assert.deepEqual(
+    (await sessions.get(late.id))?.slackBinding,
+    slackSource,
+    "a session written mid-backfill is caught",
+  );
 
   const filled = (await sessions.get(slack.id))!;
   assert.deepEqual(filled.slackBinding, slackSource);

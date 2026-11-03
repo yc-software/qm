@@ -442,7 +442,8 @@ export function createSessionMethods(
     async getSessionForViewer(sessionId, principalId, window) {
       const found = await sessionForViewer(sessionId, principalId);
       if (!found) return null;
-      const session = { ...found, canContinue: await canContinueOnWeb(principalId, found) };
+      const { spawnMeta: _spawnMeta, slackBinding: _slackBinding, ...shown } = found;
+      const session = { ...shown, canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords, goals] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {

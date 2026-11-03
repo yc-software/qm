@@ -440,7 +440,7 @@ interface SessionFactsFill extends Pick<SessionFacts, "slackBinding"> {
   spawnMeta?: SpawnMeta;
 }
 
-export type SessionFactsCursor = { id: string } | "done";
+export type SessionFactsCursor = { id: string; copied: number } | "done";
 
 export interface SessionStore {
   getOrCreateByThread(
@@ -463,7 +463,7 @@ export interface SessionStore {
   sessionFactsCursor(): Promise<SessionFactsCursor | null>;
   saveSessionFactsCursor(cursor: SessionFactsCursor): Promise<void>;
   sessionsAfter(cursor: Exclude<SessionFactsCursor, "done"> | null, limit: number): Promise<Session[]>;
-  fillFacts(sessionId: string, facts: SessionFactsFill): Promise<void>;
+  fillFacts(sessionId: string, facts: SessionFactsFill): Promise<boolean>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
   sideChatsOf(sessionId: string): Promise<Session[]>;
   expandSideChat(sessionId: string): Promise<void>;

@@ -74,22 +74,21 @@ export async function delegatedAuthorizationOrigin(
   if (!authorityReaches(parent, request, sender, child)) return;
   if (!isSessionTurn(parent)) return humanAuthored(parent) ? parent.origin : undefined;
   if (!delegated && !continued) return;
-  const holder = delegated ? child : sender;
-  const stamped = holder.spawnMeta;
-  if (!stamped?.authority || stamped.authority.kind !== request.origin.kind) return;
-  if (!(await stampedTreeIntact(deps.sessions, holder))) return;
-  const stamp = { actor: stamped.actor, conversation: stamped.conversation, origin: stamped.authority };
-  return authorityReaches(stamp, request, sender, child) && humanAuthored(stamp) ? stamp.origin : undefined;
+  const claim = request.delegatedAuthority;
+  if (!claim || claim.kind !== request.origin.kind) return;
+  if (!(await treeIntact(deps.sessions, delegated ? child : sender))) return;
+  const granted = { conversation: parent.conversation, origin: claim };
+  return humanAuthored(granted) ? claim : undefined;
 }
 
-async function stampedTreeIntact(sessions: Pick<SessionStore, "get">, holder: Session): Promise<boolean> {
+async function treeIntact(sessions: Pick<SessionStore, "get">, subagent: Session): Promise<boolean> {
   const seen = new Set<string>();
-  let current = holder;
+  let current = subagent;
   while (isSubagentThreadRef(current.threadRef)) {
-    if (seen.has(current.id) || !current.spawnMeta?.authority || !current.parentSessionId) return false;
+    if (seen.has(current.id) || !current.parentSessionId) return false;
     seen.add(current.id);
     const parent = await sessions.get(current.parentSessionId);
-    if (!parent || parent.scopeId !== holder.scopeId) return false;
+    if (!parent || parent.scopeId !== subagent.scopeId) return false;
     current = parent;
   }
   return true;
@@ -763,7 +762,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 origin: caller.origin,
                 openFingerprint: fingerprint,
                 ...(binding.request.slackSource ? { slackSource: binding.request.slackSource } : {}),
-                ...(binding.authority ? { authority: binding.authority } : {}),
               };
               if (!existing?.spawnMeta) {
                 await deps.sessions.setParentSession(child.id, binding.session.id);
@@ -780,6 +778,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 ...childRunRequest(child, meta, text, task),
                 sessionSenderId: binding.session.id,
                 ...(binding.request.runId ? { delegatingRunId: binding.request.runId } : {}),
+                ...(binding.authority ? { delegatedAuthority: binding.authority } : {}),
               };
               await deps.runs.enqueue({
                 sessionId: child.threadRef,
@@ -924,6 +923,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;
               request.delegatingRunId = binding.request.runId;
+              if (binding.authority) request.delegatedAuthority = binding.authority;
+              else delete request.delegatedAuthority;
               await deps.runs.enqueue({
                 sessionId: target.threadRef,
                 dedupKey,
@@ -1099,7 +1100,10 @@ export interface SubagentMailDeps {
   deliveries?: Pick<DeliveryStore, "enqueue">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
+  sessions: Pick<
+    SessionStore,
+    "get" | "getByThread" | "getForParticipant" | "getEntries" | "latestEntrySeq" | "visibleEntries"
+  >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
@@ -1179,10 +1183,19 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     body:
       body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
   });
-  const inherited = { ...meta };
-  delete (inherited as Partial<SpawnMeta>).openFingerprint;
+  const inherited = { ...meta } as typeof meta & { openFingerprint?: string; delegatedAuthority?: TurnOrigin };
+  delete inherited.openFingerprint;
+  delete inherited.delegatedAuthority;
+  const delegatedAuthority =
+    initiatingRun && deps.runs.get && isSessionTurn(initiatingRun.request)
+      ? await delegatedAuthorizationOrigin(initiatingRun.request, {
+          runs: { get: deps.runs.get },
+          sessions: deps.sessions,
+        })
+      : undefined;
   const request: OrchestratorInput = {
     ...inherited,
+    ...(delegatedAuthority ? { delegatedAuthority } : {}),
     sessionSenderId: child.id,
     conversation: {
       ...meta.conversation,

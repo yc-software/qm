@@ -102,7 +102,6 @@ export interface SpawnMeta {
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
-  authority?: TurnOrigin;
 }
 
 export interface Session {

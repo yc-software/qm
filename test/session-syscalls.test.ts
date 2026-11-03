@@ -18,6 +18,7 @@ import {
   stopSessionTree,
   sessionContextOf,
 } from "../src/sessions/session-syscalls.ts";
+import { isSessionTurn } from "../src/core/turn-origin.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Run, RunStore } from "../src/runs/run-store.ts";
@@ -1234,6 +1235,18 @@ test("no wake once the parent already consumed the completion", async () => {
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 });
 
+async function liveTurnApi(r: Rig, session: Session, run: Run) {
+  let authority: OrchestratorInput["origin"] | undefined;
+  if (isSessionTurn(run.request)) authority = await delegatedAuthorizationOrigin(run.request, r);
+  else if (run.request.origin.kind === "human") authority = run.request.origin;
+  return createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session,
+    scopeId: scope,
+    ...(authority ? { authority } : {}),
+    request: { ...run.request, runId: run.id },
+  });
+}
+
 async function delegatedHumanRig(
   context: Partial<OrchestratorInput> = {},
   authority: OrchestratorInput["origin"] | undefined = { kind: "human" },
@@ -1319,6 +1332,32 @@ test("a return whose delegating run was pruned still reaches the parent, without
   assert.equal(wake.request.origin.kind, "automation");
   assert.equal(wake.request.actor.id, actor.id);
   assert.equal(await delegatedAuthorizationOrigin(wake.request, r), undefined);
+});
+
+test("human authority does not travel across a peer message between sibling subagents", async () => {
+  const r = await delegatedHumanRig();
+  const openedPeer = await r.api.open({ task: "peer" });
+  assert.ok(openedPeer.ok);
+  const peer = await freshSession(r.sessions, openedPeer.sessionId);
+  const peerRun = (await r.runs.inFlightForThread(peer.threadRef))[0]!;
+  const childTurn = await liveTurnApi(r, r.child, r.run);
+  const openedNested = await childTurn.open({ task: "nested" });
+  assert.ok(openedNested.ok);
+  const nested = await freshSession(r.sessions, openedNested.sessionId);
+  const nestedRun = (await r.runs.inFlightForThread(nested.threadRef))[0]!;
+  assert.equal((await delegatedAuthorizationOrigin(nestedRun.request, r))?.kind, "human");
+  const peerTurn = await liveTurnApi(r, peer, peerRun);
+  assert.ok((await peerTurn.write({ target: r.child.id, text: "do this", wake: true })).ok);
+  const relayed = (await r.runs.inFlightForThread(r.child.threadRef)).find(
+    (run) => run.request.sessionSenderId === peer.id,
+  )!;
+  assert.equal(await delegatedAuthorizationOrigin(relayed.request, r), undefined);
+  const relayedTurn = await liveTurnApi(r, r.child, relayed);
+  assert.ok((await relayedTurn.write({ target: nested.id, text: "and this", wake: true })).ok);
+  const laundered = (await r.runs.inFlightForThread(nested.threadRef)).find(
+    (run) => run.request.delegatingRunId === relayed.id,
+  )!;
+  assert.equal(await delegatedAuthorizationOrigin(laundered.request, r), undefined);
 });
 
 test("a stamped subagent does not lend its human authority to an exchange a non-human turn started", async () => {
@@ -1448,11 +1487,7 @@ for (const surface of ["slack", "web"] as const) {
     assert.equal(wake.request.origin.kind, "human");
     assert.equal(wake.request.addressed, true);
     assert.equal((await delegatedAuthorizationOrigin(wake.request, r))?.kind, "human");
-    const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
-      session: r.room,
-      scopeId: scope,
-      request: { ...wake.request, runId: wake.id },
-    });
+    const api = await liveTurnApi(r, r.room, wake);
     assert.ok((await api.write({ target: r.child.id, text: "step two", wake: true })).ok);
     const next = (await r.runs.inFlightForThread(r.child.threadRef))[0]!;
     assert.equal((await delegatedAuthorizationOrigin(next.request, r))?.kind, "human");
@@ -1462,9 +1497,9 @@ for (const surface of ["slack", "web"] as const) {
   });
 }
 
-test("a subagent keeps the human authority it was spawned with after the human-authored run is pruned", async () => {
+test("a delegated exchange keeps its human authority after the person-authored run is pruned", async () => {
   const r = await delegatedHumanRig({}, { kind: "human", messageTs: "1.1" });
-  assert.deepEqual(r.child.spawnMeta?.authority, { kind: "human", messageTs: "1.1" });
+  assert.deepEqual(r.run.request.delegatedAuthority, { kind: "human", messageTs: "1.1" });
   const parentTurn = await r.runs.claimById(r.parent.id, "parent", 60_000);
   await r.runs.complete(r.parent.id, parentTurn!.leaseToken!, { status: "ok", reply: "delegated" });
   const claimed = await r.runs.claimById(r.run.id, "w1", 60_000);
@@ -1474,16 +1509,13 @@ test("a subagent keeps the human authority it was spawned with after the human-a
     (await r.runs.get(r.run.id))!,
   );
   const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
-  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
-    session: r.room,
-    scopeId: scope,
-    request: { ...wake.request, runId: wake.id },
-  });
+  const api = await liveTurnApi(r, r.room, wake);
   assert.ok((await api.write({ target: r.child.id, text: "step two", wake: true })).ok);
   const next = (await r.runs.inFlightForThread(r.child.threadRef))[0]!;
+  assert.deepEqual(next.request.delegatedAuthority, { kind: "human" });
   await r.runs.pruneFinished(Date.now() + 1, { deadline: Date.now() + 60_000, stop: () => false });
   assert.equal(await r.runs.get(r.parent.id), null);
-  assert.deepEqual(await delegatedAuthorizationOrigin(next.request, r), { kind: "human", messageTs: "1.1" });
+  assert.deepEqual(await delegatedAuthorizationOrigin(next.request, r), { kind: "human" });
   assert.equal(await delegatedAuthorizationOrigin({ ...next.request, actor: { ...actor, id: "other" } }, r), undefined);
   await r.sessions.setParentSession(r.child.id, null);
   assert.equal(await delegatedAuthorizationOrigin(next.request, r), undefined);
