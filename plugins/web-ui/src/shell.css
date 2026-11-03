@@ -223,7 +223,7 @@ body.resizing-sidebar .sidebar {
   top: 0;
   bottom: 0;
   left: var(--sidebar-w);
-  width: 9px;
+  width: 10px;
   transform: translateX(-50%);
   z-index: 11;
   cursor: col-resize;
@@ -234,18 +234,15 @@ body.resizing-sidebar .sidebar {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 2px;
+  right: 50%;
+  width: 1px;
   background: transparent;
   transition: background 0.12s ease;
 }
 
-.sidebar-resize-handle:hover::after {
-  background: color-mix(in srgb, var(--brand-accent) 5%, transparent);
-}
+.sidebar-resize-handle:hover::after,
 body.resizing-sidebar .sidebar-resize-handle::after {
-  background: var(--brand-accent);
+  background: color-mix(in srgb, var(--primary) 30%, transparent);
 }
 body.resizing-sidebar {
   cursor: col-resize;
