@@ -317,7 +317,7 @@ import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
-import { createRunPreemption, createWorker, type Worker } from "./runs/worker.ts";
+import { createRunPreemption, createWorker, SHUTDOWN_SETTLE_MS, type Worker } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
@@ -2677,6 +2677,7 @@ export function buildApp(
     createWorker({
       admittedWork,
       runs,
+      sessions,
       orchestrator,
       leaseTtlMs,
       heartbeatIntervalMs: config.heartbeatIntervalMs,
@@ -2876,7 +2877,7 @@ export function buildApp(
   async function releaseInFlightRuns(): Promise<void> {
     inlineShutdown.abort();
     await Promise.all([
-      withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
+      withTimeout(() => admittedWork.drained(), SHUTDOWN_SETTLE_MS + 1_000, "inline turn handback").catch(
         swallowAs("wiring: inline turn handback failed", undefined),
       ),
       ...workers.map((w) => w.releaseInFlight()),
