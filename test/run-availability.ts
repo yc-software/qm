@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -7,7 +7,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, pointOwnerAtSchema, restoreFileOwner } from "./support/test-database.ts";
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -16,6 +16,8 @@ const request: OrchestratorInput = {
   origin: { kind: "direct" },
   text: "availability",
 };
+afterEach(restoreFileOwner);
+
 async function until(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 3_000;
   while (!predicate()) {
@@ -31,6 +33,7 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
   const url = new URL(process.env.DATABASE_URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
   url.searchParams.set("application_name", schema);
+  pointOwnerAtSchema(schema);
   return {
     url: url.toString(),
     admin,

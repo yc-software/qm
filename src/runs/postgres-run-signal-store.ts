@@ -3,6 +3,7 @@ import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
+import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
 import { spokenByPerson } from "../core/turn-origin.ts";
 
 const CHANNEL = "run_signals";
@@ -133,9 +134,12 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return toSignals(rows);
     },
 
-    async pendingRunIds() {
-      const { rows } = await q(`SELECT DISTINCT run_id FROM run_signals WHERE consumed_at IS NULL`);
-      return rows.map((r) => r.run_id as string);
+    async pendingRuns() {
+      const { rows } = await claimAcrossTenants(
+        pg,
+        `SELECT DISTINCT ON (run_id) * FROM run_signals WHERE consumed_at IS NULL ORDER BY run_id`,
+      );
+      return rows.map((r) => ({ runId: r.run_id as string, ...rowTenant(r) }));
     },
 
     async prune(olderThanMs) {

@@ -2,9 +2,11 @@ import "./instrument.ts";
 import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
+import { useOwnerDatabase } from "../tenants/claim.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 
 const config = loadConfig();
+useOwnerDatabase(config.databaseOwnerUrl);
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 if (!config.backgroundDeploymentId) await built.rewriteSurfaceOrigins();

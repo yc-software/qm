@@ -25,6 +25,7 @@ if (positionals.length === 0) throw new Error("Pass the Postgres test files to r
 const files = positionals.toSorted((a, b) => statSync(b).size - statSync(a).size);
 
 const baseUrl = process.env.DATABASE_URL;
+const OWNER_DATABASE_HOOK = new URL("../test/support/owner-database.ts", import.meta.url).href;
 if (!baseUrl) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
 const runId = `qmt_${process.pid}_${randomBytes(4).toString("hex")}`;
 const children = new Set();
@@ -46,8 +47,8 @@ function killGroup(child) {
   }
 }
 
-function databaseUrl(name) {
-  const url = new URL(baseUrl);
+function databaseUrl(name, base = baseUrl) {
+  const url = new URL(base);
   url.pathname = `/${name}`;
   return url.toString();
 }
@@ -74,10 +75,14 @@ function runFile(file, env) {
       children.delete(child);
       resolve({ file, ok, ms: Date.now() - started, output });
     };
-    const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", file], {
-      detached: true,
-      env: { ...process.env, ...env },
-    });
+    const child = spawn(
+      process.execPath,
+      ["--experimental-test-module-mocks", "--import", OWNER_DATABASE_HOOK, "--test", file],
+      {
+        detached: true,
+        env: { ...process.env, ...env },
+      },
+    );
     children.add(child);
     child.stdout?.on("data", (chunk) => (output += chunk));
     child.stderr?.on("data", (chunk) => (output += chunk));
@@ -99,7 +104,11 @@ async function runIsolated(file, index) {
   try {
     await admin.query(`CREATE DATABASE ${name}`);
     if (stopping) return { file, ok: false, ms: 0, output: "" };
-    return await runFile(file, { DATABASE_URL: databaseUrl(name), QM_TEST_TEMPLATE_DATABASE: templateName });
+    return await runFile(file, {
+      DATABASE_URL: databaseUrl(name),
+      DATABASE_OWNER_URL: databaseUrl(name, process.env.DATABASE_OWNER_URL ?? baseUrl),
+      QM_TEST_TEMPLATE_DATABASE: templateName,
+    });
   } finally {
     await dropDatabase(name);
   }
