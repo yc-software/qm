@@ -31,7 +31,7 @@ test("a run executing on another instance still reports alive", async () => {
         },
       }),
     );
-    const claimed = await inTestTenant(() => built.runs.claim("some-other-instance", 60_000));
+    const claimed = await built.runs.claim("some-other-instance", 60_000);
     assert.equal(claimed?.id, run.id, "the foreign worker holds the run");
 
     const view = await inTestTenant(() => built.app.getRun(run.id));
@@ -65,7 +65,7 @@ test("a run whose lease has lapsed is not alive", async () => {
         },
       }),
     );
-    await inTestTenant(() => built.runs.claim("some-other-instance", 1));
+    await built.runs.claim("some-other-instance", 1);
     await new Promise((r) => setTimeout(r, 20));
 
     const view = await inTestTenant(() => built.app.getRun(run.id));

@@ -13,6 +13,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "goal-cancel-")) }));
@@ -34,10 +35,8 @@ async function sessionWithGoal(built: ReturnType<typeof freshApp>, ref: string, 
   await sessions.addParticipant(session.id, "U1");
   const goal = createGoalRecord({ objective: "old outreach goal", floor: { minTurns: 40 } });
   goal.status = status;
-  const { lease } = await sessions.acquireLease(session.id);
-  assert.ok(lease);
-  await sessions.setGoal(lease, goal);
-  await sessions.releaseLease(lease);
+  const writer = { sessionId: session.id };
+  await sessions.setGoal(writer, goal);
   return session;
 }
 
@@ -102,11 +101,10 @@ for (const status of ["active", "paused"] as const) {
       await built.runs.enqueue({ sessionId: ref, request: runRequest() });
       return session;
     });
-    const run = await built.runs.claim("w1", 60_000);
+    const run = await withoutTenant(() => built.runs.claim("w1", 60_000));
     await inTestTenant(async () => {
       assert.equal(run?.sessionId, ref);
-      const { lease } = await built.sessions.acquireLease(session.id, "turn");
-      assert.ok(lease, "the running turn holds the session");
+      const writer = { sessionId: session.id };
 
       const cancelling = built.app.cancelSessionGoal(session.id, "U1");
       await new Promise((r) => setTimeout(r, 200));
@@ -122,8 +120,7 @@ for (const status of ["active", "paused"] as const) {
       const final = (await sessionGoal(built, session.id))!;
       final.status = "paused";
       final.tokensUsed = 77;
-      await built.sessions.setGoal(lease, final);
-      await built.sessions.releaseLease(lease);
+      await built.sessions.setGoal(writer, final);
       await built.runs.complete(run!.id, run!.leaseToken ?? "", { status: "ok", reply: "done" });
 
       assert.deepEqual(await cancelling, { cancelled: true });
@@ -147,7 +144,7 @@ test("cancelling with no open goal touches nothing", async () => {
     await built.runs.enqueue({ sessionId: ref, request: runRequest() });
     return session;
   });
-  const run = await built.runs.claim("w1", 60_000);
+  const run = await withoutTenant(() => built.runs.claim("w1", 60_000));
   await inTestTenant(async () => {
     assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), {
       cancelled: false,

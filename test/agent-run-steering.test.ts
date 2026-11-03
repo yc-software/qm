@@ -189,26 +189,22 @@ for (const variant of ["text", "images", "documents", "finished during preparati
   });
 }
 
-test("a lease lost mid-turn fails the turn instead of degrading silently", async () => {
+test("a session deleted mid-turn fails the turn instead of degrading silently", async () => {
   const agent = createAgent({ apiKey: "sk-test" });
   const sink: Sink = { entries: [] };
   const store = createPostgresSessionStore(testDatabaseUrl());
-  const session = await store.getOrCreateByThread("dm:lease-lost", "dm", "personal:tester" as ScopeId);
-  const attempt = await store.acquireLease(session.id, "turn");
-  const lease = attempt.lease!;
-  assert.ok(lease);
+  const session = await store.getOrCreateByThread("dm:session-deleted", "dm", "personal:tester" as ScopeId);
+  const writer = { sessionId: session.id };
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
-    await store.releaseLease(lease);
-    const thief = await store.acquireLease(session.id, "turn");
-    assert.ok(thief.lease);
-    return sse(textReplyEvents("reply after the lease was stolen"));
+    await store.deleteSession(session.id);
+    return sse(textReplyEvents("reply after the session was deleted"));
   }) as typeof globalThis.fetch;
   try {
     const turn = turnInput(session.id, sink, {
-      emit: (entry) => store.append(lease, entry),
+      emit: (entry) => store.append(writer, entry),
     });
-    await assert.rejects(agent.runTurn(turn), /without a valid session lease/);
+    await assert.rejects(agent.runTurn(turn), /foreign key/);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -220,8 +216,7 @@ test("completed Pi attach results retain openable files in viewer history", asyn
   const scopeLabel = "personal:tester" as ScopeId;
   const session = await store.getOrCreateByThread("web:tester:attach-history", "dm", scopeLabel);
   await store.addParticipant(session.id, "tester", undefined, { includeHistory: true });
-  const { lease } = await store.acquireLease(session.id);
-  assert.ok(lease);
+  const writer = { sessionId: session.id };
   const files = [
     { name: "desktop.png", mimetype: "image/png", sizeBytes: 123, artifactId: "desktop" },
     { name: "phone.png", mimetype: "image/png", sizeBytes: 456, artifactId: "phone" },
@@ -256,7 +251,7 @@ test("completed Pi attach results retain openable files in viewer history", asyn
           tools: {
             attach: async () => ({ ok: true, files, staged: files.length }),
           } as unknown as AgentTurnInput["tools"],
-          emit: (entry) => store.append(lease, entry),
+          emit: (entry) => store.append(writer, entry),
         },
       ),
     );
@@ -274,7 +269,6 @@ test("completed Pi attach results retain openable files in viewer history", asyn
     }
   } finally {
     globalThis.fetch = realFetch;
-    await store.releaseLease(lease);
   }
 });
 
@@ -429,7 +423,7 @@ for (const stopBeforeIntake of [false, true]) {
     const agent = createAgent({ apiKey: "sk-test", signals });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread("web:steer-tool", "dm", "personal:tester" as ScopeId);
-    const lease = (await store.acquireLease(session.id, "turn")).lease!;
+    const writer = { sessionId: session.id };
     const realFetch = globalThis.fetch;
     let calls = 0;
     globalThis.fetch = (async () => {
@@ -477,7 +471,7 @@ for (const stopBeforeIntake of [false, true]) {
               return { text };
             },
             emit: async (entry) => {
-              const saved = await store.append(lease, entry);
+              const saved = await store.append(writer, entry);
               entries.push(saved);
               return saved;
             },
@@ -505,7 +499,6 @@ for (const stopBeforeIntake of [false, true]) {
       }
     } finally {
       globalThis.fetch = realFetch;
-      await store.releaseLease(lease);
       await agent.close?.();
     }
   });
@@ -637,7 +630,7 @@ for (const abort of ["shutdown", "stop"] as const) {
     const agent = createAgent({ apiKey: "sk-test" });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
-    const lease = (await store.acquireLease(session.id, "turn")).lease!;
+    const writer = { sessionId: session.id };
     const realFetch = globalThis.fetch;
     let calls = 0;
     globalThis.fetch = (async () => {
@@ -679,7 +672,7 @@ for (const abort of ["shutdown", "stop"] as const) {
               },
             } as AgentTurnInput["tools"],
             emit: async (entry) => {
-              const saved = await store.append(lease, entry);
+              const saved = await store.append(writer, entry);
               entries.push(saved);
               return saved;
             },
@@ -702,7 +695,6 @@ for (const abort of ["shutdown", "stop"] as const) {
       );
     } finally {
       globalThis.fetch = realFetch;
-      await store.releaseLease(lease);
       await agent.close?.();
     }
   });

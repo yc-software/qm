@@ -14,6 +14,7 @@ import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/securit
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { holdThread, testRuns } from "./support/live-run.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 import { withoutTenant } from "../src/tenants/context.ts";
 
@@ -235,7 +236,7 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
     wireRunResultDeliveries(runs, deliveries);
 
     const crashed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-    const c1 = await runs.claim("w1", 5_000);
+    const c1 = await withoutTenant(() => runs.claim("w1", 5_000));
     await runs.setDeliveryState(crashed.id, null, { editRef: "171.002" });
     await runs.complete(crashed.id, c1?.leaseToken ?? "", { status: "ok", reply: "recovered reply" });
     const pending = await deliveries.pending("slack");
@@ -245,7 +246,7 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
     assert.equal(pending[0]!.idempotencyKey, `run:${crashed.id}`);
 
     const live = (await runs.enqueue({ sessionId: "sB", request: turn("b", "C9") })).run;
-    const c2 = await runs.claim("w2", 5_000);
+    const c2 = await withoutTenant(() => runs.claim("w2", 5_000));
     await deliveries.ackByKey(`run:${live.id}`, 99);
     await runs.complete(live.id, c2?.leaseToken ?? "", { status: "ok", reply: "delivered live" });
     await new Promise((r) => setTimeout(r, 0));
@@ -262,7 +263,7 @@ test("sweep enqueues the recovery delivery for a terminal run whose outbox row n
     const { runs } = createPostgresRunStore(testDatabaseUrl());
     const deliveries = createDeliveryStore();
     const bypassed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-    const claimed = await runs.claim("w1", 5_000);
+    const claimed = await withoutTenant(() => runs.claim("w1", 5_000));
     await runs.complete(bypassed.id, claimed?.leaseToken ?? "", { status: "ok", reply: "lost on the way out" });
     const recovery = wireRunResultDeliveries(runs, deliveries);
     assert.deepEqual(await deliveries.pending("slack"), [], "wired after the fact: nothing enqueued");
@@ -353,7 +354,7 @@ test("wired stores: a parked run lands a durable, non-ackable failure note", () 
     wireRunResultDeliveries(runs, deliveries);
 
     const parked = (await runs.enqueue({ sessionId: "sP", request: turn("p", "C9:171.001"), maxAttempts: 1 })).run;
-    const claimed = await runs.claim("w1", 5_000);
+    const claimed = await withoutTenant(() => runs.claim("w1", 5_000));
     await runs.fail(parked.id, claimed?.leaseToken ?? "", "boom", { retry: true });
     await new Promise((r) => setTimeout(r, 0));
 
@@ -387,7 +388,7 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
     const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
     const { sessions, session } = await failureSessions();
 
-    assert.equal(await recordRunFailureEntry(sessions, failedRun()), true);
+    assert.equal(await recordRunFailureEntry(sessions, testRuns(), failedRun()), true);
     const entries = await sessions.getEntries(session.id);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]!.type, "system");
@@ -397,7 +398,23 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
       runId: "r-1",
     });
 
-    assert.equal(await recordRunFailureEntry(sessions, failedRun()), false, "recording is idempotent");
+    assert.equal(await recordRunFailureEntry(sessions, testRuns(), failedRun()), false, "recording is idempotent");
+    assert.equal((await sessions.getEntries(session.id)).length, 1);
+  }));
+
+test("a failure entry waits for a live turn on the conversation to finish before it lands", () =>
+  inTestTenant(async () => {
+    const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
+    const { sessions, session } = await failureSessions();
+    const runs = testRuns();
+    const finishTurn = await holdThread(runs, "slack:D1");
+
+    const recording = recordRunFailureEntry(sessions, runs, failedRun());
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal((await sessions.getEntries(session.id)).length, 0, "nothing lands inside the live turn");
+
+    await finishTurn();
+    assert.equal(await recording, true);
     assert.equal((await sessions.getEntries(session.id)).length, 1);
   }));
 
@@ -405,15 +422,14 @@ test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry",
   inTestTenant(async () => {
     const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
     const { sessions, session } = await failureSessions();
-    const { lease } = await sessions.acquireLease(session.id);
-    await sessions.append(lease!, {
+    const writer = { sessionId: session.id };
+    await sessions.append(writer, {
       type: "system",
       payload: { kind: "turn_failure", message: "already recorded by the turn", runId: "r-1" },
       scopeLabel: session.scopeId,
     });
-    await sessions.releaseLease(lease!);
 
-    assert.equal(await recordRunFailureEntry(sessions, failedRun()), false);
+    assert.equal(await recordRunFailureEntry(sessions, testRuns(), failedRun()), false);
     assert.equal((await sessions.getEntries(session.id)).length, 1, "no duplicate entry");
   }));
 
@@ -421,15 +437,14 @@ test("a web-drain-recorded failure delivery suppresses the onTerminal entry by i
   inTestTenant(async () => {
     const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
     const { sessions, session } = await failureSessions();
-    const { lease } = await sessions.acquireLease(session.id);
-    await sessions.append(lease!, {
+    const writer = { sessionId: session.id };
+    await sessions.append(writer, {
       type: "system",
       payload: { kind: "turn_failure", message: "recorded at the web drain", deliveryKey: "run:r-1" },
       scopeLabel: session.scopeId,
     });
-    await sessions.releaseLease(lease!);
 
-    assert.equal(await recordRunFailureEntry(sessions, failedRun()), false);
+    assert.equal(await recordRunFailureEntry(sessions, testRuns(), failedRun()), false);
     assert.equal((await sessions.getEntries(session.id)).length, 1);
   }));
 
@@ -437,7 +452,7 @@ test("a done run records nothing", () =>
   inTestTenant(async () => {
     const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
     const { sessions, session } = await failureSessions();
-    assert.equal(await recordRunFailureEntry(sessions, run({ sessionId: "slack:D1" })), false);
+    assert.equal(await recordRunFailureEntry(sessions, testRuns(), run({ sessionId: "slack:D1" })), false);
     assert.equal((await sessions.getEntries(session.id)).length, 0);
   }));
 
@@ -450,7 +465,7 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
 
     const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 }))
       .run;
-    const claimed = await runs.claim("w1", 5_000);
+    const claimed = await withoutTenant(() => runs.claim("w1", 5_000));
     await runs.fail(parked.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
 
     for (let i = 0; i < 50 && (await sessions.getEntries(session.id)).length === 0; i++) {
@@ -492,7 +507,7 @@ test("failed internal swarm notifications never append user-facing failure entri
       throw new Error("must not access the transcript");
     },
   } as unknown as TurnFailureSessions;
-  assert.equal(await recordRunFailureEntry(sessions, failed), false);
+  assert.equal(await recordRunFailureEntry(sessions, testRuns(), failed), false);
 });
 
 for (const surface of ["slack", "web"] as const) {

@@ -6,10 +6,8 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import { handbackStop, PARKED, type Run, type RunStore } from "../src/runs/run-store.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
-
-const sessions = createPostgresSessionStore(testDatabaseUrl());
+import { withoutTenant } from "../src/tenants/context.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -31,7 +29,11 @@ const backends: Array<{ name: string; skip: string | false; make: () => Promise<
 
 async function claimAll(runs: RunStore): Promise<string[]> {
   const order: string[] = [];
-  for (let run = await runs.claim("w", 60_000); run; run = await runs.claim("w", 60_000)) {
+  for (
+    let run = await withoutTenant(() => runs.claim("w", 60_000));
+    run;
+    run = await withoutTenant(() => runs.claim("w", 60_000))
+  ) {
     order.push(run.request.text);
     await runs.complete(run.id, run.leaseToken!, { status: "ok", sessionId: run.sessionId, reply: "" });
   }
@@ -54,8 +56,12 @@ for (const backend of backends) {
           await runs.enqueue({ sessionId: "sw", request: { ...subagentOf(human, "swarm worker"), swarm } });
           await runs.enqueue({ sessionId: "shared", request: cron("background first in its conversation") });
           await runs.enqueue({ sessionId: "shared", request: request("person second in its conversation") });
-          assert.equal(await runs.personWaiting(Date.now() - 60_000), false, "only turns past the grace period count");
-          assert.equal(await runs.personWaiting(Date.now()), true);
+          assert.equal(
+            await withoutTenant(() => runs.personWaiting(Date.now() - 60_000)),
+            false,
+            "only turns past the grace period count",
+          );
+          assert.equal(await withoutTenant(() => runs.personWaiting(Date.now())), true);
           assert.deepEqual(await claimAll(runs), [
             "person",
             "subagent",
@@ -79,11 +85,11 @@ for (const backend of backends) {
       const runs = await backend.make();
       try {
         const queued = (await runs.enqueue({ sessionId: "cron", request: cron("cron") })).run;
-        const lease = (await runs.claim("w", 60_000))!;
+        const lease = (await withoutTenant(() => runs.claim("w", 60_000)))!;
         assert.equal(await runs.releaseLease(lease.id, lease.leaseToken!, { kind: "parked" }), true);
         const parked = (await runs.get(queued.id))!;
         assert.deepEqual([parked.status, parked.preemptions, parked.lastStop], ["pending", 1, { kind: "parked" }]);
-        const again = (await runs.claim("w", 60_000))!;
+        const again = (await withoutTenant(() => runs.claim("w", 60_000)))!;
         await runs.releaseLease(again.id, again.leaseToken!, { kind: "shutdown" });
         assert.equal((await runs.get(queued.id))!.preemptions, 1, "a deploy handback is not a park");
       } finally {
@@ -126,7 +132,7 @@ async function withWorkers(
   await setup?.(runs);
   const log: string[] = [];
   const workers = Array.from({ length: count }, () =>
-    createWorker({ runs, sessions, orchestrator: scripted(log), leaseTtlMs: 60_000, pollMs: 5 }),
+    createWorker({ runs, orchestrator: scripted(log), leaseTtlMs: 60_000, pollMs: 5 }),
   );
   const preemption = createRunPreemption({ runs, workers, graceMs: 0 });
   for (const worker of workers) worker.start();
@@ -206,7 +212,7 @@ test("subagents of a person's turn and thrice-parked runs keep their worker", ()
         )
       ).run;
       for (let i = 0; i < 3; i++) {
-        const lease = (await inTestTenant(() => runs.claim("w", 60_000)))!;
+        const lease = (await runs.claim("w", 60_000))!;
         await inTestTenant(() => runs.releaseLease(lease.id, lease.leaseToken!, { kind: "parked" }));
       }
     },

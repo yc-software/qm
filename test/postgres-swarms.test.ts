@@ -292,9 +292,7 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
       const recovered = (await store.get(initial.id))!;
       assert.equal(recovered.messages[0]!.notifications[member!.id]!.runId, notification.runId);
       const recoveredRun = (await restoredRuntime.runs.get(notification.runId!))!;
-      assert.ok(
-        await sibling.binding({ ...recoveredRun.request, runId: recoveredRun.id, attempt: 1, background: true }),
-      );
+      assert.ok(await sibling.binding({ ...recoveredRun.request, runId: recoveredRun.id, attempt: 1 }));
       const session = await restoredSessions.get(recovered.members[1]!.sessionId!);
       assert.equal(session?.scopeId, initial.scopeId);
       assert.ok(await restoredSessions.getForParticipant(session!.id, "alice"));

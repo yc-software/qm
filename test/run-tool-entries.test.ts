@@ -66,10 +66,10 @@ test("a run's tool entries include rounds after a mid-run goal prompt and stop a
     const first = await inTestTenant(() => built.app.turn(dm("!run echo hi")));
     const run = await settled(built, first.runId!);
     const session = (await inTestTenant(() => built.sessions.getByThread(run.sessionId)))!;
-    const { lease } = await inTestTenant(() => built.sessions.acquireLease(session.id));
+    const writer = { sessionId: session.id };
     const scopeLabel = session.scopeId;
     await inTestTenant(() =>
-      built.sessions.append(lease!, {
+      built.sessions.append(writer, {
         type: "user",
         payload: {
           text: "[goal] The active goal is not marked complete. Continue working toward it.",
@@ -80,20 +80,19 @@ test("a run's tool entries include rounds after a mid-run goal prompt and stop a
       }),
     );
     const call = await inTestTenant(() =>
-      built.sessions.append(lease!, {
+      built.sessions.append(writer, {
         type: "tool_call",
         payload: { tool: "execute", command: "make test", callId: "goal-round" },
         scopeLabel,
       }),
     );
     await inTestTenant(() =>
-      built.sessions.append(lease!, {
+      built.sessions.append(writer, {
         type: "tool_result",
         payload: { tool: "execute", callId: "goal-round", isError: false, result: "ok" },
         scopeLabel,
       }),
     );
-    await inTestTenant(() => built.sessions.releaseLease(lease!));
     const second = await inTestTenant(() => built.app.turn(dm("!run echo again")));
     await settled(built, second.runId!);
     const owner = run.request.actor.id;
@@ -117,8 +116,8 @@ test("each tool entry nudges the run stream once it is durable", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-tools-nudge-")) }));
   const log: string[] = [];
   const append = built.sessions.append.bind(built.sessions);
-  built.sessions.append = async (lease, entry) => {
-    const appended = await append(lease, entry);
+  built.sessions.append = async (writer, entry) => {
+    const appended = await append(writer, entry);
     log.push(appended.type);
     return appended;
   };

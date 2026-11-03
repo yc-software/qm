@@ -56,7 +56,7 @@ test("a live turn shows only the current step in a closed fold that remembers be
     const fold = head()!.parentElement as HTMLDetailsElement;
     assert.equal(fold.open, false, "live fold starts closed");
     assert.match(head()!.textContent!, /Run the test suite/);
-    assert.doesNotMatch(head()!.textContent!, /Working for|Read files|Running commands/);
+    assert.doesNotMatch(head()!.textContent!, /Working for|Reading files|Running commands/);
     assert.match(head()!.querySelector(".work-elapsed")?.textContent ?? "", /\d+s/);
     assert.ok(head()!.querySelector(".work-step .tool-icon svg"), "the step's icon sits left of the label");
 

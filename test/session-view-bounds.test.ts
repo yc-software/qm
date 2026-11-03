@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
-import { windowedTranscript, type Lease, type SessionStore } from "../src/sessions/session-store.ts";
+import { windowedTranscript, type SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId, type ScopeId, type SessionEntry, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
@@ -54,10 +54,9 @@ async function toolHeavySession(sessions: SessionStore, turns = 1) {
   const scope = scopeId("personal", "U1");
   const session = await sessions.getOrCreateByThread("web:U1:tool-pins", "dm", scope, undefined, "web");
   await sessions.addParticipant(session.id, "U1", undefined, { includeHistory: true });
-  const { lease } = await sessions.acquireLease(session.id);
-  const held = lease as Lease;
+  const writer = { sessionId: session.id };
   const emit = (type: SessionEntry["type"], payload: unknown) =>
-    sessions.append(held, { type, payload, scopeLabel: scope as ScopeId });
+    sessions.append(writer, { type, payload, scopeLabel: scope as ScopeId });
   let narration: SessionEntry | undefined;
   let reply: SessionEntry | undefined;
   for (let turn = 0; turn < turns; turn++) {
@@ -69,7 +68,6 @@ async function toolHeavySession(sessions: SessionStore, turns = 1) {
     await emit("tool_result", { tool: "execute", callId: `c${turn}`, isError: false, result: "tidied" });
     reply = await emit("assistant", { text: `Queue ${turn} tidied.` });
   }
-  await sessions.releaseLease(held);
   return { session, narration: narration!, reply: reply! };
 }
 
@@ -119,14 +117,13 @@ test("earlier pages bound entry reads, widen for dense turns, and match full-rea
         }
         assert.ok(calls.every((opts) => opts?.beforeSeq === beforeSeq && opts.limit === 80));
       }
-      const { lease } = await built.sessions.acquireLease(session.id);
+      const writer = { sessionId: session.id };
       for (let i = 0; i < 180; i++)
-        await built.sessions.append(lease!, {
+        await built.sessions.append(writer, {
           type: "text",
           payload: { text: `detail ${i}` },
           scopeLabel: session.scopeId,
         });
-      await built.sessions.releaseLease(lease!);
       calls.length = 0;
       const page = await built.app.getSession(session.id, { beforeSeq: 680, tailTurns: 1 });
       assert.equal(page!.entries[0]!.seq, 495);
@@ -146,20 +143,19 @@ test("earlier pages respect viewer tenure boundaries", async () => {
     await inTestTenant(async () => {
       const { session } = await toolHeavySession(built.sessions, 30);
       await built.sessions.addParticipant(session.id, "late");
-      const { lease } = await built.sessions.acquireLease(session.id);
+      const writer = { sessionId: session.id };
       for (let i = 0; i < 10; i++) {
-        await built.sessions.append(lease!, {
+        await built.sessions.append(writer, {
           type: "user",
           payload: { text: `late question ${i}` },
           scopeLabel: session.scopeId,
         });
-        await built.sessions.append(lease!, {
+        await built.sessions.append(writer, {
           type: "assistant",
           payload: { text: `late reply ${i}` },
           scopeLabel: session.scopeId,
         });
       }
-      await built.sessions.releaseLease(lease!);
       for (const viewer of ["late", "U1", "stranger"]) {
         const full = await built.app.getSessionForViewer(session.id, viewer);
         for (const beforeSeq of [100, 155, 170]) {
@@ -203,26 +199,25 @@ test("incremental transcript reads bound entry storage and preserve windows and 
       assert.deepEqual(viewerPage.entries, page.entries);
       assert.equal(viewerPage.earlierEntries, 490);
       await built.sessions.addParticipant(session.id, "late");
-      const { lease } = await built.sessions.acquireLease(session.id);
+      const writer = { sessionId: session.id };
       for (let i = 0; i < 10; i++) {
-        await built.sessions.append(lease!, {
+        await built.sessions.append(writer, {
           type: "user",
           payload: { text: `new question ${i}` },
           scopeLabel: session.scopeId,
         });
-        await built.sessions.append(lease!, {
+        await built.sessions.append(writer, {
           type: "assistant",
           payload: { text: `new reply ${i}` },
           scopeLabel: session.scopeId,
         });
       }
       await built.sessions.removeParticipant(session.id, "U1");
-      await built.sessions.append(lease!, {
+      await built.sessions.append(writer, {
         type: "user",
         payload: { text: "after departure" },
         scopeLabel: session.scopeId,
       });
-      await built.sessions.releaseLease(lease!);
       for (const viewer of [undefined, "U1", "late", "stranger"]) {
         const read = (window?: { sinceSeq?: number; beforeSeq?: number }) =>
           viewer === undefined

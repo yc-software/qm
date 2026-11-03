@@ -75,9 +75,8 @@ test("participant can read child history and title across memory checkpoints", (
     await r.sessions.setParentSession(child.id, r.room.id);
     await r.sessions.addParticipant(child.id, actor.id);
     await r.sessions.updateTitle(child.id, "PRIVATE_SENTINEL");
-    const { lease } = await r.sessions.acquireLease(child.id);
-    assert.ok(lease);
-    await r.sessions.append(lease, {
+    const writer = { sessionId: child.id };
+    await r.sessions.append(writer, {
       type: "user",
       scopeLabel: scope,
       payload: {
@@ -90,8 +89,7 @@ test("participant can read child history and title across memory checkpoints", (
         },
       },
     });
-    await r.sessions.append(lease, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
-    await r.sessions.releaseLease(lease);
+    await r.sessions.append(writer, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
     const result = await r.syscallsFor(r.room).read({ target: child.id });
     assert.ok(result.ok && result.mode === "transcript");
     assert.equal(result.title, "PRIVATE_SENTINEL");
@@ -106,14 +104,13 @@ test("explicit source title changes reach fresh child tasks without copying hist
   inTestTenant(async () => {
     const r = await rig();
     await r.sessions.updateTitle(r.room.id, "PRIVATE_SENTINEL");
-    const { lease } = await r.sessions.acquireLease(r.room.id);
-    assert.ok(lease);
-    const old = await r.sessions.append(lease, {
+    const writer = { sessionId: r.room.id };
+    const old = await r.sessions.append(writer, {
       type: "assistant",
       scopeLabel: scope,
       payload: { text: "PRIVATE_SENTINEL" },
     });
-    await r.sessions.append(lease, {
+    await r.sessions.append(writer, {
       type: "user",
       scopeLabel: scope,
       payload: {
@@ -121,7 +118,6 @@ test("explicit source title changes reach fresh child tasks without copying hist
         memoryContext: { kind: "memory_context", snapshot: { audience: "safe-audience" }, throughSeq: old.seq },
       },
     });
-    await r.sessions.releaseLease(lease);
     await r.sessions.updateTitle(r.room.id, "Current parent");
     const opened = await r
       .syscallsFor((await r.sessions.get(r.room.id))!)
@@ -141,9 +137,8 @@ test("participant sees child title in session write response", () =>
     await r.sessions.setParentSession(child.id, r.room.id);
     await r.sessions.addParticipant(child.id, actor.id);
     await r.sessions.updateTitle(child.id, "PRIVATE_SENTINEL");
-    const { lease } = await r.sessions.acquireLease(child.id);
-    assert.ok(lease);
-    await r.sessions.append(lease, {
+    const writer = { sessionId: child.id };
+    await r.sessions.append(writer, {
       type: "user",
       scopeLabel: scope,
       payload: {
@@ -156,8 +151,7 @@ test("participant sees child title in session write response", () =>
         },
       },
     });
-    await r.sessions.append(lease, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
-    await r.sessions.releaseLease(lease);
+    await r.sessions.append(writer, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
     const result = await r.syscallsFor(r.room).write({ target: child.id, text: "generic message" });
     assert.match(JSON.stringify(result), /PRIVATE_SENTINEL/);
   }));

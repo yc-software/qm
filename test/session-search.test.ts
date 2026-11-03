@@ -20,15 +20,14 @@ function test(name: string, fn: () => Promise<void>): void {
 async function seed(sessions: SessionStore, threadRef: string, principal: string, texts: string[]): Promise<string> {
   const s = await sessions.getOrCreateByThread(threadRef, "dm", scopeId("personal", principal));
   await sessions.addParticipant(s.id, principal, undefined, { includeHistory: true });
-  const { lease } = await sessions.acquireLease(s.id);
+  const writer = { sessionId: s.id };
   for (const [i, text] of texts.entries()) {
-    await sessions.append(lease!, {
+    await sessions.append(writer, {
       type: i % 2 === 0 ? "user" : "assistant",
       payload: i % 2 === 0 ? { text, name: "josh" } : { text },
       scopeLabel: scopeId("personal", principal),
     });
   }
-  await sessions.releaseLease(lease!);
   return s.id;
 }
 
@@ -56,20 +55,19 @@ test("session store: search respects participant visibility windows and identity
   const store = createPostgresSessionStore(testDatabaseUrl());
   const s = await store.getOrCreateByThread("web:U1:w", "dm", scopeId("personal", "U1"));
   await store.addParticipant(s.id, "U1", undefined, { includeHistory: true });
-  const { lease } = await store.acquireLease(s.id);
-  await store.append(lease!, {
+  const writer = { sessionId: s.id };
+  await store.append(writer, {
     type: "user",
     payload: { text: "secret prelude" },
     scopeLabel: scopeId("personal", "U1"),
   });
   // U2 joins WITHOUT history — the prelude is outside their window.
   await store.addParticipant(s.id, "U2");
-  await store.append(lease!, {
+  await store.append(writer, {
     type: "user",
     payload: { text: "shared secret plans" },
     scopeLabel: scopeId("personal", "U1"),
   });
-  await store.releaseLease(lease!);
 
   const u2 = await store.searchEntries("U2", "secret");
   assert.equal(u2.length, 1, "U2 sees only the post-join message");
@@ -83,18 +81,17 @@ test("session store: search ignores non-conversational entry types", async () =>
   const store = createPostgresSessionStore(testDatabaseUrl());
   const s = await store.getOrCreateByThread("web:U1:t", "dm", scopeId("personal", "U1"));
   await store.addParticipant(s.id, "U1", undefined, { includeHistory: true });
-  const { lease } = await store.acquireLease(s.id);
-  await store.append(lease!, {
+  const writer = { sessionId: s.id };
+  await store.append(writer, {
     type: "tool_call",
     payload: { tool: "execute", callId: "c1", text: "grep zanzibar" },
     scopeLabel: scopeId("personal", "U1"),
   });
-  await store.append(lease!, {
+  await store.append(writer, {
     type: "text",
     payload: { text: "zanzibar itinerary" },
     scopeLabel: scopeId("personal", "U1"),
   });
-  await store.releaseLease(lease!);
 
   const hits = await store.searchEntries("U1", "zanzibar");
   assert.equal(hits.length, 1, "tool calls are not searched");
@@ -109,13 +106,12 @@ nodeTest("app.searchSessions decorates hits with session metadata and enforces v
       "let's plan the zanzibar trip",
       "Zanzibar it is — I drafted an itinerary.",
     ]);
-    const { lease } = await sessions.acquireLease(id);
-    await sessions.append(lease!, {
+    const writer = { sessionId: id };
+    await sessions.append(writer, {
       type: "tool_result",
       payload: { tool: "execute", callId: "c1", text: "zanzibar weather outputonly" },
       scopeLabel: scopeId("personal", "U1"),
     });
-    await sessions.releaseLease(lease!);
     await sessions.updateTitle(id, "Trip planning");
     await seed(sessions, "web:U2:other", "U2", ["zanzibar for U2 only"]);
 

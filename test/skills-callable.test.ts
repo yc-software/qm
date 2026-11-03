@@ -166,14 +166,12 @@ appTest("skills index order ignores skill use, so the system prompt stays byte-s
   const first = await built.app.turn(request);
   assert.ok((first.reply ?? "").indexOf("- helper-00 — ") < (first.reply ?? "").indexOf("- helper-19 — "));
   const sessionId = first.sessionId!;
-  const { lease } = await built.sessions.acquireLease(sessionId, "turn");
-  assert.ok(lease);
-  await built.sessions.append(lease, {
+  const writer = { sessionId: sessionId };
+  await built.sessions.append(writer, {
     type: "tool_call",
     payload: { tool: "skills", callId: "skills-1", action: "read", name: "helper-19" },
     scopeLabel: "personal:U1",
   });
-  await built.sessions.releaseLease(lease);
   await built.app.turn(request);
   const recorded = (await built.sessions.listLlmRequests(sessionId)).filter((r) => r.model === "mock");
   const systems = recorded.map((r) => (r.promptEnvelope as { system: string }).system);

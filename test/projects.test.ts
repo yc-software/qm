@@ -334,6 +334,7 @@ async function listen(server: Server): Promise<string> {
 
 test("Project routes use ordinary group sessions with the durable roster as authority", async (t) => {
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
+  const deployAcl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) }));
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
@@ -467,7 +468,6 @@ test("Project routes use ordinary group sessions with the durable roster as auth
       approval: { requestId: pendingApproval.requestId, approved: true },
     });
     assert.equal(forgedApproval.status, "refused");
-    const deployAcl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
     const deploy = createDeployService({
       ...singleProcessDeps(),
       deployStore: createDeployStore(testDeployBackings()),
@@ -563,13 +563,13 @@ test("Project routes use ordinary group sessions with the durable roster as auth
       forkCopyStarted = resolve;
     });
     let copyingSessionId: string | undefined;
-    built.sessions.appendMany = async (lease, entries) => {
-      if (!copyingSessionId && lease.sessionId !== first.id && lease.sessionId !== forked.session.id) {
-        copyingSessionId = lease.sessionId;
+    built.sessions.appendMany = async (writer, entries) => {
+      if (!copyingSessionId && writer.sessionId !== first.id && writer.sessionId !== forked.session.id) {
+        copyingSessionId = writer.sessionId;
         forkCopyStarted();
         await forkCopyReleased;
       }
-      return appendForFork(lease, entries);
+      return appendForFork(writer, entries);
     };
     const racingForkPromise = built.app.forkSession(first.id, "owner");
     await forkCopyStart;
@@ -598,30 +598,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     const continuedForkRequest = (await built.sessions.listLlmRequests(racingFork.session.id)).at(-1)!;
     assert.match(JSON.stringify(continuedForkRequest.promptEnvelope), /after joining/);
 
-    const participantOrder: string[] = [];
-    const acquireLease = built.sessions.acquireLease.bind(built.sessions);
-    const addParticipantForOrder = built.sessions.addParticipant.bind(built.sessions);
-    built.sessions.acquireLease = async (sessionId, holder) => {
-      const attempt = await acquireLease(sessionId, holder);
-      participantOrder.push(`lease:${sessionId}`);
-      return attempt;
-    };
-    built.sessions.addParticipant = async (sessionId, principalId, title) => {
-      participantOrder.push(`participant:${sessionId}:${principalId}`);
-      return addParticipantForOrder(sessionId, principalId, title);
-    };
-    try {
-      assert.equal((await turn("owner", "web:owner:second")).status, "ok");
-    } finally {
-      built.sessions.acquireLease = acquireLease;
-      built.sessions.addParticipant = addParticipantForOrder;
-    }
-    const leaseIndex = participantOrder.findIndex((event) => event.startsWith("lease:"));
-    const participantIndex = participantOrder.findIndex((event) => event.startsWith("participant:"));
-    assert.ok(
-      leaseIndex >= 0 && participantIndex > leaseIndex,
-      "Project participant reconciliation happens only after the lease",
-    );
+    assert.equal((await turn("owner", "web:owner:second")).status, "ok");
     const projectSessions = (await built.sessions.scanAll()).filter((session) => session.scopeId === scope);
     assert.equal(projectSessions.length, 6);
     for (const session of projectSessions) {
@@ -913,16 +890,15 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
     const entriesBeforeRace = await built.sessions.getEntries(session.id);
     const llmRequestsBeforeRace = await built.sessions.listLlmRequests(session.id);
 
-    const originalAcquireLease = built.sessions.acquireLease.bind(built.sessions);
+    const originalGetOrCreate = built.sessions.getOrCreateByThread.bind(built.sessions);
     let changed = false;
-    built.sessions.acquireLease = async (sessionId, holder) => {
-      const attempt = await originalAcquireLease(sessionId, holder);
-      if (!changed && sessionId === session.id) {
-        assert.ok(attempt.lease);
+    built.sessions.getOrCreateByThread = async (...args) => {
+      const opened = await originalGetOrCreate(...args);
+      if (!changed && opened.id === session.id) {
         changed = true;
         assert.equal((await built.app.addProjectMember(project.id, "owner", "late-member")).status, "ok");
       }
-      return attempt;
+      return opened;
     };
 
     try {
@@ -941,7 +917,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
         new Set(["owner", "member", "late-member"]),
       );
     } finally {
-      built.sessions.acquireLease = originalAcquireLease;
+      built.sessions.getOrCreateByThread = originalGetOrCreate;
     }
   });
 });

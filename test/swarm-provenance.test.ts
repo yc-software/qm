@@ -40,7 +40,6 @@ test("execution metadata does not change stable dispatch provenance", () =>
         ...f.input,
         attempt: f.run.attempts,
         runLeaseToken: f.run.leaseToken!,
-        background: true,
         finalAttempt: false,
         cancel: new AbortController().signal,
         runStartedAt: Date.now(),

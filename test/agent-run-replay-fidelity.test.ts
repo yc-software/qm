@@ -582,18 +582,16 @@ async function withPgSession(
       "dm",
       "personal:tester" as SessionEntry["scopeLabel"],
     );
-    const { lease } = await store.acquireLease(session.id);
-    assert.ok(lease);
+    const writer = { sessionId: session.id };
     await raw.query("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
     await fn({
       toolOutput: createPostgresToolOutputStore({
         pool: { q: async (sql, params) => (await raw.query(sql, params)).rows },
         bytesFor: () => createMemoryDurableByteStore(),
       }),
-      emit: (entry) => store.append({ ...lease, turnId: "run-pg" }, entry),
+      emit: (entry) => store.append({ ...writer, turnId: "run-pg" }, entry),
       history: async () => forModelContext(await store.getEntries(session.id)),
     });
-    await store.releaseLease(lease);
   } finally {
     await raw.end();
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);

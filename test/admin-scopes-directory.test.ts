@@ -64,15 +64,14 @@ test("the admin scope directory lists every known scope with labels and counts (
       s.built.sessions.getOrCreateByThread("T1", "channel", "channel:C9", "eng"),
     );
     await inTestTenant(() => s.built.sessions.addParticipant(session.id, "U1"));
-    const { lease } = await inTestTenant(() => s.built.sessions.acquireLease(session.id));
+    const writer = { sessionId: session.id };
     await inTestTenant(() =>
-      s.built.sessions.append(lease!, {
+      s.built.sessions.append(writer, {
         type: "user",
         payload: { text: "ship the board deck" },
         scopeLabel: "channel:C9",
       }),
     );
-    await inTestTenant(() => s.built.sessions.releaseLease(lease!));
     await inTestTenant(() =>
       s.built.app.createCron({
         ownerScopeId: "channel:GONE",

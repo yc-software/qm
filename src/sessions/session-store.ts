@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
-import { sleep } from "../util/async.ts";
 import type { GoalRecord } from "../agent/goal.ts";
 
 export const LLM_CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -47,62 +46,14 @@ interface ContextWindow {
   totalEntries: number;
 }
 
-export interface Lease {
+export interface SessionWriter {
   sessionId: string;
-  token: string;
   turnId?: string;
-}
-
-export type LeaseHolder = "turn" | "compaction" | "fork" | "backfill";
-
-export interface LeaseAttempt {
-  lease: Lease | null;
-  heldBy?: LeaseHolder;
-  heldSince?: number;
-  heldUntil?: number;
-}
-
-export interface LeasePeek {
-  holder?: LeaseHolder;
-  heldUntil: number;
-}
-
-export interface AcquireLeaseWaitOptions {
-  waitFor?: (heldBy: LeaseHolder | undefined) => boolean;
-}
-
-const LEASE_WAIT_MIN_DELAY_MS = 25;
-const LEASE_WAIT_MAX_DELAY_MS = 1_000;
-
-export async function acquireLeaseWithin(
-  sessions: Pick<SessionStore, "acquireLease" | "peekLease">,
-  sessionId: string,
-  holder: LeaseHolder,
-  budgetMs: number,
-  opts?: AcquireLeaseWaitOptions,
-): Promise<LeaseAttempt & { waitedMs?: number }> {
-  const started = Date.now();
-  const deadline = started + budgetMs;
-  let delay = LEASE_WAIT_MIN_DELAY_MS;
-  for (;;) {
-    const waitedMs = Date.now() - started;
-    const attempt = await sessions.acquireLease(sessionId, holder);
-    if (attempt.lease) return { ...attempt, waitedMs };
-    if (attempt.heldUntil === undefined) return { ...attempt, waitedMs };
-    if (opts?.waitFor && !opts.waitFor(attempt.heldBy)) return { ...attempt, waitedMs };
-    for (;;) {
-      if (Date.now() + LEASE_WAIT_MIN_DELAY_MS > deadline) return { ...attempt, waitedMs: Date.now() - started };
-      await sleep(Math.min(delay, deadline - Date.now()));
-      delay = Math.min(delay * 2, LEASE_WAIT_MAX_DELAY_MS);
-      const seen = await sessions.peekLease(sessionId);
-      if (!seen || seen.heldUntil <= Date.now()) break;
-    }
-  }
+  runLeaseToken?: string;
 }
 
 export interface StoreOptions {
   now?: () => number;
-  leaseTtlMs?: number;
 }
 
 export interface NewEntry {
@@ -506,16 +457,8 @@ export interface SessionStore {
     },
   ): Promise<void>;
 
-  readonly leaseTtlMs: number;
-  acquireLease(sessionId: string, holder?: LeaseHolder): Promise<LeaseAttempt>;
-  peekLease(sessionId: string): Promise<LeasePeek | null>;
-  renewLease(lease: Lease): Promise<boolean>;
-  releaseLease(lease: Lease): Promise<void>;
-  forceReleaseLease(sessionId: string): Promise<void>;
-  fenceTurnLease(sessionId: string, until: number): Promise<void>;
-
-  append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
-  appendMany(lease: Lease, entries: readonly NewEntry[]): Promise<SessionEntry[]>;
+  append(writer: SessionWriter, entry: NewEntry): Promise<SessionEntry>;
+  appendMany(writer: SessionWriter, entries: readonly NewEntry[]): Promise<SessionEntry[]>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   hasDeliveryEntry(sessionId: string, deliveryKey: string, slackTs?: string): Promise<boolean>;
   countEntriesBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
@@ -524,9 +467,9 @@ export interface SessionStore {
   latestEntrySeq(sessionId: string): Promise<number>;
   latestToolPurposes(turnIds: readonly string[]): Promise<Map<string, string>>;
   goals(sessionIds: readonly string[]): Promise<Map<string, GoalRecord>>;
-  setGoal(lease: Lease, goal: GoalRecord, notices?: readonly NewEntry[]): Promise<void>;
+  setGoal(writer: SessionWriter, goal: GoalRecord, notices?: readonly NewEntry[]): Promise<void>;
 
-  recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
+  recordLlmRequest(sessionId: string, rec: NewLlmRequest): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
   purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 

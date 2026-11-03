@@ -404,11 +404,12 @@ export async function sessionTreeRoot(sessions: Pick<SessionStore, "get">, sessi
   return (await sessionAncestors(sessions, session)).at(-1) ?? session;
 }
 
-export async function stoppableAncestors(
+export async function stoppableRoot(
   sessions: Pick<SessionStore, "sameScopeAncestors">,
   session: Session,
-): Promise<Session[]> {
-  return session.parentSessionId ? sessions.sameScopeAncestors([session.threadRef]) : [];
+): Promise<Session | undefined> {
+  if (!session.parentSessionId) return undefined;
+  return (await sessions.sameScopeAncestors([session.threadRef])).find((ancestor) => !ancestor.parentSessionId);
 }
 
 export async function sessionTreeWorking(
@@ -430,7 +431,7 @@ export async function workingSessionThreadRefs(
   const active = await runs.activeSessionIds();
   const working = new Set(active);
   for (const ancestor of await sessions.sameScopeAncestors(active))
-    if (!awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
+    if (!ancestor.parentSessionId && !awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
   return working;
 }
 
@@ -1128,7 +1129,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "runLeaseToken",
     "runStartedAt",
     "finalAttempt",
-    "background",
     "cancel",
     "shutdown",
     "modelAccount",

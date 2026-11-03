@@ -9,6 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 const actor = { externalId: "U1" };
 
@@ -62,7 +63,7 @@ test("a redelivered message that folded into a live run as a steer is injected o
   try {
     const first = await inTestTenant(() => built.app.turn(slackTurn("first", "t1")));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
+    const claimed = await withoutTenant(() => built.runs.claim("w1", 30_000));
     assert.equal(claimed?.id, runId);
     const steer = await inTestTenant(() => built.app.turn(slackTurn("also this", "t2")));
     const replay = await inTestTenant(() => built.app.turn(slackTurn("also this", "t2")));
@@ -80,7 +81,7 @@ test("a redelivery that arrives while the first delivery's run is live joins tha
   try {
     const first = await inTestTenant(() => built.app.turn(slackTurn("hello", "t1")));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
+    const claimed = await withoutTenant(() => built.runs.claim("w1", 30_000));
     assert.equal(claimed?.id, runId);
     const again = await inTestTenant(() => built.app.turn(slackTurn("hello", "t1")));
     assert.equal(again.status, "silent");
@@ -99,7 +100,7 @@ test("a message folded as a steer is not re-run as a fresh turn after that run e
   try {
     const first = await inTestTenant(() => built.app.turn(slackTurn("first", "t1")));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
+    const claimed = await withoutTenant(() => built.runs.claim("w1", 30_000));
     await inTestTenant(() => built.app.turn(slackTurn("fold me", "t2")));
     assert.equal((await inTestTenant(() => built.signals.takePending(runId))).length, 1);
     await inTestTenant(() => built.runs.complete(runId, claimed!.leaseToken!, { status: "silent" }));
@@ -137,7 +138,7 @@ test("a redelivery that slips past the lookup still cannot steer the run it belo
   try {
     const first = await inTestTenant(() => built.app.turn(slackTurn("hello", "t1")));
     const runId = (first as { runId: string }).runId;
-    await built.runs.claim("w1", 30_000);
+    await withoutTenant(() => built.runs.claim("w1", 30_000));
     const real = built.runs.getByDedupKey.bind(built.runs);
     let misses = 1;
     built.runs.getByDedupKey = async (key) => (misses-- > 0 ? null : real(key));
@@ -154,7 +155,7 @@ test("a redelivery of a finished run posts nothing rather than the answer a seco
   try {
     const first = await inTestTenant(() => built.app.turn(slackTurn("hello", "t1")));
     const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
+    const claimed = await withoutTenant(() => built.runs.claim("w1", 30_000));
     await inTestTenant(() => built.runs.complete(runId, claimed!.leaseToken!, { status: "ok", reply: "the answer" }));
     const again = await inTestTenant(() => built.app.turn({ ...slackTurn("hello", "t1"), async: false }));
     assert.equal(again.status, "silent");

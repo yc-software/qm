@@ -48,7 +48,7 @@ export interface ScreenSecurityInput {
   payload: string;
   signal: AbortSignal;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: TurnLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+  recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;
 }
 
 export interface AgentTurnInput {
@@ -107,7 +107,7 @@ export interface AgentTurnInput {
   runtimePinned?: boolean;
   onRuntime?(runtime: TurnRuntime): void;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: TurnLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+  recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;
   onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onModelRequest?(): void;
   onDelta?(chunk: string): void;
@@ -147,7 +147,7 @@ export interface DetectInput {
   reactionGuidance?: string;
   history: SessionEntry[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: TurnLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+  recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;
 }
 
 export interface DetectResult {

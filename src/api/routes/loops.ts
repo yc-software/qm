@@ -17,7 +17,7 @@ import { settleGroup } from "../../loops/triage.ts";
 import type { CronStore } from "../../cron/cron-store.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } from "../../cron/schedule.ts";
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
-import { errMessage, swallow } from "../../util/errors.ts";
+import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj, resolveCapabilityDestination } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
@@ -345,10 +345,7 @@ async function getLoop(ctx: ApiCtx): Promise<void> {
             ...(item.sourcePayload ? { sourcePayload: agentSourcePayload(item.sourcePayload, item.source) } : {}),
             ...(item.inboxPreview
               ? {
-                  inboxPreview: agentSourcePayload(
-                    item.inboxPreview,
-                    item.source ?? String(item.sourcePayload?.source ?? ""),
-                  ),
+                  inboxPreview: agentSourcePayload(item.inboxPreview, item.source),
                 }
               : {}),
           }
@@ -474,15 +471,26 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   }
   const updated = Object.keys(patch).length > 0 ? await deps.store.update(loop.id, patch) : loop;
   if (!updated) return sendJson(ctx.res, 404, { error: "not_found", message: "no such loop" });
-  if (patch.state !== undefined && loop.cronId && deps.crons) {
+  if (patch.state !== undefined) {
     try {
-      await deps.crons.setEnabled(loop.cronId, patch.state === "enabled");
+      await syncLoopSchedule(deps, loop, patch.state);
     } catch (e) {
-      await deps.store.update(loop.id, { restore: loop });
       return sendJson(ctx.res, 502, { error: "loop_schedule_failed", message: errMessage(e) });
     }
   }
   return sendJson(ctx.res, 200, { loop: updated ?? (await deps.store.get(loop.id)) });
+}
+
+export async function syncLoopSchedule(deps: LoopServiceDeps, loop: Loop, state: LoopState): Promise<void> {
+  if (!loop.cronId || !deps.crons) return;
+  try {
+    await deps.crons.setEnabled(loop.cronId, state === "enabled");
+  } catch (e) {
+    await deps.store
+      .update(loop.id, { restore: loop })
+      .catch((restoreErr: unknown) => reportFailure("loops: restore state after schedule failure", restoreErr));
+    throw e;
+  }
 }
 
 async function deleteLoop(ctx: ApiCtx): Promise<void> {

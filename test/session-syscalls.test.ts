@@ -51,9 +51,10 @@ async function rig(opts?: {
   treeRunCap?: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }): Promise<Rig> {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const { runs } = createPostgresRunStore(url);
+  const signals = createPostgresRunSignalStore(url);
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const advisoryLock = testAdvisoryLock();
   const factory = createSessionSyscalls({
@@ -293,10 +294,8 @@ test("read lists children with status and renders a child's recent transcript", 
   const opened = await syscalls.open({ task: "research callers", name: "research_callers" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id, "turn");
-  assert.ok(lease);
-  await r.sessions.append(lease!, { type: "assistant", payload: { text: "found 3 call sites" }, scopeLabel: scope });
-  await r.sessions.releaseLease(lease!);
+  const writer = { sessionId: child.id };
+  await r.sessions.append(writer, { type: "assistant", payload: { text: "found 3 call sites" }, scopeLabel: scope });
 
   const list = await syscalls.read({});
   assert.ok(list.ok && list.mode === "children");
@@ -349,9 +348,8 @@ test("a silent child mails a completed-without-reply notice without borrowing tr
   const opened = await r.syscallsFor(r.room).open({ task: "quiet work" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id, "turn");
-  await r.sessions.append(lease!, { type: "assistant", payload: { text: "halfway there" }, scopeLabel: scope });
-  await r.sessions.releaseLease(lease!);
+  const writer = { sessionId: child.id };
+  await r.sessions.append(writer, { type: "assistant", payload: { text: "halfway there" }, scopeLabel: scope });
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
   await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "silent" });
@@ -427,14 +425,12 @@ test("concurrent opens and wakes share one admission limit; a wake past it sends
 test("session reads hide history outside the viewer's participant tenure", async () => {
   const r = await rig();
   const target = await r.sessions.getOrCreateByThread("web:private-old", "dm", scope);
-  const { lease } = await r.sessions.acquireLease(target.id);
-  assert.ok(lease);
-  await r.sessions.append(lease, {
+  const writer = { sessionId: target.id };
+  await r.sessions.append(writer, {
     type: "assistant",
     payload: { text: "hidden-before-membership" },
     scopeLabel: scope,
   });
-  await r.sessions.releaseLease(lease);
   await r.sessions.addParticipant(target.id, actor.id);
   const view = await r.syscallsFor(r.room).read({ target: target.id });
   assert.ok(view.ok && view.mode === "transcript");
@@ -975,13 +971,12 @@ test("queued results recheck source-entry visibility after participant tenure ch
   const opened = await api.open({ task: "shared result" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id);
-  const entry = await r.sessions.append(lease!, {
+  const writer = { sessionId: child.id };
+  const entry = await r.sessions.append(writer, {
     type: "assistant",
     payload: { text: "OLD_PRIVATE_RESULT" },
     scopeLabel: sharedScope,
   });
-  await r.sessions.releaseLease(lease!);
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   const claimed = await r.runs.claimById(run!.id, "child-worker", 30_000);
   await r.runs.complete(run!.id, claimed!.leaseToken!, {
@@ -1757,13 +1752,14 @@ test("children of a Slack group turn keep its source so external-workspace polic
   const policies = { ext: access };
   const admitted = (request: OrchestratorInput) =>
     externalSlackRequestAllowed({ ...request, surface: request.surface ?? "" }, policies);
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const { runs } = createPostgresRunStore(url);
   const factory = createSessionSyscalls({
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals: createPostgresRunSignalStore(url),
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
   });
@@ -1801,8 +1797,9 @@ test("children of a Slack group turn keep its source so external-workspace polic
 });
 
 test("sessions list shows only sidebar sessions the whole audience can see and create needs a live turn", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const { runs } = createPostgresRunStore(url);
   const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];
   const room = await sessions.getOrCreateByThread("web:U1:room", "dm", scope, undefined, "web");
   await sessions.updateTitle(room.id, "room");
@@ -1817,7 +1814,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     sessions,
     runs,
-    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    signals: createPostgresRunSignalStore(url),
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
     conversations: {

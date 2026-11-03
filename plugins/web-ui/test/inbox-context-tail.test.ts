@@ -30,7 +30,6 @@ test("long Slack conversations show the latest messages and reveal earlier ones 
         state: "held",
         source: "slack",
         sourcePayload: {
-          source: "slack",
           title: "Conversation",
           from: "Sam",
           snippet: "latest",

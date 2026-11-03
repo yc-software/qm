@@ -15,7 +15,7 @@ async function fixture(source = "gmail", meta: Record<string, unknown> = { threa
       dedupeKey: "ask",
       source,
       sourceAt: 1000,
-      sourcePayload: { source, [source]: meta, context: [{ author: "Elsewhere", text: "UNRELATED CHANNEL TAIL" }] },
+      sourcePayload: { [source]: meta, context: [{ author: "Elsewhere", text: "UNRELATED CHANNEL TAIL" }] },
       proposal: { by: "human", data: { body: "Keep my edit" } },
     },
   ]);
@@ -757,13 +757,13 @@ test("Slack-id principals and items without a known sender use only the director
   assert.deepEqual((await items.get(item.id))!.sourcePayload!.participants, [
     { id: "U1", name: "Alex", avatarUrl: ALEX },
   ]);
-  const legacy = await fixture("slack", { channelId: "D2", ts: "1.0" });
-  await createInboxSourceRefresh({ featureFlags, items: legacy.items, tokens, directory, fetchImpl })(
+  const noSender = await fixture("slack", { channelId: "D2", ts: "1.0" });
+  await createInboxSourceRefresh({ featureFlags, items: noSender.items, tokens, directory, fetchImpl })(
     "owner",
-    [legacy.item],
+    [noSender.item],
     "avatars",
   );
-  assert.deepEqual(await legacy.items.get(legacy.item.id), legacy.item);
+  assert.deepEqual(await noSender.items.get(noSender.item.id), noSender.item);
 });
 
 test("people outside the directory keep the profile Slack returned with their message", async () => {
