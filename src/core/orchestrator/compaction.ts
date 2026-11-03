@@ -19,6 +19,7 @@ import { errMessage } from "../../util/errors.ts";
 import { createKeyedQueue } from "../../util/async.ts";
 import { waitForNoRunningRun } from "../../runs/run-store.ts";
 import type { OrchestratorDeps } from "./types.ts";
+import { entryFromItem, itemFromEntry } from "../../sessions/items.ts";
 
 const MAX_CONTEXT_TOKENS = 120_000;
 const KEEP_RECENT_TOKEN_FRACTION = 0.6;
@@ -26,7 +27,6 @@ const DOCUMENT_TOKEN_FRACTION = 0.5;
 
 interface Summarized {
   text: string;
-  summaryLabel: ScopeId;
   throughSeq: number;
   mode?: "recent";
 }
@@ -92,8 +92,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     const plan = planCompaction(input.visibleHistory, maxContextTokens, keepRecentTokenFraction, reuseBudgetTokens);
     if (!plan || !plan.toSummarize.length) return null;
 
-    const summaryLabel = input.scopeId;
-
     input.cancel?.throwIfAborted();
     let text: string;
     try {
@@ -123,7 +121,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     input.cancel?.throwIfAborted();
     return {
       text,
-      summaryLabel,
       throughSeq: compactionThroughSeq(plan.toSummarize),
     };
   }
@@ -133,17 +130,19 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     writer: SessionWriter;
     summarized: Summarized;
   }): Promise<SessionEntry> {
-    const { text, summaryLabel, throughSeq, mode } = input.summarized;
-    const summary = await deps.sessions.append(input.writer, {
-      type: "system",
-      payload: {
-        ...createContextSummaryPayload(throughSeq, text),
-        ...(mode ? { mode } : {}),
-      },
-      scopeLabel: summaryLabel,
-    });
+    const { text, throughSeq, mode } = input.summarized;
+    const summary = await deps.sessions.append(
+      input.writer,
+      itemFromEntry({
+        type: "system",
+        payload: {
+          ...createContextSummaryPayload(throughSeq, text),
+          ...(mode ? { mode } : {}),
+        },
+      }),
+    );
     await deps.agent.resetSession?.(input.session.id);
-    return summary;
+    return entryFromItem(summary, input.session.scopeId);
   }
 
   async function applyCompaction(input: CompactionInput): Promise<SessionEntry[] | null> {
@@ -212,8 +211,8 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     if (priorText)
       text = priorText.startsWith(notice) ? priorText : `${notice}\n\nLast saved summary (not updated):\n${priorText}`;
     const window = await deps.sessions.getContextWindow(input.session.id);
-    const boundary = window.entries.reduce(
-      (seq, entry) => Math.max(seq, contextSummaryPayload(entry)?.throughSeq ?? -1),
+    const boundary = window.items.reduce(
+      (seq, item) => Math.max(seq, item.kind === "ContextCompaction" ? (item.throughSeq ?? -1) : -1),
       -1,
     );
     const throughSeq = Math.max(boundary, compactionThroughSeq([...(prior ? [prior] : []), ...rest.slice(0, start)]));
@@ -222,7 +221,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       ...input,
       summarized: {
         text,
-        summaryLabel: (includedPrior?.scopeLabel ?? input.scopeId) as ScopeId,
         throughSeq,
         mode: "recent",
       },
@@ -261,7 +259,9 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         const session = await deps.sessions.get(input.sessionId);
         if (!session) return;
         const maxContextTokens = tokenBudgetFor(input.scopeId, input.model);
-        const entries = (await deps.sessions.getContextWindow(input.sessionId)).entries;
+        const entries = (await deps.sessions.getContextWindow(input.sessionId)).items.map((item) =>
+          entryFromItem(item, session.scopeId),
+        );
         const history = forModelContext(entries);
         if (!overBudgetFraction(history, maxContextTokens, COMPACT_SOFT_FRACTION)) return;
         const snapshotSeq = entries.at(-1)?.seq ?? -1;
@@ -275,8 +275,8 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         if (!summarized) return;
         if (deps.runs && !(await waitForNoRunningRun(deps.runs, session.threadRef, WRITE_WAIT_MS, input.runLeaseToken)))
           return;
-        const since = await deps.sessions.getEntries(input.sessionId, { sinceSeq: snapshotSeq + 1 });
-        if (!since.some((entry) => !!contextSummaryPayload(entry))) {
+        const since = await deps.sessions.getItems(input.sessionId, { sinceSeq: snapshotSeq + 1 });
+        if (!since.some((item) => item.kind === "ContextCompaction" && item.throughSeq !== null)) {
           await writeCompaction({ session, writer: { sessionId: input.sessionId }, summarized });
         }
       } catch (e) {

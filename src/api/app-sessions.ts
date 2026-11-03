@@ -6,7 +6,8 @@ import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import type { ParticipantPageQuery } from "../sessions/session-store.ts";
-import type { PendingApprovalRecord, Session } from "../types.ts";
+import type { PendingApprovalRecord, ScopeId, Session, SessionEntry } from "../types.ts";
+import { entryFromItem, itemFromEntry, type Item } from "../sessions/items.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
@@ -147,6 +148,8 @@ export function createSessionMethods(
     artifactAuthor,
   } = h;
   const transcripts = createTranscriptSource(deps.sessions);
+  const asEntries = (items: readonly Item[], scope: ScopeId): SessionEntry[] =>
+    items.map((item) => entryFromItem(item, scope));
   const pinView = (
     rec: { id: string; text?: string; entrySeq?: number; addedBy: string; createdAt: number },
     entry?: { payload: unknown },
@@ -178,10 +181,7 @@ export function createSessionMethods(
     );
   };
 
-  const storedEntryAt = async (sessionId: string, seq: number) => {
-    const entry = await deps.sessions.getEntry(sessionId, seq);
-    return entry;
-  };
+  const storedEntryAt = (sessionId: string, seq: number) => deps.sessions.getItem(sessionId, seq);
 
   const viewerStoredEntryAt = async (sessionId: string, principalId: string, seq: number) => {
     const window = (await deps.sessions.participantWindowsOf(sessionId)).find((w) => w.principalId === principalId);
@@ -191,20 +191,20 @@ export function createSessionMethods(
   };
 
   const viewerEntryAt = async (sessionId: string, principalId: string, seq: number) => {
-    const latest = await deps.sessions.latestEntrySeq(sessionId);
+    const latest = await deps.sessions.latestItemSeq(sessionId);
     if (seq > latest) return undefined;
-    let scoped = (await transcripts.forViewer(sessionId, principalId, { limit: latest - seq + 1 })).entries;
+    let scoped = (await transcripts.forViewer(sessionId, principalId, { limit: latest - seq + 1 })).items;
     if (scoped.length && scoped[0]!.seq > seq) {
-      scoped = (await transcripts.forViewer(sessionId, principalId)).entries;
+      scoped = (await transcripts.forViewer(sessionId, principalId)).items;
     }
     return scoped.find((e) => e.seq === seq) ?? (await viewerStoredEntryAt(sessionId, principalId, seq));
   };
 
   const renderedEntryAt = async (sessionId: string, seq: number) => {
-    const latest = await deps.sessions.latestEntrySeq(sessionId);
+    const latest = await deps.sessions.latestItemSeq(sessionId);
     if (seq > latest) return undefined;
-    let scoped = (await transcripts.forRender(sessionId, { limit: latest - seq + 1 })).entries;
-    if (scoped.length && scoped[0]!.seq > seq) scoped = (await transcripts.forRender(sessionId)).entries;
+    let scoped = (await transcripts.forRender(sessionId, { limit: latest - seq + 1 })).items;
+    if (scoped.length && scoped[0]!.seq > seq) scoped = (await transcripts.forRender(sessionId)).items;
     return scoped.find((e) => e.seq === seq) ?? (await storedEntryAt(sessionId, seq));
   };
 
@@ -214,7 +214,7 @@ export function createSessionMethods(
   };
 
   const mirrorNativePin = async (
-    session: { id: string; surface?: string; threadRef: string },
+    session: { id: string; scopeId: ScopeId; surface?: string; threadRef: string },
     pinId: string,
     entrySeq: number | undefined,
     remove: boolean,
@@ -222,8 +222,8 @@ export function createSessionMethods(
     if (entrySeq === undefined || !deps.deliveries) return;
     const channel = slackDmChannel(session);
     if (!channel) return;
-    const entry = await renderedEntryAt(session.id, entrySeq);
-    const ts = (entry?.payload as { ts?: unknown } | undefined)?.ts;
+    const item = await renderedEntryAt(session.id, entrySeq);
+    const ts = (item && (entryFromItem(item, session.scopeId).payload as { ts?: unknown }))?.ts;
     if (typeof ts !== "string" || !ts) return;
     await deps.deliveries.enqueue({
       destination: { type: "slack", target: channel, pin: { messageTs: ts, ...(remove ? { remove: true } : {}) } },
@@ -406,15 +406,18 @@ export function createSessionMethods(
         deps.sessions.listPins(sessionId),
       ]);
       let read = initialRead;
-      let all = read.entries;
+      let all = asEntries(read.items, session.scopeId);
       while (limit !== undefined && read.earlier > 0 && !coversTailWindow(all, window!.tailTurns!)) {
         limit *= 2;
         read = await transcripts.forRender(sessionId, { limit, beforeSeq: window?.beforeSeq });
-        all = read.entries;
+        all = asEntries(read.items, session.scopeId);
       }
       const w = windowedTranscript(all, window);
       const earlier = w.earlier + read.earlier;
-      const pins = await decoratedPins(pinRecords, all, (seq) => storedEntryAt(sessionId, seq));
+      const pins = await decoratedPins(pinRecords, all, async (seq) => {
+        const item = await storedEntryAt(sessionId, seq);
+        return item && entryFromItem(item, session.scopeId);
+      });
       return {
         session,
         entries: w.entries,
@@ -460,15 +463,18 @@ export function createSessionMethods(
       const goal = openGoal(goals.get(sessionId));
       const runtime = latestRuns?.get(found.threadRef)?.result?.runtime;
       let read = initialRead;
-      let visible = read.entries;
+      let visible = asEntries(read.items, found.scopeId);
       while (limit !== undefined && read.earlier > 0 && !coversTailWindow(visible, window!.tailTurns!)) {
         limit *= 2;
         read = await transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq });
-        visible = read.entries;
+        visible = asEntries(read.items, found.scopeId);
       }
       const w = windowedTranscript(visible, window);
       const earlier = w.earlier + read.earlier;
-      const pins = await decoratedPins(pinRecords, visible, (seq) => viewerStoredEntryAt(sessionId, principalId, seq));
+      const pins = await decoratedPins(pinRecords, visible, async (seq) => {
+        const item = await viewerStoredEntryAt(sessionId, principalId, seq);
+        return item && entryFromItem(item, found.scopeId);
+      });
       return {
         session,
         entries: w.entries,
@@ -499,7 +505,7 @@ export function createSessionMethods(
       if (!rec) return (await deps.sessions.get(session.id)) ? { error: "limit" } : { error: "not_found" };
       await mirrorNativePin(session, rec.id, rec.entrySeq, false);
       const pinned = rec.entrySeq !== undefined ? await viewerEntryAt(session.id, addedBy, rec.entrySeq) : undefined;
-      return { pin: pinView(rec, pinned) };
+      return { pin: pinView(rec, pinned && entryFromItem(pinned, session.scopeId)) };
     },
 
     async listConversationPins(threadRef, reader) {
@@ -508,13 +514,16 @@ export function createSessionMethods(
       const pinRecords = await deps.sessions.listPins(session.id);
       if (!pinRecords.length) return [];
       const seqs = pinRecords.filter((p) => p.entrySeq !== undefined).map((p) => p.entrySeq!);
-      const resolveMissing = (seq: number) => viewerStoredEntryAt(session.id, reader, seq);
+      const resolveMissing = async (seq: number) => {
+        const item = await viewerStoredEntryAt(session.id, reader, seq);
+        return item && entryFromItem(item, session.scopeId);
+      };
       if (!seqs.length) return decoratedPins(pinRecords, [], resolveMissing);
-      const latest = await deps.sessions.latestEntrySeq(session.id);
+      const latest = await deps.sessions.latestItemSeq(session.id);
       const minSeq = Math.min(...seqs);
       const visible = (await transcripts.forViewer(session.id, reader, { limit: Math.max(1, latest - minSeq + 1) }))
-        .entries;
-      return decoratedPins(pinRecords, visible, resolveMissing);
+        .items;
+      return decoratedPins(pinRecords, asEntries(visible, session.scopeId), resolveMissing);
     },
 
     async unpinConversationItem(threadRef, pinId) {
@@ -529,8 +538,8 @@ export function createSessionMethods(
     async getSessionEntryForViewer(sessionId, principalId, seq) {
       const session = await sessionForViewer(sessionId, principalId);
       if (!session) return null;
-      const entry = await viewerEntryAt(sessionId, principalId, seq);
-      return entry ? { entry } : null;
+      const item = await viewerEntryAt(sessionId, principalId, seq);
+      return item ? { entry: entryFromItem(item, session.scopeId) } : null;
     },
 
     listFilesForViewer(principalId, opts, inScope) {
@@ -1050,7 +1059,7 @@ export function createSessionMethods(
       if (!goal) return { cancelled: false as const, reason: "no_open_goal" as const };
       cancelGoal(goal, "Cancelled from the goal bar.");
       await deps.sessions.setGoal({ sessionId: session.id }, goal, [
-        { type: "system", payload: goalCancelledPayload(goal, principalId), scopeLabel: session.scopeId },
+        itemFromEntry({ type: "system", payload: goalCancelledPayload(goal, principalId) }),
       ]);
       return { cancelled: true as const };
     },
@@ -1069,19 +1078,19 @@ export function createSessionMethods(
       if (!source) return null;
       const parsed = parseScopeId(source.scopeId);
       const fork = async (projectMembers?: readonly string[]) => {
-        let visible = (await transcripts.forViewer(sessionId, principalId)).entries;
+        let visible = (await transcripts.forViewer(sessionId, principalId)).items;
         if (projectMembers?.length) {
           const views = await Promise.all(
-            projectMembers.map(async (memberId) => (await transcripts.forViewer(sessionId, memberId)).entries),
+            projectMembers.map(async (memberId) => (await transcripts.forViewer(sessionId, memberId)).items),
           );
           const common = commonEntrySeqs(views);
-          visible = visible.filter((entry) => common.has(entry.seq));
+          visible = visible.filter((item) => common.has(item.seq));
         }
         const upToSeq = opts?.upToSeq;
-        const copied = upToSeq === undefined ? visible : visible.filter((entry) => entry.seq <= upToSeq);
+        const copied = upToSeq === undefined ? visible : visible.filter((item) => item.seq <= upToSeq);
         if (
           opts?.sideChat &&
-          (!isSideChatAnchor(opts.sideChat) || !copied.some((entry) => entry.seq === opts.sideChat!.entrySeq))
+          (!isSideChatAnchor(opts.sideChat) || !copied.some((item) => item.seq === opts.sideChat!.entrySeq))
         )
           throw new SideChatAnchorError();
         const threadRef = `web:${principalId}:${randomUUID()}`;
@@ -1095,11 +1104,11 @@ export function createSessionMethods(
         await Promise.all(
           (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
         );
-        const copiedEntries = await deps.sessions.appendMany(
+        const copiedItems = await deps.sessions.appendMany(
           { sessionId: forked.id },
-          copied.map((entry) => ({ type: entry.type, payload: entry.payload, scopeLabel: entry.scopeLabel })),
+          copied.map(({ sessionId: _sessionId, seq: _seq, createdAt: _createdAt, ...item }) => item),
         );
-        const forkBoundarySeq = copiedEntries.at(-1)?.seq ?? null;
+        const forkBoundarySeq = copiedItems.at(-1)?.seq ?? null;
         if (forkBoundarySeq !== null) {
           await deps.sessions.updateForkProvenance(forked.id, {
             forkedFrom: { sessionId, title: source.title ?? null },
@@ -1119,7 +1128,7 @@ export function createSessionMethods(
         });
         const stored = (await deps.sessions.get(forked.id)) ?? forked;
         const session = { ...stored, canContinue: await canContinueOnWeb(principalId, stored) };
-        return { session, entries: (await transcripts.forRender(forked.id)).entries };
+        return { session, entries: asEntries((await transcripts.forRender(forked.id)).items, forked.scopeId) };
       };
       const projectId = parsed.kind === "group" ? projectIdFromGroupRef(parsed.ref) : null;
       if (!projectId) return fork();

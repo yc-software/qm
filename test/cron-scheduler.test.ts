@@ -723,14 +723,13 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     const session = await sessions.getOrCreateByThread(req.conversation.threadRef!, "dm", scope);
     sessionIds.push(session.id);
-    priorAssistantSeen.push((await sessions.getEntries(session.id)).filter((e) => e.type === "assistant").length);
+    priorAssistantSeen.push((await sessions.getItems(session.id)).filter((e) => e.kind === "AgentMessage").length);
     texts.push(req.text);
     const writer = { sessionId: session.id };
-    await sessions.append(writer, { type: "user", payload: { text: req.text }, scopeLabel: scope });
+    await sessions.append(writer, { kind: "UserMessage", text: req.text });
     await sessions.append(writer, {
-      type: "assistant",
-      payload: { text: replies[sessionIds.length - 1] ?? "ok" },
-      scopeLabel: scope,
+      kind: "AgentMessage",
+      text: replies[sessionIds.length - 1] ?? "ok",
     });
     return { status: "ok", reply: replies[sessionIds.length - 1] ?? "ok", sessionId: session.id };
   };

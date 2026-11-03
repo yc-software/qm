@@ -1,28 +1,21 @@
-import type { Delivery, ScopeId, SessionEntry } from "../types.ts";
+import type { Delivery, ScopeId } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
 import { type NewEntry, type SessionStore } from "../sessions/session-store.ts";
 import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
+import { isAgentReply, isUserItem, type Item, itemFromEntry } from "../sessions/items.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
 const RECORDED_CACHE_CAP = 1000;
 const WRITE_GIVEUP_MS = 10 * 60_000;
 
-type WebTranscriptSessions = Pick<
-  SessionStore,
-  "appendMany" | "hasDeliveryEntry" | "get" | "getByThread" | "getEntries"
->;
+type WebTranscriptSessions = Pick<SessionStore, "appendMany" | "hasDeliveryEntry" | "get" | "getByThread" | "getItems">;
 
-export function turnRecordedFailure(
-  tail: readonly SessionEntry[],
-  note: { notBefore: number; runId?: string },
-): boolean {
-  return tail.some((entry) => {
-    if (entry.type !== "system") return false;
-    const payload = entry.payload as { kind?: unknown; runId?: unknown } | null;
-    if (payload?.kind !== "turn_failure") return false;
-    if (typeof payload.runId === "string") return payload.runId === note.runId;
-    return entry.createdAt >= note.notBefore;
+export function turnRecordedFailure(tail: readonly Item[], note: { notBefore: number; runId?: string }): boolean {
+  return tail.some((item) => {
+    if (item.kind !== "Error") return false;
+    if (item.turnId !== null) return item.turnId === note.runId;
+    return item.createdAt >= note.notBefore;
   });
 }
 
@@ -59,18 +52,17 @@ export function withWebTranscriptDeliveries(
     const reply = note?.kind === "slack_reply" ? note : undefined;
     if (await sessions.hasDeliveryEntry(session.id, d.idempotencyKey, reply?.ts)) return true;
     const failure = note?.kind === "turn_failure" ? note : undefined;
-    if (failure && turnRecordedFailure(await sessions.getEntries(session.id, { limit: DEDUPE_SCAN_LIMIT }), failure))
+    if (failure && turnRecordedFailure(await sessions.getItems(session.id, { limit: DEDUPE_SCAN_LIMIT }), failure))
       return true;
     const turnId = failure?.runId ?? d.id;
     if (
       !failure &&
-      (await sessions.getEntries(session.id, { turnId })).some((entry) => entry.type === (reply ? "user" : "assistant"))
+      (await sessions.getItems(session.id, { turnId })).some((item) => (reply ? isUserItem(item) : isAgentReply(item)))
     )
       return true;
-    const scopeLabel = session.scopeId;
     const ownReply = d.provenance?.sourceThreadRef === d.destination.target;
     const via = d.provenance?.trigger && !ownReply ? d.provenance.trigger : undefined;
-    let entry: NewEntry;
+    let entry: Pick<NewEntry, "type" | "payload">;
     if (reply) {
       entry = {
         type: "user",
@@ -81,18 +73,16 @@ export function withWebTranscriptDeliveries(
           slackReplyReceipt: true,
           deliveryKey: d.idempotencyKey,
         },
-        scopeLabel,
       };
     } else if (failure) {
       entry = {
         type: "system",
         payload: { kind: "turn_failure", message: d.text, ...(failure.runId ? { runId: failure.runId } : {}) },
-        scopeLabel,
       };
     } else {
-      entry = { type: "assistant", payload: { text: d.text, ...(via ? { via } : {}) }, scopeLabel };
+      entry = { type: "assistant", payload: { text: d.text, ...(via ? { via } : {}) } };
     }
-    await sessions.appendMany({ sessionId: session.id, turnId }, [entry]);
+    await sessions.appendMany({ sessionId: session.id, turnId }, [itemFromEntry(entry)]);
     return true;
   };
 

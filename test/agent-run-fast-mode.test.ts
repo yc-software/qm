@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { applyTurnEffort, createAgent } from "../src/agent/agent-run.ts";
 import type { AgentOptions } from "../src/agent/agent-run.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
+import { storedItem } from "../src/sessions/items.ts";
 import type { SessionEntry } from "../src/types.ts";
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import { defaultInteractiveThinkingLevel, getRequiredModel, modelSupportsFastMode } from "../src/model/pi-models.ts";
@@ -376,7 +376,7 @@ async function runTurn(
       orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
       runtime: { modelId, fastMode },
       ...(!gateway && modelId === ASTRA.id ? { providerKeys: { openai: "sk-openai-direct" } } : {}),
-      emit: async (entry: NewEntry) => ({ ...entry, seq: seq++, createdAt: Date.now() }) as unknown as SessionEntry,
+      emit: async (item) => storedItem(item, { sessionId, seq: seq++, createdAt: Date.now() }),
       recordModelCall: () => {},
       recordLlmRequest: (rec: TurnLlmRequestRecord) => {
         rows.push(rec);

@@ -2,6 +2,7 @@ import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { requestedRuntimeError, userRuntimeConfigBody, validateWebTurnModelOptions } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
+import { entryFromItem } from "../sessions/items.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
@@ -690,9 +691,9 @@ export function createTurnMethods(
       if (viewer && !(await viewerMayUseRun(run, viewer))) return [];
       const session = await deps.sessions.getByThread(run.sessionId);
       if (!session) return [];
-      const entries = await deps.sessions.getEntries(session.id, {
-        sinceSeq: Math.max(run.turnUserSeq, (afterSeq ?? -1) + 1),
-      });
+      const entries = (
+        await deps.sessions.getItems(session.id, { sinceSeq: Math.max(run.turnUserSeq, (afterSeq ?? -1) + 1) })
+      ).map((item) => entryFromItem(item, session.scopeId));
       const nextRun = entries.findIndex((e) => {
         const owner = (e.payload as { runId?: unknown } | null)?.runId;
         return e.type === "user" && typeof owner === "string" && owner !== runId;
