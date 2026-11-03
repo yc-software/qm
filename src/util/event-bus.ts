@@ -2,6 +2,7 @@ import { swallow } from "./errors.ts";
 
 export interface SubscribeOptions {
   onResync?: () => void;
+  allTenants?: boolean;
 }
 
 export interface EventBus<T> {

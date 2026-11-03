@@ -103,6 +103,7 @@ const capFor = (actorId: string) =>
 test("broker admission preserves configured email members without external invitations", async (t) => {
   const s = start({ signed: true, emailAuthDomain: "corp.example", emailAuthPrincipals: ["ops@allowed.example"] });
   t.after(s.close);
+  await s.built.identity.ready();
   for (const email of ["Ops@Allowed.example", "person@corp.example"]) {
     assert.equal(s.built.identity.externalMember(email), undefined);
     assert.deepEqual(await coreEmailAdmission(s.base, SECRET, email), { allowed: true });

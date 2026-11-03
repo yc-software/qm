@@ -20,6 +20,7 @@ for (const surface of ["web", "slack", "swarm"]) {
         },
       },
     });
+    await built.identity.ready();
     await selectDefaultSandbox(built, "U1", "personal:U1");
     const server = createInsecureTestServer(built.app);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
