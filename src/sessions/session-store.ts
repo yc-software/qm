@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
 import type { GoalRecord } from "../agent/goal.ts";
+import type { Item, NewItem } from "./items.ts";
 
 export const LLM_CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
@@ -42,8 +43,8 @@ export function createContextSummaryPayload(throughSeq: number, text: string): C
 }
 
 interface ContextWindow {
-  entries: SessionEntry[];
-  totalEntries: number;
+  items: Item[];
+  totalItems: number;
 }
 
 export interface SessionWriter {
@@ -85,7 +86,7 @@ export interface SessionPin extends NewSessionPin {
 
 export const isWebThread = (threadRef: string): boolean => threadRef.startsWith("web:");
 
-export interface GetEntriesOptions {
+export interface GetItemsOptions {
   messagesOnly?: boolean;
   transcript?: boolean;
   turnId?: string;
@@ -294,12 +295,7 @@ export interface SessionSummary {
   lastMessage: string;
 }
 
-export function userMessagePreview(payload: unknown, maxLen = 160): string {
-  let text = "";
-  if (typeof payload === "string") text = payload;
-  else if (payload && typeof payload === "object" && typeof (payload as { text?: unknown }).text === "string") {
-    text = (payload as { text: string }).text;
-  }
+export function userMessagePreview(text: string, maxLen = 160): string {
   const kept =
     text
       .split("\n\n")
@@ -457,17 +453,17 @@ export interface SessionStore {
     },
   ): Promise<void>;
 
-  append(writer: SessionWriter, entry: NewEntry): Promise<SessionEntry>;
-  appendMany(writer: SessionWriter, entries: readonly NewEntry[]): Promise<SessionEntry[]>;
-  getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  append(writer: SessionWriter, item: NewItem): Promise<Item>;
+  appendMany(writer: SessionWriter, items: readonly NewItem[]): Promise<Item[]>;
+  getItems(sessionId: string, opts?: GetItemsOptions): Promise<Item[]>;
   hasDeliveryEntry(sessionId: string, deliveryKey: string, slackTs?: string): Promise<boolean>;
-  countEntriesBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
+  countItemsBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
-  getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
-  latestEntrySeq(sessionId: string): Promise<number>;
+  getItem(sessionId: string, seq: number): Promise<Item | undefined>;
+  latestItemSeq(sessionId: string): Promise<number>;
   latestToolPurposes(turnIds: readonly string[]): Promise<Map<string, string>>;
   goals(sessionIds: readonly string[]): Promise<Map<string, GoalRecord>>;
-  setGoal(writer: SessionWriter, goal: GoalRecord, notices?: readonly NewEntry[]): Promise<void>;
+  setGoal(writer: SessionWriter, goal: GoalRecord, notices?: readonly NewItem[]): Promise<void>;
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
@@ -493,7 +489,7 @@ export interface SessionStore {
   listPins(sessionId: string): Promise<SessionPin[]>;
   removePin(sessionId: string, pinId: string): Promise<boolean>;
 
-  visibleEntries(sessionId: string, principalId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  visibleItems(sessionId: string, principalId: string, opts?: GetItemsOptions): Promise<Item[]>;
 
   searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
 

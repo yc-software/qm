@@ -3,7 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
-import { promptEnvelopeBody, type NewEntry } from "../src/sessions/session-store.ts";
+import { promptEnvelopeBody } from "../src/sessions/session-store.ts";
+import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -23,10 +24,10 @@ function turnInput(sessionId: string, sink: Sink, overrides: Partial<AgentTurnIn
     tools: {} as AgentTurnInput["tools"],
     scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
-    emit: async (entry: NewEntry) => {
-      const appended = { ...entry, seq: seq++, createdAt: Date.now() };
-      sink.entries.push({ seq: appended.seq, type: entry.type, payload: entry.payload });
-      return appended as unknown as SessionEntry;
+    emit: async (item) => {
+      const stored = storedItem(item, { sessionId, seq: seq++, createdAt: Date.now() });
+      sink.entries.push(entryFromItem(stored, "personal:tester"));
+      return stored;
     },
     recordModelCall: () => {},
     ...overrides,
@@ -118,9 +119,9 @@ for (const variant of ["text", "images", "documents", "finished during preparati
     try {
       const turn = turnInput("steer-order", sink, { runId: "run-order" });
       const emit = turn.emit;
-      turn.emit = async (entry) => {
-        if (entry.type === "thinking") await new Promise((resolve) => setTimeout(resolve, 100));
-        return emit(entry);
+      turn.emit = async (item) => {
+        if (item.kind === "Reasoning") await new Promise((resolve) => setTimeout(resolve, 100));
+        return emit(item);
       };
       turn.prepareSteer = async (text) => {
         if (finishDuringPreparation) {
@@ -257,14 +258,14 @@ test("completed Pi attach results retain openable files in viewer history", asyn
     );
     assert.equal(result.reply, "Here are the previews.");
     assert.equal(calls, 2);
-    const original = (await store.getEntries(session.id)).find((e) => e.type === "tool_result");
+    const original = (await store.getItems(session.id)).find((item) => item.kind === "ToolResult");
     assert.ok(original);
-    assert.deepEqual((original.payload as { files?: unknown[] }).files, files);
+    assert.deepEqual(original.body.files, files);
     const source = createTranscriptSource(store);
     for (const read of [await source.forRender(session.id), await source.forViewer(session.id, "tester")]) {
-      const restored = read.entries.find((e) => e.type === "tool_result");
+      const restored = read.items.find((item) => item.kind === "ToolResult");
       assert.ok(restored);
-      assert.deepEqual((restored.payload as { files?: unknown[] }).files, files);
+      assert.deepEqual(restored.body.files, files);
       assert.deepEqual(restored, original);
     }
   } finally {
@@ -472,7 +473,7 @@ for (const stopBeforeIntake of [false, true]) {
             },
             emit: async (entry) => {
               const saved = await store.append(writer, entry);
-              entries.push(saved);
+              entries.push(entryFromItem(saved, session.scopeId));
               return saved;
             },
           },
@@ -492,7 +493,7 @@ for (const stopBeforeIntake of [false, true]) {
         );
         assert.equal((users[1]!.payload as { ts?: string }).ts, "tool.1");
         assert.deepEqual(
-          (await store.getEntries(session.id)).map((entry) => [entry.seq, entry.type]),
+          (await store.getItems(session.id)).map((item) => [item.seq, entryFromItem(item, session.scopeId).type]),
           entries.map((entry) => [entry.seq, entry.type]),
         );
         assert.equal((await signals.pending("tool-steer")).length, 0);
@@ -673,7 +674,7 @@ for (const abort of ["shutdown", "stop"] as const) {
             } as AgentTurnInput["tools"],
             emit: async (entry) => {
               const saved = await store.append(writer, entry);
-              entries.push(saved);
+              entries.push(entryFromItem(saved, session.scopeId));
               return saved;
             },
           },

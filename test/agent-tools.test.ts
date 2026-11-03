@@ -11,6 +11,7 @@ import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/pri
 import { createPostgresToolOutputStore, parkedOutputKey } from "../src/sessions/tool-output.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { itemFromEntry } from "../src/sessions/items.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
@@ -718,7 +719,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
     current: tc,
     emit: (e) => {
       emitted.push(e as Emitted);
-      appends.push(store.append({ ...writer, turnId: "run-park" }, e as Parameters<typeof store.append>[1]));
+      appends.push(store.append({ ...writer, turnId: "run-park" }, itemFromEntry(e)));
     },
     scopeLabel: "personal:U1",
   };

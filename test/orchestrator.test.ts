@@ -25,6 +25,7 @@ import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
@@ -181,14 +182,18 @@ test("inbound file problems reach the model in the environment footer, not a log
   const res = await app.turn(dm("what's your favorite color", { inboundNotes: [note] }));
   assert.equal(res.status, "ok", res.reason);
 
-  const entries = await sessions.getEntries(res.sessionId!);
+  const items = await sessions.getItems(res.sessionId!);
   assert.equal(
-    entries.some((e) => e.type === "system" && /screenshot\.png/.test(JSON.stringify(e.payload))),
+    items.some(
+      (item) =>
+        ["Wake", "Error", "ContextCompaction", "Retraction", "Stop", "RuntimeChange"].includes(item.kind) &&
+        /screenshot\.png/.test(JSON.stringify(item)),
+    ),
     false,
   );
-  const user = entries.find((e) => e.type === "user");
+  const user = items.find((item) => item.kind === "UserMessage");
   assert.match(
-    String((user!.payload as { environment?: unknown }).environment),
+    String(user!.body.environment),
     /<environment>[\s\S]*did not reach \.\/inbox\/[\s\S]*screenshot\.png[\s\S]*<\/environment>/,
   );
 
@@ -208,8 +213,8 @@ test("a failed turn still records which inbound files did not arrive", async () 
   const note = 'skipped "screenshot.png" — too many files in one message (max 10)';
   await assert.rejects(app.turn(dm("!boom", { inboundNotes: [note] })), /boom/);
   const { sessionId } = (await errors.list()).find((e) => e.category === "turn")!;
-  const user = (await sessions.getEntries(sessionId!)).find((e) => e.type === "user");
-  assert.match(String((user?.payload as { environment?: unknown } | undefined)?.environment), /screenshot\.png/);
+  const user = (await sessions.getItems(sessionId!)).find((item) => item.kind === "UserMessage");
+  assert.match(String(user?.body.environment), /screenshot\.png/);
 });
 
 test("a proactive-opener turn greets with no user text and records the seeding entry hidden", async () => {
@@ -293,9 +298,9 @@ test("a silent cron source run stays out of normal human chat history", async ()
   assert.equal((await built.deliveries.pending("principal")).length, 0, "finish_silently means no delivery");
   const source = (await built.sessions.scanAll()).find((s) => s.threadRef.startsWith(`cron:${cron.id}:fire:`));
   assert.ok(source, "cron source run is still durably recorded (in its per-fire background thread)");
-  const sourceEntries = await built.sessions.getEntries(source!.id);
+  const sourceItems = await built.sessions.getItems(source!.id);
   assert.ok(
-    sourceEntries.some((e) => e.type === "assistant"),
+    sourceItems.some((item) => item.kind === "AgentMessage" && item.variant === null),
     "source run keeps its assistant output for audit/origin",
   );
   assert.equal(
@@ -335,7 +340,9 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   const recipient = await built.sessions.getByThread("dm:D-alice");
   assert.ok(recipient, "recipient DM session exists after delivery ack");
   assert.equal(
-    (await built.sessions.getEntries(recipient!.id)).some((e) => e.type === "assistant"),
+    (await built.sessions.getItems(recipient!.id)).some(
+      (item) => item.kind === "AgentMessage" && item.variant === null,
+    ),
     false,
     "recipient transcript is not polluted with a fake assistant row",
   );
@@ -2165,10 +2172,9 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
   const { app, sessions } = freshApp();
   const entryBatches: number[] = [];
   const appendMany = sessions.appendMany.bind(sessions);
-  sessions.appendMany = async (writer, entries) => {
-    if (entries.some((entry) => (entry.payload as { overheard?: boolean })?.overheard))
-      entryBatches.push(entries.length);
-    return appendMany(writer, entries);
+  sessions.appendMany = async (writer, items) => {
+    if (items.some((item) => item.body?.overheard)) entryBatches.push(items.length);
+    return appendMany(writer, items);
   };
   const overheardEntries = (entries: { type: string; payload: unknown }[]) =>
     entries.filter((e) => e.type === "user" && (e.payload as { overheard?: boolean }).overheard === true);
@@ -2828,13 +2834,11 @@ test("a tool that declares approval runs once for the exact approved arguments",
     dm(call, { approval: { requestId: again.pendingApprovals![0]!.requestId, approved: false } }),
   );
   assert.equal(denied.status, "refused");
-  const notes = (await sessions.getEntries(denied.sessionId!)).filter(
-    (e) => e.type === "user" && (e.payload as { hidden?: boolean }).hidden,
+  const notes = (await sessions.getItems(denied.sessionId!)).filter(
+    (item) => item.kind === "UserMessage" && item.hidden,
   );
   assert.ok(
-    notes.some((e) =>
-      /denied this pending operation, so it did not run: example_send/.test((e.payload as { text: string }).text),
-    ),
+    notes.some((item) => /denied this pending operation, so it did not run: example_send/.test(item.text ?? "")),
   );
 });
 
@@ -2930,9 +2934,11 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   });
   assert.equal(approved.status, "ok");
   assert.match(approved.reply ?? "", /approved-input/);
-  const userEntries = (await risky.sessions.getEntries(approved.sessionId!)).filter((e) => e.type === "user");
+  const userItems = (await risky.sessions.getItems(approved.sessionId!)).filter((item) =>
+    USER_ITEM_KINDS.includes(item.kind),
+  );
   assert.deepEqual(
-    userEntries.map((e) => (e.payload as { text?: unknown }).text),
+    userItems.map((item) => item.text),
     [request.text],
     "the approved message is recorded once",
   );
@@ -2952,9 +2958,9 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   }
   const repeatSession = (await repeatApp.sessions.getByThread(repeated.conversation.threadRef))!;
   assert.deepEqual(
-    (await repeatApp.sessions.getEntries(repeatSession.id))
-      .filter((e) => e.type === "user")
-      .map((e) => [(e.payload as { text?: unknown }).text, (e.payload as { hidden?: unknown }).hidden === true]),
+    (await repeatApp.sessions.getItems(repeatSession.id))
+      .filter((item) => USER_ITEM_KINDS.includes(item.kind))
+      .map((item) => [item.text, item.hidden === true]),
     [
       [repeated.text, false],
       [repeated.text, false],
@@ -2973,7 +2979,7 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   assert.match(denied.reason ?? "", /approval denied/);
   assert.equal(denied.refusalKind, "approval_denied");
   assert.deepEqual(
-    (await deniedApp.sessions.getEntries(deniedPending.sessionId!)).filter((e) => e.type === "user"),
+    (await deniedApp.sessions.getItems(deniedPending.sessionId!)).filter((item) => USER_ITEM_KINDS.includes(item.kind)),
     [],
     "denied flagged input never enters the session log",
   );
@@ -3202,8 +3208,8 @@ test("a thread image is ingested into a session once; later turns that re-send i
     blobId: shot.blobId,
   });
   const attachmentsOfLastUserEntry = async (sessionId: string) => {
-    const users = (await built.sessions.getEntries(sessionId)).filter((entry) => entry.type === "user");
-    return (users.at(-1)!.payload as { attachments?: Array<{ sourceId?: string }> }).attachments;
+    const users = (await built.sessions.getItems(sessionId)).filter((item) => USER_ITEM_KINDS.includes(item.kind));
+    return users.at(-1)!.body.attachments as Array<{ sourceId?: string }> | undefined;
   };
 
   const first = await built.app.turn(dm("what is this?", { attachments: [image("F-shot", "shot.png")] }));
@@ -3540,23 +3546,19 @@ test("accepted approval decisions are durably recorded in the conversation", asy
     const first = await app.turn(dm(`!run ${command}`));
     const requestId = first.pendingApprovals![0]!.requestId;
     await app.turn(dm(`!run ${command}`, { approval: { requestId, approved } }));
-    const decisions = (await sessions.getEntries(first.sessionId!)).filter(
-      (entry) => entry.type === "approval_resolved",
-    );
+    const decisions = (await sessions.getItems(first.sessionId!)).filter((item) => item.kind === "ElicitationResponse");
     assert.equal(decisions.length, 1);
     const replay = (await runs.list()).find((run) => run.request.approval?.requestId === requestId);
     assert.ok(replay);
-    assert.deepEqual(decisions[0]!.payload, {
-      requestId,
-      command,
-      approved,
-      runId: replay.id,
-      ...(approved ? { scope: "once" } : {}),
-    });
+    const { elicitId, approved: recorded, turnId, body } = decisions[0]!;
+    assert.deepEqual(
+      { elicitId, approved: recorded, turnId, body },
+      { elicitId: requestId, approved, turnId: replay.id, body: { command, ...(approved ? { scope: "once" } : {}) } },
+    );
     const live = await app.getRun(replay.id);
     const liveDecisions = live?.activity?.filter((entry) => entry.type === "approval_resolved");
     assert.equal(liveDecisions?.length, 1);
-    assert.deepEqual(liveDecisions![0]!.payload, decisions[0]!.payload);
+    assert.deepEqual(liveDecisions![0]!.payload, entryFromItem(decisions[0]!, "personal:U1").payload);
   }
 });
 
@@ -4251,9 +4253,7 @@ test("enforced screening quarantines auto-posture tool output with once-only rel
   assert.equal(first.status, "ok");
   assert.doesNotMatch(first.reply ?? "", /SCREENING_FIXTURE_BLOCK/);
   assert.match(first.reply ?? "", /quarantined/);
-  const toolResults = (await built.sessions.getEntries(first.sessionId!)).filter(
-    (entry) => entry.type === "tool_result",
-  );
+  const toolResults = (await built.sessions.getItems(first.sessionId!)).filter((item) => item.kind === "ToolResult");
   assert.ok(toolResults.length);
   assert.doesNotMatch(JSON.stringify(toolResults), /SCREENING_FIXTURE_BLOCK/);
   const approval = first.pendingApprovals![0]!;

@@ -8,7 +8,8 @@ import pg from "pg";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { createConfiguredMemoryService } from "../../src/memory/provider-factory.ts";
-import { scopeId, type SessionEntry } from "../../src/types.ts";
+import { scopeId, type EntryType } from "../../src/types.ts";
+import { itemFromEntry, storedItem, type Item } from "../../src/sessions/items.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
 import { recallText } from "../support/recall-text.ts";
 
@@ -23,12 +24,12 @@ function skipReason(): string | false {
   return false;
 }
 
-function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
-  return { sessionId: "s-e2e", seq, parentSeq: null, type, payload, scopeLabel: "personal:U1", createdAt: seq };
+function entry(type: EntryType, payload: unknown, seq: number): Item {
+  return storedItem(itemFromEntry({ type, payload }), { sessionId: "s-e2e", seq, createdAt: seq });
 }
 
 // A coding session as QM records it: prompt, failing check, fix, passing check.
-const trace: SessionEntry[] = [
+const trace: Item[] = [
   entry("user", { text: "Fix the failing order tests in osprey" }, 1),
   entry("tool_call", { tool: "execute", callId: "a", command: "TOKEN=sk-e2e-secret-value-123456 ./test.sh" }, 2),
   entry("tool_result", { tool: "execute", callId: "a", isError: true, code: 1 }, 3),
@@ -78,7 +79,7 @@ describe(
       memory = createConfiguredMemoryService({
         defaultMemory: createPostgresMemoryService(DB!),
         config,
-        sessionEntries: async (id) => (id === "s-e2e" ? trace : []),
+        sessionItems: async (id) => (id === "s-e2e" ? trace : []),
       });
     });
 

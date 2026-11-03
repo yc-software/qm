@@ -9,6 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 async function withDefaultComputer(built: ReturnType<typeof buildApp>) {
   const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
@@ -163,9 +164,10 @@ test("skills index order ignores skill use, so the system prompt stays byte-stab
   const sessionId = first.sessionId!;
   const writer = { sessionId: sessionId };
   await built.sessions.append(writer, {
-    type: "tool_call",
-    payload: { tool: "skills", callId: "skills-1", action: "read", name: "helper-19" },
-    scopeLabel: "personal:U1",
+    kind: "ToolCall",
+    tool: "skills",
+    callId: "skills-1",
+    body: { action: "read", name: "helper-19" },
   });
   await built.app.turn(request);
   const recorded = (await built.sessions.listLlmRequests(sessionId)).filter((r) => r.model === "mock");
@@ -207,6 +209,9 @@ test("Open sharing keeps private skill metadata out of the persisted channel sho
     text: "!skill make-digest",
   });
   assert.match(read.reply ?? "", /Step 1: gather/);
-  const entries = await built.sessions.getEntries(result.sessionId!);
-  assert.doesNotMatch(JSON.stringify(entries.filter((e) => e.type === "user")), /assemble a morning digest/);
+  const items = await built.sessions.getItems(result.sessionId!);
+  assert.doesNotMatch(
+    JSON.stringify(items.filter((item) => USER_ITEM_KINDS.includes(item.kind))),
+    /assemble a morning digest/,
+  );
 });

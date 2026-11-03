@@ -8,6 +8,7 @@ import { standaloneFailureText, userFacingFailureClause } from "../core/failure-
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
+import { itemFromEntry } from "../sessions/items.ts";
 import { reportFailureAs } from "../util/errors.ts";
 
 export interface RunResultDelivery {
@@ -90,7 +91,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
   return null;
 }
 
-export type TurnFailureSessions = Pick<SessionStore, "append" | "getByThread" | "getEntries">;
+export type TurnFailureSessions = Pick<SessionStore, "append" | "getByThread" | "getItems">;
 
 const FAILURE_RECORD_SCAN_LIMIT = 200;
 const FAILURE_RECORD_WAIT_MS = 10 * 60_000;
@@ -112,14 +113,14 @@ export async function recordRunFailureEntry(
     console.error(`[delivery] session ${session.id} stayed busy — failed run ${run.id} has no turn_failure entry`);
     return false;
   }
-  const tail = await sessions.getEntries(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
+  const tail = await sessions.getItems(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
   if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return false;
   const payload: TurnFailurePayload = {
     kind: "turn_failure",
     message: `I couldn't finish that turn: ${userFacingFailureClause(run.result ?? { status: "failed" })}`,
     runId: run.id,
   };
-  await sessions.append({ sessionId: session.id }, { type: "system", payload, scopeLabel: session.scopeId });
+  await sessions.append({ sessionId: session.id }, itemFromEntry({ type: "system", payload }));
   return true;
 }
 
