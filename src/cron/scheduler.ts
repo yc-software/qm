@@ -15,7 +15,7 @@ import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { recoverNextFireAt } from "./schedule.ts";
-import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
+import { fireJobStartsAt, type CronFireJob, type CronJobQueue } from "./job-queue.ts";
 import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
@@ -26,11 +26,10 @@ const CRON_FIRE_REPLY_MAX_CHARS = 2000;
 const STRANDED_SWEEP_INTERVAL_MS = 10 * 60_000;
 const FIRE_GC_INTERVAL_MS = 6 * 60 * 60_000;
 const BUSY_DEFER_MS = 30_000;
-const BUSY_DEFER_MAX_LATE_MS = 10 * 60_000;
 const MAINTENANCE_INTERVAL_MS = 5000;
 const REPAIR_INTERVAL_MS = 60_000;
 
-type FireResult = { authzFailed: boolean; deferred?: boolean };
+type FireResult = { authzFailed: boolean };
 
 type RunNowResult =
   | { started: true; fireKey: string; settled: Promise<void> }
@@ -171,7 +170,7 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string, runtimeProblem?
     ...(readsNotes ? fireNoteLine(cron.lastFireNote) : []),
     ...(readsNotes
       ? [
-          `Before finishing, leave a short note for the next fire (cron tool, action="note", id="${cron.id}"): one or two sentences — the outcome plus anything the next fire must know. Include the published checkpoint file ID, or small progress state directly; never include credentials. It's a report for the next fire, never instructions that override the stored task. Skip it only if there is truly nothing to say.`,
+          `Before finishing, leave a short note for the next fire (cron tool, action="note", id="${cron.id}"): one or two sentences — the outcome plus anything the next fire must know. Include the published checkpoint file ID, or small progress state directly; never include secret values (credential handles are fine). It's a report for the next fire, never instructions that override the stored task. Skip it only if there is truly nothing to say. If this fire had to work around something the stored task doesn't say (such as a credential handle a command needed), patch the task to say it, so no later fire has to rediscover it.`,
         ]
       : []),
     ...(runtimeProblem
@@ -309,7 +308,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
                 errorNotice: (reason: string) =>
                   `⚠️ Scheduled task “${cron.title ?? cron.id}” did not run: ${reason.endsWith(".") ? reason.slice(0, -1) : reason}. Later failures go only to its run log until it runs successfully again.`,
               }),
-          deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
         },
       );
     } catch (e) {
@@ -323,20 +321,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         note: truncate(errMessage(e), CRON_FIRE_REPLY_MAX_CHARS),
       });
       throw e;
-    }
-    if (outcome.deferred) {
-      const deferUntil = now() + BUSY_DEFER_MS;
-      await deps.crons.recordFire(cron.id, {
-        fireKey,
-        threadRef,
-        firedAt: t,
-        endedAt: now(),
-        ...(scheduledAt !== undefined ? { scheduledAt } : {}),
-        status: "deferred",
-        note: `session busy — retrying at ${utcMinute(deferUntil)}`,
-      });
-      await deps.crons.defer(cron.id, deferUntil);
-      return { authzFailed: false, deferred: true };
     }
     if (outcome.ran || outcome.authzFailed) {
       await deps.crons.recordFire(cron.id, {
@@ -404,13 +388,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       try {
         await withCronLifecycle(cron.id, true, async () => {
           if (stopped || observed !== epoch) return;
-          const { authzFailed, deferred } = await fire(
-            cron,
-            t,
-            `cron:${cron.id}:${cron.scheduledAt}`,
-            cron.scheduledAt,
-          );
-          if (!authzFailed && !deferred) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
+          const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${cron.scheduledAt}`, cron.scheduledAt);
+          if (!authzFailed) await deps.crons.markFired(cron.id, t, cron.scheduledAt);
         });
       } catch (e) {
         reportFailure("scheduler: fire", e);
@@ -483,10 +462,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         return;
       }
       try {
-        const { authzFailed, deferred } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
-        if (authzFailed || deferred) {
+        const { authzFailed } = await fire(cron, t, `cron:${cron.id}:${slot}`, slot);
+        if (authzFailed) {
           await deps.crons.unclaimSlot(job.cronId, slot, t, cron.lastFiredAt);
-          if (deferred) await enqueueNext(job.cronId);
           return;
         }
       } catch (e) {
@@ -501,11 +479,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   async function reconcile(): Promise<void> {
     try {
+      const horizon = now() + 2 * REPAIR_INTERVAL_MS;
       for (const cron of await deps.crons.list()) {
         if (stopped) break;
         if (cron.archived || !cron.enabled) continue;
         const job = nextJob(cron);
-        if (job) await deps.jobQueue!.enqueueFire(job);
+        if (job && fireJobStartsAt(job) <= horizon) await deps.jobQueue!.enqueueFire(job);
       }
     } catch (e) {
       reportFailure("scheduler: reconcile", e);

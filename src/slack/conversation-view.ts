@@ -15,7 +15,7 @@ import {
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { SlackConversationKind } from "./messaging.ts";
 import { type SlackHistoryMessage } from "./payloads.ts";
-import { messageWithForwardedContent } from "./forwards.ts";
+import { slackMessageContent } from "./message-content.ts";
 
 export const RECENT_HISTORY_LIMIT = 200;
 export const RECENT_THREAD_LIMIT = 200;
@@ -136,7 +136,7 @@ export function createConversationSerializer(deps: {
     const botNameById = new Map<string, string>();
     await resolveMissingAuthorNames(client, kept, nameById, botNameById);
     return kept.map((m) => {
-      const content = messageWithForwardedContent(m);
+      const content = slackMessageContent(m);
       return {
         ts: m.ts,
         name: messageAuthorName(m, nameById, botNameById),

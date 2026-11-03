@@ -84,23 +84,6 @@ test("a titled entry-less session stays listed", async () => {
   );
 });
 
-test("a turn refused with 'session busy' does not surface a stranded shell", async () => {
-  const { app, sessions } = freshApp();
-
-  const thread = "web:U1:busy-race";
-  const shell = await sessions.getOrCreateByThread(thread, "dm", "personal:U1");
-  const { lease: held } = await sessions.acquireLease(shell.id);
-  assert.ok(held);
-
-  const outcome = await app.turn(dm("hello again", thread));
-  assert.equal(outcome.status, "refused");
-  assert.equal((outcome as { refusalKind?: string }).refusalKind, "session_busy");
-
-  const raw = await sessions.listByParticipant("U1");
-  assert.equal(raw.find((s) => s.id === shell.id)?.hasEntries, false, "the shell exists, participant attached");
-  assert.ok(!(await app.listSessions("U1")).find((s) => s.id === shell.id), "but it is not listed");
-});
-
 test("context cards do not count hidden shells or treat them as shared-scope authority", async () => {
   const { app, sessions } = freshApp();
 

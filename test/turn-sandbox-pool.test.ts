@@ -135,9 +135,8 @@ test("each computer a turn touched is released exactly once, the default box wit
   const scoped = await f.turn.provision();
   await f.turn.provisionResource(scoped.id);
   await f.turn.provisionResource("other");
-  await f.turn.provisionForReach("channel:C1");
   await f.turn.reclaimBox();
-  assert.deepEqual(f.teardowns.map(([id]) => id).sort(), [scoped.id, "channel:C1", "other"].sort());
+  assert.deepEqual(f.teardowns.map(([id]) => id).sort(), [scoped.id, "other"].sort());
   assert.ok(f.teardowns.every(([, opts]) => !opts.keepWarm && !opts.homeUnchanged));
   assert.deepEqual(f.clearedTurnFiles().sort(), [scoped.id, "other"].sort());
   assert.equal(f.liveLookups(), 1);
@@ -161,7 +160,6 @@ test("an eagerly warmed default box the turn opened by its id is released as use
 const kinds = {
   scoped: { id: "box-1", open: (f: ReturnType<typeof fixture>) => f.turn.provision() },
   resource: { id: "job-box", open: (f: ReturnType<typeof fixture>) => f.turn.provisionResource("job-box") },
-  reach: { id: "channel:C1", open: (f: ReturnType<typeof fixture>) => f.turn.provisionForReach("channel:C1") },
 };
 
 for (const [kind, { id, open }] of Object.entries(kinds)) {
@@ -191,7 +189,7 @@ for (const [kind, { id, open }] of Object.entries(kinds)) {
 
 test("concurrent opens of one computer share a single provision", async () => {
   const f = fixture();
-  const [a, b] = await Promise.all([f.turn.provisionForReach("channel:C1"), f.turn.provisionForReach("channel:C1")]);
+  const [a, b] = await Promise.all([f.turn.provisionResource("other"), f.turn.provisionResource("other")]);
   const [c, d] = await Promise.all([f.turn.provision(), f.turn.provision()]);
   assert.equal(a, b);
   assert.equal(c, d);
@@ -246,12 +244,12 @@ test("a computer opened while reclaim waits on another is released too", async (
   f.gates.push(first.promise, second.promise);
   const opening = f.turn.provisionResource(await f.turn.accessResource("job-box"));
   const reclaim = f.turn.reclaimBox();
-  const late = f.turn.provisionForReach("channel:C1");
+  const late = f.turn.provisionResource("other");
   first.resolve();
   await opening;
   second.resolve();
   await Promise.all([late, reclaim]);
-  assert.deepEqual(Object.keys(f.released()).sort(), ["channel:C1", "job-box"]);
+  assert.deepEqual(Object.keys(f.released()).sort(), ["job-box", "other"]);
 });
 
 test("a computer opened while reclaim is tearing down another is released too", async () => {
@@ -261,10 +259,10 @@ test("a computer opened while reclaim is tearing down another is released too", 
   await f.turn.provisionResource("job-box");
   const reclaim = f.turn.reclaimBox();
   while (!f.teardowns.length) await new Promise((resolve) => setImmediate(resolve));
-  await f.turn.provisionForReach("channel:C1");
+  await f.turn.provisionResource("other");
   tearing.resolve();
   await reclaim;
-  assert.deepEqual(Object.keys(f.released()).sort(), ["channel:C1", "job-box"]);
+  assert.deepEqual(Object.keys(f.released()).sort(), ["job-box", "other"]);
 });
 
 test("another scope's computer is released without touching this turn's files", async () => {

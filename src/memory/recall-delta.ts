@@ -1,5 +1,5 @@
 import { retainedSnapshot } from "../agent/context-snapshot.ts";
-import type { SessionEntry } from "../types.ts";
+import type { Item } from "../sessions/items.ts";
 import { recallLabel, renderRecall, type RecalledFact } from "./cross-scope.ts";
 import { factHash, renderFacts, type MemoryFact } from "./facts.ts";
 import type { MemoryProviderOutcome } from "./memory-service.ts";
@@ -35,13 +35,13 @@ const sourceOf = ({ scope, provider }: Shown) => JSON.stringify([scope, provider
 
 export function memoryRecallDelta(
   recalled: readonly RecalledFact[],
-  history: readonly SessionEntry[],
+  history: readonly Item[],
   held: ReadonlyMap<string, ReadonlyMap<string, MemoryFact>>,
   labels: ReadonlyMap<string, string> = new Map(),
   outcomes: readonly MemoryProviderOutcome[] = [],
 ): { text: string; record: RecallRecord } {
-  const { previous, anchorSeq } = retainedSnapshot(history, (entry) => {
-    const record = (entry.payload as { memoryRecall?: RecallRecord } | null)?.memoryRecall;
+  const { previous, anchorSeq } = retainedSnapshot(history, (item) => {
+    const record = item.body.memoryRecall as RecallRecord | undefined;
     return record?.shown ? record : undefined;
   });
   const current = recalled.map(shownOf);

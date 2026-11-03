@@ -118,7 +118,7 @@ test("explicit read tools notify only for human Slack turns, using their origina
           },
         },
       },
-      input: { surface: "slack", surfaceTools: true, origin: { kind }, background: true },
+      input: { surface: "slack", surfaceTools: true, origin: { kind } },
       actor: { id: "reader@example.com" },
       conversation: { kind: "channel" },
       defaultDestination: { type: "slack", target: "C1:1700.1" },

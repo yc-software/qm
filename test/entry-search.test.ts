@@ -1,8 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  entrySearchAuthor,
-  entrySearchText,
+  itemSearchAuthor,
   matchesSearchTerms,
   searchSnippet,
   searchTerms,
@@ -34,17 +33,11 @@ test("matchesSearchTerms mirrors prefix semantics", () => {
   assert.ok(!matchesSearchTerms("the deployment", ["de"]), "short terms do not prefix-match");
 });
 
-test("entrySearchText reads string payloads and payload.text", () => {
-  assert.equal(entrySearchText("plain"), "plain");
-  assert.equal(entrySearchText({ text: "hello" }), "hello");
-  assert.equal(entrySearchText({ other: 1 }), null);
-  assert.equal(entrySearchText(null), null);
-});
-
-test("entrySearchAuthor only reads user entries", () => {
-  assert.equal(entrySearchAuthor({ type: "user", payload: { name: "josh" } }), "josh");
-  assert.equal(entrySearchAuthor({ type: "assistant", payload: { name: "x" } }), undefined);
-  assert.equal(entrySearchAuthor({ type: "user", payload: {} }), undefined);
+test("itemSearchAuthor only reads user items", () => {
+  assert.equal(itemSearchAuthor({ kind: "UserMessage", body: { name: "josh" } }), "josh");
+  assert.equal(itemSearchAuthor({ kind: "SteeringMessage", body: { name: "josh" } }), "josh");
+  assert.equal(itemSearchAuthor({ kind: "AgentMessage", body: { name: "x" } }), undefined);
+  assert.equal(itemSearchAuthor({ kind: "UserMessage", body: {} }), undefined);
 });
 
 test("searchSnippet clips long text around the first match", () => {

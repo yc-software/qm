@@ -14,6 +14,7 @@ import { createServer, METHODS, type IncomingMessage, type ServerResponse } from
 import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
+import { createCanonicalResolver } from "./canonical.ts";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import { answerPreflight, parseAllowedOrigins, prepareCors } from "./cors.ts";
 import {
@@ -307,32 +308,21 @@ async function isAdmin(sub: string): Promise<boolean> {
   return false;
 }
 
-const CANONICAL_TTL_MS = 60_000;
 const CANONICAL_TIMEOUT_MS = 4_000;
-const canonicalCache = new LRUCache<string, string>({ max: 10_000, ttl: CANONICAL_TTL_MS });
 
-async function canonicalPrincipal(sub: string): Promise<string | null> {
-  const hit = canonicalCache.get(sub);
-  if (hit !== undefined) return hit;
+const canonicalPrincipal = createCanonicalResolver(async (sub) => {
   const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
-  try {
-    const r = await fetch(`${CORE}${path}`, {
-      headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-      signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
-    });
-    if (!r.ok) {
-      console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
-      return null;
-    }
-    const body = (await r.json()) as { canonicalId?: unknown };
-    const canonical = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
-    canonicalCache.set(sub, canonical);
-    return canonical;
-  } catch (error) {
-    console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
+  const r = await fetch(`${CORE}${path}`, {
+    headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+    signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
+  });
+  if (!r.ok) {
+    console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
     return null;
   }
-}
+  const body = (await r.json()) as { canonicalId?: unknown };
+  return typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
+});
 
 function identityUnavailable(req: IncomingMessage, res: ServerResponse): void {
   if (wantsHtml(req))
@@ -1080,19 +1070,21 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   let session = renewSessionCookie(req, res) ?? currentSession(req);
   const authenticatedPrincipal = session?.sub;
+  let staleSession: SessionClaims | null = null;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
     const canonical = await canonicalPrincipal(session.sub);
-    if (canonical === null) return identityUnavailable(req, res);
-    session = { ...session, sub: canonical };
+    if (!canonical) return identityUnavailable(req, res);
+    if (canonical.stale) staleSession = { ...session, sub: canonical.id };
+    session = canonical.stale ? null : { ...session, sub: canonical.id };
   }
 
   if (pathname === "/auth/impersonate" && method === "POST") {
-    if (!session) return json(res, 401, { error: "sign in" });
+    if (!session) return staleSession ? identityUnavailable(req, res) : json(res, 401, { error: "sign in" });
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
     if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
-    if (target === session.sub || (await canonicalPrincipal(target)) === session.sub)
+    if (target === session.sub || (await canonicalPrincipal(target))?.id === session.sub)
       return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
     const result = await coreImpersonate("start", session.sub, target);
     if (!result.ok) {
@@ -1125,7 +1117,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
     const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
     setSession(res, [clearCookie("portal_impersonate", "/", SECURE_COOKIES)]);
-    if (session && imp && imp.actor === session.sub) await coreImpersonate("stop", session.sub, imp.target);
+    const actor = session ?? staleSession;
+    if (actor && imp && imp.actor === actor.sub) await coreImpersonate("stop", actor.sub, imp.target);
     if (wantsHtml(req)) {
       res.writeHead(303, { location: "/", "cache-control": "no-store" });
       return void res.end();
@@ -1164,6 +1157,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   const consentBounce = (): void => {
+    if (staleSession) return identityUnavailable(req, res);
     res.writeHead(302, { location: `/auth/login?returnTo=${encodeURIComponent(`${pathname}${url.search}`)}` });
     return void res.end();
   };
@@ -1199,6 +1193,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
   const dropSubmit = /^\/drop\/([^/]+)$/.exec(pathname);
   if (method === "POST" && dropSubmit) {
+    if (staleSession) return identityUnavailable(req, res);
     if (!session)
       return json(res, 401, {
         error: "sign in",
@@ -1259,7 +1254,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ]);
   }
 
+  if (!isDeployment) session ??= staleSession;
   if (!session) {
+    if (staleSession) return identityUnavailable(req, res);
     if (method === "GET" && wantsHtml(req)) {
       if (PLAYGROUND) {
         session = await mintPlaygroundSession(req, res);

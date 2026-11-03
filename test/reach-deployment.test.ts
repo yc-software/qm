@@ -253,6 +253,54 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
   }
 });
 
+test("HTTP: /v1/deployments/:id shows a deployment only to principals who can see it", async () => {
+  const { app, acl, directory } = appWithFakeRuntime();
+  const shared = await app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    name: "shared-app",
+    entrypoint: "x",
+    files: [],
+  });
+  const hidden = await app.deploy({
+    ownerScopeId: scopeId("personal", "U3"),
+    createdBy: "U3",
+    name: "hidden-app",
+    entrypoint: "x",
+    files: [],
+  });
+  await acl.grant({
+    ownerScopeId: scopeId("personal", "U1"),
+    ref: `deployment:${shared.id}`,
+    granteeScopeId: scopeId("channel", "C1"),
+    permission: "read",
+    grantedBy: "U1",
+  });
+  await directory.replaceChannels(
+    [{ channelId: "C1", name: "eng", isPrivate: true }],
+    [{ channelId: "C1", principalId: "U2" }],
+  );
+  const server = createInsecureTestServer(app);
+  server.listen(0);
+  try {
+    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    const view = async (ref: string, principal?: string) => {
+      const r = await fetch(`${base}/v1/deployments/${ref}${principal ? `?principalId=${principal}` : ""}`);
+      const body = (await r.json()) as { deployment?: { id: string; permission?: string } };
+      return [r.status, body.deployment?.id, body.deployment?.permission];
+    };
+    assert.deepEqual(await view(shared.id, "U2"), [200, shared.id, "read"]);
+    assert.deepEqual(await view("shared-app", "U2"), [200, shared.id, "read"]);
+    assert.deepEqual(await view(shared.id, "U1"), [200, shared.id, "write"]);
+    assert.deepEqual(await view(hidden.id, "U2"), [404, undefined, undefined]);
+    assert.deepEqual(await view("hidden-app", "U2"), [404, undefined, undefined]);
+    assert.deepEqual(await view(hidden.id), [200, hidden.id, undefined]);
+    assert.deepEqual(await view("missing-app", "U2"), [404, undefined, undefined]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ingress is configured", async () => {
   const { app, acl, directory } = appWithFakeRuntime();
   const shared = await app.deploy({

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { isUserItem } from "../src/sessions/items.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -16,19 +17,15 @@ mock.module("./support/mock-agent.ts", {
       const run = agent.runTurn;
       agent.runTurn = async (turn: AgentTurnInput) => {
         if (turn.input.startsWith("The human released quarantined")) {
-          const held = turn.history.findLast(
-            (entry) =>
-              entry.type === "user" &&
-              (entry.payload as { securityReleaseRequestId?: string }).securityReleaseRequestId,
-          );
-          observedRelease = String((held?.payload as { text?: string } | undefined)?.text ?? "Missing released output");
+          const held = turn.history.findLast((item) => isUserItem(item) && item.body.securityReleaseRequestId);
+          observedRelease = held?.text ?? "Missing released output";
           const reply = "Released fixture output.";
-          await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-          await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+          await turn.emit({ kind: "UserMessage", text: turn.input });
+          await turn.emit({ kind: "AgentMessage", text: reply });
           return { reply };
         }
         if (!turn.input.startsWith("run fixture")) return run(turn);
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "UserMessage", text: turn.input });
         const ref: ToolContextRef = {
           current: {
             ...turn.tools,
@@ -40,7 +37,7 @@ mock.module("./support/mock-agent.ts", {
               return { stdout: "SCREENING_FIXTURE_BLOCK", stderr: "", code: 0, timedOut: false };
             },
           },
-          emit: turn.emit,
+          emit: (item) => turn.emit(item),
           scopeLabel: turn.scopeLabel,
           orgScopeId: turn.orgScopeId,
           toolApprovalGate: turn.toolApprovalGate,
@@ -60,7 +57,7 @@ mock.module("./support/mock-agent.ts", {
             : { command: "printf SCREENING_FIXTURE_BLOCK", purpose: "Check output screening" },
         );
         const reply = result.content.map((part) => part.text ?? "").join("\n");
-        await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "AgentMessage", text: reply });
         return { reply, pendingApprovals: ref.pendingApprovals, pausedOnApproval: ref.pausedOnApproval };
       };
       return agent;
@@ -100,10 +97,8 @@ for (const securityPosture of ["auto", "strict"] as const) {
     const release = blocked.pendingApprovals![0]!;
     assert.equal(release.approvalKey, "security-screen-release:execute");
     assert.deepEqual(release.grantModes, { session: false, always: false });
-    const results = (await built.sessions.getEntries(blocked.sessionId!)).filter(
-      (entry) => entry.type === "tool_result",
-    );
-    assert.ok(results.some((entry) => (entry.payload as { quarantined?: boolean }).quarantined));
+    const results = (await built.sessions.getItems(blocked.sessionId!)).filter((item) => item.kind === "ToolResult");
+    assert.ok(results.some((item) => item.body.quarantined));
     assert.doesNotMatch(JSON.stringify(results), /SCREENING_FIXTURE_BLOCK/);
     for (const scope of ["session", "always"] as const) {
       const broad = await built.app.turn({ ...req, approval: { requestId: release.requestId, approved: true, scope } });

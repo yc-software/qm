@@ -142,20 +142,20 @@ test("spine ON: a mid-turn message STEERS the live run instead of forking a seco
   assert.equal(runs.filter((r) => r.sessionId === `ch:${channel}:${root}`).length, 1, "no second run was enqueued");
 });
 
-test("spine ON: an empty mid-turn message DROPS (attaches to the live run) — no second turn, no signal", async () => {
+test("spine ON: an empty mid-turn message is refused out loud — no second turn, no signal", async () => {
   const built = freshApp();
   const channel = "C5";
   const root = "500.5";
   const first = await built.app.turn(mention("@bot go", channel, root));
   const liveRunId = first.runId!;
   const empty = await built.app.turn(mention("   ", channel, root));
-  assert.equal(empty.runId, liveRunId, "the empty message attached to the live run, not a new turn");
-  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "a drop sends no signal");
+  assert.deepEqual(empty, { status: "refused", reason: "empty message" });
+  assert.equal((await built.signals.takePending(liveRunId)).length, 0, "an empty message sends no signal");
   const runs = await built.runs.list();
   assert.equal(
     runs.filter((r) => r.sessionId === `ch:${channel}:${root}`).length,
     1,
-    "no second run enqueued on a drop",
+    "no second run enqueued for an empty message",
   );
 });
 

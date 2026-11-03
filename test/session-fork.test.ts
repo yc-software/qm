@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { SideChatAnchorError } from "../src/api/app-types.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { isUserItem, type Item } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -41,19 +42,27 @@ test("forking copies the transcript into a fresh independent web session", async
   assert.notEqual(fork.session.threadRef, source.session.threadRef);
   assert.equal(fork.session.scopeId, source.session.scopeId);
   const stored = await Promise.all(
-    source.entries.map(async (e) => (await app.getSessionEntryForViewer(sid, "U1", e.seq))!.entry),
+    source.items.map(async (e) => (await app.getSessionItemForViewer(sid, "U1", e.seq))!.item),
   );
+  const columns = ({ sessionId: _sessionId, createdAt: _createdAt, ...item }: Item) => item;
   assert.deepEqual(
-    fork.entries.map((e) => [e.type, e.payload]),
-    stored.map((e) => [e.type, e.payload]),
-    "the fork copies whole stored entries, model context included, not the trimmed view",
+    fork.items.map(columns),
+    stored.map(columns),
+    "the fork copies whole stored items, model context included, not the trimmed view",
   );
   assert.deepEqual(fork.session.forkedFrom, { sessionId: sid, title: source.session.title ?? null });
-  assert.equal(fork.session.forkBoundarySeq, fork.entries.at(-1)?.seq);
+  assert.equal(fork.session.forkBoundarySeq, fork.items.at(-1)?.seq);
 
   const mine = await app.listSessions("U1");
   assert.ok(mine.some((s) => s.id === fork.session.id));
-  assert.deepEqual(await sessions.getEntries(fork.session.id), fork.entries);
+  const forkItems = await sessions.getItems(fork.session.id);
+  assert.deepEqual(forkItems, fork.items);
+  const sourceItems = await sessions.getItems(sid);
+  assert.deepEqual(forkItems.map(columns), sourceItems.map(columns), "the fork copies every stored column");
+  assert.ok(
+    forkItems.some((item) => item.kind === "UserMessage" && item.author === "U1"),
+    "the fork keeps message authors",
+  );
 });
 
 test("upToSeq truncates the copy at the cut point", async () => {
@@ -61,29 +70,26 @@ test("upToSeq truncates the copy at the cut point", async () => {
   await app.turn(dm("Keep this turn", "web:U1:f2"));
   const r2 = await app.turn(dm("Drop this turn", "web:U1:f2"));
   const sid = r2.sessionId!;
-  const entries = (await app.getSession(sid))!.entries;
-  const secondUser = entries.filter((e) => e.type === "user")[1]!;
+  const secondUser = (await app.getSession(sid))!.items.filter(isUserItem)[1]!;
 
   const fork = await app.forkSession(sid, "U1", { upToSeq: secondUser.seq - 1 });
   assert.ok(fork);
-  assert.ok(fork.entries.length > 0, "the first turn is kept");
-  const copiedTexts = fork.entries
-    .filter((e) => e.type === "user")
-    .map((e) => (e.payload as { text?: string }).text ?? "");
+  assert.ok(fork.items.length > 0, "the first turn is kept");
+  const copiedTexts = fork.items.filter(isUserItem).map((e) => e.text ?? "");
   assert.ok(copiedTexts.some((t) => t.includes("Keep this turn")));
   assert.ok(!copiedTexts.some((t) => t.includes("Drop this turn")));
-  assert.equal(fork.session.forkBoundarySeq, fork.entries.at(-1)?.seq);
+  assert.equal(fork.session.forkBoundarySeq, fork.items.at(-1)?.seq);
 });
 
 test("a single-entry fork (boundary seq 0) still records provenance", async () => {
   const { app } = freshApp();
   const r = await app.turn(dm("Only the opening message survives the cut", "web:U1:seq0"));
   const sid = r.sessionId!;
-  const first = (await app.getSession(sid))!.entries[0]!;
+  const first = (await app.getSession(sid))!.items[0]!;
   const fork = await app.forkSession(sid, "U1", { upToSeq: first.seq });
   assert.ok(fork);
-  assert.equal(fork.entries.length, 1);
-  assert.equal(fork.entries[0]!.seq, 0, "entry seqs are 0-based");
+  assert.equal(fork.items.length, 1);
+  assert.equal(fork.items[0]!.seq, 0, "entry seqs are 0-based");
   assert.deepEqual(fork.session.forkedFrom, {
     sessionId: sid,
     title: (await app.getSession(sid))!.session.title ?? null,
@@ -96,7 +102,7 @@ test("an empty fork has no provenance", async () => {
   const r = await app.turn(dm("Nothing before zero", "web:U1:empty"));
   const fork = await app.forkSession(r.sessionId!, "U1", { upToSeq: -1 });
   assert.ok(fork);
-  assert.equal(fork.entries.length, 0);
+  assert.equal(fork.items.length, 0);
   assert.equal(fork.session.forkedFrom, undefined);
   assert.equal(fork.session.forkBoundarySeq, undefined);
 });
@@ -108,9 +114,9 @@ test("the fork inherits a marked title and the original keeps its own history", 
   await app.updateSession(sid, "U1", { title: "Migration plan" });
 
   const fork = (await app.forkSession(sid, "U1"))!;
-  const before = (await app.getSession(sid))!.entries.length;
+  const before = (await app.getSession(sid))!.items.length;
   await app.turn(dm("A follow-up only in the fork", fork.session.threadRef));
-  assert.equal((await app.getSession(sid))!.entries.length, before, "turns on the fork do not touch the source");
+  assert.equal((await app.getSession(sid))!.items.length, before, "turns on the fork do not touch the source");
   const forkTitle = (await app.getSession(fork.session.id))!.session.title;
   assert.equal(forkTitle, "Chat: Plan the database migration (fork)");
 });
@@ -126,9 +132,9 @@ test("side chats preserve their anchor, stay out of session pages, and expand in
   const { app, sessions } = freshApp();
   const result = await app.turn(dm("Explain shared queues", "web:U1:side-chat"));
   const source = (await app.getSession(result.sessionId!))!;
-  const entry = source.entries[0]!;
+  const entry = source.items[0]!;
   const fork = await app.forkSession(source.session.id, "U1", {
-    upToSeq: source.entries.at(-1)!.seq,
+    upToSeq: source.items.at(-1)!.seq,
     sideChat: { entrySeq: entry.seq, quote: "shared queues", occurrence: 0 },
   });
   assert.ok(fork);
@@ -145,11 +151,11 @@ test("side chats preserve their anchor, stay out of session pages, and expand in
   assert.equal(await app.expandSideChat("stranger", fork.session.id), null);
   const page = await app.listSessionPage("U1", { limit: 50 });
   assert.ok(!page.sessions.some((session) => session.id === fork.session.id));
-  const before = await sessions.getEntries(fork.session.id);
+  const before = await sessions.getItems(fork.session.id);
   const expanded = await app.expandSideChat("U1", fork.session.id);
   assert.equal(expanded?.id, fork.session.id);
   assert.equal(expanded?.sideChat?.expanded, true);
-  assert.deepEqual(await sessions.getEntries(fork.session.id), before);
+  assert.deepEqual(await sessions.getItems(fork.session.id), before);
   assert.ok(
     (await app.listSessionPage("U1", { limit: 50 })).sessions.some((session) => session.id === fork.session.id),
   );
@@ -160,7 +166,7 @@ test("side chats reject missing anchors and anchors beyond the fork boundary", a
   const { app } = freshApp();
   const result = await app.turn(dm("Explain shared queues", "web:U1:bad-side-chat"));
   const source = (await app.getSession(result.sessionId!))!;
-  const last = source.entries.at(-1)!.seq;
+  const last = source.items.at(-1)!.seq;
   for (const occurrence of [undefined, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
     await assert.rejects(
       app.forkSession(source.session.id, "U1", {

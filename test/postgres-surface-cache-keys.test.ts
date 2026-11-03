@@ -28,8 +28,8 @@ async function downgradeToLegacySchema(url: string): Promise<void> {
       await pool.query(`ALTER TABLE ${table} DROP COLUMN surface, DROP COLUMN account`);
     }
     await pool.query("DELETE FROM qm_schema_migrations WHERE id IN ($1, $2)", [
-      "surface-cache/store/0007",
       "surface-cache/store/0008",
+      "surface-cache/store/0009",
     ]);
   } finally {
     await pool.end();
