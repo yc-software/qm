@@ -8278,6 +8278,12 @@ h3.ambient-field-label {
   border-radius: 16px;
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.03);
 }
+@container chat (min-width: 861px) {
+  .split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap {
+    width: var(--content-w);
+    margin-inline: auto;
+  }
+}
 
 [data-density] .composer-toolbar .icon-btn,
 [data-density] .composer-toolbar .menu-button,
