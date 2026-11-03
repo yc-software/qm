@@ -139,10 +139,8 @@ export function workspaceTools(kit: ToolKit) {
     }
     const skill = isObj(response.body) && isObj(response.body.skill) ? response.body.skill : undefined;
     if (response.status >= 400 || !skill) {
-      const message =
-        isObj(response.body) && typeof response.body.message === "string"
-          ? response.body.message
-          : (typeof response.body === "string" ? response.body : JSON.stringify(response.body)).slice(0, 500);
+      const raw = typeof response.body === "string" ? response.body : JSON.stringify(response.body);
+      const message = isObj(response.body) && typeof response.body.message === "string" ? response.body.message : raw;
       const where = `HTTP ${response.status}${response.requestId ? `, request ${response.requestId}` : ""}`;
       return recordResult(
         callId,
