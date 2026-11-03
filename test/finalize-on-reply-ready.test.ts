@@ -136,19 +136,15 @@ function buildOrchestrator(
   return { orch, sessions };
 }
 
-test("detached tail: the run finishes as soon as the reply is ready; backup/teardown run detached + the lease is freed early", async () => {
+test("detached tail: the run finishes as soon as the reply is ready; backup/teardown run detached", async () => {
   const g = gatedSandbox();
-  const { orch, sessions } = buildOrchestrator(g.sandbox);
+  const { orch } = buildOrchestrator(g.sandbox);
 
   const result = await orch.handleTurn({ ...dm("dm:U1:t1", "!run echo hi"), runId: "r1" });
   assert.equal(result.status, "ok");
   assert.equal(g.provisioned, 1, "the turn provisioned a box");
 
   assert.equal(g.teardownFinished, 0, "the VM was NOT torn down before the reply returned");
-
-  const { lease: lease2 } = await sessions.acquireLease(result.sessionId!);
-  assert.ok(lease2, "the session lease is free right after the reply (fast follow-up not blocked)");
-  await sessions.releaseLease(lease2!);
 
   for (let i = 0; i < 2000 && g.teardownStarted === 0; i++) await tick();
   assert.equal(g.teardownStarted, 1, "the detached tail reached teardown");
@@ -227,7 +223,7 @@ test("detached tail: a turn that never used its eagerly provisioned box returns 
 
 test("detached tail: a turn paused on approval returns its card before the eagerly provisioned box is torn down", async () => {
   const g = gatedSandbox();
-  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockAgent());
+  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockAgent());
 
   const first = await orch.handleTurn({ ...dm("dm:U1:t7", "!run echo hi"), runId: "r7" });
   assert.equal(first.status, "ok");
@@ -243,10 +239,6 @@ test("detached tail: a turn paused on approval returns its card before the eager
   assert.equal(g.provisioned, 2, "the box was provisioned eagerly for the paused turn");
   assert.equal(g.teardownFinished, 1, "the approval card returned without waiting for that box's teardown");
 
-  const { lease } = await sessions.acquireLease(paused.sessionId!);
-  assert.ok(lease, "the resumed turn can claim the session while the box is still being reclaimed");
-  await sessions.releaseLease(lease!);
-
   for (let i = 0; i < 200 && g.teardownStarted < 2; i++) await tick();
   assert.equal(g.teardownStarted, 2, "the detached tail still reclaims the box");
   g.release();
@@ -254,7 +246,7 @@ test("detached tail: a turn paused on approval returns its card before the eager
   assert.equal(g.teardownFinished, 2);
 });
 
-test("detached tail: the message edit catch-up still runs before the lease is released", async () => {
+test("detached tail: the message edit catch-up still runs before the turn returns", async () => {
   const g = gatedSandbox();
   let asked = 0;
   const surfaceCache = new Proxy({} as Record<string, unknown>, {

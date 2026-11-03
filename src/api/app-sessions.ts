@@ -10,7 +10,7 @@ import type { PendingApprovalRecord, Session } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
-import { acquireLeaseWithin, entryWithinTenure, windowedTranscript } from "../sessions/session-store.ts";
+import { entryWithinTenure, windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { cancelGoal, goalCancelledPayload, openGoal } from "../agent/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
@@ -22,6 +22,7 @@ import { cronRef, deployRef, encodeRef, fileRef, parseRef, skillRef } from "../a
 import { samePerson } from "../directory/person.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import { swallowAs } from "../util/errors.ts";
+import { waitForNoRunningRun } from "../runs/run-store.ts";
 import { type ArtifactHome } from "./artifact-share.ts";
 import { randomUUID } from "node:crypto";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
@@ -61,7 +62,7 @@ function coversTailWindow(entries: readonly { type: string }[], tailTurns: numbe
   return entries.filter((e) => e.type === "user").length >= tailTurns;
 }
 
-const GOAL_CANCEL_LEASE_WAIT_MS = 30_000;
+const GOAL_CANCEL_WAIT_MS = 30_000;
 
 const MAX_LISTED_CHILDREN = 500;
 
@@ -1039,26 +1040,19 @@ export function createSessionMethods(
       const currentGoal = async () => openGoal((await deps.sessions.goals([session.id])).get(session.id));
       const before = await currentGoal();
       if (!before) return { cancelled: false as const, reason: "no_open_goal" as const };
-      let { lease } = await deps.sessions.acquireLease(session.id, "backfill");
-      if (!lease) {
-        if (before.status === "active")
-          for (const run of await deps.runs.inFlightForThread(session.threadRef))
-            if (run.status === "running")
-              await deps.signals?.send(run.id, { kind: "abort", reason: "because its goal was cancelled" });
-        ({ lease } = await acquireLeaseWithin(deps.sessions, session.id, "backfill", GOAL_CANCEL_LEASE_WAIT_MS));
-      }
-      if (!lease) return { cancelled: false as const, reason: "busy" as const };
-      try {
-        const goal = await currentGoal();
-        if (!goal) return { cancelled: false as const, reason: "no_open_goal" as const };
-        cancelGoal(goal, "Cancelled from the goal bar.");
-        await deps.sessions.setGoal(lease, goal, [
-          { type: "system", payload: goalCancelledPayload(goal, principalId), scopeLabel: session.scopeId },
-        ]);
-        return { cancelled: true as const };
-      } finally {
-        await deps.sessions.releaseLease(lease);
-      }
+      if (before.status === "active")
+        for (const run of await deps.runs.inFlightForThread(session.threadRef))
+          if (run.status === "running")
+            await deps.signals?.send(run.id, { kind: "abort", reason: "because its goal was cancelled" });
+      if (!(await waitForNoRunningRun(deps.runs, session.threadRef, GOAL_CANCEL_WAIT_MS)))
+        return { cancelled: false as const, reason: "busy" as const };
+      const goal = await currentGoal();
+      if (!goal) return { cancelled: false as const, reason: "no_open_goal" as const };
+      cancelGoal(goal, "Cancelled from the goal bar.");
+      await deps.sessions.setGoal({ sessionId: session.id }, goal, [
+        { type: "system", payload: goalCancelledPayload(goal, principalId), scopeLabel: session.scopeId },
+      ]);
+      return { cancelled: true as const };
     },
 
     async regenerateTitle(sessionId, principalId) {
@@ -1101,18 +1095,11 @@ export function createSessionMethods(
         await Promise.all(
           (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),
         );
-        const { lease } = await deps.sessions.acquireLease(forked.id, "fork");
-        if (!lease) throw new Error(`fork: could not lease fresh session ${forked.id}`);
-        let forkBoundarySeq: number | null;
-        try {
-          const copiedEntries = await deps.sessions.appendMany(
-            lease,
-            copied.map((entry) => ({ type: entry.type, payload: entry.payload, scopeLabel: entry.scopeLabel })),
-          );
-          forkBoundarySeq = copiedEntries.at(-1)?.seq ?? null;
-        } finally {
-          await deps.sessions.releaseLease(lease);
-        }
+        const copiedEntries = await deps.sessions.appendMany(
+          { sessionId: forked.id },
+          copied.map((entry) => ({ type: entry.type, payload: entry.payload, scopeLabel: entry.scopeLabel })),
+        );
+        const forkBoundarySeq = copiedEntries.at(-1)?.seq ?? null;
         if (forkBoundarySeq !== null) {
           await deps.sessions.updateForkProvenance(forked.id, {
             forkedFrom: { sessionId, title: source.title ?? null },
@@ -1190,6 +1177,7 @@ export function createSessionMethods(
     async discardSession(sessionId, principalId) {
       const session = await sessionForViewer(sessionId, principalId);
       if (!session) return false;
+      if ((await deps.runs.inFlightForThread(session.threadRef)).length) return false;
       if (!(await deps.sessions.deleteSessionIfEmpty(sessionId))) return false;
       deps.auditLog.record({
         at: Date.now(),

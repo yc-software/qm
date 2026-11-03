@@ -1,11 +1,7 @@
 import type { ScopeId, Session, SessionEntry } from "../../types.ts";
 import { parseScopeId } from "../../types.ts";
-import type { Lease } from "../../sessions/session-store.ts";
-import {
-  acquireLeaseWithin,
-  contextSummaryPayload,
-  createContextSummaryPayload,
-} from "../../sessions/session-store.ts";
+import type { SessionWriter } from "../../sessions/session-store.ts";
+import { contextSummaryPayload, createContextSummaryPayload } from "../../sessions/session-store.ts";
 import {
   COMPACT_HARD_FRACTION,
   COMPACT_SOFT_FRACTION,
@@ -21,6 +17,7 @@ import {
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import { errMessage } from "../../util/errors.ts";
 import { createKeyedQueue } from "../../util/async.ts";
+import { waitForNoRunningRun } from "../../runs/run-store.ts";
 import type { OrchestratorDeps } from "./types.ts";
 
 const MAX_CONTEXT_TOKENS = 120_000;
@@ -36,7 +33,7 @@ interface Summarized {
 
 interface CompactionInput {
   session: Session;
-  lease: Lease;
+  writer: SessionWriter;
   visibleHistory: SessionEntry[];
   scopeId: string;
   actorId: string;
@@ -48,7 +45,13 @@ interface CompactionInput {
 export interface CompactionContext {
   compactContextIfNeeded(input: CompactionInput): Promise<SessionEntry[]>;
   compactRecent(input: CompactionInput): Promise<SessionEntry[]>;
-  scheduleBackgroundCompaction(input: { sessionId: string; scopeId: string; actorId: string; model?: string }): void;
+  scheduleBackgroundCompaction(input: {
+    sessionId: string;
+    runId?: string;
+    scopeId: string;
+    actorId: string;
+    model?: string;
+  }): void;
   documentTokenBudget(scopeId: string, model?: string): number;
 }
 
@@ -79,7 +82,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
   const keepRecentTokenFraction = Math.min(KEEP_RECENT_TOKEN_FRACTION, COMPACT_SOFT_FRACTION - 0.1);
 
   async function summarizeForCompaction(
-    input: Omit<CompactionInput, "lease">,
+    input: Omit<CompactionInput, "writer">,
     recoverOnFailure = false,
   ): Promise<Summarized | null> {
     if (isManagedGroupScope(input.scopeId)) return null;
@@ -127,11 +130,11 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
 
   async function writeCompaction(input: {
     session: Session;
-    lease: Lease;
+    writer: SessionWriter;
     summarized: Summarized;
   }): Promise<SessionEntry> {
     const { text, summaryLabel, throughSeq, mode } = input.summarized;
-    const summary = await deps.sessions.append(input.lease, {
+    const summary = await deps.sessions.append(input.writer, {
       type: "system",
       payload: {
         ...createContextSummaryPayload(throughSeq, text),
@@ -227,13 +230,14 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     return [summary, ...recent];
   }
 
-  const WRITE_LEASE_WAIT_MS = 60_000;
+  const WRITE_WAIT_MS = 60_000;
 
   const backgroundCompaction = createKeyedQueue<string>();
   const compactionPending = new Set<string>();
 
   function scheduleBackgroundCompaction(input: {
     sessionId: string;
+    runId?: string;
     scopeId: string;
     actorId: string;
     model?: string;
@@ -253,7 +257,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       );
     void backgroundCompaction(input.sessionId, async () => {
       compactionPending.delete(input.sessionId);
-      let lease: Lease | null = null;
       try {
         const session = await deps.sessions.get(input.sessionId);
         if (!session) return;
@@ -270,16 +273,13 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
           ...(input.model ? { model: input.model } : {}),
         });
         if (!summarized) return;
-        lease = (await acquireLeaseWithin(deps.sessions, input.sessionId, "compaction", WRITE_LEASE_WAIT_MS)).lease;
-        if (!lease) return;
+        if (deps.runs && !(await waitForNoRunningRun(deps.runs, session.threadRef, WRITE_WAIT_MS, input.runId))) return;
         const since = await deps.sessions.getEntries(input.sessionId, { sinceSeq: snapshotSeq + 1 });
         if (!since.some((entry) => !!contextSummaryPayload(entry))) {
-          await writeCompaction({ session, lease, summarized });
+          await writeCompaction({ session, writer: { sessionId: input.sessionId }, summarized });
         }
       } catch (e) {
         recordFailure(e);
-      } finally {
-        if (lease) await deps.sessions.releaseLease(lease);
       }
     }).catch((e) => {
       recordFailure(e);

@@ -60,14 +60,12 @@ test("compaction stops automatic document replay while preserving the original f
       attachments: Array<{ artifactId: string }>;
     }
   ).attachments[0]!;
-  const { lease } = await built.sessions.acquireLease(first.sessionId!, "compaction");
-  assert.ok(lease);
-  await built.sessions.append(lease, {
+  const writer = { sessionId: first.sessionId! };
+  await built.sessions.append(writer, {
     type: "system",
     payload: { kind: "context_summary", text: "Earlier user supplied a document.", throughSeq: entries.at(-1)!.seq },
     scopeLabel: entries[0]!.scopeLabel,
   });
-  await built.sessions.releaseLease(lease);
   const result = await built.app.turn({ ...request, text: "what was in the document?" });
   assert.equal(result.status, "ok");
   const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
@@ -102,16 +100,14 @@ test("compaction during a turn stops document replay immediately", async () => {
       attachments: Array<{ artifactId: string }>;
     }
   ).attachments[0]!;
-  const { lease } = await built.sessions.acquireLease(first.sessionId!, "compaction");
-  assert.ok(lease);
+  const writer = { sessionId: first.sessionId! };
   for (let i = 0; i < 8; i++) {
-    await built.sessions.append(lease, {
+    await built.sessions.append(writer, {
       type: i % 2 === 0 ? "user" : "assistant",
       payload: { text: "Synthetic conversation context. ".repeat(2000) },
       scopeLabel: entries[0]!.scopeLabel,
     });
   }
-  await built.sessions.releaseLease(lease);
   const result = await built.app.turn({ ...request, text: "what was in the document?" });
   assert.equal(result.status, "ok");
   const compacted = await built.sessions.getEntries(first.sessionId!);

@@ -160,7 +160,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   maxClaims: number;
   processReaperIntervalMs: number;
   approvalSummaryTimeoutMs: number;
-  turnLeaseWaitMs: number;
   securityScreenTimeoutMs: number;
   securityScreen: SecurityScreenMode;
   securityScreenClassifier: "model" | "proxy";
@@ -231,7 +230,6 @@ export const CONFIG_DEFAULTS = {
   cronFireConcurrency: 4,
   monitorHeartbeatSec: 180,
   approvalSummaryTimeoutMs: 6_000,
-  turnLeaseWaitMs: 5_000,
   securityScreenTimeoutMs: 15_000,
   workers: 16,
   leaseTtlMs: 120_000,
@@ -657,7 +655,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     approvalSummaryTimeoutMs:
       numEnvStrict("APPROVAL_SUMMARY_TIMEOUT_MS", env.APPROVAL_SUMMARY_TIMEOUT_MS) ??
       CONFIG_DEFAULTS.approvalSummaryTimeoutMs,
-    turnLeaseWaitMs: numEnvStrict("TURN_LEASE_WAIT_MS", env.TURN_LEASE_WAIT_MS) ?? CONFIG_DEFAULTS.turnLeaseWaitMs,
     securityScreenTimeoutMs,
     surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,
     ...sandbox,

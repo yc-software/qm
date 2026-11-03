@@ -99,15 +99,13 @@ test("a resumed turn whose dead attempt already posted does not post its closing
   };
   const threadRef = "ch:C1:100.1";
   const session = await sessions.getOrCreateByThread(threadRef, "channel", "channel:C1");
-  const { lease } = await sessions.acquireLease(session.id);
-  assert.ok(lease);
+  const writer = { sessionId: session.id };
   for (const [type, payload] of [
     ["user", { text: "run it and tell me the output", runId: "run-1" }],
     ["tool_call", { tool: "slack", action: "post", callId: "p1", text: "Output: ok" }],
     ["tool_result", { tool: "slack", action: "post", callId: "p1", ok: true, result: "[sent]" }],
   ] as const)
-    await sessions.append(lease, { type, payload, scopeLabel: "channel:C1" });
-  await sessions.releaseLease(lease);
+    await sessions.append(writer, { type, payload, scopeLabel: "channel:C1" });
   const orch = buildOrchestrator(agent, sessions, deliveries);
   const result = await orch.handleTurn({
     surface: "slack",

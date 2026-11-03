@@ -30,6 +30,7 @@ import {
 import { countTokens } from "../src/util/tokens.ts";
 import type { Agent, CompactInput } from "../src/agent/agent.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
+import type { RunStore } from "../src/runs/run-store.ts";
 import type { TeamStore } from "../src/teams/teams.ts";
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
@@ -105,6 +106,7 @@ function buildOrchestrator(
   defaultTurnWallClockMs?: number,
   swarm?: Awaited<ReturnType<typeof swarmFixture>>,
   teams?: TeamStore,
+  runs?: RunStore,
 ) {
   const config = testConfigStore(ORG);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
@@ -126,6 +128,7 @@ function buildOrchestrator(
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
     sessions,
+    ...(runs ? { runs } : {}),
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: swarm?.sandbox ?? fakeSandbox(),
@@ -147,18 +150,28 @@ function buildOrchestrator(
   return { orch, sessions, errors, config };
 }
 
+function liveTurnProbe() {
+  const busyThreads = new Set<string>();
+  const runChecks: string[] = [];
+  const runs = {
+    inFlightForThread: async (threadRef: string) => {
+      runChecks.push(threadRef);
+      return busyThreads.has(threadRef) ? [{ id: "another-run", status: "running" }] : [];
+    },
+  } as unknown as RunStore;
+  return { runs, busyThreads, runChecks };
+}
+
 async function seed(sessions: SessionStore, entries: Array<Partial<SessionEntry>>): Promise<string> {
   const session = await sessions.getOrCreateByThread(conv.threadRef, "dm", PERSONAL);
-  const { lease } = await sessions.acquireLease(session.id);
-  assert.ok(lease, "could not acquire lease to seed");
+  const writer = { sessionId: session.id };
   for (const e of entries) {
-    await sessions.append(lease!, {
+    await sessions.append(writer, {
       type: e.type ?? "user",
       payload: e.payload ?? { text: "x" },
       scopeLabel: (e.scopeLabel ?? PERSONAL) as never,
     });
   }
-  await sessions.releaseLease(lease!);
   return session.id;
 }
 
@@ -191,19 +204,6 @@ async function waitForSummary(sessions: SessionStore, sessionId: string, deadlin
   }
 }
 
-async function waitForLeaseRelease(sessions: SessionStore, sessionId: string, deadlineMs = 3_000): Promise<void> {
-  const deadline = Date.now() + deadlineMs;
-  for (;;) {
-    const { lease } = await sessions.acquireLease(sessionId);
-    if (lease) {
-      await sessions.releaseLease(lease);
-      return;
-    }
-    assert.ok(Date.now() < deadline, "the background pass never released the session lease");
-    await new Promise((r) => setTimeout(r, 10));
-  }
-}
-
 test("overflow over the injected token budget summarizes: compactHistory runs over the oldest entries, a summary is appended, the session resets, the rebuilt context is bounded", async () => {
   const { agent, compactCalls, resetCalls } = spyAgent();
   const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
@@ -230,32 +230,6 @@ test("overflow over the injected token budget summarizes: compactHistory runs ov
   assert.equal(resetCalls[0], sid, "resetSession must be called with the session id");
 
   assert.equal(res.reply, "history:2", "rebuilt context is [summary, keep-recent…]");
-});
-
-test("the background pass labels the lease it takes, so a turn it locks out can name what beat it", async () => {
-  const { agent } = spyAgent();
-  const { orch, sessions } = buildOrchestrator(agent, budgetKeepingOnlyNewest("msg 4", "msg 5"));
-  const holders: Array<string | undefined> = [];
-  const acquire = sessions.acquireLease.bind(sessions);
-  sessions.acquireLease = async (sessionId, holder) => {
-    holders.push(holder);
-    return acquire(sessionId, holder);
-  };
-
-  const sid = await seed(
-    sessions,
-    msgTexts(6).map((text) => ({ payload: { text } })),
-  );
-  assert.equal((await orch.handleTurn(turn("!histcount"))).status, "ok");
-
-  const deadline = Date.now() + 3_000;
-  while (!holders.includes("compaction") && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
-  assert.ok(
-    holders.includes("compaction"),
-    "the post-turn background pass takes the lock as compaction, not as a turn",
-  );
-  assert.ok(holders.includes("turn"), "…and the turn itself takes it as a turn");
-  await waitForLeaseRelease(sessions, sid);
 });
 
 test("token overflow triggers compaction with only a few huge entries", async () => {
@@ -621,7 +595,6 @@ test("a DM follow-up after the background pass reuses the summary — no blockin
   await orch.handleTurn(turn("!histcount"));
   assert.equal((await waitForSummary(sessions, sid)).length, 1, "the background pass ran after the first DM turn");
   assert.equal(compactCalls.length, 1);
-  await waitForLeaseRelease(sessions, sid);
 
   const expectedHistory = forModelContext(await sessions.getEntries(sid));
   assert.ok(expectedHistory.some((entry) => contextSummaryPayload(entry)));
@@ -871,26 +844,7 @@ async function untilTrue(what: string, predicate: () => boolean, deadlineMs = 3_
   }
 }
 
-test("the background pass leaves the session writable while it summarizes — a follow-up turn is never locked out", async () => {
-  const { agent, compactCalls, open } = gatedAgent();
-  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
-  const sid = await seed(
-    sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
-  );
-
-  assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
-  await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
-
-  const { lease } = await sessions.acquireLease(sid, "turn");
-  assert.ok(lease, "background compaction must not hold the write-lock across its model call");
-  await sessions.releaseLease(lease!);
-
-  open();
-  assert.equal((await waitForSummary(sessions, sid)).length, 1, "and the summary still lands afterwards");
-});
-
-test("the background pass summarizes first and requests its lease only after the summarizer returns", async () => {
+test("the background pass summarizes first and checks for a live turn only after the summarizer returns", async () => {
   const { agent, compactCalls, open } = gatedAgent();
   const events: string[] = [];
   const gated = agent.compactHistory!;
@@ -900,12 +854,15 @@ test("the background pass summarizes first and requests its lease only after the
     events.push("summarize:end");
     return text;
   };
-  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
-  const acquire = sessions.acquireLease.bind(sessions);
-  sessions.acquireLease = async (sessionId, holder) => {
-    if (holder === "compaction") events.push("acquire:compaction");
-    return acquire(sessionId, holder);
-  };
+  const { runs, runChecks } = liveTurnProbe();
+  const { orch, sessions } = buildOrchestrator(
+    agent,
+    budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))),
+    undefined,
+    undefined,
+    undefined,
+    runs,
+  );
   const sid = await seed(
     sessions,
     msgTexts(8).map((text) => ({ payload: { text } })),
@@ -913,27 +870,27 @@ test("the background pass summarizes first and requests its lease only after the
 
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
   await untilTrue("the background summarizer to be in flight", () => events.includes("summarize:start"));
-
-  assert.ok(
-    !events.includes("acquire:compaction"),
-    `the pass must not request the session lease before the summarizer has returned (saw ${events.join(" → ")})`,
-  );
-  const { lease: probe } = await sessions.acquireLease(sid, "turn");
-  assert.ok(probe, "the session lease stays free for the whole summarization call");
-  await sessions.releaseLease(probe!);
+  runChecks.length = 0;
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(runChecks, [], "the pass must not check for a live turn before the summarizer has returned");
 
   open();
-  assert.equal((await waitForSummary(sessions, sid)).length, 1, "the summary lands once the lease is taken");
-  assert.ok(
-    events.indexOf("acquire:compaction") > events.indexOf("summarize:end"),
-    `the compaction lease must be requested strictly after the summarizer returns (saw ${events.join(" → ")})`,
-  );
+  assert.equal((await waitForSummary(sessions, sid)).length, 1, "the summary lands after the check");
+  assert.ok(runChecks.length > 0, "the pass checks for a live turn once the summarizer returns");
   assert.equal(compactCalls.length, 1, "and the model was called exactly once");
 });
 
-test("the background pass waits out a turn that holds the lock rather than throwing its summary away", async () => {
+test("the background pass waits out another live turn rather than throwing its summary away", async () => {
   const { agent, compactCalls, resetCalls, open } = gatedAgent();
-  const { orch, sessions } = buildOrchestrator(agent, budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))));
+  const { runs, busyThreads } = liveTurnProbe();
+  const { orch, sessions } = buildOrchestrator(
+    agent,
+    budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))),
+    undefined,
+    undefined,
+    undefined,
+    runs,
+  );
   const sid = await seed(
     sessions,
     msgTexts(8).map((text) => ({ payload: { text } })),
@@ -942,14 +899,13 @@ test("the background pass waits out a turn that holds the lock rather than throw
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
   await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
 
-  const { lease: held } = await sessions.acquireLease(sid, "turn");
-  assert.ok(held);
+  busyThreads.add(conv.threadRef);
   open();
   await new Promise((r) => setTimeout(r, 300));
   assert.equal((await summaryEntries(sessions, sid)).length, 0, "the pass wrote nothing behind the turn's back");
   assert.equal(resetCalls.length, 0);
 
-  await sessions.releaseLease(held!);
+  busyThreads.delete(conv.threadRef);
   assert.equal((await waitForSummary(sessions, sid)).length, 1, "the summary lands once the turn is done");
   assert.equal(compactCalls.length, 1, "and the model was called exactly once for it");
 });
@@ -999,14 +955,12 @@ test("a summary that landed while the pass was summarizing makes it drop its own
   assert.equal((await orch.handleTurn(turn("!histcount"))).reply, "history:8");
   await untilTrue("the background summarizer to be in flight", () => compactCalls.length === 1);
 
-  const { lease: rival } = await sessions.acquireLease(sid, "compaction");
-  assert.ok(rival);
-  await sessions.append(rival!, {
+  const rival = { sessionId: sid };
+  await sessions.append(rival, {
     type: "system",
     payload: createContextSummaryPayload(6, "a rival fold"),
     scopeLabel: PERSONAL,
   });
-  await sessions.releaseLease(rival!);
 
   open();
   await new Promise((r) => setTimeout(r, 300));

@@ -8,7 +8,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 
 for (const backend of ["memory", "postgres"] as const) {
   test(
-    `appendMany preserves ordering, counters, and leases: ${backend}`,
+    `appendMany preserves ordering and counters, and rejects writes to a deleted session: ${backend}`,
     {
       skip: backend === "postgres" && !process.env.DATABASE_URL,
     },
@@ -20,10 +20,9 @@ for (const backend of ["memory", "postgres"] as const) {
       const scope = scopeId("personal", "batch-test");
       const session = await store.getOrCreateByThread(`web:batch-test:${randomUUID()}`, "dm", scope);
       await store.addParticipant(session.id, "batch-test");
-      const { lease } = await store.acquireLease(session.id);
-      assert.ok(lease);
-      await store.append(lease, { type: "user", payload: { text: "Before batch" }, scopeLabel: scope });
-      const batch = await store.appendMany(lease, [
+      const writer = { sessionId: session.id };
+      await store.append(writer, { type: "user", payload: { text: "Before batch" }, scopeLabel: scope });
+      const batch = await store.appendMany(writer, [
         { type: "assistant", payload: { text: "First answer" }, scopeLabel: scope },
         { type: "user", payload: { text: "Next question" }, scopeLabel: scope },
         { type: "assistant", payload: { text: "Next answer" }, scopeLabel: scope },
@@ -37,7 +36,7 @@ for (const backend of ["memory", "postgres"] as const) {
         ],
       );
       assert.deepEqual((await store.getEntries(session.id)).slice(1), batch);
-      assert.deepEqual(await store.appendMany(lease, []), []);
+      assert.deepEqual(await store.appendMany(writer, []), []);
       const pool = backend === "postgres" ? new pg.Pool({ connectionString: process.env.DATABASE_URL }) : null;
       try {
         if (pool) {
@@ -50,7 +49,7 @@ for (const backend of ["memory", "postgres"] as const) {
           );
           try {
             await assert.rejects(
-              store.appendMany(lease, [
+              store.appendMany(writer, [
                 { type: "user", payload: { text: "Rolled back" }, scopeLabel: scope },
                 { type: "assistant", payload: { text: "Fails item insert" }, scopeLabel: scope },
               ]),
@@ -62,13 +61,12 @@ for (const backend of ["memory", "postgres"] as const) {
             await pool.query(`ALTER TABLE items DROP CONSTRAINT ${constraint}`);
           }
         }
-        await store.releaseLease(lease);
+        await store.deleteSession(session.id);
         await assert.rejects(
-          store.appendMany(lease, [{ type: "user", payload: { text: "Rejected" }, scopeLabel: scope }]),
-          /lease/,
+          store.appendMany(writer, [{ type: "user", payload: { text: "Rejected" }, scopeLabel: scope }]),
+          /foreign key/,
         );
-        await assert.rejects(store.appendMany(lease, []), /lease/);
-        assert.equal((await store.getEntries(session.id)).length, 4);
+        assert.equal((await store.getEntries(session.id)).length, 0);
       } finally {
         await pool?.end();
       }
@@ -77,15 +75,14 @@ for (const backend of ["memory", "postgres"] as const) {
 }
 
 test(
-  "a postgres append holds the lease and writes in five statements, and concurrent appends keep distinct sequences",
+  "a postgres append takes the session lock and writes in five statements, and concurrent appends keep distinct sequences",
   { skip: !process.env.DATABASE_URL },
   async () => {
     const store = createPostgresSessionStore(process.env.DATABASE_URL!);
     const scope = scopeId("personal", "batch-test");
     const session = await store.getOrCreateByThread(`web:batch-test:${randomUUID()}`, "dm", scope);
-    const { lease } = await store.acquireLease(session.id);
-    assert.ok(lease);
-    await store.append(lease, { type: "user", payload: { text: "warm" }, scopeLabel: scope });
+    const writer = { sessionId: session.id };
+    await store.append(writer, { type: "user", payload: { text: "warm" }, scopeLabel: scope });
     const query = pg.Client.prototype.query;
     let statements = 0;
     pg.Client.prototype.query = function (this: pg.Client, ...args: Parameters<typeof query>) {
@@ -93,21 +90,20 @@ test(
       return query.apply(this, args);
     } as typeof query;
     try {
-      await store.append(lease, { type: "assistant", payload: { text: "counted" }, scopeLabel: scope });
+      await store.append(writer, { type: "assistant", payload: { text: "counted" }, scopeLabel: scope });
     } finally {
       pg.Client.prototype.query = query;
     }
     assert.equal(statements, 5);
     const appended = await Promise.all(
       Array.from({ length: 8 }, (_, i) =>
-        store.append(lease, { type: "assistant", payload: { text: `parallel ${i}` }, scopeLabel: scope }),
+        store.append(writer, { type: "assistant", payload: { text: `parallel ${i}` }, scopeLabel: scope }),
       ),
     );
     assert.deepEqual(
       appended.map((entry) => entry.seq).sort((a, b) => a - b),
       [2, 3, 4, 5, 6, 7, 8, 9],
     );
-    await store.releaseLease(lease);
   },
 );
 
@@ -119,8 +115,7 @@ test(
     const ahead = createPostgresSessionStore(process.env.DATABASE_URL!, { now: () => Date.now() + 10 * 60_000 });
     const scope = scopeId("personal", "batch-test");
     const session = await store.getOrCreateByThread(`web:batch-test:${randomUUID()}`, "dm", scope);
-    const { lease } = await store.acquireLease(session.id);
-    assert.ok(lease);
+    const writer = { sessionId: session.id };
     const query = pg.Client.prototype.query;
     const reachedCommit = Promise.withResolvers<void>();
     const releaseCommit = Promise.withResolvers<void>();
@@ -134,7 +129,7 @@ test(
       return query.apply(this, args);
     } as typeof query;
     try {
-      const appending = store.append(lease, { type: "user", payload: { text: "first" }, scopeLabel: scope });
+      const appending = store.append(writer, { type: "user", payload: { text: "first" }, scopeLabel: scope });
       await reachedCommit.promise;
       pg.Client.prototype.query = query;
       const deleting = ahead.deleteSessionIfEmpty(session.id);

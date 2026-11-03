@@ -101,9 +101,8 @@ test("sidebar batches visible goals from the session rows and drops inactive one
     const ref = `web:${owner}:batch:${index}`;
     const session = await sessions.getOrCreateByThread(ref, "dm", `personal:${owner}`);
     await sessions.addParticipant(session.id, owner);
-    const { lease } = await sessions.acquireLease(session.id);
-    assert.ok(lease);
-    await sessions.setGoal(lease, {
+    const writer = { sessionId: session.id };
+    await sessions.setGoal(writer, {
       objective: `goal ${index}`,
       status: index === 1 ? "complete" : "active",
       tokensUsed: 0,
@@ -111,7 +110,6 @@ test("sidebar batches visible goals from the session rows and drops inactive one
       updatedAt: 1,
       activeMs: 123,
     });
-    await sessions.releaseLease(lease);
     await runs.enqueue({ sessionId: ref, request: enqueueRequest() });
     if (owner === "U1") {
       visible.push(session.id);
@@ -146,13 +144,12 @@ test("a working subagent reports its current run start and latest purpose from t
   const child = await app.turn(dm("child", "web:U1:c"));
   await sessions.setParentSession(child.sessionId!, parent.sessionId!);
   const say = async (purpose: string, runId: string) => {
-    const { lease } = await sessions.acquireLease(child.sessionId!);
-    await sessions.append(lease!, {
+    const writer = { sessionId: child.sessionId! };
+    await sessions.append(writer, {
       type: "tool_call",
       payload: { tool: "execute", callId: purpose, purpose, runId },
       scopeLabel: "personal:U1",
     });
-    await sessions.releaseLease(lease!);
   };
   await say("Old task", randomUUID());
   await runs.enqueue({ sessionId: "web:U1:c", request: enqueueRequest() });
