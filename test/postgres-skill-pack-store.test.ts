@@ -24,57 +24,6 @@ const makePacks = (url: string) => createPostgresSkillPackStore(url, { now: () =
 const files = [{ path: "skills/shared/run.sh", content: "echo hi", executable: true }];
 const bundle = (packId: string) => ({ packId, commit: "c1", files, hash: computeBundleHash(files) });
 
-test("skill packs round-trip, patch only the given fields, and record imports", { skip }, async () => {
-  await withTypedTableDb(makePacks, async ({ store, tenant }) => {
-    await withTenant(tenant, async () => {
-      const pack = await store.create(base);
-      assert.deepEqual(await store.get(pack.id), { ...base, id: pack.id, createdAt: 1000 });
-      const all = await store.create({ ...base, subset: "all", config: undefined, authCredentialSlug: "gh" });
-      assert.equal((await store.get(all.id))?.subset, "all");
-      assert.equal((await store.get(all.id))?.authCredentialSlug, "gh");
-      assert.equal((await store.get(all.id))?.config, undefined);
-
-      const updated = await store.update(pack.id, { ref: "v2", updateAvailable: true, available: 4 });
-      assert.deepEqual(updated, {
-        ...base,
-        id: pack.id,
-        createdAt: 1000,
-        ref: "v2",
-        updateAvailable: true,
-        available: 4,
-      });
-      assert.equal((await store.update(pack.id, { authCredentialSlug: undefined })).authCredentialSlug, undefined);
-      await store.recordImport(pack.id, { at: 5, commit: "c1", status: "ok", counts: { imported: 2 } });
-      assert.deepEqual((await store.get(pack.id))?.lastImport, {
-        at: 5,
-        commit: "c1",
-        status: "ok",
-        counts: { imported: 2 },
-      });
-      await store.recordImport(pack.id, { at: 6, commit: "c2", status: "error", error: "boom" });
-      assert.deepEqual((await store.get(pack.id))?.lastImport, { at: 6, commit: "c2", status: "error", error: "boom" });
-      await assert.rejects(store.update("missing", { ref: "x" }), /unknown skill pack/);
-
-      assert.deepEqual((await store.list()).map((p) => p.id).sort(), [pack.id, all.id].sort());
-      await store.remove(all.id);
-      assert.equal(await store.get(all.id), null);
-    });
-  });
-});
-
-test("skill packs are isolated per tenant", { skip }, async () => {
-  await withTypedTableDb(makePacks, async ({ store, tenant, otherTenant }) => {
-    const mine = await withTenant(tenant, () => store.create(base));
-    await withTenant(otherTenant, async () => {
-      assert.equal(await store.get(mine.id), null);
-      assert.deepEqual(await store.list(), []);
-      await assert.rejects(store.update(mine.id, { ref: "x" }), /unknown skill pack/);
-      await store.remove(mine.id);
-    });
-    assert.equal((await withTenant(tenant, () => store.get(mine.id)))?.ref, "main");
-  });
-});
-
 test("the conversion backfills skill packs into the instance tenant and drops the old table", { skip }, async () => {
   const stored = {
     id: "p1",

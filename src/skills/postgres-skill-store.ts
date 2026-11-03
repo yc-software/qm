@@ -3,7 +3,7 @@ import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { tsPrefixQuery } from "../sessions/entry-search.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import type { ScopeId } from "../types.ts";
-import { pgJsonText, pgTextSafe } from "../util/text.ts";
+import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { createPostgresSkillBundleStore, type SkillBundleStore } from "./skill-bundle-store.ts";
 import { createPostgresSkillPackStore, type SkillPackStore } from "./skill-pack-store.ts";
 import {
@@ -151,7 +151,7 @@ function toRow(skill: Skill): unknown[] {
     pgTextSafe(manifest.description),
     manifest.requiredCapabilities.map(pgTextSafe),
     pgTextSafe(manifest.body),
-    manifest.files ? pgJsonText(manifest.files) : null,
+    manifest.files ? jsonbStringify(manifest.files) : null,
     pgTextSafe(skill.signature),
     skill.status,
     pgTextSafe(skill.createdBy),

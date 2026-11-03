@@ -2,7 +2,7 @@ import type { SessionEntry } from "../types.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { pgJsonText } from "../util/text.ts";
+import { jsonbStringify } from "../util/text.ts";
 
 export interface SharedAttachment {
   id: string;
@@ -90,8 +90,8 @@ export function createPostgresSessionShareStore(connectionString: string): Sessi
           visibility.maxSeq,
           visibility.minCreatedAt,
           visibility.maxCreatedAt,
-          pgJsonText(share.messages),
-          pgJsonText(share.files),
+          jsonbStringify(share.messages),
+          jsonbStringify(share.files),
         ],
       );
     },

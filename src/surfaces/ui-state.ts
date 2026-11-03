@@ -1,7 +1,7 @@
 import { createPgPool, withPgTransaction, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { pgJsonText } from "../util/text.ts";
+import { jsonbStringify } from "../util/text.ts";
 
 export interface PersistedUiState {
   value: unknown;
@@ -46,7 +46,7 @@ const INSERT = `INSERT INTO web_ui_state(principal_id, key, value, updated_at) V
   ON CONFLICT (tenant_id, principal_id, key)`;
 const UPSERT = `${INSERT} DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`;
 
-const jsonValue = (state: PersistedUiState) => pgJsonText(state.value ?? null);
+const jsonValue = (state: PersistedUiState) => jsonbStringify(state.value ?? null);
 
 function uiState(rows: Rows): PersistedUiState | null {
   const row = rows[0];

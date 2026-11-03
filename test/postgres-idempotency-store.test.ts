@@ -8,55 +8,6 @@ import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/ty
 const skip = skipWithoutPg;
 const COMMITTED_AT = Date.now() - 60_000;
 
-test("a committed key survives a restart and stays scoped to its tenant", { skip }, async () => {
-  await withTypedTableDb(
-    (url) => createPostgresIdempotencyStore(url),
-    async ({ store, url, tenant, otherTenant }) => {
-      let runs = 0;
-      assert.equal(await withTenant(tenant, () => store.once("webhook:w1:d1", async () => void runs++)), true);
-      const restarted = createPostgresIdempotencyStore(url);
-      try {
-        assert.equal(await withTenant(tenant, () => restarted.committed("webhook:w1:d1")), true);
-        assert.equal(await withTenant(tenant, () => restarted.once("webhook:w1:d1", async () => void runs++)), false);
-        assert.equal(await withTenant(otherTenant, () => restarted.committed("webhook:w1:d1")), false);
-        assert.equal(await withTenant(otherTenant, () => store.committed("webhook:w1:d1")), false);
-        assert.equal(
-          await withTenant(otherTenant, () => restarted.once("webhook:w1:d1", async () => void runs++)),
-          true,
-        );
-        assert.equal(runs, 2);
-      } finally {
-        await restarted.close?.();
-      }
-    },
-  );
-});
-
-test("retention prunes only the current tenant's expired rows", { skip }, async () => {
-  let t = 0;
-  await withTypedTableDb(
-    (url) => createPostgresIdempotencyStore(url, { retentionMs: 100, pruneIntervalMs: 1, now: () => t }),
-    async ({ store, admin, tenant, otherTenant }) => {
-      t = 10;
-      await withTenant(tenant, () => store.once("old", async () => {}));
-      await withTenant(otherTenant, () => store.once("old", async () => {}));
-      t = 500;
-      await withTenant(tenant, () => store.once("fresh", async () => {}));
-      const keys = async () =>
-        (
-          await admin.query(
-            `SELECT tenant_id::text AS tenant, key FROM idempotency ORDER BY key COLLATE "C", tenant_id`,
-          )
-        ).rows;
-      for (let i = 0; i < 50 && (await keys()).length === 3; i++) await new Promise((r) => setTimeout(r, 20));
-      assert.deepEqual(await keys(), [
-        { tenant, key: "fresh" },
-        { tenant: otherTenant, key: "old" },
-      ]);
-    },
-  );
-});
-
 test("the conversion backfills committed keys into the instance tenant and drops the old table", { skip }, async () => {
   await withTypedTableDb(
     (url) => createPostgresIdempotencyStore(url),

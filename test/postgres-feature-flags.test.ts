@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresFeatureFlagStore } from "../src/feature-flags.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { tenantRootScope, withTenant, withoutTenant } from "../src/tenants/context.ts";
+import { orgId } from "../src/config.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 
 const skip = skipWithoutPg;
@@ -29,14 +30,14 @@ test("feature flags map each feature to enabled scopes and the org scope enables
         assert.deepEqual([...(await store.enabledFor("personal:U1"))].sort(), ["inbox_loops", "responsive_spine"]);
         await store.setEnabled("inbox_loops", "channel:C1", false, "admin");
         assert.equal(await store.enabled("inbox_loops", "channel:C1"), false);
-        await store.setEnabled("swarms", tenantRootScope(), true, "admin");
+        await store.setEnabled("swarms", `org:${orgId()}`, true, "admin");
         assert.equal(await store.enabled("swarms", "channel:C9"), true);
         assert.deepEqual(
           (await store.list()).map((row) => [row.featureName, row.enabledScopes]),
           [
             ["inbox_loops", ["personal:U1"]],
             ["responsive_spine", ["personal:U1"]],
-            ["swarms", [tenantRootScope()]],
+            ["swarms", [`org:${orgId()}`]],
           ],
         );
         await assert.rejects(store.setEnabled("swarms", "personal:U1", true, " "), /must not be empty/);

@@ -2,7 +2,7 @@ import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { pgJsonText, pgTextSafe } from "../util/text.ts";
+import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
 export type ContextRequestOutcome =
   { status: "done"; result: SurfaceContextResult } | { status: "failed"; error: string };
@@ -79,8 +79,8 @@ export function createPostgresContextRequestStore(connectionString: string): Con
           r.source,
           r.createdAt,
           r.status,
-          pgJsonText(r.query),
-          r.result === undefined ? null : pgJsonText(r.result),
+          jsonbStringify(r.query),
+          r.result === undefined ? null : jsonbStringify(r.result),
           r.error === undefined ? null : pgTextSafe(r.error),
         ],
       );
@@ -99,7 +99,7 @@ export function createPostgresContextRequestStore(connectionString: string): Con
         [
           id,
           outcome.status,
-          outcome.status === "done" ? pgJsonText(outcome.result) : null,
+          outcome.status === "done" ? jsonbStringify(outcome.result) : null,
           outcome.status === "failed" ? pgTextSafe(outcome.error) : null,
         ],
       );

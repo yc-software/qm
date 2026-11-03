@@ -1,5 +1,5 @@
 import { swallowAs } from "../util/errors.ts";
-import { pgJsonText, pgTextSafe } from "../util/text.ts";
+import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import type { PendingApprovalRecord } from "../types.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
@@ -140,7 +140,7 @@ function fromRow(row: Rows[number]): PendingApprovalRecord {
 
 function toParams(id: string, r: PendingApprovalRecord): unknown[] {
   const text = (value: string | undefined) => (value === undefined ? null : pgTextSafe(value));
-  const json = (value: unknown) => (value === undefined ? null : pgJsonText(value));
+  const json = (value: unknown) => (value === undefined ? null : jsonbStringify(value));
   return [
     id,
     pgTextSafe(r.sessionId),
