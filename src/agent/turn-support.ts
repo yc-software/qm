@@ -1,19 +1,19 @@
-import { TURN_STOPPED_KIND, type ReplayImageRef } from "./replay.ts";
+import type { ReplayImageRef } from "./replay.ts";
 import { randomBytes } from "node:crypto";
 import {
   parseSecurityScreenVerdict,
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-posture.ts";
-import type { ScopeId, SessionEntry } from "../types.ts";
+import type { ScopeId } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
-import { goalWorkFromEntries } from "./goal.ts";
+import { goalWorkFromItems } from "./goal.ts";
 import type { TurnLlmRequestRecord, ModelUtilities, AgentTurnInput, AgentTurnResult } from "./agent.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./agent-run.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
-import { entryFromItem, type Item, itemFromEntry, storedItem } from "../sessions/items.ts";
-import type { NewEntry } from "../sessions/session-store.ts";
+import { type Item, storedItem } from "../sessions/items.ts";
+import type { StepFields } from "./step-recorder.ts";
 
 export interface ToolPlumbing {
   controlTools?: boolean;
@@ -58,25 +58,17 @@ export function imageRefs(images: AgentTurnInput["images"]): { images?: ReplayIm
   };
 }
 
-export async function emitEntry(
-  turn: Pick<AgentTurnInput, "emit" | "scopeLabel">,
-  entry: Pick<NewEntry, "type" | "payload" | "author">,
-): Promise<SessionEntry> {
-  return entryFromItem(await turn.emit(itemFromEntry(entry)), turn.scopeLabel);
-}
-
 export async function recordSteerIntake(turn: AgentTurnInput, steer: SteerIntake): Promise<void> {
-  await emitEntry(turn, {
-    type: "user",
-    payload: {
-      text: steer.text,
+  await turn.emit({
+    kind: "SteeringMessage",
+    text: steer.text,
+    author: steer.author ?? null,
+    body: {
       ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
       ...(steer.ts ? { ts: steer.ts } : {}),
-      steered: true,
       ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
       ...imageRefs(steer.images),
     },
-    ...(steer.author ? { author: steer.author } : {}),
   });
   await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
 }
@@ -87,20 +79,24 @@ export async function recordStoppedTurn(
   turn: AgentTurnInput,
   partial: string,
   reason: string = STOPPED_FALLBACK_REASON,
-  replay: Record<string, unknown> = {},
-): Promise<SessionEntry | null> {
+  replay: StepFields | null = null,
+): Promise<Item | null> {
   if (turn.shutdown?.aborted) return null;
   const answer = partial.trim()
-    ? await emitEntry(turn, { type: "assistant", payload: { text: partial, stopped: true, ...replay } })
+    ? await turn.emit({
+        kind: "AgentMessage",
+        text: partial,
+        step: replay?.step ?? null,
+        body: { stopped: true, ...replay?.body },
+      })
     : null;
-  const note = await emitEntry(turn, { type: "system", payload: { kind: TURN_STOPPED_KIND, reason } });
+  const note = await turn.emit({ kind: "Stop", body: { reason } });
   return note ?? answer;
 }
 
 export function turnToolContext(turn: AgentTurnInput): ToolContextRef {
   return {
     current: turn.tools,
-    runtimeRunId: turn.runId,
     runtimeActorId: turn.runtimeActorId,
     pendingApprovals: [],
     pausedOnApproval: false,
@@ -111,12 +107,12 @@ export function turnToolContext(turn: AgentTurnInput): ToolContextRef {
     ...(turn.continueTurn ? { goalRound: 1 } : {}),
     saveGoal: turn.saveGoal,
     ...(turn.goalInbox ? { goalInbox: turn.goalInbox } : {}),
-    emit: (entry) => emitEntry(turn, entry),
+    emit: turn.emit,
     scopeLabel: turn.scopeLabel,
     orgScopeId: turn.orgScopeId,
     screenToolResult: turn.screenToolResult,
     governGoal: turn.governGoal,
-    goalRecentWork: () => goalWorkFromEntries(turn.history.slice(-40)),
+    goalRecentWork: () => goalWorkFromItems(turn.history.slice(-40)),
     toolApprovalGate: turn.toolApprovalGate,
     shutdown: turn.shutdown,
   };
@@ -150,7 +146,7 @@ export function bridgedTools(ref: ToolContextRef, options: AgentToolsOptions): B
 }
 
 export interface ResumedToolResult {
-  history: SessionEntry[];
+  history: Item[];
   message: {
     role: "toolResult";
     toolCallId: string;
@@ -171,11 +167,11 @@ export async function resumeInterruptedToolCall(
   const tool = tools.find((candidate) => candidate.name === call.tool);
   const emit = ref.emit;
   const abortSignal = ref.abortSignal;
-  let recorded: SessionEntry | undefined;
-  ref.emit = async (entry) => {
-    if (entry.type === "tool_call") return;
-    const appended = await emit?.(entry);
-    if (entry.type === "tool_result" && !recorded) recorded = appended as SessionEntry;
+  let recorded: Item | undefined;
+  ref.emit = async (item) => {
+    if (item.kind === "ToolCall") return;
+    const appended = await emit?.(item);
+    if (item.kind === "ToolResult" && !recorded) recorded = appended;
     return appended;
   };
   ref.abortSignal = turn.cancel;
@@ -192,21 +188,19 @@ export async function resumeInterruptedToolCall(
     }
     if (!recorded) {
       await ref.emit({
-        type: "tool_result",
-        payload: { tool: call.tool, callId: call.callId, isError, result: content[0]?.text ?? "", interrupted: true },
-        scopeLabel: turn.scopeLabel,
+        kind: "ToolResult",
+        tool: call.tool,
+        callId: call.callId,
+        isError,
+        text: content[0]?.text ?? "",
+        body: { interrupted: true },
       });
     }
   } catch (error) {
-    const payload = recorded?.payload as { result?: unknown; isError?: unknown } | undefined;
-    isError = payload ? payload.isError === true : true;
-    content = [{ type: "text", text: payload ? String(payload.result ?? "") : `[error] ${errMessage(error)}` }];
+    isError = recorded ? recorded.isError === true : true;
+    content = [{ type: "text", text: recorded ? (recorded.text ?? "") : `[error] ${errMessage(error)}` }];
     if (!recorded)
-      await ref.emit({
-        type: "tool_result",
-        payload: { tool: call.tool, callId: call.callId, isError, result: content[0]!.text },
-        scopeLabel: turn.scopeLabel,
-      });
+      await ref.emit({ kind: "ToolResult", tool: call.tool, callId: call.callId, isError, text: content[0]!.text });
   } finally {
     ref.emit = emit;
     ref.abortSignal = abortSignal;

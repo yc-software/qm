@@ -13,6 +13,7 @@ import { createToolContext, type ToolContext, type ToolContextDeps } from "../sr
 import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
+import type { NewItem } from "../src/sessions/items.ts";
 
 const scopedHandle: SandboxHandle = { id: "scoped-box", rootDir: "/workspace" };
 const scratchHandle: SandboxHandle = { id: "scratch-box", rootDir: "/workspace", scratch: true };
@@ -121,22 +122,20 @@ test("scope defaults to the durable scoped box; scratch is an explicit opt-in", 
 });
 
 test("the tool_call/tool_result entries record which box ran the command", async () => {
-  const emitted: Array<{ type: string; payload: { tool?: string; scope?: string } }> = [];
+  const emitted: string[] = [];
   const { tc } = sinkToolContext();
   const ref: ToolContextRef = {
     current: tc,
-    emit: (e) => {
-      emitted.push(e as never);
+    emit: async (item) => {
+      emitted.push(`${item.kind}:${String(item.body?.scope)}`);
+      return undefined;
     },
     scopeLabel: scopeId("personal", "U1"),
   };
   const [execute] = createAgentTools(ref);
   await call(execute, { command: "echo hi", scope: "scratch", purpose: "Run test command" });
   await call(execute, { command: "echo hi", purpose: "Run test command" });
-  assert.deepEqual(
-    emitted.map((e) => `${e.type}:${e.payload.scope}`),
-    ["tool_call:scratch", "tool_result:scratch", "tool_call:scoped", "tool_result:scoped"],
-  );
+  assert.deepEqual(emitted, ["ToolCall:scratch", "ToolResult:scratch", "ToolCall:scoped", "ToolResult:scoped"]);
 });
 
 async function freshApp(extra: Partial<Config> = {}) {
@@ -285,7 +284,7 @@ test("execute refuses a credential that would override the computer's own enviro
 
 test("execute masks credential output before model delivery, screening, and transcript logging", async () => {
   const secret = "execution-secret-123456";
-  const emitted: unknown[] = [];
+  const emitted: NewItem[] = [];
   const screened: unknown[] = [];
   const { ctx } = routingCtx({
     sandbox: {
@@ -317,12 +316,7 @@ test("execute masks credential output before model delivery, screening, and tran
   assert.match(textOf(result), /<redacted:credential>/);
   assert.match(textOf(result), /exit 0/);
   assert.equal(screened.length, 1);
-  assert.ok(
-    emitted.some((entry) => {
-      const e = entry as { type?: string; payload?: { isError?: boolean; code?: number } };
-      return e.type === "tool_result" && e.payload?.isError === false && e.payload?.code === 0;
-    }),
-  );
+  assert.ok(emitted.some((item) => item.kind === "ToolResult" && item.isError === false && item.body?.code === 0));
 });
 
 test("execute checks only the current execution environment, including inherited credentials", async () => {
@@ -365,7 +359,7 @@ test("execute replaces credential-bearing provider errors without retaining the 
 
 test("execute records a safe provider-error result for native replay", async () => {
   const secret = "provider-secret-12345";
-  const entries: unknown[] = [];
+  const entries: NewItem[] = [];
   const { ctx } = routingCtx({
     provision: async () => ({ ...scopedHandle, env: { TOKEN: secret } }),
     sandbox: {
@@ -384,7 +378,7 @@ test("execute records a safe provider-error result for native replay", async () 
   const result = await call(execute, { command: "diagnose", purpose: "Run test command" });
   assert.match(textOf(result), /<redacted:credential>/);
   assert.ok(!JSON.stringify({ result, entries }).includes(secret));
-  assert.ok(entries.some((entry) => (entry as { type?: string }).type === "tool_result"));
+  assert.ok(entries.some((item) => item.kind === "ToolResult"));
 });
 
 test("execute respects secret metadata even for configuration-named credentials", async () => {

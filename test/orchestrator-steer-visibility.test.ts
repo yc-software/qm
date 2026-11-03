@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import * as mockAgent from "./support/mock-agent.ts";
-import { emitEntry, recordSteerIntake } from "../src/agent/turn-support.ts";
+import { recordSteerIntake } from "../src/agent/turn-support.ts";
 import type { AgentTurnInput, AgentTurnResult } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -54,7 +54,7 @@ for (const mode of ["retry", "handoff"] as const) {
         await turn.emit({ kind: "UserMessage", text: turn.input });
       }
       await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
-      await emitEntry(turn, { type: "user", payload: { text: "private steer", steered: true, hidden: true } });
+      await turn.emit({ kind: "SteeringMessage", text: "private steer", body: { hidden: true } });
     };
     try {
       const result = await built.app.turn(request);

@@ -165,7 +165,7 @@ export function recallTools(kit: ToolKit) {
     label: "history",
     description:
       "Search or reopen this conversation's own transcript (including parts compacted out of context; tool results excluded) when something said earlier is not in front of you. " +
-      "`query` returns the newest matching entries tagged type#seq; `seq` returns one entry (very long ones trimmed in the middle).",
+      "`query` returns the newest matching entries tagged kind#seq; `seq` returns one entry (very long ones trimmed in the middle).",
     parameters: Type.Object({
       query: Type.Optional(Type.String({ description: "Words to find (all must match, case-insensitive)." })),
       seq: Type.Optional(Type.Integer({ description: "Reopen this entry instead of searching." })),
@@ -186,7 +186,7 @@ export function recallTools(kit: ToolKit) {
           return recordResult(
             callId,
             { tool: "history", error: "seq must be an integer" },
-            text("[error] history `seq` must be an integer entry number, like the 87 in tool_call#87."),
+            text("[error] history `seq` must be an integer entry number, like the 87 in ToolCall#87."),
             true,
           );
         }

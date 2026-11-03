@@ -14,7 +14,7 @@ import { withModelRequestContext } from "../src/model/request-context.ts";
 import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { Config } from "../src/config.ts";
-import type { Session, SessionEntry } from "../src/types.ts";
+import type { Session } from "../src/types.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
@@ -147,7 +147,10 @@ test("every helper call keeps its work's context and names its own purpose", asy
     modelGateway: gateway,
   });
   const session = { id: "session-cron" } as Session;
-  const entry = { sessionId: "session-cron", seq: 1, parentSeq: null, type: "user", payload: { text: "report" } };
+  const reportItem = storedItem(
+    { kind: "UserMessage", text: "report" },
+    { sessionId: "session-cron", seq: 1, createdAt: 0 },
+  );
   const helpers: Record<string, () => Promise<unknown>> = {
     detect: () =>
       harness.shouldRespond!({
@@ -161,7 +164,7 @@ test("every helper call keeps its work's context and names its own purpose", asy
     compaction: () =>
       harness.compactHistory!({
         session,
-        history: [{ ...entry, scopeLabel: "channel:C123", createdAt: 0 } as SessionEntry],
+        history: [reportItem],
         recordModelCall: () => {},
       }),
     title: () => harness.generateTitle!("User:\nSummarize the nightly report"),

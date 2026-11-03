@@ -1,4 +1,4 @@
-import type { SessionEntry } from "../types.ts";
+import { isUserItem, type Item } from "./items.ts";
 
 export const SEARCH_HIT_LIMIT = 40;
 
@@ -26,9 +26,9 @@ export function entrySearchText(payload: unknown): string | null {
   return typeof text === "string" ? text : null;
 }
 
-export function entrySearchAuthor(entry: Pick<SessionEntry, "type" | "payload">): string | undefined {
-  if (entry.type !== "user") return undefined;
-  const name = (entry.payload as { name?: unknown } | null)?.name;
+export function itemSearchAuthor(item: Pick<Item, "kind" | "body">): string | undefined {
+  if (!isUserItem(item)) return undefined;
+  const name = item.body.name;
   return typeof name === "string" && name.trim() ? name.trim() : undefined;
 }
 

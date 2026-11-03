@@ -4,7 +4,8 @@ import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import { recoveredRuntime } from "../src/agent/runtime-recovery.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { randomUUID } from "node:crypto";
+import { storedItem } from "../src/sessions/items.ts";
 import { testConfigStore } from "./support/test-database.ts";
 
 const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
@@ -89,22 +90,24 @@ test("account preflight failure cannot change a scope default", async () => {
 });
 
 test("runtime recovery uses only durable decisions belonging to the same run and actor", () => {
-  const entry = (runId: string, actorId: string, modelId: string): SessionEntry => ({
-    sessionId: "s",
-    seq: 1,
-    parentSeq: null,
-    type: "tool_result",
-    scopeLabel: claims.scopeId,
-    createdAt: 1,
-    payload: { tool: "runtime", runId, actorId, runtimeHandoff: { choice: { ...active, modelId }, lifetime: "task" } },
-  });
-  const entries = [
-    entry("run", "alice", "gpt-6-astra"),
-    entry("other", "alice", "claude-sonnet-5"),
-    entry("run", "bob", "claude-opus-5"),
+  const run = randomUUID();
+  const item = (turnId: string, actorId: string, modelId: string) =>
+    storedItem(
+      {
+        kind: "ToolResult",
+        tool: "runtime",
+        callId: "c",
+        body: { actorId, runtimeHandoff: { choice: { ...active, modelId }, lifetime: "task" } },
+      },
+      { sessionId: "s", seq: 1, createdAt: 1, turnId },
+    );
+  const items = [
+    item(run, "alice", "gpt-6-astra"),
+    item(randomUUID(), "alice", "claude-sonnet-5"),
+    item(run, "bob", "claude-opus-5"),
   ];
-  assert.equal(recoveredRuntime(entries, "run", "alice")?.choice.modelId, "gpt-6-astra");
-  assert.equal(recoveredRuntime(entries, "new", "alice"), undefined);
+  assert.equal(recoveredRuntime(items, run, "alice")?.choice.modelId, "gpt-6-astra");
+  assert.equal(recoveredRuntime(items, randomUUID(), "alice"), undefined);
 });
 
 test("individual-account availability does not depend on organization provider keys", async () => {

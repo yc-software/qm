@@ -6,7 +6,8 @@ import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import { recoveredRuntime } from "../src/agent/runtime-recovery.ts";
 import { turnModelOptions } from "../src/agent/runtime-choice.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { randomUUID } from "node:crypto";
+import { storedItem } from "../src/sessions/items.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 
 const ORG = "org:default-org";
@@ -171,19 +172,25 @@ test("runtime get and inherit use job execution defaults, and handoffs survive r
     explicit,
   );
   assert.ok(handoff.ok && handoff.handoff);
-  const entries = [
-    {
-      type: "tool_result",
-      payload: { tool: "runtime", runId: "run", actorId: "alice", runtimeHandoff: handoff.handoff },
-    },
-  ] as SessionEntry[];
-  const restored = recoveredRuntime(entries, "run", "alice");
+  const run = randomUUID();
+  const items = [
+    storedItem(
+      {
+        kind: "ToolResult",
+        tool: "runtime",
+        callId: "c",
+        body: { actorId: "alice", runtimeHandoff: handoff.handoff },
+      },
+      { sessionId: "s", seq: 1, createdAt: 1, turnId: run },
+    ),
+  ];
+  const restored = recoveredRuntime(items, run, "alice");
   assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback, restored?.choice, undefined, "cron"), {
     ...category,
     ...explicit,
     modelId: "gpt-6-sol",
   });
-  assert.equal(recoveredRuntime(entries, "another-run", "alice"), undefined);
+  assert.equal(recoveredRuntime(items, randomUUID(), "alice"), undefined);
   assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, "cron"), category);
 });
 

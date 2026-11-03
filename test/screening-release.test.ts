@@ -3,8 +3,8 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
-import { emitEntry } from "../src/agent/turn-support.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { isUserItem } from "../src/sessions/items.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -17,12 +17,8 @@ mock.module("./support/mock-agent.ts", {
       const run = agent.runTurn;
       agent.runTurn = async (turn: AgentTurnInput) => {
         if (turn.input.startsWith("The human released quarantined")) {
-          const held = turn.history.findLast(
-            (entry) =>
-              entry.type === "user" &&
-              (entry.payload as { securityReleaseRequestId?: string }).securityReleaseRequestId,
-          );
-          observedRelease = String((held?.payload as { text?: string } | undefined)?.text ?? "Missing released output");
+          const held = turn.history.findLast((item) => isUserItem(item) && item.body.securityReleaseRequestId);
+          observedRelease = held?.text ?? "Missing released output";
           const reply = "Released fixture output.";
           await turn.emit({ kind: "UserMessage", text: turn.input });
           await turn.emit({ kind: "AgentMessage", text: reply });
@@ -41,7 +37,7 @@ mock.module("./support/mock-agent.ts", {
               return { stdout: "SCREENING_FIXTURE_BLOCK", stderr: "", code: 0, timedOut: false };
             },
           },
-          emit: (entry) => emitEntry(turn, entry),
+          emit: (item) => turn.emit(item),
           scopeLabel: turn.scopeLabel,
           orgScopeId: turn.orgScopeId,
           toolApprovalGate: turn.toolApprovalGate,

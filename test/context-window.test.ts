@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
-import { entryFromItem, type Item } from "../src/sessions/items.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
 import { scopeId } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -37,10 +36,9 @@ async function exerciseWindow(store: SessionStore, threadRef: string) {
   );
 
   const full = await store.getItems(session.id);
-  const asEntries = (items: Item[]) => items.map((item) => entryFromItem(item, session.scopeId));
   assert.deepEqual(
-    forModelContext(asEntries(window.items)),
-    forModelContext(asEntries(full)),
+    forModelContext(window.items),
+    forModelContext(full),
     "model context built from the window is identical to one built from the full history",
   );
 
