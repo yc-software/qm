@@ -318,7 +318,6 @@ import {
   PROCESS_REGISTRY_MIGRATIONS,
   type ProcessRegistry,
 } from "./processes/process-registry.ts";
-import { MEMORY_VECTOR_MIGRATIONS } from "./memory/postgres-vector-store.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
 import { createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
@@ -715,7 +714,6 @@ export function buildApp(
     ...RENDER_WORKSPACE_MIGRATIONS,
     ...FILE_UPLOAD_MIGRATIONS,
     ...BUDGET_MIGRATIONS,
-    ...MEMORY_VECTOR_MIGRATIONS,
     ...PROCESS_REGISTRY_MIGRATIONS,
   ]);
   const workspace =

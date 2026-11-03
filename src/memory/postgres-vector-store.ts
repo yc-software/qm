@@ -63,7 +63,6 @@ function vectorWidth(dimensions: number | undefined): number | null {
 }
 
 export const MEMORY_VECTOR_MIGRATIONS: readonly PgMigrationDefinition[] = [
-  ...MEMORY_FACTS_MIGRATIONS,
   { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
   { id: "memory/vectors/0002", statements: SCHEMA },
   tenantTables("memory/vectors/0003-tenants", [
@@ -72,7 +71,7 @@ export const MEMORY_VECTOR_MIGRATIONS: readonly PgMigrationDefinition[] = [
 ];
 
 export function createPostgresVectorStore(connectionString: string): MemoryVectorStore {
-  const db = createPgPool(connectionString, MEMORY_VECTOR_MIGRATIONS);
+  const db = createPgPool(connectionString, [...MEMORY_FACTS_MIGRATIONS, ...MEMORY_VECTOR_MIGRATIONS]);
   return {
     async search(input) {
       if (!input.ids.length) return [];

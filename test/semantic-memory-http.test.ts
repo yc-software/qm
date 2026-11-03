@@ -107,8 +107,8 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
     const { rows } = await inspector.query(
       "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector') AS installed, to_regclass('memory_fact_vectors') AS vectors",
     );
-    assert.equal(rows[0].installed, false);
-    assert.equal(rows[0].vectors, null);
+    assert.equal(rows[0].installed, true);
+    assert.equal(rows[0].vectors, "memory_fact_vectors");
   } finally {
     await inspector.end();
   }
