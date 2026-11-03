@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { applyPgMigrations, definePgMigration, migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
+import { grantAppLogin } from "../../src/tenants/logins.ts";
 import { TENANCY_BASE } from "../../src/tenants/migrations.ts";
 
 export const PG_URL = process.env.DATABASE_URL;
@@ -40,8 +41,9 @@ export async function withTypedTableDb<S extends Closable>(
     await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'main', 'Main')`, [tenant]);
     await migrateRegisteredPgSchemas(ownerUrl.toString());
     await owner.close?.();
-    await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD 'app' NOSUPERUSER NOBYPASSRLS IN ROLE qm_app`);
-    await admin.query(`GRANT USAGE, CREATE ON SCHEMA ${schema} TO ${role}`);
+    await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD 'app' NOSUPERUSER NOBYPASSRLS`);
+    await grantAppLogin(admin, appUrl.toString());
+    await admin.query(`GRANT CREATE ON SCHEMA ${schema} TO ${role}`);
     const otherTenant = randomUUID();
     await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [otherTenant]);
     store = make(appUrl.toString());
