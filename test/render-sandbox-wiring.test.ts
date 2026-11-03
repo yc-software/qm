@@ -9,7 +9,11 @@ test("Render sandboxes can start without S3 storage configuration", async () => 
       databaseUrl: "postgres://unused/unused",
       snapshotStore: "local",
       s3Bucket: undefined,
-      renderSandbox: { apiKey: "render-test-key", workspaceId: "tea-test" },
+      renderSandbox: {
+        apiKey: "render-test-key",
+        workspaceId: "tea-test",
+        image: `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`,
+      },
     }),
   );
   await built.runtime.stop();

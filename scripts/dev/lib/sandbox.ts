@@ -190,6 +190,33 @@ export async function resolveSandbox(opts: {
     return { backend: "superserve", env, detail: `Superserve (template ${template})`, publicApiUrl: apiUrl, warnings };
   }
 
+  if (backend === "render") {
+    const apiKey = opts.baseEnv.RENDER_API_KEY?.trim();
+    const workspaceId = opts.baseEnv.RENDER_WORKSPACE_ID?.trim();
+    const image = opts.baseEnv.RENDER_SANDBOX_IMAGE?.trim();
+    if (!apiKey || !workspaceId || !image)
+      throw new Error(
+        "--sandbox render requires RENDER_API_KEY, RENDER_WORKSPACE_ID, and RENDER_SANDBOX_IMAGE (<repository>:<tag>@sha256:<digest>) in the environment",
+      );
+    let apiUrl = opts.baseEnv.PUBLIC_API_URL || null;
+    if (!apiUrl) {
+      apiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
+      if (!apiUrl)
+        warnings.push(
+          "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
+        );
+    }
+    const env: Record<string, string> = {
+      SANDBOX_BACKEND: "render",
+      WORKSPACE_STORE: "postgres",
+      RENDER_API_KEY: apiKey,
+      RENDER_WORKSPACE_ID: workspaceId,
+      RENDER_SANDBOX_IMAGE: image,
+    };
+    if (apiUrl) env.PUBLIC_API_URL = apiUrl;
+    return { backend: "render", env, detail: `Render (image ${image})`, publicApiUrl: apiUrl, warnings };
+  }
+
   if (backend === "do-managed-agents") {
     const managedAgentsToken = opts.baseEnv.DO_AGENTS_API_TOKEN?.trim();
     if (!managedAgentsToken)
