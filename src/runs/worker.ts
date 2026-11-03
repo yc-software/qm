@@ -35,9 +35,11 @@ export const LEASE_LOST_CONSECUTIVE = 3;
 
 export const SHUTDOWN_SETTLE_MS = 5_000;
 
-export const SHUTDOWN_HANDBACK_MS = 3_000;
+const SHUTDOWN_HANDBACK_MS = 3_000;
 
-export const SHUTDOWN_EXIT_MS = 2 * SHUTDOWN_HANDBACK_MS + FLUSH_MS;
+export const SHUTDOWN_RELEASE_MS = SHUTDOWN_SETTLE_MS + SHUTDOWN_HANDBACK_MS;
+
+export const SHUTDOWN_EXIT_MS = SHUTDOWN_RELEASE_MS + SHUTDOWN_HANDBACK_MS + FLUSH_MS;
 
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 
@@ -189,9 +191,12 @@ async function handBack(
     await deps.runs.releaseLease(run.id, token, stop);
     return;
   }
-  console.warn(`[worker] run ${run.id} ignored shutdown; handing it back to resume after this process exits`);
   const exited = Date.now() + SHUTDOWN_EXIT_MS;
-  if (!(await deps.runs.heartbeat(run.id, token, deps.leaseTtlMs))) return;
+  if (!(await deps.runs.heartbeat(run.id, token, deps.leaseTtlMs))) {
+    console.warn(`[worker] run ${run.id} ignored shutdown and is no longer held here; leaving it to its owner`);
+    return;
+  }
+  console.warn(`[worker] run ${run.id} ignored shutdown; handing it back to resume after this process exits`);
   const session = await deps.sessions.getByThread(run.sessionId);
   if (session) await deps.sessions.fenceTurnLease(session.id, exited);
   await deps.runs.releaseLease(run.id, token, stop, exited);
