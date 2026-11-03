@@ -744,6 +744,22 @@ test("SkillStore.promote of two same-name skills at once leaves one org record",
   assert.equal(orgRecords.length, 1);
 });
 
+test("SkillStore.promote supersedes a draft org record of the same name instead of adding a second", async () => {
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const manifest = { name: "tidy", description: "d", requiredCapabilities: [], body: "b" };
+  const draft = await store.create({ scopeId: scopeId("org", ORG), manifest, createdBy: "U2" });
+  const src = await store.create({ scopeId: scopeId("personal", "U1"), manifest, createdBy: "U1" });
+  await store.review(src.id, "R1", []);
+  await store.publish(src.id);
+  const promoted = await store.promote(src.id, scopeId("org", ORG));
+  const live = (await store.list()).filter((x) => x.scopeId === scopeId("org", ORG) && x.status !== "archived");
+  assert.deepEqual(
+    live.map((x) => [x.id, x.status]),
+    [[draft.id, "published"]],
+  );
+  assert.equal(promoted.version, draft.version + 1);
+});
+
 test("SkillStore.promote supersedes an existing same-name org record instead of duplicating it", async () => {
   const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const src = await store.create({

@@ -312,8 +312,11 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
       if (s.status !== "published") throw new Error("only a published skill can be promoted");
       if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — cannot promote");
       return withNameLock(targetScopeId, s.manifest.name, async () => {
-        const existing = (await skills.all()).find(
-          (x) => x.status === "published" && x.scopeId === targetScopeId && x.manifest.name === s.manifest.name,
+        const existing = foreignSkillCollision(
+          await inScopes([targetScopeId]),
+          targetScopeId,
+          s.manifest.name,
+          () => false,
         );
         const at = Date.now();
         const promoted: Skill = {
