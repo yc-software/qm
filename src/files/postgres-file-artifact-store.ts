@@ -15,6 +15,7 @@ import {
   type FileSource,
   type ListOwnedOptions,
 } from "./file-artifact-store.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS file_artifacts(
@@ -68,6 +69,7 @@ export function createPostgresFileArtifactStore(
   byteStore: DurableByteStore,
 ): FileArtifactStore {
   const { q, query, pool } = createPgPool(connectionString, [
+    ...TENANCY,
     { id: "files/artifacts/0001", statements: SCHEMA },
     {
       id: "files/artifacts/0002",
@@ -75,6 +77,10 @@ export function createPostgresFileArtifactStore(
         "CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)",
       ],
     },
+    tenantTables("files/artifacts/0003-tenants", [
+      { table: "file_artifacts", primaryKey: "id" },
+      { table: "file_artifact_deletions", primaryKey: "id" },
+    ]),
   ]);
 
   async function getRow(id: string): Promise<FileArtifact | null> {

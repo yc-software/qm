@@ -4,6 +4,7 @@ import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
 import { spokenByPerson } from "../core/turn-origin.ts";
+import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 const CHANNEL = "run_signals";
 
@@ -22,6 +23,7 @@ function toSignals(rows: Rows): RunSignal[] {
 
 export function createPostgresRunSignalStore(connectionString: string): RunSignalStore {
   const pg = createPgPool(connectionString, [
+    ...TENANCY,
     {
       id: "runs/signals/0001",
       statements: [
@@ -45,6 +47,13 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
         `CREATE UNIQUE INDEX IF NOT EXISTS run_signals_by_dedupe_key ON run_signals(dedupe_key) WHERE dedupe_key IS NOT NULL`,
       ],
     },
+    tenantTables("runs/signals/0003-tenants", [
+      {
+        table: "run_signals",
+        primaryKey: "id",
+        unique: [{ name: "run_signals_by_dedupe_key", columns: "dedupe_key", where: "dedupe_key IS NOT NULL" }],
+      },
+    ]),
   ]);
   const q = pg.query;
 
