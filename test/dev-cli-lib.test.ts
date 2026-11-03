@@ -401,6 +401,7 @@ test("supervised children share the selected dev org", () => {
     watch: false,
     webUiBasePath: "/",
     slack: { botToken: "xoxb-test", appToken: "xapp-test" },
+    slot: "pool1",
     databaseUrl: "postgres://postgres:pw@localhost/qm",
     adminGrantsSeed: "",
     coreSigningSecret: "",
@@ -412,7 +413,7 @@ test("supervised children share the selected dev org", () => {
   const coreEnv = specs.find((spec) => spec.name === "core")!.env;
   assert.equal(coreEnv.ORG_ID, undefined);
   assert.equal(coreEnv.DATABASE_OWNER_URL, "postgres://postgres:pw@localhost/qm");
-  assert.equal(new URL(coreEnv.DATABASE_URL!).username, "qm_app");
+  assert.equal(new URL(coreEnv.DATABASE_URL!).username, "pool1_app");
   assert.equal(coreEnv.DATABASE_READER_URL, undefined);
   for (const spec of specs.filter((spec) => spec.name !== "core")) {
     assert.equal(spec.env.HOME, undefined);
@@ -431,6 +432,7 @@ test("child specs disable environment Slack tokens when no Slack tokens are supp
     baseEnv: { SLACK_BOT_TOKEN: "inherited-bot", SLACK_APP_TOKEN: "inherited-app" },
     watch: false,
     webUiBasePath: "/",
+    slot: "pool1",
     databaseUrl: "postgres://postgres:pw@localhost/qm",
     adminGrantsSeed: "",
     coreSigningSecret: "",

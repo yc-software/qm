@@ -10,6 +10,7 @@ export interface SpecInputs {
   web?: boolean;
   webUiBasePath: string;
   slack?: { botToken: string; appToken: string };
+  slot: string;
   databaseUrl: string;
   adminGrantsSeed: string;
   coreSigningSecret: string;
@@ -33,7 +34,7 @@ export function buildChildSpecs(i: SpecInputs): ChildSpec[] {
       env: {
         ...base,
         PORT: String(i.ports.core),
-        ...(i.databaseUrl ? databaseLoginEnv(i.databaseUrl) : {}),
+        ...(i.databaseUrl ? databaseLoginEnv(i.databaseUrl, i.slot) : {}),
         ...(i.adminGrantsSeed ? { ADMIN_GRANTS: i.adminGrantsSeed } : {}),
         PUBLIC_WEB_URL: i.web === false ? "" : `http://localhost:${i.ports.portal}`,
         ...(i.slack

@@ -530,8 +530,7 @@ test("Render creates one project and wires MinIO credentials, URLs, Postgres, an
 
   assert.equal(core.RENDER_ENVIRONMENT_ID, "evm-acme");
   assert.equal(core.DATABASE_OWNER_URL, "postgresql://qm:private-password@pg/qm");
-  assert.match(core.DATABASE_URL!, /^postgresql:\/\/qm_app:[A-Za-z0-9_-]{43}@pg\/qm$/);
-  assert.equal(core.DATABASE_READER_URL, undefined);
+  assert.match(core.DATABASE_URL!, /^postgresql:\/\/acme_app:[A-Za-z0-9_-]{43}@pg\/qm$/);
   assert.equal(core.SANDBOX_BACKEND, undefined, "the sandbox backend is a tenant setting");
   assert.equal(core.PUBLIC_API_URL, "https://acme-core-assigned.onrender.com");
   assert.equal(minio.MINIO_API_CORS_ALLOW_ORIGIN, "https://acme-web-ui-assigned.onrender.com");

@@ -179,8 +179,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       "secret-store values win over colliding config env on services and plugins",
     );
     assert.ok(envFiles.includes("DATABASE_OWNER_URL=postgres://owner:owner-pw@external/db"));
-    assert.match(envFiles, /\nDATABASE_URL=postgres:\/\/qm_app:[A-Za-z0-9_-]{43}@external\/db\n/);
-    assert.doesNotMatch(envFiles, /DATABASE_READER_URL/);
+    assert.match(envFiles, /\nDATABASE_URL=postgres:\/\/sekrit_app:[A-Za-z0-9_-]{43}@external\/db\n/);
     assert.ok(!envFiles.includes("EXAMPLE_SCREEN_TOKEN"), "tenant-owned secrets stay out of core env");
     assert.ok(
       envFiles.includes(`FLY_RESIDENT_ENV_SB_TOKEN=${SECRETS.SB_TOKEN}`),
@@ -248,7 +247,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
 });
 
 test(
-  "managed Postgres: core gets the qm_owner and qm_app logins, never the superuser; state.json is 0600",
+  "managed Postgres: core gets the deployment's owner and app logins, never the superuser; state.json is 0600",
   { timeout: 60_000 },
   async () => {
     const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-pg-"));
@@ -294,10 +293,12 @@ test(
 
       const envFiles = readFileSync(fake.envCopy, "utf8");
       assert.ok(envFiles.includes(`POSTGRES_PASSWORD=${password}`), "pg gets its password via the env-file");
-      const owner = derivedLoginPassword(password, "qm_owner");
-      assert.ok(envFiles.includes(`DATABASE_OWNER_URL=postgres://qm_owner:${owner}@pg:5432/qm`));
+      const owner = derivedLoginPassword(password, "sekritpg_owner");
+      assert.ok(envFiles.includes(`DATABASE_OWNER_URL=postgres://sekritpg_owner:${owner}@pg:5432/qm`));
       assert.ok(
-        envFiles.includes(`DATABASE_URL=postgres://qm_app:${derivedLoginPassword(owner, "qm_app")}@pg:5432/qm`),
+        envFiles.includes(
+          `DATABASE_URL=postgres://sekritpg_app:${derivedLoginPassword(owner, "sekritpg_app")}@pg:5432/qm`,
+        ),
       );
       assert.ok(!envFiles.includes(`postgres://postgres:`), "core never receives the superuser login");
       assert.match(argv, /\["exec","-i","qm-sekritpg-pg","psql","-U","postgres","-d","qm"/);

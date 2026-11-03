@@ -1,8 +1,7 @@
 import { createHmac } from "node:crypto";
 import { CliError } from "./log.ts";
 
-export const OWNER_LOGIN = "qm_owner";
-export const APP_LOGIN = "qm_app";
+const MAX_LOGIN_BYTES = 63;
 
 export interface DatabaseLoginEnv {
   DATABASE_OWNER_URL: string;
@@ -10,6 +9,10 @@ export interface DatabaseLoginEnv {
 }
 
 export const DATABASE_LOGIN_ENV_NAMES = ["DATABASE_OWNER_URL", "DATABASE_URL"] as const;
+
+export function deploymentLogin(deploymentId: string, role: "app" | "owner"): string {
+  return `${deploymentId.replaceAll("-", "_").slice(0, MAX_LOGIN_BYTES - role.length - 1)}_${role}`;
+}
 
 export function derivedLoginPassword(secret: string, login: string): string {
   return createHmac("sha256", secret).update(`qm-database-login:${login}`).digest("base64url");
@@ -35,14 +38,15 @@ export function loginUrl(baseUrl: string, login: string, password: string): stri
   return url.toString();
 }
 
-export function databaseLoginEnv(ownerUrl: string, appPassword?: string): DatabaseLoginEnv {
+export function databaseLoginEnv(ownerUrl: string, deploymentId: string, appPassword?: string): DatabaseLoginEnv {
   const owner = parsedDatabaseUrl(ownerUrl, "DATABASE_OWNER_URL");
   const ownerLogin = decodeURIComponent(owner.username);
-  if (ownerLogin === APP_LOGIN)
+  const appLogin = deploymentLogin(deploymentId, "app");
+  if (ownerLogin === appLogin)
     throw new CliError(`DATABASE_OWNER_URL must name the login that owns the tables, not ${ownerLogin}`);
   const ownerPassword = decodeURIComponent(owner.password);
   return {
     DATABASE_OWNER_URL: ownerUrl,
-    DATABASE_URL: loginUrl(ownerUrl, APP_LOGIN, appPassword ?? derivedLoginPassword(ownerPassword, APP_LOGIN)),
+    DATABASE_URL: loginUrl(ownerUrl, appLogin, appPassword ?? derivedLoginPassword(ownerPassword, appLogin)),
   };
 }

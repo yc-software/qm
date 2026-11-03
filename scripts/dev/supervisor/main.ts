@@ -373,6 +373,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     portalSessionSecret,
     portalDevPrincipal,
     sandboxEnv: sandbox.env,
+    slot,
   };
 }
 

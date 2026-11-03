@@ -102,7 +102,7 @@ else if (a[0] === "status") console.log(JSON.stringify({ Machines: [{ config: { 
 else if (a[0] === "image" && a[1] === "show") console.log(JSON.stringify([{ Registry: "registry.fly.io", Repository: "acme-core", Tag: "deployment-123", Digest: "sha256:${"b".repeat(64)}" }]));
 else if (a[0] === "mpg" && a[1] === "list") console.log("pg-1 acme-pg");
 else if (a[0] === "mpg" && a[1] === "status") console.log(JSON.stringify({ credentials: { direct_uri: "postgresql://u:p@direct.pg-1.flympg.net/db" } }));
-else if (a[0] === "mpg" && a[1] === "users" && a[2] === "list") console.log(JSON.stringify([{ name: "qm_reader", role: "reader" }]));
+else if (a[0] === "mpg" && a[1] === "users" && a[2] === "list") console.log(JSON.stringify([{ name: "globex_app", role: "writer" }]));
 else if (a[0] === "mpg" && a[1] === "users" && a[2] === "rotate-password") console.log(JSON.stringify({ username: a[a.indexOf("--username") + 1], password: "rotated-" + a[a.indexOf("--username") + 1] }));
 else if (a[0] === "secrets" && a[1] === "set") fs.appendFileSync(${JSON.stringify(log)}, "  value " + fs.readFileSync(0, "utf8") + "\\n");
 else console.log("ok");
@@ -134,11 +134,13 @@ else console.log("ok");
     await flyUp(config, dir, { buildFrom: true, configPath });
     const calls = readFileSync(log, "utf8");
     assert.match(calls, /storage create --name acme-data --app acme-core --org personal --yes/);
-    assert.match(calls, /mpg users create pg-1 --username qm_app --role writer/);
-    assert.doesNotMatch(calls, /mpg users create pg-1 --username qm_reader/, "an existing login is reused");
+    assert.match(calls, /mpg users create pg-1 --username acme_app --role writer/);
+    assert.doesNotMatch(calls, /--username globex_app/, "another deployment's login is left alone");
     assert.match(calls, /DATABASE_OWNER_URL=-\n {2}value postgresql:\/\/u:p@direct\.pg-1\.flympg\.net\/db/);
-    assert.match(calls, /DATABASE_URL=-\n {2}value postgresql:\/\/qm_app:rotated-qm_app@direct\.pg-1\.flympg\.net\/db/);
-    assert.doesNotMatch(calls, /DATABASE_READER_URL/);
+    assert.match(
+      calls,
+      /DATABASE_URL=-\n {2}value postgresql:\/\/acme_app:rotated-acme_app@direct\.pg-1\.flympg\.net\/db/,
+    );
     assert.match(calls, /secrets unset --stage -a acme-core FLY_RESIDENT_ENV_STALE_TOKEN\n/);
     assert.doesNotMatch(calls, /secrets unset[^\n]*(SECURITY_SCREEN_PROXY_TOKEN|ANTHROPIC_API_KEY)/);
     assert.ok(calls.indexOf("secrets unset") < calls.indexOf("deploy"));

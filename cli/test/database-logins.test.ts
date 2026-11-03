@@ -1,44 +1,58 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { databaseLoginEnv, derivedLoginPassword } from "../src/database-logins.ts";
+import { databaseLoginEnv, deploymentLogin, derivedLoginPassword } from "../src/database-logins.ts";
 import { dockerOwnerBootstrapSql, managedDockerOwnerUrl } from "../src/backends/docker-postgres.ts";
 import { mpgClusterOfUrl } from "../src/backends/fly-postgres.ts";
 
+test("logins are named after the deployment and fit Postgres's 63-byte limit", () => {
+  assert.equal(deploymentLogin("acme-prod", "app"), "acme_prod_app");
+  assert.equal(deploymentLogin("acme-prod", "owner"), "acme_prod_owner");
+  const long = "a".repeat(63);
+  assert.equal(Buffer.byteLength(deploymentLogin(long, "owner")), 63);
+  assert.notEqual(deploymentLogin("acme", "app"), deploymentLogin("globex", "app"));
+});
+
 test("the app login is derived from the owner login and keeps its host, database and options", () => {
   const owner = "postgres://owner:s3cret@db.internal:5432/qm?sslmode=require";
-  const env = databaseLoginEnv(owner);
+  const env = databaseLoginEnv(owner, "acme");
   assert.deepEqual(Object.keys(env).sort(), ["DATABASE_OWNER_URL", "DATABASE_URL"]);
   assert.equal(env.DATABASE_OWNER_URL, owner);
   const app = new URL(env.DATABASE_URL);
-  assert.equal(app.username, "qm_app");
-  assert.equal(app.password, derivedLoginPassword("s3cret", "qm_app"));
+  assert.equal(app.username, "acme_app");
+  assert.equal(app.password, derivedLoginPassword("s3cret", "acme_app"));
   assert.notEqual(app.password, "s3cret");
   assert.equal(app.host, "db.internal:5432");
   assert.equal(app.pathname, "/qm");
   assert.equal(app.searchParams.get("sslmode"), "require");
-  assert.deepEqual(databaseLoginEnv(owner), env, "derivation is stable across runs");
-  assert.notEqual(databaseLoginEnv(owner.replace("s3cret", "rotated")).DATABASE_URL, env.DATABASE_URL);
+  assert.deepEqual(databaseLoginEnv(owner, "acme"), env, "derivation is stable across runs");
+  assert.notEqual(databaseLoginEnv(owner.replace("s3cret", "rotated"), "acme").DATABASE_URL, env.DATABASE_URL);
 });
 
 test("a provider-issued app password is used as given", () => {
-  const env = databaseLoginEnv("postgresql://u:p@direct.pg-1.flympg.net/db", "a-pw");
-  assert.equal(env.DATABASE_URL, "postgresql://qm_app:a-pw@direct.pg-1.flympg.net/db");
+  const env = databaseLoginEnv("postgresql://u:p@direct.pg-1.flympg.net/db", "acme", "a-pw");
+  assert.equal(env.DATABASE_URL, "postgresql://acme_app:a-pw@direct.pg-1.flympg.net/db");
   assert.equal(mpgClusterOfUrl(env.DATABASE_OWNER_URL), "pg-1");
   assert.equal(mpgClusterOfUrl("postgres://u:p@db.example.com/qm"), undefined);
 });
 
 test("an owner URL that is not an owner login is refused", () => {
-  assert.throws(() => databaseLoginEnv("postgres://qm_app:x@db/qm"), /must name the login that owns the tables/);
-  assert.throws(() => databaseLoginEnv("postgres://db/qm"), /must carry a login name and password/);
-  assert.throws(() => databaseLoginEnv("mysql://u:p@db/qm"), /postgres:\/\/ or postgresql:\/\//);
+  assert.throws(
+    () => databaseLoginEnv("postgres://acme_app:x@db/qm", "acme"),
+    /must name the login that owns the tables/,
+  );
+  assert.throws(() => databaseLoginEnv("postgres://db/qm", "acme"), /must carry a login name and password/);
+  assert.throws(() => databaseLoginEnv("mysql://u:p@db/qm", "acme"), /postgres:\/\/ or postgresql:\/\//);
 });
 
 test("the Docker owner bootstrap makes a non-superuser owner and never embeds its password", () => {
-  const password = derivedLoginPassword("superuser-pw", "qm_owner");
-  const sql = dockerOwnerBootstrapSql(password);
-  assert.match(sql, /ALTER ROLE qm_owner WITH LOGIN NOSUPERUSER CREATEROLE NOBYPASSRLS PASSWORD 'SCRAM-SHA-256\$4096:/);
-  assert.match(sql, /ALTER DATABASE qm OWNER TO qm_owner;/);
+  const password = derivedLoginPassword("superuser-pw", "acme_owner");
+  const sql = dockerOwnerBootstrapSql("acme_owner", password);
+  assert.match(
+    sql,
+    /ALTER ROLE "acme_owner" WITH LOGIN NOSUPERUSER CREATEROLE NOBYPASSRLS PASSWORD 'SCRAM-SHA-256\$4096:/,
+  );
+  assert.match(sql, /ALTER DATABASE qm OWNER TO "acme_owner";/);
   assert.ok(!sql.includes(password));
-  assert.equal(new URL(managedDockerOwnerUrl("superuser-pw")).password, password);
-  assert.equal(new URL(managedDockerOwnerUrl("superuser-pw")).username, "qm_owner");
+  assert.equal(new URL(managedDockerOwnerUrl("acme", "superuser-pw")).password, password);
+  assert.equal(new URL(managedDockerOwnerUrl("acme", "superuser-pw")).username, "acme_owner");
 });

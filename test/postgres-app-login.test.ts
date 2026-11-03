@@ -42,7 +42,7 @@ function loginUrl(name: string, password: string): string {
 }
 
 test(
-  "the release step creates the login DATABASE_URL names, and sets its password only when it does not log in",
+  "the release step creates the login DATABASE_URL names and never resets an existing login's password",
   { skip },
   async () => {
     const admin = new pg.Client({ connectionString: URL! });
@@ -63,10 +63,9 @@ test(
         rolcreatedb: false,
       });
       assert.equal(await ensureAppLogin(URL!, appUrl), "unchanged", "a working login is left alone");
-      const rotated = loginUrl(name, randomBytes(24).toString("base64url"));
-      assert.equal(await logsIn(rotated), false);
-      assert.equal(await ensureAppLogin(URL!, rotated), "password set");
-      assert.equal(await logsIn(rotated), true);
+      const other = loginUrl(name, randomBytes(24).toString("base64url"));
+      await assert.rejects(ensureAppLogin(URL!, other), /exists but refuses DATABASE_URL's password/);
+      assert.equal(await logsIn(appUrl), true, "another deployment's password is never reset");
       await assert.rejects(
         ensureAppLogin(URL!, URL!),
         /is the table owner|the table owner; give it a login of its own/,
@@ -89,7 +88,7 @@ test(
     const admin = new pg.Pool({ connectionString: ownerUrl.toString() });
     const password = randomBytes(24).toString("base64url");
     const appUrl = new globalThis.URL(ownerUrl);
-    appUrl.username = "qm_app";
+    appUrl.username = `${schema}_app`;
     appUrl.password = password;
     await admin.query(`CREATE SCHEMA ${schema}`);
     await ensureAppLogin(ownerUrl.toString(), appUrl.toString());
@@ -99,8 +98,8 @@ test(
         id: "0001_login_probe",
         statements: [
           `CREATE TABLE ${schema}.login_probe(id int)`,
-          `GRANT USAGE ON SCHEMA ${schema} TO qm_app`,
-          `GRANT SELECT, INSERT ON ${schema}.login_probe TO qm_app`,
+          `GRANT USAGE ON SCHEMA ${schema} TO ${schema}_app`,
+          `GRANT SELECT, INSERT ON ${schema}.login_probe TO ${schema}_app`,
         ],
       },
     ]);
@@ -112,13 +111,14 @@ test(
       assert.equal(owner.rows[0].tableowner, decodeURIComponent(ownerUrl.username));
       await store.q(`INSERT INTO login_probe VALUES (1)`);
       assert.deepEqual(await store.q(`SELECT current_user AS who, count(*)::int AS n FROM login_probe`), [
-        { who: "qm_app", n: 1 },
+        { who: `${schema}_app`, n: 1 },
       ]);
       await assert.rejects(store.q(`DROP TABLE login_probe`), /must be owner/);
     } finally {
       await store.close();
       configurePgPooling({});
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+      await admin.query(`DROP ROLE ${schema}_app`);
       await admin.end();
     }
   },

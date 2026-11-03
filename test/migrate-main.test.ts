@@ -21,7 +21,7 @@ test(
         env: {
           PATH: process.env.PATH,
           NODE_ENV: "test",
-          ...databaseLoginEnv(databaseUrl!),
+          ...databaseLoginEnv(databaseUrl!, new URL(databaseUrl!).pathname.slice(1)),
           SANDBOX_BACKEND: "local",
           CONNECTOR_SECRET_KEY: "migration-test-connector-secret",
           CAPABILITY_SECRET: "migration-test-capability-secret",

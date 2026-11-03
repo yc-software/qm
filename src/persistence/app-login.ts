@@ -4,7 +4,7 @@ import { pgConnectionOptions } from "./pg-pool.ts";
 const INVALID_PASSWORD = "28P01";
 const MAX_NAME_BYTES = 63;
 
-export type AppLoginChange = "created" | "password set" | "unchanged";
+export type AppLoginChange = "created" | "unchanged";
 
 async function loginAccepted(url: string): Promise<boolean> {
   const pg = (await import("pg")).default;
@@ -42,16 +42,16 @@ export async function ensureAppLogin(ownerUrl: string, appUrl: string): Promise<
       await owner.query("COMMIT");
       return "unchanged";
     }
-    const exists = Boolean((await owner.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [login])).rowCount);
-    const role = owner.escapeIdentifier(login);
-    const password = `PASSWORD '${scramVerifier(decodeURIComponent(new URL(appUrl).password))}'`;
+    if ((await owner.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [login])).rowCount)
+      throw new Error(
+        `the login ${login} exists but refuses DATABASE_URL's password; it may belong to another deployment, so it is left unchanged`,
+      );
+    const password = scramVerifier(decodeURIComponent(new URL(appUrl).password));
     await owner.query(
-      exists
-        ? `ALTER ROLE ${role} ${password}`
-        : `CREATE ROLE ${role} LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE ${password}`,
+      `CREATE ROLE ${owner.escapeIdentifier(login)} LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD '${password}'`,
     );
     await owner.query("COMMIT");
-    return exists ? "password set" : "created";
+    return "created";
   } finally {
     await owner.end();
   }

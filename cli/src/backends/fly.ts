@@ -733,6 +733,7 @@ async function deployService(
     const ownerUrl = deploymentSecretValue("DATABASE_OWNER_URL", readEnvFile(ctx.envFile).get("DATABASE_OWNER_URL"));
     timing.time(service, "Postgres ensure", () =>
       ensureFlyPostgres({
+        deploymentId: ctx.config.deploymentId,
         appPrefix: ctx.appPrefix,
         flyOrg: ctx.flyOrg,
         region: ctx.region,

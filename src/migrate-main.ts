@@ -1,23 +1,19 @@
 import { loadConfig } from "./config.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
-import { appLoginName, ensureAppLogin, type AppLoginChange } from "./persistence/app-login.ts";
+import { appLoginName, ensureAppLogin } from "./persistence/app-login.ts";
 import { buildApp } from "./wiring.ts";
 
-const CHANGE_NOTE: Record<AppLoginChange, (login: string) => string> = {
-  created: (login) => `created the login ${login}`,
-  "password set": (login) => `set the password for ${login}`,
-  unchanged: (login) => `${login} already accepts its password`,
-};
-
 const config = loadConfig();
-if (!config.databaseUrl || !config.databaseOwnerUrl)
-  throw new Error("database migrations need DATABASE_URL and DATABASE_OWNER_URL");
-const { runtime } = buildApp(config);
+const { databaseUrl, databaseOwnerUrl } = config;
+if (!databaseUrl || !databaseOwnerUrl) throw new Error("database migrations need DATABASE_URL and DATABASE_OWNER_URL");
+const { runtime } = buildApp({ ...config, databaseUrl: databaseOwnerUrl, databasePoolUrl: undefined });
 try {
-  const change = await ensureAppLogin(config.databaseOwnerUrl, config.databaseUrl);
-  await migrateRegisteredPgSchemas(config.databaseUrl);
-  const login = appLoginName(config.databaseOwnerUrl, config.databaseUrl);
-  console.log(`[qm:migrate] ${CHANGE_NOTE[change](login)}; database migrations applied`);
+  const change = await ensureAppLogin(databaseOwnerUrl, databaseUrl);
+  await migrateRegisteredPgSchemas(databaseOwnerUrl);
+  const login = appLoginName(databaseOwnerUrl, databaseUrl);
+  console.log(
+    `[qm:migrate] ${change === "created" ? "created" : "found"} the login ${login}; database migrations applied`,
+  );
 } finally {
   await runtime.stop();
 }

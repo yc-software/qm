@@ -255,7 +255,7 @@ async function ensurePostgres(ctx: DockerCtx, dryRun: boolean): Promise<string> 
   }
 
   const pgName = cname(ctx, "pg");
-  const url = (password: string): string => managedDockerOwnerUrl(password);
+  const url = (password: string): string => managedDockerOwnerUrl(ctx.config.deploymentId, password);
 
   if (dryRun) {
     step(`Postgres: would run ${pgName} (image pgvector/pgvector:0.8.1-pg16, volume ${pgVolume(ctx)})`);
@@ -405,7 +405,7 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
   };
   if (ctx.signingSecret) env.CORE_SIGNING_SECRET = ctx.signingSecret;
   if (service === "core") {
-    Object.assign(env, databaseLoginEnv(ctx.databaseOwnerUrl));
+    Object.assign(env, databaseLoginEnv(ctx.databaseOwnerUrl, config.deploymentId));
     for (const key of ctx.sandboxSecretKeys) {
       const value = out[key];
       if (value !== undefined) env[key] = value;
@@ -691,7 +691,7 @@ export async function dockerUp(
   ctx.databaseOwnerUrl = await ensurePostgres(ctx, false);
   if (!externalDockerOwnerUrl(ctx.envFile)) {
     await waitPostgres(ctx);
-    bootstrapDockerOwner(cname(ctx, "pg"), readDeploymentState(config.deploymentId)!.pgPassword!);
+    bootstrapDockerOwner(cname(ctx, "pg"), config.deploymentId, readDeploymentState(config.deploymentId)!.pgPassword!);
   }
 
   for (const def of ordered(runnableServices(config.services))) {

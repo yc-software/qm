@@ -260,8 +260,7 @@ test("a fresh Fly deploy stages the direct Managed Postgres URL without attachin
     (args) => args[0] === "secrets" && args[1] === "set" && args.includes("DATABASE_OWNER_URL=-"),
   );
   assert.ok(commands.some((args) => args[0] === "secrets" && args.includes("DATABASE_URL=-")));
-  assert.ok(!commands.some((args) => args[0] === "secrets" && args.includes("DATABASE_READER_URL=-")));
-  assert.ok(commands.some((args) => args.join(" ") === "mpg users create pg-1 --username qm_app --role writer"));
+  assert.ok(commands.some((args) => args.join(" ") === "mpg users create pg-1 --username acme_app --role writer"));
   assert.ok(!commands.some((args) => args.includes("--role") && args.includes("reader")), "no reader login is made");
   const deploy = commands.findIndex((args) => args[0] === "deploy");
   assert.ok(directSecret >= 0, "the direct DATABASE_URL is staged");

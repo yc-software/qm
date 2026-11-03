@@ -584,7 +584,7 @@ resource "random_password" "database" {
 }
 
 resource "random_password" "database_login" {
-  for_each = toset(["qm_app"])
+  for_each = toset([local.app_login])
   length   = 32
   special  = false
 }
@@ -780,9 +780,10 @@ resource "aws_secretsmanager_secret" "contract" {
   tags                    = local.tags
 }
 locals {
+  app_login = "${replace(substr(var.deployment_id, 0, 59), "-", "_")}_app"
   database_logins = {
     DATABASE_OWNER_URL = { user = var.db_username, password = random_password.database.result }
-    DATABASE_URL       = { user = "qm_app", password = random_password.database_login["qm_app"].result }
+    DATABASE_URL       = { user = local.app_login, password = random_password.database_login[local.app_login].result }
   }
 }
 

@@ -113,7 +113,7 @@ export function renderServiceEnv(
       }),
     );
   const managedValues: Record<string, string> = {
-    ...(coreAccess ? databaseLoginEnv(connections.databaseOwnerUrl) : {}),
+    ...(coreAccess ? databaseLoginEnv(connections.databaseOwnerUrl, config.deploymentId) : {}),
     PUBLIC_API_URL: config.apiUrl ?? config.publicUrl,
   };
   for (const secret of computedSecrets(config)) {
