@@ -138,3 +138,32 @@ test("sidebar batches visible goals from the session rows and drops inactive one
   assert.equal(list.find((row) => row.id === visible[0])?.goal?.activeMs, 123);
   assert.equal(list.find((row) => row.id === visible[1])?.goal, undefined);
 });
+
+test("a working subagent reports its current run start and latest purpose from that run", async () => {
+  const { app, runs, sessions } = freshApp();
+  const parent = await app.turn(dm("parent", "web:U1:p"));
+  const child = await app.turn(dm("child", "web:U1:c"));
+  await sessions.setParentSession(child.sessionId!, parent.sessionId!);
+  const say = async (purpose: string) => {
+    const { lease } = await sessions.acquireLease(child.sessionId!);
+    await sessions.append(lease!, {
+      type: "tool_call",
+      payload: { tool: "execute", callId: purpose, purpose },
+      scopeLabel: "personal:U1",
+    });
+    await sessions.releaseLease(lease!);
+  };
+  await say("Old task");
+  await new Promise((r) => setTimeout(r, 5));
+  await runs.enqueue({ sessionId: "web:U1:c", request: enqueueRequest() });
+  const claimed = await runs.claim("w1", 5_000);
+
+  let row = (await app.listSessions("U1")).find((s) => s.id === child.sessionId);
+  assert.equal(row?.workingSince, claimed!.startedAt);
+  assert.equal(row?.purpose, undefined, "a purpose from an earlier run is not shown");
+
+  await say("Reading the spec");
+  row = (await app.listSessions("U1")).find((s) => s.id === child.sessionId);
+  assert.equal(row?.purpose, "Reading the spec");
+  assert.equal((await app.listSessions("U1")).find((s) => s.id === parent.sessionId)?.workingSince, undefined);
+});

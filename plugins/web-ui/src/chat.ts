@@ -2840,6 +2840,11 @@ export function createChatSurface(
         ${row.state === "waiting" ? html`<span class="awaiting-dot" aria-hidden="true"></span>` : nothing}
         ${row.state === "failed" ? html`<span class="subagent-failed-mark">${icon(TriangleAlert, 12)}</span>` : nothing}
         <span class="subagent-row-title" dir="auto">${title}</span>
+        ${
+          row.state === "working" && row.session.purpose
+            ? html`<span class="subagent-row-purpose" dir="auto">${row.session.purpose}</span>`
+            : nothing
+        }
         <span class="subagent-row-meta">${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}</span>
       </button>
       ${

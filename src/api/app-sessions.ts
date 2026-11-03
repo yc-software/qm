@@ -348,6 +348,23 @@ export function createSessionMethods(
           ...(goal.floor ? { floor: { ...goal.floor } } : {}),
         });
     }
+    const workingChildren = new Map<string, { workingSince: number; purpose?: string }>();
+    await Promise.all(
+      working
+        .filter((s) => s.parentSessionId)
+        .map(async (s) => {
+          const run = latestRuns.get(s.threadRef);
+          const since = run?.startedAt ?? run?.createdAt;
+          if (!since) return;
+          const recent = await deps.sessions.getEntries(s.id, { limit: 8 }).catch(() => []);
+          const purpose = recent
+            .filter((e) => e.type === "tool_call" && e.createdAt >= since)
+            .map((e) => (e.payload as { purpose?: unknown } | null)?.purpose)
+            .findLast((p): p is string => typeof p === "string" && p.trim() !== "")
+            ?.trim();
+          workingChildren.set(s.id, { workingSince: since, ...(purpose ? { purpose } : {}) });
+        }),
+    );
     const subagents = new Map<string, { running: number; waiting: number }>();
     for (const d of descendants) {
       const isWaiting = waiting.has(d.id);
@@ -375,6 +392,7 @@ export function createSessionMethods(
       ...(watchCounts.has(s.threadRef) ? { watches: watchCounts.get(s.threadRef)! } : {}),
       ...(cronCounts.has(s.threadRef) ? { crons: cronCounts.get(s.threadRef)! } : {}),
       ...(goals.has(s.id) ? { goal: goals.get(s.id)! } : {}),
+      ...workingChildren.get(s.id),
       ...(subagents.has(s.id) ? { subagents: subagents.get(s.id)! } : {}),
     }));
   }
