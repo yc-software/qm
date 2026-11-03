@@ -146,12 +146,11 @@ async function pipelinedTransaction(
   values: unknown[],
   signal: AbortSignal | undefined,
 ): Promise<QueryResult> {
-  if (!settings.length) return withAbort(() => client.query({ text, values }), signal);
   const assignments = settings.map((_, i) => `set_config($${2 * i + 1}, $${2 * i + 2}, true)`);
   const settled = await withAbort(() => {
     const statements = [
       client.query("BEGIN"),
-      client.query(`SELECT ${assignments.join(", ")}`, settings.flat()),
+      ...(settings.length ? [client.query(`SELECT ${assignments.join(", ")}`, settings.flat())] : []),
       client.query({ text, values }),
     ];
     return Promise.allSettled(signal ? statements : [...statements, client.query("COMMIT")]);
@@ -164,7 +163,7 @@ async function pipelinedTransaction(
   if (failed) throw failed.reason;
   const status = client.getTransactionStatus();
   if (status !== "I") throw new Error(`pg-pool: pipelined query left its connection in transaction status ${status}`);
-  return (settled[2] as PromiseFulfilledResult<QueryResult>).value;
+  return (settled[settings.length ? 2 : 1] as PromiseFulfilledResult<QueryResult>).value;
 }
 
 type CancelConnection = EventEmitter & {
