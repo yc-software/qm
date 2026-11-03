@@ -1510,8 +1510,20 @@ test("a delegated exchange keeps its human authority after the person-authored r
   assert.equal(await r.runs.get(r.parent.id), null);
   assert.deepEqual(await delegatedAuthorizationOrigin(next.request, r), { kind: "human" });
   assert.equal(await delegatedAuthorizationOrigin({ ...next.request, actor: { ...actor, id: "other" } }, r), undefined);
+  const wakeTurn = await r.runs.claimById(wake.id, "parent", 60_000);
+  await r.runs.complete(wake.id, wakeTurn!.leaseToken!, { status: "ok", reply: "sent step two" });
+  const stepTwo = await r.runs.claimById(next.id, "w2", 60_000);
+  await r.runs.complete(next.id, stepTwo!.leaseToken!, { status: "ok", reply: "step two" });
+  await deliverSubagentMail(
+    { ...r, maxAttempts: 3, delegationEnabled: async () => true },
+    (await r.runs.get(next.id))!,
+  );
+  const secondWake = (await r.runs.getByDedupKey(`subagent-return:${next.id}`))!;
+  assert.deepEqual(secondWake.request.delegatedAuthority, { kind: "human" });
+  assert.deepEqual(await delegatedAuthorizationOrigin(secondWake.request, r), { kind: "human" });
   await r.sessions.setParentSession(r.child.id, null);
   assert.equal(await delegatedAuthorizationOrigin(next.request, r), undefined);
+  assert.equal(await delegatedAuthorizationOrigin(secondWake.request, r), undefined);
 });
 
 test("completed children do not fill a working parent's run slots and consumed returns settle", async () => {

@@ -17,7 +17,6 @@ import type { ScopeId, Session, SpawnMeta, TurnOrigin } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import { isTerminal, type Run, type RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
-import { delegatedAuthorizationOrigin, heldAuthority } from "./delegated-authority.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 
@@ -1025,7 +1024,7 @@ export interface SubagentMailDeps {
   deliveries?: Pick<DeliveryStore, "enqueue">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "getForParticipant" | "latestItemSeq" | "visibleItems">;
+  sessions: Pick<SessionStore, "get" | "getByThread" | "latestItemSeq" | "visibleItems">;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
@@ -1087,17 +1086,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   });
   const inherited = { ...meta };
   delete (inherited as Partial<SpawnMeta>).openFingerprint;
-  const delegatedAuthority =
-    initiatingRun &&
-    heldAuthority(
-      initiatingRun.request,
-      deps.runs.get && isSessionTurn(initiatingRun.request)
-        ? await delegatedAuthorizationOrigin(initiatingRun.request, {
-            runs: { get: deps.runs.get },
-            sessions: deps.sessions,
-          })
-        : undefined,
-    );
+  const delegatedAuthority = initiatingRun ? run.request.delegatedAuthority : undefined;
   const request: OrchestratorInput = {
     ...inherited,
     sessionSenderId: child.id,
