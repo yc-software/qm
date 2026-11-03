@@ -297,6 +297,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           surface: "cron",
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
+          ...(cron.script ? { cronScript: cron.script } : {}),
           onClaimed: async () => {
             await deps.crons.beginFire(cron.id, runningEntry);
           },

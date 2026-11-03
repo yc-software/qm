@@ -359,6 +359,7 @@ export interface TurnRequest {
   origin?: TurnOrigin;
   gatewayContext?: GatewayContext;
   unattendedGrants?: string[];
+  cronScript?: import("./triggers/types.ts").CronScript;
   botActor?: boolean;
   conversationHeader?: string;
   priorTurns?: ConversationTurn[];
@@ -468,5 +469,6 @@ export interface TurnResult {
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
   runtime?: TurnRuntime;
+  scriptVerdict?: string;
   retracted?: string[];
 }

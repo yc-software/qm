@@ -73,6 +73,7 @@ export interface DirectoryStore {
   groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
   listGroupsFor(principalId: string): Promise<string[]>;
   conversationMembers(kind: "channel" | "group", id: string): Promise<DirectoryMember[] | undefined>;
+  groupRosters(groupIds: readonly string[]): Promise<Map<string, DirectoryMember[]>>;
   listChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
   setWorkspaceUrl(url: string): Promise<void>;
   meta(): Promise<DirectoryMeta>;

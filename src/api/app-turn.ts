@@ -385,6 +385,7 @@ export function createTurnMethods(
           : {}),
         ...(req.skipMemory ? { skipMemory: true } : {}),
         ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
+        ...(req.cronScript && origin.kind === "automation" ? { cronScript: req.cronScript } : {}),
         ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
         ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
