@@ -22,7 +22,10 @@ function status(ctx: ApiCtx, state: BackgroundOwnership): void {
   });
 }
 
-export function requireOperatorControl(ctx: ApiCtx, unavailable = "operator_control_unavailable"): boolean {
+export function requireOperatorControl(
+  ctx: Pick<ApiCtx, "secret" | "auth" | "deps" | "req" | "res">,
+  unavailable = "operator_control_unavailable",
+): boolean {
   const secret = ctx.deps.deploymentControlSecret;
   if (!ctx.secret || !ctx.auth || !isStrongSigningSecret(secret) || !isBearerSecret(secret) || secret === ctx.secret) {
     sendJson(ctx.res, 503, { error: unavailable });

@@ -19,7 +19,7 @@ import {
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
-import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { activePrincipal, adminActorFrom, audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import {
   ADMIN_RESOURCES,
   ADMIN_RESOURCE_BY_ID,
@@ -45,6 +45,8 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const actor = await authorizeAdmin(ctx, targetScope);
   if (!actor) return;
+  if (ctx.operator && !ADMIN_RESOURCE_BY_ID.get(resource)?.operator)
+    return sendJson(res, 403, { error: "forbidden", message: `${resource} is not set by the operator` });
   const withScopeMutationLock = async <T>(fn: () => Promise<T>): Promise<T> =>
     deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();
 
@@ -89,8 +91,13 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const desc = ADMIN_RESOURCE_BY_ID.get(resource);
   if (!desc) return sendJson(res, 404, { error: "not_found", message: `unknown admin resource: ${resource}` });
+  const ifUnset = isObj(body) && body.ifUnset === true;
+  if (ifUnset && !desc.isSet)
+    return sendJson(res, 400, { error: "bad_request", message: `${resource} does not support ifUnset` });
   if (desc.refreshesModels) await deps.refreshModels?.();
   return withScopeMutationLock(async () => {
+    if (ifUnset && (await desc.isSet!(deps, targetScope, body)))
+      return sendJson(res, 200, { ok: true, scopeId: targetScope, resource, unchanged: true });
     try {
       const result = await desc.apply(ctx, actor, targetScope);
       if ("error" in result) {

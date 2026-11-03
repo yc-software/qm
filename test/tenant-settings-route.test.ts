@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { orgScope } from "../src/config.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { buildApp } from "./support/build-app.ts";
 import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
@@ -28,20 +29,21 @@ async function fixture(secret: string | undefined = controlSecret) {
     modelCredentials: built.modelCredentials,
     config: built.config,
     featureFlags: built.featureFlags,
+    admin: built.admin,
     replayDedupe: built.replayDedupe,
   });
   server.listen(0);
-  const url = `http://localhost:${(server.address() as AddressInfo).port}${path}`;
+  const origin = `http://localhost:${(server.address() as AddressInfo).port}`;
   let nonce = 0;
-  const put = async (body: unknown, overrides: Record<string, string> = {}) => {
+  const put = async (body: unknown, overrides: Record<string, string> = {}, target = path) => {
     const raw = JSON.stringify(body);
     const ts = Math.floor(Date.now() / 1000) + nonce++;
-    return fetch(url, {
+    return fetch(`${origin}${target}`, {
       method: "PUT",
       headers: {
         "content-type": "application/json",
         "x-timestamp": String(ts),
-        "x-signature": signRequest(sourceSecret, ts, `PUT\n${path}\n${raw}`),
+        "x-signature": signRequest(sourceSecret, ts, `PUT\n${target}\n${raw}`),
         authorization: `Bearer ${controlSecret}`,
         ...overrides,
       },
@@ -115,6 +117,14 @@ test("the settings route writes to the tenant its slug names and refuses unknown
     const written = await srv.put({ tenant: SLUG, env: { PI_MODEL: "claude-opus-5-5" } });
     assert.equal(written.status, 200);
     assert.equal(((await written.json()) as { tenant: string }).tenant, TEST_TENANT);
+    const other = await srv.put({ tenant: `t-${OTHER_TENANT.slice(-12)}`, env: { SANDBOX_BACKEND: "e2b" } });
+    assert.equal(((await other.json()) as { tenant: string }).tenant, OTHER_TENANT);
+    await withTenant(OTHER_TENANT, async () =>
+      assert.equal((await srv.built.tenantSettings.get()).values.SANDBOX_BACKEND, "e2b"),
+    );
+    await withTenant(TEST_TENANT, async () =>
+      assert.notEqual((await srv.built.tenantSettings.get()).values.SANDBOX_BACKEND, "e2b"),
+    );
     await withTenant(OTHER_TENANT, async () => {
       assert.notEqual((await srv.built.tenantSettings.get()).piModel, "claude-opus-5-5");
     });
@@ -130,6 +140,64 @@ test("the settings route writes to the tenant its slug names and refuses unknown
       message: "No tenant has the slug nobody",
       tenant: "nobody",
     });
+  } finally {
+    await srv.close();
+  }
+});
+
+test("the operator sets the admin values the CLI imports, in the named tenant, audited as the operator", async () => {
+  const srv = await fixture();
+  const scopes = `/v1/admin/scopes/${orgScope()}`;
+  try {
+    const flag = await srv.put(
+      { tenant: SLUG, featureName: "inbox_loops", scopeId: "personal:ada@example.com", on: true },
+      {},
+      `${scopes}/feature-flags`,
+    );
+    assert.equal(flag.status, 200);
+    await withTenant(TEST_TENANT, async () =>
+      assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "personal:ada@example.com"), true),
+    );
+    await withTenant(TEST_TENANT, async () =>
+      assert.equal(
+        (await srv.built.featureFlags.list()).find((row) => row.featureName === "inbox_loops")?.updatedBy,
+        "operator",
+      ),
+    );
+    const first = await srv.put({ tenant: SLUG, posture: "strict", ifUnset: true }, {}, `${scopes}/security-posture`);
+    assert.deepEqual(await first.json(), { ok: true, scopeId: orgScope(), resource: "security-posture" });
+    const again = await srv.put({ tenant: SLUG, posture: "auto", ifUnset: true }, {}, `${scopes}/security-posture`);
+    assert.equal(((await again.json()) as { unchanged?: boolean }).unchanged, true);
+    await withTenant(TEST_TENANT, async () =>
+      assert.equal(await srv.built.config.getSecurityPostureOwnDurable(orgScope()), "strict"),
+    );
+
+    await withTenant(TEST_TENANT, () => srv.built.modelCredentials.set("anthropic", "stored-key", "admin@example.com"));
+    const key = await srv.put(
+      { tenant: SLUG, apiKey: "pushed-key", ifUnset: true },
+      {},
+      "/v1/admin/model-providers/anthropic",
+    );
+    assert.equal(((await key.json()) as { unchanged?: boolean }).unchanged, true);
+    await withTenant(TEST_TENANT, async () =>
+      assert.equal(await srv.built.modelCredentials.resolve("anthropic"), "stored-key"),
+    );
+    const soul = await srv.put({ tenant: SLUG, text: "x" }, {}, `${scopes}/soul`);
+    assert.equal(soul.status, 403);
+    const noTenant = await srv.put({ posture: "strict" }, {}, `${scopes}/security-posture`);
+    assert.equal(((await noTenant.json()) as { error: string }).error, "invalid_tenant");
+    const wrongBearer = await srv.put(
+      { tenant: SLUG, posture: "strict" },
+      { authorization: `Bearer ${sourceSecret}` },
+      `${scopes}/security-posture`,
+    );
+    assert.equal(wrongBearer.status, 401);
+    const flagIfUnset = await srv.put(
+      { tenant: SLUG, featureName: "inbox_loops", scopeId: "personal:bo@example.com", on: true, ifUnset: true },
+      {},
+      `${scopes}/feature-flags`,
+    );
+    assert.equal(flagIfUnset.status, 400);
   } finally {
     await srv.close();
   }

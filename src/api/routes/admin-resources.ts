@@ -109,6 +109,8 @@ export interface AdminResource {
   label?: string;
   enumValues?: readonly unknown[];
   refreshesModels?: true;
+  operator?: true;
+  isSet?: (deps: ServerDeps, scope: string, body: unknown) => Promise<boolean>;
 }
 
 function generic<V>(
@@ -147,6 +149,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label: "Security posture. The org value is a minimum; narrower scopes may tighten it but cannot weaken it.",
     readKey: "securityPosture",
     enumValues: SECURITY_POSTURES,
+    operator: true,
+    isSet: async (deps, scope) => Boolean(await deps.config!.getSecurityPostureOwnDurable(scope)),
     get: (deps, scope) => deps.config!.getSecurityPostureDurable(scope),
     apply: generic<SecurityPosture>(
       (body) => {
@@ -166,6 +170,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       "Cross-context read posture. The organization is a ceiling; personal and room scopes may opt out. Isolated wins.",
     readKey: "sharingPosture",
     enumValues: SHARING_POSTURES,
+    operator: true,
+    isSet: async (deps, scope) => Boolean(await deps.config!.getSharingPostureOwnDurable(scope)),
     get: (deps, scope) => deps.config!.getSharingPostureDurable(scope),
     apply: generic<SharingPosture | null>(
       (body) => {
@@ -333,6 +339,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     kind: "custom",
     target: "org",
     readKey: "featureFlags",
+    operator: true,
     label: "Live feature rollout table. Each feature maps to the scopes where it is enabled.",
     get: async (deps) => {
       if (!deps.featureFlags) return undefined;
@@ -662,6 +669,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     target: "org",
     clearable: true,
     readKey: "branding",
+    operator: true,
+    isSet: async (deps, scope) => Boolean(await deps.config!.getBrandingDurable(scope)),
     get: (deps, scope) => deps.config!.getBranding(scope),
     apply: async (ctx, _actor, scope) => {
       const bad = orgOnly(scope, "branding is org-wide");
@@ -747,6 +756,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     id: "connectors",
     kind: "custom",
     readKey: "connectors",
+    operator: true,
+    isSet: async (deps, scope, body) =>
+      Boolean(await deps.config!.getConnectorClientSecret(scope, String((body as { provider?: unknown }).provider))),
     get: (deps, scope) => deps.config!.listConnectorClients(scope),
     apply: async (ctx, actor, scope) => {
       const { deps } = ctx;
