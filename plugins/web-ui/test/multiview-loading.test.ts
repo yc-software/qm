@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
@@ -16,7 +17,7 @@ test("a restored tab finishes loading after becoming hidden while session metada
     path: "/",
     welcome: true,
     listSessions: sessions,
-    entries: [{ seq: 1, type: "assistant", createdAt: 1, payload: { text: "Restored target transcript" } }],
+    items: [item("AgentMessage", { seq: 1, createdAt: 1, text: "Restored target transcript" })],
     remoteCanvas: {
       v: 2,
       active: true,

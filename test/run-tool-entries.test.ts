@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
+import type { Item } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const actor = { externalId: "U1" };
@@ -42,16 +43,16 @@ test("a run's tool entries are read from the session, bounded by its turn and it
     const second = await built.app.turn(dm("plain follow-up"));
     await settled(built, second.runId!);
     const owner = run.request.actor.id;
-    const entries = await built.app.getRunToolEntries(first.runId!, owner);
+    const items = await built.app.getRunToolItems(first.runId!, owner);
     assert.deepEqual(
-      entries.map((e) => e.type),
-      ["tool_call", "tool_result"],
+      items.map((item) => item.kind),
+      ["ToolCall", "ToolResult"],
     );
-    assert.equal((entries[0]!.payload as { command?: string }).command, "echo hi");
-    assert.ok(entries.every((e) => e.seq > run.turnUserSeq!));
-    assert.deepEqual(await built.app.getRunToolEntries(second.runId!, owner), []);
-    assert.deepEqual(await built.app.getRunToolEntries(first.runId!, "internal:someone-else"), []);
-    assert.deepEqual(await built.app.getRunToolEntries("missing-run", owner), []);
+    assert.equal(items[0]!.body.command, "echo hi");
+    assert.ok(items.every((item) => item.seq > run.turnUserSeq!));
+    assert.deepEqual(await built.app.getRunToolItems(second.runId!, owner), []);
+    assert.deepEqual(await built.app.getRunToolItems(first.runId!, "internal:someone-else"), []);
+    assert.deepEqual(await built.app.getRunToolItems("missing-run", owner), []);
   } finally {
     await built.runtime.stop();
   }
@@ -88,15 +89,14 @@ test("a run's tool entries include rounds after a mid-run goal prompt and stop a
     const second = await built.app.turn(dm("!run echo again"));
     await settled(built, second.runId!);
     const owner = run.request.actor.id;
-    const callIds = (entries: Array<{ payload: unknown }>) =>
-      entries.map((e) => (e.payload as { callId?: string }).callId);
-    const all = await built.app.getRunToolEntries(run.id, owner);
+    const callIds = (items: Item[]) => items.map((item) => item.callId);
+    const all = await built.app.getRunToolItems(run.id, owner);
     assert.equal(all.length, 4);
     assert.deepEqual(callIds(all.slice(2)), ["goal-round", "goal-round"]);
-    assert.deepEqual(callIds(await built.app.getRunToolEntries(run.id, owner, call.seq)), ["goal-round"]);
-    const next = await built.app.getRunToolEntries(second.runId!, owner);
+    assert.deepEqual(callIds(await built.app.getRunToolItems(run.id, owner, call.seq)), ["goal-round"]);
+    const next = await built.app.getRunToolItems(second.runId!, owner);
     assert.equal(next.length, 2);
-    assert.ok(next.every((e) => (e.payload as { callId?: string }).callId !== "goal-round"));
+    assert.ok(next.every((item) => item.callId !== "goal-round"));
   } finally {
     await built.runtime.stop();
   }

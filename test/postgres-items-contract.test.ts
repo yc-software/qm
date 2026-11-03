@@ -15,7 +15,7 @@ import {
   parkedOutputKey,
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
-import { itemFromEntry, type Item, type NewItem } from "../src/sessions/items.ts";
+import type { Item, NewItem } from "../src/sessions/items.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items contract test";
@@ -71,7 +71,6 @@ test("pg items keep turn, author and time in typed columns", { skip }, async () 
       author: "alice",
       body: { reason: "user", text: "Stopped" },
     });
-    assert.throws(() => itemFromEntry({ type: "system", payload: { kind: "goal", goal: {} } }), /goal/);
 
     assert.deepEqual((await store.getItems(session.id)).map(stored), [
       { seq: 0, kind: "UserMessage", turnId: runId, author: "alice", text: "hi", body: {} },
@@ -266,36 +265,5 @@ test("message-only transcript reads filter before pagination and retain visibili
       [answer.seq],
     );
     assert.deepEqual(await store.visibleItems(session.id, "outsider", { messagesOnly: true, limit: 1 }), []);
-  });
-});
-
-test("legacy entries are written as the same item rows", { skip }, async () => {
-  await withSchema("items_legacy", async ({ store }) => {
-    const scope = scopeId("personal", "alice");
-    const session = await store.getOrCreateByThread("web:legacy", "dm", scope);
-    const runId = randomUUID();
-    const written = await store.appendMany({ sessionId: session.id }, [
-      itemFromEntry({ type: "user", payload: { text: "hi", ts: "171.1", hidden: true, runId: "run-1" }, author: "U1" }),
-      itemFromEntry({ type: "user", payload: { text: "also", steered: true }, author: "U2" }),
-      itemFromEntry({ type: "assistant", payload: { text: "hello", deliveryKey: "k1" }, author: "U1" }),
-      itemFromEntry({ type: "system", payload: { kind: "turn_failure", text: "failed", runId } }),
-      itemFromEntry({ type: "system", payload: { kind: "goal_cancelled", note: "done" } }),
-    ]);
-    assert.deepEqual(written.map(stored), [
-      {
-        seq: 0,
-        kind: "UserMessage",
-        author: "U1",
-        text: "hi",
-        hidden: true,
-        externalId: "171.1",
-        body: { runId: "run-1" },
-      },
-      { seq: 1, kind: "SteeringMessage", author: "U2", text: "also", body: {} },
-      { seq: 2, kind: "AgentMessage", text: "hello", body: {} },
-      { seq: 3, kind: "Error", turnId: runId, errorCode: "turn_failure", body: { text: "failed" } },
-      { seq: 4, kind: "Wake", wakeCause: "system", body: { kind: "goal_cancelled", note: "done" } },
-    ]);
-    assert.deepEqual((await store.getItems(session.id)).map(stored), written.map(stored));
   });
 });

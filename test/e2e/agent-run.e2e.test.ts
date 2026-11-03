@@ -9,6 +9,7 @@ import { buildApp } from "../../src/wiring.ts";
 import type { Config } from "../../src/config.ts";
 import type { TurnRequest } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
+import { isAgentReply, isUserItem } from "../../src/sessions/items.ts";
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
 const opts = { skip: NO_KEY ? "set ANTHROPIC_API_KEY to run live e2e" : false, timeout: 120_000 };
@@ -64,14 +65,13 @@ test("multi-turn memory persists within a session (set then recall)", opts, asyn
   assert.match(recall.reply ?? "", /\b7\b/);
 });
 
-test("the turn is recorded in the session log (user + assistant entries)", opts, async () => {
+test("the turn is recorded in the session log (user + agent items)", opts, async () => {
   const { app } = freshApp();
   const r = await app.turn(dm("Say hi in one word."));
   assert.equal(r.status, "ok");
   const found = await app.getSession(r.sessionId!);
-  const types = found!.entries.map((e) => e.type);
-  assert.ok(types.includes("user"));
-  assert.ok(types.includes("assistant"));
+  assert.ok(found!.items.some(isUserItem));
+  assert.ok(found!.items.some(isAgentReply));
 });
 
 test("internal-only still refuses a guest even with the real agent", opts, async () => {

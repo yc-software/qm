@@ -1,3 +1,5 @@
+import type { RunActivityEntry } from "../src/items.ts";
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
@@ -24,48 +26,50 @@ const MODEL = {
   maxTokens: 4096,
 };
 
-const toolSteps = (startedAt: number) => [
+const toolSteps = (startedAt: number): RunActivityEntry[] => [
   {
-    seq: 2,
-    parentSeq: null,
-    type: "tool_call",
-    createdAt: startedAt,
-    payload: { tool: "files", action: "read", callId: "c1", path: "docs/plan.md" },
+    item: item("ToolCall", {
+      seq: 2,
+      createdAt: startedAt,
+      tool: "files",
+      callId: "c1",
+      body: { action: "read", path: "docs/plan.md" },
+    }),
   },
   {
-    seq: 3,
-    parentSeq: null,
-    type: "tool_result",
-    createdAt: startedAt + 1000,
-    payload: { tool: "files", action: "read", callId: "c1", path: "docs/plan.md", bytes: 10 },
-  },
-];
-const midTool = (startedAt: number) => [
-  ...toolSteps(startedAt),
-  {
-    seq: 4,
-    parentSeq: null,
-    type: "tool_call",
-    createdAt: startedAt + 2000,
-    payload: { tool: "execute", callId: "c2", command: "npm test", purpose: "Run the test suite" },
+    item: item("ToolResult", {
+      seq: 3,
+      createdAt: startedAt + 1000,
+      tool: "files",
+      callId: "c1",
+      body: { action: "read", path: "docs/plan.md", bytes: 10 },
+    }),
   },
 ];
-const finalAnswer = (startedAt: number) => [
+const midTool = (startedAt: number): RunActivityEntry[] => [
   ...toolSteps(startedAt),
   {
-    seq: 4,
-    parentSeq: null,
-    type: "text",
-    createdAt: startedAt + 2000,
-    payload: { text: "Reading the plan first.", phase: "commentary" },
+    item: item("ToolCall", {
+      seq: 4,
+      createdAt: startedAt + 2000,
+      tool: "execute",
+      callId: "c2",
+      body: { command: "npm test", purpose: "Run the test suite" },
+    }),
   },
+];
+const finalAnswer = (startedAt: number): RunActivityEntry[] => [
+  ...toolSteps(startedAt),
   {
-    seq: 5,
-    parentSeq: null,
-    type: "text_start",
-    createdAt: startedAt + 3000,
-    payload: { phase: "final_answer", streamOffset: 0 },
+    item: item("AgentMessage", {
+      seq: 4,
+      createdAt: startedAt + 2000,
+      text: "Reading the plan first.",
+      variant: "narration",
+      body: { phase: "commentary" },
+    }),
   },
+  { marker: "text_start", seq: 5, createdAt: startedAt + 3000, phase: "final_answer", streamOffset: 0 },
 ];
 const scenarios = [
   { name: "mid-tool with the fold closed", opened: false, activity: midTool, live: /Run the test suite/ },
@@ -76,7 +80,7 @@ const scenarios = [
 for (const scenario of scenarios)
   test(`pressing Stop ${scenario.name} shows one Stopping… head until the turn ends`, async () => {
     const startedAt = Date.now() - 12_000;
-    const activity: unknown[] = scenario.activity(startedAt);
+    const activity: RunActivityEntry[] = scenario.activity(startedAt);
     let signals = 0;
     let ended = false;
     const run = () =>
@@ -94,7 +98,7 @@ for (const scenario of scenarios)
     const h = await harness({
       path: `/s/${SESSION.id}`,
       listSessions: [SESSION],
-      entries: [{ seq: 1, type: "user", createdAt: startedAt - 1000, payload: { text: "run the tests" } }],
+      items: [item("UserMessage", { seq: 1, createdAt: startedAt - 1000, text: "run the tests" })],
       api: (path, init) => {
         if (path.startsWith("/api/runtime-config"))
           return Response.json({
@@ -147,11 +151,14 @@ for (const scenario of scenarios)
       else assert.notEqual(fold()?.open, true, "pressing Stop does not force the fold open");
 
       activity.push({
-        seq: 9,
-        parentSeq: null,
-        type: "tool_result",
-        createdAt: Date.now(),
-        payload: { tool: "execute", callId: "c2", code: 130, result: "interrupted" },
+        item: item("ToolResult", {
+          seq: 9,
+          createdAt: Date.now(),
+          tool: "execute",
+          callId: "c2",
+          text: "interrupted",
+          body: { code: 130 },
+        }),
       });
       const seen = polls();
       await until(() => polls() >= seen + 2);

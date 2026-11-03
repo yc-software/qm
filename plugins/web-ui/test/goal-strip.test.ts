@@ -1,11 +1,11 @@
+import type { Item } from "../src/items.ts";
+import { item } from "./item-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { goalElapsedLabel, goalWorkedLabel, goalFloorLabel, goalObjectiveLabel } from "../src/goal-strip.ts";
-import { entriesToMessages, type SessionEntry } from "../src/core-bridge.ts";
+import { itemsToMessages } from "../src/core-bridge.ts";
 
-const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Parameters<
-  typeof entriesToMessages
->[1];
+const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Parameters<typeof itemsToMessages>[1];
 
 const record = (status: string, extra: Record<string, unknown> = {}): unknown => ({
   objective: "work for 20 minutes",
@@ -32,18 +32,18 @@ test("worked time leads the label, the floor follows", () => {
 
 test("a goal cancelled from the goal bar leaves one note in the transcript", () => {
   const goal = record("active");
-  const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "work for 20 minutes" }, createdAt: 900 },
-    { type: "tool_call", payload: { tool: "goal", action: "create", callId: "c1" }, createdAt: 1000 },
-    { type: "tool_result", payload: { tool: "goal", action: "create", goal, callId: "c1" }, createdAt: 1001 },
-    { type: "assistant", payload: { text: "(stopped)", stopped: true }, createdAt: 1003 },
-    {
-      type: "system",
-      payload: { kind: "goal_cancelled", objective: "work for 20 minutes", cancelledBy: "U1" },
+  const items: Item[] = [
+    item("UserMessage", { createdAt: 900, text: "work for 20 minutes" }),
+    item("ToolCall", { createdAt: 1000, tool: "goal", callId: "c1", body: { action: "create" } }),
+    item("ToolResult", { createdAt: 1001, tool: "goal", callId: "c1", body: { action: "create", goal } }),
+    item("AgentMessage", { createdAt: 1003, text: "(stopped)", body: { stopped: true } }),
+    item("Wake", {
       createdAt: 1004,
-    },
+      wakeCause: "system",
+      body: { kind: "goal_cancelled", objective: "work for 20 minutes", cancelledBy: "U1" },
+    }),
   ];
-  const messages = entriesToMessages(entries, MODEL);
+  const messages = itemsToMessages(items, MODEL);
   const notes = messages.filter((m) => (m as { role?: string }).role === "system-note");
   assert.deepEqual(
     notes.map((n) => ({ ...(n as object) })),

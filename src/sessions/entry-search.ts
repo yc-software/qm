@@ -20,12 +20,6 @@ export function tsPrefixQuery(query: string): string | null {
   return terms.map((t) => (t.length >= MIN_PREFIX_LEN ? `${t}:*` : t)).join(" & ");
 }
 
-export function entrySearchText(payload: unknown): string | null {
-  if (typeof payload === "string") return payload;
-  const text = (payload as { text?: unknown } | null)?.text;
-  return typeof text === "string" ? text : null;
-}
-
 export function itemSearchAuthor(item: Pick<Item, "kind" | "body">): string | undefined {
   if (!isUserItem(item)) return undefined;
   const name = item.body.name;

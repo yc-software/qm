@@ -1,8 +1,10 @@
+import type { Item } from "../src/items.ts";
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { Conversation } from "../src/conv-types.ts";
-import { entriesToMessages, type AssistantWork, type SessionEntry } from "../src/core-bridge.ts";
+import { itemsToMessages, type AssistantWork } from "../src/core-bridge.ts";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 
 async function settle(): Promise<void> {
@@ -10,20 +12,10 @@ async function settle(): Promise<void> {
 }
 
 test("the mounted conversation recovers a saved answer after a local polling timeout", async (t) => {
-  const user: SessionEntry = {
-    type: "user",
-    seq: 1,
-    createdAt: 100,
-    payload: { text: "Compute the result", runId: "run-current" },
-  };
-  const answer: SessionEntry = {
-    type: "assistant",
-    seq: 2,
-    createdAt: 200,
-    payload: { text: "The saved result is 42." },
-  };
-  const entries = [user];
-  const h = await harness({ path: `/s/${SESSION.id}`, entries });
+  const user: Item = item("UserMessage", { seq: 1, createdAt: 100, text: "Compute the result", turnId: "run-current" });
+  const answer: Item = item("AgentMessage", { seq: 2, createdAt: 200, text: "The saved result is 42." });
+  const items = [user];
+  const h = await harness({ path: `/s/${SESSION.id}`, items });
   try {
     await h.boot();
     h.releaseSessions();
@@ -45,14 +37,14 @@ test("the mounted conversation recovers a saved answer after a local polling tim
       return fixtureFetch(...args);
     };
     const timeout = (): AssistantWork => ({
-      ...(entriesToMessages([answer])[0] as AssistantWork),
+      ...(itemsToMessages([answer])[0] as AssistantWork),
       content: [{ type: "text", text: "" }],
       stopReason: "error",
       errorMessage: "Timed out waiting for the agent to respond.",
       interruptedRunId: "run-current",
     });
     const reset = (last = timeout()): void => {
-      agent.state.messages = [...entriesToMessages([user]), last];
+      agent.state.messages = [...itemsToMessages([user]), last];
       chat.drawActiveChat();
     };
     const refresh = async (): Promise<void> => {
@@ -69,7 +61,7 @@ test("the mounted conversation recovers a saved answer after a local polling tim
     });
 
     await t.test("a late delivery replaces the timeout with the saved answer", async () => {
-      entries.push(answer);
+      items.push(answer);
       await refresh();
       assert.equal((agent.state.messages.at(-1) as AssistantWork)?.stopReason, "stop");
       assert.match(h.mainText(), /The saved result is 42/);
@@ -116,15 +108,10 @@ test("the mounted conversation recovers a saved answer after a local polling tim
 
     await t.test("another run's saved answer does not erase this run's timeout", async () => {
       reset();
-      entries.splice(
-        0,
-        entries.length,
-        { ...user, payload: { text: "Compute the result", runId: "other-run" } },
-        answer,
-      );
+      items.splice(0, items.length, { ...user, turnId: "other-run" }, answer);
       await refresh();
       assert.equal((agent.state.messages.at(-1) as AssistantWork)?.stopReason, "error");
-      entries.splice(0, entries.length, user, answer);
+      items.splice(0, items.length, user, answer);
     });
 
     await t.test("genuine failures and user cancellation remain visible", async () => {

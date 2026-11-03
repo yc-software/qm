@@ -36,14 +36,14 @@ function fixture() {
   stack.getBoundingClientRect = () => ({ top: -scroller.scrollTop }) as DOMRect;
   row.getBoundingClientRect = () => ({ top: 0, height: content.clientHeight + 24 }) as DOMRect;
   const observed = new Set<Element>();
-  let resize = (_entries: Array<{ target: Element }>) => {};
+  let resize = (_items: Array<{ target: Element }>) => {};
   const restore = ["ResizeObserver", "getComputedStyle"].map(
     (key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const,
   );
   Object.assign(globalThis, {
     getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
     ResizeObserver: class {
-      constructor(callback: (entries: Array<{ target: Element }>) => void) {
+      constructor(callback: (items: Array<{ target: Element }>) => void) {
         resize = callback;
       }
       observe(element: Element) {
