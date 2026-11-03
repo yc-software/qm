@@ -18,7 +18,8 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
+import { mintPortalIdentity as mintTenantPortalIdentity } from "../src/auth/portal-identity.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -237,7 +238,10 @@ test("core route: a portal identity that does not match the request actor is ref
     method: "POST",
     headers: {
       ...inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "eve", exp: Date.now() + 60_000 }, SECRET),
+      [PORTAL_IDENTITY_HEADER]: await mintTenantPortalIdentity(
+        { p: "eve", t: testTenants()[0], exp: Date.now() + 60_000 },
+        SECRET,
+      ),
     },
     body: raw,
   });
