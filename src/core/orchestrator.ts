@@ -131,10 +131,9 @@ import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import { approvalView, grantModesWithin } from "./orchestrator/approvals.ts";
 import {
   intakeOf,
-  midTurnNeedsScreen,
   midTurnPrompt,
-  screenMidTurn,
   senderLine,
+  wordsToScreen,
   type IncomingMessage,
   type Speaker,
 } from "./orchestrator/intake.ts";
@@ -235,7 +234,7 @@ import {
   unscreenedVerdict,
 } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
-import type { EgressPolicy, Principal } from "../types.ts";
+import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
@@ -802,11 +801,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           sessionSender.scopeId === scopeId &&
           (await deps.sessions.getForParticipant(sessionSender.id, actor.id)),
         );
+        const screenedWords = wordsToScreen(input.text, { origin: input.origin, fromSession: sessionTurn });
         const screenPayload = screenInbound
           ? securityScreenPayload({
               ...input,
               ...turnOriginRequestFields(input.origin),
-              ...(sessionTurn ? { triggered: true, securityScreenData: input.text } : {}),
+              ...(screenedWords !== undefined ? { triggered: true, securityScreenData: screenedWords } : {}),
               overheard: [],
               externalPromptData,
               verifiedSwarm: Boolean(input.swarm && swarmBinding),
@@ -2808,29 +2808,23 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? speakerLine({
               id: actor.id,
               ...(actor.displayName ? { name: actor.displayName } : {}),
-              origin: input.origin.kind,
+              origin: input.origin,
               fromSession: sessionTurn,
             })
           : "";
         const unscreenedNote =
           inputUnscreened || inboundUnscreened || documentInputs.unscreened ? unscreenedNotice("inbound content") : "";
-        const screenInjected = async (
-          text: string,
-          label: string,
-          from: Principal = actor,
-          verifiedSwarm = false,
-        ): Promise<string | null> => {
+        const screenSwarmMessage = async (text: string): Promise<string | null> => {
           const screen = await orchestrator.screenSecuritySteer({
             payload: text,
-            actor: from,
+            actor,
             conversation,
             sessionId: session.id,
-            ...(verifiedSwarm ? { verifiedSwarm } : {}),
+            verifiedSwarm: true,
           });
           if (screen === "block") return null;
-          return screen === "unscreened" ? `${unscreenedNotice(label)}\n${text}` : text;
+          return screen === "unscreened" ? `${unscreenedNotice("swarm message")}\n${text}` : text;
         };
-        const screenSwarmMessage = (text: string) => screenInjected(text, "swarm message", actor, true);
         const mailbox =
           deps.swarms && input.runId && !partial && !input.approval
             ? await openSwarmMailbox({ swarms: deps.swarms, input, screen: screenSwarmMessage })
@@ -3215,28 +3209,37 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             prepareSteer: async (text, request) => {
               const steerer = request ? deps.identity.resolve(request.actor) : actor;
               const author = steerer.id;
-              const steerOrigin = request ? resolveTurnOrigin(request).kind : input.origin.kind;
-              let said = [
-                text.trim()
-                  ? speakerLine({
-                      id: author,
-                      ...(request?.actor.displayName ? { name: request.actor.displayName } : {}),
-                      origin: steerOrigin,
-                      fromSession: request ? isSessionTurn(request) : sessionTurn,
-                    })
-                  : "",
-                text,
-              ]
-                .filter(Boolean)
-                .join("\n");
-              if (midTurnNeedsScreen(steerOrigin)) {
-                const screened = await screenMidTurn(
-                  said,
-                  (payload) => screenInjected(payload, "mid-turn message", steerer),
-                  (error) => reportFailure("orchestrator: mid-turn message screen", error),
-                );
-                if (screened.withheld) return { text: screened.text, author, withheld: true };
-                said = screened.text;
+              const speaker: Speaker = request
+                ? {
+                    id: author,
+                    ...(request.actor.displayName ? { name: request.actor.displayName } : {}),
+                    origin: resolveTurnOrigin(request),
+                    fromSession: isSessionTurn(request),
+                  }
+                : {
+                    id: author,
+                    ...(actor.displayName ? { name: actor.displayName } : {}),
+                    origin: { kind: "direct" },
+                    fromSession: false,
+                  };
+              let said = [text.trim() ? speakerLine(speaker) : "", text].filter(Boolean).join("\n");
+              const words = wordsToScreen(said, speaker);
+              if (words !== undefined) {
+                const screen = await orchestrator
+                  .screenSecuritySteer({ payload: words, actor: steerer, conversation, sessionId: session.id })
+                  .catch((error: unknown) => {
+                    reportFailure("orchestrator: mid-turn message screen", error);
+                    return undefined;
+                  });
+                if (!screen || screen === "block")
+                  return {
+                    text: screen
+                      ? "A mid-turn message was withheld by the security screen."
+                      : "A mid-turn message was withheld because the security screen could not check it.",
+                    author,
+                    withheld: true,
+                  };
+                if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;
               }
               const refreshedInbox =
                 input.surface === "web" &&

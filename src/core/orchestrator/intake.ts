@@ -22,7 +22,7 @@ export interface IncomingMessage {
 export interface Speaker {
   id: string;
   name?: string;
-  origin: TurnOrigin["kind"];
+  origin: TurnOrigin;
   fromSession: boolean;
 }
 
@@ -31,28 +31,16 @@ export function senderLine(
   speaker: Speaker,
   nameOf: (id: string) => string | undefined,
 ): string {
-  if (speaker.origin === "automation" || speaker.fromSession) return "";
+  if (speaker.origin.kind === "automation" || speaker.fromSession) return "";
   if (turn.conversationKind === "dm" && samePerson(speaker.id, turn.ownerId)) return "";
   return senderNote(speaker.name ?? nameOf(speaker.id) ?? speaker.id);
 }
 
-export function midTurnNeedsScreen(origin: TurnOrigin["kind"]): boolean {
-  return origin === "ambient" || origin === "automation";
-}
-
-export async function screenMidTurn(
-  said: string,
-  screen: (text: string) => Promise<string | null>,
-  onError: (error: unknown) => void,
-): Promise<{ text: string; withheld?: true }> {
-  const screened = await screen(said).catch((error: unknown) => {
-    onError(error);
-    return undefined;
-  });
-  if (screened === undefined)
-    return { text: "A mid-turn message was withheld because the security screen could not check it.", withheld: true };
-  if (screened === null) return { text: "A mid-turn message was withheld by the security screen.", withheld: true };
-  return { text: screened };
+export function wordsToScreen(said: string, speaker: Pick<Speaker, "origin" | "fromSession">): string | undefined {
+  let words: string | undefined;
+  if (speaker.origin.kind === "automation") words = speaker.origin.screenData;
+  else if (speaker.fromSession || speaker.origin.kind === "ambient") words = said;
+  return words?.trim() ? words : undefined;
 }
 
 type Received = Awaited<ReturnType<typeof materializeInbound>>;
