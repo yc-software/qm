@@ -39,7 +39,6 @@ const ALLOWED: Record<string, string> = {
   audit: "GET",
   deployments: "GET",
   sessions: "GET",
-  runs: "GET",
   files: "GET",
   retention: "GET",
   directory: "GET",
