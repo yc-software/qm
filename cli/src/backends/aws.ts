@@ -60,6 +60,7 @@ import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import { canonicalJson } from "../canonical-json.ts";
 import {
   capture,
+  captureBoth,
   deploymentSecretValue,
   envNum,
   isInvalidSecret,
@@ -693,6 +694,19 @@ export function imageTransferArgs(source: string, tagged: string): string[] {
   return ["buildx", "imagetools", "create", "--prefer-index=false", "--tag", tagged, source];
 }
 
+function buildCacheArgs(ref: string): string[] {
+  const exportsCache = captureBoth("docker", ["buildx", "inspect"])
+    .split("\n")
+    .some((line) => line.startsWith("Driver:") && line.slice("Driver:".length).trim() !== "docker");
+  if (!exportsCache) return [];
+  return [
+    "--cache-from",
+    `type=registry,ref=${ref}`,
+    "--cache-to",
+    `type=registry,ref=${ref},mode=max,image-manifest=true,oci-mediatypes=true`,
+  ];
+}
+
 async function publishWorkloadImage(
   config: QmConfig,
   workload: string,
@@ -704,7 +718,9 @@ async function publishWorkloadImage(
   const aws = requireAws(config);
   const spec = aws.services[workload]!;
   const tagged = `${ecrHost(aws)}/${spec.ecrRepository}:${label}`;
-  const platform = `linux/${workloadArchitecture(config, workload)}`;
+  const architecture = workloadArchitecture(config, workload);
+  const platform = `linux/${architecture}`;
+  const cache = buildCacheArgs(`${ecrHost(aws)}/${spec.ecrRepository}:buildcache-${architecture}`);
   if (plugin?.kind === "source") {
     const args = [
       "buildx",
@@ -713,6 +729,7 @@ async function publishWorkloadImage(
       platform,
       "--provenance=false",
       "--push",
+      ...cache,
       "-f",
       plugin.dockerfile!,
       "-t",
@@ -736,6 +753,7 @@ async function publishWorkloadImage(
       platform,
       "--provenance=false",
       "--push",
+      ...cache,
       "-f",
       dockerfile,
       "-t",
