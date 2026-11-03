@@ -180,7 +180,7 @@ test("a person with a ChatGPT login falls back to an OpenAI model through that l
   });
   await withFetch(
     (url) =>
-      url.includes("chatgpt.com")
+      new URL(url).host === "chatgpt.com"
         ? errorReply(500, "server_error", "subscription unavailable")
         : errorReply(401, "authentication_error", "key revoked"),
     async (calls) => {
