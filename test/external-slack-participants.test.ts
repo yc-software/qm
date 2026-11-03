@@ -62,7 +62,7 @@ test("a Slack channel turn with an external in the audience is refused while the
 
 test("with the toggle on, an internal actor may drive a Slack turn in a room with an external", async () => {
   const built = freshApp();
-  await built.config.setExternalSlackParticipants(org, true);
+  await inTestTenant(() => built.config.setExternalSlackParticipants(org, true));
   await Promise.resolve();
   const res = await inTestTenant(() => built.app.turn(externalChannelTurn("slack")));
   assert.equal(res.status, "ok");
@@ -71,7 +71,7 @@ test("with the toggle on, an internal actor may drive a Slack turn in a room wit
 
 test("the toggle relaxes only Slack: a non-Slack surface with an external audience stays refused", async () => {
   const built = freshApp();
-  await built.config.setExternalSlackParticipants(org, true);
+  await inTestTenant(() => built.config.setExternalSlackParticipants(org, true));
   await Promise.resolve();
   const res = await inTestTenant(() => built.app.turn(externalChannelTurn("test")));
   assert.equal(res.status, "refused");
@@ -80,7 +80,7 @@ test("the toggle relaxes only Slack: a non-Slack surface with an external audien
 
 test("the toggle never lets an external actor interact", async () => {
   const built = freshApp();
-  await built.config.setExternalSlackParticipants(org, true);
+  await inTestTenant(() => built.config.setExternalSlackParticipants(org, true));
   await Promise.resolve();
   const res = await inTestTenant(() =>
     built.app.turn({
@@ -142,7 +142,7 @@ test("admin resource: org-only PUT, read-back, and the surface-config echo", asy
     const read = await fetch(`${base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
     assert.equal(((await read.json()) as { externalSlackParticipants?: boolean }).externalSlackParticipants, true);
 
-    const surf = await fetch(`${base}/v1/surface-config`);
+    const surf = await fetch(`${base}/v1/surface-config`, { headers: testTenantHeaders() });
     assert.equal(((await surf.json()) as { externalSlackParticipants?: boolean }).externalSlackParticipants, true);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
