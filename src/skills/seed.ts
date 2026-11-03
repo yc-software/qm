@@ -3,7 +3,14 @@ import { join, relative, sep } from "node:path";
 import type { ScopeId } from "../types.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { parseSeedSkillFrontmatter } from "./frontmatter.ts";
-import { safeSkillFilePath, type Skill, type SkillFile, type SkillManifest, type SkillStore } from "./skill-store.ts";
+import {
+  foreignSkillCollision,
+  safeSkillFilePath,
+  type Skill,
+  type SkillFile,
+  type SkillManifest,
+  type SkillStore,
+} from "./skill-store.ts";
 
 export interface SeedInstallResult {
   installed: string[];
@@ -71,15 +78,6 @@ export function parseSeedSkill(raw: string): SkillManifest {
 }
 
 export type UpsertOutcome = "installed" | "updated" | "skipped" | "foreign";
-
-export function foreignSkillCollision(
-  all: Skill[],
-  scopeId: ScopeId,
-  name: string,
-  isOwn: (skill: Skill) => boolean,
-): Skill | undefined {
-  return all.find((s) => s.scopeId === scopeId && s.manifest.name === name && !isOwn(s) && s.status !== "archived");
-}
 
 const upsertQueue = createKeyedQueue<string>();
 

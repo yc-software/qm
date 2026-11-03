@@ -100,6 +100,15 @@ export interface SkillStore {
   move(id: string, toScopeId: ScopeId): Promise<Skill>;
 }
 
+export function foreignSkillCollision(
+  all: Skill[],
+  scopeId: ScopeId,
+  name: string,
+  isOwn: (skill: Skill) => boolean,
+): Skill | undefined {
+  return all.find((s) => s.scopeId === scopeId && s.manifest.name === name && !isOwn(s) && s.status !== "archived");
+}
+
 function scopeKind(scopeId: ScopeId): string {
   return parseScopeId(scopeId).kind ?? scopeId;
 }
@@ -333,10 +342,8 @@ export function createSkillStore(opts: SkillStoreOptions): SkillStore {
         throw new Error("ceding a skill to the org goes through promote (admin-gated), not move");
       }
       return withNameLock(toScopeId, s.manifest.name, async () => {
-        const taken = (await inScopes([toScopeId])).some(
-          (x) => x.id !== id && x.manifest.name === s.manifest.name && x.status !== "archived",
-        );
-        if (taken) throw new Error(`a skill named ${s.manifest.name} already exists there`);
+        if (foreignSkillCollision(await inScopes([toScopeId]), toScopeId, s.manifest.name, (x) => x.id === id))
+          throw new Error(`a skill named ${s.manifest.name} already exists there`);
         const current = await skills.get(id);
         if (!current) throw new Error(`unknown skill: ${id}`);
         current.scopeId = toScopeId;
