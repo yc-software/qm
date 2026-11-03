@@ -996,7 +996,7 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   if (restored === "exists")
     return sendJson(ctx.res, 409, {
       error: "exists",
-      message: "a live skill of that name already exists here — archive or rename it first",
+      message: "a live skill of that name already exists here — archive it first",
     });
   return restored ? sendJson(ctx.res, 200, { ok: true }) : sendJson(ctx.res, 404, { error: "not_found" });
 }

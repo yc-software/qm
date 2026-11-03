@@ -722,6 +722,11 @@ test("SkillStore.promote of two same-name skills at once leaves one org record",
         await sleep(50);
         return rows;
       },
+      async select(query) {
+        const rows = await backing.select(query);
+        await sleep(50);
+        return rows;
+      },
     },
   });
   const sources: string[] = [];
