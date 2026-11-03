@@ -1,4 +1,5 @@
 import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnRequest, TurnResult } from "../types.ts";
+import type { CronScript } from "./types.ts";
 import { actsAsScope, parseScopeId } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
@@ -47,6 +48,7 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "a
   message?: string;
   threadRef?: string;
   unattendedGrants?: string[];
+  cronScript?: CronScript;
   shadow?: boolean;
   thinkingLevel?: string;
   readOnly?: boolean;
@@ -244,6 +246,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let userNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
+  let scriptVerdict: string | undefined;
   const ran = await deps.idempotency.once(spec.fireKey, async () => {
     await spec.onClaimed?.();
     if (spec.message !== undefined) {
@@ -278,6 +281,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
       triggered: true,
       ...(spec.unattendedGrants && grantsHomedWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
+      ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
       ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
       ...turnModelOptions({
         triggered: true,
@@ -298,6 +302,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     errorCode = res.errorCode;
     reply = res.reply;
     sessionId = res.sessionId;
+    scriptVerdict = res.scriptVerdict;
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
       note = "hit a require_approval command — failed closed (no human at fire/event time)";
@@ -330,12 +335,13 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     }
   });
 
+  const loggedNote = scriptVerdict && note ? `${scriptVerdict}; ${note}` : (scriptVerdict ?? note);
   const outcome: TriggerOutcome = {
     authzFailed: false,
     ran,
     ...(status ? { status } : {}),
     ...(errorCode ? { errorCode } : {}),
-    ...(note ? { note } : {}),
+    ...(loggedNote ? { note: loggedNote } : {}),
     ...(userNote ? { userNote } : {}),
     ...(reply !== undefined ? { reply } : {}),
     ...(sessionId ? { sessionId } : {}),

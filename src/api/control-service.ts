@@ -1,7 +1,7 @@
 import { unattendedGrantRefusal } from "../cron/authority.ts";
 import { isDeepStrictEqual } from "node:util";
 import type { Destination } from "../types.ts";
-import type { Cron, CronFireLogEntry, CronSchedule, Webhook } from "../triggers/types.ts";
+import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "../triggers/types.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -46,6 +46,14 @@ export interface CronCreateRequest {
   unfurlLinks?: boolean;
   unattendedGrants?: string[];
   session?: boolean;
+  script?: CronScriptRequest;
+}
+
+export interface CronScriptRequest {
+  command: string;
+  mode?: CronScript["mode"];
+  credentials?: string[];
+  sandboxId?: string;
 }
 
 export type CronCreateResult =
@@ -96,6 +104,7 @@ export interface CronPatchRequest {
   unfurlLinks?: boolean;
   unattendedGrants?: string[];
   session?: boolean;
+  script?: CronScriptRequest | null;
 }
 
 export interface CronRunsRequest {
@@ -109,7 +118,7 @@ export interface CronRunsResult {
 }
 
 export const CRON_PATCH_NOTHING_TO_CHANGE =
-  "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, unattendedGrants, or session";
+  "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, unattendedGrants, session, or script";
 
 export const CRON_FIRE_NOTE_MAX_CHARS = 400;
 
@@ -260,8 +269,33 @@ function hasCronPatchField(req: CronPatchRequest): boolean {
     req.archived !== undefined ||
     req.unfurlLinks !== undefined ||
     req.unattendedGrants !== undefined ||
-    req.session !== undefined
+    req.session !== undefined ||
+    req.script !== undefined
   );
+}
+
+function cronScriptFrom(
+  req: CronScriptRequest,
+  cron: { action?: string; loopId?: string },
+): CronScript | ControlErr<"bad_request"> {
+  const refuse = (message: string): ControlErr<"bad_request"> => ({ ok: false, code: "bad_request", message });
+  if (cron.action === undefined || cron.loopId) return refuse("script needs a cron with a task for the agent");
+  if (typeof req.command !== "string" || !req.command.trim()) return refuse("script.command must be a command");
+  if (req.mode !== undefined && req.mode !== "shadow" && req.mode !== "live")
+    return refuse('script.mode must be "shadow" or "live"');
+  if (
+    req.credentials !== undefined &&
+    !(Array.isArray(req.credentials) && req.credentials.every((c) => typeof c === "string"))
+  )
+    return refuse("script.credentials must be credential handles");
+  if (req.sandboxId !== undefined && (typeof req.sandboxId !== "string" || !req.sandboxId))
+    return refuse("script.sandboxId must be a sandbox id");
+  return {
+    command: req.command,
+    mode: req.mode ?? "shadow",
+    ...(req.credentials?.length ? { credentials: req.credentials } : {}),
+    ...(req.sandboxId ? { sandboxId: req.sandboxId } : {}),
+  };
 }
 
 function liveSessionRef(
@@ -356,6 +390,8 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (req.action === undefined && req.text === undefined) {
         return { ok: false, code: "bad_request", message: "task (what to do) or text (exact text to send) required" };
       }
+      const script = req.script ? cronScriptFrom(req.script, req) : undefined;
+      if (script && "ok" in script) return script;
       const hasParticipants = Array.isArray(req.participants);
       const wantsGroup = hasParticipants && req.participants!.length > 0;
       const wantsPersonal = req.scope === "personal";
@@ -485,6 +521,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         ...(typeof req.title === "string" ? { title: req.title } : {}),
         ...(destination ? { destination } : {}),
         ...(req.unattendedGrants !== undefined ? { unattendedGrants: req.unattendedGrants } : {}),
+        ...(script ? { script } : {}),
       };
       const sessionRef = req.session === false ? undefined : liveSessionRef(capability, ownerScopeId);
       if (sessionRef) input.sessionRef = sessionRef;
@@ -544,6 +581,15 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       }
       const patch = patchFromCronPatchRequest(before, req, capability);
       if ("ok" in patch) return patch;
+      if (req.script === null && before.script) patch.script = null;
+      else if (req.script) {
+        const script = cronScriptFrom(req.script, {
+          ...before,
+          ...(req.action !== undefined ? { action: req.action } : {}),
+        });
+        if ("ok" in script) return script;
+        patch.script = script;
+      }
       if (req.unattendedGrants !== undefined) patch.unattendedGrants = req.unattendedGrants;
       else if ((before.unattendedGrants?.length ?? 0) > 0) patch.unattendedGrants = before.unattendedGrants;
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
@@ -562,6 +608,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         if (req.enabled !== undefined) changeSummary.push(`enabled=${req.enabled}`);
         if (req.archived !== undefined) changeSummary.push(`archived=${req.archived}`);
         if (req.unfurlLinks !== undefined) changeSummary.push(`unfurlLinks=${req.unfurlLinks}`);
+        if (patch.script !== undefined) changeSummary.push("script");
         if (req.session !== undefined)
           changeSummary.push(req.session ? "tied to a session" : "untied from its session");
         const detail: CronEditDetail =

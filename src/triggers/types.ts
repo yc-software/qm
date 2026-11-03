@@ -32,6 +32,13 @@ export interface CronFireLogEntry {
   sessionId?: string;
 }
 
+export interface CronScript {
+  command: string;
+  mode: "shadow" | "live";
+  credentials?: string[];
+  sandboxId?: string;
+}
+
 export interface CronFireNote {
   text: string;
   at: number;
@@ -52,6 +59,7 @@ export interface Cron extends TriggerBase {
   createdAt: number;
   unattendedGrants?: string[];
   sessionRef?: string;
+  script?: CronScript;
 
   fireLog?: CronFireLogEntry[];
   lastFireNote?: CronFireNote;

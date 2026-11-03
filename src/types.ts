@@ -380,6 +380,7 @@ export interface TurnRequest {
   gatewayContext?: GatewayContext;
   triggered?: boolean;
   unattendedGrants?: string[];
+  cronScript?: import("./triggers/types.ts").CronScript;
   securityScreenData?: string;
   triggerDestination?: Destination;
   ownerKeychainUnion?: boolean;
@@ -493,4 +494,5 @@ export interface TurnResult {
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
   runtime?: TurnRuntime;
+  scriptVerdict?: string;
 }

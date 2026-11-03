@@ -129,6 +129,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     ownerKeychainUnion: _ownerKeychainUnion,
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
+    cronScript: _cronScript,
     redeliveryKey: _redeliveryKey,
     ...safeBody
   } = body;

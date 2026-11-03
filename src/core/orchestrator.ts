@@ -127,6 +127,7 @@ import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { collectBlob } from "../persistence/blob-transfer.ts";
 import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
+import { runCronScript } from "../cron/script.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
 import type { FileArtifact } from "../files/file-artifact-store.ts";
 import { artifactImageLoader } from "../agent/replay-images.ts";
@@ -2864,6 +2865,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (releasedToolOutput) {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
         }
+        const cronScript =
+          input.cronScript && !partial
+            ? await runCronScript(
+                input.cronScript,
+                (command, opts) => baseTools.execute(command, opts),
+                turnAbort.signal,
+              )
+            : undefined;
+        if (cronScript?.handled && input.cronScript?.mode === "live")
+          return { status: "silent", sessionId: session.id, scriptVerdict: cronScript.verdict };
+        if (cronScript?.escalation) turnInput = `${turnInput}\n\n${cronScript.escalation}`;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
         const sessionUsedTools = visibleHistory.some(
           (e) => e.kind === "ToolCall" && !(e.tool === "skill" || (e.tool === "skills" && e.body.action === "read")),
@@ -3711,6 +3723,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
+        if (cronScript) finalResult = { ...finalResult, scriptVerdict: cronScript.verdict };
         await fallbackTitleWrite;
 
         tailOwnsCleanup = true;
