@@ -57,9 +57,10 @@ final class WorkspacePickerTests: XCTestCase {
       id: "session", scopeId: "personal:alice", threadRef: "web:alice:one", surface: "web",
       canContinue: true)
     let update = Task { await model.update(conversation, patch: ["title": "Changed"]) }
-    try await Task.sleep(for: .milliseconds(20))
+    try await LateResponseProtocol.waitForRequest()
     try model.selectWorkspace("https://\(UUID().uuidString).example")
     model.error = "New workspace error"
+    LateResponseProtocol.respond()
     await update.value
     XCTAssertEqual(model.error, "New workspace error")
     XCTAssertFalse(model.loading)

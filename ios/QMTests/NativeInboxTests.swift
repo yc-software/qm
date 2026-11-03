@@ -127,12 +127,9 @@ final class NativeInboxTests: XCTestCase {
         "<!-- <p>hidden</p> --><a title=\"a>b\">1 &lt; 2</a> &bogus; <SCRIPT>if (a<b) {}</SCRIPT>&#39;ok&#39;"
       ), "1 < 2 &bogus; 'ok'")
   }
-  func testLegacyNetworkPolicyAndVersionedSoulPayload() throws {
+  func testVersionedSoulAndEmojiPayloads() throws {
     let config = try JSONDecoder().decode(
-      NativeAdminConfiguration.self,
-      from: Data(
-        #"{"egress":{"allowedHosts":["example.com"]},"soul":"Original","soulVersion":4}"#.utf8))
-    XCTAssertEqual(config.egress?.deniedHosts, [])
+      NativeAdminConfiguration.self, from: Data(#"{"soul":"Original","soulVersion":4}"#.utf8))
     var soul = NativeAdminSettingDraft(.soul, config)
     soul.text = "Updated"
     XCTAssertEqual(

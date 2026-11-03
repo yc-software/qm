@@ -35,7 +35,7 @@ struct NativeAdminRuntimeDraft: Equatable {
   var fast: Bool
   init(_ configuration: NativeAdminModelConfiguration) {
     inherit = configuration.runtime == nil && configuration.baseModel == nil
-    harness = configuration.runtime?.harnessId ?? configuration.harnessDefault
+    harness = configuration.harnessDefault
     model =
       configuration.runtime?.modelId ?? configuration.baseModel ?? configuration.baseModelDefault
     effort = configuration.runtime?.effortLevel ?? "auto"

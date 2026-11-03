@@ -8,12 +8,6 @@ struct NativeAdminConfiguration: Decodable {
   struct Egress: Codable, Equatable {
     var allowedHosts: [String]
     var deniedHosts: [String]
-    enum CodingKeys: String, CodingKey { case allowedHosts, deniedHosts }
-    init(from decoder: Decoder) throws {
-      let values = try decoder.container(keyedBy: CodingKeys.self)
-      allowedHosts = try values.decodeIfPresent([String].self, forKey: .allowedHosts) ?? []
-      deniedHosts = try values.decodeIfPresent([String].self, forKey: .deniedHosts) ?? []
-    }
   }
   struct Branding: Codable, Equatable {
     var accent: String?

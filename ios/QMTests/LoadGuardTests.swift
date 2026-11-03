@@ -101,20 +101,49 @@ final class LoadGuardTests: XCTestCase {
     XCTAssertFalse(loader.loading)
   }
 
-  func testContinuingRunKeepsRevisionUntilRestart() async {
+  func testContinuingRunKeepsEarlierLoadUntilRestart() async {
     let loader = LoadGuard()
-    let revision = loader.revision
+    var events: [String] = []
+    let first = Gate()
+    let earlier = Task {
+      await loader.run {
+        await first.wait()
+        return "earlier"
+      } apply: {
+        events.append($0)
+      } failed: { _ in
+      }
+    }
+    await first.started()
     await loader.run(restart: false) {
-      1
-    } apply: { _ in
+      "continued"
+    } apply: {
+      events.append($0)
     } failed: { _ in
     }
-    XCTAssertEqual(loader.revision, revision)
+    await first.open()
+    let earlierApplied = await earlier.value
+    XCTAssertTrue(earlierApplied)
+    let second = Gate()
+    let continued = Task {
+      await loader.run(restart: false) {
+        await second.wait()
+        return "dropped"
+      } apply: {
+        events.append($0)
+      } failed: { _ in
+      }
+    }
+    await second.started()
     await loader.run {
-      2
-    } apply: { _ in
+      "restarted"
+    } apply: {
+      events.append($0)
     } failed: { _ in
     }
-    XCTAssertNotEqual(loader.revision, revision)
+    await second.open()
+    let continuedApplied = await continued.value
+    XCTAssertFalse(continuedApplied)
+    XCTAssertEqual(events, ["continued", "earlier", "restarted"])
   }
 }

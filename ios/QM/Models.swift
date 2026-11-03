@@ -394,6 +394,12 @@ struct ChatMessage: Identifiable {
 }
 
 func chatMessages(_ entries: [Entry]) -> [ChatMessage] {
+  var builder = ChatMessageBuilder()
+  for entry in entries { builder.add(entry) }
+  return builder.messagesWithReferences()
+}
+
+private struct ChatMessageBuilder {
   var messages: [ChatMessage] = []
   var posts: [String: Entry] = [:]
   var posted = false
@@ -403,89 +409,22 @@ func chatMessages(_ entries: [Entry]) -> [ChatMessage] {
   var currentRunID: String?
   var activity: [Entry] = []
   var turnStart = 0
-  for entry in entries {
-    guard let payload = entry.payload else { continue }
+
+  mutating func add(_ entry: Entry) {
+    guard let payload = entry.payload else { return }
     let messageCount = messages.count
     if entry.type == "user", payload.steered != true || payload.runId != nil {
       currentRunID = payload.runId
     }
     if NativeWorkItem.supports(entry) { activity.append(entry) }
     switch entry.type {
-    case "user":
-      if payload.steered != true {
-        activity = []
-        turnStart = messages.count
-        posts = [:]
-        posted = false
-        silent = false
-        lastText = ""
-      }
-      guard payload.hidden != true else { continue }
-      let text = payload.display ?? payload.text ?? ""
-      if let mail = SubagentMail(text: payload.text) {
-        messages.append(
-          ChatMessage(id: entry.id, role: "notice", text: "", notice: .subagent(mail)))
-      } else if !text.isEmpty || !(payload.attachments ?? []).isEmpty {
-        messages.append(
-          ChatMessage(
-            id: entry.id, role: "user", text: text, files: payload.attachments ?? [],
-            speaker: payload.name, steered: payload.steered == true, slackTimestamp: payload.ts))
-      }
-    case "text":
-      lastText = payload.text ?? ""
+    case "user": addUser(entry, payload)
+    case "text": lastText = payload.text ?? ""
     case "tool_call":
       if payload.action == "post", let callID = payload.callId { posts[callID] = entry }
-    case "tool_result":
-      if payload.tool == "miniapp", payload.succeeded, let artifact = payload.playground,
-        artifact.kind == "playground", FilePreviewResource.path(for: artifact.artifactId) != nil,
-        !artifact.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-        playgroundIDs.insert(artifact.id).inserted
-      {
-        messages.append(
-          ChatMessage(id: entry.id, role: "assistant", text: "", playgrounds: [artifact]))
-      }
-      if payload.tool == "finish_silently" && payload.silent == true
-        || payload.tool == "stay_silent" && payload.ok == true
-      {
-        silent = true
-      }
-      if let callID = payload.callId, let post = posts.removeValue(forKey: callID),
-        payload.succeeded
-      {
-        messages.append(
-          ChatMessage(
-            id: post.id, role: "assistant", text: post.payload?.text ?? "",
-            files: payload.files ?? []))
-        posted = true
-      } else if payload.tool == "attach", payload.succeeded, let files = payload.files,
-        !files.isEmpty
-      {
-        messages.append(ChatMessage(id: entry.id, role: "assistant", text: "", files: files))
-      }
-    case "assistant":
-      if !posted && !silent {
-        let text = payload.text?.isEmpty == false ? payload.text! : lastText
-        if !text.isEmpty || !(payload.attachments ?? []).isEmpty {
-          messages.append(
-            ChatMessage(
-              id: entry.id, role: "assistant", text: text, files: payload.attachments ?? [],
-              speaker: payload.name))
-        }
-      }
-      posted = false
-      silent = false
-      lastText = ""
-      posts = [:]
-    case "delivery":
-      if let files = payload.files, !files.isEmpty {
-        if let last = messages.indices.last(where: {
-          $0 >= turnStart && messages[$0].role == "assistant"
-        }) {
-          messages[last].files += files
-        } else {
-          messages.append(ChatMessage(id: entry.id, role: "assistant", text: "", files: files))
-        }
-      }
+    case "tool_result": addToolResult(entry, payload)
+    case "assistant": addAssistant(entry, payload)
+    case "delivery": addDelivery(entry, payload)
     case "approval_resolved":
       if let approved = payload.approved, let command = payload.command {
         messages.append(
@@ -493,28 +432,110 @@ func chatMessages(_ entries: [Entry]) -> [ChatMessage] {
             id: entry.id, role: "notice", text: "",
             notice: .approval(approved: approved, command: command, scope: payload.scope)))
       }
-    case "system":
-      if payload.kind == "message_revision", let action = payload.action,
-        ["edited", "deleted"].contains(action), let timestamp = payload.ts, !timestamp.isEmpty
-      {
-        for index in messages.indices where messages[index].slackTimestamp == timestamp {
-          if action == "edited" { messages[index].edited = true }
-          if action == "deleted" { messages[index].deleted = true }
-        }
-        messages.append(
-          ChatMessage(
-            id: entry.id, role: "notice", text: "",
-            notice: .revision(action: action, speaker: payload.name, text: payload.text ?? "")))
-      } else if payload.kind == "turn_failure", let message = payload.message {
-        messages.append(ChatMessage(id: entry.id, role: "error", text: message))
-      }
+    case "system": addSystem(entry, payload)
     default: break
     }
-    if entry.type == "assistant", messageCount == messages.count,
-      let last = messages.indices.last(where: {
-        $0 >= turnStart && messages[$0].role == "assistant"
-      })
+    attachActivity(entry, from: messageCount)
+  }
+
+  private var lastAssistantInTurn: Int? {
+    messages.indices.last { $0 >= turnStart && messages[$0].role == "assistant" }
+  }
+
+  private mutating func addUser(_ entry: Entry, _ payload: EntryPayload) {
+    if payload.steered != true {
+      activity = []
+      turnStart = messages.count
+      posts = [:]
+      posted = false
+      silent = false
+      lastText = ""
+    }
+    guard payload.hidden != true else { return }
+    let text = payload.display ?? payload.text ?? ""
+    if let mail = SubagentMail(text: payload.text) {
+      messages.append(ChatMessage(id: entry.id, role: "notice", text: "", notice: .subagent(mail)))
+    } else if !text.isEmpty || !(payload.attachments ?? []).isEmpty {
+      messages.append(
+        ChatMessage(
+          id: entry.id, role: "user", text: text, files: payload.attachments ?? [],
+          speaker: payload.name, steered: payload.steered == true, slackTimestamp: payload.ts))
+    }
+  }
+
+  private mutating func addToolResult(_ entry: Entry, _ payload: EntryPayload) {
+    if payload.tool == "miniapp", payload.succeeded, let artifact = payload.playground,
+      artifact.kind == "playground", FilePreviewResource.path(for: artifact.artifactId) != nil,
+      !artifact.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      playgroundIDs.insert(artifact.id).inserted
     {
+      messages.append(
+        ChatMessage(id: entry.id, role: "assistant", text: "", playgrounds: [artifact]))
+    }
+    if payload.tool == "finish_silently" && payload.silent == true
+      || payload.tool == "stay_silent" && payload.ok == true
+    {
+      silent = true
+    }
+    if let callID = payload.callId, let post = posts.removeValue(forKey: callID),
+      payload.succeeded
+    {
+      messages.append(
+        ChatMessage(
+          id: post.id, role: "assistant", text: post.payload?.text ?? "",
+          files: payload.files ?? []))
+      posted = true
+    } else if payload.tool == "attach", payload.succeeded, let files = payload.files,
+      !files.isEmpty
+    {
+      messages.append(ChatMessage(id: entry.id, role: "assistant", text: "", files: files))
+    }
+  }
+
+  private mutating func addAssistant(_ entry: Entry, _ payload: EntryPayload) {
+    if !posted && !silent {
+      let text = payload.text?.isEmpty == false ? payload.text! : lastText
+      if !text.isEmpty || !(payload.attachments ?? []).isEmpty {
+        messages.append(
+          ChatMessage(
+            id: entry.id, role: "assistant", text: text, files: payload.attachments ?? [],
+            speaker: payload.name))
+      }
+    }
+    posted = false
+    silent = false
+    lastText = ""
+    posts = [:]
+  }
+
+  private mutating func addDelivery(_ entry: Entry, _ payload: EntryPayload) {
+    guard let files = payload.files, !files.isEmpty else { return }
+    if let last = lastAssistantInTurn {
+      messages[last].files += files
+    } else {
+      messages.append(ChatMessage(id: entry.id, role: "assistant", text: "", files: files))
+    }
+  }
+
+  private mutating func addSystem(_ entry: Entry, _ payload: EntryPayload) {
+    if payload.kind == "message_revision", let action = payload.action,
+      ["edited", "deleted"].contains(action), let timestamp = payload.ts, !timestamp.isEmpty
+    {
+      for index in messages.indices where messages[index].slackTimestamp == timestamp {
+        if action == "edited" { messages[index].edited = true }
+        if action == "deleted" { messages[index].deleted = true }
+      }
+      messages.append(
+        ChatMessage(
+          id: entry.id, role: "notice", text: "",
+          notice: .revision(action: action, speaker: payload.name, text: payload.text ?? "")))
+    } else if payload.kind == "turn_failure", let message = payload.message {
+      messages.append(ChatMessage(id: entry.id, role: "error", text: message))
+    }
+  }
+
+  private mutating func attachActivity(_ entry: Entry, from messageCount: Int) {
+    if entry.type == "assistant", messageCount == messages.count, let last = lastAssistantInTurn {
       messages[last].activity += activity
       activity = []
     }
@@ -528,16 +549,20 @@ func chatMessages(_ entries: [Entry]) -> [ChatMessage] {
       }
     }
   }
-  var references: [String: DeliveredFile] = [:]
-  for index in messages.indices {
-    if messages[index].role == "user" { references = [:] }
-    if case .subagent = messages[index].notice { references = [:] }
-    for file in messages[index].files {
-      if let name = file.name { references[name] = file }
+
+  func messagesWithReferences() -> [ChatMessage] {
+    var messages = messages
+    var references: [String: DeliveredFile] = [:]
+    for index in messages.indices {
+      if messages[index].role == "user" { references = [:] }
+      if case .subagent = messages[index].notice { references = [:] }
+      for file in messages[index].files {
+        if let name = file.name { references[name] = file }
+      }
+      messages[index].referencedFiles = Array(references.values)
     }
-    messages[index].referencedFiles = Array(references.values)
+    return messages
   }
-  return messages
 }
 
 struct RunResult: Decodable {

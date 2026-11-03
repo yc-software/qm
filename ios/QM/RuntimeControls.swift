@@ -1,13 +1,12 @@
 import SwiftUI
 
 struct RuntimeSelection: Codable, Equatable {
-  let harnessId: String
   let modelId: String
   let effortLevel: String?
   let fastMode: Bool?
 
   var turnOptions: [String: Any] {
-    var options: [String: Any] = ["harness": harnessId, "model": modelId]
+    var options: [String: Any] = ["model": modelId]
     if let effortLevel { options["thinkingLevel"] = effortLevel }
     if let fastMode { options["fastMode"] = fastMode }
     return options
@@ -19,77 +18,55 @@ struct RuntimeModelMetadata: Decodable {
   let label: String
   let provider: String?
   let reasoning: Bool?
-  let effortLevelsByHarness: [String: [String]]?
+  let effortLevels: [String]
 }
 
 struct RuntimeConfiguration: Decodable {
   let scopeId: String
-  let approvedHarnesses: [String]
-  let modelsByHarness: [String: [String]]
+  let models: [String]
   let modelCatalog: [String: RuntimeModelMetadata]
   let orgDefault: RuntimeSelection
   let scopeOverride: RuntimeSelection?
   let effective: RuntimeSelection
   let unavailableReason: String?
-  let fastModeModelIds: [String]?
+  let fastModeModelIds: [String]
 
-  var harnesses: [String] { approvedHarnesses.filter { !models(for: $0).isEmpty } }
-
-  func models(for harness: String) -> [String] {
+  var selectableModels: [String] {
     var seen = Set<String>()
-    return (modelsByHarness[harness] ?? []).filter {
-      modelCatalog[$0]?.id == $0 && seen.insert($0).inserted
-    }
+    return models.filter { modelCatalog[$0]?.id == $0 && seen.insert($0).inserted }
   }
 
-  func efforts(harness: String, model: String) -> [String] {
-    guard let advertised = modelCatalog[model]?.effortLevelsByHarness?[harness] else {
-      return RuntimeDraft.efforts(for: harness)
-    }
-    return ["auto"] + advertised.filter { $0 != "auto" }
+  func efforts(model: String) -> [String] {
+    modelCatalog[model]?.effortLevels ?? ["auto"]
   }
 
-  func supportsFastMode(harness: String, model: String) -> Bool {
-    ["pi", "claude", "codex"].contains(harness) && (fastModeModelIds ?? []).contains(model)
+  func supportsFastMode(model: String) -> Bool {
+    fastModeModelIds.contains(model)
   }
 }
 
 struct RuntimeDraft {
-  var harness: String
   var model: String
   var effort: String
   var fast: Bool
 
   init(_ selection: RuntimeSelection) {
-    harness = selection.harnessId
     model = selection.modelId
     effort = selection.effortLevel ?? "auto"
     fast = selection.fastMode == true
   }
 
-  static func efforts(for harness: String) -> [String] {
-    switch harness {
-    case "pi": ["auto", "low", "medium", "high", "xhigh", "max", "ultracode"]
-    case "claude": ["auto", "low", "medium", "high", "xhigh", "max"]
-    case "codex": ["auto", "low", "medium", "high", "xhigh"]
-    default: ["auto"]
-    }
-  }
-
   mutating func normalize(using configuration: RuntimeConfiguration) {
-    if !configuration.efforts(harness: harness, model: model).contains(effort) { effort = "auto" }
-    if !configuration.supportsFastMode(harness: harness, model: model) { fast = false }
+    if !configuration.efforts(model: model).contains(effort) { effort = "auto" }
+    if !configuration.supportsFastMode(model: model) { fast = false }
   }
 
   var selection: RuntimeSelection {
-    RuntimeSelection(harnessId: harness, modelId: model, effortLevel: effort, fastMode: fast)
+    RuntimeSelection(modelId: model, effortLevel: effort, fastMode: fast)
   }
 
   func body(scopeID: String) -> [String: Any] {
-    [
-      "scopeId": scopeID, "harnessId": harness, "modelId": model,
-      "effortLevel": effort, "fastMode": fast,
-    ]
+    ["scopeId": scopeID, "modelId": model, "effortLevel": effort, "fastMode": fast]
   }
 }
 
@@ -119,33 +96,27 @@ struct RuntimeControlsView: View {
           if let reason = configuration.unavailableReason {
             Label(reason, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
           }
-          if configuration.harnesses.isEmpty {
+          if configuration.selectableModels.isEmpty {
             Text("No models are available. Connect a model account or ask your administrator.")
           } else {
-            Picker("Runtime", selection: harnessBinding) {
-              if !configuration.harnesses.contains(draft.harness) {
-                Text("\(draft.harness) (unavailable)").tag(draft.harness)
-              }
-              ForEach(configuration.harnesses, id: \.self) { Text($0).tag($0) }
-            }
             Picker("Model", selection: modelBinding) {
-              if !configuration.models(for: draft.harness).contains(draft.model) {
+              if !configuration.selectableModels.contains(draft.model) {
                 Text("\(draft.model) (unavailable)").tag(draft.model)
               }
-              ForEach(configuration.models(for: draft.harness), id: \.self) { id in
+              ForEach(configuration.selectableModels, id: \.self) { id in
                 Text(configuration.modelCatalog[id]?.label ?? id).tag(id)
               }
             }
-            if configuration.efforts(harness: draft.harness, model: draft.model).count > 1 {
+            if configuration.efforts(model: draft.model).count > 1 {
               Picker("Reasoning effort", selection: effortBinding) {
                 ForEach(
-                  configuration.efforts(harness: draft.harness, model: draft.model), id: \.self
+                  configuration.efforts(model: draft.model), id: \.self
                 ) {
                   Text($0 == "xhigh" ? "Extra high" : $0.capitalized).tag($0)
                 }
               }
             }
-            if configuration.supportsFastMode(harness: draft.harness, model: draft.model) {
+            if configuration.supportsFastMode(model: draft.model) {
               Toggle("Fast mode", isOn: fastBinding)
             }
           }
@@ -203,21 +174,7 @@ struct RuntimeControlsView: View {
 
   private var canSave: Bool {
     guard let draft, let configuration else { return false }
-    return configuration.harnesses.contains(draft.harness)
-      && configuration.models(for: draft.harness).contains(draft.model)
-  }
-
-  private var harnessBinding: Binding<String> {
-    Binding(
-      get: { draft?.harness ?? "" },
-      set: { value in
-        guard let configuration, var next = draft else { return }
-        next.harness = value
-        let models = configuration.models(for: value)
-        if !models.contains(next.model) { next.model = models.first ?? "" }
-        next.normalize(using: configuration)
-        draft = next
-      })
+    return configuration.selectableModels.contains(draft.model)
   }
 
   private var modelBinding: Binding<String> {

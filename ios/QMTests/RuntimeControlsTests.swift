@@ -7,35 +7,31 @@ final class RuntimeControlsTests: XCTestCase {
     try JSONDecoder().decode(
       RuntimeConfiguration.self,
       from: Data(
-        #"{"scopeId":"personal:alice","approvedHarnesses":["pi","codex","other"],"modelsByHarness":{"pi":["dynamic","dynamic","missing","mismatch"],"codex":["dynamic"],"other":[]},"modelCatalog":{"dynamic":{"id":"dynamic","label":"New server model","provider":"openai","reasoning":true},"mismatch":{"id":"different","label":"Wrong model"}},"orgDefault":{"harnessId":"pi","modelId":"dynamic"},"scopeOverride":null,"effective":{"harnessId":"pi","modelId":"dynamic","effortLevel":"ultracode","fastMode":true},"fastModeModelIds":["dynamic"]}"#
+        #"{"scopeId":"personal:alice","models":["dynamic","dynamic","missing","mismatch","plain"],"modelCatalog":{"dynamic":{"id":"dynamic","label":"New server model","provider":"openai","reasoning":true,"effortLevels":["auto","adaptive","low","high","max"]},"mismatch":{"id":"different","label":"Wrong model","effortLevels":["auto"]},"plain":{"id":"plain","label":"Plain","effortLevels":["auto","low"]}},"orgDefault":{"modelId":"dynamic","revision":3},"scopeOverride":null,"effective":{"modelId":"dynamic","effortLevel":"max","fastMode":true},"fastModeModelIds":["dynamic"]}"#
           .utf8))
   }
 
   func testOnlyAdvertisedModelsWithMatchingMetadataAreSelectable() throws {
     let config = try configuration()
-    XCTAssertEqual(config.harnesses, ["pi", "codex"])
-    XCTAssertEqual(config.models(for: "pi"), ["dynamic"])
+    XCTAssertEqual(config.selectableModels, ["dynamic", "plain"])
     XCTAssertEqual(config.modelCatalog["dynamic"]?.label, "New server model")
   }
 
-  func testSwitchingHarnessRemovesUnsupportedEffortAndFastMode() throws {
+  func testEffortsComeFromTheModelCatalog() throws {
     let config = try configuration()
-    var draft = RuntimeDraft(config.effective)
-    draft.harness = "codex"
-    draft.normalize(using: config)
-    XCTAssertEqual(draft.effort, "auto")
-    XCTAssertTrue(draft.fast)
-    draft.harness = "opencode"
-    draft.normalize(using: config)
-    XCTAssertFalse(draft.fast)
-    XCTAssertEqual(RuntimeDraft.efforts(for: "opencode"), ["auto"])
+    XCTAssertEqual(config.efforts(model: "dynamic"), ["auto", "adaptive", "low", "high", "max"])
+    XCTAssertEqual(config.efforts(model: "plain"), ["auto", "low"])
   }
 
-  func testSwitchingModelClearsUnsupportedFastMode() throws {
+  func testSwitchingModelRemovesUnsupportedEffortAndFastMode() throws {
     let config = try configuration()
     var draft = RuntimeDraft(config.effective)
-    draft.model = "not-fast"
     draft.normalize(using: config)
+    XCTAssertEqual(draft.effort, "max")
+    XCTAssertTrue(draft.fast)
+    draft.model = "plain"
+    draft.normalize(using: config)
+    XCTAssertEqual(draft.effort, "auto")
     XCTAssertFalse(draft.fast)
   }
 
@@ -47,28 +43,14 @@ final class RuntimeControlsTests: XCTestCase {
     XCTAssertEqual(body["scopeId"] as? String, "channel:team")
     XCTAssertEqual(body["modelId"] as? String, "dynamic")
     XCTAssertEqual(body["fastMode"] as? Bool, false)
-    XCTAssertEqual(body["effortLevel"] as? String, "ultracode")
-  }
-  func testAdvertisedProviderEffortsOverrideLegacyHarnessList() throws {
-    let data = Data(
-      #"{"scopeId":"personal:test","approvedHarnesses":["claude"],"modelsByHarness":{"claude":["model"]},"modelCatalog":{"model":{"id":"model","label":"Model","effortLevelsByHarness":{"claude":["adaptive","low","high"]}}},"orgDefault":{"harnessId":"claude","modelId":"model"},"effective":{"harnessId":"claude","modelId":"model","effortLevel":"adaptive"}}"#
-        .utf8)
-    let config = try JSONDecoder().decode(RuntimeConfiguration.self, from: data)
-    XCTAssertEqual(
-      config.efforts(harness: "claude", model: "model"), ["auto", "adaptive", "low", "high"])
-    var draft = RuntimeDraft(config.effective)
-    draft.normalize(using: config)
-    XCTAssertEqual(draft.effort, "adaptive")
-    draft.effort = "max"
-    draft.normalize(using: config)
-    XCTAssertEqual(draft.effort, "auto")
+    XCTAssertEqual(body["effortLevel"] as? String, "max")
+    XCTAssertNil(body["harnessId"])
   }
 
   func testConversationSelectionUsesTurnOptionsWithoutScopeMutation() {
-    let selected = RuntimeSelection(
-      harnessId: "codex", modelId: "chosen", effortLevel: "high", fastMode: false)
+    let selected = RuntimeSelection(modelId: "chosen", effortLevel: "high", fastMode: false)
     XCTAssertEqual(selected.turnOptions["model"] as? String, "chosen")
-    XCTAssertEqual(selected.turnOptions["harness"] as? String, "codex")
+    XCTAssertNil(selected.turnOptions["harness"])
     XCTAssertEqual(selected.turnOptions["thinkingLevel"] as? String, "high")
     XCTAssertEqual(selected.turnOptions["fastMode"] as? Bool, false)
     XCTAssertNil(selected.turnOptions["scopeId"])

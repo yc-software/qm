@@ -142,10 +142,8 @@ final class AttachmentSubmissionTests: XCTestCase {
       localOnly: true)
     let chat = ChatModel(
       conversation: conversation, client: client, user: "test", knownSession: false)
-    let first = RuntimeSelection(
-      harnessId: "codex", modelId: "first", effortLevel: "high", fastMode: false)
-    let second = RuntimeSelection(
-      harnessId: "pi", modelId: "second", effortLevel: "low", fastMode: true)
+    let first = RuntimeSelection(modelId: "first", effortLevel: "high", fastMode: false)
+    let second = RuntimeSelection(modelId: "second", effortLevel: "low", fastMode: true)
     chat.selectRuntime(first)
     chat.draft = "Runtime QA"
     await chat.send()
