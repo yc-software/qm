@@ -220,6 +220,7 @@ export interface DeliveryProvenance {
 
 export interface Delivery {
   id: string;
+  tenantId?: string;
   destination: Destination;
   text: string;
   attachments?: OutgoingAttachment[];
