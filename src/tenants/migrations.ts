@@ -18,6 +18,12 @@ BEGIN
   END IF;
   RETURN bound::uuid;
 END $qm_bound_tenant$`,
+    `DO $adopt_tenant$
+BEGIN
+  IF to_regclass('qm_tenant') IS NOT NULL THEN
+    INSERT INTO tenants(id, slug, name) SELECT id, id::text, id::text FROM qm_tenant ON CONFLICT (id) DO NOTHING;
+  END IF;
+END $adopt_tenant$`,
   ],
 };
 
@@ -43,10 +49,7 @@ BEGIN
     RETURN;
   END IF;
   SELECT count(*), min(id::text)::uuid INTO tenant_count, tenant FROM tenants;
-  IF tenant_count = 0 AND to_regclass('qm_tenant') IS NOT NULL THEN
-    EXECUTE 'SELECT id FROM qm_tenant' INTO tenant;
-    INSERT INTO tenants(id, slug, name) VALUES (tenant, tenant::text, tenant::text);
-  ELSIF tenant_count <> 1 THEN
+  IF tenant_count <> 1 THEN
     RAISE EXCEPTION 'Rows in ${table} need a tenant, but this database has % tenants', tenant_count;
   END IF;
   EXECUTE format('ALTER TABLE ${table} ADD COLUMN tenant_id UUID NOT NULL DEFAULT %L', tenant);
