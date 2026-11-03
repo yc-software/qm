@@ -168,6 +168,20 @@ test(
         "INSERT INTO sessions (id, type, scope_id, thread_ref, created_at, spawn_meta) VALUES ('child', 'chat', 'org:o', 'child', 1, $1)",
         [JSON.stringify({ slackSource: internalSource, origin: { kind: "automation", destination: oldDestination } })],
       );
+      const bindSession = (id: string, binding: object, meta: object) =>
+        admin.query(
+          "INSERT INTO sessions (id, type, scope_id, thread_ref, created_at, spawn_meta, slack_binding) VALUES ($1, 'dm', 'org:o', $1, 1, $2, $3)",
+          [id, JSON.stringify(meta), JSON.stringify(binding)],
+        );
+      await bindSession(
+        "bound-external",
+        { ...ids, externalPolicyNamespace: "external-slack:TPARTNER:x" },
+        {
+          externalSlack: { ...ids, ...access },
+          origin: { kind: "human" },
+        },
+      );
+      await bindSession("bound-internal", internalSource, { origin: { kind: "human" } });
       const signal = (consumed: number | null) =>
         admin.query(
           "INSERT INTO run_signals (run_id, kind, payload, created_at, consumed_at) VALUES ('pending', 'steer', $1, 1, $2)",
@@ -273,6 +287,17 @@ test(
         surfaceOrigin: internalOrigin,
         origin: { kind: "automation", destination: newDestination },
       });
+      const bound = async (id: string) =>
+        rowToSession((await admin.query("SELECT * FROM sessions WHERE id = $1", [id])).rows[0]);
+      const boundExternal = await bound("bound-external");
+      assert.deepEqual(
+        boundExternal.surfaceBinding,
+        slackSurfaceOrigin({ ...ids, policyNamespace: "external-slack:TPARTNER:x" }),
+      );
+      assert.deepEqual(boundExternal.spawnMeta, { surfaceOrigin: externalOrigin, origin: { kind: "human" } });
+      const boundInternal = await bound("bound-internal");
+      assert.deepEqual(boundInternal.surfaceBinding, internalOrigin);
+      assert.deepEqual(boundInternal.spawnMeta, { origin: { kind: "human" } });
       const signals = (await admin.query("SELECT payload FROM run_signals ORDER BY id")).rows;
       assert.deepEqual(signals[0].payload.request.surfaceOrigin, internalOrigin);
       assert.deepEqual(signals[0].payload.sessionRequest.surfaceOrigin, externalOnlyOrigin);

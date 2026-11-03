@@ -233,7 +233,15 @@ const LIVE_ORIGIN_REWRITES = [
   migration("surface-origin-rewrite/spawn-meta", [
     ifTable(
       "sessions",
-      `UPDATE sessions SET spawn_meta = pg_temp.qm_surface_request_text(spawn_meta) WHERE ${oldKeysIn("spawn_meta")}`,
+      `UPDATE sessions SET
+         spawn_meta = CASE WHEN ${oldKeysIn("spawn_meta")} THEN COALESCE(pg_temp.qm_surface_request(
+           pg_temp.qm_jsonb_or_null(spawn_meta) || CASE
+             WHEN slack_binding ? 'teamId' AND spawn_meta LIKE '%"externalSlack"%' AND spawn_meta NOT LIKE '%"slackSource"%'
+             THEN jsonb_build_object('slackSource', slack_binding) ELSE '{}'::jsonb END)::text, spawn_meta) ELSE spawn_meta END,
+         slack_binding = CASE WHEN slack_binding ? 'teamId'
+           THEN pg_temp.qm_surface_request(jsonb_build_object('slackSource', slack_binding)) -> 'surfaceOrigin'
+           ELSE slack_binding END
+       WHERE ${oldKeysIn("spawn_meta")} OR slack_binding ? 'teamId'`,
     ),
   ]),
 ];

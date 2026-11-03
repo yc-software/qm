@@ -17,7 +17,12 @@ import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
-import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
+import {
+  requiresDelegation,
+  delegatedAuthorizationOrigin,
+  ownsSessionContext,
+  sessionContextOf,
+} from "../sessions/session-syscalls.ts";
 import {
   documentText,
   type DocumentInput,
@@ -60,7 +65,9 @@ import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolutio
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { reachEnqueue } from "../reach/reach.ts";
+import { interimReplyDelivery, turnGuidance } from "./orchestrator/reply-check.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
+import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { DirectoryStore, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { SessionWriter } from "../sessions/session-store.ts";
@@ -1165,6 +1172,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         conversation.channelName,
         input.surface,
         desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
+        {
+          ...(input.surfaceOrigin ? { surfaceBinding: input.surfaceOrigin } : {}),
+          ...(ownsSessionContext(conversation.threadRef, input) ? { context: sessionContextOf(input) } : {}),
+        },
       );
       screenSession.id = session.id;
       const origin = await originOf(session);
@@ -3013,6 +3024,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           if (error) throw new NonRetryableTurnError(error);
         }
+        const replyCheck = await (automatedTurn || sessionTurn ? undefined : deps.replyCheck)?.({
+          surfaceName,
+          ...(runtimePurpose ? { runtimePurpose } : {}),
+          guidance: turnGuidance(
+            resolution.guidance,
+            conversation.kind !== "dm" && conversation.channelRef
+              ? async () => (await deps.channelPolicy?.get(conversation.channelRef!))?.orders
+              : undefined,
+          ),
+          input: baseText,
+          turn: {
+            actorId: actor.id,
+            scopeLabel: scopeId,
+            sessionId: session.id,
+            ...(input.runId ? { runId: input.runId } : {}),
+            cancel: turnAbort.signal,
+          },
+        }).catch(swallowAs("orchestrator: reply check setup", undefined));
+        const checkReply = replyCheck?.enforce ? replyCheck.check : undefined;
         const runAgentSegment = async (
           agentInput: string,
           extras: {
@@ -3399,6 +3429,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             goal: sessionGoal,
             saveGoal,
             ...(goalInbox ? { goalInbox } : {}),
+            ...(checkReply ? { checkReply } : {}),
+            onInterimReply: interimReplyDelivery({
+              surfaceName,
+              spineTurn: input.surfaceTools === true,
+              addressed: input.addressed === true,
+              strictReadOnly,
+              destination: defaultDestination,
+              deliveries: deps.deliveries,
+              postKeys,
+              provenance: postProvenance,
+              ackText: () => spineAckText,
+              postedSoFar: () => spine.surfaceOutboundCount,
+            }),
             scopeLabel: scopeId,
             orgScopeId: resolution.orgScopeId,
             onModelRequest: () => dispatchTrace?.modelRequest(),
@@ -3498,6 +3541,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
+        if (replyCheck && !replyCheck.enforce && result.reply.trim() && !result.silent && !result.stopped)
+          void replyCheck.check(result.reply).catch(swallowAs("orchestrator: observed reply check", undefined));
         if (
           input.addressed &&
           !strictReadOnly &&
@@ -3512,9 +3557,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (primaryReply && defaultDestination && deps.deliveries) {
             try {
               const directKey = postKeys.key(defaultDestination, postKeys.take());
+              const editNote = replyEditNote(result.retracted);
               await reachEnqueue({
                 deliveries: deps.deliveries,
-                destination: defaultDestination,
+                destination: editNote ? { ...defaultDestination, editNote } : defaultDestination,
                 text: primaryReply,
                 idempotencyKey: directKey,
                 provenance: postProvenance(directKey),
@@ -3693,6 +3739,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             status: "ok",
             sessionId: session.id,
             reply,
+            ...(result.retracted?.length ? { retracted: result.retracted } : {}),
             ...(result.stopped ? { stopped: true } : {}),
             ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
             ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
@@ -3701,6 +3748,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
+        if (turnRuntime) await deps.sessions.setRuntime(session.id, turnRuntime);
         await fallbackTitleWrite;
 
         tailOwnsCleanup = true;

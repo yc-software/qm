@@ -116,13 +116,30 @@ export interface AgentTurnInput {
   onReasoningDelta?(step: string, index: number, chunk: string): void;
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
   onToolCallStart?(name: string): void;
+  checkReply?(draft: string): Promise<ReplyVerdict | undefined>;
+  onInterimReply?(text: string): boolean | Promise<boolean>;
   screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;
   governGoal?: import("./goal.ts").GoalGovernor;
 }
 
+export interface ReplyVerdict {
+  action: "retry" | "prod";
+  reason: string;
+  message: string;
+}
+
+export const REPLY_CHECK_LIMITS: Record<ReplyVerdict["action"], number> = { retry: 2, prod: 1 };
+
+export const replyCheckPrompt = (verdict: ReplyVerdict): string =>
+  verdict.action === "prod"
+    ? `[system] The reply check says you stopped early; the user has already seen your reply above. ${verdict.message}`
+    : `[system] The reply check retracted your reply above; the user sees it marked as retracted. ${verdict.message} Write the full reply again now.`;
+
 export interface AgentTurnResult {
   runtimeHandoff?: TurnHandoff;
   reply: string;
+  retracted?: string[];
+  prodded?: string[];
   silent?: boolean;
   stopped?: true;
   stoppedByUser?: true;

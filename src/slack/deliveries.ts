@@ -22,6 +22,8 @@ import {
   recoveryVerifyOldest,
   slackReplyArgs,
   slackSectionBlocks,
+  plainContext,
+  blocksWithContext,
   stripReactionDirectives,
   toSlackMrkdwn,
   uploadAttachments,
@@ -167,7 +169,10 @@ export function createDeliveryPoller(deps: {
     const base = deps.webUiPublicUrl?.trim().replace(/\/+$/, "");
     const id = d.provenance?.trigger === "cron" ? cronIdOf(d.provenance.sourceThreadRef) : null;
     const sender = d.destination.relaySender?.trim().replace(/^@+/, "");
-    const attribution = sender ? [{ type: "plain_text", text: `Sent for @${sender}`, emoji: false }] : [];
+    const attribution = [
+      ...(sender ? [plainContext(`Sent for @${sender}`)] : []),
+      ...(d.destination.editNote ? [plainContext(d.destination.editNote)] : []),
+    ];
     if (!base || !id) return attribution;
     const title = escapeSlackText(d.provenance?.sourceTitle?.trim() || "Cron");
     return [
@@ -357,9 +362,7 @@ export function createDeliveryPoller(deps: {
                 ...messageFooter,
                 ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
               ];
-              const footerBlocks = footer.length
-                ? [...(text.trim() ? slackSectionBlocks(text) : []), { type: "context", elements: footer }]
-                : undefined;
+              const footerBlocks = footer.length ? blocksWithContext(text, footer) : undefined;
               if (!text.trim() && !(messageFooter.length && d.attachments?.length)) {
                 if (editRef) {
                   await client.chat
@@ -483,11 +486,7 @@ export function createDeliveryPoller(deps: {
               const threadTs = d.destination.threadTs;
               const footer = deliveryFooter(d);
               if (!text.trim() && !footer.length && d.attachments?.length) text = "Files attached.";
-              const blocks =
-                card?.blocks ??
-                (footer.length
-                  ? [...(text.trim() ? slackSectionBlocks(text) : []), { type: "context", elements: footer }]
-                  : undefined);
+              const blocks = card?.blocks ?? (footer.length ? blocksWithContext(text, footer) : undefined);
               let uploadError: unknown;
               let reused = false;
               if (text.trim() || blocks) {
