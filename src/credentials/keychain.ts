@@ -1,5 +1,4 @@
-import type { Claimed } from "../tenants/claim.ts";
-import { withTenant } from "../tenants/context.ts";
+import { crossTenantLoop, inTenantOf, type Claimed } from "../tenants/claim.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
@@ -682,23 +681,6 @@ export function createKeychain(deps: {
     return (await deps.grants.activeFor(scopeId)).filter((g) => !consumedGrant(g) && !expired(g, t));
   }
 
-  async function resolvedAsks(nowAt: number): Promise<KeychainAsk[]> {
-    const out: KeychainAsk[] = [];
-    const taskDecisions = new Set<string>();
-    for (const rec of await deps.asks.newestFirst({})) {
-      const a = await freshAsk(rec, nowAt);
-      const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
-      const task = JSON.stringify([a.credentialId, a.requesterScopeId, origin]);
-      const retainDecision =
-        origin !== undefined && !taskDecisions.has(task) && !!(await deps.creds.get(a.credentialId));
-      taskDecisions.add(task);
-      if (a.status === "pending") continue;
-      if (a.notifiedAt === undefined) out.push(a);
-      else if (!retainDecision && a.notifiedAt < nowAt - ASK_PRUNE_AFTER_MS) await deps.asks.delete(a.id);
-    }
-    return out;
-  }
-
   async function freshAsk(rec: KeychainAsk, t: number): Promise<KeychainAsk> {
     if (rec.status !== "pending" && rec.status !== "expired") return rec;
     const grant = await deps.grants.get(hashId([rec.credentialId, "ask", rec.id]));
@@ -1378,12 +1360,25 @@ export function createKeychain(deps: {
       });
     },
 
-    async unnotifiedResolvedAsks(nowAt) {
+    unnotifiedResolvedAsks: crossTenantLoop(async (nowAt: number) => {
       const out: Array<Claimed<KeychainAsk>> = [];
-      for (const tenantId of await deps.asks.tenants())
-        for (const ask of await withTenant(tenantId, () => resolvedAsks(nowAt))) out.push({ ...ask, tenantId });
+      const taskDecisions = new Set<string>();
+      for (const rec of await deps.asks.claimSweepable(nowAt - ASK_PRUNE_AFTER_MS)) {
+        const { tenantId } = rec;
+        const a = await inTenantOf(tenantId, () => freshAsk(rec, nowAt));
+        const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
+        const task = JSON.stringify([tenantId, a.credentialId, a.requesterScopeId, origin]);
+        const retainDecision =
+          origin !== undefined &&
+          !taskDecisions.has(task) &&
+          !!(await inTenantOf(tenantId, () => deps.creds.get(a.credentialId)));
+        taskDecisions.add(task);
+        if (a.status === "pending") continue;
+        if (a.notifiedAt === undefined) out.push({ ...a, tenantId });
+        else if (!retainDecision) await inTenantOf(tenantId, () => deps.asks.delete(a.id));
+      }
       return out;
-    },
+    }),
 
     async markAskNotified(id, status) {
       await deps.asks.update(id, (current) =>

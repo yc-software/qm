@@ -1,4 +1,5 @@
 import type { ScopeId } from "../types.ts";
+import type { Claimed } from "../tenants/claim.ts";
 import { personIds, samePerson } from "../directory/person.ts";
 import type { KeychainAsk, KeychainCredential, KeychainGrant } from "./keychain.ts";
 
@@ -38,7 +39,7 @@ export interface KeychainAskRows {
   update(id: string, fn: (current: KeychainAsk) => KeychainAsk): Promise<KeychainAsk | null>;
   delete(id: string): Promise<void>;
   newestFirst(filter: KeychainAskFilter): Promise<KeychainAsk[]>;
-  tenants(): Promise<string[]>;
+  claimSweepable(prunedBefore: number): Promise<Array<Claimed<KeychainAsk>>>;
 }
 
 export interface KeychainRows {

@@ -8,7 +8,7 @@ import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { typedColumns, type ColumnCast, type TypedColumns } from "../persistence/typed-columns.ts";
 import { jsonBackfill, upsertStatement } from "../persistence/typed-statements.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { claimAcrossTenants } from "../tenants/claim.ts";
+import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
 import type { ScopeId } from "../types.ts";
 import type { KeychainAsk, KeychainCredential, KeychainGrant } from "./keychain.ts";
 import { askMatches, matchesOwner, ownerKeys, type KeychainAskFilter, type KeychainRows } from "./keychain-rows.ts";
@@ -342,9 +342,14 @@ export function createPostgresKeychainRows(connectionString: string): KeychainRo
         );
         return found.map((row) => ASK.fromRow(row)).filter((ask) => askMatches(ask, filter));
       },
-      async tenants() {
-        const { rows } = await claimAcrossTenants(connectionString, "SELECT DISTINCT tenant_id FROM keychain_asks");
-        return rows.map((row) => String(row.tenant_id));
+      async claimSweepable(prunedBefore) {
+        const { rows } = await claimAcrossTenants(
+          connectionString,
+          `SELECT tenant_id, ${ASK.names} FROM keychain_asks
+           WHERE notified_at IS NULL OR notified_at < $1 ORDER BY created_at DESC, id DESC`,
+          [prunedBefore],
+        );
+        return rows.map((row) => ({ ...ASK.fromRow(row), ...rowTenant(row) }));
       },
     },
   };
