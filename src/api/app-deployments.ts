@@ -18,6 +18,7 @@ export function createDeploymentMethods(
   | "redeploy"
   | "listDeployments"
   | "getDeployment"
+  | "deploymentTenant"
   | "shareDeployment"
   | "inviteToDeployment"
   | "deploymentGrantees"
@@ -58,6 +59,9 @@ export function createDeploymentMethods(
     },
     listDeployments() {
       return deps.deploy.listDeployments();
+    },
+    deploymentTenant(name) {
+      return deps.deploy.deploymentTenant(name);
     },
     getDeployment(idOrName) {
       return deps.deploy.getDeployment(idOrName);

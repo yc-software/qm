@@ -546,6 +546,7 @@ export interface App {
   redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   listDeployments(): Promise<Deployment[]>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
+  deploymentTenant(name: string): Promise<string | undefined>;
   listDeploymentsForViewer(principalId: string): Promise<ViewerDeployment[]>;
   effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null>;
   deploymentGitPermissionFor(idOrName: string, principalId: string): Promise<"read" | "write" | null>;

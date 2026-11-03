@@ -79,6 +79,7 @@ export interface DeployService {
   deploy(input: DeployInput): Promise<Deployment>;
   redeploy(id: string, input: RedeployInput): Promise<Deployment>;
   getDeployment(idOrName: string): Promise<Deployment | null>;
+  deploymentTenant(name: string): Promise<string | undefined>;
   listDeployments(): Promise<Deployment[]>;
   rollbackDeployment(id: string, version: number, options?: { alwaysOn?: boolean; actor?: string }): Promise<void>;
   archiveDeployment(id: string): Promise<void>;
@@ -438,6 +439,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
+    deploymentTenant(name) {
+      return deps.deployStore.tenantOfName(name);
+    },
     async getDeployment(idOrName) {
       return (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
     },

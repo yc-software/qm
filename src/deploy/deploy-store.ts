@@ -5,6 +5,7 @@ import { APP_PAGE_VIEW_MIGRATIONS } from "./page-views.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { typedColumns } from "../persistence/typed-columns.ts";
 import { jsonBackfill } from "../persistence/typed-statements.ts";
+import { claimAcrossTenants } from "../tenants/claim.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
@@ -104,6 +105,7 @@ export interface DeployStore {
   addVersionFromCommit(id: string, commit: string): Promise<DeploymentVersion | null>;
   get(id: string): Promise<Deployment | null>;
   getByName(name: string): Promise<Deployment | null>;
+  tenantOfName(name: string): Promise<string | undefined>;
   list(): Promise<Deployment[]>;
   setCurrentVersion(id: string, version: number): Promise<void>;
   setVersionImage(id: string, version: number, image: string): Promise<void>;
@@ -135,6 +137,7 @@ export interface DeploymentRows {
   merge(id: string, patch: Partial<Deployment>): Promise<unknown>;
   list(): Promise<Deployment[]>;
   byName(name: string): Promise<Deployment | null>;
+  tenantOfName(name: string): Promise<string | undefined>;
   touch(id: string, at: number): Promise<boolean>;
 }
 
@@ -257,6 +260,15 @@ export function createPostgresDeploymentRows(databaseUrl: string): DeploymentRow
     merge: table.merge,
     list: () => rows("true"),
     byName: async (name) => (await rows("name = $1", [name]))[0] ?? null,
+    async tenantOfName(name) {
+      const { rows } = await claimAcrossTenants(
+        databaseUrl,
+        "SELECT tenant_id::text AS tenant_id FROM deployments WHERE name = $1",
+        [name],
+      );
+      const tenant = rows[0]?.tenant_id;
+      return typeof tenant === "string" ? tenant : undefined;
+    },
     touch: async (id, at) =>
       (
         await table.db.query(
@@ -386,6 +398,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     },
     get: (id) => backingMap.get(id),
     getByName: (name) => backingMap.byName(name),
+    tenantOfName: (name) => backingMap.tenantOfName(name),
     list: () => backingMap.list(),
     async setCurrentVersion(id, version) {
       const d = await backingMap.get(id);
