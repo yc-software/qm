@@ -687,10 +687,10 @@ test("the agent edits its own chat message in place and never reposts it", async
   }
 });
 
-test("an explicit edit the chat refuses fails its delivery instead of posting a new message", async () => {
+test("an explicit edit the chat refuses fails its delivery instead of posting, and an edit of the reply slot closes it", async () => {
   const partnerChat = await fakePartnerChat(200, ["77"]);
   const deliveries = createDeliveryStore();
-  const fake = fakeRuns({ [R1]: { target: `${CONTAINER}:1002` } });
+  const fake = fakeRuns({ [R1]: { target: `${CONTAINER}:1002`, editRef: "78" } });
   const outbound = createPartnerChatDeliveries({
     url: partnerChat.url,
     secret: SECRET,
@@ -716,6 +716,19 @@ test("an explicit edit the chat refuses fails its delivery instead of posting a 
       ["/qm_surface/messages/77/update"],
     );
     assert.ok((await deliveries.get(d.id))?.failedReason);
+    assert.deepEqual(fake.slots, []);
+    await deliveries.enqueue({
+      destination: {
+        type: "partner-chat",
+        target: `${CONTAINER}:1002`,
+        edit: { messageTs: "1793649600.00000000000000000078" },
+      },
+      text: "rewritten answer",
+      idempotencyKey: `post:${R1}:partner-chat:${CONTAINER}:1002:2`,
+    });
+    await outbound.drain();
+    assert.deepEqual(partnerChat.received.at(-1)?.path, "/qm_surface/messages/78/update");
+    assert.deepEqual(fake.slots, [[R1, { editRef: "" }]]);
   } finally {
     await partnerChat.close();
   }

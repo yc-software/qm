@@ -185,8 +185,13 @@ export function createPartnerChatDeliveries(deps: {
     if (!ref) throw new PartnerChatHttpError(400, `unroutable target ${d.destination.target}`);
     if (d.destination.react || d.destination.delete || d.destination.pin || d.attachments?.length || !body)
       throw new PartnerChatHttpError(400, "only non-empty text posts and edits are supported");
-    if (d.destination.edit) return edit(ref, d.destination.edit.messageTs, body);
     const key = runKey(d.idempotencyKey);
+    if (d.destination.edit) {
+      const edited = partnerChatMessageId(d.destination.edit.messageTs);
+      await edit(ref, edited, body);
+      if (key && (await deps.runs.get(key.runId))?.deliveryState?.editRef === edited) await setSlot(key.runId, "");
+      return;
+    }
     if (key) return deliverForRun(d, ref, body, key);
     if (d.destination.editRef) await edit(ref, d.destination.editRef, body);
     else await post(d, ref, body);
