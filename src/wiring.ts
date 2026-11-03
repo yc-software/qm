@@ -2953,7 +2953,7 @@ export function buildApp(
     brokeredTools,
     deploymentLayerReady,
     deploymentLayerRefresh,
-    rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(pgArtifactMap.pool),
+    rewriteSurfaceOrigins: async () => rewriteSurfaceOrigins(await pgArtifactMap.pool.pool()),
     sessions,
     runs,
     signals: runSignals,

@@ -1,4 +1,5 @@
-import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
+import type { Pool } from "pg";
+import { withPgTransaction } from "../persistence/pg-pool.ts";
 
 const DESTINATION_FIELDS: [table: string, field: string][] = [
   ["crons", "destination"],
@@ -85,8 +86,8 @@ const migration = (id: string, statements: string[]) => ({
   statements: [`SET LOCAL lock_timeout = '3s'`, ...HELPERS, ...statements, ...DROPS],
 });
 
-const OVERLAP_ORIGIN_MIGRATIONS = [
-  migration("surfaces/0001-neutral-origin-and-account", [
+const LIVE_ORIGIN_REWRITES = [
+  migration("surfaces/live-origin-and-account", [
     ifTable(
       "runs",
       `UPDATE runs r SET request = pg_temp.qm_surface_request_text(r.request)
@@ -124,7 +125,7 @@ const OVERLAP_ORIGIN_MIGRATIONS = [
       ),
     ),
   ]),
-  migration("surfaces/0002-neutral-origin-spawn-meta", [
+  migration("surfaces/live-origin-spawn-meta", [
     ifTable(
       "sessions",
       `UPDATE sessions SET spawn_meta = pg_temp.qm_surface_request_text(spawn_meta) WHERE ${oldKeysIn("spawn_meta")}`,
@@ -133,7 +134,6 @@ const OVERLAP_ORIGIN_MIGRATIONS = [
 ];
 
 export const SURFACE_ORIGIN_MIGRATIONS = [
-  ...OVERLAP_ORIGIN_MIGRATIONS,
   migration("surfaces/0003-neutral-origin-settled-runs", [
     ifTable(
       "runs",
@@ -147,13 +147,12 @@ export const SURFACE_ORIGIN_MIGRATIONS = [
   ]),
 ];
 
-export async function rewriteSurfaceOrigins(pg: PgPool): Promise<void> {
-  const pool = await pg.pool();
-  for (const migration of OVERLAP_ORIGIN_MIGRATIONS)
+export async function rewriteSurfaceOrigins(pool: Pool): Promise<void> {
+  for (const migration of LIVE_ORIGIN_REWRITES)
     await withPgTransaction(pool, async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('qm:surface-origin-rewrite'))");
       for (const statement of migration.statements) await client.query(statement);
     }).catch((error: unknown) => {
-      throw new Error(`surface origin overlap rewrite ${migration.id} failed`, { cause: error });
+      throw new Error(`surface origin live rewrite ${migration.id} failed`, { cause: error });
     });
 }
