@@ -17,24 +17,24 @@ interface StartupWorkDeps {
   checkBrokerCredentials?: () => Promise<void>;
 }
 
-interface StartupWork {
-  deploymentLayer: Promise<unknown>;
-  skills: Promise<void>;
-}
-
 interface Startup {
-  begin(): StartupWork;
+  skills: Promise<void>;
+  begin(): Promise<void>;
   stop(): void;
 }
 
 export function createStartup(deps: StartupWorkDeps): Startup {
-  let work: StartupWork | undefined;
+  const skills = Promise.withResolvers<void>();
+  let work: Promise<void> | undefined;
   let unlisten: (() => void) | undefined;
-  const run = (): StartupWork => {
-    unlisten = deps.listen();
-    void deps.identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
-    void deps.configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
-    const deploymentLayer = deps.deploymentLayer.hydrate();
+  const hydrate = async (): Promise<void> => {
+    await deps.identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
+    await deps.configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
+  };
+  const seed = async (): Promise<void> => {
+    await deps.seedCatalogs?.().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e)));
+  };
+  const maintain = (): void => {
     deps.mcp.start();
     void deps.blobTransfer
       .ensureExpiry?.(BLOB_TRANSFER_EXPIRY_DAYS)
@@ -45,16 +45,22 @@ export function createStartup(deps: StartupWorkDeps): Startup {
         ),
       );
     void deps.checkBrokerCredentials?.();
-    const layerReady = deploymentLayer.then(
-      () => undefined,
-      (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
-    );
-    const seeded = deps
-      .seedCatalogs?.()
-      .catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e)));
-    return { deploymentLayer, skills: Promise.all([seeded, layerReady]).then(() => undefined) };
+  };
+  const run = (): Promise<void> => {
+    unlisten = deps.listen();
+    const deploymentLayer = hydrate().then(() => deps.deploymentLayer.hydrate());
+    const skillsSeeded = deploymentLayer
+      .then(
+        () => undefined,
+        (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
+      )
+      .then(seed);
+    skills.resolve(skillsSeeded);
+    void skillsSeeded.then(maintain);
+    return Promise.all([deploymentLayer, skillsSeeded]).then(() => undefined);
   };
   return {
+    skills: skills.promise,
     begin: () => (work ??= run()),
     stop: () => unlisten?.(),
   };

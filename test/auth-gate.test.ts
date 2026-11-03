@@ -185,7 +185,11 @@ test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body 
     const tsA = Math.floor(Date.now() / 1000);
     const noSha = await fetch(`${base}/v1/blobs`, {
       method: "POST",
-      headers: { "x-timestamp": String(tsA), "x-signature": signRequest(SECRET, tsA, "POST\n/v1/blobs\n") },
+      headers: {
+        ...testTenantHeaders(),
+        "x-timestamp": String(tsA),
+        "x-signature": signRequest(SECRET, tsA, canonicalPayload("POST", "/v1/blobs", "", testTenants()[0])),
+      },
       body,
     });
     assert.equal(noSha.status, 400);
@@ -193,9 +197,10 @@ test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body 
     const ok = await fetch(`${base}/v1/blobs`, {
       method: "POST",
       headers: {
+        ...testTenantHeaders(),
         "x-content-sha256": sha,
         "x-timestamp": String(tsB),
-        "x-signature": signRequest(SECRET, tsB, `POST\n/v1/blobs\n${sha}`),
+        "x-signature": signRequest(SECRET, tsB, canonicalPayload("POST", "/v1/blobs", sha, testTenants()[0])),
       },
       body,
     });
