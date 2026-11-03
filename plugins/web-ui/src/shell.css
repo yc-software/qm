@@ -1855,9 +1855,9 @@ a.chat-row-open {
   box-shadow: var(--chat-surface-shadow);
 }
 
-.message-stack .user-row.stuck > .message-meta:not(:has(:focus-visible)) {
-  opacity: 0;
-  pointer-events: none;
+.message-stack .user-row.stuck > .message-meta {
+  position: static;
+  margin-bottom: calc(-1 * var(--meta-lane));
 }
 
 @media (prefers-reduced-motion: reduce) {
