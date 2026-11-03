@@ -10,7 +10,7 @@ import { withTenant } from "../src/tenants/context.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy upgrade test";
-const TENANCY = /^0000-tenancy\/|-tenants$|^sessions\/store\/005[01]-/;
+const TENANCY = /^0000-tenancy\/|-tenants$|^sessions\/store\/005[012]-/;
 
 async function withSchema(fn: (url: string, db: pg.Pool) => Promise<void>): Promise<void> {
   const schema = `upgrade_${randomUUID().replaceAll("-", "")}`;
@@ -55,7 +55,7 @@ test(
       await db.query(`INSERT INTO acl_grants VALUES ('personal:a', 'p', 'personal:b', 'read', 'a')`);
       await db.query(
         `INSERT INTO directory_members(org_id, principal_id, display_name, display_name_lc, type)
-       VALUES ('org', 'a', 'A', 'a', 'internal'), ('org', 'b', 'B', 'b', 'internal'), ('old', 'a', 'Old', 'old', 'internal')`,
+       VALUES ('org', 'a', 'A', 'a', 'internal'), ('org', 'b', 'B', 'b', 'internal')`,
       );
       await migrateRegisteredPgSchemas(url);
       assert.deepEqual((await db.query("SELECT id::text AS id FROM tenants")).rows, [{ id: instance }]);
@@ -102,6 +102,24 @@ test("rows that cannot name their one tenant stop the upgrade instead of picking
     await assert.rejects(
       migrateRegisteredPgSchemas(url),
       /Rows in acl_grants need a tenant, but this database has 2 tenants/,
+    );
+  });
+});
+
+test("directory rows from more than one org stop the upgrade and name the orgs", { skip }, async () => {
+  await withSchema(async (url, db) => {
+    createPostgresSessionStore(url);
+    await applyPgMigrations(
+      db,
+      registeredPgMigrations(url).filter((m) => !TENANCY.test(m.id)),
+    );
+    await db.query(
+      `INSERT INTO directory_members(org_id, principal_id, display_name, display_name_lc, type)
+       VALUES ('org', 'a', 'A', 'a', 'internal'), ('old', 'a', 'Old', 'old', 'internal')`,
+    );
+    await assert.rejects(
+      migrateRegisteredPgSchemas(url),
+      /Rows in directory_members belong to more than one org: old, org/,
     );
   });
 });
