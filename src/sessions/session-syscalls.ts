@@ -86,16 +86,32 @@ export async function delegatedAuthorizationOrigin(
 }
 
 async function treeIntact(sessions: Pick<SessionStore, "get">, subagent: Session): Promise<boolean> {
-  const seen = new Set<string>();
-  let current = subagent;
-  while (isSubagentThreadRef(current.threadRef)) {
-    if (seen.has(current.id) || !current.parentSessionId) return false;
-    seen.add(current.id);
-    const parent = await sessions.get(current.parentSessionId);
-    if (!parent || parent.scopeId !== subagent.scopeId) return false;
-    current = parent;
-  }
-  return true;
+  const chain = [subagent, ...(await sessionAncestors(sessions, subagent))];
+  return (
+    !isSubagentThreadRef(chain.at(-1)!.threadRef) && chain.every((session) => session.scopeId === subagent.scopeId)
+  );
+}
+
+export async function heldAuthority(
+  request: OrchestratorInput,
+  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread" | "getForParticipant"> },
+): Promise<OrchestratorInput["origin"] | undefined> {
+  if (isSessionTurn(request)) return delegatedAuthorizationOrigin(request, deps);
+  return humanAuthored(request) ? request.origin : undefined;
+}
+
+function automationContext(base: SpawnMeta, actor: OrchestratorInput["actor"]): SpawnMeta {
+  return {
+    ...base,
+    actor,
+    origin: {
+      kind: "automation",
+      ...(base.origin?.kind === "automation" && base.origin.destination
+        ? { destination: base.origin.destination }
+        : {}),
+    },
+    unattendedGrants: undefined,
+  };
 }
 
 function authorityReaches(
@@ -1119,36 +1135,16 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
   const initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
-  if (run.request.delegatingRunId && !initiatingRun)
+  const delegationGone = !!run.request.delegatingRunId && !initiatingRun;
+  if (delegationGone)
     console.warn(
-      `[subagent-return] delegating run ${run.request.delegatingRunId} of ${run.id} is gone; returning with the child's spawn context and no inherited authority`,
+      `[subagent-return] delegating run ${run.request.delegatingRunId} of ${run.id} is gone; returning with the parent's stored context and no inherited authority`,
     );
-  const initiatingContext =
-    initiatingRun?.request ??
-    (run.request.delegatingRunId
-      ? {
-          ...child.spawnMeta,
-          actor: run.request.actor,
-          origin: { kind: "automation" as const },
-          unattendedGrants: undefined,
-        }
-      : child.spawnMeta);
+  const initiatingContext = initiatingRun?.request ?? child.spawnMeta;
   const currentContext = storedContext(parent);
-  const originalParent = parent.threadRef === initiatingContext.conversation.threadRef;
+  const originalParent = !delegationGone && parent.threadRef === initiatingContext.conversation.threadRef;
   if (!originalParent && !currentContext) throw new Error("the current parent has no verified runtime context yet");
-  const meta = originalParent
-    ? initiatingContext
-    : {
-        ...currentContext!,
-        actor: run.request.actor,
-        origin: {
-          kind: "automation" as const,
-          ...(currentContext!.origin?.kind === "automation" && currentContext!.origin.destination
-            ? { destination: currentContext!.origin.destination }
-            : {}),
-        },
-        unattendedGrants: undefined,
-      };
+  const meta = originalParent ? initiatingContext : automationContext(currentContext!, run.request.actor);
   const title = child.title?.trim() || child.id;
   const result = run.result;
   let kind: SubagentMailKind;
@@ -1183,11 +1179,8 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   delete inherited.openFingerprint;
   delete inherited.delegatedAuthority;
   const delegatedAuthority =
-    initiatingRun && deps.runs.get && isSessionTurn(initiatingRun.request)
-      ? await delegatedAuthorizationOrigin(initiatingRun.request, {
-          runs: { get: deps.runs.get },
-          sessions: deps.sessions,
-        })
+    initiatingRun && deps.runs.get
+      ? await heldAuthority(initiatingRun.request, { runs: { get: deps.runs.get }, sessions: deps.sessions })
       : undefined;
   const request: OrchestratorInput = {
     ...inherited,

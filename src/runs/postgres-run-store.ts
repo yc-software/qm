@@ -16,7 +16,7 @@ import type {
   RunStore,
   SessionWatch,
 } from "./run-store.ts";
-import type { RunPriority } from "./run-store.ts";
+import type { RunPriority, TerminalCursor } from "./run-store.ts";
 import {
   countedClaims,
   isTerminal,
@@ -537,20 +537,21 @@ END $base_schema$`,
 
     async pruneFinished(cutoff, { deadline, stop }) {
       let pruned = 0;
-      let after: [number, string] = [0, ""];
+      let after: TerminalCursor = { finishedAt: 0, id: "" };
       while (Date.now() < deadline && !stop()) {
         const { rows } = await q(
           `DELETE FROM runs WHERE id IN (
              SELECT id FROM runs WHERE status IN ('done','failed') AND finished_at < $1 AND (finished_at, id) > ($3, $4)
              ORDER BY finished_at, id LIMIT $2 FOR UPDATE SKIP LOCKED
            ) RETURNING finished_at, id`,
-          [cutoff, PRUNE_BATCH, ...after],
+          [cutoff, PRUNE_BATCH, after.finishedAt, after.id],
         );
         pruned += rows.length;
         if (rows.length < PRUNE_BATCH) break;
         for (const row of rows) {
-          const key: [number, string] = [Number(row.finished_at), row.id as string];
-          if (key[0] > after[0] || (key[0] === after[0] && key[1] > after[1])) after = key;
+          const key = { finishedAt: Number(row.finished_at), id: row.id as string };
+          if (key.finishedAt > after.finishedAt || (key.finishedAt === after.finishedAt && key.id > after.id))
+            after = key;
         }
       }
       return pruned;

@@ -76,7 +76,7 @@ export interface Run {
   lastStop?: RunStop | null;
 }
 
-interface TerminalCursor {
+export interface TerminalCursor {
   finishedAt: number;
   id: string;
 }

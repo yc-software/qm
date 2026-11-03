@@ -15,10 +15,10 @@ import {
   requiresDelegation,
   sessionTreeRunCount,
   delegatedAuthorizationOrigin,
+  heldAuthority,
   stopSessionTree,
   sessionContextOf,
 } from "../src/sessions/session-syscalls.ts";
-import { isSessionTurn } from "../src/core/turn-origin.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Run, RunStore } from "../src/runs/run-store.ts";
@@ -1228,9 +1228,7 @@ test("no wake once the parent already consumed the completion", async () => {
 });
 
 async function liveTurnApi(r: Rig, session: Session, run: Run) {
-  let authority: OrchestratorInput["origin"] | undefined;
-  if (isSessionTurn(run.request)) authority = await delegatedAuthorizationOrigin(run.request, r);
-  else if (run.request.origin.kind === "human") authority = run.request.origin;
+  const authority = await heldAuthority(run.request, r);
   return createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
     session,
     scopeId: scope,
