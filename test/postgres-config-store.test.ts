@@ -11,191 +11,196 @@ import { defaultOrgPolicy } from "../src/policy/command-policy.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres config-store tests";
 
 const maps = (f: PostgresArtifactMaps) => configStoreMaps(f.map);
 
-test("SOUL compare-and-set permits only one writer and keeps current plus history in one durable row", async () => {
-  const souls = testMap<PersistedSoul>();
-  const legacyHistory = testMap<PersistedSoulRevision>();
-  const left = testConfigStore({ souls, soulHistory: legacyHistory });
-  const right = testConfigStore({ souls, soulHistory: legacyHistory });
-  const channel = scopeId("channel", "CAS");
+test("SOUL compare-and-set permits only one writer and keeps current plus history in one durable row", () =>
+  inTestTenant(async () => {
+    const souls = testMap<PersistedSoul>();
+    const legacyHistory = testMap<PersistedSoulRevision>();
+    const left = testConfigStore({ souls, soulHistory: legacyHistory });
+    const right = testConfigStore({ souls, soulHistory: legacyHistory });
+    const channel = scopeId("channel", "CAS");
 
-  const results = await Promise.all([
-    left.setSoulIfVersion(channel, 0, "left", "alice"),
-    right.setSoulIfVersion(channel, 0, "right", "bob"),
-  ]);
-  assert.deepEqual(
-    results.sort((a, b) => (a ?? 99) - (b ?? 99)),
-    [1, null],
-  );
+    const results = await Promise.all([
+      left.setSoulIfVersion(channel, 0, "left", "alice"),
+      right.setSoulIfVersion(channel, 0, "right", "bob"),
+    ]);
+    assert.deepEqual(
+      results.sort((a, b) => (a ?? 99) - (b ?? 99)),
+      [1, null],
+    );
 
-  const durable = await souls.get(channel);
-  assert.equal(durable?.history?.length, 1);
-  assert.equal(durable?.history?.[0]?.content, durable?.content);
-  for (let version = 1; version < 30; version++) {
-    assert.equal(await left.setSoulIfVersion(channel, version, `revision ${version + 1}`, "alice"), version + 1);
-  }
-  assert.equal((await souls.get(channel))?.history?.length, 30, "the canonical row retains the full durable history");
-  assert.equal(left.soulHistory(channel).length, 25, "the operator view remains bounded");
-  const fresh = testConfigStore({ souls, soulHistory: legacyHistory });
-  await fresh.hydrate?.();
-  assert.equal(fresh.soulHistory(channel)[0]?.content, fresh.getSoul(channel));
-  await right.refreshScope(channel);
-  assert.equal(
-    right.soulHistory(channel)[0]?.content,
-    right.getSoul(channel),
-    "a cross-instance refresh advances current SOUL and history together",
-  );
-});
+    const durable = await souls.get(channel);
+    assert.equal(durable?.history?.length, 1);
+    assert.equal(durable?.history?.[0]?.content, durable?.content);
+    for (let version = 1; version < 30; version++) {
+      assert.equal(await left.setSoulIfVersion(channel, version, `revision ${version + 1}`, "alice"), version + 1);
+    }
+    assert.equal((await souls.get(channel))?.history?.length, 30, "the canonical row retains the full durable history");
+    assert.equal(left.soulHistory(channel).length, 25, "the operator view remains bounded");
+    const fresh = testConfigStore({ souls, soulHistory: legacyHistory });
+    await fresh.hydrate?.();
+    assert.equal(fresh.soulHistory(channel)[0]?.content, fresh.getSoul(channel));
+    await right.refreshScope(channel);
+    assert.equal(
+      right.soulHistory(channel)[0]?.content,
+      right.getSoul(channel),
+      "a cross-instance refresh advances current SOUL and history together",
+    );
+  }));
 
-test("setSoul advances the canonical row without trusting a stale instance cache", async () => {
-  const souls = testMap<PersistedSoul>();
-  const left = testConfigStore({ souls });
-  const right = testConfigStore({ souls });
-  const channel = scopeId("channel", "latest");
+test("setSoul advances the canonical row without trusting a stale instance cache", () =>
+  inTestTenant(async () => {
+    const souls = testMap<PersistedSoul>();
+    const left = testConfigStore({ souls });
+    const right = testConfigStore({ souls });
+    const channel = scopeId("channel", "latest");
 
-  assert.equal(await left.setSoul(channel, "left", "alice"), 1);
-  assert.equal(right.soulVersion(channel), 0);
-  assert.equal(await right.setSoul(channel, "right", "bob"), 2);
+    assert.equal(await left.setSoul(channel, "left", "alice"), 1);
+    assert.equal(right.soulVersion(channel), 0);
+    assert.equal(await right.setSoul(channel, "right", "bob"), 2);
 
-  const durable = await souls.get(channel);
-  assert.equal(durable?.version, 2);
-  assert.deepEqual(
-    durable?.history?.map(({ version, content }) => ({ version, content })),
-    [
-      { version: 2, content: "right" },
-      { version: 1, content: "left" },
-    ],
-  );
-});
+    const durable = await souls.get(channel);
+    assert.equal(durable?.version, 2);
+    assert.deepEqual(
+      durable?.history?.map(({ version, content }) => ({ version, content })),
+      [
+        { version: 2, content: "right" },
+        { version: 1, content: "left" },
+      ],
+    );
+  }));
 
-test("a guidance revision keeps the session that wrote it after another instance hydrates it", async () => {
-  const souls = testMap<PersistedSoul>();
-  const writer = testConfigStore({ souls });
-  const channel = scopeId("channel", "revision-session");
-  await writer.setSoul(channel, "first", "alice", "session-a");
-  await writer.setSoulIfVersion(channel, 1, "second", "alice", "session-b");
+test("a guidance revision keeps the session that wrote it after another instance hydrates it", () =>
+  inTestTenant(async () => {
+    const souls = testMap<PersistedSoul>();
+    const writer = testConfigStore({ souls });
+    const channel = scopeId("channel", "revision-session");
+    await writer.setSoul(channel, "first", "alice", "session-a");
+    await writer.setSoulIfVersion(channel, 1, "second", "alice", "session-b");
 
-  const reader = testConfigStore({ souls });
-  await reader.refreshScope(channel);
-  assert.deepEqual(
-    reader.soulHistory(channel).map(({ version, sessionId }) => ({ version, sessionId })),
-    [
-      { version: 2, sessionId: "session-b" },
-      { version: 1, sessionId: "session-a" },
-    ],
-  );
-});
+    const reader = testConfigStore({ souls });
+    await reader.refreshScope(channel);
+    assert.deepEqual(
+      reader.soulHistory(channel).map(({ version, sessionId }) => ({ version, sessionId })),
+      [
+        { version: 2, sessionId: "session-b" },
+        { version: 1, sessionId: "session-a" },
+      ],
+    );
+  }));
 
-test("the first write after upgrade retains a canonical revision that predates embedded history", async () => {
-  const souls = testMap<PersistedSoul>();
-  const channel = scopeId("channel", "pre-history-upgrade");
-  await souls.put(channel, { scopeId: channel, content: "pre-upgrade", version: 8 });
-  const store = testConfigStore({ souls });
+test("the first write after upgrade retains a canonical revision that predates embedded history", () =>
+  inTestTenant(async () => {
+    const souls = testMap<PersistedSoul>();
+    const channel = scopeId("channel", "pre-history-upgrade");
+    await souls.put(channel, { scopeId: channel, content: "pre-upgrade", version: 8 });
+    const store = testConfigStore({ souls });
 
-  assert.equal(await store.setSoul(channel, "post-upgrade", "alice"), 9);
-  assert.deepEqual(
-    (await souls.get(channel))?.history?.map(({ version, content, updatedAt }) => ({ version, content, updatedAt })),
-    [
-      { version: 9, content: "post-upgrade", updatedAt: (await souls.get(channel))!.updatedAt },
-      { version: 8, content: "pre-upgrade", updatedAt: 0 },
-    ],
-  );
-});
+    assert.equal(await store.setSoul(channel, "post-upgrade", "alice"), 9);
+    assert.deepEqual(
+      (await souls.get(channel))?.history?.map(({ version, content, updatedAt }) => ({ version, content, updatedAt })),
+      [
+        { version: 9, content: "post-upgrade", updatedAt: (await souls.get(channel))!.updatedAt },
+        { version: 8, content: "pre-upgrade", updatedAt: 0 },
+      ],
+    );
+  }));
 
-test("refreshScope merges legacy SOUL history into a canonical row and migrates it safely", async () => {
-  const souls = testMap<PersistedSoul>();
-  const legacyBacking = testMap<PersistedSoulRevision>();
-  let legacyScans = 0;
-  const legacyHistory: DurableMap<PersistedSoulRevision> = {
-    ...legacyBacking,
-    async all() {
-      legacyScans++;
-      return legacyBacking.all();
-    },
-  };
-  const channel = scopeId("channel", "legacy-refresh");
-  const revision: PersistedSoulRevision = {
-    scopeId: channel,
-    content: "legacy current",
-    version: 4,
-    updatedAt: 40,
-    updatedBy: "alice",
-  };
-  await souls.put(channel, { ...revision });
-  await legacyHistory.put(`${channel}:4`, revision);
-  await legacyHistory.put(`${channel}:3`, {
-    scopeId: channel,
-    content: "legacy prior",
-    version: 3,
-    updatedAt: 30,
-    updatedBy: "bob",
-  });
-  const store = testConfigStore({ souls, soulHistory: legacyHistory });
+test("refreshScope merges legacy SOUL history into a canonical row and migrates it safely", () =>
+  inTestTenant(async () => {
+    const souls = testMap<PersistedSoul>();
+    const legacyBacking = testMap<PersistedSoulRevision>();
+    let legacyScans = 0;
+    const legacyHistory: DurableMap<PersistedSoulRevision> = {
+      ...legacyBacking,
+      async all() {
+        legacyScans++;
+        return legacyBacking.all();
+      },
+    };
+    const channel = scopeId("channel", "legacy-refresh");
+    const revision: PersistedSoulRevision = {
+      scopeId: channel,
+      content: "legacy current",
+      version: 4,
+      updatedAt: 40,
+      updatedBy: "alice",
+    };
+    await souls.put(channel, { ...revision });
+    await legacyHistory.put(`${channel}:4`, revision);
+    await legacyHistory.put(`${channel}:3`, {
+      scopeId: channel,
+      content: "legacy prior",
+      version: 3,
+      updatedAt: 30,
+      updatedBy: "bob",
+    });
+    const store = testConfigStore({ souls, soulHistory: legacyHistory });
 
-  await store.hydrate?.();
-  await store.refreshScope(channel);
-  await store.refreshScope(channel);
+    await store.hydrate?.();
+    await store.refreshScope(channel);
+    await store.refreshScope(channel);
 
-  assert.deepEqual(
-    store.soulHistory(channel).map(({ version, content }) => ({ version, content })),
-    [
-      { version: 4, content: "legacy current" },
-      { version: 3, content: "legacy prior" },
-    ],
-  );
-  assert.deepEqual(
-    (await souls.get(channel))?.history,
-    store.soulHistory(channel),
-    "refresh atomically migrates legacy revisions into the canonical row",
-  );
-  assert.equal(legacyScans, 1, "legacy history is scanned once at hydration, never per scope refresh or write");
-});
+    assert.deepEqual(
+      store.soulHistory(channel).map(({ version, content }) => ({ version, content })),
+      [
+        { version: 4, content: "legacy current" },
+        { version: 3, content: "legacy prior" },
+      ],
+    );
+    assert.deepEqual(
+      (await souls.get(channel))?.history,
+      store.soulHistory(channel),
+      "refresh atomically migrates legacy revisions into the canonical row",
+    );
+    assert.equal(legacyScans, 1, "legacy history is scanned once at hydration, never per scope refresh or write");
+  }));
 
-test("legacy migration rechecks the canonical marker inside the atomic update", async () => {
-  const backing = testMap<PersistedSoul>();
-  const legacyHistory = testMap<PersistedSoulRevision>();
-  const channel = scopeId("channel", "legacy-interleaving-restore");
-  const restored: PersistedSoul = {
-    scopeId: channel,
-    content: "restored while refreshing",
-    version: 1,
-    updatedAt: 50,
-    history: [],
-  };
-  let restoreBeforeUpdate = false;
-  const souls: DurableMap<PersistedSoul> = {
-    ...backing,
-    async update(id, fn) {
-      if (restoreBeforeUpdate) {
-        restoreBeforeUpdate = false;
-        await backing.put(id, restored);
-      }
-      return backing.update!(id, fn);
-    },
-  };
-  await souls.put(channel, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
-  await legacyHistory.put(`${channel}:4`, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
-  await legacyHistory.put(`${channel}:3`, { scopeId: channel, content: "legacy prior", version: 3, updatedAt: 30 });
-  const stale = testConfigStore({ souls, soulHistory: legacyHistory });
-  await stale.hydrate?.();
+test("legacy migration rechecks the canonical marker inside the atomic update", () =>
+  inTestTenant(async () => {
+    const backing = testMap<PersistedSoul>();
+    const legacyHistory = testMap<PersistedSoulRevision>();
+    const channel = scopeId("channel", "legacy-interleaving-restore");
+    const restored: PersistedSoul = {
+      scopeId: channel,
+      content: "restored while refreshing",
+      version: 1,
+      updatedAt: 50,
+      history: [],
+    };
+    let restoreBeforeUpdate = false;
+    const souls: DurableMap<PersistedSoul> = {
+      ...backing,
+      async update(id, fn) {
+        if (restoreBeforeUpdate) {
+          restoreBeforeUpdate = false;
+          await backing.put(id, restored);
+        }
+        return backing.update!(id, fn);
+      },
+    };
+    await souls.put(channel, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
+    await legacyHistory.put(`${channel}:4`, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
+    await legacyHistory.put(`${channel}:3`, { scopeId: channel, content: "legacy prior", version: 3, updatedAt: 30 });
+    const stale = testConfigStore({ souls, soulHistory: legacyHistory });
+    await stale.hydrate?.();
 
-  restoreBeforeUpdate = true;
-  await stale.refreshScope(channel);
+    restoreBeforeUpdate = true;
+    await stale.refreshScope(channel);
 
-  assert.deepEqual(await souls.get(channel), restored);
-  assert.equal(stale.getSoul(channel), restored.content);
-  assert.deepEqual(stale.soulHistory(channel), []);
-});
+    assert.deepEqual(await souls.get(channel), restored);
+    assert.equal(stale.getSoul(channel), restored.content);
+    assert.deepEqual(stale.soulHistory(channel), []);
+  }));
 
-test(
-  "pg config store: scoped soul/policy/egress/flags survive a restart (write-through + hydrate)",
-  { skip },
-  async () => {
+test("pg config store: scoped soul/policy/egress/flags survive a restart (write-through + hydrate)", { skip }, () =>
+  inTestTenant(async () => {
     const f = createPostgresMapFactory(URL!);
     const ch = scopeId("channel", "C1");
     const org = TEST_ROOT_SCOPE;
@@ -244,91 +249,94 @@ test(
     assert.equal(b.getBaseModel(ch), "claude-opus-4-8", "the base model survived");
     assert.equal(b.getBrowseMaxSteps(ch), 120, "the browse step limit survived");
     assert.equal(b.getBrowseModel(ch), "claude-sonnet-4-6", "the browse model survived");
-  },
+  }),
 );
 
 test(
   "pg config store: rapid overlapping writes to one scope converge to the last value (serialized write-through)",
   { skip },
-  async () => {
-    const f = createPostgresMapFactory(URL!);
-    const ch = scopeId("channel", "C2");
-    const m = maps(f);
-    const a = testConfigStore(m);
+  () =>
+    inTestTenant(async () => {
+      const f = createPostgresMapFactory(URL!);
+      const ch = scopeId("channel", "C2");
+      const m = maps(f);
+      const a = testConfigStore(m);
 
-    let lastVersion = 0;
-    for (let i = 1; i <= 8; i++) {
-      lastVersion = await a.setSoul(ch, `soul v${i}`);
-      await a.setEgress(ch, { allowedHosts: [`host${i}.example`], deniedHosts: [] });
-    }
-    await a.setBaseModel(ch, "claude-opus-4-8");
-    await a.setBaseModel(ch, null);
-    await a.setBrowseMaxSteps(ch, 60);
-    await a.setBrowseMaxSteps(ch, null);
-    await a.setBrowseModel(ch, "claude-sonnet-4-6");
-    await a.setBrowseModel(ch, null);
-    await settle(
-      async () =>
-        (await m.souls.get(ch))?.content === "soul v8" &&
-        (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "host8.example" &&
-        !(await m.baseModels.get(ch)) &&
-        !(await m.browseMaxSteps.get(ch)) &&
-        !(await m.browseModels.get(ch)),
-    );
+      let lastVersion = 0;
+      for (let i = 1; i <= 8; i++) {
+        lastVersion = await a.setSoul(ch, `soul v${i}`);
+        await a.setEgress(ch, { allowedHosts: [`host${i}.example`], deniedHosts: [] });
+      }
+      await a.setBaseModel(ch, "claude-opus-4-8");
+      await a.setBaseModel(ch, null);
+      await a.setBrowseMaxSteps(ch, 60);
+      await a.setBrowseMaxSteps(ch, null);
+      await a.setBrowseModel(ch, "claude-sonnet-4-6");
+      await a.setBrowseModel(ch, null);
+      await settle(
+        async () =>
+          (await m.souls.get(ch))?.content === "soul v8" &&
+          (await m.egressPolicies.get(ch))?.policy.allowedHosts[0] === "host8.example" &&
+          !(await m.baseModels.get(ch)) &&
+          !(await m.browseMaxSteps.get(ch)) &&
+          !(await m.browseModels.get(ch)),
+      );
 
-    const b = testConfigStore(maps(f));
-    await b.hydrate?.();
-    assert.equal(b.getSoul(ch), "soul v8", "the durable soul ends on the last write, not a reordered earlier one");
-    assert.equal(b.soulVersion(ch), lastVersion);
-    assert.deepEqual(
-      b.getEgress(ch),
-      { allowedHosts: ["host8.example"], deniedHosts: [] },
-      "the durable egress ends on the last write",
-    );
-    assert.equal(b.getBaseModel(ch), null, "a cleared base model stays cleared after restart");
-    assert.equal(b.getBrowseMaxSteps(ch), null, "a cleared browse step limit stays cleared after restart");
-    assert.equal(b.getBrowseModel(ch), null, "a cleared browse model stays cleared after restart");
-  },
+      const b = testConfigStore(maps(f));
+      await b.hydrate?.();
+      assert.equal(b.getSoul(ch), "soul v8", "the durable soul ends on the last write, not a reordered earlier one");
+      assert.equal(b.soulVersion(ch), lastVersion);
+      assert.deepEqual(
+        b.getEgress(ch),
+        { allowedHosts: ["host8.example"], deniedHosts: [] },
+        "the durable egress ends on the last write",
+      );
+      assert.equal(b.getBaseModel(ch), null, "a cleared base model stays cleared after restart");
+      assert.equal(b.getBrowseMaxSteps(ch), null, "a cleared browse step limit stays cleared after restart");
+      assert.equal(b.getBrowseModel(ch), null, "a cleared browse model stays cleared after restart");
+    }),
 );
 
-test("pg config store: settings written on one core reach another core through refreshScope", { skip }, async () => {
-  const f = createPostgresMapFactory(URL!);
-  const ch = scopeId("channel", "C4");
-  const org = TEST_ROOT_SCOPE;
-  const a = testConfigStore(maps(f));
-  const b = testConfigStore(maps(f));
-  await a.hydrate?.();
-  await b.hydrate?.();
+test("pg config store: settings written on one core reach another core through refreshScope", { skip }, () =>
+  inTestTenant(async () => {
+    const f = createPostgresMapFactory(URL!);
+    const ch = scopeId("channel", "C4");
+    const org = TEST_ROOT_SCOPE;
+    const a = testConfigStore(maps(f));
+    const b = testConfigStore(maps(f));
+    await a.hydrate?.();
+    await b.hydrate?.();
 
-  await a.setWebuiModels(ch, ["claude-opus-4-8"]);
-  await a.setAckEmoji(ch, ["eyes"]);
-  await a.setBrowseMaxSteps(ch, 77);
-  await a.setBrowseModel(ch, "claude-sonnet-4-6");
-  await a.setBranding(ch, { accent: "#123456" });
-  await a.setChannelHeaderPin(ch, true);
-  await a.setApprovalGrantModes(ch, { session: false, always: true });
-  await a.setOrgAmbient(false);
-  await b.refreshScope(ch);
-  await b.refreshScope(org);
+    await a.setWebuiModels(ch, ["claude-opus-4-8"]);
+    await a.setAckEmoji(ch, ["eyes"]);
+    await a.setBrowseMaxSteps(ch, 77);
+    await a.setBrowseModel(ch, "claude-sonnet-4-6");
+    await a.setBranding(ch, { accent: "#123456" });
+    await a.setChannelHeaderPin(ch, true);
+    await a.setApprovalGrantModes(ch, { session: false, always: true });
+    await a.setOrgAmbient(false);
+    await b.refreshScope(ch);
+    await b.refreshScope(org);
 
-  assert.deepEqual(b.getWebuiModels(ch), ["claude-opus-4-8"]);
-  assert.deepEqual(b.getAckEmoji(ch), ["eyes"]);
-  assert.equal(b.getBrowseMaxSteps(ch), 77);
-  assert.equal(b.getBrowseModel(ch), "claude-sonnet-4-6");
-  assert.deepEqual(b.getBranding(ch), { accent: "#123456" });
-  assert.equal(b.getChannelHeaderPin(ch), true);
-  assert.deepEqual(await b.getApprovalGrantModesDurable(ch), { session: false, always: true });
-  assert.equal(b.getOrgAmbient(), false);
+    assert.deepEqual(b.getWebuiModels(ch), ["claude-opus-4-8"]);
+    assert.deepEqual(b.getAckEmoji(ch), ["eyes"]);
+    assert.equal(b.getBrowseMaxSteps(ch), 77);
+    assert.equal(b.getBrowseModel(ch), "claude-sonnet-4-6");
+    assert.deepEqual(b.getBranding(ch), { accent: "#123456" });
+    assert.equal(b.getChannelHeaderPin(ch), true);
+    assert.deepEqual(await b.getApprovalGrantModesDurable(ch), { session: false, always: true });
+    assert.equal(b.getOrgAmbient(), false);
 
-  await a.setWebuiModels(ch, null);
-  await a.setAckEmoji(ch, null);
-  await a.setBrowseMaxSteps(ch, null);
-  await a.setBrowseModel(ch, null);
-  await b.refreshScope(ch);
-  await b.refreshScope(org);
+    await a.setWebuiModels(ch, null);
+    await a.setAckEmoji(ch, null);
+    await a.setBrowseMaxSteps(ch, null);
+    await a.setBrowseModel(ch, null);
+    await b.refreshScope(ch);
+    await b.refreshScope(org);
 
-  assert.equal(b.getWebuiModels(ch), null);
-  assert.equal(b.getAckEmoji(ch), null);
-  assert.equal(b.getBrowseMaxSteps(ch), null);
-  assert.equal(b.getBrowseModel(ch), null);
-});
+    assert.equal(b.getWebuiModels(ch), null);
+    assert.equal(b.getAckEmoji(ch), null);
+    assert.equal(b.getBrowseMaxSteps(ch), null);
+    assert.equal(b.getBrowseModel(ch), null);
+  }),
+);

@@ -10,6 +10,7 @@ import {
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { testConfigStore } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const envWithSlack = {
   SLACK_OAUTH_CLIENT_ID: "env-sid",
@@ -52,65 +53,69 @@ test("new ciphertexts are v2 (HKDF) and legacy sha256-key ciphertexts still decr
   assert.throws(() => decryptSecret("just-one-part", key), /malformed/);
 });
 
-test("BYO record wins over env; the secret is encrypted at rest and never echoed", async () => {
-  const store = testConfigStore({ connectorSecretKey: "persistent-key" });
-  await store.setConnectorClient(TEST_ROOT_SCOPE, "google", {
-    clientId: "org-cid",
-    clientSecret: "org-secret",
-    scopes: ["custom.scope"],
-    redirectAllowlist: ["https://app/cb"],
-    updatedBy: "admin-alice",
-  });
+test("BYO record wins over env; the secret is encrypted at rest and never echoed", () =>
+  inTestTenant(async () => {
+    const store = testConfigStore({ connectorSecretKey: "persistent-key" });
+    await store.setConnectorClient(TEST_ROOT_SCOPE, "google", {
+      clientId: "org-cid",
+      clientSecret: "org-secret",
+      scopes: ["custom.scope"],
+      redirectAllowlist: ["https://app/cb"],
+      updatedBy: "admin-alice",
+    });
 
-  const pub = await store.listConnectorClients(TEST_ROOT_SCOPE);
-  assert.equal(pub.length, 1);
-  assert.equal(pub[0]!.provider, "google");
-  assert.equal(pub[0]!.clientId, "org-cid");
-  assert.equal(pub[0]!.hasSecret, true);
-  assert.equal((pub[0] as unknown as Record<string, unknown>).clientSecret, undefined);
-  assert.equal((pub[0] as unknown as Record<string, unknown>).secretEnc, undefined);
-  assert.doesNotMatch(JSON.stringify(pub), /org-secret/);
+    const pub = await store.listConnectorClients(TEST_ROOT_SCOPE);
+    assert.equal(pub.length, 1);
+    assert.equal(pub[0]!.provider, "google");
+    assert.equal(pub[0]!.clientId, "org-cid");
+    assert.equal(pub[0]!.hasSecret, true);
+    assert.equal((pub[0] as unknown as Record<string, unknown>).clientSecret, undefined);
+    assert.equal((pub[0] as unknown as Record<string, unknown>).secretEnc, undefined);
+    assert.doesNotMatch(JSON.stringify(pub), /org-secret/);
 
-  const resolve = createConnectorClientResolver({
-    reader: store,
-    secrets: createEnvSecretSource(envWithSlack),
-  });
-  const c = await resolve("google", {});
-  assert.equal(c.id, "org-cid");
-  assert.equal(c.secret, "org-secret");
-  assert.deepEqual(c.scopes, ["custom.scope"]);
-  assert.deepEqual(c.redirectAllowlist, ["https://app/cb"]);
-  assert.equal(c.clientRef, `${TEST_ROOT_SCOPE}:google`);
-});
+    const resolve = createConnectorClientResolver({
+      reader: store,
+      secrets: createEnvSecretSource(envWithSlack),
+    });
+    const c = await resolve("google", {});
+    assert.equal(c.id, "org-cid");
+    assert.equal(c.secret, "org-secret");
+    assert.deepEqual(c.scopes, ["custom.scope"]);
+    assert.deepEqual(c.redirectAllowlist, ["https://app/cb"]);
+    assert.equal(c.clientRef, `${TEST_ROOT_SCOPE}:google`);
+  }));
 
-test("a provider with no org record falls back to env", async () => {
-  const store = testConfigStore({ connectorSecretKey: "k" });
-  const resolve = createConnectorClientResolver({
-    reader: store,
-    secrets: createEnvSecretSource(envWithSlack),
-  });
-  const c = await resolve("slack", {});
-  assert.equal(c.id, "env-sid");
-  assert.equal(c.clientRef, "env:slack");
-  await assert.rejects(resolve("google", {}), /GOOGLE_OAUTH_CLIENT_ID/);
-});
+test("a provider with no org record falls back to env", () =>
+  inTestTenant(async () => {
+    const store = testConfigStore({ connectorSecretKey: "k" });
+    const resolve = createConnectorClientResolver({
+      reader: store,
+      secrets: createEnvSecretSource(envWithSlack),
+    });
+    const c = await resolve("slack", {});
+    assert.equal(c.id, "env-sid");
+    assert.equal(c.clientRef, "env:slack");
+    await assert.rejects(resolve("google", {}), /GOOGLE_OAUTH_CLIENT_ID/);
+  }));
 
-test("a disabled org connector is refused (grays out the app grid)", async () => {
-  const store = testConfigStore({ connectorSecretKey: "k" });
-  await store.setConnectorClient(TEST_ROOT_SCOPE, "google", {
-    clientId: "c",
-    clientSecret: "s",
-    enabled: false,
-  });
-  const resolve = createConnectorClientResolver({ reader: store });
-  await assert.rejects(resolve("google", {}), /disabled/);
-});
+test("a disabled org connector is refused (grays out the app grid)", () =>
+  inTestTenant(async () => {
+    const store = testConfigStore({ connectorSecretKey: "k" });
+    await store.setConnectorClient(TEST_ROOT_SCOPE, "google", {
+      clientId: "c",
+      clientSecret: "s",
+      enabled: false,
+    });
+    const resolve = createConnectorClientResolver({ reader: store });
+    await assert.rejects(resolve("google", {}), /disabled/);
+  }));
 
-test("deleting a connector record falls back to env / unconfigured", async () => {
-  const store = testConfigStore({ connectorSecretKey: "k" });
-  await store.setConnectorClient(TEST_ROOT_SCOPE, "google", { clientId: "c", clientSecret: "s" });
-  assert.equal((await store.listConnectorClients(TEST_ROOT_SCOPE)).length, 1);
-  await store.deleteConnectorClient(TEST_ROOT_SCOPE, "google");
-  assert.equal((await store.listConnectorClients(TEST_ROOT_SCOPE)).length, 0);
-  assert.equal(await store.getConnectorClientSecret(TEST_ROOT_SCOPE, "google"), null);
-});
+test("deleting a connector record falls back to env / unconfigured", () =>
+  inTestTenant(async () => {
+    const store = testConfigStore({ connectorSecretKey: "k" });
+    await store.setConnectorClient(TEST_ROOT_SCOPE, "google", { clientId: "c", clientSecret: "s" });
+    assert.equal((await store.listConnectorClients(TEST_ROOT_SCOPE)).length, 1);
+    await store.deleteConnectorClient(TEST_ROOT_SCOPE, "google");
+    assert.equal((await store.listConnectorClients(TEST_ROOT_SCOPE)).length, 0);
+    assert.equal(await store.getConnectorClientSecret(TEST_ROOT_SCOPE, "google"), null);
+  }));

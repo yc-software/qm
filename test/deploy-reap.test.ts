@@ -42,55 +42,58 @@ function svc(managedScaleToZero: boolean) {
 
 const future = Date.now() + 1_000_000;
 
-test("unmanaged provider: an idle deployment is reaped (destroyed, stopped, endpoint cleared)", async () => {
-  const { deploy, deployStore } = svc(false);
-  const d = await inTestTenant(() =>
-    deploy.deploy({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      entrypoint: "x",
-      files: [],
-    }),
-  );
-  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "running");
+test("unmanaged provider: an idle deployment is reaped (destroyed, stopped, endpoint cleared)", () =>
+  inTestTenant(async () => {
+    const { deploy, deployStore } = svc(false);
+    const d = await inTestTenant(() =>
+      deploy.deploy({
+        ownerScopeId: scopeId("personal", "U1"),
+        createdBy: "U1",
+        entrypoint: "x",
+        files: [],
+      }),
+    );
+    assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "running");
 
-  const stopped = await deploy.reapIdleDeployments(60_000, future);
-  assert.equal(stopped, 1);
-  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "stopped");
-  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.endpoint, null);
-});
+    const stopped = await deploy.reapIdleDeployments(60_000, future);
+    assert.equal(stopped, 1);
+    assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "stopped");
+    assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.endpoint, null);
+  }));
 
-test("managed provider: reap is a no-op — the platform sleeps/wakes it, endpoint stays valid", async () => {
-  const { deploy, deployStore, destroys } = svc(true);
-  const d = await inTestTenant(() =>
-    deploy.deploy({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      entrypoint: "x",
-      files: [],
-    }),
-  );
+test("managed provider: reap is a no-op — the platform sleeps/wakes it, endpoint stays valid", () =>
+  inTestTenant(async () => {
+    const { deploy, deployStore, destroys } = svc(true);
+    const d = await inTestTenant(() =>
+      deploy.deploy({
+        ownerScopeId: scopeId("personal", "U1"),
+        createdBy: "U1",
+        entrypoint: "x",
+        files: [],
+      }),
+    );
 
-  const stopped = await deploy.reapIdleDeployments(60_000, future);
-  assert.equal(stopped, 0);
-  assert.equal(destroys, 0);
-  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "running");
-  assert.deepEqual((await inTestTenant(() => deployStore.get(d.id)))!.endpoint, { host: "127.0.0.1", port: 5000 });
-});
+    const stopped = await deploy.reapIdleDeployments(60_000, future);
+    assert.equal(stopped, 0);
+    assert.equal(destroys, 0);
+    assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "running");
+    assert.deepEqual((await inTestTenant(() => deployStore.get(d.id)))!.endpoint, { host: "127.0.0.1", port: 5000 });
+  }));
 
-test("unmanaged provider: an always-on deployment is never reaped", async () => {
-  const { deploy, deployStore } = svc(false);
-  const d = await inTestTenant(() =>
-    deploy.deploy({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      entrypoint: "x",
-      files: [],
-    }),
-  );
-  await inTestTenant(() => deploy.setDeploymentAlwaysOn(d.id, true));
+test("unmanaged provider: an always-on deployment is never reaped", () =>
+  inTestTenant(async () => {
+    const { deploy, deployStore } = svc(false);
+    const d = await inTestTenant(() =>
+      deploy.deploy({
+        ownerScopeId: scopeId("personal", "U1"),
+        createdBy: "U1",
+        entrypoint: "x",
+        files: [],
+      }),
+    );
+    await inTestTenant(() => deploy.setDeploymentAlwaysOn(d.id, true));
 
-  const stopped = await deploy.reapIdleDeployments(60_000, future);
-  assert.equal(stopped, 0);
-  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "running");
-});
+    const stopped = await deploy.reapIdleDeployments(60_000, future);
+    assert.equal(stopped, 0);
+    assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "running");
+  }));

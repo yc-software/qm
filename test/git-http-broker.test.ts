@@ -7,6 +7,7 @@ import { brokerGitHttp } from "../src/api/git-http-broker.ts";
 import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
 import type { BaseCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 function req(headers: Record<string, string>, body = ""): IncomingMessage {
   const r = Readable.from(body ? [body] : []) as IncomingMessage;
@@ -66,117 +67,9 @@ function ctx(path: string, method: string, deps: ServerDeps, body = ""): BaseCtx
   };
 }
 
-test("git HTTP broker streams a smart-HTTP request through the pinned service credential", async () => {
-  let seen: { url: string; method: string; headers: Record<string, string>; body: string } | undefined;
-  const deps: ServerDeps = {
-    control: {} as ServerDeps["control"],
-    serviceCreds: {
-      getServiceCredentialSecret: async () => ({
-        slug: "gitlab",
-        name: "GitLab git",
-        secret: "dXNlcjp0b2tlbg==",
-        host: "gitlab.example",
-        injection: { scheme: "Basic " },
-        allowedMethods: ["GET", "POST"],
-        allowedPathPrefixes: ["/acme/repo.git"],
-        enabled: true,
-      }),
-    } as unknown as ServerDeps["serviceCreds"],
-    gitHttpFetch: async (url, init) => {
-      const chunks: Buffer[] = [];
-      if (init.body)
-        for await (const chunk of init.body) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-      seen = { url, method: init.method, headers: init.headers, body: Buffer.concat(chunks).toString("utf8") };
-      return {
-        status: 200,
-        headers: { "content-type": "application/x-git-receive-pack-result" },
-        body: Readable.from(["0000"]),
-      };
-    },
-  };
-  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
-  await brokerGitHttp(c);
-
-  assert.equal(await text(c.res), "0000");
-  assert.equal(c.res.statusCode, 200);
-  assert.equal(c.res.capturedHeaders?.["content-type"], "application/x-git-receive-pack-result");
-  assert.deepEqual(seen, {
-    url: "https://gitlab.example/acme/repo.git/git-receive-pack",
-    method: "POST",
-    headers: {
-      "content-type": "application/x-git-receive-pack-request",
-      "git-protocol": "version=2",
-      Authorization: "Basic dXNlcjp0b2tlbg==",
-    },
-    body: "PACK",
-  });
-});
-
-test("git HTTP broker sends a credential's fixed headers over a caller's case variant", async () => {
-  let seen: Record<string, string> | undefined;
-  const deps: ServerDeps = {
-    control: {} as ServerDeps["control"],
-    serviceCreds: {
-      getServiceCredentialSecret: async () => ({
-        slug: "gitlab",
-        name: "GitLab git",
-        secret: "dXNlcjp0b2tlbg==",
-        host: "gitlab.example",
-        injection: { scheme: "Basic ", headers: { "Git-Protocol": "version=1", "x-tenant": "acme" } },
-        allowedMethods: ["GET", "POST"],
-        allowedPathPrefixes: ["/acme/repo.git"],
-        enabled: true,
-      }),
-    } as unknown as ServerDeps["serviceCreds"],
-    gitHttpFetch: async (_url, init) => {
-      seen = init.headers;
-      return { status: 200, headers: {}, body: Readable.from(["0000"]) };
-    },
-  };
-  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
-  await brokerGitHttp(c);
-  await text(c.res);
-  assert.deepEqual(seen, {
-    "content-type": "application/x-git-receive-pack-request",
-    "Git-Protocol": "version=1",
-    "x-tenant": "acme",
-    Authorization: "Basic dXNlcjp0b2tlbg==",
-  });
-});
-
-test("git HTTP broker refuses an env-delivery record like a missing credential", async () => {
-  let fetched = false;
-  const deps: ServerDeps = {
-    control: {} as ServerDeps["control"],
-    serviceCreds: {
-      getServiceCredentialSecret: async () => ({
-        slug: "gitlab",
-        name: "GitLab git",
-        secret: "dXNlcjp0b2tlbg==",
-        delivery: "env",
-        envKey: "GITLAB_TOKEN",
-        host: "gitlab.example",
-        enabled: true,
-      }),
-    } as unknown as ServerDeps["serviceCreds"],
-    gitHttpFetch: async () => {
-      fetched = true;
-      return { status: 200, headers: {}, body: Readable.from(["0000"]) };
-    },
-  };
-  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/info/refs?service=git-upload-pack", "GET", deps);
-  await brokerGitHttp(c);
-  assert.equal(c.res.statusCode, 404);
-  assert.equal(fetched, false, "no upstream git fetch happens");
-});
-
-test("git HTTP broker refuses encoded parent traversal past the repo path", async () => {
-  for (const path of [
-    "/v1/credentials/git/gitlab/acme/repo.git/..%2fother-repo.git/info/refs",
-    "/v1/credentials/git/gitlab/acme/repo.git/%2e%2e%2fother-repo.git/info/refs",
-    "/v1/credentials/git/gitlab/acme/repo.git/%252e%252e%252fother/info/refs",
-  ]) {
-    let fetched = false;
+test("git HTTP broker streams a smart-HTTP request through the pinned service credential", () =>
+  inTestTenant(async () => {
+    let seen: { url: string; method: string; headers: Record<string, string>; body: string } | undefined;
     const deps: ServerDeps = {
       control: {} as ServerDeps["control"],
       serviceCreds: {
@@ -191,44 +84,157 @@ test("git HTTP broker refuses encoded parent traversal past the repo path", asyn
           enabled: true,
         }),
       } as unknown as ServerDeps["serviceCreds"],
+      gitHttpFetch: async (url, init) => {
+        const chunks: Buffer[] = [];
+        if (init.body)
+          for await (const chunk of init.body) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+        seen = { url, method: init.method, headers: init.headers, body: Buffer.concat(chunks).toString("utf8") };
+        return {
+          status: 200,
+          headers: { "content-type": "application/x-git-receive-pack-result" },
+          body: Readable.from(["0000"]),
+        };
+      },
+    };
+    const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
+    await brokerGitHttp(c);
+
+    assert.equal(await text(c.res), "0000");
+    assert.equal(c.res.statusCode, 200);
+    assert.equal(c.res.capturedHeaders?.["content-type"], "application/x-git-receive-pack-result");
+    assert.deepEqual(seen, {
+      url: "https://gitlab.example/acme/repo.git/git-receive-pack",
+      method: "POST",
+      headers: {
+        "content-type": "application/x-git-receive-pack-request",
+        "git-protocol": "version=2",
+        Authorization: "Basic dXNlcjp0b2tlbg==",
+      },
+      body: "PACK",
+    });
+  }));
+
+test("git HTTP broker sends a credential's fixed headers over a caller's case variant", () =>
+  inTestTenant(async () => {
+    let seen: Record<string, string> | undefined;
+    const deps: ServerDeps = {
+      control: {} as ServerDeps["control"],
+      serviceCreds: {
+        getServiceCredentialSecret: async () => ({
+          slug: "gitlab",
+          name: "GitLab git",
+          secret: "dXNlcjp0b2tlbg==",
+          host: "gitlab.example",
+          injection: { scheme: "Basic ", headers: { "Git-Protocol": "version=1", "x-tenant": "acme" } },
+          allowedMethods: ["GET", "POST"],
+          allowedPathPrefixes: ["/acme/repo.git"],
+          enabled: true,
+        }),
+      } as unknown as ServerDeps["serviceCreds"],
+      gitHttpFetch: async (_url, init) => {
+        seen = init.headers;
+        return { status: 200, headers: {}, body: Readable.from(["0000"]) };
+      },
+    };
+    const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
+    await brokerGitHttp(c);
+    await text(c.res);
+    assert.deepEqual(seen, {
+      "content-type": "application/x-git-receive-pack-request",
+      "Git-Protocol": "version=1",
+      "x-tenant": "acme",
+      Authorization: "Basic dXNlcjp0b2tlbg==",
+    });
+  }));
+
+test("git HTTP broker refuses an env-delivery record like a missing credential", () =>
+  inTestTenant(async () => {
+    let fetched = false;
+    const deps: ServerDeps = {
+      control: {} as ServerDeps["control"],
+      serviceCreds: {
+        getServiceCredentialSecret: async () => ({
+          slug: "gitlab",
+          name: "GitLab git",
+          secret: "dXNlcjp0b2tlbg==",
+          delivery: "env",
+          envKey: "GITLAB_TOKEN",
+          host: "gitlab.example",
+          enabled: true,
+        }),
+      } as unknown as ServerDeps["serviceCreds"],
       gitHttpFetch: async () => {
         fetched = true;
         return { status: 200, headers: {}, body: Readable.from(["0000"]) };
       },
     };
-    const c = ctx(path, "GET", deps);
+    const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/info/refs?service=git-upload-pack", "GET", deps);
     await brokerGitHttp(c);
-    assert.equal(c.res.statusCode, 403, path);
-    assert.match(await text(c.res), /path_not_allowed/);
+    assert.equal(c.res.statusCode, 404);
     assert.equal(fetched, false, "no upstream git fetch happens");
-  }
-});
+  }));
 
-test("git HTTP broker cannot use a Composio key for project-wide discovery or execution", async () => {
-  for (const method of ["GET", "POST"]) {
-    let contacted = false;
-    const deps = {
-      control: {},
-      serviceCreds: {
-        getServiceCredentialSecret: async () => ({
-          slug: "gitlab",
-          name: "legacy",
-          secret: "project-key",
-          enabled: true,
-          delivery: "broker",
-          host: "backend.composio.dev",
-          allowedMethods: ["GET", "POST"],
-        }),
-      },
-      gitHttpFetch: async () => {
-        contacted = true;
-        throw new Error("must not contact upstream");
-      },
-    } as unknown as ServerDeps;
-    const c = ctx("/v1/credentials/git/gitlab/api/v3.1/connected_accounts", method, deps);
-    await brokerGitHttp(c);
-    await text(c.res);
-    assert.equal(c.res.statusCode, 403);
-    assert.equal(contacted, false);
-  }
-});
+test("git HTTP broker refuses encoded parent traversal past the repo path", () =>
+  inTestTenant(async () => {
+    for (const path of [
+      "/v1/credentials/git/gitlab/acme/repo.git/..%2fother-repo.git/info/refs",
+      "/v1/credentials/git/gitlab/acme/repo.git/%2e%2e%2fother-repo.git/info/refs",
+      "/v1/credentials/git/gitlab/acme/repo.git/%252e%252e%252fother/info/refs",
+    ]) {
+      let fetched = false;
+      const deps: ServerDeps = {
+        control: {} as ServerDeps["control"],
+        serviceCreds: {
+          getServiceCredentialSecret: async () => ({
+            slug: "gitlab",
+            name: "GitLab git",
+            secret: "dXNlcjp0b2tlbg==",
+            host: "gitlab.example",
+            injection: { scheme: "Basic " },
+            allowedMethods: ["GET", "POST"],
+            allowedPathPrefixes: ["/acme/repo.git"],
+            enabled: true,
+          }),
+        } as unknown as ServerDeps["serviceCreds"],
+        gitHttpFetch: async () => {
+          fetched = true;
+          return { status: 200, headers: {}, body: Readable.from(["0000"]) };
+        },
+      };
+      const c = ctx(path, "GET", deps);
+      await brokerGitHttp(c);
+      assert.equal(c.res.statusCode, 403, path);
+      assert.match(await text(c.res), /path_not_allowed/);
+      assert.equal(fetched, false, "no upstream git fetch happens");
+    }
+  }));
+
+test("git HTTP broker cannot use a Composio key for project-wide discovery or execution", () =>
+  inTestTenant(async () => {
+    for (const method of ["GET", "POST"]) {
+      let contacted = false;
+      const deps = {
+        control: {},
+        serviceCreds: {
+          getServiceCredentialSecret: async () => ({
+            slug: "gitlab",
+            name: "legacy",
+            secret: "project-key",
+            enabled: true,
+            delivery: "broker",
+            host: "backend.composio.dev",
+            allowedMethods: ["GET", "POST"],
+          }),
+        },
+        gitHttpFetch: async () => {
+          contacted = true;
+          throw new Error("must not contact upstream");
+        },
+      } as unknown as ServerDeps;
+      const c = ctx("/v1/credentials/git/gitlab/api/v3.1/connected_accounts", method, deps);
+      await brokerGitHttp(c);
+      await text(c.res);
+      assert.equal(c.res.statusCode, 403);
+      assert.equal(contacted, false);
+    }
+  }));

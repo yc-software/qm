@@ -8,6 +8,7 @@ import { externalMemberActive, validEmail } from "../../identity/external-member
 import { isObj, authorizeAdmin, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import { tenantRootScope } from "../../tenants/context.ts";
+import { personalScope } from "../../types.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -107,7 +108,7 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
       principalId: ctx.actor?.p ?? "admin",
       action: "auth.broker.revoke",
       resource: email,
-      scopeLabel: tenantRootScope(),
+      scopeLabel: personalScope(email),
     });
     return sendJson(res, 200, { ok: true });
   }

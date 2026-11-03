@@ -6,8 +6,8 @@ import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { PersistedEgressPolicy, PersistedSoul } from "../src/resolution/config-store.ts";
 import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 
@@ -18,17 +18,17 @@ async function setup() {
   return createResolutionService(config, createAclStore(createPostgresGrantStore(testDatabaseUrl())));
 }
 
-test("DM mounts global + personal (the user's own workspace)", () =>
+test("DM mounts only personal (the user's own workspace)", () =>
   inTestTenant(async () => {
     const res = await setup();
     const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
     const r = await res.resolve(conv, actor);
     const mounts = r.layers.map((l) => l.scopeId);
-    assert.deepEqual(mounts, [TEST_ROOT_SCOPE, scopeId("personal", "U1")]);
+    assert.deepEqual(mounts, [scopeId("personal", "U1")]);
     assert.match(r.systemPrompt, /PERSONAL_SOUL/);
   }));
 
-test("channel mounts ONLY global + that channel — never personal (spec §9)", () =>
+test("channel mounts ONLY that channel — never personal (spec §9)", () =>
   inTestTenant(async () => {
     const res = await setup();
     const conv: Conversation = {
@@ -39,7 +39,7 @@ test("channel mounts ONLY global + that channel — never personal (spec §9)", 
     };
     const r = await res.resolve(conv, actor);
     const mounts = r.layers.map((l) => l.scopeId);
-    assert.deepEqual(mounts, [TEST_ROOT_SCOPE, scopeId("channel", "C1")]);
+    assert.deepEqual(mounts, [scopeId("channel", "C1")]);
     assert.equal(mounts.includes(scopeId("personal", "U1")), false);
     assert.match(r.systemPrompt, /CHANNEL_SOUL/);
     assert.doesNotMatch(r.systemPrompt, /PERSONAL_SOUL/);
@@ -86,15 +86,14 @@ test("egress floor includes the conversation scope policy for shared rooms", () 
     assert.deepEqual(r.egress.deniedHosts, ["channel-bad.test"]);
   }));
 
-test("the writable layer is the scope, global is read-only", () =>
+test("the writable layer is the scope and the tenant root is the org scope, not a mount", () =>
   inTestTenant(async () => {
     const res = await setup();
     const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
     const r = await res.resolve(conv, actor);
-    const org = r.layers.find((l) => l.scopeId === TEST_ROOT_SCOPE);
     const personal = r.layers.find((l) => l.scopeId === scopeId("personal", "U1"));
-    assert.equal(org?.mode, "ro");
     assert.equal(personal?.mode, "rw");
+    assert.equal(r.orgScopeId, TEST_ROOT_SCOPE);
   }));
 
 test("resolution carries the durable effective security posture", () =>

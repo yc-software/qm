@@ -16,6 +16,7 @@ import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { personalScope } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "deployment-token-gate-secret".repeat(2);
 
@@ -108,79 +109,85 @@ describe("a published app's broker token follows the app it was minted for, on e
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it("reaches upstream while the app is running and the credential is on for apps", async () => {
-    deployments.set("d1", running("d1"));
-    assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 200, git: 200 });
-  });
+  it("reaches upstream while the app is running and the credential is on for apps", () =>
+    inTestTenant(async () => {
+      deployments.set("d1", running("d1"));
+      assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 200, git: 200 });
+    }));
 
-  it("is refused once the app is stopped, archived or gone, and for a token whose actor is not the publisher", async () => {
-    const refused = { broker: 401, git: 401 };
-    deployments.set("d1", { ...running("d1"), status: "stopped" });
-    assert.deepEqual(await statuses(() => tokenFor("d1")), refused);
-    deployments.set("d1", { ...running("d1"), status: "archived" });
-    assert.deepEqual(await statuses(() => tokenFor("d1")), refused);
-    deployments.delete("d1");
-    assert.deepEqual(await statuses(() => tokenFor("d1")), refused);
-    deployments.set("d2", running("d2", "someone-else"));
-    assert.deepEqual(await statuses(() => tokenFor("d2", "publisher")), refused);
-  });
+  it("is refused once the app is stopped, archived or gone, and for a token whose actor is not the publisher", () =>
+    inTestTenant(async () => {
+      const refused = { broker: 401, git: 401 };
+      deployments.set("d1", { ...running("d1"), status: "stopped" });
+      assert.deepEqual(await statuses(() => tokenFor("d1")), refused);
+      deployments.set("d1", { ...running("d1"), status: "archived" });
+      assert.deepEqual(await statuses(() => tokenFor("d1")), refused);
+      deployments.delete("d1");
+      assert.deepEqual(await statuses(() => tokenFor("d1")), refused);
+      deployments.set("d2", running("d2", "someone-else"));
+      assert.deepEqual(await statuses(() => tokenFor("d2", "publisher")), refused);
+    }));
 
-  it("is refused when an admin switches the credential off for published apps", async () => {
-    deployments.set("d1", running("d1"));
-    deploymentsAllowed = false;
-    try {
-      assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 403, git: 403 });
-    } finally {
-      deploymentsAllowed = true;
-    }
-  });
+  it("is refused when an admin switches the credential off for published apps", () =>
+    inTestTenant(async () => {
+      deployments.set("d1", running("d1"));
+      deploymentsAllowed = false;
+      try {
+        assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 403, git: 403 });
+      } finally {
+        deploymentsAllowed = true;
+      }
+    }));
 
-  it("is refused without a token, with the wrong audience, and after scope membership is revoked", async () => {
-    deployments.set("d1", running("d1"));
-    assert.equal((await fetch(`${base}/v1/credentials/git/sample-api/sample-api/repo.git/info/refs`)).status, 401);
-    assert.deepEqual(await statuses(() => tokenFor("d1", "publisher", CONTROL_PLANE_AUD)), { broker: 403, git: 403 });
-    scopeAuthorized = false;
-    try {
-      assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 403, git: 403 });
-    } finally {
-      scopeAuthorized = true;
-    }
-  });
+  it("is refused without a token, with the wrong audience, and after scope membership is revoked", () =>
+    inTestTenant(async () => {
+      deployments.set("d1", running("d1"));
+      assert.equal((await fetch(`${base}/v1/credentials/git/sample-api/sample-api/repo.git/info/refs`)).status, 401);
+      assert.deepEqual(await statuses(() => tokenFor("d1", "publisher", CONTROL_PLANE_AUD)), { broker: 403, git: 403 });
+      scopeAuthorized = false;
+      try {
+        assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 403, git: 403 });
+      } finally {
+        scopeAuthorized = true;
+      }
+    }));
 
-  it("is refused once the publisher is offboarded", async () => {
-    deployments.set("d1", running("d1"));
-    offboarded = true;
-    try {
-      assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 401, git: 401 });
-    } finally {
-      offboarded = false;
-    }
-  });
+  it("is refused once the publisher is offboarded", () =>
+    inTestTenant(async () => {
+      deployments.set("d1", running("d1"));
+      offboarded = true;
+      try {
+        assert.deepEqual(await statuses(() => tokenFor("d1")), { broker: 401, git: 401 });
+      } finally {
+        offboarded = false;
+      }
+    }));
 
-  it("checks scope membership with the token's bot and member claims on both routes", async () => {
-    const token = () =>
-      mintCapabilityToken(
-        {
-          actorId: "B1",
-          scopeId: "channel:C1",
-          aud: CREDENTIAL_BROKER_AUD,
-          credentials: ["sample-api"],
-          botActor: true,
-          liveActor: true,
-          members: [{ id: "B1", type: "internal" }],
-          exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
-        },
-        SECRET,
-      );
-    authorized.length = 0;
-    assert.deepEqual(await statuses(token), { broker: 200, git: 200 });
-    const expected = {
-      actorId: "B1",
-      scopeId: "channel:C1",
-      botActor: true,
-      liveActor: true,
-      members: [{ id: "B1", type: "internal" }],
-    };
-    assert.deepEqual(authorized, [expected, expected]);
-  });
+  it("checks scope membership with the token's bot and member claims on both routes", () =>
+    inTestTenant(async () => {
+      const token = () =>
+        mintCapabilityToken(
+          {
+            actorId: "B1",
+            scopeId: "channel:C1",
+            aud: CREDENTIAL_BROKER_AUD,
+            credentials: ["sample-api"],
+            botActor: true,
+            liveActor: true,
+            members: [{ id: "B1", type: "internal" }],
+            exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+          },
+          SECRET,
+        );
+      authorized.length = 0;
+      assert.deepEqual(await statuses(token), { broker: 200, git: 200 });
+      const expected = {
+        actorId: "B1",
+        scopeId: "channel:C1",
+        botActor: true,
+        liveActor: true,
+        members: [{ id: "B1", type: "internal" }],
+      };
+      assert.deepEqual(authorized, [expected, expected]);
+    }));
 });

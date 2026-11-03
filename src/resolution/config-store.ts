@@ -1,5 +1,5 @@
 import type { CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
-import { scopeId } from "../types.ts";
+import { parseScopeId, scopeId } from "../types.ts";
 import { tenantRootScope } from "../tenants/context.ts";
 import { defaultOrgPolicy } from "../policy/command-policy.ts";
 import { randomBytes } from "node:crypto";
@@ -21,6 +21,8 @@ import {
   type DecryptedConnectorClient,
 } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
+
+const isOrgScope = (id: ScopeId): boolean => parseScopeId(id).kind === "org";
 
 export interface PersistedSoul {
   scopeId: ScopeId;
@@ -340,7 +342,7 @@ export function createConfigStore(
   const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;
 
   const purposeFields = (id: ScopeId, row?: PersistedBaseModel | null) =>
-    id === tenantRootScope()
+    isOrgScope(id)
       ? {
           ...(row?.embeddingModelId ? { embeddingModelId: row.embeddingModelId } : {}),
           ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
@@ -409,7 +411,7 @@ export function createConfigStore(
       "You are a helpful internal assistant for this organization. Be concise, accurate, and respect data boundaries: never reveal information to people who are not party to the current conversation.",
     version: 1,
   };
-  const soulOf = (id: ScopeId) => souls.get(id) ?? (id === tenantRootScope() ? defaultOrgSoul : undefined);
+  const soulOf = (id: ScopeId) => souls.get(id) ?? (isOrgScope(id) ? defaultOrgSoul : undefined);
 
   let hydrated: Promise<void> | null = null;
   const loadSoulCache = (id: ScopeId, soul: PersistedSoul | null): void => {
@@ -575,26 +577,25 @@ export function createConfigStore(
     restoreSoulCacheSnapshot(id, snapshot) {
       loadSoulCache(id, cloneSoul(snapshot));
     },
-    getCommandPolicy: (id) => settings.commandPolicies.get(id) ?? (id === tenantRootScope() ? orgDefaultPolicy : null),
+    getCommandPolicy: (id) => settings.commandPolicies.get(id) ?? (isOrgScope(id) ? orgDefaultPolicy : null),
     setCommandPolicy: (id, policy) => settings.commandPolicies.set(id, policy),
     async getSecurityPostureDurable(id) {
       const orgPosture = (await settings.securityPostures.durable(tenantRootScope())) ?? defaultSecurityPosture;
-      if (id === tenantRootScope()) return orgPosture;
+      if (isOrgScope(id)) return orgPosture;
       return composeSecurityPosture(orgPosture, await settings.securityPostures.durable(id));
     },
     async setSecurityPosture(id, posture) {
-      const effective =
-        id === tenantRootScope()
-          ? posture
-          : composeSecurityPosture(
-              (await settings.securityPostures.durable(tenantRootScope())) ?? defaultSecurityPosture,
-              posture,
-            );
+      const effective = isOrgScope(id)
+        ? posture
+        : composeSecurityPosture(
+            (await settings.securityPostures.durable(tenantRootScope())) ?? defaultSecurityPosture,
+            posture,
+          );
       await settings.securityPostures.set(id, effective);
     },
     async getSharingPostureDurable(id) {
       const orgPosture = (await settings.sharingPostures.durable(tenantRootScope())) ?? defaultSharingPosture;
-      return id === tenantRootScope()
+      return isOrgScope(id)
         ? orgPosture
         : composeSharingPostures(orgPosture, [await settings.sharingPostures.durable(id)]);
     },
@@ -604,20 +605,20 @@ export function createConfigStore(
         [tenantRootScope(), personalId, targetId].map((id) => settings.sharingPostures.durable(id)),
       );
       return composeSharingPostures(orgPosture ?? defaultSharingPosture, [
-        personalId === tenantRootScope() ? undefined : personalPosture,
-        targetId === tenantRootScope() || targetId === personalId ? undefined : targetPosture,
+        isOrgScope(personalId) ? undefined : personalPosture,
+        isOrgScope(targetId) || targetId === personalId ? undefined : targetPosture,
       ]);
     },
     setSharingPosture: (id, posture) => settings.sharingPostures.set(id, posture),
     clearSharingPosture: (id) => settings.sharingPostures.set(id, null),
     async getApprovalGrantModesDurable(id) {
       const orgModes = (await settings.approvalGrantModes.durable(tenantRootScope())) ?? DEFAULT_APPROVAL_GRANT_MODES;
-      if (id === tenantRootScope()) return { ...orgModes };
+      if (isOrgScope(id)) return { ...orgModes };
       return composeApprovalGrantModes(orgModes, await settings.approvalGrantModes.durable(id));
     },
     setApprovalGrantModes: (id, modes) =>
       settings.approvalGrantModes.set(id, { session: !!modes.session, always: !!modes.always }),
-    getEgress: (id) => settings.egressPolicies.get(id) ?? (id === tenantRootScope() ? orgDefaultEgress : null),
+    getEgress: (id) => settings.egressPolicies.get(id) ?? (isOrgScope(id) ? orgDefaultEgress : null),
     setEgress: (id, policy) => settings.egressPolicies.set(id, policy),
     getUnfulfilledInsights: (id) =>
       (settings.unfulfilledInsights.get(tenantRootScope()) ?? false) || (settings.unfulfilledInsights.get(id) ?? false),
@@ -637,7 +638,7 @@ export function createConfigStore(
     },
     getChannelHeaderPinDurable: async (id) =>
       (await settings.channelHeaderPin.durable(id)) ??
-      (id === tenantRootScope() ? false : ((await settings.channelHeaderPin.durable(tenantRootScope())) ?? false)),
+      (isOrgScope(id) ? false : ((await settings.channelHeaderPin.durable(tenantRootScope())) ?? false)),
     getChannelHeaderPinOverrideDurable: async (id) => (await settings.channelHeaderPin.durable(id)) ?? null,
     getChannelHeaderPinDefaultDurable: async () =>
       (await settings.channelHeaderPin.durable(tenantRootScope())) ?? false,
@@ -672,10 +673,9 @@ export function createConfigStore(
           cacheBaseModel(id, await updateBaseModelRow(id, (row) => withoutRuntime(id, row)));
           return;
         }
-        const orgRevision =
-          id === tenantRootScope() ? 0 : ((await baseModelStore.get(tenantRootScope()))?.revision ?? 0);
+        const orgRevision = isOrgScope(id) ? 0 : ((await baseModelStore.get(tenantRootScope()))?.revision ?? 0);
         const saved = await updateBaseModelRow(id, (row) => {
-          if (id !== tenantRootScope()) return { scopeId: id, ...selection, orgRevision };
+          if (!isOrgScope(id)) return { scopeId: id, ...selection, orgRevision };
           const revision = (row?.revision ?? 0) + 1;
           return { scopeId: id, ...purposeFields(id, row), ...selection, revision, orgRevision: revision };
         });
@@ -684,7 +684,7 @@ export function createConfigStore(
       noteRuntimeSelectionChanged(id);
     },
     async acknowledgeRuntimeSelection(id) {
-      if (id === tenantRootScope()) return;
+      if (isOrgScope(id)) return;
       await writeQueue(`model:${id}`, async () => {
         const orgRevision = (await baseModelStore.get(tenantRootScope()))?.revision ?? 0;
         const saved = await baseModelStore.merge(id, { orgRevision });
@@ -721,7 +721,7 @@ export function createConfigStore(
     getBaseModelOwnDurable: async (id) => (await baseModelStore.get(id))?.modelId ?? null,
     getBaseModelDurable: async (id) =>
       (await baseModelStore.get(id))?.modelId ??
-      (id === tenantRootScope() ? null : ((await baseModelStore.get(tenantRootScope()))?.modelId ?? null)),
+      (isOrgScope(id) ? null : ((await baseModelStore.get(tenantRootScope()))?.modelId ?? null)),
     getWebuiModels: (id) => settings.webuiModels.get(id) ?? null,
     setWebuiModels: (id, ids) => settings.webuiModels.set(id, ids?.length ? ids : null),
     getWebuiModelsDurable: async (id) =>

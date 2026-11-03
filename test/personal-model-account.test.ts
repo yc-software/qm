@@ -20,125 +20,129 @@ const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(b
 
 const SECRET = "personal-account-test-signing-secret";
 
-test("personal account choice persists across instances without changing anyone else's choice", async () => {
-  const individualModelAuth = testMap<PersistedScopedFlag>();
-  const first = testConfigStore({ individualModelAuth });
-  const second = testConfigStore({ individualModelAuth });
-  assert.equal(await first.getIndividualModelAuthDurable("alice"), false);
-  await first.setPersonalModelAuth("alice", true);
-  assert.equal(await second.getIndividualModelAuthDurable("alice"), true);
-  assert.equal(await second.getIndividualModelAuthDurable("bob"), false);
-  assert.equal(await second.getIndividualModelAuthDurable(), false);
-  await second.setPersonalModelAuth("alice", false);
-  assert.equal(await first.getIndividualModelAuthDurable("alice"), false);
-  await first.setIndividualModelAuth(true);
-  assert.equal(await second.getIndividualModelAuthDurable("alice"), true);
-});
+test("personal account choice persists across instances without changing anyone else's choice", () =>
+  inTestTenant(async () => {
+    const individualModelAuth = testMap<PersistedScopedFlag>();
+    const first = testConfigStore({ individualModelAuth });
+    const second = testConfigStore({ individualModelAuth });
+    assert.equal(await first.getIndividualModelAuthDurable("alice"), false);
+    await first.setPersonalModelAuth("alice", true);
+    assert.equal(await second.getIndividualModelAuthDurable("alice"), true);
+    assert.equal(await second.getIndividualModelAuthDurable("bob"), false);
+    assert.equal(await second.getIndividualModelAuthDurable(), false);
+    await second.setPersonalModelAuth("alice", false);
+    assert.equal(await first.getIndividualModelAuthDurable("alice"), false);
+    await first.setIndividualModelAuth(true);
+    assert.equal(await second.getIndividualModelAuthDurable("alice"), true);
+  }));
 
-test("account API binds choice to the signed-in person, preserves connections, and fails closed after disconnect", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-account-")) }));
-  const server = createServer(built.app, {
-    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    signingSecret: SECRET,
-    requireSignedPortalIdentity: true,
-    capabilitySecret: SECRET + "capability",
-    portalIdentitySecret: SECRET + "portal",
-    config: built.config,
-    userModelCredentials: built.userModelCredentials,
-    auditLog: built.auditLog,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  async function request(account: unknown, principalId = "alice", signedIn = "alice") {
-    const path = "/v1/user-model-auth/account";
-    const body = JSON.stringify({ account, principalId, nonce: crypto.randomUUID() });
-    return fetch(base + path, {
-      method: "POST",
-      headers: signedRequestHeaders(SECRET, "POST", path, body, {
-        "content-type": "application/json",
-        "x-portal-identity": await mintPortalIdentity(
-          { p: signedIn, exp: Date.now() + 60_000, t: testTenants()[0] },
-          SECRET + "portal",
-        ),
-        ...testTenantHeaders(),
+test("account API binds choice to the signed-in person, preserves connections, and fails closed after disconnect", () =>
+  inTestTenant(async () => {
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-account-")) }));
+    const server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      requireSignedPortalIdentity: true,
+      capabilitySecret: SECRET + "capability",
+      portalIdentitySecret: SECRET + "portal",
+      config: built.config,
+      userModelCredentials: built.userModelCredentials,
+      auditLog: built.auditLog,
+    });
+    server.listen(0);
+    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    async function request(account: unknown, principalId = "alice", signedIn = "alice") {
+      const path = "/v1/user-model-auth/account";
+      const body = JSON.stringify({ account, principalId, nonce: crypto.randomUUID() });
+      return fetch(base + path, {
+        method: "POST",
+        headers: signedRequestHeaders(SECRET, "POST", path, body, {
+          "content-type": "application/json",
+          "x-portal-identity": await mintPortalIdentity(
+            { p: signedIn, exp: Date.now() + 60_000, t: testTenants()[0] },
+            SECRET + "portal",
+          ),
+          ...testTenantHeaders(),
+        }),
+        body,
+      });
+    }
+    try {
+      assert.equal((await request("personal")).status, 409);
+      assert.equal((await request("invalid")).status, 400);
+      await inTestTenant(() => built.userModelCredentials.setApiKey("alice", "anthropic", "test-personal-key"));
+      assert.equal((await request("personal", "bob", "alice")).status, 403);
+      const enabled = await request("personal");
+      assert.equal(enabled.status, 200);
+      assert.deepEqual(await enabled.json(), {
+        individualModelAuth: true,
+        required: false,
+        account: "personal",
+        connections: [{ provider: "anthropic", kind: "apikey" }],
+      });
+      assert.equal(await inTestTenant(() => built.config.getIndividualModelAuthDurable("bob")), false);
+      assert.equal((await request("company")).status, 200);
+      assert.equal((await inTestTenant(() => built.userModelCredentials.connections("alice"))).length, 1);
+      assert.equal((await request("personal")).status, 200);
+      await inTestTenant(() => built.userModelCredentials.delete("alice", "anthropic"));
+      assert.equal(await inTestTenant(() => built.config.getIndividualModelAuthDurable("alice")), true);
+      assert.equal((await request("company")).status, 200);
+      await inTestTenant(() => built.config.setIndividualModelAuth(true));
+      assert.equal((await request("company")).status, 403);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }));
+
+test("personal provider choice is durable and controls the submitted run independently of the company model", () =>
+  inTestTenant(async () => {
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-routing-")) }));
+    await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "anthropic", "test-anthropic-key"));
+    await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "test-openai-key"));
+    await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
+    const submitted = await inTestTenant(() =>
+      built.app.turn({
+        surface: "slack",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "personal-provider-choice" },
+        text: "hello",
+        liveActor: true,
+        async: true,
+        model: "company-only-custom-model",
       }),
-      body,
-    });
-  }
-  try {
-    assert.equal((await request("personal")).status, 409);
-    assert.equal((await request("invalid")).status, 400);
-    await inTestTenant(() => built.userModelCredentials.setApiKey("alice", "anthropic", "test-personal-key"));
-    assert.equal((await request("personal", "bob", "alice")).status, 403);
-    const enabled = await request("personal");
-    assert.equal(enabled.status, 200);
-    assert.deepEqual(await enabled.json(), {
-      individualModelAuth: true,
-      required: false,
-      account: "personal",
-      connections: [{ provider: "anthropic", kind: "apikey" }],
-    });
-    assert.equal(await inTestTenant(() => built.config.getIndividualModelAuthDurable("bob")), false);
-    assert.equal((await request("company")).status, 200);
-    assert.equal((await inTestTenant(() => built.userModelCredentials.connections("alice"))).length, 1);
-    assert.equal((await request("personal")).status, 200);
-    await inTestTenant(() => built.userModelCredentials.delete("alice", "anthropic"));
-    assert.equal(await inTestTenant(() => built.config.getIndividualModelAuthDurable("alice")), true);
-    assert.equal((await request("company")).status, 200);
-    await inTestTenant(() => built.config.setIndividualModelAuth(true));
-    assert.equal((await request("company")).status, 403);
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
+    );
+    const run = await inTestTenant(() => built.runs.get(submitted.runId!));
+    assert.equal(run?.request.modelAccount, "openai");
+    assert.equal(run?.request.model, undefined);
+    await inTestTenant(() => built.config.setPersonalModelAuth("U1", false));
+    assert.equal((await inTestTenant(() => built.runs.get(submitted.runId!)))?.request.modelAccount, "openai");
+    const steered = await inTestTenant(() =>
+      built.app.signalRun(submitted.runId!, { kind: "steer", text: "more work" }, "U1"),
+    );
+    assert.equal(steered.accepted, false);
+    assert.match(steered.reason ?? "", /account_changed/);
+    assert.equal(
+      (await inTestTenant(() => built.app.signalRun(submitted.runId!, { kind: "abort" }, "U1"))).accepted,
+      true,
+    );
+  }));
 
-test("personal provider choice is durable and controls the submitted run independently of the company model", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-routing-")) }));
-  await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "anthropic", "test-anthropic-key"));
-  await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "test-openai-key"));
-  await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
-  const submitted = await inTestTenant(() =>
-    built.app.turn({
+test("shared chat messages queue instead of borrowing another person's account", () =>
+  inTestTenant(async () => {
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-steering-")) }));
+    const message = (user: string) => ({
       surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "personal-provider-choice" },
+      actor: { externalId: user },
+      conversation: { kind: "channel" as const, threadRef: "account-steering", channelRef: "C1" },
       text: "hello",
       liveActor: true,
       async: true,
-      model: "company-only-custom-model",
-    }),
-  );
-  const run = await inTestTenant(() => built.runs.get(submitted.runId!));
-  assert.equal(run?.request.modelAccount, "openai");
-  assert.equal(run?.request.model, undefined);
-  await inTestTenant(() => built.config.setPersonalModelAuth("U1", false));
-  assert.equal((await inTestTenant(() => built.runs.get(submitted.runId!)))?.request.modelAccount, "openai");
-  const steered = await inTestTenant(() =>
-    built.app.signalRun(submitted.runId!, { kind: "steer", text: "more work" }, "U1"),
-  );
-  assert.equal(steered.accepted, false);
-  assert.match(steered.reason ?? "", /account_changed/);
-  assert.equal(
-    (await inTestTenant(() => built.app.signalRun(submitted.runId!, { kind: "abort" }, "U1"))).accepted,
-    true,
-  );
-});
-
-test("shared chat messages queue instead of borrowing another person's account", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-steering-")) }));
-  const message = (user: string) => ({
-    surface: "slack",
-    actor: { externalId: user },
-    conversation: { kind: "channel" as const, threadRef: "account-steering", channelRef: "C1" },
-    text: "hello",
-    liveActor: true,
-    async: true,
-  });
-  await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "anthropic"));
-  const first = await inTestTenant(() => built.app.turn(message("U1")));
-  const other = await inTestTenant(() => built.app.turn(message("U2")));
-  assert.notEqual(first.runId, other.runId);
-  assert.notEqual(other.steered, true);
-  assert.equal((await inTestTenant(() => built.runs.get(other.runId!)))?.request.modelAccount, "company");
-  assert.equal((await inTestTenant(() => built.signals.takePending(first.runId!))).length, 0);
-});
+    });
+    await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "anthropic"));
+    const first = await inTestTenant(() => built.app.turn(message("U1")));
+    const other = await inTestTenant(() => built.app.turn(message("U2")));
+    assert.notEqual(first.runId, other.runId);
+    assert.notEqual(other.steered, true);
+    assert.equal((await inTestTenant(() => built.runs.get(other.runId!)))?.request.modelAccount, "company");
+    assert.equal((await inTestTenant(() => built.signals.takePending(first.runId!))).length, 0);
+  }));

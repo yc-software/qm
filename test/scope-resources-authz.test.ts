@@ -214,37 +214,40 @@ test("owning a resource in a scope does NOT grant access to that scope's context
     assert.equal(await app.listScopeResources("U2", channelScope), null);
   }));
 
-test("historical participation grants neither context listing nor current scope resources", async () => {
-  const deps = makeDeps();
-  deps.sessions.listByParticipant = async (principalId: string) =>
-    principalId === "U2"
-      ? [
-          {
-            id: "old",
-            threadRef: "old",
-            type: "channel",
-            scopeId: channelScope,
-            channelName: "general",
-            createdAt: 1,
-            lastActivityAt: 2,
-            hasEntries: true,
-          },
-        ]
-      : [];
-  deps.sessions.participantScopes = async (principalId: string) =>
-    principalId === "U2" ? [{ scopeId: channelScope, channelName: "general", sessionCount: 1, lastActivityAt: 2 }] : [];
-  await deps.skills.create({
-    scopeId: channelScope,
-    manifest: { name: "private", description: "private", requiredCapabilities: [], body: "# Private" },
-    createdBy: U1,
-  });
-  const app = createApp(deps as unknown as AppDeps);
+test("historical participation grants neither context listing nor current scope resources", () =>
+  inTestTenant(async () => {
+    const deps = makeDeps();
+    deps.sessions.listByParticipant = async (principalId: string) =>
+      principalId === "U2"
+        ? [
+            {
+              id: "old",
+              threadRef: "old",
+              type: "channel",
+              scopeId: channelScope,
+              channelName: "general",
+              createdAt: 1,
+              lastActivityAt: 2,
+              hasEntries: true,
+            },
+          ]
+        : [];
+    deps.sessions.participantScopes = async (principalId: string) =>
+      principalId === "U2"
+        ? [{ scopeId: channelScope, channelName: "general", sessionCount: 1, lastActivityAt: 2 }]
+        : [];
+    await deps.skills.create({
+      scopeId: channelScope,
+      manifest: { name: "private", description: "private", requiredCapabilities: [], body: "# Private" },
+      createdBy: U1,
+    });
+    const app = createApp(deps as unknown as AppDeps);
 
-  assert.ok(!(await app.listContexts("U2")).some((context) => context.scopeId === channelScope));
-  assert.equal(await app.listScopeResources("U2", channelScope), null);
-  assert.equal(await app.belongsToScope("U2", channelScope), false);
-  assert.ok(!(await app.listVisibleSkills("U2")).some((result) => result.skill?.scopeId === channelScope));
-});
+    assert.ok(!(await app.listContexts("U2")).some((context) => context.scopeId === channelScope));
+    assert.equal(await app.listScopeResources("U2", channelScope), null);
+    assert.equal(await app.belongsToScope("U2", channelScope), false);
+    assert.ok(!(await app.listVisibleSkills("U2")).some((result) => result.skill?.scopeId === channelScope));
+  }));
 
 test("a context view never leaks another scope's files or crons", () =>
   inTestTenant(async () => {
@@ -322,12 +325,13 @@ test("webhook secrets are redacted by the route, not the app layer", () =>
     assert.equal(out!.webhooks[0]!.verification.secret, "topsecret");
   }));
 
-test("team members belong to their team scope", async () => {
-  const deps = makeDeps();
-  const teams = { isMember: async (principalId: string, teamId: string) => principalId === U1 && teamId === "labs" };
-  const app = createApp({ ...deps, teams } as unknown as AppDeps);
+test("team members belong to their team scope", () =>
+  inTestTenant(async () => {
+    const deps = makeDeps();
+    const teams = { isMember: async (principalId: string, teamId: string) => principalId === U1 && teamId === "labs" };
+    const app = createApp({ ...deps, teams } as unknown as AppDeps);
 
-  assert.equal(await app.belongsToScope(U1, scopeId("team", "labs")), true);
-  assert.equal(await app.belongsToScope("U2", scopeId("team", "labs")), false);
-  assert.equal(await app.belongsToScope(U1, scopeId("team", "other")), false);
-});
+    assert.equal(await app.belongsToScope(U1, scopeId("team", "labs")), true);
+    assert.equal(await app.belongsToScope("U2", scopeId("team", "labs")), false);
+    assert.equal(await app.belongsToScope(U1, scopeId("team", "other")), false);
+  }));

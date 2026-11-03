@@ -189,36 +189,41 @@ test("an org grant surfaces the file to any org member", () =>
     assert.ok(await app.openFileForViewer(id, "U9"));
   }));
 
-test("openFileForViewer returns null when the bytes are gone (a backfilled history row)", async () => {
-  const owner = scopeId("personal", "U1");
-  const id = "backfill-1";
-  const row = {
-    id,
-    ownerScopeId: owner,
-    createdBy: "U1",
-    name: "old.png",
-    path: "old.png",
-    mimetype: "image/png",
-    sizeBytes: 10,
-    blobKey: null,
-    sha256: null,
-    direction: "out" as const,
-    source: "backfill" as const,
-    createdAt: 1,
-    updatedAt: 1,
-    enabled: true,
-  };
-  const files = {
-    get: async () => row,
-    open: async () => null,
-  } as unknown as FileArtifactStore;
-  const app = makeApp(
-    files,
-    createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
-  );
+test("openFileForViewer returns null when the bytes are gone (a backfilled history row)", () =>
+  inTestTenant(async () => {
+    const owner = scopeId("personal", "U1");
+    const id = "backfill-1";
+    const row = {
+      id,
+      ownerScopeId: owner,
+      createdBy: "U1",
+      name: "old.png",
+      path: "old.png",
+      mimetype: "image/png",
+      sizeBytes: 10,
+      blobKey: null,
+      sha256: null,
+      direction: "out" as const,
+      source: "backfill" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      enabled: true,
+    };
+    const files = {
+      get: async () => row,
+      open: async () => null,
+    } as unknown as FileArtifactStore;
+    const app = makeApp(
+      files,
+      createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
+    );
 
-  assert.equal(await app.openFileForViewer(id, "U1"), null, "owner is authorized but the bytes are unavailable → 404");
-});
+    assert.equal(
+      await app.openFileForViewer(id, "U1"),
+      null,
+      "owner is authorized but the bytes are unavailable → 404",
+    );
+  }));
 
 test("uploadFileForViewer stores a personal inbound file", () =>
   inTestTenant(async () => {
