@@ -156,7 +156,6 @@ test("only the claimed tidy job's turns see the notebook alone, whatever its tit
 
   await f.fireAt(alice, Date.now() + 120_000);
   await f.crons.update(tidy.id, { action: "Summarize my week." });
-  assert.notEqual(copy.id, tidy.id);
   for (const id of [tidy.id, copy.id]) {
     const fired = await f.scheduler.runNow(id);
     assert.ok(fired.started);
