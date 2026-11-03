@@ -3,20 +3,89 @@ import os
 
 @testable import QM
 
+struct ChatStubLog: Sendable {
+  var received: [String: Int] = [:]
+  var loaded: [String: Int] = [:]
+  var stopped: [String: Int] = [:]
+}
+
 final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
-  static let counts = OSAllocatedUnfairLock(initialState: [String: Int]())
+  private struct Waiter: Sendable {
+    let condition: @Sendable (ChatStubLog) -> Bool
+    let then: @Sendable () -> Void
+  }
+  private struct Registry: Sendable {
+    var log = ChatStubLog()
+    var held: [String: @Sendable () -> Void] = [:]
+    var released: Set<String> = []
+    var waiters: [UUID: Waiter] = [:]
+  }
+  private static let registry = OSAllocatedUnfairLock(initialState: Registry())
+  private let isStopped = OSAllocatedUnfairLock(initialState: false)
+
+  static var log: ChatStubLog { registry.withLock { $0.log } }
+
+  @discardableResult
+  private static func record<T: Sendable>(_ change: @Sendable (inout Registry) -> T) -> T {
+    let (value, reached) = registry.withLock { registry in
+      let value = change(&registry)
+      let met = registry.waiters.filter { $0.value.condition(registry.log) }
+      for id in met.keys { registry.waiters[id] = nil }
+      return (value, met.values.map(\.then))
+    }
+    for then in reached { then() }
+    return value
+  }
+
+  static func wait(
+    until condition: @escaping @Sendable (ChatStubLog) -> Bool, then: @escaping @Sendable () -> Void
+  ) -> UUID {
+    let id = UUID()
+    record { $0.waiters[id] = Waiter(condition: condition, then: then) }
+    return id
+  }
+
+  static func stopWaiting(_ id: UUID) {
+    registry.withLock { $0.waiters[id] = nil }
+  }
+
+  static func release(_ key: String) {
+    let deliver = registry.withLock { registry -> (@Sendable () -> Void)? in
+      if let deliver = registry.held.removeValue(forKey: key) { return deliver }
+      registry.released.insert(key)
+      return nil
+    }
+    deliver?()
+  }
+
+  private static func hold(_ key: String, _ deliver: @escaping @Sendable () -> Void) {
+    let releasedEarly = registry.withLock { registry -> Bool in
+      if registry.released.remove(key) != nil { return true }
+      registry.held[key] = deliver
+      return false
+    }
+    if releasedEarly { DispatchQueue.global().async(execute: deliver) }
+  }
+
+  private func load(_ text: String, key: String, finish: Bool) {
+    guard !isStopped.withLock({ $0 }) else { return }
+    client?.urlProtocol(self, didLoad: Data(text.utf8))
+    if finish { client?.urlProtocolDidFinishLoading(self) }
+    Self.record { $0.log.loaded[key, default: 0] += 1 }
+  }
+
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
     let host = request.url!.host!
     let path = request.url!.path
-    let count = Self.counts.withLock { values in
-      let key = host + path
-      values[key, default: 0] += 1
-      return values[key]!
+    let key = host + path
+    let count = Self.record { registry in
+      registry.log.received[key, default: 0] += 1
+      return registry.log.received[key]!
     }
     var status = 200
-    var delay = 0.005
+    var held = false
     var body = "{}"
     var contentType = "application/json"
     switch path {
@@ -26,6 +95,7 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
       if host.hasPrefix("overlap"), count > 1 {
         body = #"{"runId":"run","queued":[{"runId":"next","text":"Next"}]}"#
       }
+      if host.hasPrefix("overlap-completing"), count == 2 { held = true }
     case "/api/turn":
       body = #"{"status":"ok","reply":"Answer"}"#
       if host.hasPrefix("overlap") || host.hasPrefix("active-failure") {
@@ -34,8 +104,8 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
       if host.hasPrefix("accepted") { body = #"{"runId":"run","status":"queued"}"# }
     case "/api/runs/run/events":
       contentType = "text/event-stream"
-      if host.hasPrefix("overlap") { delay = 0.15 }
-      if host.hasPrefix("reconnect-stall"), count > 1 { delay = 1 }
+      if host.hasPrefix("overlap"), count == 1 { held = true }
+      if host.hasPrefix("reconnect-stall"), count > 1 { held = true }
       body =
         "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"Answer\",\"status\":\"done\",\"result\":{\"status\":\"ok\",\"reply\":\"Answer\"}}}\n\n"
       if host.hasPrefix("posted-finish") || host.hasPrefix("posted-lag") {
@@ -87,9 +157,9 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
       }
     case "/api/sessions/chat/approvals":
       body = #"{"approvals":[]}"#
-      if count > 1 {
-        delay = 0.3
-        if host.hasPrefix("failure") || host.hasPrefix("replay-failure") { status = 503 }
+      if count > 1, host.hasPrefix("failure") || host.hasPrefix("replay-failure") { status = 503 }
+      if count == 2, ["idle", "replay-failure", "delayed"].contains(where: host.hasPrefix) {
+        held = true
       }
     default: break
     }
@@ -107,11 +177,9 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
       headerFields: ["Content-Type": contentType])!
     if host.hasPrefix("active-failure"), path == "/api/runs/run/events" {
       client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-      client?.urlProtocol(
-        self,
-        didLoad: Data(
-          "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"Still writing\",\"status\":\"running\"}}\n\n"
-            .utf8))
+      load(
+        "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"partial\":\"Still writing\",\"status\":\"running\"}}\n\n",
+        key: key, finish: false)
       return
     }
     if host.hasPrefix("stream-burst"), path.hasSuffix("/events") {
@@ -119,23 +187,87 @@ final class ChatReconciliationProtocol: URLProtocol, @unchecked Sendable {
       let burst = (0..<200).map {
         "data: {\"type\":\"CUSTOM\",\"name\":\"delta\",\"value\":{\"offset\":\($0),\"delta\":\"x\"}}\n\n"
       }.joined()
-      client?.urlProtocol(self, didLoad: Data(burst.utf8))
-      DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { [self] in
-        let terminal =
-          "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"status\":\"done\",\"result\":{\"status\":\"ok\",\"reply\":\"Complete\"}}}\n\n"
-        client?.urlProtocol(self, didLoad: Data(terminal.utf8))
-        client?.urlProtocolDidFinishLoading(self)
+      load(burst, key: key, finish: false)
+      Self.hold("\(key)#\(count)") { [self] in
+        load(
+          "data: {\"type\":\"CUSTOM\",\"name\":\"run\",\"value\":{\"status\":\"done\",\"result\":{\"status\":\"ok\",\"reply\":\"Complete\"}}}\n\n",
+          key: key, finish: true)
       }
       return
     }
     let responseBody = body
-    DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [self] in
+    let respond: @Sendable () -> Void = { [self] in
+      guard !isStopped.withLock({ $0 }) else { return }
       client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-      client?.urlProtocol(self, didLoad: Data(responseBody.utf8))
-      client?.urlProtocolDidFinishLoading(self)
+      load(responseBody, key: key, finish: true)
+    }
+    if held {
+      Self.hold("\(key)#\(count)", respond)
+    } else {
+      DispatchQueue.global().async(execute: respond)
     }
   }
-  override func stopLoading() {}
+  override func stopLoading() {
+    isStopped.withLock { $0 = true }
+    let key = request.url!.host! + request.url!.path
+    Self.record { $0.log.stopped[key, default: 0] += 1 }
+  }
+}
+
+private struct Arrival {
+  let arrive: @Sendable () -> Void
+  private let stream: AsyncStream<Bool>
+  private let finish: @Sendable () -> Void
+
+  init() {
+    let (stream, continuation) = AsyncStream<Bool>.makeStream()
+    let timer = Task {
+      try await Task.sleep(for: .seconds(5))
+      continuation.yield(false)
+    }
+    continuation.onTermination = { _ in timer.cancel() }
+    self.stream = stream
+    arrive = { continuation.yield(true) }
+    finish = { continuation.finish() }
+  }
+
+  func wait() async -> Bool {
+    defer { finish() }
+    for await arrived in stream { return arrived }
+    return false
+  }
+}
+
+@MainActor
+private final class ModelWatch {
+  private var condition: (@MainActor () -> Bool)?
+  private let then: @Sendable () -> Void
+
+  init(_ condition: @escaping @MainActor () -> Bool, then: @escaping @Sendable () -> Void) {
+    self.condition = condition
+    self.then = then
+    check()
+  }
+
+  func stop() { condition = nil }
+
+  private func check() {
+    guard let condition else { return }
+    let met = withObservationTracking {
+      condition()
+    } onChange: {
+      Task { @MainActor in self.check() }
+    }
+    if met {
+      stop()
+      then()
+    }
+  }
+}
+
+@MainActor
+private final class Sighting {
+  var seen = false
 }
 
 @MainActor
@@ -154,6 +286,44 @@ final class ChatReconciliationTests: XCTestCase {
       client: client, user: "test", knownSession: true)
   }
 
+  private func key(_ chat: ChatModel, _ path: String) -> String {
+    chat.client.baseURL.host! + path
+  }
+
+  private func release(_ chat: ChatModel, _ path: String, _ count: Int) {
+    ChatReconciliationProtocol.release("\(key(chat, path))#\(count)")
+  }
+
+  private func stub(
+    _ condition: @escaping @Sendable (ChatStubLog) -> Bool, file: StaticString = #filePath,
+    line: UInt = #line
+  ) async {
+    let arrival = Arrival()
+    let id = ChatReconciliationProtocol.wait(until: condition, then: arrival.arrive)
+    let arrived = await arrival.wait()
+    ChatReconciliationProtocol.stopWaiting(id)
+    XCTAssertTrue(arrived, "The stub never reached the expected state", file: file, line: line)
+  }
+
+  private func until(
+    _ condition: @escaping @MainActor () -> Bool, file: StaticString = #filePath,
+    line: UInt = #line
+  ) async {
+    let arrival = Arrival()
+    let watch = ModelWatch(condition, then: arrival.arrive)
+    let arrived = await arrival.wait()
+    watch.stop()
+    XCTAssertTrue(arrived, "The chat never reached the expected state", file: file, line: line)
+  }
+
+  private func watch(_ check: @escaping @MainActor () -> Void) -> ModelWatch {
+    ModelWatch(
+      {
+        check()
+        return false
+      }, then: {})
+  }
+
   func testBurstPublishesAllTextAndTerminalCannotBeOverwrittenByDelayedPartial() async throws {
     let chat = try chat("stream-burst")
     defer {
@@ -161,12 +331,11 @@ final class ChatReconciliationTests: XCTestCase {
       chat.client.signOut()
     }
     await chat.resume()
-    for _ in 0..<30 {
-      if chat.partial.count == 200 { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await until { chat.partial.count == 200 }
     XCTAssertEqual(chat.partial, String(repeating: "x", count: 200))
-    try await Task.sleep(for: .milliseconds(300))
+    let approvals = key(chat, "/api/sessions/chat/approvals")
+    release(chat, "/api/runs/run/events", 1)
+    await stub { $0.received[approvals] == 2 }
     XCTAssertTrue(chat.partial.isEmpty)
     XCTAssertNil(chat.activeRunID)
   }
@@ -175,10 +344,14 @@ final class ChatReconciliationTests: XCTestCase {
     let chat = try chat("stream-burst")
     defer { chat.client.signOut() }
     await chat.resume()
+    let events = key(chat, "/api/runs/run/events")
+    await stub { $0.loaded[events] == 1 }
     chat.pause()
     let partial = chat.partial
-    try await Task.sleep(for: .milliseconds(300))
+    await stub { $0.stopped[events] == 1 }
+    release(chat, "/api/runs/run/events", 1)
     XCTAssertEqual(chat.partial, partial)
+    XCTAssertEqual(ChatReconciliationProtocol.log.loaded[events], 1)
   }
 
   func testCachedHistoryTracksEntryChangesAndPreservesItDuringStreaming() throws {
@@ -204,14 +377,8 @@ final class ChatReconciliationTests: XCTestCase {
       chat.client.signOut()
     }
     await chat.resume()
-    let key = chat.client.baseURL.host! + "/api/runs/run/events"
-    for _ in 0..<300 {
-      if ChatReconciliationProtocol.counts.withLock({ $0[key, default: 0] }) >= 2 { break }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    XCTAssertGreaterThanOrEqual(
-      ChatReconciliationProtocol.counts.withLock { $0[key, default: 0] }, 2)
-    try await Task.sleep(for: .milliseconds(100))
+    let events = key(chat, "/api/runs/run/events")
+    await stub { $0.received[events] == 2 }
     XCTAssertEqual(chat.partial, "Newer recovered text")
   }
 
@@ -251,10 +418,7 @@ final class ChatReconciliationTests: XCTestCase {
       chat.client.signOut()
     }
     await chat.resume()
-    for _ in 0..<100 {
-      if !chat.partial.isEmpty { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await until { !chat.partial.isEmpty }
     XCTAssertEqual(chat.partial, "Answer")
     XCTAssertEqual(chat.displayedPartial, "")
     XCTAssertEqual(chat.messages.map(\.text), ["Question", "Answer"])
@@ -267,10 +431,7 @@ final class ChatReconciliationTests: XCTestCase {
       chat.client.signOut()
     }
     await chat.resume()
-    for _ in 0..<100 {
-      if chat.activeRunID == nil, chat.error != nil { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await until { chat.activeRunID == nil && chat.error != nil }
     XCTAssertNil(chat.activeRunID)
     XCTAssertNotNil(chat.error)
     XCTAssertEqual(chat.displayedPartial, "")
@@ -285,10 +446,7 @@ final class ChatReconciliationTests: XCTestCase {
       chat.client.signOut()
     }
     await chat.resume()
-    for _ in 0..<100 {
-      if chat.activeRunID == nil, chat.messages.last?.activity.count == 4 { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await until { chat.activeRunID == nil && chat.messages.last?.activity.count == 4 }
     XCTAssertNil(chat.activeRunID)
     XCTAssertNil(chat.error)
     let refreshed = await chat.refresh()
@@ -319,8 +477,8 @@ final class ChatReconciliationTests: XCTestCase {
     XCTAssertTrue(chat.needsEarlierHistory(for: 5000))
     XCTAssertFalse(chat.needsEarlierHistory(for: 10000))
     await chat.loadInheritedHistory()
-    let key = chat.client.baseURL.host! + "/api/sessions/chat"
-    XCTAssertEqual(ChatReconciliationProtocol.counts.withLock { $0[key, default: 0] }, 1)
+    XCTAssertEqual(
+      ChatReconciliationProtocol.log.received[key(chat, "/api/sessions/chat")], 1)
   }
 
   func testInheritedHistoryCanRetryAfterFailure() async throws {
@@ -343,10 +501,7 @@ final class ChatReconciliationTests: XCTestCase {
       chat.client.signOut()
     }
     await chat.resume()
-    for _ in 0..<100 {
-      if chat.messages.last?.role == "assistant" { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await until { chat.messages.last?.role == "assistant" }
     XCTAssertEqual(chat.messages.map(\.text), ["Question", "Answer"])
     XCTAssertEqual(chat.messages.last?.activity.first?.payload?.thinking, "Working through it.")
     XCTAssertNil(chat.activeRunID)
@@ -359,21 +514,25 @@ final class ChatReconciliationTests: XCTestCase {
       chat.pause()
       chat.client.signOut()
     }
-    await chat.resume()
-    var sawFinal = false
-    for _ in 0..<100 {
-      if chatMessages(chat.entries).contains(where: { $0.role == "assistant" }) {
-        sawFinal = true
-        XCTAssertEqual(chat.displayedPartial, "")
-        XCTAssertNil(chat.activeRunID)
-      }
-      try await Task.sleep(for: .milliseconds(5))
+    let answer = Sighting()
+    let invariant = watch {
+      guard chatMessages(chat.entries).contains(where: { $0.role == "assistant" }) else { return }
+      answer.seen = true
+      XCTAssertEqual(chat.displayedPartial, "")
+      XCTAssertNil(chat.activeRunID)
     }
-    XCTAssertTrue(sawFinal)
+    defer { invariant.stop() }
+    await chat.resume()
+    let approvals = key(chat, "/api/sessions/chat/approvals")
+    await stub { $0.received[approvals] == 2 }
+    XCTAssertTrue(chatMessages(chat.entries).contains { $0.role == "assistant" })
+    XCTAssertEqual(chat.displayedPartial, "")
+    XCTAssertNil(chat.activeRunID)
+    release(chat, "/api/sessions/chat/approvals", 2)
+    await stub { $0.loaded[approvals] == 2 }
+    XCTAssertTrue(answer.seen)
     XCTAssertEqual(chatMessages(chat.entries).filter { $0.role == "assistant" }.count, 1)
-    let key = chat.client.baseURL.host! + "/api/runs/run"
-    let polls = ChatReconciliationProtocol.counts.withLock { $0[key, default: 0] }
-    XCTAssertEqual(polls, 0)
+    XCTAssertNil(ChatReconciliationProtocol.log.received[key(chat, "/api/runs/run")])
   }
 
   func testApprovalsFailureCannotResurrectStreamingCopy() async throws {
@@ -383,7 +542,7 @@ final class ChatReconciliationTests: XCTestCase {
       chat.client.signOut()
     }
     await chat.resume()
-    try await Task.sleep(for: .milliseconds(450))
+    await until { chat.error != nil }
     XCTAssertEqual(chatMessages(chat.entries).last?.text, "Answer")
     XCTAssertEqual(chat.displayedPartial, "")
     XCTAssertNil(chat.activeRunID)
@@ -396,10 +555,8 @@ final class ChatReconciliationTests: XCTestCase {
       chat.client.signOut()
     }
     await chat.resume()
-    for _ in 0..<100 {
-      if chat.entries.count == 2 { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    let approvals = key(chat, "/api/sessions/chat/approvals")
+    await stub { $0.received[approvals] == 2 }
     await chat.reconcileActivity(.init(runId: nil, queued: []))
     XCTAssertEqual(chat.displayedPartial, "")
     XCTAssertEqual(chatMessages(chat.entries).filter { $0.role == "assistant" }.count, 1)
@@ -414,16 +571,13 @@ final class ChatReconciliationTests: XCTestCase {
     await chat.resume()
     chat.draft = "Question"
     let sending = Task { await chat.send() }
-    var sawFinal = false
-    for _ in 0..<100 {
-      if chat.entries.count == 2 {
-        sawFinal = true
-        XCTAssertEqual(chat.displayedPartial, "")
-      }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    let approvals = key(chat, "/api/sessions/chat/approvals")
+    await stub { $0.received[approvals] == 2 }
+    XCTAssertEqual(chat.entries.count, 2)
+    XCTAssertEqual(chat.displayedPartial, "")
+    release(chat, "/api/sessions/chat/approvals", 2)
     await sending.value
-    XCTAssertTrue(sawFinal)
+    XCTAssertNotNil(chat.error)
     XCTAssertNil(chat.activeRunID)
     XCTAssertEqual(chat.displayedPartial, "")
   }
@@ -435,40 +589,40 @@ final class ChatReconciliationTests: XCTestCase {
       chat.client.signOut()
     }
     await chat.resume()
-    for _ in 0..<100 {
-      if chat.entries.count == 2 { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await until { chat.entries.count == 2 }
     await chat.reconcileActivity(.init(runId: "run", queued: []))
     XCTAssertNil(chat.activeRunID)
-    try await Task.sleep(for: .milliseconds(400))
-    let key = chat.client.baseURL.host! + "/api/runs/run/events"
-    let streams = ChatReconciliationProtocol.counts.withLock { $0[key, default: 0] }
-    XCTAssertEqual(streams, 1)
+    XCTAssertEqual(ChatReconciliationProtocol.log.received[key(chat, "/api/runs/run/events")], 1)
     XCTAssertEqual(chat.displayedPartial, "")
   }
 
   func testPreviousRunCompletingDuringQueuedSubmissionKeepsItsOwnIdentity() async throws {
-    let chat = try chat("overlap")
+    let chat = try chat("overlap-completing")
     defer {
       chat.pause()
       chat.client.signOut()
     }
+    let recorded = Sighting()
+    let invariant = watch {
+      let answers = chat.messages.filter { $0.role == "assistant" && $0.text == "Answer" }
+      guard !answers.isEmpty else { return }
+      recorded.seen = true
+      XCTAssertEqual(answers.count, 1)
+      XCTAssertEqual(chat.displayedPartial, "")
+    }
+    defer { invariant.stop() }
     await chat.resume()
     chat.draft = "Next"
     let submitting = Task { await chat.send() }
-    var sawRecordedAnswer = false
-    for _ in 0..<100 {
-      let answers = chat.messages.filter { $0.role == "assistant" && $0.text == "Answer" }
-      if !answers.isEmpty {
-        sawRecordedAnswer = true
-        XCTAssertEqual(answers.count, 1)
-        XCTAssertEqual(chat.displayedPartial, "")
-      }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    let active = key(chat, "/api/runs/active")
+    let approvals = key(chat, "/api/sessions/chat/approvals")
+    await stub { $0.received[active] == 2 }
+    release(chat, "/api/runs/run/events", 1)
+    await stub { $0.received[approvals] == 2 }
+    release(chat, "/api/runs/active", 2)
     await submitting.value
-    XCTAssertTrue(sawRecordedAnswer)
+    XCTAssertTrue(recorded.seen)
+    XCTAssertNil(chat.activeRunID)
     XCTAssertFalse(chat.messages.contains { $0.text == "Next" })
   }
 
@@ -526,7 +680,11 @@ final class ChatReconciliationTests: XCTestCase {
     chat.draft = "Next"
     await chat.send()
     await chat.reconcileActivity(.init(runId: nil, queued: []))
-    try await Task.sleep(for: .milliseconds(400))
+    let approvals = key(chat, "/api/sessions/chat/approvals")
+    let refreshes = ChatReconciliationProtocol.log.received[approvals, default: 0]
+    release(chat, "/api/runs/run/events", 1)
+    await stub { $0.received[approvals, default: 0] > refreshes }
+    XCTAssertNil(chat.activeRunID)
     XCTAssertFalse(chat.messages.contains { $0.text == "Next" })
     XCTAssertFalse(chat.runPresentations.contains { $0.id == "next" })
   }
@@ -538,10 +696,7 @@ final class ChatReconciliationTests: XCTestCase {
       chat.client.signOut()
     }
     await chat.resume()
-    for _ in 0..<100 {
-      if chat.partial == "Still writing" { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
+    await until { chat.partial == "Still writing" }
     XCTAssertEqual(chat.partial, "Still writing")
     chat.draft = "Next"
     await chat.send()
@@ -549,9 +704,7 @@ final class ChatReconciliationTests: XCTestCase {
     XCTAssertEqual(chat.partialRunID, "run")
     XCTAssertEqual(chat.displayedPartial, "Still writing")
     XCTAssertFalse(chat.messages.contains { $0.text == "Next" })
-    let key = chat.client.baseURL.host! + "/api/runs/next/events"
-    let nextStreams = ChatReconciliationProtocol.counts.withLock { $0[key, default: 0] }
-    XCTAssertEqual(nextStreams, 0)
+    XCTAssertNil(ChatReconciliationProtocol.log.received[key(chat, "/api/runs/next/events")])
   }
 
 }
