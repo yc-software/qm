@@ -6,8 +6,8 @@ import { scopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { grantAppLogin } from "../src/tenants/logins.ts";
 import { applyPgMigrations, definePgMigration, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
-import { testMigratedDatabaseUrl } from "./support/test-database.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { ownerUrlOf, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 import { createAppLogin, type AppLogin } from "./support/app-login.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenant table tests";
@@ -48,11 +48,13 @@ let login: AppLogin;
 before(async () => {
   if (skip) return;
   url = testMigratedDatabaseUrl();
-  owner = new pg.Pool({ connectionString: url });
-  login = await createAppLogin(url);
+  owner = new pg.Pool({ connectionString: ownerUrlOf(url) });
+  login = await createAppLogin(ownerUrlOf(url));
   app = new pg.Pool({ connectionString: login.url });
   const store = createPostgresSessionStore(url);
-  const session = await store.getOrCreateByThread(`tables-${randomUUID()}`, "dm", scopeId("personal", "t"));
+  const session = await inTestTenant(() =>
+    store.getOrCreateByThread(`tables-${randomUUID()}`, "dm", scopeId("personal", "t")),
+  );
   await inTenant(app, a, async (c) => {
     await c.query(
       "INSERT INTO runs(id, session_id, status, request, idempotency_key, created_at) VALUES ('r1', $1, 'pending', '{}', 'k', 1)",
@@ -168,5 +170,5 @@ test("granting refuses a login that is missing or owns the tables", { skip }, as
 test("the app login verifies applied migrations and refuses to apply pending ones", { skip }, async () => {
   await applyPgMigrations(app, registeredPgMigrations(url));
   const pending = definePgMigration({ id: `zz-pending-${randomUUID()}`, statements: ["SELECT 1"] });
-  await assert.rejects(applyPgMigrations(app, [pending]), /cannot apply pending migrations zz-pending-/);
+  await assert.rejects(applyPgMigrations(app, [pending]), /permission denied/);
 });

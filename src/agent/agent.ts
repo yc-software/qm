@@ -13,7 +13,8 @@ import type {
   TurnRequest,
   TurnRuntime,
 } from "../types.ts";
-import type { LlmCallUsage, LlmTransportMeta, NewEntry } from "../sessions/session-store.ts";
+import type { LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
+import type { Item, NewItem } from "../sessions/items.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
 import type { GrindMeter } from "./goal.ts";
@@ -48,7 +49,7 @@ export interface ScreenSecurityInput {
   payload: string;
   signal: AbortSignal;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: TurnLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+  recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;
 }
 
 export interface AgentTurnInput {
@@ -99,7 +100,7 @@ export interface AgentTurnInput {
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
   toolApprovalGate?(tool: string, callKey?: string): boolean;
-  emit(entry: NewEntry): Promise<SessionEntry>;
+  emit(item: NewItem): Promise<Item>;
   resumeToolCall?: ResumableToolCall;
   scopeLabel: ScopeId;
   orgScopeId: ScopeId;
@@ -107,7 +108,7 @@ export interface AgentTurnInput {
   runtimePinned?: boolean;
   onRuntime?(runtime: TurnRuntime): void;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: TurnLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+  recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;
   onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onModelRequest?(): void;
   onDelta?(chunk: string): void;
@@ -147,7 +148,7 @@ export interface DetectInput {
   reactionGuidance?: string;
   history: SessionEntry[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: TurnLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
+  recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;
 }
 
 export interface DetectResult {

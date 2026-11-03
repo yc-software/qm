@@ -1,6 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
+import { inTestTenant } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,14 +15,19 @@ function freshApp() {
   return buildApp(testConfig({ dataDir }));
 }
 
+function test(name: string, fn: (built: ReturnType<typeof freshApp>) => Promise<void>): void {
+  nodeTest(name, () => {
+    const built = freshApp();
+    return inTestTenant(() => fn(built));
+  });
+}
+
 const actor = { externalId: "U1" };
 function dm(text: string, thread: string): TurnRequest {
   return { surface: "test", actor, conversation: { kind: "dm", threadRef: thread }, text };
 }
 
-test("background output selects the recorded private resource and fails closed when it is unavailable", async () => {
-  const built = buildApp(testConfig({}));
-  await built.identity.ready();
+test("background output selects the recorded private resource and fails closed when it is unavailable", async (built) => {
   try {
     const root = await built.app.turn(dm("Start", "resource-output"));
     const resource = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Worker");
@@ -85,8 +91,8 @@ function watchInput(
   };
 }
 
-test("listSessions counts detached work per conversation — live jobs and armed watches, keyed by threadRef", async () => {
-  const { app, processes, monitors } = freshApp();
+test("listSessions counts detached work per conversation — live jobs and armed watches, keyed by threadRef", async (built) => {
+  const { app, processes, monitors } = built;
   assert.ok(processes, "test sandbox supports process sessions");
 
   const busy = "web:U1:busy";
@@ -114,8 +120,8 @@ test("listSessions counts detached work per conversation — live jobs and armed
   assert.equal(idleRow?.watches, undefined);
 });
 
-test("sessionBackground spells the badge out for the viewer — and stays invisible to strangers", async () => {
-  const { app, processes, monitors } = freshApp();
+test("sessionBackground spells the badge out for the viewer — and stays invisible to strangers", async (built) => {
+  const { app, processes, monitors } = built;
   const thread = "web:U1:inspect";
   const r = await app.turn(dm("start the job", thread));
   const sessionId = r.sessionId!;
@@ -137,8 +143,8 @@ test("sessionBackground spells the badge out for the viewer — and stays invisi
   assert.equal(await app.sessionBackground("nope", "U1"), null);
 });
 
-test("readSessionBackgroundOutput binds the job to the conversation, not just the scope", async () => {
-  const { app, processes } = freshApp();
+test("readSessionBackgroundOutput binds the job to the conversation, not just the scope", async (built) => {
+  const { app, processes } = built;
   const mine = "web:U1:mine";
   const other = "web:U1:other";
   const r1 = await app.turn(dm("conversation A", mine));
@@ -163,8 +169,8 @@ function cronInput(target: string | undefined, action: string) {
   };
 }
 
-test("listSessions counts session-targeted crons — enabled and unarchived only, keyed by destination target", async () => {
-  const { app, crons } = freshApp();
+test("listSessions counts session-targeted crons — enabled and unarchived only, keyed by destination target", async (built) => {
+  const { app, crons } = built;
   const here = "web:U1:cronned";
   const elsewhere = "web:U1:plain";
   await app.turn(dm("watch my PR", here));
@@ -186,8 +192,7 @@ test("listSessions counts session-targeted crons — enabled and unarchived only
   assert.equal(plainRow?.crons, undefined, "clean rows carry no zero-count fields");
 });
 
-test("sessionBackground lists the session's crons alongside jobs and watches", async () => {
-  const { app, crons } = freshApp();
+test("sessionBackground lists the session's crons alongside jobs and watches", async ({ app, crons }) => {
   const thread = "web:U1:cron-inspect";
   const r = await app.turn(dm("schedule it", thread));
 

@@ -1,3 +1,4 @@
+import type { SpendLimit } from "../ratelimit/spend-limits.ts";
 import type { ApprovalGrantModes, CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
 import type { SecurityPosture } from "../security/security-posture.ts";
 import type { SharingPosture } from "./sharing-posture.ts";
@@ -33,6 +34,7 @@ export interface ScopeSettings {
   ackEmoji?: string[];
   branding?: OrgBranding;
   browseMaxSteps?: number;
+  spendLimit?: SpendLimit;
   browseModel?: string;
   modelAccount?: Exclude<ModelAccount, "company">;
   modelId?: string;

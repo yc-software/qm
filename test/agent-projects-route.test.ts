@@ -10,6 +10,7 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "agent-projects-secret".repeat(2);
 
@@ -21,14 +22,16 @@ describe("agent projects self-API", async () => {
   let theirsId: string;
 
   const capFor = (actorId: string) =>
-    mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scopeId("personal", actorId),
-        aud: CONTROL_PLANE_AUD,
-        exp: Date.now() + CAPABILITY_TTL_MS,
-      },
-      SECRET,
+    inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId,
+          scopeId: scopeId("personal", actorId),
+          aud: CONTROL_PLANE_AUD,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+        },
+        SECRET,
+      ),
     );
 
   const request = async (method: string, path: string, body?: unknown, token?: string) =>
@@ -43,13 +46,15 @@ describe("agent projects self-API", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    await built.app.upsertDirectory([
-      { principalId: "U1", displayName: "One", type: "internal" },
-      { principalId: "U2", displayName: "Two", type: "internal" },
-      { principalId: "U3", displayName: "Three", type: "internal" },
-    ]);
-    mineId = (await built.app.createProject("U1", "Mine"))!.id;
-    theirsId = (await built.app.createProject("U2", "Theirs"))!.id;
+    await inTestTenant(() =>
+      built.app.upsertDirectory([
+        { principalId: "U1", displayName: "One", type: "internal" },
+        { principalId: "U2", displayName: "Two", type: "internal" },
+        { principalId: "U3", displayName: "Three", type: "internal" },
+      ]),
+    );
+    mineId = (await inTestTenant(() => built.app.createProject("U1", "Mine")))!.id;
+    theirsId = (await inTestTenant(() => built.app.createProject("U2", "Theirs")))!.id;
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -123,7 +128,7 @@ describe("agent projects self-API", async () => {
   it("allows every mutation under strict posture", async () => {
     const token = await capFor("U1");
     const scope = scopeId("personal", "U1");
-    await built.config.setSecurityPosture(scope, "strict");
+    await inTestTenant(() => built.config.setSecurityPosture(scope, "strict"));
     try {
       const created = await request("POST", "/v1/projects", { name: "Strict" }, token);
       assert.equal(created.status, 201);
@@ -135,7 +140,7 @@ describe("agent projects self-API", async () => {
       assert.equal((await request("POST", `/v1/projects/${projectId}/members`, { memberId: "U3" }, token)).status, 200);
       assert.equal((await request("DELETE", `/v1/projects/${projectId}/members/U3`, {}, token)).status, 200);
     } finally {
-      await built.config.setSecurityPosture(scope, "auto");
+      await inTestTenant(() => built.config.setSecurityPosture(scope, "auto"));
     }
   });
 });

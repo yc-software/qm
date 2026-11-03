@@ -10,6 +10,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "reach-edit-secret".repeat(3);
 const TS = "1723497600.123456";
@@ -20,14 +21,16 @@ describe("POST /v1/reach with edit", () => {
   let built: BuiltApp;
 
   const cap = async (destination?: Destination) =>
-    await mintCapabilityToken(
-      {
-        actorId: "U-carol",
-        scopeId: scopeId("personal", "U-carol"),
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        ...(destination ? { destination } : {}),
-      },
-      SECRET,
+    await inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId: "U-carol",
+          scopeId: scopeId("personal", "U-carol"),
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          ...(destination ? { destination } : {}),
+        },
+        SECRET,
+      ),
     );
 
   const post = async (body: unknown, destination?: Destination) =>
@@ -40,18 +43,20 @@ describe("POST /v1/reach with edit", () => {
   const delivery = async (res: Response) => {
     assert.equal(res.status, 200, await res.clone().text());
     const { deliveryId } = (await res.json()) as { deliveryId: string };
-    const d = (await built.app.pendingDeliveries("slack")).find((x) => x.id === deliveryId);
+    const d = (await inTestTenant(() => built.app.pendingDeliveries("slack"))).find((x) => x.id === deliveryId);
     assert.ok(d, "delivery enqueued for the slack surface");
     return d!;
   };
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    await built.app.upsertDirectory([
-      { principalId: "U-carol", displayName: "Carol", type: "internal" },
-      { principalId: "U-alice", displayName: "Alice", type: "internal" },
-    ]);
-    await built.app.upsertChannels([{ channelId: "C-eng", name: "eng" }]);
+    await inTestTenant(() =>
+      built.app.upsertDirectory([
+        { principalId: "U-carol", displayName: "Carol", type: "internal" },
+        { principalId: "U-alice", displayName: "Alice", type: "internal" },
+      ]),
+    );
+    await inTestTenant(() => built.app.upsertChannels([{ channelId: "C-eng", name: "eng" }]));
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,

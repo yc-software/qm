@@ -17,6 +17,7 @@ import {
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "emoji-route-secret".repeat(3);
 const ACTOR = "U_E1";
@@ -31,9 +32,11 @@ describe("POST /v1/emoji", async () => {
   let sessions: BrowserSessionStore;
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId)) =>
-    mintCapabilityToken(
-      { actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
+    inTestTenant(() =>
+      mintCapabilityToken(
+        { actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS },
+        SECRET,
+      ),
     );
 
   before(async () => {
@@ -42,9 +45,11 @@ describe("POST /v1/emoji", async () => {
       sessions: testMap<StoredBrowserSession>(),
       key: deriveConnectorKey(Buffer.alloc(32, 1)),
     });
-    await sessions.put(ACTOR, JSON.stringify({ cookies: [] }));
     const directory = createPostgresDirectoryStore(testDatabaseUrl());
-    await directory.setWorkspaceUrl("https://acme.slack.com/");
+    await inTestTenant(async () => {
+      await sessions.put(ACTOR, JSON.stringify({ cookies: [] }));
+      await directory.setWorkspaceUrl("https://acme.slack.com/");
+    });
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,

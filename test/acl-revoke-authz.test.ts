@@ -16,6 +16,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");
@@ -50,30 +51,36 @@ async function fileAcl(ownerScopeId: string) {
   });
 }
 
-test("revoke has the same owner check as grant: a non-owner cannot revoke a personal-scope grant", async () => {
-  const acl = await fileAcl(owner);
-  await acl.grant(grant());
-  await assert.rejects(acl.revoke(owner, "F1", carol, "U2"), /only a manager/);
-  assert.equal((await acl.grantsFor(owner, "F1")).length, 1, "the grant survives the rejected revoke");
-  await acl.revoke(owner, "F1", carol, "U1");
-  assert.equal((await acl.grantsFor(owner, "F1")).length, 0, "the owner can revoke");
-});
+test("revoke has the same owner check as grant: a non-owner cannot revoke a personal-scope grant", () =>
+  inTestTenant(async () => {
+    const acl = await fileAcl(owner);
+    await acl.grant(grant());
+    await assert.rejects(acl.revoke(owner, "F1", carol, "U2"), /only a manager/);
+    assert.equal((await acl.grantsFor(owner, "F1")).length, 1, "the grant survives the rejected revoke");
+    await acl.revoke(owner, "F1", carol, "U1");
+    assert.equal((await acl.grantsFor(owner, "F1")).length, 0, "the owner can revoke");
+  }));
 
-test("org-owned grants have no single owner, so revoke is not owner-gated (same as grant)", async () => {
-  const acl = await fileAcl(org);
-  await acl.grant(grant({ ownerScopeId: org, grantedBy: "admin" }));
-  await acl.revoke(org, "F1", carol, "someone-else");
-  assert.equal((await acl.grantsFor(org, "F1")).length, 0);
-});
+test("org-owned grants have no single owner, so revoke is not owner-gated (same as grant)", () =>
+  inTestTenant(async () => {
+    const acl = await fileAcl(org);
+    await acl.grant(grant({ ownerScopeId: org, grantedBy: "admin" }));
+    await acl.revoke(org, "F1", carol, "someone-else");
+    assert.equal((await acl.grantsFor(org, "F1")).length, 0);
+  }));
 
 test("POST /v1/grants/revoke requires revokedBy and rejects a non-owner", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "revoke-")) }));
-  await putFile(built.files, owner);
+  await inTestTenant(() => putFile(built.files, owner));
   const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const post = (path: string, body: unknown) =>
-    fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    fetch(base + path, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...testTenantHeaders() },
+      body: JSON.stringify(body),
+    });
   try {
     assert.equal((await post("/v1/grants", grant())).status, 200);
 
@@ -88,7 +95,7 @@ test("POST /v1/grants/revoke requires revokedBy and rejects a non-owner", async 
     });
     assert.equal(forged.status, 400);
     assert.equal(((await forged.json()) as { error: string }).error, "revoke_failed");
-    assert.equal((await built.acl.grantsFor(owner, "F1")).length, 1, "the grant survives");
+    assert.equal((await inTestTenant(() => built.acl.grantsFor(owner, "F1"))).length, 1, "the grant survives");
 
     const legit = await post("/v1/grants/revoke", {
       ownerScopeId: owner,
@@ -97,7 +104,7 @@ test("POST /v1/grants/revoke requires revokedBy and rejects a non-owner", async 
       revokedBy: "U1",
     });
     assert.equal(legit.status, 200);
-    assert.equal((await built.acl.grantsFor(owner, "F1")).length, 0);
+    assert.equal((await inTestTenant(() => built.acl.grantsFor(owner, "F1"))).length, 0);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

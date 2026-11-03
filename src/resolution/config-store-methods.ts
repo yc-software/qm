@@ -320,6 +320,8 @@ type PreferenceMethods =
   | "getBranding"
   | "setBranding"
   | "getBrandingDurable"
+  | "getSpendLimitDurable"
+  | "setSpendLimit"
   | "getBrowseMaxSteps"
   | "setBrowseMaxSteps"
   | "getBrowseModel"
@@ -381,6 +383,8 @@ export function preferenceMethods(ctx: ConfigContext): Methods<PreferenceMethods
     getBranding: (id) => ctx.scope(id)?.branding ?? null,
     setBranding: (id, value) => ctx.put(id, "branding", value),
     getBrandingDurable: async (id) => (await ctx.own(id)).branding ?? null,
+    getSpendLimitDurable: async (id) => (await ctx.own(id)).spendLimit ?? null,
+    setSpendLimit: (id, limit) => ctx.put(id, "spendLimit", limit),
     getBrowseMaxSteps: (id) => ctx.scope(id)?.browseMaxSteps ?? null,
     setBrowseMaxSteps: (id, steps) => ctx.put(id, "browseMaxSteps", steps),
     getBrowseModel: (id) => ctx.scope(id)?.browseModel ?? null,

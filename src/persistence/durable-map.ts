@@ -80,22 +80,9 @@ export function createPostgresMap<T>(
     }),
   ];
   for (const definition of migrations) pg.registerMigration(definition);
-  let readyP: Promise<void> | null = null;
-  function ready(): Promise<void> {
-    if (!readyP) {
-      readyP = (async () => {
-        for (const definition of migrations) await pg.migrate(definition);
-      })().catch((e) => {
-        readyP = null;
-        throw e;
-      });
-    }
-    return readyP;
-  }
   const bumpSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
      ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
   async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
-    await ready();
     return withPgTransaction(await pg.pool(), async (client) => {
       await client.query(bumpSql);
       return fn(client);
@@ -104,7 +91,6 @@ export function createPostgresMap<T>(
   const CACHE_MAX_AGE_MS = 15_000;
   let cache: { v: string; fetchedAt: number; entries: Array<[string, T]> } | null = null;
   async function snapshot(): Promise<Array<[string, T]>> {
-    await ready();
     const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
     const v = vRows.length ? String(vRows[0]!.v) : "";
     if (!cache || cache.v !== v || Date.now() - cache.fetchedAt > CACHE_MAX_AGE_MS) {
@@ -116,7 +102,6 @@ export function createPostgresMap<T>(
   async function selectRows<K extends Extract<keyof T, string>>(
     query: DurableMapSelect<T, K>,
   ): Promise<Array<[string, Omit<T, K>]>> {
-    await ready();
     const params: unknown[] = [[...(query.omit ?? [])]];
     let projection = "json";
     for (const [field, keys] of Object.entries(query.pickNested ?? {})) {
@@ -163,7 +148,6 @@ export function createPostgresMap<T>(
     },
     selectEntries: selectRows,
     async get(id) {
-      await ready();
       const rows = await pg.q(`SELECT json FROM ${table} WHERE id = $1`, [id]);
       return rows.length ? (rows[0]!.json as T) : null;
     },

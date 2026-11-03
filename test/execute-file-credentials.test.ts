@@ -15,6 +15,7 @@ import type { ProcessSandbox, ProcessState, Sandbox, SandboxHandle } from "../sr
 import { scopeId } from "../src/types.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const run = promisify(execFile);
 const SECRET_TOKEN = "synthetic-background-token-123";
@@ -342,72 +343,76 @@ const savedValue = async (f: Awaited<ReturnType<typeof fixture>>) => {
 const refresh =
   'printf %s "$HOME" > staged-home; sleep 0.5; cat "$HOME/.aws/sso/cache/session.json" > seen; printf background > "$HOME/.aws/sso/cache/session.json"';
 
-test("background credentials stay staged until the job exits, then refreshes are saved", async (t) => {
-  const f = await fixture(t);
-  const bg = background(f);
-  const ctx = bg.ctx();
-  const started = await ctx.backgroundStart(refresh, { purpose: "Refresh a background login", credentials: ["aws"] });
-  assert.equal(started.status.state, "running");
-  assert.equal((await ctx.execute("echo unrelated")).stdout.trim(), "unrelated");
-  let status: ProcessState = started.status;
-  while (status.state !== "exited") status = (await ctx.backgroundPoll(started.processId, { waitSeconds: 1 })).status;
-  assert.equal(await readFile(join(f.handle.rootDir, "seen"), "utf8"), "original");
-  assert.equal(await savedValue(f), "background");
-  await assert.rejects(access(await readFile(join(f.handle.rootDir, "staged-home"), "utf8")));
-  assert.equal(await bg.registry.credentialFiles(started.processId), null);
-});
+test("background credentials stay staged until the job exits, then refreshes are saved", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const bg = background(f);
+    const ctx = bg.ctx();
+    const started = await ctx.backgroundStart(refresh, { purpose: "Refresh a background login", credentials: ["aws"] });
+    assert.equal(started.status.state, "running");
+    assert.equal((await ctx.execute("echo unrelated")).stdout.trim(), "unrelated");
+    let status: ProcessState = started.status;
+    while (status.state !== "exited") status = (await ctx.backgroundPoll(started.processId, { waitSeconds: 1 })).status;
+    assert.equal(await readFile(join(f.handle.rootDir, "seen"), "utf8"), "original");
+    assert.equal(await savedValue(f), "background");
+    await assert.rejects(access(await readFile(join(f.handle.rootDir, "staged-home"), "utf8")));
+    assert.equal(await bg.registry.credentialFiles(started.processId), null);
+  }));
 
-test("background start output masks the command's credential values", async (t) => {
-  const f = await fixture(t);
-  const bg = background(f);
-  const started = await bg.ctx().backgroundStart('echo "early $API_TOKEN"; sleep 0.3', {
-    purpose: "Print a token",
-    credentials: ["token"],
-  });
-  assert.match(started.output, /early <redacted:credential>/);
-  assert.ok(!started.output.includes(SECRET_TOKEN));
-  assert.ok(!JSON.stringify(await bg.registry.get(started.processId)).includes(SECRET_TOKEN));
-});
+test("background start output masks the command's credential values", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const bg = background(f);
+    const started = await bg.ctx().backgroundStart('echo "early $API_TOKEN"; sleep 0.3', {
+      purpose: "Print a token",
+      credentials: ["token"],
+    });
+    assert.match(started.output, /early <redacted:credential>/);
+    assert.ok(!started.output.includes(SECRET_TOKEN));
+    assert.ok(!JSON.stringify(await bg.registry.get(started.processId)).includes(SECRET_TOKEN));
+  }));
 
-test("a failed background writeback keeps the refresh for a later retry", async (t) => {
-  const f = await fixture(t);
-  let outage = true;
-  const keychain: Pick<Keychain, "writebackBaseline" | "updateFiles"> = {
-    writebackBaseline: (source, fingerprint) => f.keychain.writebackBaseline(source, fingerprint),
-    async updateFiles(materialized, updated) {
-      if (outage) throw new Error("keychain database unavailable");
-      await f.keychain.updateFiles(materialized, updated);
-    },
-  };
-  const bg = background(f, { keychain });
-  const started = await bg.ctx().backgroundStart(refresh, { purpose: "Refresh a login", credentials: ["aws"] });
-  await bg.waitForExit(started.processId);
-  await assert.rejects(bg.ctx().backgroundPoll(started.processId), /will retry/);
-  const staged = await readFile(join(f.handle.rootDir, "staged-home"), "utf8");
-  await access(staged);
-  assert.equal(await savedValue(f), "original");
-  assert.equal((await bg.registry.get(started.processId))?.credentialsPending, true);
-  outage = false;
-  await reconcileProcesses(bg.sandbox, f.handle, bg.registry, scope, (h, processId) => bg.finish(h, processId));
-  assert.equal(await savedValue(f), "background");
-  await assert.rejects(access(staged));
-  assert.equal(await bg.registry.credentialFiles(started.processId), null);
-});
+test("a failed background writeback keeps the refresh for a later retry", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    let outage = true;
+    const keychain: Pick<Keychain, "writebackBaseline" | "updateFiles"> = {
+      writebackBaseline: (source, fingerprint) => f.keychain.writebackBaseline(source, fingerprint),
+      async updateFiles(materialized, updated) {
+        if (outage) throw new Error("keychain database unavailable");
+        await f.keychain.updateFiles(materialized, updated);
+      },
+    };
+    const bg = background(f, { keychain });
+    const started = await bg.ctx().backgroundStart(refresh, { purpose: "Refresh a login", credentials: ["aws"] });
+    await bg.waitForExit(started.processId);
+    await assert.rejects(bg.ctx().backgroundPoll(started.processId), /will retry/);
+    const staged = await readFile(join(f.handle.rootDir, "staged-home"), "utf8");
+    await access(staged);
+    assert.equal(await savedValue(f), "original");
+    assert.equal((await bg.registry.get(started.processId))?.credentialsPending, true);
+    outage = false;
+    await reconcileProcesses(bg.sandbox, f.handle, bg.registry, scope, (h, processId) => bg.finish(h, processId));
+    assert.equal(await savedValue(f), "background");
+    await assert.rejects(access(staged));
+    assert.equal(await bg.registry.credentialFiles(started.processId), null);
+  }));
 
-test("a background start that fails after launch leaves staging to the exit hook", async (t) => {
-  const f = await fixture(t);
-  const bg = background(f, { readFailures: 1 });
-  await assert.rejects(
-    bg.ctx().backgroundStart(refresh, { purpose: "Refresh a login", credentials: ["aws"] }),
-    /transient read failure/,
-  );
-  const [record] = await bg.registry.listByScope(scope);
-  await bg.waitForExit(record!.processId);
-  assert.equal(await readFile(join(f.handle.rootDir, "seen"), "utf8"), "original");
-  await bg.ctx().backgroundPoll(record!.processId);
-  assert.equal(await savedValue(f), "background");
-  await assert.rejects(access(await readFile(join(f.handle.rootDir, "staged-home"), "utf8")));
-});
+test("a background start that fails after launch leaves staging to the exit hook", (t) =>
+  inTestTenant(async () => {
+    const f = await fixture(t);
+    const bg = background(f, { readFailures: 1 });
+    await assert.rejects(
+      bg.ctx().backgroundStart(refresh, { purpose: "Refresh a login", credentials: ["aws"] }),
+      /transient read failure/,
+    );
+    const [record] = await bg.registry.listByScope(scope);
+    await bg.waitForExit(record!.processId);
+    assert.equal(await readFile(join(f.handle.rootDir, "seen"), "utf8"), "original");
+    await bg.ctx().backgroundPoll(record!.processId);
+    assert.equal(await savedValue(f), "background");
+    await assert.rejects(access(await readFile(join(f.handle.rootDir, "staged-home"), "utf8")));
+  }));
 
 test("a background start that fails before launch removes its staging", async (t) => {
   const f = await fixture(t);

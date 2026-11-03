@@ -2,7 +2,8 @@ import pg from "pg";
 import { applyPgMigrations, definePgMigration, migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { TENANCY_BASE } from "../../src/tenants/migrations.ts";
 import { createAppLogin, type AppLogin } from "./app-login.ts";
-import { testBareDatabaseUrl } from "./test-database.ts";
+import { useOwnerDatabase } from "../../src/tenants/claim.ts";
+import { restoreFileOwner, testBareDatabaseUrl } from "./test-database.ts";
 import { testTenants } from "./test-tenants.ts";
 
 export const skipWithoutPg = process.env.DATABASE_URL
@@ -40,8 +41,10 @@ export async function withTypedTableDb<S extends Closable>(
     await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [otherTenant]);
     login = await createAppLogin(url);
     store = make(login.url);
+    useOwnerDatabase(url);
     await fn({ store, admin, url: login.url, ownerUrl: url, tenant, otherTenant });
   } finally {
+    restoreFileOwner();
     await store?.close?.();
     await login?.drop();
     await admin.end();

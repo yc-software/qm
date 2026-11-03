@@ -42,6 +42,8 @@ const SCOPE_COLUMNS = [
   "brand_self_label",
   "brand_org_name",
   "browse_max_steps",
+  "spend_daily_usd",
+  "spend_monthly_usd",
   "browse_model",
   "model_account",
   "model_id",
@@ -91,6 +93,8 @@ const SCOPE_ROW = z.object({
   brand_self_label: text,
   brand_org_name: text,
   browse_max_steps: int,
+  spend_daily_usd: int,
+  spend_monthly_usd: int,
   browse_model: text,
   model_account: cell(z.enum(["personal", "anthropic", "openai"])),
   model_id: text,
@@ -139,6 +143,10 @@ function scopeFromRow(row: Row): [ScopeId, ScopeSettings] {
           })
         : undefined,
       browseMaxSteps: r.browse_max_steps,
+      spendLimit:
+        r.spend_daily_usd === undefined && r.spend_monthly_usd === undefined
+          ? undefined
+          : definedOnly({ dailyUsd: r.spend_daily_usd, monthlyUsd: r.spend_monthly_usd }),
       browseModel: r.browse_model,
       modelAccount: r.model_account,
       modelId: r.model_id,
@@ -176,6 +184,8 @@ function scopeToColumns(s: ScopeSettings): unknown[] {
     s.branding?.selfLabel,
     s.branding?.orgName,
     s.browseMaxSteps,
+    s.spendLimit?.dailyUsd,
+    s.spendLimit?.monthlyUsd,
     s.browseModel,
     s.modelAccount,
     s.modelId,

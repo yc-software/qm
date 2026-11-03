@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { createApp, type App, type AppDeps } from "../src/api/app.ts";
 import { postSoul } from "../src/api/routes/surface.ts";
@@ -24,6 +24,11 @@ import {
 } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => void | Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 const ORG = "default-org";
 const OWNER = "owner";

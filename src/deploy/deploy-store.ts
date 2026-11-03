@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { swallow } from "../util/errors.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
@@ -162,44 +161,24 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
     TENANCY_BASE,
     migration,
     tenantTables("deploy/access/0002-tenants", [{ table: "deployment_access", primaryKey: "id" }]),
+    {
+      id: "durable-map/deployments/name-unique",
+      statements: [
+        `CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX} ON deployments ((json->>'name')) WHERE json->>'name' IS NOT NULL`,
+      ],
+    },
   ];
   for (const definition of migrations) pg.registerMigration(definition);
-  let readyP: Promise<void> | null = null;
-  function ready(): Promise<void> {
-    if (!readyP) {
-      readyP = (async () => {
-        for (const definition of migrations) await pg.migrate(definition);
-        await pg
-          .q(
-            `CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX}
-             ON deployments ((json->>'name')) WHERE json->>'name' IS NOT NULL`,
-          )
-          .catch((e) =>
-            swallow(
-              "deploy-store: could not create unique name index on deployments (concurrent boot, or duplicate names)",
-              e,
-            ),
-          );
-      })().catch((e) => {
-        readyP = null;
-        throw e;
-      });
-    }
-    return readyP;
-  }
   return {
     async readOne(id) {
-      await ready();
       const rows = await pg.q("SELECT last_access_at FROM deployment_access WHERE id = $1", [id]);
       return rows.length ? Number(rows[0]!.last_access_at) : null;
     },
     async readAll() {
-      await ready();
       const rows = await pg.q("SELECT id, last_access_at FROM deployment_access");
       return new Map(rows.map((row) => [row.id as string, Number(row.last_access_at)]));
     },
     async write(id, at) {
-      await ready();
       const res = await pg.query(
         `INSERT INTO deployment_access (id, last_access_at)
          SELECT d.id, $2::bigint FROM deployments d WHERE d.id = $1
@@ -209,7 +188,6 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
       return res.rowCount > 0;
     },
     async findByName(name) {
-      await ready();
       const rows = await pg.q("SELECT json FROM deployments WHERE json->>'name' = $1 ORDER BY id LIMIT 1", [name]);
       return rows.length ? (rows[0]!.json as Deployment) : null;
     },

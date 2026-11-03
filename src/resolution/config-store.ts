@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import { createKeyedQueue } from "../util/async.ts";
 import type { SecurityPosture } from "../security/security-posture.ts";
 import type { SharingPosture } from "./sharing-posture.ts";
+import type { SpendLimit } from "../ratelimit/spend-limits.ts";
 import type {
   ConnectorClientInput,
   PublicConnectorClient,
@@ -113,6 +114,8 @@ export interface ScopedConfigStore {
   getBranding(id: ScopeId): OrgBranding | null;
   setBranding(id: ScopeId, branding: OrgBranding | null): Promise<void>;
   getBrandingDurable(id: ScopeId): Promise<OrgBranding | null>;
+  getSpendLimitDurable(id: ScopeId): Promise<SpendLimit | null>;
+  setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
   getBrowseModel(id: ScopeId): string | null;

@@ -17,7 +17,7 @@ import {
   parseReactionEvent,
 } from "./payloads.ts";
 import type { AckGate } from "./deferred-ack.ts";
-import { messageWithForwardedContent } from "./forwards.ts";
+import { slackMessageContent } from "./message-content.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { ActorAssertion } from "./identity.ts";
 import type { DenyResponder } from "./allow-from.ts";
@@ -153,7 +153,7 @@ export function registerSlackEvents(
         channel: e.channel,
         ts: e.ts,
       });
-      const content = messageWithForwardedContent(e);
+      const content = slackMessageContent(e);
       await dispatch(
         key,
         {
@@ -169,6 +169,7 @@ export function registerSlackEvents(
           threadTs: e.thread_ts,
           ts: e.ts,
           ...(e.bot_id || e.subtype === "bot_message" ? { botAuthored: true } : {}),
+          message: e,
           ackGate: context.ackGate,
         },
         client,
@@ -204,12 +205,13 @@ export function registerSlackEvents(
       }
       const ackGate = context.ackGate;
       if (m.channel && m.ts && !m.hidden && !m.subtype && !(m.bot_id || m.subtype === "bot_message")) {
+        const text = slackMessageContent(m).text;
         deps.inboxMessage?.(client, {
           channel: m.channel,
           ts: m.ts,
           isDirectMessage: isDirectChannelType(m.channel_type),
           ...(m.thread_ts ? { threadTs: m.thread_ts } : {}),
-          ...(typeof m.text === "string" && m.text ? { text: m.text } : {}),
+          ...(text ? { text } : {}),
           ...(m.user ? { senderSlackId: m.user } : {}),
         });
       }
@@ -285,7 +287,7 @@ export function registerSlackEvents(
           channel: m.channel,
           ts: m.ts,
         });
-        const content = messageWithForwardedContent(m);
+        const content = slackMessageContent(m);
         await dispatch(
           key,
           {
@@ -301,6 +303,7 @@ export function registerSlackEvents(
             threadTs: m.thread_ts,
             ts: m.ts,
             ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
+            message: m,
             ackGate,
           },
           client,
@@ -332,7 +335,7 @@ export function registerSlackEvents(
           ts: m.ts,
         });
         const identity = await eventIdentity(client, m);
-        const content = messageWithForwardedContent(m);
+        const content = slackMessageContent(m);
         await dispatch(
           key,
           {
@@ -349,6 +352,7 @@ export function registerSlackEvents(
             ts: m.ts,
             unprompted: true,
             ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
+            message: m,
             ackGate,
           },
           client,

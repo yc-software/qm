@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Pool } from "pg";
 import { mergeDirs, runMigration } from "../scripts/migrate-principals-to-email.mjs";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 const BASE_URL = process.env.DATABASE_URL;
 const skip = BASE_URL ? false : "set DATABASE_URL (a Postgres) to run the migration tests";
@@ -19,7 +19,7 @@ let pool: Pool | null = null;
 before(async () => {
   if (!BASE_URL) return;
   const pg = (await import("pg")).default;
-  testUrl = testDatabaseUrl();
+  testUrl = testBareDatabaseUrl();
   pool = new pg.Pool({ connectionString: testUrl });
   await pool.query(`
     CREATE TABLE participants(session_id TEXT NOT NULL, principal_id TEXT NOT NULL, PRIMARY KEY(session_id, principal_id));

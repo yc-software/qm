@@ -8,6 +8,7 @@ import type { WorkspaceLayer } from "../src/types.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -51,14 +52,16 @@ const bgId = (n: number) => `00000000-0000-0000-0000-${n.toString(16).padStart(1
 
 test("reaper flips expired sessions and calls kill for each", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: ID,
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "build",
-    command: "aws sso login",
-    ttlMs: -1,
-  });
+  await inTestTenant(() =>
+    reg.register({
+      processId: ID,
+      scopeId: "s",
+      sandboxId: "sandbox-1",
+      kind: "build",
+      command: "aws sso login",
+      ttlMs: -1,
+    }),
+  );
   const killed: string[] = [];
   const reaper = createProcessReaper(reg, {
     ...singleProcessDeps(),
@@ -69,20 +72,22 @@ test("reaper flips expired sessions and calls kill for each", async () => {
   const { reaped } = await reaper.sweep();
   assert.equal(reaped, 1);
   assert.deepEqual(killed, [ID]);
-  assert.equal((await reg.get(ID))!.status, "reaped");
+  assert.equal((await inTestTenant(() => reg.get(ID)))!.status, "reaped");
 });
 
 test("reaper calls onReaped for each reaped record (so a reaped run's death can notify the conversation)", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: ID,
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "background",
-    command: "bg: x",
-    ttlMs: -1,
-    runId: "run-7",
-  });
+  await inTestTenant(() =>
+    reg.register({
+      processId: ID,
+      scopeId: "s",
+      sandboxId: "sandbox-1",
+      kind: "background",
+      command: "bg: x",
+      ttlMs: -1,
+      runId: "run-7",
+    }),
+  );
   const seen: Array<{ kind: string; runId?: string }> = [];
   const reaper = createProcessReaper(reg, {
     ...singleProcessDeps(),
@@ -100,15 +105,17 @@ test("reaper calls onReaped for each reaped record (so a reaped run's death can 
 
 test("a row deleted mid-sweep (a run that finished between snapshot and mark) is neither counted nor notified", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: ID,
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "background",
-    command: "bg: x",
-    ttlMs: -1,
-    runId: "run-9",
-  });
+  await inTestTenant(() =>
+    reg.register({
+      processId: ID,
+      scopeId: "s",
+      sandboxId: "sandbox-1",
+      kind: "background",
+      command: "bg: x",
+      ttlMs: -1,
+      runId: "run-9",
+    }),
+  );
   const notified: string[] = [];
   const reaper = createProcessReaper(reg, {
     ...singleProcessDeps(),
@@ -124,15 +131,17 @@ test("a row deleted mid-sweep (a run that finished between snapshot and mark) is
 
 test("an onReaped failure does not abort the sweep or un-reap the record", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: ID,
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "background",
-    command: "bg: x",
-    ttlMs: -1,
-    runId: "run-7",
-  });
+  await inTestTenant(() =>
+    reg.register({
+      processId: ID,
+      scopeId: "s",
+      sandboxId: "sandbox-1",
+      kind: "background",
+      command: "bg: x",
+      ttlMs: -1,
+      runId: "run-7",
+    }),
+  );
   const reaper = createProcessReaper(reg, {
     ...singleProcessDeps(),
     intervalMs: 60_000,
@@ -141,42 +150,48 @@ test("an onReaped failure does not abort the sweep or un-reap the record", async
     },
   });
   assert.equal((await reaper.sweep()).reaped, 1, "the reap still counts despite the hook throwing");
-  assert.equal((await reg.get(ID))!.status, "reaped");
+  assert.equal((await inTestTenant(() => reg.get(ID)))!.status, "reaped");
 });
 
 test("reaper leaves unexpired sessions alone", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: ID,
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "build",
-    command: "make",
-    ttlMs: 60_000,
-  });
+  await inTestTenant(() =>
+    reg.register({
+      processId: ID,
+      scopeId: "s",
+      sandboxId: "sandbox-1",
+      kind: "build",
+      command: "make",
+      ttlMs: 60_000,
+    }),
+  );
   const reaper = createProcessReaper(reg, { ...singleProcessDeps(), intervalMs: 60_000 });
   assert.equal((await reaper.sweep()).reaped, 0);
-  assert.equal((await reg.liveByScope("s")).length, 1);
+  assert.equal((await inTestTenant(() => reg.liveByScope("s"))).length, 1);
 });
 
 test("a kill failure does not abort the sweep, leaves the record running, and is retried next sweep", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: bgId(1),
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "build",
-    command: "x",
-    ttlMs: -1,
-  });
-  await reg.register({
-    processId: bgId(2),
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "background",
-    command: "bg: y",
-    ttlMs: -1,
-  });
+  await inTestTenant(() =>
+    reg.register({
+      processId: bgId(1),
+      scopeId: "s",
+      sandboxId: "sandbox-1",
+      kind: "build",
+      command: "x",
+      ttlMs: -1,
+    }),
+  );
+  await inTestTenant(() =>
+    reg.register({
+      processId: bgId(2),
+      scopeId: "s",
+      sandboxId: "sandbox-1",
+      kind: "background",
+      command: "bg: y",
+      ttlMs: -1,
+    }),
+  );
   let failFirst = true;
   const reaper = createProcessReaper(reg, {
     ...singleProcessDeps(),
@@ -187,40 +202,46 @@ test("a kill failure does not abort the sweep, leaves the record running, and is
   });
 
   assert.equal((await reaper.sweep()).reaped, 1, "the other record is still reaped");
-  assert.equal((await reg.get(bgId(1)))!.status, "running", "a failed kill is NOT marked dead");
-  assert.equal((await reg.get(bgId(2)))!.status, "reaped");
+  assert.equal((await inTestTenant(() => reg.get(bgId(1))))!.status, "running", "a failed kill is NOT marked dead");
+  assert.equal((await inTestTenant(() => reg.get(bgId(2))))!.status, "reaped");
 
   failFirst = false;
   assert.equal((await reaper.sweep()).reaped, 1, "the failed kill is retried on the next sweep");
-  assert.equal((await reg.get(bgId(1)))!.status, "reaped");
+  assert.equal((await inTestTenant(() => reg.get(bgId(1))))!.status, "reaped");
 });
 
 test("kill hook SIGTERMs every expired kind — background, build, and dev-server alike", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: bgId(1),
-    scopeId: "personal:A",
-    sandboxId: "sandbox-1",
-    kind: "background",
-    command: "bg: npm run build",
-    ttlMs: -1,
-  });
-  await reg.register({
-    processId: bgId(2),
-    scopeId: "personal:B",
-    sandboxId: "sandbox-1",
-    kind: "build",
-    command: "aws sso login",
-    ttlMs: -1,
-  });
-  await reg.register({
-    processId: bgId(3),
-    scopeId: "personal:C",
-    sandboxId: "sandbox-1",
-    kind: "dev-server",
-    command: "npm run dev",
-    ttlMs: -1,
-  });
+  await inTestTenant(() =>
+    reg.register({
+      processId: bgId(1),
+      scopeId: "personal:A",
+      sandboxId: "sandbox-1",
+      kind: "background",
+      command: "bg: npm run build",
+      ttlMs: -1,
+    }),
+  );
+  await inTestTenant(() =>
+    reg.register({
+      processId: bgId(2),
+      scopeId: "personal:B",
+      sandboxId: "sandbox-1",
+      kind: "build",
+      command: "aws sso login",
+      ttlMs: -1,
+    }),
+  );
+  await inTestTenant(() =>
+    reg.register({
+      processId: bgId(3),
+      scopeId: "personal:C",
+      sandboxId: "sandbox-1",
+      kind: "dev-server",
+      command: "npm run dev",
+      ttlMs: -1,
+    }),
+  );
 
   const { sandbox, provisions, signals, teardowns } = killSpySandbox();
   const reaper = createProcessReaper(reg, {
@@ -244,19 +265,21 @@ test("kill hook SIGTERMs every expired kind — background, build, and dev-serve
   assert.equal(teardowns.length, 3);
   assert.equal(teardowns[0]!.opts?.keepWarm, true);
 
-  for (const n of [1, 2, 3]) assert.equal((await reg.get(bgId(n)))!.status, "reaped");
+  for (const n of [1, 2, 3]) assert.equal((await inTestTenant(() => reg.get(bgId(n))))!.status, "reaped");
 });
 
 test("kill hook escalates TERM → KILL when the grace period passes without an exit", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: ID,
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "background",
-    command: "bg: stubborn",
-    ttlMs: -1,
-  });
+  await inTestTenant(() =>
+    reg.register({
+      processId: ID,
+      scopeId: "s",
+      sandboxId: "sandbox-1",
+      kind: "background",
+      command: "bg: stubborn",
+      ttlMs: -1,
+    }),
+  );
   const { sandbox, signals } = killSpySandbox({ diesOn: "KILL" });
   const reaper = createProcessReaper(reg, {
     ...singleProcessDeps(),
@@ -269,19 +292,21 @@ test("kill hook escalates TERM → KILL when the grace period passes without an 
     signals.map((s) => s.signal),
     ["TERM", "KILL"],
   );
-  assert.equal((await reg.get(ID))!.status, "reaped");
+  assert.equal((await inTestTenant(() => reg.get(ID)))!.status, "reaped");
 });
 
 test("a process that survives TERM+KILL is NOT marked reaped (zombie stays visible, kill retried)", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: ID,
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "background",
-    command: "bg: immortal",
-    ttlMs: -1,
-  });
+  await inTestTenant(() =>
+    reg.register({
+      processId: ID,
+      scopeId: "s",
+      sandboxId: "sandbox-1",
+      kind: "background",
+      command: "bg: immortal",
+      ttlMs: -1,
+    }),
+  );
   const { sandbox, signals } = killSpySandbox({ diesOn: "never" });
   const reaper = createProcessReaper(reg, {
     ...singleProcessDeps(),
@@ -294,7 +319,11 @@ test("a process that survives TERM+KILL is NOT marked reaped (zombie stays visib
     signals.map((s) => s.signal),
     ["TERM", "KILL"],
   );
-  assert.equal((await reg.get(ID))!.status, "running", "an unconfirmed kill is not accounted as dead");
+  assert.equal(
+    (await inTestTenant(() => reg.get(ID)))!.status,
+    "running",
+    "an unconfirmed kill is not accounted as dead",
+  );
 
   assert.equal((await reaper.sweep()).reaped, 0, "still expired, retried again");
   assert.equal(signals.length, 4);
@@ -302,14 +331,16 @@ test("a process that survives TERM+KILL is NOT marked reaped (zombie stays visib
 
 test("only the leader instance's interval sweep reaps (one replica kills, not all of them)", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: ID,
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "background",
-    command: "bg: x",
-    ttlMs: -1,
-  });
+  await inTestTenant(() =>
+    reg.register({
+      processId: ID,
+      scopeId: "s",
+      sandboxId: "sandbox-1",
+      kind: "background",
+      command: "bg: x",
+      ttlMs: -1,
+    }),
+  );
 
   let leader = false;
   const lease: LeaderLease = {
@@ -326,12 +357,16 @@ test("only the leader instance's interval sweep reaps (one replica kills, not al
   reaper.start();
   try {
     await sleep(40);
-    assert.equal((await reg.get(ID))!.status, "running", "a non-leader's interval does not reap");
+    assert.equal((await inTestTenant(() => reg.get(ID)))!.status, "running", "a non-leader's interval does not reap");
     assert.equal(killed.length, 0);
 
     leader = true;
     await sleep(40);
-    assert.equal((await reg.get(ID))!.status, "reaped", "the leader's interval reaps the expired process");
+    assert.equal(
+      (await inTestTenant(() => reg.get(ID)))!.status,
+      "reaped",
+      "the leader's interval reaps the expired process",
+    );
     assert.ok(killed.length >= 1);
   } finally {
     reaper.stop();
@@ -340,14 +375,16 @@ test("only the leader instance's interval sweep reaps (one replica kills, not al
 
 test("a vanished process session counts as a confirmed kill", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: ID,
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "background",
-    command: "bg: x",
-    ttlMs: -1,
-  });
+  await inTestTenant(() =>
+    reg.register({
+      processId: ID,
+      scopeId: "s",
+      sandboxId: "sandbox-1",
+      kind: "background",
+      command: "bg: x",
+      ttlMs: -1,
+    }),
+  );
   const { sandbox, teardowns } = killSpySandbox({ vanished: true });
   const reaper = createProcessReaper(reg, {
     ...singleProcessDeps(),
@@ -356,19 +393,21 @@ test("a vanished process session counts as a confirmed kill", async () => {
   });
 
   assert.equal((await reaper.sweep()).reaped, 1);
-  assert.equal((await reg.get(ID))!.status, "reaped");
+  assert.equal((await inTestTenant(() => reg.get(ID)))!.status, "reaped");
   assert.equal(teardowns[0]!.opts?.keepWarm, true, "the box is still released keep-warm");
 });
 
 test("an expired job with no recorded computer is retired without touching the scope's current computer", async () => {
   const reg = createPostgresProcessRegistry(testDatabaseUrl());
-  await reg.register({
-    processId: bgId(9),
-    scopeId: "personal:A",
-    kind: "background",
-    command: "bg: npm run dev",
-    ttlMs: -1,
-  } as unknown as Parameters<typeof reg.register>[0]);
+  await inTestTenant(() =>
+    reg.register({
+      processId: bgId(9),
+      scopeId: "personal:A",
+      kind: "background",
+      command: "bg: npm run dev",
+      ttlMs: -1,
+    } as unknown as Parameters<typeof reg.register>[0]),
+  );
   const { sandbox, provisions, signals } = killSpySandbox();
   const reaper = createProcessReaper(reg, {
     ...singleProcessDeps(),
@@ -378,5 +417,5 @@ test("an expired job with no recorded computer is retired without touching the s
   assert.equal((await reaper.sweep()).reaped, 1);
   assert.equal(provisions.length, 0);
   assert.equal(signals.length, 0);
-  assert.equal((await reg.get(bgId(9)))!.status, "reaped");
+  assert.equal((await inTestTenant(() => reg.get(bgId(9))))!.status, "reaped");
 });

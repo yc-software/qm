@@ -39,7 +39,7 @@ export type SecurityClassifier = (
   payload: string,
   actorId: string,
   scopeLabel: ScopeId,
-  recordLlmRequest: ((rec: TurnLlmRequestRecord, signal?: AbortSignal) => void | Promise<void>) | undefined,
+  recordLlmRequest: ((rec: TurnLlmRequestRecord) => void | Promise<void>) | undefined,
   context: SecurityScreenContext,
 ) => Promise<SecurityScreenVerdict | undefined>;
 

@@ -16,6 +16,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings, testIdentity } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 
@@ -66,13 +67,15 @@ async function fixture(
     sessions: createPostgresSessionStore(testDatabaseUrl()),
     identity: await testIdentity(),
   } as unknown as Parameters<typeof createApp>[0]);
-  await app.deploy({
-    ownerScopeId: scopeId("personal", "alice@example.com"),
-    createdBy: "alice@example.com",
-    entrypoint: "x",
-    files: [],
-    name: "mysite",
-  });
+  await inTestTenant(() =>
+    app.deploy({
+      ownerScopeId: scopeId("personal", "alice@example.com"),
+      createdBy: "alice@example.com",
+      entrypoint: "x",
+      files: [],
+      name: "mysite",
+    }),
+  );
   const server = createInsecureTestServer(app, deps);
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
@@ -86,7 +89,7 @@ async function fixture(
 test("/d/ path serving sandboxes proxied HTML so an app cannot act on the portal's origin", async () => {
   const f = await fixture({});
   try {
-    const page = await httpGet(f.port, "/d/mysite/", { "x-as-principal": "alice@example.com" });
+    const page = await httpGet(f.port, "/d/mysite/", { "x-as-principal": "alice@example.com", ...testTenantHeaders() });
     assert.equal(page.status, 200);
     const csp = page.headers["content-security-policy"];
     assert.match(String(csp), /^sandbox /, "proxied HTML carries a sandbox CSP");
@@ -99,7 +102,10 @@ test("/d/ path serving sandboxes proxied HTML so an app cannot act on the portal
 test("/d/ path serving sandboxes every response — content-type spoofing cannot dodge it", async () => {
   const f = await fixture({}, "Text/HTML; charset=utf-8");
   try {
-    const data = await httpGet(f.port, "/d/mysite/api", { "x-as-principal": "alice@example.com" });
+    const data = await httpGet(f.port, "/d/mysite/api", {
+      "x-as-principal": "alice@example.com",
+      ...testTenantHeaders(),
+    });
     assert.equal(data.status, 200);
     assert.match(String(data.headers["content-security-policy"]), /^sandbox /);
   } finally {
@@ -110,7 +116,7 @@ test("/d/ path serving sandboxes every response — content-type spoofing cannot
 test("/d/ path serving strips clear-site-data so an app cannot log its viewers out of the portal", async () => {
   const f = await fixture({}, "text/html", { "clear-site-data": '"cookies", "storage"' });
   try {
-    const page = await httpGet(f.port, "/d/mysite/", { "x-as-principal": "alice@example.com" });
+    const page = await httpGet(f.port, "/d/mysite/", { "x-as-principal": "alice@example.com", ...testTenantHeaders() });
     assert.equal(page.status, 200);
     assert.equal(page.headers["clear-site-data"], undefined);
   } finally {
@@ -144,13 +150,17 @@ test("a /d/ document navigation upgrades to the app's subdomain once one is conf
   try {
     const nav = await httpGet(f.port, "/d/mysite/page?a=1", {
       "x-as-principal": "alice@example.com",
+      ...testTenantHeaders(),
       "sec-fetch-dest": "document",
       Accept: "text/html",
     });
     assert.equal(nav.status, 302);
     assert.equal(nav.headers.location, "https://mysite.apps.example.com/page?a=1");
 
-    const sub = await httpGet(f.port, "/d/mysite/app.js", { "x-as-principal": "alice@example.com" });
+    const sub = await httpGet(f.port, "/d/mysite/app.js", {
+      "x-as-principal": "alice@example.com",
+      ...testTenantHeaders(),
+    });
     assert.equal(sub.status, 200, "subresource fetches keep proxying so open tabs never break");
   } finally {
     await f.close();
@@ -162,6 +172,7 @@ test("without a subdomain configuration /d/ document navigations proxy in place"
   try {
     const nav = await httpGet(f.port, "/d/mysite/", {
       "x-as-principal": "alice@example.com",
+      ...testTenantHeaders(),
       "sec-fetch-dest": "document",
       Accept: "text/html",
     });

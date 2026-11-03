@@ -13,6 +13,14 @@ import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+
+function fetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return globalThis.fetch(url, {
+    ...init,
+    headers: { ...testTenantHeaders(), ...Object.fromEntries(new Headers(init.headers)) },
+  });
+}
 
 function start() {
   const built = buildApp(
@@ -90,12 +98,14 @@ test("GET /v1/skills returns metadata only; authorized detail fetch returns the 
 test("GET /v1/skills marks a private-channel skill editable for a member and not for a non-member", async () => {
   const srv = start();
   try {
-    await srv.directory.replaceChannels(
-      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
-      [
-        { channelId: "C9", principalId: "avery" },
-        { channelId: "C9", principalId: "jordan" },
-      ],
+    await inTestTenant(() =>
+      srv.directory.replaceChannels(
+        [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
+        [
+          { channelId: "C9", principalId: "avery" },
+          { channelId: "C9", principalId: "jordan" },
+        ],
+      ),
     );
     await publish(srv.skills, scopeId("channel", "C9"), "team-thing", "shared in the channel");
 
@@ -429,7 +439,7 @@ async function startSecure() {
       signingSecret: SECRET,
     }),
   );
-  await built.identity.ready();
+  await inTestTenant(() => built.identity.ready());
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
@@ -437,15 +447,17 @@ async function startSecure() {
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const cap = (actorId: string, scope: ScopeId = scopeId("personal", actorId), liveActor = true) =>
-    mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scope,
-        aud: CONTROL_PLANE_AUD,
-        ...(liveActor ? { liveActor: true } : {}),
-        exp: Date.now() + CAPABILITY_TTL_MS,
-      },
-      SECRET,
+    inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId,
+          scopeId: scope,
+          aud: CONTROL_PLANE_AUD,
+          ...(liveActor ? { liveActor: true } : {}),
+          exp: Date.now() + CAPABILITY_TTL_MS,
+        },
+        SECRET,
+      ),
     );
   return {
     base,
@@ -488,12 +500,14 @@ test("POST /v1/skills via a capability token authors as the token's own principa
 test("POST /v1/skills via a capability token from a private-channel scope homes the skill there, authored by the actor", async () => {
   const srv = await startSecure();
   try {
-    await srv.directory.replaceChannels(
-      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
-      [
-        { channelId: "C9", principalId: "avery" },
-        { channelId: "C9", principalId: "jordan" },
-      ],
+    await inTestTenant(() =>
+      srv.directory.replaceChannels(
+        [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
+        [
+          { channelId: "C9", principalId: "avery" },
+          { channelId: "C9", principalId: "jordan" },
+        ],
+      ),
     );
     const res = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
@@ -577,12 +591,14 @@ test("PUT /v1/skills/:id via a capability token cannot edit another scope's skil
 });
 
 async function seedChannelSkill(srv: Awaited<ReturnType<typeof startSecure>>) {
-  await srv.directory.replaceChannels(
-    [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
-    [
-      { channelId: "C9", principalId: "avery" },
-      { channelId: "C9", principalId: "jordan" },
-    ],
+  await inTestTenant(() =>
+    srv.directory.replaceChannels(
+      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
+      [
+        { channelId: "C9", principalId: "avery" },
+        { channelId: "C9", principalId: "jordan" },
+      ],
+    ),
   );
   const res = await fetch(`${srv.base}/v1/skills`, {
     method: "POST",
@@ -675,9 +691,11 @@ test("an author who LEAVES a private channel loses inline CRUD on its skill (mem
   const srv = await startSecure();
   try {
     const id = await seedChannelSkill(srv);
-    await srv.directory.replaceChannels(
-      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
-      [{ channelId: "C9", principalId: "jordan" }],
+    await inTestTenant(() =>
+      srv.directory.replaceChannels(
+        [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
+        [{ channelId: "C9", principalId: "jordan" }],
+      ),
     );
     const edit = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
@@ -705,8 +723,10 @@ test("management tracks CURRENT directory membership, not a stale session — a 
   const srv = await startSecure();
   try {
     const id = await seedChannelSkill(srv);
-    const sess = await srv.sessions.getOrCreateByThread("C9:t1", "channel", scopeId("channel", "C9"), "avery-jordan");
-    await srv.sessions.addParticipant(sess.id, "dana");
+    const sess = await inTestTenant(() =>
+      srv.sessions.getOrCreateByThread("C9:t1", "channel", scopeId("channel", "C9"), "avery-jordan"),
+    );
+    await inTestTenant(() => srv.sessions.addParticipant(sess.id, "dana"));
     const edit = await fetch(`${srv.base}/v1/skills/${id}`, {
       method: "PUT",
       headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("dana") },
@@ -722,9 +742,11 @@ test("management tracks CURRENT directory membership, not a stale session — a 
 test("a shared-scope skill cannot be created/edited/deleted by an automated trigger (no liveActor)", async () => {
   const srv = await startSecure();
   try {
-    await srv.directory.replaceChannels(
-      [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
-      [{ channelId: "C9", principalId: "avery" }],
+    await inTestTenant(() =>
+      srv.directory.replaceChannels(
+        [{ channelId: "C9", name: "avery-jordan", isPrivate: true }],
+        [{ channelId: "C9", principalId: "avery" }],
+      ),
     );
     const triggerTok = await srv.cap("avery", scopeId("channel", "C9"), false);
     const create = await fetch(`${srv.base}/v1/skills`, {
@@ -843,10 +865,12 @@ test("a PERSONAL-scope trigger (no liveActor) may still edit + delete its OWNER'
 test("a group-DM skill is editable by any group member (the group-DM analog of a private channel)", async () => {
   const srv = await startSecure();
   try {
-    await srv.directory.replaceGroups([
-      { groupId: "G7", principalId: "ann" },
-      { groupId: "G7", principalId: "bob" },
-    ]);
+    await inTestTenant(() =>
+      srv.directory.replaceGroups([
+        { groupId: "G7", principalId: "ann" },
+        { groupId: "G7", principalId: "bob" },
+      ]),
+    );
     const created = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",
       headers: {
@@ -895,10 +919,12 @@ test("POST /v1/skills refuses to home a skill directly in an org or team scope (
 test("GET /v1/skills shows a group-DM skill to a member known only via directory membership", async () => {
   const srv = start();
   try {
-    await srv.directory.replaceGroups([
-      { groupId: "G7", principalId: "ann" },
-      { groupId: "G7", principalId: "bob" },
-    ]);
+    await inTestTenant(() =>
+      srv.directory.replaceGroups([
+        { groupId: "G7", principalId: "ann" },
+        { groupId: "G7", principalId: "bob" },
+      ]),
+    );
     await publish(srv.skills, scopeId("group", "G7"), "grouped", "shared in the group DM");
     const forBob = (await (await fetch(`${srv.base}/v1/skills?principalId=bob`)).json()) as { skills: SkillView[] };
     const g = forBob.skills.find((s) => s.name === "grouped");
@@ -951,9 +977,11 @@ test("an ORG- or TEAM-homed skill is never inline-managed, even by its author (p
 test("a PUBLIC channel (self-joinable) stays owner-only — a non-author member cannot edit it", async () => {
   const srv = await startSecure();
   try {
-    await srv.directory.replaceChannels(
-      [{ channelId: "CPUB", name: "general", isPrivate: false }],
-      ["owner", "rando"].map((principalId) => ({ channelId: "CPUB", principalId })),
+    await inTestTenant(() =>
+      srv.directory.replaceChannels(
+        [{ channelId: "CPUB", name: "general", isPrivate: false }],
+        ["owner", "rando"].map((principalId) => ({ channelId: "CPUB", principalId })),
+      ),
     );
     const created = await fetch(`${srv.base}/v1/skills`, {
       method: "POST",

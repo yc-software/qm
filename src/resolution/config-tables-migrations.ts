@@ -40,6 +40,13 @@ const SCOPE_SOURCES: Array<[string, Record<string, string>]> = [
     },
   ],
   ["browse_max_steps_configs", { browse_max_steps: "(json->>'steps')::integer" }],
+  [
+    "spend_limit_configs",
+    {
+      spend_daily_usd: "(json->'limit'->>'dailyUsd')::double precision",
+      spend_monthly_usd: "(json->'limit'->>'monthlyUsd')::double precision",
+    },
+  ],
   ["browse_model_configs", { browse_model: "json->>'modelId'" }],
   ["org_ambient_flag", { org_ambient: flag() }],
   ["interactive_fast_mode_flag", { interactive_fast_mode: flag() }],
@@ -103,6 +110,8 @@ const CREATE_TABLES = [
      brand_self_label TEXT,
      brand_org_name TEXT,
      browse_max_steps INTEGER,
+     spend_daily_usd DOUBLE PRECISION,
+     spend_monthly_usd DOUBLE PRECISION,
      browse_model TEXT,
      model_account TEXT CHECK (model_account IN ('personal', 'anthropic', 'openai')),
      model_id TEXT,
