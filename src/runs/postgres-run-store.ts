@@ -131,7 +131,8 @@ END $base_schema$`,
     availabilityTimer = setTimeout(
       crossTenantLoop(() => {
         availabilityTimer = undefined;
-        availabilityProbe = q(
+        availabilityProbe = claimAcrossTenants(
+          pg,
           `SELECT EXISTS (
           SELECT 1 FROM runs r WHERE r.status='pending' AND r.retry_after <= $1
           AND NOT EXISTS (
@@ -214,11 +215,17 @@ END $base_schema$`,
       OFFSET 0
     )`;
 
-  async function claim(workerId: string, ttlMs: number, runId?: string, sessionId?: string): Promise<Run | null> {
+  async function claimWith(
+    query: (text: string, params: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>,
+    workerId: string,
+    ttlMs: number,
+    runId?: string,
+    sessionId?: string,
+  ): Promise<Run | null> {
     const token = randomUUID();
     const now = Date.now();
     try {
-      const { rows } = await q(
+      const { rows } = await query(
         `UPDATE runs SET status='running', lease_token=$1, lease_expires_at=$2, worker_id=$3,
            attempts=attempts+1, started_at=COALESCE(started_at,$4)
          WHERE id = (
@@ -285,12 +292,13 @@ END $base_schema$`,
       return rows[0] ? rowToRun(rows[0]) : null;
     },
 
-    claim,
+    claim: (workerId, ttlMs) => claimWith((text, params) => claimAcrossTenants(pg, text, params), workerId, ttlMs),
 
-    claimById: (runId, workerId, ttlMs) => claim(workerId, ttlMs, runId),
-    claimForSession: (sessionId, workerId, ttlMs) => claim(workerId, ttlMs, undefined, sessionId),
+    claimById: (runId, workerId, ttlMs) => claimWith(q, workerId, ttlMs, runId),
+    claimForSession: (sessionId, workerId, ttlMs) => claimWith(q, workerId, ttlMs, undefined, sessionId),
     async personWaiting(createdBefore) {
-      const { rows } = await q(
+      const { rows } = await claimAcrossTenants(
+        pg,
         `SELECT EXISTS (
            SELECT 1 FROM runs candidate WHERE ${claimable("$2")}
              AND candidate.claim_priority=0 AND candidate.created_at <= $1

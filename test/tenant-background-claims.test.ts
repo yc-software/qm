@@ -153,15 +153,31 @@ test("a claimed row binds its own tenant, and a row without one runs unbound", (
 });
 
 test(
-  "once runs carry tenant_id, one worker claims across tenants and runs each turn under its run's tenant",
+  "under the restricted app login, one worker claims runs across tenants and runs each turn under its run's tenant",
   { skip },
   async () => {
     const url = testDatabaseUrl();
-    const { runs, close } = createPostgresRunStore(url);
+    const owner = createPostgresRunStore(url);
+    const role = `qmt_app_${randomBytes(6).toString("hex")}`;
+    const admin = new pg.Pool({ connectionString: url, max: 1 });
+    let app: ReturnType<typeof createPostgresRunStore> | undefined;
     try {
-      const first = (await runs.enqueue({ sessionId: "s-a", request: turn("a"), maxAttempts: 1 })).run;
-      const second = (await runs.enqueue({ sessionId: "s-b", request: turn("b"), maxAttempts: 1 })).run;
+      const first = (await owner.runs.enqueue({ sessionId: "s-a", request: turn("a"), maxAttempts: 1 })).run;
+      const second = (await owner.runs.enqueue({ sessionId: "s-b", request: turn("b"), maxAttempts: 1 })).run;
       await withTenantColumn(url, "runs", { [first.id]: A, [second.id]: B });
+      for (const statement of TENANCY_BASE.statements) await admin.query(statement);
+      await admin.query("ALTER TABLE runs ENABLE ROW LEVEL SECURITY");
+      await admin.query(
+        "CREATE POLICY runs_tenant ON runs USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())",
+      );
+      await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD '${role}' NOBYPASSRLS`);
+      await admin.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${role}`);
+      await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
+      const appUrl = new URL(url);
+      appUrl.username = role;
+      appUrl.password = role;
+      app = createPostgresRunStore(appUrl.toString());
+      await assert.rejects(app.runs.get(first.id), /No tenant is bound/);
       const ran: Array<[string, string | undefined]> = [];
       const orchestrator = {
         async handleTurn(input: OrchestratorInput) {
@@ -170,7 +186,7 @@ test(
         },
       } as unknown as Orchestrator;
       const sessions = { getByThread: async () => null, fenceTurnLease: async () => undefined };
-      const worker = withTenant(A, () => createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 }));
+      const worker = createWorker({ runs: app.runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
       withTenant(B, () => worker.start());
       for (let i = 0; i < 400 && ran.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 5));
       await worker.stop(1);
@@ -178,9 +194,16 @@ test(
         ["a", A],
         ["b", B],
       ]);
-      assert.equal((await runs.get(first.id))?.tenantId, A);
+      assert.deepEqual(
+        (await admin.query("SELECT id, status FROM runs ORDER BY id")).rows.map((row) => row.status),
+        ["done", "done"],
+      );
     } finally {
-      await close();
+      await app?.close();
+      await owner.close();
+      await admin.query(`DROP OWNED BY ${role}`);
+      await admin.query(`DROP ROLE ${role}`);
+      await admin.end();
     }
   },
 );
