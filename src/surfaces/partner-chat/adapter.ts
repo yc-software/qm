@@ -59,7 +59,9 @@ export function createPartnerChatSurface(deps: {
     },
     threadTarget(target, threadTs) {
       const ref = parsePartnerChatRef(target);
-      return ref ? partnerChatRef({ ...ref, thread: partnerChatMessageId(threadTs) }) : target;
+      const thread = partnerChatMessageId(threadTs);
+      if (!ref || !/^\d+$/.test(thread)) throw new Error(`can't reply under ${threadTs} in ${target}`);
+      return partnerChatRef({ ...ref, thread });
     },
     principalFor: (user) => user.principal,
     mention: (user) => `@${user.principal.displayName ?? user.id}`,

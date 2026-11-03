@@ -341,6 +341,7 @@ test("partner-chat principals are internal only when vouched for, otherwise exte
     surface.threadTarget?.("partner-chat:7001:group:42", "1793649600.00000000000000001001"),
     "partner-chat:7001:group:42:1001",
   );
+  assert.throws(() => surface.threadTarget?.("partner-chat:7001:group:42", "not-a-message"), /can't reply under/);
 });
 
 test("a chat with any member the deployment does not vouch for is neither mirrored nor answered", async () => {
