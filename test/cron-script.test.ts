@@ -98,6 +98,24 @@ test("a script needs a task cron and is removed by patch null or a switch to tex
   assert.ok(created.ok);
   assert.deepEqual(created.cron.script, { command: "./check.sh", credentials: ["gh"] });
 
+  const untried = await control.createCron(
+    { schedule: { everyMs: 3_600_000 }, action: "check", script: { command: "./check.sh" } },
+    claims(),
+  );
+  assert.deepEqual(
+    untried.ok ? "" : untried.message,
+    "set a cron's script with the cron tool, which runs it once first",
+  );
+  const elsewhere = await control.patchCron(
+    created.cron.id,
+    { script: { command: "./other.sh" } },
+    { ...claims(), scopeId: scopeId("channel", "C9") },
+    passes,
+  );
+  assert.match(elsewhere.ok ? "" : elsewhere.message, /scope the cron runs in/);
+  const kept = await control.getCron(created.cron.id, claims());
+  assert.deepEqual(kept.ok && kept.cron.script, { command: "./check.sh", credentials: ["gh"] });
+
   const removed = await control.patchCron(created.cron.id, { script: null }, claims());
   assert.ok(removed.ok);
   assert.equal(removed.cron.script, undefined);
