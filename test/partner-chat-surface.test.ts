@@ -472,7 +472,7 @@ test("a direct reply holds one placeholder that the reply replaces, or that sett
   }
 });
 
-test("a refusal notice edits an open placeholder, is posted in the reply thread when none was posted, and a bare settle without one stays silent", async () => {
+test("a notice edits an open placeholder, is posted in the reply thread when none was posted or the reply already closed the slot, and a bare settle without one stays silent", async () => {
   const id = (n: number) => `00000000-0000-4000-8000-00000000002${n}`;
   const target = `${CONTAINER}:1002`;
   const partnerChat = await fakePartnerChat();
@@ -507,11 +507,13 @@ test("a refusal notice edits an open placeholder, is posted in the reply thread 
       [
         ["/qm_surface/messages/99/update", null, notice],
         ["/qm_surface/messages", "1002", notice],
+        ["/qm_surface/messages", "1002", notice],
       ],
     );
     assert.deepEqual(fake.slots, [
       [id(1), { editRef: "" }],
       [id(2), { editRef: "" }],
+      [id(4), { editRef: "" }],
     ]);
     assert.equal((await deliveries.pending("partner-chat")).length, 0);
   } finally {
@@ -678,6 +680,9 @@ test("a followed turn queues its placeholder after the delay, and a finished dir
     }),
   );
   live.settle(run(6, { editRef: "42", result: { status: "pending_approval" } }));
+  live.settle(
+    run(7, { editRef: "", result: { status: "pending_approval", reason: "Waiting on approval to run it." } }),
+  );
   live.unanswered(
     {
       status: "pending_approval",
@@ -688,7 +693,7 @@ test("a followed turn queues its placeholder after the delay, and a finished dir
   );
   live.unanswered({ status: "refused", reason: "empty message" }, destination, "notice:m8");
   live.unanswered({ status: "silent" }, destination, "notice:m9");
-  await settle(async () => (await deliveries.pending("partner-chat")).length === 6);
+  await settle(async () => (await deliveries.pending("partner-chat")).length === 7);
   await new Promise((r) => setTimeout(r, 50));
   assert.deepEqual(
     (await deliveries.pending("partner-chat")).map((d) => [d.idempotencyKey, d.destination.target, d.text]).sort(),
@@ -699,6 +704,7 @@ test("a followed turn queues its placeholder after the delay, and a finished dir
         "⚠️ I couldn't finish that turn: project membership changed; retry from the current project",
       ],
       [`notice:${id(6)}`, destination.target, "This conversation is waiting on a pending approval."],
+      [`notice:${id(7)}`, destination.target, "Waiting on approval to run it."],
       ["notice:m7", destination.target, "This conversation is waiting for someone else to resolve a pending approval."],
       ["notice:m8", destination.target, "⚠️ I couldn't finish that turn: empty message"],
       [`placeholder:${R1}`, destination.target, "…"],

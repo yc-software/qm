@@ -33,12 +33,14 @@ export function createPartnerChatLiveReply(deps: {
     settle(run: Run): void {
       const target = run.request.deliveryTarget;
       if (run.request.surface !== "partner-chat" || run.request.origin.kind !== "human" || !target) return;
-      if (run.deliveryState?.editRef === "" || runResultDelivery(run, deps.surfaces)) return;
       const destination = { type: "partner-chat", target };
+      if (run.result?.status === "pending_approval") {
+        void enqueue(destination, run.result.reason ?? AWAITING_APPROVAL, `notice:${run.id}`);
+        return;
+      }
+      if (run.deliveryState?.editRef === "" || runResultDelivery(run, deps.surfaces)) return;
       if (run.result?.status === "refused")
         void enqueue(destination, unfinishedTurnText(userFacingFailureClause(run.result)), `notice:${run.id}`);
-      else if (run.result?.status === "pending_approval")
-        void enqueue(destination, run.result.reason ?? AWAITING_APPROVAL, `notice:${run.id}`);
       else void enqueue(destination, SETTLED, `settle:${run.id}`);
     },
     unanswered(result: TurnResult, destination: Destination, idempotencyKey: string): void {

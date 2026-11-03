@@ -3635,7 +3635,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (spine.surfaceOutboundCount === 0 && (!isPollFire || primaryReply)) {
             const nudgeHistory = filterHistory(forModelContext((await historyWindow()).items));
             result = await runAgentTurn(
-              `[system] You were addressed directly. Reply with the \`${input.surface ?? "slack"}\` tool's \`post\` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.`,
+              `[system] You were addressed directly. Reply with the \`${surfaceName}\` tool's \`post\` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.`,
               inbound.images.length ? { images: inbound.images } : {},
               { history: nudgeHistory },
             );

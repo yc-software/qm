@@ -166,7 +166,6 @@ export function createPartnerChatDeliveries(deps: {
       return;
     }
     if (key.kind === "notice") {
-      if (slot === "") return;
       if (slot) await editOrPost(d, ref, slot, body);
       else await post(d, ref, body);
       await setSlot(key.runId, "");
