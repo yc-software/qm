@@ -83,7 +83,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
     app: tenantBound(app),
     deploy: tenantBound(deploy),
     acl: tenantBound(acl),
-    identity,
+    identity: tenantBound(identity),
     base,
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
