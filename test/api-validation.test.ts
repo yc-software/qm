@@ -47,3 +47,13 @@ test("unknown resources are 404, not silent 200 or 500", async () => {
     await s.close();
   }
 });
+
+test("malformed percent-encoding in path ids is 400, not 500", async () => {
+  const s = start();
+  try {
+    assert.equal((await fetch(`${s.base}/v1/crons/%E0%A4%A`)).status, 400);
+    assert.equal((await fetch(`${s.base}/d/%E0%A4%A/`)).status, 400);
+  } finally {
+    await s.close();
+  }
+});
