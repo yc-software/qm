@@ -518,7 +518,7 @@ END $base_schema$`,
     },
 
     async steerQueued(queuedRunId, targetRunId, signal, signals) {
-      await signals.hasDedupeKey(signal.dedupeKey!);
+      await signals.runForDedupeKey(signal.dedupeKey!);
       const { rows } = await q(
         `WITH target AS (
            SELECT id FROM runs WHERE id=$2 AND status IN ('pending','running') FOR UPDATE

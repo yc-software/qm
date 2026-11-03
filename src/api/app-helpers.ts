@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -660,6 +661,25 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     }
   }
 
+  async function steerRun(
+    run: Run,
+    signal: RunSignal,
+    queuedRunId?: string,
+  ): Promise<{ sent: boolean; terminal?: boolean; drained?: boolean; replayRunId?: string }> {
+    const sent = queuedRunId
+      ? await deps.runs.steerQueued(queuedRunId, run.id, signal, deps.signals!)
+      : await deps.signals!.send(run.id, signal);
+    if (!sent) return { sent };
+    const after = await deps.runs.get(run.id);
+    if (after && !isTerminal(after.status)) return { sent };
+    const own = (await replayOrphanedRunSignals(run.id)).find((drained) => drained.signal.ts === signal.ts);
+    return {
+      sent,
+      terminal: true,
+      drained: Boolean(own),
+      ...(own?.replayRunId ? { replayRunId: own.replayRunId } : {}),
+    };
+  }
   async function replayOrphanedRunSignals(runId: string): Promise<Array<{ signal: RunSignal; replayRunId?: string }>> {
     if (!deps.signals) return [];
     const drained: Array<{ signal: RunSignal; replayRunId?: string }> = [];
@@ -675,20 +695,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           }
           let replayRunId: string | undefined;
           const dedupKey = `session-signal:${runId}:${id}`;
-          if (signal.sessionRequest) {
-            const {
-              clientTools: _clientTools,
-              desktopClientId: _desktopClientId,
-              ...sessionRequest
-            } = signal.sessionRequest;
-            const { run } = await deps.runs.enqueue({
-              sessionId: completed.sessionId,
-              request: sessionRequest,
-              dedupKey,
-              maxAttempts: deps.maxAttempts,
-            });
-            replayRunId = run.id;
-          } else if (signal.request) {
+          if (signal.request) {
             const {
               approval: _ap,
               redeliveryKey: _redeliveryKey,
@@ -756,7 +763,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
             ...(base.fastMode === undefined && prior?.fastMode !== undefined ? { fastMode: prior.fastMode } : {}),
             ...(base.timezone === undefined && prior?.timezone !== undefined ? { timezone: prior.timezone } : {}),
           };
-          const replayed = await app.turn({ ...base, ...inheritedOptions, async: true });
+          const replayed = await app.turn(
+            { ...base, ...inheritedOptions, async: true },
+            { signalDedupKey: `steer-replay:${runId}:${signal.ts ?? signal.dedupeKey ?? randomUUID()}` },
+          );
           replayRunId = replayed.runId;
         } catch (err) {
           replayOutcomeKnown = false;
@@ -838,6 +848,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     syncProjectChannelRoster,
     syncLinkedProjectRosters,
     replayOrphanedRunSignals,
+    steerRun,
   };
 }
 

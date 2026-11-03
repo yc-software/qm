@@ -50,7 +50,7 @@ import {
   type SessionSyscallsFactory,
   deliverSubagentMail,
   sessionTreeRoot,
-  sessionTreeRunCount,
+  sessionTreeRuns,
   sessionTreeWorking,
   stoppableRoot,
   SUBAGENT_TREE_RUN_CAP,
@@ -1529,7 +1529,7 @@ export function buildApp(
           known &&
           (known.parentSessionId || (await sessions.childrenOf(known.id)).length > 0) &&
           !(input.dedupKey && (await runStore.runs.getByDedupKey(input.dedupKey))) &&
-          (await sessionTreeRunCount(sessions, runStore.runs, await sessionTreeRoot(sessions, known))) >=
+          (await sessionTreeRuns(sessions, runStore.runs, await sessionTreeRoot(sessions, known))).length >=
             SUBAGENT_TREE_RUN_CAP
         )
           throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);

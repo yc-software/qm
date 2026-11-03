@@ -17,7 +17,7 @@ export type { DeployInput, RedeployInput } from "../deploy/deploy-service.ts";
 export function createApp(deps: AppDeps): App {
   const app = {} as App;
   const helpers = createAppHelpers(deps, app);
-  const ambient = createAmbientHelpers(deps, app);
+  const ambient = createAmbientHelpers(deps, app, helpers);
   const methods = {
     swarms: deps.swarms,
     ...createTurnMethods(deps, helpers, ambient),
