@@ -413,17 +413,23 @@ export function createRunPreemption(deps: {
     );
     if (!slotPark || !live.includes(slotPark)) slotPark = undefined;
     if (live.length === 0) return false;
-    const blocking = await deps.runs.personWaitingIn(
-      live.map(({ run }) => run.sessionId),
-      createdBefore,
-    );
+    const blocked = new Set<HeldRun>();
+    for (const [tenantId, group] of Map.groupBy(live, ({ run }) => run.tenantId)) {
+      const waiting = await inTenantOf(tenantId, () =>
+        deps.runs.personWaitingIn(
+          group.map(({ run }) => run.sessionId),
+          createdBefore,
+        ),
+      );
+      for (const held of group) if (waiting.has(held.run.sessionId)) blocked.add(held);
+    }
     const waitingElsewhere = held.length >= deps.worker.slots && (await deps.runs.personWaiting(createdBefore));
     if (!waitingElsewhere) slotPark = undefined;
     else if (!slotPark && !held.some(({ shutdown }) => shutdown.signal.aborted))
-      slotPark = live.filter(({ run }) => !blocking.has(run.sessionId)).sort((a, b) => b.claimedAt - a.claimedAt)[0];
+      slotPark = live.filter((held) => !blocked.has(held)).sort((a, b) => b.claimedAt - a.claimedAt)[0];
     let requested = false;
     for (const run of live) {
-      const wanted = blocking.has(run.run.sessionId) || run === slotPark;
+      const wanted = blocked.has(run) || run === slotPark;
       requested ||= wanted && !run.parkRequested;
       run.parkRequested = wanted;
     }
