@@ -99,7 +99,9 @@ import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts"
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
-import { configStoreMaps, createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
+import { onFirstBind, withTenant } from "./tenants/context.ts";
+import { createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
+import { createPostgresConfigTables } from "./resolution/config-tables-pg.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
@@ -629,12 +631,19 @@ export function buildApp(
   void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
-    ...configStoreMaps(artifactMap),
+    tables: createPostgresConfigTables(databaseUrl),
     defaultSecurityPosture: config.securityPosture,
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
+  const preloadConfig = () =>
+    onFirstBind((tenant) =>
+      withTenant(tenant, () => configStore.hydrate()).catch((error: unknown) => {
+        reportFailureAs("tenant: load configuration", undefined)(error);
+        throw error;
+      }),
+    );
+  let stopConfigPreload: (() => void) | undefined = preloadConfig();
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills", ["scopeId"]),
     advisoryLock,
@@ -2899,6 +2908,7 @@ export function buildApp(
   const runtime: Runtime = {
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      stopConfigPreload ??= preloadConfig();
       flyTunnel?.monitor();
       drain.start();
       renderBasePreparing = new AbortController();
@@ -2923,6 +2933,8 @@ export function buildApp(
     },
     releaseInFlightRuns,
     async stop() {
+      stopConfigPreload?.();
+      stopConfigPreload = undefined;
       renderBasePreparing?.abort();
       await stopBackground();
       await Promise.all([

@@ -1,13 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import { recoveredRuntime } from "../src/agent/runtime-recovery.ts";
 import { turnModelOptions } from "../src/agent/runtime-choice.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { SessionEntry } from "../src/types.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
+import { testConfigStore, testConfigTables } from "./support/test-database.ts";
 
 const ORG = "org:default-org";
 const SCOPE = "personal:alice";
@@ -93,9 +92,9 @@ test("each purpose ignores conversation overrides and explicit fields including 
 });
 
 test("durable purpose defaults refresh between child followups", async () => {
-  const baseModels = testMap<PersistedBaseModel>();
-  const writer = testConfigStore("default-org", { baseModels });
-  const reader = testConfigStore("default-org", { baseModels });
+  const tables = testConfigTables();
+  const writer = testConfigStore("default-org", { tables });
+  const reader = testConfigStore("default-org", { tables });
   await writer.setPurposeRuntime("subagent", category);
   assert.deepEqual(
     await resolveRuntimeChoice(reader, ORG, SCOPE, fallback, undefined, undefined, "subagent"),

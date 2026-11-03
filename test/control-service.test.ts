@@ -10,6 +10,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createControlService, type ControlService } from "../src/api/control-service.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
+import { tenantReady } from "../src/tenants/context.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 
@@ -788,6 +789,7 @@ test("webhook create surfaces the inbound url + the secret verbatim; list elides
 
 test("soul read returns the effective SOUL; write replaces this scope's SOUL and bumps the version", async () => {
   const { control } = setup();
+  await tenantReady();
   const before = control.readSoul(claims("U1"));
   assert.equal(before.soul, null);
 

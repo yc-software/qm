@@ -1,10 +1,9 @@
 import { availableRuntimeError } from "../src/api/runtime-config.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
+import { testConfigStore, testConfigTables } from "./support/test-database.ts";
 
 const ORG = "org:default-org" as const;
 const PERSONAL = "personal:alice" as const;
@@ -87,9 +86,9 @@ test("runtime resolution carries reasoning and fast-mode defaults into turns", a
 });
 
 test("runtime resolution reads selections from shared durable state on every turn", async () => {
-  const baseModels = testMap<PersistedBaseModel>();
-  const writer = testConfigStore("default-org", { baseModels });
-  const reader = testConfigStore("default-org", { baseModels });
+  const tables = testConfigTables();
+  const writer = testConfigStore("default-org", { tables });
+  const reader = testConfigStore("default-org", { tables });
   const fallback = { modelId: "claude-opus-4-8" };
 
   await writer.setRuntimeSelection(ORG, fallback);
