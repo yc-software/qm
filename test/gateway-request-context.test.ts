@@ -260,6 +260,7 @@ async function gatewayApp(
     }),
   });
   t.after(() => built.runtime.stop());
+  await built.startup();
   await inTestTenant(() => built.tenantSettings.get());
   return { config, built, seen, sent };
 }

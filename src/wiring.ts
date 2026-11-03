@@ -103,6 +103,7 @@ import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.
 import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
+import { createStartup, seedCatalogs } from "./startup-work.ts";
 import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
@@ -313,7 +314,7 @@ import {
 } from "./runs/instance-registry.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
-import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
+import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
 import {
   createPostgresProcessRegistry,
   PROCESS_REGISTRY_MIGRATIONS,
@@ -431,6 +432,8 @@ export interface BuiltApp {
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   deploymentLayerStore: DeploymentLayerStore;
+  startup: () => Promise<void>;
+  deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
   signals: RunSignalStore;
@@ -677,25 +680,9 @@ export function buildApp(
       : {}),
   });
   const layer = () => deploymentLayerStore.runtime();
-  const installCatalogs = async (): Promise<void> => {
-    if (!config.seedSkills) return;
-    await installSeedSkills(skills, { dir: config.skillsSeedDir, scopeId: orgScope, respectArchived: true });
-    for (const dir of config.pluginSkillDirs) {
-      if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;
-      await installSeedSkills(skills, {
-        dir,
-        scopeId: orgScope,
-        createdBy: "system:plugin-skills",
-        reviewer: "system:plugin-skills-reviewer",
-        respectArchived: true,
-      });
-    }
-  };
-  const seedTenant = () =>
-    Promise.all([
-      installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
-      deploymentLayerStore.hydrate().catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
-    ]);
+  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
+    label: "deployment layer refresh",
+  });
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
@@ -1322,13 +1309,7 @@ export function buildApp(
   const loadTenant = () =>
     onFirstBind((tenant) =>
       withTenant(tenant, () =>
-        Promise.all([
-          tenantSettings.get(),
-          identity.ready(),
-          configStore.hydrate?.(),
-          refreshCustomProviders(),
-          seedTenant(),
-        ]),
+        Promise.all([tenantSettings.get(), identity.ready(), configStore.hydrate?.(), refreshCustomProviders()]),
       ),
     );
   let stopTenantLoad: (() => void) | undefined = loadTenant();
@@ -1571,7 +1552,24 @@ export function buildApp(
     onReasoning: (runId, block, text, offset) => emitRunReasoning(runStreamEvents, runId, block, text, offset),
     onChange: refreshRunStream,
   });
-  const stopStreamSync = serveRunStreamSync(runStreamEvents, turnStream);
+  const startup = createStartup({
+    identity,
+    configStore,
+    deploymentLayer: deploymentLayerStore,
+    mcp: mcpToolService,
+    blobTransfer,
+    listen: () => serveRunStreamSync(runStreamEvents, turnStream),
+    ...(config.seedSkills
+      ? {
+          seedCatalogs: seedCatalogs(skills, {
+            seedDir: config.skillsSeedDir,
+            pluginDirs: config.pluginSkillDirs,
+            ...(layerSkillsDir ? { layerSkillsDir } : {}),
+            scopeId: orgScope,
+          }),
+        }
+      : {}),
+  });
   runs.onTerminal((run) => refreshRunStream(run.id));
   const sessionStateBus: SessionStateBus = createPostgresSessionStateBus(databaseUrl);
   const ledgerEventBus: LedgerEventBus = createPostgresLedgerEventBus(databaseUrl);
@@ -2706,12 +2704,6 @@ export function buildApp(
     { label: "Composio consent returns", immediate: true },
   );
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
-  const BLOB_TRANSFER_EXPIRY_DAYS = 1;
-  void blobTransfer
-    .ensureExpiry?.(BLOB_TRANSFER_EXPIRY_DAYS)
-    .catch((e) =>
-      console.error("[blob-transfer] S3 lifecycle expiry install failed (sweep remains the fallback):", errMessage(e)),
-    );
   const idleSweeper =
     deployIdleTtlMs && deployIdleTtlMs > 0
       ? createSweeper(() => app.reapIdleDeployments(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
@@ -2841,6 +2833,7 @@ export function buildApp(
       releasing = null;
       flyTunnel?.monitor();
       tenantSettings.start();
+      void startup.begin().catch(reportFailureAs("startup: load deployment layer", undefined));
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
@@ -2870,7 +2863,7 @@ export function buildApp(
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await releaseInFlightRuns();
       await drain.stop();
-      stopStreamSync();
+      startup.stop();
       stopTenantLoad?.();
       stopTenantLoad = undefined;
       await Promise.all(
@@ -2900,6 +2893,8 @@ export function buildApp(
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
     },
     deploymentLayerStore,
+    startup: startup.begin,
+    deploymentLayerRefresh,
     sessions,
     runs,
     signals: runSignals,

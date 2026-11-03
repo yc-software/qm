@@ -6,13 +6,13 @@ import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
-import { testTenants } from "./support/test-tenants.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
@@ -43,9 +43,9 @@ async function fixture(run: () => Promise<void> = async () => {}) {
     return fetch(url, {
       method,
       headers: {
+        ...testTenantHeaders(),
         "content-type": "application/json",
         "x-timestamp": String(ts),
-        "x-qm-tenant": testTenants()[0],
         "x-signature": signRequest(sourceSecret, ts, `${method}\n${path}\n${testTenants()[0]}\n${raw}`),
         authorization: `Bearer ${controlSecret}`,
         ...overrides,
@@ -79,9 +79,11 @@ test("live smoke requires distinct credentials, rejects capabilities and arbitra
     for (const credentials of invalidCredentials) {
       assert.equal((await srv.request("POST", body(), credentials)).status, 401);
     }
-    const capability = await mintCapabilityToken(
-      { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
-      "capability-only-secret".repeat(3),
+    const capability = await inTestTenant(() =>
+      mintCapabilityToken(
+        { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
+        "capability-only-secret".repeat(3),
+      ),
     );
     assert.equal((await srv.request("POST", body(), { "x-agent-capability": capability })).status, 403);
     for (const request of [

@@ -34,6 +34,8 @@ export interface ApiCtx extends BaseCtx {
 
 export type RouteAuth = "either" | "source" | "public" | { aud: string; bearer?: true };
 
+export type RouteTenant = "none" | "row";
+
 export type RouteActor = "person" | "system" | `${"query" | "body"}.${string}`;
 
 export interface AdminAccess {
@@ -50,6 +52,7 @@ export type Route<C extends BaseCtx = ApiCtx> = {
   operator?: true;
   allowedInStrict?: true;
   maxBodyBytes?: number;
+  tenant?: RouteTenant;
 } & ({ method: string; path: string } | { match: (method: string, pathname: string) => boolean });
 
 export function withActor<C extends BaseCtx>(actor: RouteActor, routes: Route<C>[]): Route<C>[] {

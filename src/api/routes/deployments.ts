@@ -1736,7 +1736,7 @@ function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
 }
 
 export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { match: isDeploymentGitRoute, auth: "public", handle: serveDeploymentGit },
+  { match: isDeploymentGitRoute, auth: "public", tenant: "row", handle: serveDeploymentGit },
   {
     match: (m, p) =>
       p.startsWith("/v1/admin/deployments/") &&

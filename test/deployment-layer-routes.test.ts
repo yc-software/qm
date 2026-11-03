@@ -15,7 +15,7 @@ import { testConfig } from "./support/test-config.ts";
 import { DeploymentLayerPersistedError } from "../src/deployment/deployment-layer-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, testTenants } from "./support/test-tenants.ts";
+import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SECRET = "layer-routes-secret".repeat(3);
 const PATH = "/v1/deployment-layer";
@@ -43,8 +43,8 @@ function start(overrides: { deploymentLayerDir?: string } = {}, serverDeps: Reco
 function signed(method: string, body: string, ts = Math.floor(Date.now() / 1000)): Record<string, string> {
   return {
     "content-type": "application/json",
+    ...testTenantHeaders(),
     "x-timestamp": String(ts),
-    "x-qm-tenant": testTenants()[0],
     "x-signature": signRequest(SECRET, ts, `${method}\n${PATH}\n${testTenants()[0]}\n${body}`),
   };
 }
@@ -84,7 +84,7 @@ test("a signed request that names no tenant is refused before the layer is read 
         ...(body ? { body } : {}),
       });
       assert.equal(res.status, 401);
-      assert.match(((await res.json()) as { message: string }).message, /must name their tenant in a signed header/);
+      assert.match(((await res.json()) as { message: string }).message, /no verifiable tenant/);
     }
   } finally {
     await srv.close();
@@ -381,9 +381,11 @@ test("a skill collision racing after validation is accepted degraded and audited
 test("a VALID capability token is rejected on the deployment-layer routes (source-auth only)", async () => {
   const srv = start();
   try {
-    const cap = await mintCapabilityToken(
-      { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
+    const cap = await inTestTenant(() =>
+      mintCapabilityToken(
+        { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
+        SECRET,
+      ),
     );
     const get = await fetch(`${srv.base}${PATH}`, { headers: { "x-agent-capability": cap } });
     assert.equal(get.status, 403);

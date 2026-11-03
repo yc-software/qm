@@ -46,7 +46,9 @@ async function start(
 }
 
 async function effectiveModel(base: string): Promise<string> {
-  const res = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+  const res = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`, {
+    headers: testTenantHeaders(),
+  });
   assert.equal(res.status, 200);
   return ((await res.json()) as { effective: { modelId: string } }).effective.modelId;
 }
@@ -141,7 +143,9 @@ test("company ChatGPT-only deployments offer their plain GPT default through man
   inTestTenant(async () => {
     const srv = await start({}, { CODEX_AUTH_CREDENTIAL: "company-chatgpt" });
     try {
-      const res = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+      const res = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`, {
+        headers: testTenantHeaders(),
+      });
       assert.equal(res.status, 200);
       const body = (await res.json()) as {
         effective: { modelId: string };

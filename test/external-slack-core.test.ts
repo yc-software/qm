@@ -51,12 +51,12 @@ test("external Slack strips private and org preloads before the prompt, but keep
       apiBaseUrl: "https://core.example.test",
     }),
   );
-  await b.identity.ready();
   await b.config.hydrate?.();
   await b.identity.refresh();
-  await b.deploymentLayerStore.hydrate();
+  await b.startup();
   t.after(async () => {
     b.scheduler.stop();
+    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   await inTestTenant(async () => {

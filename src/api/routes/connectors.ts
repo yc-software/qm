@@ -518,7 +518,12 @@ async function catalog(ctx: ApiCtx): Promise<void> {
 }
 
 export const connectorRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback", auth: "public", handle: oauthCallback },
+  {
+    match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "callback",
+    auth: "public",
+    tenant: "row",
+    handle: oauthCallback,
+  },
 ];
 
 export async function gmailSent(ctx: ApiCtx): Promise<void> {

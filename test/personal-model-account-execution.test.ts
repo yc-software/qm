@@ -42,34 +42,35 @@ async function build(keys: Partial<Record<ModelProvider, string>> = {}, settings
 }
 
 for (const provider of ["anthropic", "openai"] as const) {
-  test(`queued personal ${provider} turns use only that provider's credentials after switching to company`, async () => {
-    turns.length = 0;
-    const built = await build({ anthropic: "company-anthropic", openai: "company-openai" });
-    await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic"));
-    await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "personal-openai"));
-    await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, provider));
-    const submitted = await inTestTenant(() =>
-      built.app.turn({
-        surface: "slack",
-        actor: { externalId: "U1" },
-        conversation: { kind: "dm", threadRef: `execute-personal-${provider}` },
-        text: "hello",
-        liveActor: true,
-        async: true,
-      }),
-    );
-    await inTestTenant(() => built.config.setPersonalModelAuth("U1", false));
-    built.runtime.start();
-    try {
-      const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
-      assert.equal(finished.status, "done", JSON.stringify(finished.result));
-      assert.equal(turns.length, 1);
-      assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
-      assert.equal(resolveModel(turns[0]!.runtime!.modelId!)?.provider, provider);
-    } finally {
-      await built.runtime.stop();
-    }
-  });
+  test(`queued personal ${provider} turns use only that provider's credentials after switching to company`, () =>
+    inTestTenant(async () => {
+      turns.length = 0;
+      const built = await build({ anthropic: "company-anthropic", openai: "company-openai" });
+      await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic"));
+      await inTestTenant(() => built.userModelCredentials.setApiKey("U1", "openai", "personal-openai"));
+      await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, provider));
+      const submitted = await inTestTenant(() =>
+        built.app.turn({
+          surface: "slack",
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef: `execute-personal-${provider}` },
+          text: "hello",
+          liveActor: true,
+          async: true,
+        }),
+      );
+      await inTestTenant(() => built.config.setPersonalModelAuth("U1", false));
+      built.runtime.start();
+      try {
+        const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
+        assert.equal(finished.status, "done", JSON.stringify(finished.result));
+        assert.equal(turns.length, 1);
+        assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
+        assert.equal(resolveModel(turns[0]!.runtime!.modelId!)?.provider, provider);
+      } finally {
+        await built.runtime.stop();
+      }
+    }));
 }
 
 test("disconnecting a queued personal account fails without invoking any main agent or another connected provider", () =>
@@ -103,46 +104,47 @@ test("disconnecting a queued personal account fails without invoking any main ag
   }));
 
 for (const account of ["personal", "openai", "anthropic"] as const) {
-  test(`web ${account} account honors the chosen model, effort and fast mode`, async () => {
-    turns.length = 0;
-    const provider = account === "anthropic" ? "anthropic" : "openai";
-    const model = provider === "anthropic" ? "claude-sonnet-5" : "gpt-5.6-terra";
-    const built = await build({ openai: "company-openai" });
-    await inTestTenant(() => built.userModelCredentials.setApiKey("U1", provider, `personal-${provider}`));
-    await inTestTenant(() =>
-      built.config.setPersonalModelAuth("U1", true, account === "personal" ? undefined : account),
-    );
-    const submitted = await inTestTenant(() =>
-      built.app.turn({
-        surface: "web",
-        actor: { externalId: "U1" },
-        conversation: { kind: "dm", threadRef: `web:U1:picker-${account}` },
-        text: "hello",
-        liveActor: true,
-        async: true,
-        model,
-        thinkingLevel: "high",
-        fastMode: true,
-      }),
-    );
-    assert.ok(submitted.runId, JSON.stringify(submitted));
-    const queued = await inTestTenant(() => built.runs.get(submitted.runId!));
-    assert.equal(queued?.request.model, model);
-    built.runtime.start();
-    try {
-      const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
-      assert.equal(finished.status, "done", JSON.stringify(finished.result));
-      assert.equal(turns.length, 1);
-      assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
-      assert.deepEqual(turns[0]!.runtime, {
-        modelId: model,
-        effortLevel: "high",
-        fastMode: true,
-      });
-    } finally {
-      await built.runtime.stop();
-    }
-  });
+  test(`web ${account} account honors the chosen model, effort and fast mode`, () =>
+    inTestTenant(async () => {
+      turns.length = 0;
+      const provider = account === "anthropic" ? "anthropic" : "openai";
+      const model = provider === "anthropic" ? "claude-sonnet-5" : "gpt-5.6-terra";
+      const built = await build({ openai: "company-openai" });
+      await inTestTenant(() => built.userModelCredentials.setApiKey("U1", provider, `personal-${provider}`));
+      await inTestTenant(() =>
+        built.config.setPersonalModelAuth("U1", true, account === "personal" ? undefined : account),
+      );
+      const submitted = await inTestTenant(() =>
+        built.app.turn({
+          surface: "web",
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef: `web:U1:picker-${account}` },
+          text: "hello",
+          liveActor: true,
+          async: true,
+          model,
+          thinkingLevel: "high",
+          fastMode: true,
+        }),
+      );
+      assert.ok(submitted.runId, JSON.stringify(submitted));
+      const queued = await inTestTenant(() => built.runs.get(submitted.runId!));
+      assert.equal(queued?.request.model, model);
+      built.runtime.start();
+      try {
+        const finished = await inTestTenant(() => built.runs.waitFor(submitted.runId!, 5_000));
+        assert.equal(finished.status, "done", JSON.stringify(finished.result));
+        assert.equal(turns.length, 1);
+        assert.deepEqual(turns[0]!.providerKeys, { [provider]: `personal-${provider}` });
+        assert.deepEqual(turns[0]!.runtime, {
+          modelId: model,
+          effortLevel: "high",
+          fastMode: true,
+        });
+      } finally {
+        await built.runtime.stop();
+      }
+    }));
 }
 
 test("personal web selections reject wrong providers, policy exclusions and disconnected keys", (t) =>

@@ -19,12 +19,12 @@ async function fixture(t: TestContext, config: Partial<Config> = {}, settings: T
   const built = buildApp(testConfig({ memoryCapture: "off", ...config }), {
     tenantSettings: testTenantSettings(settings),
   });
-  await inTestTenant(() => built.identity.ready());
   await built.config.hydrate?.();
   await built.identity.refresh();
-  await built.deploymentLayerStore.hydrate();
+  await built.startup();
   t.after(async () => {
     built.scheduler.stop();
+    built.deploymentLayerRefresh.stop();
     await built.runtime.stop();
   });
   let members = ["U1", "U2", "U3"];
