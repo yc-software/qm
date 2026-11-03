@@ -1,6 +1,6 @@
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { createCurrentScopeMembers } from "../src/resolution/scope-membership.ts";
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { disclosedMemory, MemoryDisclosureDenied, type MemoryDisclosure } from "../src/memory/disclosure.ts";
 import { MemoryFactsMissing, renderFacts, type MemoryFact } from "../src/memory/facts.ts";
@@ -10,6 +10,10 @@ import { recallText } from "./support/recall-text.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => unknown): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 const actor = { id: "alice", type: "internal" as const };
 const bob = { id: "bob", type: "internal" as const };
@@ -274,33 +278,29 @@ test("source decisions are shared within one read but never cached across reads"
   assert.equal(checks, 4);
 });
 
-test("complete memory audience rejects external or unresolved members rather than dropping them", () =>
-  inTestTenant(async () => {
-    const directory = createPostgresDirectoryStore(testDatabaseUrl());
-    await directory.replace([{ principalId: "alice", displayName: "Alice", type: "internal" }]);
-    await directory.replaceChannels(
-      [{ channelId: "room", name: "room", isPrivate: true }],
-      [{ channelId: "room", principalId: "alice" }],
-    );
-    const members = createCurrentScopeMembers(
-      { directory, identity: { classify: () => ({ type: "internal" }) } },
-      true,
-    );
-    assert.equal((await members("channel:room"))?.length, 1);
-    await directory.replaceChannels(
-      [{ channelId: "room", name: "room", isPrivate: true }],
-      [
-        { channelId: "room", principalId: "alice" },
-        { channelId: "room", principalId: "unresolved" },
-      ],
-    );
-    assert.equal(await members("channel:room"), undefined);
-    await directory.replaceChannels(
-      [{ channelId: "room", name: "room", isPrivate: true, isExternal: true }],
-      [{ channelId: "room", principalId: "alice" }],
-    );
-    assert.equal(await members("channel:room"), undefined);
-  }));
+test("complete memory audience rejects external or unresolved members rather than dropping them", async () => {
+  const directory = createPostgresDirectoryStore(testDatabaseUrl());
+  await directory.replace([{ principalId: "alice", displayName: "Alice", type: "internal" }]);
+  await directory.replaceChannels(
+    [{ channelId: "room", name: "room", isPrivate: true }],
+    [{ channelId: "room", principalId: "alice" }],
+  );
+  const members = createCurrentScopeMembers({ directory, identity: { classify: () => ({ type: "internal" }) } }, true);
+  assert.equal((await members("channel:room"))?.length, 1);
+  await directory.replaceChannels(
+    [{ channelId: "room", name: "room", isPrivate: true }],
+    [
+      { channelId: "room", principalId: "alice" },
+      { channelId: "room", principalId: "unresolved" },
+    ],
+  );
+  assert.equal(await members("channel:room"), undefined);
+  await directory.replaceChannels(
+    [{ channelId: "room", name: "room", isPrivate: true, isExternal: true }],
+    [{ channelId: "room", principalId: "alice" }],
+  );
+  assert.equal(await members("channel:room"), undefined);
+});
 
 test("a recall-only routed provider still reaches prompt recall through disclosure", async () => {
   const f = fixture();

@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it as nodeIt } from "node:test";
 import assert from "node:assert/strict";
 import {
   personKey,
@@ -13,6 +13,10 @@ import { scopeId } from "../src/types.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+
+function it(name: string, fn: () => unknown): void {
+  nodeIt(name, () => inTestTenant(fn));
+}
 
 describe("personKey / samePerson: the canonical same-person primitive", () => {
   it("trims, and lowercases emails only (the exact formula the connector/secret-drop checks used)", () => {
@@ -29,35 +33,30 @@ describe("personKey / samePerson: the canonical same-person primitive", () => {
     assert.equal(samePerson("", ""), false, "an empty id names nobody — fail closed");
   });
 
-  it("bridges slackId ↔ email principal ONLY via an authoritative roster row", () =>
-    inTestTenant(async () => {
-      const dir = createPostgresDirectoryStore(testDatabaseUrl());
-      await dir.replace([
-        { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
-        { principalId: "casey@acme.test", displayName: "Casey", type: "internal", slackId: "U-casey" },
-      ]);
-      assert.equal(await samePersonInDirectory(dir, "jordan@acme.test", "U-jordan"), true);
-      assert.equal(
-        await samePersonInDirectory(dir, "U-jordan", "Jordan@Acme.test"),
-        true,
-        "cased email still finds its roster row",
-      );
-      assert.equal(
-        await samePersonInDirectory(dir, "jordan@acme.test", "U-casey"),
-        false,
-        "distinct people never merge",
-      );
-      assert.equal(
-        await samePersonInDirectory(dir, "jordan@acme.test", "U-ghost"),
-        false,
-        "no roster row, no bridge — fail closed",
-      );
-      assert.equal(
-        await samePersonInDirectory(createPostgresDirectoryStore(testDatabaseUrl()), "jordan@acme.test", "U-jordan"),
-        false,
-        "empty directory bridges nothing",
-      );
-    }));
+  it("bridges slackId ↔ email principal ONLY via an authoritative roster row", async () => {
+    const dir = createPostgresDirectoryStore(testDatabaseUrl());
+    await dir.replace([
+      { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
+      { principalId: "casey@acme.test", displayName: "Casey", type: "internal", slackId: "U-casey" },
+    ]);
+    assert.equal(await samePersonInDirectory(dir, "jordan@acme.test", "U-jordan"), true);
+    assert.equal(
+      await samePersonInDirectory(dir, "U-jordan", "Jordan@Acme.test"),
+      true,
+      "cased email still finds its roster row",
+    );
+    assert.equal(await samePersonInDirectory(dir, "jordan@acme.test", "U-casey"), false, "distinct people never merge");
+    assert.equal(
+      await samePersonInDirectory(dir, "jordan@acme.test", "U-ghost"),
+      false,
+      "no roster row, no bridge — fail closed",
+    );
+    assert.equal(
+      await samePersonInDirectory(createPostgresDirectoryStore(testDatabaseUrl()), "jordan@acme.test", "U-jordan"),
+      false,
+      "empty directory bridges nothing",
+    );
+  });
 
   it("personKeys collects every id the roster asserts for one person", () => {
     const keys = personKeys({ principalId: "jordan@acme.test", slackId: "U-jordan" }, "Jordan@Acme.test");
@@ -86,80 +85,74 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
     };
   }
 
-  it("an email-cased owner passes for the lowercase capability actor", () =>
-    inTestTenant(async () => {
-      assert.equal(await canAdministerCron(appOver(), cron(), "jordan@acme.test"), true);
-      assert.equal(await canAdministerCron(appOver(), cron(), "casey@acme.test"), false);
-    }));
+  it("an email-cased owner passes for the lowercase capability actor", async () => {
+    assert.equal(await canAdministerCron(appOver(), cron(), "jordan@acme.test"), true);
+    assert.equal(await canAdministerCron(appOver(), cron(), "casey@acme.test"), false);
+  });
 
-  it("a Slack-id owner resolves through the directory for an email-identity actor", () =>
-    inTestTenant(async () => {
-      const dir = createPostgresDirectoryStore(testDatabaseUrl());
-      await dir.replace([
-        { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
-      ]);
-      const slackOwned = cron({ owner: "U-jordan", ownerScopeId: scopeId("personal", "U-jordan") });
-      assert.equal(await canAdministerCron(appOver(dir), slackOwned, "jordan@acme.test"), true);
-      assert.equal(
-        await canAdministerCron(appOver(), slackOwned, "jordan@acme.test"),
-        false,
-        "without the roster the bridge fails closed",
-      );
-    }));
+  it("a Slack-id owner resolves through the directory for an email-identity actor", async () => {
+    const dir = createPostgresDirectoryStore(testDatabaseUrl());
+    await dir.replace([
+      { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
+    ]);
+    const slackOwned = cron({ owner: "U-jordan", ownerScopeId: scopeId("personal", "U-jordan") });
+    assert.equal(await canAdministerCron(appOver(dir), slackOwned, "jordan@acme.test"), true);
+    assert.equal(
+      await canAdministerCron(appOver(), slackOwned, "jordan@acme.test"),
+      false,
+      "without the roster the bridge fails closed",
+    );
+  });
 
-  it("webhooks share the same owner rule", () =>
-    inTestTenant(async () => {
-      const webhook = {
-        id: "w1",
-        owner: "Alex@EXAMPLE.com",
-        ownerScopeId: scopeId("personal", "Alex@EXAMPLE.com"),
-      } as Webhook;
-      assert.equal(await canAdministerWebhook(appOver(), webhook, "alex@example.com"), true);
-      assert.equal(await canAdministerWebhook(appOver(), webhook, "casey@example.com"), false);
-    }));
+  it("webhooks share the same owner rule", async () => {
+    const webhook = {
+      id: "w1",
+      owner: "Alex@EXAMPLE.com",
+      ownerScopeId: scopeId("personal", "Alex@EXAMPLE.com"),
+    } as Webhook;
+    assert.equal(await canAdministerWebhook(appOver(), webhook, "alex@example.com"), true);
+    assert.equal(await canAdministerWebhook(appOver(), webhook, "casey@example.com"), false);
+  });
 
-  it("the list-path matcher agrees with the per-item check, including the roster bridge", () =>
-    inTestTenant(async () => {
-      const dir = createPostgresDirectoryStore(testDatabaseUrl());
-      await dir.replace([
-        { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
-      ]);
-      const slackOwned = cron({ owner: "U-jordan", ownerScopeId: scopeId("personal", "U-jordan") });
-      const isJordan = await samePersonMatcher(dir, "jordan@acme.test");
-      assert.equal(await canAdministerCron(appOver(dir), slackOwned, "jordan@acme.test", isJordan), true);
-      assert.equal(
-        await canAdministerCron(appOver(dir), cron({ owner: "casey@acme.test" }), "jordan@acme.test", isJordan),
-        false,
-      );
-    }));
+  it("the list-path matcher agrees with the per-item check, including the roster bridge", async () => {
+    const dir = createPostgresDirectoryStore(testDatabaseUrl());
+    await dir.replace([
+      { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
+    ]);
+    const slackOwned = cron({ owner: "U-jordan", ownerScopeId: scopeId("personal", "U-jordan") });
+    const isJordan = await samePersonMatcher(dir, "jordan@acme.test");
+    assert.equal(await canAdministerCron(appOver(dir), slackOwned, "jordan@acme.test", isJordan), true);
+    assert.equal(
+      await canAdministerCron(appOver(dir), cron({ owner: "casey@acme.test" }), "jordan@acme.test", isJordan),
+      false,
+    );
+  });
 });
 
 describe("samePersonMatcher: one roster read answers many owner checks", () => {
-  it("matches the actor's own row's ids without further lookups, and never a stranger", () =>
-    inTestTenant(async () => {
-      const dir = createPostgresDirectoryStore(testDatabaseUrl());
-      await dir.replace([
-        { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
-        { principalId: "casey@acme.test", displayName: "Casey", type: "internal", slackId: "U-casey" },
-      ]);
-      const isJordan = await samePersonMatcher(dir, "jordan@acme.test");
-      assert.equal(await isJordan("Jordan@Acme.test"), true);
-      assert.equal(await isJordan("U-jordan"), true);
-      assert.equal(await isJordan("U-casey"), false);
-      assert.equal(await isJordan("casey@acme.test"), false);
-      assert.equal(await isJordan(""), false, "an empty id names nobody — fail closed");
-    }));
+  it("matches the actor's own row's ids without further lookups, and never a stranger", async () => {
+    const dir = createPostgresDirectoryStore(testDatabaseUrl());
+    await dir.replace([
+      { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
+      { principalId: "casey@acme.test", displayName: "Casey", type: "internal", slackId: "U-casey" },
+    ]);
+    const isJordan = await samePersonMatcher(dir, "jordan@acme.test");
+    assert.equal(await isJordan("Jordan@Acme.test"), true);
+    assert.equal(await isJordan("U-jordan"), true);
+    assert.equal(await isJordan("U-casey"), false);
+    assert.equal(await isJordan("casey@acme.test"), false);
+    assert.equal(await isJordan(""), false, "an empty id names nobody — fail closed");
+  });
 
-  it("an actor id with NO row of its own still bridges through the owner's row", () =>
-    inTestTenant(async () => {
-      const dir = createPostgresDirectoryStore(testDatabaseUrl());
-      await dir.replace([
-        { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
-      ]);
-      const isJordan = await samePersonMatcher(dir, "U-jordan");
-      assert.equal(await isJordan("jordan@acme.test"), true, "falls back to the per-pair directory bridge");
-      assert.equal(await isJordan("casey@acme.test"), false);
-      const noRoster = await samePersonMatcher(createPostgresDirectoryStore(testDatabaseUrl()), "U-jordan");
-      assert.equal(await noRoster("jordan@acme.test"), false, "no roster row anywhere — fail closed");
-    }));
+  it("an actor id with NO row of its own still bridges through the owner's row", async () => {
+    const dir = createPostgresDirectoryStore(testDatabaseUrl());
+    await dir.replace([
+      { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
+    ]);
+    const isJordan = await samePersonMatcher(dir, "U-jordan");
+    assert.equal(await isJordan("jordan@acme.test"), true, "falls back to the per-pair directory bridge");
+    assert.equal(await isJordan("casey@acme.test"), false);
+    const noRoster = await samePersonMatcher(createPostgresDirectoryStore(testDatabaseUrl()), "U-jordan");
+    assert.equal(await noRoster("jordan@acme.test"), false, "no roster row anywhere — fail closed");
+  });
 });

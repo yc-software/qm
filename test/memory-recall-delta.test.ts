@@ -1,5 +1,5 @@
 import { compactTranscript } from "../src/agent/context-compaction.ts";
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { memoryRecallDelta, shownFacts } from "../src/memory/recall-delta.ts";
 import { renderFacts, type MemoryFact } from "../src/memory/facts.ts";
@@ -14,6 +14,10 @@ import { TimeoutError } from "../src/util/async.ts";
 import { reportEnvelope } from "../src/memory/provider-outcome.ts";
 import { MemoryRecallWithheld } from "../src/memory/disclosure.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => unknown): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 const alice = "personal:alice";
 const memoryFact = (id: string, text: string): MemoryFact => ({
@@ -108,87 +112,86 @@ test("recall checkpoint metadata never leaks into attachment-only compaction inp
   assert.doesNotMatch(text, /CHECKPOINT_ONLY_FACT|memoryRecall/);
 });
 
-test("id-less provider lines inject only new lines over 20 turns, and timeouts or denials never claim removal", () =>
-  inTestTenant(async () => {
-    const notebook = createPostgresMemoryService(testDatabaseUrl());
-    await notebook.capture(alice, ["NOTEBOOK_FACT prefers terse replies"], Date.parse("2026-10-01T12:00:00Z"));
-    const line = (i: number) => `provider line ${i}: ${"detail ".repeat(6).trim()}`;
-    let window = 0;
-    let failure: Error | undefined;
-    let unlinked = false;
-    let withheld = false;
-    const knowledge: MemoryService = {
-      async recall() {
-        if (failure) throw failure;
-        if (withheld) throw new MemoryRecallWithheld(alice);
-        if (unlinked) {
-          reportEnvelope({ code: "actor_unlinked" });
-          return [];
-        }
-        return Array.from({ length: 6 }, (_, k) => ({ text: line(window + k), score: 0.2 }));
-      },
-      async capture() {
-        return 0;
-      },
-      async query() {
+test("id-less provider lines inject only new lines over 20 turns, and timeouts or denials never claim removal", async () => {
+  const notebook = createPostgresMemoryService(testDatabaseUrl());
+  await notebook.capture(alice, ["NOTEBOOK_FACT prefers terse replies"], Date.parse("2026-10-01T12:00:00Z"));
+  const line = (i: number) => `provider line ${i}: ${"detail ".repeat(6).trim()}`;
+  let window = 0;
+  let failure: Error | undefined;
+  let unlinked = false;
+  let withheld = false;
+  const knowledge: MemoryService = {
+    async recall() {
+      if (failure) throw failure;
+      if (withheld) throw new MemoryRecallWithheld(alice);
+      if (unlinked) {
+        reportEnvelope({ code: "actor_unlinked" });
         return [];
-      },
-      async read() {
-        return "";
-      },
-    };
-    const memory = createRoutedMemoryService({
-      providers: { default: notebook, knowledge },
-      routes: [
-        { provider: "default", scopes: ["personal"] },
-        { provider: "knowledge", scopes: ["personal"], manage: false, label: "Knowledge", failOpen: true },
-      ],
-    });
-    const labels = new Map([[alice, "Alice"]]);
-    const history: SessionEntry[] = [];
-    const turn = async () => {
-      const outcomes: MemoryProviderOutcome[] = [];
-      const report = (outcome: MemoryProviderOutcome) => void outcomes.push(outcome);
-      const recalled = await recallAcrossScopes(memory, [alice], { query: "q", report }, labels);
-      const held = new Map([[alice, shownFacts((await notebook.facts!(alice)) ?? [])]]);
-      const delta = memoryRecallDelta(recalled, history, held, labels, outcomes);
-      history.push(entry(delta.record, history.length + 1));
-      return delta.text;
-    };
-    const block = (...lines: string[]) => `### Alice · Knowledge\n\`\`\`untrusted-data\n${lines.join("\n")}\n\`\`\``;
+      }
+      return Array.from({ length: 6 }, (_, k) => ({ text: line(window + k), score: 0.2 }));
+    },
+    async capture() {
+      return 0;
+    },
+    async query() {
+      return [];
+    },
+    async read() {
+      return "";
+    },
+  };
+  const memory = createRoutedMemoryService({
+    providers: { default: notebook, knowledge },
+    routes: [
+      { provider: "default", scopes: ["personal"] },
+      { provider: "knowledge", scopes: ["personal"], manage: false, label: "Knowledge", failOpen: true },
+    ],
+  });
+  const labels = new Map([[alice, "Alice"]]);
+  const history: SessionEntry[] = [];
+  const turn = async () => {
+    const outcomes: MemoryProviderOutcome[] = [];
+    const report = (outcome: MemoryProviderOutcome) => void outcomes.push(outcome);
+    const recalled = await recallAcrossScopes(memory, [alice], { query: "q", report }, labels);
+    const held = new Map([[alice, shownFacts((await notebook.facts!(alice)) ?? [])]]);
+    const delta = memoryRecallDelta(recalled, history, held, labels, outcomes);
+    history.push(entry(delta.record, history.length + 1));
+    return delta.text;
+  };
+  const block = (...lines: string[]) => `### Alice · Knowledge\n\`\`\`untrusted-data\n${lines.join("\n")}\n\`\`\``;
 
-    const first = await turn();
-    assert.match(first, /NOTEBOOK_FACT/);
-    assert.ok(first.includes(block(...Array.from({ length: 6 }, (_, k) => line(k)))));
-    for (window = 1; window < 20; window++) {
-      assert.equal(await turn(), `New or updated memory facts:\n\n${block(line(window + 5))}`);
-    }
+  const first = await turn();
+  assert.match(first, /NOTEBOOK_FACT/);
+  assert.ok(first.includes(block(...Array.from({ length: 6 }, (_, k) => line(k)))));
+  for (window = 1; window < 20; window++) {
+    assert.equal(await turn(), `New or updated memory facts:\n\n${block(line(window + 5))}`);
+  }
 
-    window = 19;
-    failure = new TimeoutError("memory provider timed out after 3000ms");
-    assert.equal(await turn(), "");
-    failure = undefined;
-    assert.equal(await turn(), "");
+  window = 19;
+  failure = new TimeoutError("memory provider timed out after 3000ms");
+  assert.equal(await turn(), "");
+  failure = undefined;
+  assert.equal(await turn(), "");
 
-    failure = new McpCallError("mcp tools/call failed (HTTP 403)", { status: 403 });
-    assert.equal(
-      await turn(),
-      "Some previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized.",
-    );
-    failure = undefined;
-    const restored = await turn();
-    assert.ok(restored.includes(block(...Array.from({ length: 6 }, (_, k) => line(window + k)))));
-    assert.doesNotMatch(restored, /NOTEBOOK_FACT|consolidated or removed/);
+  failure = new McpCallError("mcp tools/call failed (HTTP 403)", { status: 403 });
+  assert.equal(
+    await turn(),
+    "Some previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized.",
+  );
+  failure = undefined;
+  const restored = await turn();
+  assert.ok(restored.includes(block(...Array.from({ length: 6 }, (_, k) => line(window + k)))));
+  assert.doesNotMatch(restored, /NOTEBOOK_FACT|consolidated or removed/);
 
-    const note =
-      "Some previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized.";
-    unlinked = true;
-    assert.equal(await turn(), note);
-    unlinked = false;
-    assert.ok((await turn()).includes(block(...Array.from({ length: 6 }, (_, k) => line(window + k)))));
-    withheld = true;
-    assert.equal(await turn(), note);
-  }));
+  const note =
+    "Some previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized.";
+  unlinked = true;
+  assert.equal(await turn(), note);
+  unlinked = false;
+  assert.ok((await turn()).includes(block(...Array.from({ length: 6 }, (_, k) => line(window + k)))));
+  withheld = true;
+  assert.equal(await turn(), note);
+});
 
 test("provider lines stay counted while their provider answers, so a later refusal is still noted", () => {
   const row = (text: string) => ({ scope: alice, text, source: { provider: "knowledge", label: "Knowledge" } });
