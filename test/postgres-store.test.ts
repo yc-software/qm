@@ -1,5 +1,4 @@
 import "./run-availability.ts";
-import { useOwnerDatabase } from "../src/tenants/claim.ts";
 import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
@@ -348,9 +347,6 @@ test(
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new globalThis.URL(URL!);
     url.searchParams.set("options", `-c search_path=${schema}`);
-    const owner = new globalThis.URL(process.env.DATABASE_OWNER_URL!);
-    owner.searchParams.set("options", `-c search_path=${schema}`);
-    useOwnerDatabase(owner.toString());
     const day = 86_400_000;
     const base = Date.UTC(2025, 5, 1);
     let clock = base + 3 * day;
@@ -409,7 +405,6 @@ test(
       await slowPass();
       assert.deepEqual(await pending(), [1]);
     } finally {
-      useOwnerDatabase(process.env.DATABASE_OWNER_URL);
       await raw.end();
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
       await admin.end();

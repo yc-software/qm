@@ -1,11 +1,10 @@
-import { useOwnerDatabase } from "../src/tenants/claim.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, pointOwnerAtSchema, restoreFileOwner } from "./support/test-database.ts";
 
 const request: OrchestratorInput = {
   actor: { id: "retry-test", type: "internal" },
@@ -31,9 +30,7 @@ for (const backend of ["memory", "postgres"] as const) {
         const url = new URL(connectionString);
         url.searchParams.set("options", `-c search_path=${schema}`);
         connectionString = url.toString();
-        const owner = new URL(process.env.DATABASE_OWNER_URL!);
-        owner.searchParams.set("options", `-c search_path=${schema}`);
-        useOwnerDatabase(owner.toString());
+        pointOwnerAtSchema(schema);
       }
       const runtime =
         backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
@@ -75,7 +72,7 @@ for (const backend of ["memory", "postgres"] as const) {
         await runs.close?.();
         if (admin) {
           try {
-            useOwnerDatabase(process.env.DATABASE_OWNER_URL);
+            restoreFileOwner();
             await admin.query(`DROP SCHEMA ${schema} CASCADE`);
           } finally {
             await admin.end();
@@ -99,9 +96,7 @@ for (const backend of ["memory", "postgres"] as const) {
         const url = new URL(connectionString);
         url.searchParams.set("options", `-c search_path=${schema}`);
         connectionString = url.toString();
-        const owner = new URL(process.env.DATABASE_OWNER_URL!);
-        owner.searchParams.set("options", `-c search_path=${schema}`);
-        useOwnerDatabase(owner.toString());
+        pointOwnerAtSchema(schema);
       }
       let { runs } =
         backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
@@ -149,7 +144,7 @@ for (const backend of ["memory", "postgres"] as const) {
         await runs.close?.();
         if (admin) {
           try {
-            useOwnerDatabase(process.env.DATABASE_OWNER_URL);
+            restoreFileOwner();
             await admin.query(`DROP SCHEMA ${schema} CASCADE`);
           } finally {
             await admin.end();
