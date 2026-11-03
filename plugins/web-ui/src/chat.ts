@@ -3465,7 +3465,16 @@ export function createChatSurface(
   }
 
   function toolPayloadText(payload: ToolPayload): string {
-    const hidden = new Set(["tool", "callId", "workStartedAt", "workFinishedAt", "isError", "retrySafe", "rerun"]);
+    const hidden = new Set([
+      "tool",
+      "callId",
+      "workStartedAt",
+      "workFinishedAt",
+      "isError",
+      "retrySafe",
+      "rerun",
+      "wire",
+    ]);
     const entries = Object.entries(payload as Record<string, unknown>).filter(
       ([key, value]) => !hidden.has(key) && value !== undefined,
     );
