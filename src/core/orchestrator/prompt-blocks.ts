@@ -4,7 +4,8 @@ import { retainedSnapshot } from "../../agent/context-snapshot.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import type { CandidateDestination, GatewayContext, GrantedHandle, SessionEntry } from "../../types.ts";
 import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
-import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
+import type { DirectoryMember } from "../../directory/directory-store.ts";
+import type { PersistedSoulRevision } from "../../resolution/config-store.ts";
 
 const memberLabel = (m: { principalId: string; displayName: string; slackId?: string }): string =>
   `${m.displayName} (${[m.principalId, m.slackId].filter(Boolean).join(", ")})`;
@@ -60,6 +61,64 @@ function rosterOf(entry: SessionEntry): RosterSnapshot | undefined {
   const snapshot = (entry.payload as { rosterSnapshot?: Partial<RosterSnapshot> } | null)?.rosterSnapshot;
   return Array.isArray(snapshot?.roster) && typeof snapshot.sessionId === "string"
     ? (snapshot as RosterSnapshot)
+    : undefined;
+}
+
+interface GuidanceSnapshot {
+  version: number;
+  sessionId: string;
+}
+
+export function guidanceUpdateEvent(
+  guidance: { version: number; personal: boolean; revisions: readonly PersistedSoulRevision[] },
+  history: readonly SessionEntry[],
+  sessionId: string,
+): { text: string; record: GuidanceSnapshot } {
+  const record = { version: guidance.version, sessionId };
+  const { previous } = retainedSnapshot(history, guidanceOf);
+  if (!previous || previous.version >= guidance.version) return { text: "", record };
+  const newer = guidance.revisions.filter((r) => r.version > previous.version);
+  const sources = [...new Set(newer.map((r) => r.sessionId))];
+  if (sources.length === 1 && sources[0] === sessionId) return { text: "", record };
+  const elsewhere = sources.filter((s): s is string => !!s && s !== sessionId).map((s) => s.slice(0, 7));
+  let where = "";
+  if (elsewhere.length) where = `In a different session (${elsewhere.join(", ")}) `;
+  else if (sources.includes(undefined)) where = "Outside this session ";
+  const who = guidance.personal
+    ? "the user updated their standing guidance"
+    : "this conversation's standing guidance was updated";
+  const content = (version: number) => guidance.revisions.find((r) => r.version === version)?.content;
+  const lines = (text: string) =>
+    new Set(
+      text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
+    );
+  const baseline = previous.version === 0 ? "" : content(previous.version);
+  let change = "; the current text is in your instructions";
+  if (baseline !== undefined) {
+    const before = lines(baseline);
+    const after = lines(content(guidance.version) ?? "");
+    const added = [...after].filter((line) => !before.has(line));
+    const removed = [...before].filter((line) => !after.has(line));
+    if (!added.length && !removed.length) return { text: "", record };
+    change = [
+      added.length ? `: "${added.join("\n")}"` : "",
+      removed.length ? `${added.length ? ". It no longer says" : ", removing"}: "${removed.join("\n")}"` : "",
+    ].join("");
+  }
+  const sentence = `${where}${who}${change}.`;
+  return {
+    text: `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)} Follow it moving forward but no need to directly mention you're doing so.`,
+    record,
+  };
+}
+
+function guidanceOf(entry: SessionEntry): GuidanceSnapshot | undefined {
+  const snapshot = (entry.payload as { guidanceSnapshot?: Partial<GuidanceSnapshot> } | null)?.guidanceSnapshot;
+  return typeof snapshot?.version === "number" && typeof snapshot.sessionId === "string"
+    ? (snapshot as GuidanceSnapshot)
     : undefined;
 }
 
@@ -219,25 +278,6 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
   ].join("\n");
 }
 
-const REACH_ROSTER_CAP = 30;
-export function renderReachRoster(channels: DirectoryChannel[], displayName: string): string | null {
-  if (channels.length === 0) return null;
-  const shown = channels
-    .toSorted((a, b) => a.channelId.localeCompare(b.channelId))
-    .slice(0, REACH_ROSTER_CAP)
-    .map((c) => `#${c.name}`)
-    .join(", ");
-  const more =
-    channels.length > REACH_ROSTER_CAP ? ` …and ${channels.length - REACH_ROSTER_CAP} more — name one to check` : "";
-  return [
-    "## Other computers you can reach",
-    `Rooms you and ${displayName} share: ${shown}${more}`,
-    "This conversation's computer is where you work. Other rooms' computers are places you visit:",
-    'read, search, fetch — don\'t rearrange. Run a command there with execute(scope: "#room").',
-    "Say where anything you bring back came from.",
-  ].join("\n");
-}
-
 const ROSTER_CAP = 20;
 export function renderConversationRoster(members: DirectoryMember[]): string | null {
   if (members.length === 0) return null;
@@ -263,7 +303,6 @@ const SYSTEM_CONTEXT_ORDER = [
   "Project home channel",
   "Where scheduled tasks post",
   "Who's in this conversation",
-  "Other computers you can reach",
   "Files",
   "Sandboxes",
   "Model access",

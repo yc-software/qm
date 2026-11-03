@@ -59,10 +59,9 @@ import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
-import { resolveReachableChannel } from "../resolution/scope-reach.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
-import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
+import type { DirectoryStore, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { Lease, LeaseAttempt } from "../sessions/session-store.ts";
 import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.ts";
@@ -207,13 +206,13 @@ import {
   deliveryMenu,
   environmentNote,
   membershipEvent,
+  guidanceUpdateEvent,
   renderConversationRoster,
   renderGatewayContext,
   renderSandboxProviders,
   senderNote,
   sharedFilesSystemSection,
   renderProjectHomeChannel,
-  renderReachRoster,
   renderStandingObligations,
   renderSystemContext,
   type SystemContextBlocks,
@@ -268,8 +267,6 @@ const SESSION_GONE_REASON = "this conversation is no longer available — start 
 
 const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 
-const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
-
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   if (deps.sessions.leaseTtlMs < MIN_SESSION_LEASE_TTL_MS) {
     throw new Error(
@@ -290,20 +287,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
   const pendingCaptures = perTenant(() => new Map<ScopeId, Promise<void>>());
 
-  const REACH_ROSTER_TTL_MS = 5 * 60_000;
-  const reachRosterCache = perTenant(
-    () => new LRUCache<string, DirectoryChannel[]>({ max: INSTANCE_CACHE_MAX_ENTRIES, ttl: REACH_ROSTER_TTL_MS }),
-  );
-  async function reachableChannelsFor(directory: DirectoryStore, principalId: string): Promise<DirectoryChannel[]> {
-    const cached = reachRosterCache().get(principalId);
-    if (cached) return cached;
-    const channels = await directory.listChannelsFor(principalId);
-    reachRosterCache().set(principalId, channels);
-    return channels;
-  }
-
+  const DIRECTORY_INDEX_TTL_MS = 5 * 60_000;
   const directoryIndexCache = perTenant(
-    () => new LRUCache<"index", Map<string, DirectoryMember>>({ max: 1, ttl: REACH_ROSTER_TTL_MS }),
+    () => new LRUCache<"index", Map<string, DirectoryMember>>({ max: 1, ttl: DIRECTORY_INDEX_TTL_MS }),
   );
   async function directoryIndexFor(directory: DirectoryStore): Promise<Map<string, DirectoryMember>> {
     const cached = directoryIndexCache().get("index");
@@ -393,6 +379,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     automated: boolean;
     runId?: string;
     surface?: string;
+    shutdown?: AbortSignal;
   }): Promise<{ lease: Lease; waitedMs: number } | { lease: null; waitedMs: number; refusal: TurnResult }> {
     const budget = deps.turnLeaseWaitMs ?? CONFIG_DEFAULTS.turnLeaseWaitMs;
     const attempt = await acquireLeaseWithin(
@@ -403,6 +390,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       { waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn" },
     );
     const waitedMs = attempt.waitedMs ?? 0;
+    if (attempt.lease && args.shutdown?.aborted) {
+      await deps.sessions.releaseLease(attempt.lease);
+      const runId = args.runId ? { runId: args.runId } : {};
+      return { lease: null, waitedMs, refusal: { status: "queued", sessionId: args.sessionId, ...runId } };
+    }
     if (attempt.lease)
       return { lease: args.runId ? { ...attempt.lease, turnId: args.runId } : attempt.lease, waitedMs };
     if (attempt.heldUntil === undefined) {
@@ -490,7 +482,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return "block";
       };
       if (!deps.securityScreener && !deps.agent.screenSecurity) return block("no-screener");
-      if (!(await deps.rateLimiter.check(actor.id)).allowed) return block("rate-limited");
       if (deps.budget && !(await deps.budget.check(actor.id)).allowed) return block("over-budget");
       if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
       if (!bounded || bounded.truncated) return block("oversize-input");
@@ -726,14 +717,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             reason: "internal-only: shared audience includes a non-internal participant",
           };
         }
-      }
-
-      const rl = await deps.rateLimiter.check(actor.id);
-      if (!rl.allowed) {
-        return {
-          status: "refused",
-          reason: `rate limit exceeded — try again in ${Math.ceil((rl.retryAfterMs ?? 0) / 1000)}s`,
-        };
       }
 
       if (deps.budget) {
@@ -1012,6 +995,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           automated: automatedTurn,
           ...(input.runId ? { runId: input.runId } : {}),
           ...(input.surface ? { surface: input.surface } : {}),
+          ...(input.shutdown ? { shutdown: input.shutdown } : {}),
         });
         if (!acquired.lease) return acquired.refusal;
         const lease = acquired.lease;
@@ -1911,7 +1895,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let toolCalls = 0;
       const commandPolicy = resolution.commandPolicy;
       const layerCommandRules = [...(deps.deploymentLayer?.().commandRules ?? [])];
-      const reachAvailable = !!deps.reachExec && !!deps.directory && conversation.kind === "dm";
       const turnSandboxResources = external
         ? deps.sandboxResources?.forTurn({
             actorId: actor.id,
@@ -1953,7 +1936,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         accessResource,
         provisionResource,
         useSkill,
-        provisionForReach,
         reclaimBox,
         invalidateProvision,
       } = createTurnSandboxes({
@@ -1982,6 +1964,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         automated: automatedTurn,
         ...(input.runId ? { runId: input.runId } : {}),
         ...(input.surface ? { surface: input.surface } : {}),
+        ...(input.shutdown ? { shutdown: input.shutdown } : {}),
       });
       if (!acquired.lease) return acquired.refusal;
       const lease = acquired.lease;
@@ -2270,13 +2253,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         if (automatedTurn && input.surface && isPollSurface(input.surface)) {
           systemPrompt += `\n\nThis turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call \`finish_silently\` to end the turn without sending anything — silence is the success case for a poll, so don't post a summary or a "nothing to report" note just to fill the silence.`;
-        }
-        if (reachAvailable) {
-          const roster = renderReachRoster(
-            await reachableChannelsFor(deps.directory!, actor.id),
-            actor.displayName ?? "this person",
-          );
-          if (roster) turnContextBlocks["Other computers you can reach"] = roster;
         }
         if (!external && deps.directory && conversation.kind !== "dm") {
           rosterMembers = await (async () => {
@@ -2651,15 +2627,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           accessSandboxResource: accessResource,
           useSkill,
           listSkills: (source) => visibleSkillsForTurn(source ? [source] : [scopeId, resolution.orgScopeId]),
-          ...(reachAvailable
-            ? {
-                reach: {
-                  resolveChannel: (q: string) =>
-                    resolveReachableChannel(q, { directory: deps.directory!, actorId: actor.id }),
-                  provisionFor: provisionForReach,
-                },
-              }
-            : {}),
           layers: resolution.layers,
           commandPolicy: () => commandPolicy,
           layerCommandRules: () => layerCommandRules,
@@ -3208,11 +3175,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             recallOutcomes,
           );
           const snapshot = membershipEvent(rosterMembers, continuation?.history ?? rawEntries, session.id);
+          const guidance =
+            !external && deps.config
+              ? guidanceUpdateEvent(
+                  {
+                    version: deps.config.soulVersion(scopeId),
+                    personal: conversation.kind === "dm",
+                    revisions: deps.config.soulHistory(scopeId),
+                  },
+                  continuation?.history ?? rawEntries,
+                  session.id,
+                )
+              : undefined;
           const turnEnvironment = environmentNote(
             [
               turnEnvironmentContents,
               continuation ? "" : mailbox?.text,
               snapshot.text,
+              guidance?.text,
               recall.text ? `${memoryHeading}${recall.text}` : "",
               inboundIssuesNote(inboundIssues),
             ]
@@ -3220,7 +3200,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               .join("\n\n"),
           );
           const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
-          const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
+          const silentResume = continueTurn && !continuation && !snapshot.text && !guidance?.text && !recall.text;
           let recordedRecall = false;
           const emit: AgentTurnInput["emit"] = async (entry) => {
             turnProgress++;
@@ -3243,6 +3223,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (!recordedRecall && !payload.steered && !payload.overheard) {
                 recordedRecall = true;
                 if (snapshot.record) payload.rosterSnapshot = snapshot.record;
+                if (guidance) payload.guidanceSnapshot = guidance.record;
                 if (environment) payload.environment = environment;
                 if (recall.text) payload.memoryRecall = recall.record;
                 if (!continuation && recallOutcomes.length) payload.memoryRecallOutcomes = recallOutcomes;

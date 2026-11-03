@@ -4,7 +4,7 @@ import { boundTenant } from "./tenant.ts";
 export const TENANT_HEADER = "x-qm-tenant";
 
 export function canonicalPayload(method: string, pathWithQuery: string, body: string, tenant = ""): string {
-  return `${method}\n${pathWithQuery}\n${tenant}\n${body}`;
+  return tenant ? `${method}\n${pathWithQuery}\n${tenant}\n${body}` : `${method}\n${pathWithQuery}\n${body}`;
 }
 
 export function signRequest(secret: string, timestampSec: number, canonical: string): string {

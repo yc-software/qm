@@ -29,7 +29,6 @@ import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import {
   testConfigStore,
@@ -152,7 +151,6 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
     auditLog,
-    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     agent,
     memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy: createDeployService({

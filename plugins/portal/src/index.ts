@@ -14,6 +14,7 @@ import { createServer, METHODS, type IncomingMessage, type ServerResponse } from
 import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
+import { createCanonicalResolver } from "./canonical.ts";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import { answerPreflight, parseAllowedOrigins, prepareCors } from "./cors.ts";
 import {
@@ -29,8 +30,6 @@ import {
   randomToken,
   safeEqual,
   sanitizeReturnTo,
-  requestTenant,
-  tenantKey,
   type SessionClaims,
   type ImpersonationClaims,
   type TmpClaims,
@@ -57,9 +56,7 @@ import {
   FORWARD_BROKER_HEADERS,
   FORWARD_WEBHOOK_HEADERS,
 } from "./proxy.ts";
-import { hostTenant, signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { boundTenant, withTenant } from "../../chassis/src/tenant.ts";
-import { refreshSurfaceConfig, surfaceConfig } from "./surface-config.ts";
+import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
 import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
@@ -117,6 +114,39 @@ function playgroundIntEnv(name: string, fallback: number): number {
 }
 const PLAYGROUND_MINTS_PER_IP = playgroundIntEnv("PORTAL_PLAYGROUND_MINTS_PER_IP", 30);
 const PLAYGROUND_MINT_WINDOW_S = playgroundIntEnv("PORTAL_PLAYGROUND_MINT_WINDOW_S", 3600);
+const NEUTRAL_ACCENT = "#4f46e5";
+let brandAccent = NEUTRAL_ACCENT;
+let modelProviderConfigured: boolean | undefined;
+let surfaceConfigNextAt = 0;
+let surfaceConfigInflight: Promise<void> | null = null;
+function refreshSurfaceConfig(): Promise<void> {
+  if (Date.now() >= surfaceConfigNextAt) {
+    surfaceConfigNextAt = Date.now() + 5_000;
+    surfaceConfigInflight = fetchSurfaceConfig().finally(() => {
+      surfaceConfigInflight = null;
+    });
+  }
+  return surfaceConfigInflight ?? Promise.resolve();
+}
+async function fetchSurfaceConfig(): Promise<void> {
+  try {
+    const path = withSourceAuthNonce("/v1/surface-config", CORE_SIGNING_SECRET);
+    const r = await fetch(`${CORE}${path}`, {
+      headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+      signal: AbortSignal.timeout(2_000),
+    });
+    if (r.ok) {
+      const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
+      brandAccent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
+      modelProviderConfigured =
+        typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
+      surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
+    }
+  } catch {
+    void 0;
+  }
+}
+
 const WEB_UI_UPSTREAM = (process.env.WEB_UI_UPSTREAM ?? "http://localhost:8096").replace(/\/$/, "");
 
 function isSlackIssuer(issuer: string): boolean {
@@ -229,12 +259,7 @@ const adminCache = new LRUCache<string, boolean>({ max: 10_000, ttl: ADMIN_TTL_M
 
 function portalIdentityHeaders(sub: string): Record<string, string> {
   return PORTAL_IDENTITY_SECRET
-    ? {
-        [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
-          { t: requestTenant(), p: sub, exp: Date.now() + 60_000 },
-          PORTAL_IDENTITY_SECRET,
-        ),
-      }
+    ? { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: sub, exp: Date.now() + 60_000 }, PORTAL_IDENTITY_SECRET) }
     : {};
 }
 
@@ -268,7 +293,7 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
 }
 
 async function isAdmin(sub: string): Promise<boolean> {
-  const hit = adminCache.get(tenantKey(sub));
+  const hit = adminCache.get(sub);
   if (hit !== undefined) return hit;
   for (let attempt = 0; attempt < ADMIN_PROBE_ATTEMPTS; attempt++) {
     const isAdmin = await adminProbeAttempt(sub);
@@ -277,38 +302,27 @@ async function isAdmin(sub: string): Promise<boolean> {
         await new Promise((resolve) => setTimeout(resolve, ADMIN_PROBE_RETRY_DELAY_MS));
       continue;
     }
-    adminCache.set(tenantKey(sub), isAdmin);
+    adminCache.set(sub, isAdmin);
     return isAdmin;
   }
   return false;
 }
 
-const CANONICAL_TTL_MS = 60_000;
 const CANONICAL_TIMEOUT_MS = 4_000;
-const canonicalCache = new LRUCache<string, string>({ max: 10_000, ttl: CANONICAL_TTL_MS });
 
-async function canonicalPrincipal(sub: string): Promise<string | null> {
-  const hit = canonicalCache.get(tenantKey(sub));
-  if (hit !== undefined) return hit;
+const canonicalPrincipal = createCanonicalResolver(async (sub) => {
   const path = withSourceAuthNonce(`/v1/principals/${encodeURIComponent(sub)}/canonical`, CORE_SIGNING_SECRET);
-  try {
-    const r = await fetch(`${CORE}${path}`, {
-      headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-      signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
-    });
-    if (!r.ok) {
-      console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
-      return null;
-    }
-    const body = (await r.json()) as { canonicalId?: unknown };
-    const canonical = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
-    canonicalCache.set(tenantKey(sub), canonical);
-    return canonical;
-  } catch (error) {
-    console.warn(`[portal] canonical principal lookup failed: ${errMessage(error)}`);
+  const r = await fetch(`${CORE}${path}`, {
+    headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+    signal: AbortSignal.timeout(CANONICAL_TIMEOUT_MS),
+  });
+  if (!r.ok) {
+    console.warn(`[portal] canonical principal lookup returned HTTP ${r.status}`);
     return null;
   }
-}
+  const body = (await r.json()) as { canonicalId?: unknown };
+  return typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
+});
 
 function identityUnavailable(req: IncomingMessage, res: ServerResponse): void {
   if (wantsHtml(req))
@@ -421,20 +435,13 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
   if (!isLoopbackAddress(req.socket.remoteAddress)) return null;
   if (!ignoreLogout && readCookie(req.headers.cookie, LOCAL_LOGOUT_COOKIE) === "1") return null;
   const now = Math.floor(nowMs / 1000);
-  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, tenant: requestTenant(), iat: now, exp: now + SESSION_TTL_S };
+  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, org: ORG, iat: now, exp: now + SESSION_TTL_S };
 }
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
-  const cookie = readCookie(req.headers.cookie, "portal_session");
-  return openSession(cookie, sessionKey, Date.now(), boundTenant(), SESSION_MAX_TTL_S) ?? localDevSession(req);
-}
-
-function currentImpersonation(req: IncomingMessage): ImpersonationClaims | null {
-  return openImpersonation(
-    readCookie(req.headers.cookie, "portal_impersonate"),
-    impersonateKey,
-    Date.now(),
-    boundTenant(),
+  return (
+    openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S) ??
+    localDevSession(req)
   );
 }
 
@@ -561,7 +568,7 @@ export function notConfiguredHtml(): string {
 }
 
 const connectStyle = (): string => `<style>
-  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${surfaceConfig().accent}; --radius-md:10px; }
+  :root{ --bg:#0a0a0a; --text:#fafafa; --muted:#a3a3a3; --border:#2a2a2a; --brand:${brandAccent}; --radius-md:10px; }
   html,body{ height:100%; margin:0; }
   body{ background:var(--bg); color:var(--text); display:grid; place-items:center; padding:40px 20px;
     font:14px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing:antialiased; }
@@ -612,6 +619,7 @@ async function handleConsentRedeem(
   const headers = {
     ...signedHeaders(CORE_SIGNING_SECRET, "GET", path),
     "x-consent-clicker": o.session.sub,
+    "x-consent-clicker-org": o.session.org,
   };
   let data: { status?: string; authorizeUrl?: string; provider?: string; clickerConnected?: boolean };
   try {
@@ -682,6 +690,7 @@ async function handleSecretDrop(
   const headers = {
     ...signedHeaders(CORE_SIGNING_SECRET, isPost ? "POST" : "GET", path, rawBody),
     "x-drop-owner": o.session.sub,
+    "x-drop-owner-org": o.session.org,
   };
   let r: Response;
   try {
@@ -864,7 +873,7 @@ async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse):
   const session: SessionClaims = {
     k: "session",
     sub: `playground-${randomToken(8)}`,
-    tenant: requestTenant(),
+    org: ORG,
     name: "Guest",
     anon: true,
     auth: now,
@@ -880,7 +889,7 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
     readCookie(req.headers.cookie, "portal_session"),
     sessionKey,
     Date.now(),
-    boundTenant(),
+    ORG,
     SESSION_MAX_TTL_S,
   );
   if (!session) return null;
@@ -937,14 +946,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return json(res, 404, { error: "not_found" });
     return proxyToAppHost(req, res, CORE, clientIpOf(req));
   }
-  if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
-  const tenant = await hostTenant(CORE, CORE_SIGNING_SECRET, requestHost);
-  if (!tenant) return json(res, 404, { error: "not_found", message: "no tenant serves this host" });
-  return withTenant(tenant, () => handleTenant(req, res, method, rawTarget, url));
-}
 
-async function handleTenant(req: IncomingMessage, res: ServerResponse, method: string, rawTarget: string, url: URL) {
-  const pathname = url.pathname;
   const crossOrigin = prepareCors(req, res, pathname, API_ALLOWED_ORIGINS.origins);
   if (crossOrigin && method === "OPTIONS") return answerPreflight(res);
 
@@ -959,6 +961,8 @@ async function handleTenant(req: IncomingMessage, res: ServerResponse, method: s
   }
 
   void refreshSurfaceConfig();
+
+  if (method === "GET" && pathname === "/healthz") return json(res, 200, { ok: true });
 
   if (method === "GET" && (pathname === "/favicon.ico" || pathname === "/favicon.svg")) {
     return serveFavicon(
@@ -1066,19 +1070,21 @@ async function handleTenant(req: IncomingMessage, res: ServerResponse, method: s
 
   let session = renewSessionCookie(req, res) ?? currentSession(req);
   const authenticatedPrincipal = session?.sub;
+  let staleSession: SessionClaims | null = null;
   if (session && !session.anon && (!pathname.startsWith("/auth/") || pathname.startsWith("/auth/impersonate"))) {
     const canonical = await canonicalPrincipal(session.sub);
-    if (canonical === null) return identityUnavailable(req, res);
-    session = { ...session, sub: canonical };
+    if (!canonical) return identityUnavailable(req, res);
+    if (canonical.stale) staleSession = { ...session, sub: canonical.id };
+    session = canonical.stale ? null : { ...session, sub: canonical.id };
   }
 
   if (pathname === "/auth/impersonate" && method === "POST") {
-    if (!session) return json(res, 401, { error: "sign in" });
+    if (!session) return staleSession ? identityUnavailable(req, res) : json(res, 401, { error: "sign in" });
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
     if (!(await isAdmin(session.sub))) return json(res, 403, { error: "forbidden", message: "admin access required" });
     const target = (url.searchParams.get("target") ?? "").trim();
     if (!target) return json(res, 400, { error: "bad_request", message: "target required" });
-    if (target === session.sub || (await canonicalPrincipal(target)) === session.sub)
+    if (target === session.sub || (await canonicalPrincipal(target))?.id === session.sub)
       return json(res, 400, { error: "bad_request", message: "cannot impersonate yourself" });
     const result = await coreImpersonate("start", session.sub, target);
     if (!result.ok) {
@@ -1093,7 +1099,7 @@ async function handleTenant(req: IncomingMessage, res: ServerResponse, method: s
       k: "impersonate",
       actor: session.sub,
       target,
-      tenant: session.tenant,
+      org: session.org,
       iat: now,
       exp: now + IMPERSONATE_TTL_S,
     };
@@ -1109,9 +1115,10 @@ async function handleTenant(req: IncomingMessage, res: ServerResponse, method: s
 
   if (pathname === "/auth/impersonate/stop" && method === "POST") {
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
-    const imp = currentImpersonation(req);
+    const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
     setSession(res, [clearCookie("portal_impersonate", "/", SECURE_COOKIES)]);
-    if (session && imp && imp.actor === session.sub) await coreImpersonate("stop", session.sub, imp.target);
+    const actor = session ?? staleSession;
+    if (actor && imp && imp.actor === actor.sub) await coreImpersonate("stop", actor.sub, imp.target);
     if (wantsHtml(req)) {
       res.writeHead(303, { location: "/", "cache-control": "no-store" });
       return void res.end();
@@ -1150,6 +1157,7 @@ async function handleTenant(req: IncomingMessage, res: ServerResponse, method: s
   }
 
   const consentBounce = (): void => {
+    if (staleSession) return identityUnavailable(req, res);
     res.writeHead(302, { location: `/auth/login?returnTo=${encodeURIComponent(`${pathname}${url.search}`)}` });
     return void res.end();
   };
@@ -1185,6 +1193,7 @@ async function handleTenant(req: IncomingMessage, res: ServerResponse, method: s
   }
   const dropSubmit = /^\/drop\/([^/]+)$/.exec(pathname);
   if (method === "POST" && dropSubmit) {
+    if (staleSession) return identityUnavailable(req, res);
     if (!session)
       return json(res, 401, {
         error: "sign in",
@@ -1245,7 +1254,9 @@ async function handleTenant(req: IncomingMessage, res: ServerResponse, method: s
     ]);
   }
 
+  if (!isDeployment) session ??= staleSession;
   if (!session) {
+    if (staleSession) return identityUnavailable(req, res);
     if (method === "GET" && wantsHtml(req)) {
       if (PLAYGROUND) {
         session = await mintPlaygroundSession(req, res);
@@ -1272,7 +1283,6 @@ async function handleTenant(req: IncomingMessage, res: ServerResponse, method: s
     const subPath = slash === -1 ? "/" : rest.slice(slash);
     if (!id) return json(res, 404, { error: "not_found" });
     return proxyToDeployment(req, res, {
-      tenant: requestTenant(),
       coreBase: CORE,
       id,
       subPath,
@@ -1286,7 +1296,7 @@ async function handleTenant(req: IncomingMessage, res: ServerResponse, method: s
   const settingsPath = pathname === "/settings" || pathname.startsWith("/settings/");
   if (method === "GET" && wantsHtml(req) && !settingsPath) {
     await refreshSurfaceConfig();
-    if (surfaceConfig().modelProviderConfigured === false) {
+    if (modelProviderConfigured === false) {
       if (await isAdmin(session.sub)) {
         res.writeHead(302, { location: "/settings/onboarding", "cache-control": "no-store" });
         return void res.end();
@@ -1298,15 +1308,14 @@ async function handleTenant(req: IncomingMessage, res: ServerResponse, method: s
   let principal = session.sub;
   let impersonator: string | undefined;
   if (!crossOrigin) {
-    const imp = currentImpersonation(req);
-    if (imp && imp.actor === session.sub && (await isAdmin(session.sub))) {
+    const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
+    if (imp && imp.actor === session.sub && imp.org === session.org && (await isAdmin(session.sub))) {
       principal = imp.target;
       impersonator = session.sub;
     }
   }
 
   return proxyToSurface(req, res, {
-    tenant: requestTenant(),
     upstreamBase: WEB_UI_UPSTREAM,
     forwardPath: pathname,
     search: url.search,
@@ -1341,7 +1350,7 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
       body.get("state") ?? "",
       SESSION_SECRET,
       ORIGIN,
-      requestTenant(),
+      ORG,
       SESSION_MAX_TTL_S,
     );
     if (!claims) return json(res, 400, { error: "invalid_desktop_login" });
@@ -1528,7 +1537,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   if (url.pathname === `${path}/login`) {
     const returnTo =
       url.searchParams.get("returnTo") ??
-      openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now(), boundTenant())?.returnTo ??
+      openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo ??
       null;
     const existing = currentSession(req);
     const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.issuer).digest("hex")}:`;
@@ -1539,7 +1548,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       });
       return void res.end();
     }
-    const login = trustedEntry.start(sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN), requestTenant());
+    const login = trustedEntry.start(sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN));
     setSession(res, [setCookie(cookieName, login.cookie, { path, maxAge: login.ttl, secure: SECURE_COOKIES })]);
     res.writeHead(302, { location: login.location, "cache-control": "no-store" });
     return void res.end();
@@ -1547,19 +1556,19 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
   if (url.pathname !== `${path}/callback`) return json(res, 404, { error: "not_found" });
   setSession(res, [clearCookie(cookieName, path, SECURE_COOKIES)]);
   try {
-    const identity = await trustedEntry.finish(readCookie(req.headers.cookie, cookieName), url, requestTenant());
+    const identity = await trustedEntry.finish(readCookie(req.headers.cookie, cookieName), url);
     if (trustedAdminEnabled) {
       await provisionTrustedAdmin(
         {
           core: CORE,
           signingSecret: CORE_SIGNING_SECRET!,
           identitySecret: PORTAL_IDENTITY_SECRET!,
-          tenant: requestTenant(),
+          org: ORG,
           issuer: trustedOidc!.issuer,
         },
         identity.subject,
       );
-      adminCache.delete(tenantKey(identity.sub));
+      adminCache.delete(identity.sub);
     }
     setAuthenticatedSession(res, identity.sub, identity.name);
     res.writeHead(302, {
@@ -1581,7 +1590,7 @@ function setAuthenticatedSession(res: ServerResponse, sub: string, name = "", ap
   const session: SessionClaims = {
     k: "session",
     sub,
-    tenant: requestTenant(),
+    org: ORG,
     auth: now,
     iat: now,
     exp: now + SESSION_TTL_S,
@@ -1627,16 +1636,7 @@ function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
   const nonce = randomToken();
   const { verifier, challenge } = pkcePair();
   const now = Math.floor(Date.now() / 1000);
-  const tmp: TmpClaims = {
-    k: "tmp",
-    tenant: requestTenant(),
-    state,
-    nonce,
-    pkceVerifier: verifier,
-    returnTo,
-    iat: now,
-    exp: now + TMP_TTL_S,
-  };
+  const tmp: TmpClaims = { k: "tmp", state, nonce, pkceVerifier: verifier, returnTo, iat: now, exp: now + TMP_TTL_S };
   setSession(res, [
     setCookie("portal_oidc_tmp", seal(tmp, tmpKey), { path: "/auth", maxAge: TMP_TTL_S, secure: SECURE_COOKIES }),
   ]);
@@ -1654,7 +1654,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   const code = url.searchParams.get("code") ?? "";
   const stateParam = url.searchParams.get("state") ?? "";
 
-  const tmp = openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now(), boundTenant());
+  const tmp = openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now());
   if (!tmp) return fail("login session expired, please try again");
   if (!code || !stateParam || !safeEqual(stateParam, tmp.state)) return fail("invalid login state");
   if (!consumeState(tmp.state)) return fail("login already used, please try again");
