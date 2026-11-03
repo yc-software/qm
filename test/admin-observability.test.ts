@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { isAgentReply, isUserItem, type Item } from "../src/sessions/items.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-")), ...overrides });
@@ -36,7 +37,7 @@ const get = (base: string, path: string, headers: Record<string, string> = ALICE
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
   (await get(base, path, headers)).json();
 
-test("an org admin sees conversations, transcripts, files, and runs top-down", async () => {
+test("an org admin sees conversations, transcripts, and files top-down", async () => {
   const s = start();
   try {
     const dm: TurnRequest = {
@@ -57,12 +58,12 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
     const tx = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}?scope=org:default-org`);
     assert.equal(tx.status, 200);
     const txd = await tx.json();
-    const transcript = txd as { entries: { type: string }[] };
+    const transcript = txd as { items: Item[] };
+    assert.ok(transcript.items.some(isUserItem), "transcript includes the user message");
     assert.ok(
-      transcript.entries.some((e) => e.type === "user"),
-      "transcript includes the user message",
+      !transcript.items.some((item) => (item.kind as string) === "soul"),
+      "resolved prompt context is not a transcript item",
     );
-    assert.ok(!transcript.entries.some((e) => e.type === "soul"), "resolved prompt context is not a transcript entry");
 
     await s.built.files.put({
       id: "todo-art-1",
@@ -146,20 +147,8 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
     assert.equal(svg.headers.get("content-type"), "application/octet-stream", "svg is never served inline");
     assert.match(svg.headers.get("content-disposition") ?? "", /^attachment/);
 
-    const runs = await getJson(s.base, "/v1/admin/runs?scope=org:default-org");
-    assert.ok(runs.runs.length >= 1, "the run is listed");
-    assert.equal(runs.runs[0].sessionType, "dm");
-
     const actions = (await s.built.auditLog.events()).map((e) => e.action);
-    for (const a of [
-      "sessions.read",
-      "session.read",
-      "files.read",
-      "file.read",
-      "file.download",
-      "file.view",
-      "runs.read",
-    ]) {
+    for (const a of ["sessions.read", "session.read", "files.read", "file.read", "file.download", "file.view"]) {
       assert.ok(actions.includes(a), `audited ${a}`);
     }
   } finally {
@@ -259,24 +248,19 @@ test("recipient delivery rows expose origin provenance and gated origin context"
   try {
     const sourceScope = "channel:C-origin";
     const source = await s.built.sessions.getOrCreateByThread("cron:c1:42", "channel", sourceScope, "ops");
-    const { lease } = await s.built.sessions.acquireLease(source.id);
-    assert.ok(lease);
-    const sourceUser = await s.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "post the digest" },
-      scopeLabel: sourceScope,
+    const writer = { sessionId: source.id };
+    const sourceUser = await s.built.sessions.append(writer, {
+      kind: "UserMessage",
+      text: "post the digest",
     });
-    const sourceResume = await s.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "(system note: resume)" },
-      scopeLabel: sourceScope,
+    const sourceResume = await s.built.sessions.append(writer, {
+      kind: "UserMessage",
+      text: "(system note: resume)",
     });
-    const sourceAssistant = await s.built.sessions.append(lease, {
-      type: "assistant",
-      payload: { text: "Digest posted." },
-      scopeLabel: sourceScope,
+    const sourceAssistant = await s.built.sessions.append(writer, {
+      kind: "AgentMessage",
+      text: "Digest posted.",
     });
-    await s.built.sessions.releaseLease(lease);
     await s.built.sessions.recordLlmRequest(source.id, {
       turnSeq: sourceUser.seq,
       step: 0,
@@ -326,11 +310,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     const orgRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
     assert.equal(orgRead.status, 200);
     const orgBody = (await orgRead.json()) as any;
-    assert.equal(
-      orgBody.entries.some((e: any) => e.type === "assistant"),
-      false,
-      "recipient transcript is not copied assistant history",
-    );
+    assert.equal(orgBody.items.some(isAgentReply), false, "recipient transcript is not copied assistant history");
     assert.equal(orgBody.deliveryEvents.length, 1, "recipient transcript renders delivered output inline");
     const event = orgBody.deliveryEvents[0];
     assert.equal(event.type, "principal_delivery");
@@ -350,10 +330,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     );
     assert.equal(scopedRead.status, 200);
     const scopedBody = (await scopedRead.json()) as any;
-    assert.equal(
-      scopedBody.entries.some((e: any) => e.type === "assistant"),
-      false,
-    );
+    assert.equal(scopedBody.items.some(isAgentReply), false);
     assert.equal(scopedBody.deliveryEvents.length, 1);
     assert.equal(scopedBody.deliveryEvents[0].provenance.sourceSessionId, source.id);
     assert.equal(scopedBody.deliveryEvents[0].sourceSession, undefined);
@@ -387,19 +364,15 @@ test("recipient delivery rows expose non-cron wake provenance without cron idemp
     const sourceScope = "channel:C-webhook";
     const fireKey = "webhook:wh_123:delivery_456";
     const source = await s.built.sessions.getOrCreateByThread(fireKey, "channel", sourceScope, "alerts");
-    const { lease } = await s.built.sessions.acquireLease(source.id);
-    assert.ok(lease);
-    const sourceUser = await s.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "triage the webhook" },
-      scopeLabel: sourceScope,
+    const writer = { sessionId: source.id };
+    const sourceUser = await s.built.sessions.append(writer, {
+      kind: "UserMessage",
+      text: "triage the webhook",
     });
-    const sourceAssistant = await s.built.sessions.append(lease, {
-      type: "assistant",
-      payload: { text: "Webhook triaged." },
-      scopeLabel: sourceScope,
+    const sourceAssistant = await s.built.sessions.append(writer, {
+      kind: "AgentMessage",
+      text: "Webhook triaged.",
     });
-    await s.built.sessions.releaseLease(lease);
     await s.built.sessions.recordLlmRequest(source.id, {
       turnSeq: sourceUser.seq,
       step: 0,
@@ -548,10 +521,8 @@ test("a cron-fired transcript carries its originating cron", async () => {
       action: "audit the new security advisories",
     });
     const session = await s.built.sessions.getOrCreateByThread(`cron:${cron.id}:42`, "channel", scope, "security");
-    const { lease } = await s.built.sessions.acquireLease(session.id);
-    assert.ok(lease);
-    await s.built.sessions.append(lease, { type: "user", payload: { text: cron.action }, scopeLabel: scope });
-    await s.built.sessions.releaseLease(lease);
+    const writer = { sessionId: session.id };
+    await s.built.sessions.append(writer, { kind: "UserMessage", text: cron.action });
 
     const tx = await get(
       s.base,
@@ -566,7 +537,7 @@ test("a cron-fired transcript carries its originating cron", async () => {
     assert.equal(body.origin.fireSlot, "42");
     assert.equal(body.origin.cron.title, "Daily security audit");
     assert.equal(body.origin.cron.ownerScopeId, scope);
-    assert.equal(body.entries[0].type, "user");
+    assert.equal(body.items[0].kind, "UserMessage");
   } finally {
     await s.close();
   }
@@ -603,14 +574,14 @@ test("principal deliveries render as delivery events and later DM turns get stru
     const session = await s.built.sessions.getByThread("dm:D-alice");
     assert.ok(session, "recipient session exists");
     assert.equal(
-      (await s.built.sessions.getEntries(session!.id)).some((e) => e.type === "assistant"),
+      (await s.built.sessions.getItems(session!.id)).some((e) => e.kind === "AgentMessage"),
       false,
     );
 
     const orgTx = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(session!.id)}?scope=org:default-org`);
     assert.equal(orgTx.status, 200);
     const orgBody = (await orgTx.json()) as any;
-    assert.equal(orgBody.entries.length, 0, "delivery is not a transcript entry");
+    assert.equal(orgBody.items.length, 0, "delivery is not a transcript item");
     assert.equal(orgBody.deliveryEvents.length, 1, "recipient transcript renders delivery rows inline");
     assert.equal(orgBody.deliveryEvents[0].text, "the deploy is done");
     assert.deepEqual(orgBody.deliveryEvents[0].attachments, [
@@ -664,19 +635,15 @@ test("monitor delivery origin context is scope-gated in admin", async () => {
       "dm",
       "personal:U-carol",
     );
-    const { lease } = await s.built.sessions.acquireLease(source.id);
-    assert.ok(lease);
-    const sourceUser = await s.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "monitor wake" },
-      scopeLabel: "personal:U-carol",
+    const writer = { sessionId: source.id };
+    const sourceUser = await s.built.sessions.append(writer, {
+      kind: "UserMessage",
+      text: "monitor wake",
     });
-    const sourceAssistant = await s.built.sessions.append(lease, {
-      type: "assistant",
-      payload: { text: "Approval is due." },
-      scopeLabel: "personal:U-carol",
+    const sourceAssistant = await s.built.sessions.append(writer, {
+      kind: "AgentMessage",
+      text: "Approval is due.",
     });
-    await s.built.sessions.releaseLease(lease);
     await s.built.sessions.recordLlmRequest(source.id, {
       turnSeq: sourceUser.seq,
       step: 0,
@@ -808,14 +775,11 @@ test("history separates background cron monologues from human conversations", as
     });
 
     const human = await s.built.sessions.getOrCreateByThread("ch:C9:thread", "channel", scope, "security");
-    const { lease: humanLease } = await s.built.sessions.acquireLease(human.id);
-    assert.ok(humanLease);
-    await s.built.sessions.append(humanLease, {
-      type: "user",
-      payload: { text: "what happened in prod?" },
-      scopeLabel: scope,
+    const humanWriter = { sessionId: human.id };
+    await s.built.sessions.append(humanWriter, {
+      kind: "UserMessage",
+      text: "what happened in prod?",
     });
-    await s.built.sessions.releaseLease(humanLease);
 
     const monologue = await s.built.sessions.getOrCreateByThread(
       `agent:main:cron:${cron.id}`,
@@ -823,10 +787,8 @@ test("history separates background cron monologues from human conversations", as
       scope,
       "security",
     );
-    const { lease: monologueLease } = await s.built.sessions.acquireLease(monologue.id);
-    assert.ok(monologueLease);
-    await s.built.sessions.append(monologueLease, { type: "user", payload: { text: cron.action }, scopeLabel: scope });
-    await s.built.sessions.releaseLease(monologueLease);
+    const monologueWriter = { sessionId: monologue.id };
+    await s.built.sessions.append(monologueWriter, { kind: "UserMessage", text: cron.action });
 
     const conversations = await getJson(s.base, `/v1/admin/sessions?scope=${encodeURIComponent(scope)}`);
     assert.equal(conversations.category, "conversation");
@@ -875,10 +837,8 @@ test("the Crons history lists cron fires as session rows; ?cron= paginates one c
     const mkFires = async (cronId: string, n: number) => {
       for (let i = 0; i < n; i++) {
         const sess = await s.built.sessions.getOrCreateByThread(`cron:${cronId}:slot${i}`, "channel", scope, "eng");
-        const { lease } = await s.built.sessions.acquireLease(sess.id);
-        assert.ok(lease);
-        await s.built.sessions.append(lease, { type: "user", payload: { text: "fire " + i }, scopeLabel: scope });
-        await s.built.sessions.releaseLease(lease);
+        const writer = { sessionId: sess.id };
+        await s.built.sessions.append(writer, { kind: "UserMessage", text: "fire " + i });
       }
     };
     const cron = await s.built.app.createCron({
@@ -940,14 +900,11 @@ test("cron fire rows carry the fire's result digest from the cron's fire log", a
     });
     const mkFire = async (slot: string) => {
       const sess = await s.built.sessions.getOrCreateByThread(`cron:${cron.id}:${slot}`, "channel", scope, "eng");
-      const { lease } = await s.built.sessions.acquireLease(sess.id);
-      assert.ok(lease);
-      await s.built.sessions.append(lease, {
-        type: "user",
-        payload: { text: "Stored cron task: Check yna's watched stickies" },
-        scopeLabel: scope,
+      const writer = { sessionId: sess.id };
+      await s.built.sessions.append(writer, {
+        kind: "UserMessage",
+        text: "Stored cron task: Check yna's watched stickies",
       });
-      await s.built.sessions.releaseLease(lease);
       return sess;
     };
     const replied = await mkFire("slot0");
@@ -1139,7 +1096,7 @@ test("admin observability enforces scope grants (authz is the boundary)", async 
     const UMA = { "x-admin-actor": "user-uma@default-org" };
     assert.equal((await get(s.base, "/v1/admin/sessions?scope=org:default-org", UMA)).status, 403);
     assert.equal(
-      (await get(s.base, "/v1/admin/runs?scope=org:default-org", { "x-admin-actor": "nobody@default-org" })).status,
+      (await get(s.base, "/v1/admin/errors?scope=org:default-org", { "x-admin-actor": "nobody@default-org" })).status,
       403,
     );
     assert.equal((await get(s.base, "/v1/admin/files")).status, 400);
@@ -1325,6 +1282,41 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
   }
 });
 
+test("admin governance: spend limits round-trip per scope, validate, and clear", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-spendlimit-")) }));
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    config: built.config,
+    auditLog: built.auditLog,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const put = (scope: string, body: unknown, headers: Record<string, string> = ALICE) =>
+    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/spend-limit`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).spendLimit, null, "no limit by default");
+    assert.equal(
+      (await put("org:default-org", { dailyUsd: 5 }, { "x-admin-actor": "nobody@default-org" })).status,
+      403,
+    );
+    assert.equal((await put("org:default-org", { dailyUsd: 25, monthlyUsd: 300 })).status, 200);
+    assert.deepEqual((await getJson(base, "/v1/admin/scopes/org:default-org")).spendLimit, {
+      dailyUsd: 25,
+      monthlyUsd: 300,
+    });
+    assert.equal((await put("channel:C1", { monthlyUsd: 40 })).status, 200, "any scope can carry its own cap");
+    assert.deepEqual(await built.config.getSpendLimitDurable("channel:C1"), { monthlyUsd: 40 });
+    assert.equal((await put("channel:C1", { inherit: true })).status, 200);
+    assert.equal(await built.config.getSpendLimitDurable("channel:C1"), null, "inherit clears it");
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("an OpenAI-only deployment still gets a browse model picker, and Anthropic picks are refused", async () => {
   const built = buildApp(
     testConfig({
@@ -1449,10 +1441,8 @@ test("the sessions listing digests cron fires from the fire table, even after th
     });
     const threadRef = `cron:${cron.id}:fire:abc123`;
     const session = await s.built.sessions.getOrCreateByThread(threadRef, "channel", scope, "ops");
-    const { lease } = await s.built.sessions.acquireLease(session.id);
-    assert.ok(lease);
-    await s.built.sessions.append(lease, { type: "user", payload: { text: "count signups" }, scopeLabel: scope });
-    await s.built.sessions.releaseLease(lease);
+    const writer = { sessionId: session.id };
+    await s.built.sessions.append(writer, { kind: "UserMessage", text: "count signups" });
     await s.built.crons.recordFire(cron.id, {
       fireKey: `cron:${cron.id}:1000`,
       threadRef,

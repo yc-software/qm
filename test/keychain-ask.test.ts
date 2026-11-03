@@ -40,6 +40,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -558,8 +559,8 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   const decide = (askId: string, actorId: string, decision: "once" | "standing" | "deny") =>
     approvals.decide(askId, { externalId: actorId }, decision);
   const resumeTurns = async (sessionId: string, pattern: RegExp) =>
-    (await built.sessions.getEntries(sessionId)).filter(
-      (e) => e.type === "user" && pattern.test((e.payload as { text: string }).text),
+    (await built.sessions.getItems(sessionId)).filter(
+      (item) => USER_ITEM_KINDS.includes(item.kind) && pattern.test(item.text ?? ""),
     );
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
@@ -870,7 +871,8 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 
     const resolution = await waitFor(() => resumeTurns(session!.id, /The credential owner approved access/));
     assert.equal(resolution.length, 1, "exactly one resolution turn, in the original thread's session");
-    const { text: prompt, environment } = resolution[0]!.payload as { text: string; environment: string };
+    const prompt = resolution[0]!.text ?? "";
+    const environment = String(resolution[0]!.body.environment);
     const listSystems = async () =>
       (await built.sessions.listLlmRequests(session!.id)).map((r) => (r.promptEnvelope as { system: string }).system);
     await waitFor(async () => ((await listSystems()).at(-1)?.includes(`\`github:${gh.id}\``) ? [true] : []));
@@ -1211,7 +1213,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     await built.scheduler.tick(Date.now());
     const resolved = await waitFor(() => resumeTurns(session!.id, /did not answer the access request/));
     assert.equal(resolved.length, 1, "exactly one expired-resolution turn in the asking thread");
-    assert.ok(!(resolved[0]!.payload as { text: string }).text.includes(made.ask.id));
+    assert.ok(!resolved[0]!.text!.includes(made.ask.id));
 
     await built.scheduler.tick(Date.now());
     assert.equal(

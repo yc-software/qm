@@ -70,6 +70,32 @@ export interface Swarm {
   pending: boolean;
 }
 
+export type SwarmControlState = "active" | "paused" | "stopped";
+
+const memberIndex = new WeakMap<SwarmMember[], Map<string, SwarmMember>>();
+
+export function memberById(swarm: Swarm, id: string): SwarmMember | undefined {
+  let index = memberIndex.get(swarm.members);
+  if (!index || index.size !== swarm.members.length) {
+    index = new Map(swarm.members.map((member) => [member.id, member]));
+    memberIndex.set(swarm.members, index);
+  }
+  return index.get(id);
+}
+
+export function controlState(swarm: Swarm, memberId: string): SwarmControlState {
+  let state: SwarmControlState = "active";
+  const seen = new Set<string>();
+  for (let id: string | undefined = memberId; id && !seen.has(id);) {
+    seen.add(id);
+    const member = memberById(swarm, id);
+    if (member?.control === "stopped") return "stopped";
+    if (member?.control === "paused") state = "paused";
+    id = member?.parentId;
+  }
+  return state;
+}
+
 export function swarmExpired(swarm: Swarm): boolean {
   return swarm.expiresAt !== undefined && Date.now() >= swarm.expiresAt;
 }
@@ -186,7 +212,9 @@ export function createSwarmStore(
         next.pending =
           next.members.some((member) => member.state === "reserved" || member.cleanupPending) ||
           next.messages.some((message) =>
-            Object.values(message.notifications).some((item) => item.state === "pending"),
+            Object.entries(message.notifications).some(
+              ([id, item]) => item.state === "pending" && controlState(next, id) !== "paused",
+            ),
           );
         return encode(next);
       };

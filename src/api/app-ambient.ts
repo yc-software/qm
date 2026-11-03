@@ -1,4 +1,4 @@
-import type { ActorAssertion, TurnRequest } from "../types.ts";
+import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { samePerson } from "../directory/person.ts";
@@ -17,6 +17,7 @@ import { buildWakeEnvelope } from "../wake/wake-envelope.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import { unscreenedNotice } from "../security/security-posture.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
+import { withModelRequestContext } from "../model/request-context.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 
@@ -112,8 +113,9 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       return { act: false };
     }
     const self = ambientSelf.get(`${orgIdOf()}:${surface}`);
-    const forJudge = delta.filter((m) => !m.mentionsSelf);
-    if (forJudge.length < delta.length)
+    const unmentioned = delta.filter((m) => !m.mentionsSelf);
+    const forJudge = unmentioned.filter((m) => m.text.trim());
+    if (unmentioned.length < delta.length)
       recordJudgment({
         surface,
         container,
@@ -155,7 +157,11 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       const botTs = new Set(rawDelta.filter((m) => m.bot).map((m) => m.ts));
       decision = await judgeAmbientBatch(
         {
-          judge: deps.ambientJudge,
+          judge: (system, prompt) =>
+            withModelRequestContext(
+              { scopeId: scopeId(judgeBatch.kind === "group" ? "group" : "channel", container) },
+              () => deps.ambientJudge!(system, prompt),
+            ),
           readable,
           spawnWorker: (b: AmbientBatch, d: AmbientDecision) =>
             spawnAmbientWorker(
@@ -174,6 +180,16 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
         prompt,
         ...(judgeModel ? { model: judgeModel } : {}),
         latencyMs: Date.now() - startedAt,
+        ...(tsFrom ? { tsFrom } : {}),
+        ...(tsTo ? { tsTo } : {}),
+        createdAt: Date.now(),
+      });
+    } else if (unmentioned.length) {
+      recordJudgment({
+        surface,
+        container,
+        decision: "ignore",
+        reason: "no readable text in new messages",
         ...(tsFrom ? { tsFrom } : {}),
         ...(tsTo ? { tsTo } : {}),
         createdAt: Date.now(),

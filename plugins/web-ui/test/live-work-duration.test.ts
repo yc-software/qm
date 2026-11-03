@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";
@@ -23,7 +24,7 @@ test("the live label advances between chat renders and stops when disconnected",
   part.setConnected(true);
   assert.equal(host.textContent, "59s");
   t.mock.timers.tick(1000);
-  assert.equal(host.textContent, "1m 00s");
+  assert.equal(host.textContent, "1m 0s");
   render(nothing, host);
   t.mock.timers.tick(100);
   assert.equal(host.textContent, "");
@@ -35,8 +36,10 @@ test("approval waits keep their recorded duration", (t) => {
     status: "working",
     startedAt: 100_000,
     activity: [
-      { seq: 1, parentSeq: null, type: "tool_call", payload: { command: "help" }, createdAt: 101_000 },
-      { seq: 2, parentSeq: 1, type: "tool_result", payload: { blocked: "needs_approval" }, createdAt: 108_120 },
+      { item: item("ToolCall", { seq: 1, callId: "c1", body: { command: "help" }, createdAt: 101_000 }) },
+      {
+        item: item("ToolResult", { seq: 2, callId: "c1", body: { blocked: "needs_approval" }, createdAt: 108_120 }),
+      },
     ],
   };
   const host = document.createElement("div");
@@ -44,5 +47,25 @@ test("approval waits keep their recorded duration", (t) => {
   assert.equal(host.textContent, "8s");
   t.mock.timers.tick(1000);
   assert.equal(host.textContent, "8s");
+  render(nothing, host);
+});
+
+test("the live label keeps its seconds in a two-digit slot without changing the text", (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: 109_000 });
+  const work: WorkBlock = { status: "working", startedAt: 100_000, activity: [] };
+  const host = document.createElement("div");
+  render(html`${liveWorkDuration(work)}`, host);
+  const seconds = () => host.querySelector(".work-elapsed-seconds")?.textContent;
+  assert.equal(host.textContent, "9s");
+  assert.equal(seconds(), "9");
+  t.mock.timers.tick(1000);
+  assert.equal(host.textContent, "10s");
+  assert.equal(seconds(), "10");
+  t.mock.timers.tick(59_000);
+  assert.equal(host.textContent, "1m 9s");
+  assert.equal(seconds(), "9");
+  t.mock.timers.tick(3_600_000);
+  assert.equal(host.textContent, "1h 1m 9s");
+  assert.equal(seconds(), "9");
   render(nothing, host);
 });

@@ -9,6 +9,7 @@ import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import type { Item } from "../src/sessions/items.ts";
 import { quotedData } from "../src/util/text.ts";
 
 const INJECTION = [
@@ -78,9 +79,9 @@ test("provider and notebook recall reach the prompt as quoted data, with outcome
   assert.match(providerBlock!, /^ʼʼʼ$/m);
   assert.match(providerBlock!, /^\\ {2}# system override$/m);
 
-  const outcomes = (entry: { payload: unknown } | undefined) =>
+  const outcomes = (item: Item | undefined) =>
     (
-      entry?.payload as { memoryRecallOutcomes?: Array<{ provider: string; outcome: string }> } | undefined
+      item?.body as { memoryRecallOutcomes?: Array<{ provider: string; outcome: string }> } | undefined
     )?.memoryRecallOutcomes
       ?.map(({ provider, outcome }) => ({ provider, outcome }))
       .sort((a, b) => a.provider.localeCompare(b.provider));
@@ -88,15 +89,15 @@ test("provider and notebook recall reach the prompt as quoted data, with outcome
     { provider: "default", outcome: "ok" },
     { provider: "knowledge", outcome: "ok" },
   ];
-  const entries = await built.sessions.getEntries(result.sessionId!);
-  assert.deepEqual(outcomes(entries.find((entry) => entry.type === "user")), recalledBoth);
+  const items = await built.sessions.getItems(result.sessionId!);
+  assert.deepEqual(outcomes(items.find((item) => item.kind === "UserMessage")), recalledBoth);
 
   await assert.rejects(
     built.app.turn({ ...dm("use the fancy model", "dm:U1:tB"), model: "not-a-real-model", origin: { kind: "human" } }),
     /not approved/,
   );
-  const failed = (await built.sessions.getEntries(result.sessionId!)).findLast((entry) => entry.type === "user");
-  assert.equal((failed?.payload as { text?: string } | undefined)?.text, "use the fancy model");
+  const failed = (await built.sessions.getItems(result.sessionId!)).findLast((item) => item.kind === "UserMessage");
+  assert.equal(failed?.text, "use the fancy model");
   assert.deepEqual(outcomes(failed), recalledBoth);
 });
 

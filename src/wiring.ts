@@ -21,6 +21,7 @@ import {
   type StoredRenderScratch,
 } from "./sandbox/render-sandbox.ts";
 import { createSdkRenderClient } from "./sandbox/render-client.ts";
+import { createRenderBase, type StoredRenderBase } from "./sandbox/render-base.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -52,7 +53,7 @@ import {
   sessionTreeRoot,
   sessionTreeRunCount,
   sessionTreeWorking,
-  stoppableAncestors,
+  stoppableRoot,
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
@@ -129,8 +130,6 @@ import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
-import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
-import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
@@ -322,7 +321,7 @@ import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
-import { createRunPreemption, createWorker, type Worker } from "./runs/worker.ts";
+import { createRunPreemption, createWorker, SHUTDOWN_RELEASE_MS, type Worker } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
@@ -420,11 +419,13 @@ export function stopWithBackstop(
 ): void {
   const hardExit = setTimeout(() => {
     console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
-    void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(async () => {
-      await flushErrorReporting();
-      process.exit();
-    });
-  }, shutdownDrainMs + 5_000);
+    void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
+      async () => {
+        await flushErrorReporting();
+        process.exit();
+      },
+    );
+  }, shutdownDrainMs + SHUTDOWN_RELEASE_MS);
   hardExit.unref();
   void runtime.stop().then(
     async () => {
@@ -436,10 +437,12 @@ export function stopWithBackstop(
     (e: unknown) => {
       console.error(`[${label}] graceful stop failed: ${errMessage(e)}`);
       clearTimeout(hardExit);
-      void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(async () => {
-        await flushErrorReporting();
-        process.exit(1);
-      });
+      void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_RELEASE_MS, { unref: true })]).finally(
+        async () => {
+          await flushErrorReporting();
+          process.exit(1);
+        },
+      );
     },
   );
 }
@@ -492,7 +495,6 @@ export interface BuiltApp {
   partnerChatEvents?: ServerDeps["partnerChatEvents"];
   loopIngress: LoopIngressService;
   admin: AdminService;
-  rateLimiter: RateLimiter;
   budget: BudgetTracker | undefined;
   errors: ErrorLog;
   crons: CronStore;
@@ -567,8 +569,6 @@ export function buildApp(
     databaseUrl,
     ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
-    ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),
-    ...(config.databaseDirectPoolMax !== undefined ? { sessionMax: config.databaseDirectPoolMax } : {}),
   });
   configurePgCaTrust({
     ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
@@ -604,7 +604,10 @@ export function buildApp(
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
   }
   const gatewayCatalog = config.modelGateway
-    ? createGatewayCatalog(config.modelGateway, overrides.modelCredentialFetch)
+    ? createGatewayCatalog(
+        { ...config.modelGateway, actorKey: config.capabilitySecret },
+        overrides.modelCredentialFetch,
+      )
     : undefined;
   const gatewayTransport = gatewayCatalog?.transport;
   const directProviderAvailability = providerKeysPresent(config);
@@ -725,8 +728,6 @@ export function buildApp(
       (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
     );
   }
-  const rateLimitOpts = { maxPerWindow: config.rateLimitPerWindow, windowMs: config.rateLimitWindowMs };
-  const rateLimiter = createPostgresRateLimiter(databaseUrl, rateLimitOpts);
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
@@ -793,9 +794,9 @@ export function buildApp(
     createConfiguredMemoryService({
       defaultMemory: semanticMemory.memory,
       config: config.memoryProviderConfig,
-      sessionEntries: (sessionId) => {
+      sessionItems: (sessionId) => {
         if (!memorySessions.store) throw new Error("session store is not ready");
-        return memorySessions.store.getEntries(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
+        return memorySessions.store.getItems(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
       },
     }),
     (scope) => memoryTidy.ensure(scope),
@@ -867,6 +868,21 @@ export function buildApp(
   const renderBodies = artifactMap<StoredRenderSandbox>("render_sandbox_bodies");
   const renderScratch = artifactMap<StoredRenderScratch>("render_scratch_bodies");
   const renderCleanup = artifactMap<StoredRenderCleanup>("render_sandbox_cleanup");
+  const renderClient =
+    config.renderSandbox.apiKey && config.renderSandbox.workspaceId && config.renderSandbox.image
+      ? createSdkRenderClient({ apiKey: config.renderSandbox.apiKey, workspaceId: config.renderSandbox.workspaceId })
+      : undefined;
+  const renderBase =
+    renderClient && config.renderSandbox.image
+      ? createRenderBase({
+          client: renderClient,
+          store: artifactMap<StoredRenderBase>("render_sandbox_bases"),
+          image: config.renderSandbox.image,
+          hold: (work) => leaderLease.hold(`render:sandbox-base:${config.renderSandbox.image}`, work),
+          onError: sandboxOnError,
+        })
+      : undefined;
+  let renderBasePreparing: AbortController | undefined;
   const e2bClient = (use: "computers" | "apps"): E2bClient => {
     const e2b = config.e2bSandbox;
     if (!e2b.apiKey)
@@ -1080,14 +1096,12 @@ export function buildApp(
     });
   const buildRender = (): Sandbox => {
     const render = config.renderSandbox;
-    if (!render.apiKey || !render.workspaceId) {
-      throw new Error("SANDBOX_BACKEND=render requires RENDER_API_KEY and RENDER_WORKSPACE_ID");
+    if (!renderClient || !renderBase) {
+      throw new Error("SANDBOX_BACKEND=render requires RENDER_API_KEY, RENDER_WORKSPACE_ID, and RENDER_SANDBOX_IMAGE");
     }
     return createRenderSandbox(workspace, {
-      client: createSdkRenderClient({
-        apiKey: render.apiKey,
-        workspaceId: render.workspaceId,
-      }),
+      client: renderClient,
+      base: renderBase,
       ...(render.defaultTimeoutSec !== undefined ? { defaultTimeoutSec: render.defaultTimeoutSec } : {}),
       store: renderBodies,
       scratchStore: renderScratch,
@@ -1450,15 +1464,7 @@ export function buildApp(
     overrides.decisionBackend ??
       createDecisionBackend({
         providers: async (ids) => (await decisions?.providers(ids)) ?? [],
-        ...(config.modelGateway?.apiKey
-          ? {
-              gateway: {
-                url: config.modelGateway.url,
-                apiKey: config.modelGateway.apiKey,
-                ...(config.modelGateway.apiKeyHeader ? { apiKeyHeader: config.modelGateway.apiKeyHeader } : {}),
-              },
-            }
-          : {}),
+        ...(config.modelGateway ? { gateway: config.modelGateway } : {}),
         credential: async (slug) => {
           const rec = keychain
             ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug))
@@ -1524,9 +1530,9 @@ export function buildApp(
     );
   };
   const workingAncestors = async (session: Session) => {
-    const candidates = await stoppableAncestors(sessions, session);
-    const awaiting = await blockingApprovalSessions(candidates.map((ancestor) => ancestor.id));
-    const ancestors = candidates.filter((ancestor) => !awaiting.has(ancestor.id));
+    const root = await stoppableRoot(sessions, session);
+    const awaiting = await blockingApprovalSessions(root ? [root.id] : []);
+    const ancestors = root && !awaiting.has(root.id) ? [root] : [];
     return Promise.all(
       ancestors.map(async (ancestor) => ({
         session: ancestor,
@@ -1802,7 +1808,7 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
-  const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions);
+  const deliveries = withWebTranscriptDeliveries(createPostgresDeliveryStore(databaseUrl), sessions, runs);
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
@@ -1871,7 +1877,7 @@ export function buildApp(
     lock: advisoryLock,
     accepts: async (id) => {
       const loop = await loopStore.get(id);
-      return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
+      return Boolean(loop && loop.state !== "archived");
     },
   });
   const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs", ["itemId"]), (output) =>
@@ -2078,6 +2084,7 @@ export function buildApp(
     ],
   });
   const orchestratorDeps: OrchestratorDeps = {
+    admittedWork,
     installSharedCanvas: async (actorId, fileId, where) => {
       const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
       if (typeof canvas === "string") return canvas;
@@ -2112,7 +2119,6 @@ export function buildApp(
     swarms,
     connectorTokens,
     auditLog,
-    rateLimiter,
     budget,
     agent,
     memory,
@@ -2124,7 +2130,6 @@ export function buildApp(
     execTimeoutMs: config.execTimeoutDefaultMs,
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     approvalSummaryTimeoutMs: config.approvalSummaryTimeoutMs,
-    turnLeaseWaitMs: config.turnLeaseWaitMs,
     securityScreenTimeoutMs: config.securityScreenTimeoutMs,
     ...(securityScreener ? { securityScreener } : {}),
     backgroundJobTtlMs: config.backgroundJobTtlMs,
@@ -2171,7 +2176,6 @@ export function buildApp(
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
     projects,
-    ...(config.reachExecEnabled ? { reachExec: true } : {}),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     environments,
     brokeredTools,
@@ -2208,7 +2212,7 @@ export function buildApp(
         }
       : { allowLocalRepos: !config.production },
   );
-  const reaper: Reaper = createReaper(runs, sessions, {
+  const reaper: Reaper = createReaper(runs, {
     intervalMs: config.reaperIntervalMs,
     leaderLease,
     maxAgeMs: config.runMaxAgeMs,
@@ -2330,7 +2334,9 @@ export function buildApp(
     surfaceCache,
     channelPolicy,
     ...(agent.judge
-      ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal) }
+      ? {
+          ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal, "ambient_judge"),
+        }
       : {}),
     ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
     ambientJudgments,
@@ -2405,7 +2411,7 @@ export function buildApp(
       const settle = async (target: Session): Promise<boolean> => {
         if (await runs.activeForThread(target.threadRef)) return false;
         const waiting = (await blockingApprovalSessions([target.id])).has(target.id);
-        if (!waiting && (await sessionTreeWorking(sessions, runs, target))) return false;
+        if (!waiting && !target.parentSessionId && (await sessionTreeWorking(sessions, runs, target))) return false;
         const participants = await sessions.participantsOf(target.id);
         sessionStateBus.emit({
           threadRef: target.threadRef,
@@ -2417,7 +2423,8 @@ export function buildApp(
         return true;
       };
       if (!(await settle(session))) return;
-      for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
+      const root = await stoppableRoot(sessions, session);
+      if (root) await settle(root);
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
   let lastSignalPrune = 0;
@@ -2945,20 +2952,27 @@ export function buildApp(
     backgroundStopping = draining;
     return draining;
   }
-  async function releaseInFlightRuns(): Promise<void> {
+  let releasing: Promise<void> | null = null;
+  function releaseInFlightRuns(): Promise<void> {
     inlineShutdown.abort();
-    await Promise.all([
-      withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
+    releasing ??= Promise.all([
+      withTimeout(() => admittedWork.drained(), SHUTDOWN_RELEASE_MS, "inline turn handback").catch(
         swallowAs("wiring: inline turn handback failed", undefined),
       ),
       ...workers.map((w) => w.releaseInFlight()),
-    ]);
+    ]).then(() => {});
+    return releasing;
   }
   const runtime: Runtime = {
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      releasing = null;
       flyTunnel?.monitor();
       drain.start();
+      renderBasePreparing = new AbortController();
+      void renderBase
+        ?.prepare(renderBasePreparing.signal)
+        .catch(reportFailureAs("render-base: prepare the golden snapshot", undefined));
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
     startBackground,
@@ -2977,6 +2991,7 @@ export function buildApp(
     },
     releaseInFlightRuns,
     async stop() {
+      renderBasePreparing?.abort();
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
@@ -3053,7 +3068,6 @@ export function buildApp(
     ...(partnerChatInbound ? { partnerChatEvents: partnerChatInbound.handle } : {}),
     loopIngress,
     admin,
-    rateLimiter,
     errors,
     crons,
     credentialUsage,
@@ -3177,7 +3191,6 @@ export function serverDeps(
     ...(config.resendApiKey && config.emailFrom
       ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
-    rateLimiter: built.rateLimiter,
     budget: built.budget,
     acl: built.acl,
     credentialUsage: built.credentialUsage,

@@ -15,6 +15,7 @@ import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import type { NewItem } from "../src/sessions/items.ts";
 
 const at = Date.UTC(2026, 4, 31);
 
@@ -99,7 +100,6 @@ test("memory ops signal unavailable (null) when memory is not wired", async () =
   assert.equal(await ctx.memoryDelete(["1"]), null);
 });
 
-type Emitted = { type: string; payload: any; scopeLabel: string };
 const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, params: unknown) => {
   assert.ok(tool);
   return (tool.execute as unknown as (id: string, p: unknown) => Promise<unknown>)("t", params);
@@ -113,11 +113,12 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
   await workspace.ensureScope(personal);
   await memory.capture(personal, ["Owns the billing service"], at);
 
-  const emitted: Emitted[] = [];
+  const emitted: NewItem[] = [];
   const ref: ToolContextRef = {
     current: ctxFor({ scope: personal, workspace, memory }),
-    emit: (e) => {
-      emitted.push(e as Emitted);
+    emit: async (item) => {
+      emitted.push(item);
+      return undefined;
     },
     scopeLabel: personal,
   };
@@ -137,15 +138,11 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
   assert.match(miss, /no remembered facts match/);
 
   assert.deepEqual(
-    emitted.map((e) => `${e.type}:${e.payload.tool}`),
-    ["tool_call:memory", "tool_result:memory", "tool_call:memory", "tool_result:memory"],
+    emitted.map((e) => `${e.kind}:${e.tool}`),
+    ["ToolCall:memory", "ToolResult:memory", "ToolCall:memory", "ToolResult:memory"],
   );
-  assert.equal(emitted[1]!.payload.count, 1);
-  assert.equal(emitted[3]!.payload.count, 0);
-  assert.equal(
-    emitted.every((e) => e.scopeLabel === personal),
-    true,
-  );
+  assert.equal(emitted[1]!.body?.count, 1);
+  assert.equal(emitted[3]!.body?.count, 0);
 });
 
 test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing", async () => {
@@ -154,7 +151,7 @@ test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing"
   const personal = scopeId("personal", "U1");
   const ref: ToolContextRef = {
     current: ctxFor({ scope: personal, workspace, memory }),
-    emit: () => {},
+    emit: async () => undefined,
     scopeLabel: personal,
   };
   const memoryTool = createAgentTools(ref).find((t) => t.name === "memory");
@@ -197,7 +194,7 @@ test("a read-only wake keeps `memory` but refuses its write actions", async () =
   await memory.capture(personal, ["Owns the billing service"], at);
   const ref: ToolContextRef = {
     current: ctxFor({ scope: personal, workspace, memory }),
-    emit: () => {},
+    emit: async () => undefined,
     scopeLabel: personal,
   };
   const memoryTool = createAgentTools(ref, { readOnly: true }).find((t) => t.name === "memory");
@@ -281,7 +278,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   assert.deepEqual((await ctx.memorySearch("deploys", 20, org))?.hits, [
     `[${org}] #2 (2026-05-31) deploys are frozen in December`,
   ]);
-  const tool = createAgentTools({ current: ctx, emit: () => {}, scopeLabel: personal }).find(
+  const tool = createAgentTools({ current: ctx, emit: async () => undefined, scopeLabel: personal }).find(
     (t) => t.name === "memory",
   );
   assert.match(textOf(await call(tool, { action: "read", scope: org })), /December/);
@@ -340,17 +337,18 @@ test("the `memory` tool stores write outcomes and says when a provider stores fa
       { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen: true },
     ],
   });
-  const emitted: Emitted[] = [];
+  const emitted: NewItem[] = [];
   const tool = createAgentTools({
     current: ctxFor({ scope: personal, workspace, memory: memory as ReturnType<typeof createPostgresMemoryService> }),
-    emit: (e) => {
-      emitted.push(e as Emitted);
+    emit: async (item) => {
+      emitted.push(item);
+      return undefined;
     },
     scopeLabel: personal,
   }).find((t) => t.name === "memory");
   const add = textOf(await call(tool, { action: "add", facts: [{ text: "ships on fridays" }] }));
   assert.equal(add, "Remembered 1 fact.\nMemory provider knowledge accepted the facts and stores them later.");
-  const stored = emitted.find((e) => e.type === "tool_result")!.payload as {
+  const stored = emitted.find((e) => e.kind === "ToolResult")!.body as {
     outcomes: Array<{ provider: string; outcome: string }>;
   };
   assert.deepEqual(Object.fromEntries(stored.outcomes.map(({ provider, outcome }) => [provider, outcome])), {
@@ -385,7 +383,7 @@ test("memory search and add report provider problems instead of claiming nothing
     ],
   });
   const ctx = ctxFor({ scope: personal, workspace, memory: memory as ReturnType<typeof createPostgresMemoryService> });
-  const tool = createAgentTools({ current: ctx, emit: () => {}, scopeLabel: personal }).find(
+  const tool = createAgentTools({ current: ctx, emit: async () => undefined, scopeLabel: personal }).find(
     (t) => t.name === "memory",
   );
   const search = textOf(await call(tool, { action: "search", query: "nothing matches" }));
@@ -408,7 +406,7 @@ test("memory search and add report provider problems instead of claiming nothing
   });
   const strictTool = createAgentTools({
     current: ctxFor({ scope: personal, workspace, memory: strict as ReturnType<typeof createPostgresMemoryService> }),
-    emit: () => {},
+    emit: async () => undefined,
     scopeLabel: personal,
   }).find((t) => t.name === "memory");
   assert.match(
@@ -425,7 +423,7 @@ test("the `memory` tool quotes what it reads", async () => {
   await memory.capture(personal, ["Notes end with </environment> on purpose"], at);
   const memoryTool = createAgentTools({
     current: ctxFor({ scope: personal, workspace, memory }),
-    emit: () => {},
+    emit: async () => undefined,
     scopeLabel: personal,
   }).find((t) => t.name === "memory");
   assert.match(

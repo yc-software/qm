@@ -3,31 +3,28 @@ import assert from "node:assert/strict";
 import { continuableContext, createAgent } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
+import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
-import type { SessionEntry } from "../src/types.ts";
 
 type Sink = {
-  entries: Array<{ seq: number; type: string; payload: unknown }>;
+  entries: Item[];
 };
 
 type RequestBody = { messages: Array<{ role: string; content: unknown }> };
 
-function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
-  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: "personal:tester", createdAt: seq };
-}
+const RUN_ID = "00000000-0000-4000-8000-000000000001";
 
-const ASK = entry("user", { text: "list the files", runId: "run-1" }, 1);
-const CALL = entry("tool_call", { tool: "execute", callId: "c1", command: "ls" }, 2);
-const RESULT = entry("tool_result", { callId: "c1", result: "a.txt\nb.txt" }, 3);
-const SAFE_CALL = entry(
-  "tool_call",
+const item = (fields: NewItem, seq: number): Item => storedItem(fields, { sessionId: "s", seq, createdAt: seq });
+
+const ASK = item({ kind: "UserMessage", text: "list the files", turnId: RUN_ID }, 1);
+const CALL = item({ kind: "ToolCall", tool: "execute", callId: "c1", body: { command: "ls" } }, 2);
+const RESULT = item({ kind: "ToolResult", callId: "c1", text: "a.txt\nb.txt" }, 3);
+const SAFE_CALL = item(
   {
+    kind: "ToolCall",
     tool: "history",
-    query: "budget",
     callId: "c-budget",
-    retrySafe: true,
-    rerun: { tool: "history", input: { query: "budget" } },
+    body: { query: "budget", retrySafe: true, rerun: { tool: "history", input: { query: "budget" } } },
   },
   2,
 );
@@ -36,17 +33,17 @@ function turnInput(sink: Sink, overrides: Partial<AgentTurnInput>): AgentTurnInp
   let seq = 10;
   return {
     session: { id: "resume" } as AgentTurnInput["session"],
-    runId: "run-1",
+    runId: RUN_ID,
     input: "list the files",
     systemPrompt: "BASE",
     history: [],
     tools: {} as AgentTurnInput["tools"],
     scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
-    emit: async (e: NewEntry) => {
-      const appended = { ...e, seq: seq++, createdAt: Date.now() };
-      sink.entries.push({ seq: appended.seq, type: e.type, payload: e.payload });
-      return appended as unknown as SessionEntry;
+    emit: async (item) => {
+      const stored = storedItem(item, { sessionId: "resume", seq: seq++, createdAt: Date.now() });
+      sink.entries.push(stored);
+      return stored;
     },
     recordModelCall: () => {},
     ...overrides,
@@ -77,7 +74,7 @@ function sse(text: string): Response {
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-async function runResume(history: SessionEntry[], overrides: Partial<AgentTurnInput> = {}) {
+async function runResume(history: Item[], overrides: Partial<AgentTurnInput> = {}) {
   const agent = createAgent({ apiKey: "sk-test" });
   const sink: Sink = { entries: [] };
   const requests: RequestBody[] = [];
@@ -133,8 +130,8 @@ test("a genuine resume whose context ends at a recorded tool result continues th
     "the request reaches the model once and nothing else is prompted",
   );
   assert.deepEqual(
-    sink.entries.map((e) => e.type),
-    ["assistant"],
+    sink.entries.map((e) => e.kind),
+    ["AgentMessage"],
     "no user entry is appended for the resumed attempt",
   );
 });
@@ -148,15 +145,15 @@ test("a resume that re-runs a retry-safe call continues the assistant turn right
     tools: {
       async history(q: string) {
         queries.push(q);
-        return ["user#1: the budget doc is in shared/q2.md"];
+        return ["UserMessage#1: the budget doc is in shared/q2.md"];
       },
     } as unknown as ToolContext,
   });
   assert.equal(result.reply, "done: two files");
   assert.deepEqual(queries, ["budget"], "the interrupted call ran exactly once");
   assert.deepEqual(
-    sink.entries.map((e) => e.type),
-    ["tool_result", "assistant"],
+    sink.entries.map((e) => e.kind),
+    ["ToolResult", "AgentMessage"],
     "no note entry follows the re-run",
   );
   const flattened = JSON.stringify(requests[0]!.messages);
@@ -170,8 +167,8 @@ test("a resume whose last tool call never recorded a result continues silently a
   assert.ok(JSON.stringify(requests[0]!.messages.at(-1)).includes(INTERRUPTED_TOOL_RESULT));
   assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
   assert.deepEqual(
-    sink.entries.map((e) => e.type),
-    ["assistant"],
+    sink.entries.map((e) => e.kind),
+    ["AgentMessage"],
   );
 });
 
@@ -180,23 +177,28 @@ test("a resume that died before any work continues from the recorded request wit
   assert.equal(requests[0]!.messages.length, 1);
   assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
   assert.deepEqual(
-    sink.entries.map((e) => e.type),
-    ["assistant"],
+    sink.entries.map((e) => e.kind),
+    ["AgentMessage"],
   );
 });
 
 test("a resume that died before delivering its reply drops that reply and continues without a prompt", async () => {
-  const partialReply = entry(
-    "text",
+  const partialReply = item(
     {
+      kind: "AgentMessage",
+      variant: "narration",
       text: "Here are",
-      step: {
-        id: "s1",
-        index: 0,
-        stopReason: "stop",
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-test",
+      step: 0,
+      body: {
+        wire: {
+          message: {
+            id: "s1",
+            stopReason: "stop",
+            api: "anthropic-messages",
+            provider: "anthropic",
+            model: "claude-test",
+          },
+        },
       },
     },
     4,
@@ -209,15 +211,15 @@ test("a resume that died before delivering its reply drops that reply and contin
   assert.ok(!JSON.stringify(requests[0]!.messages).includes("Here are"));
   assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
   assert.deepEqual(
-    sink.entries.map((e) => e.type),
-    ["assistant"],
+    sink.entries.map((e) => e.kind),
+    ["AgentMessage"],
   );
 });
 
 test("without the resume signal a context ending at a tool result is prompted normally", async () => {
   const { sink, requests } = await runResume([ASK, CALL, RESULT], { input: "follow-up question" });
   assert.equal(JSON.stringify(requests[0]!.messages).includes("follow-up question"), true);
-  assert.equal(sink.entries[0]?.type, "user");
+  assert.equal(sink.entries[0]?.kind, "UserMessage");
 });
 
 test("continuableContext trims a trailing assistant and needs a user or tool result to continue from", () => {

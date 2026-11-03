@@ -135,6 +135,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     const alice = await token("U1");
     for (const path of [
       "/v1/memory?principalId=",
+      "/v1/spend?principalId=",
       "/v1/contexts/policy?scope=channel:C1&principalId=",
       "/v1/sessions/s1/background?viewer=",
       "/v1/shared-sessions/token?viewer=",
@@ -317,7 +318,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       endpoint: null,
       versions: [{ version: 1, createdAt: Date.now(), entrypoint: "node app.js", snapshotDir: "" }],
     };
-    built.app.listDeployments = async () => [deployment];
+    built.app.getDeployment = async (id) => (id === deployment.id ? deployment : null);
     built.app.listDeploymentsForViewer = async () => [];
     built.app.canManageDeployment = async (_id, principalId) => principalId === "U2";
     assert.equal((await fetch(`${base}/v1/deployments?principalId=U2`, { headers: aliceHeaders })).status, 403);

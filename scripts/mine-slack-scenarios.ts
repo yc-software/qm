@@ -14,26 +14,12 @@ const MIN_HUMANS = Number(arg("min-humans", "2"));
 const PER_CLUSTER = Number(arg("limit", "4"));
 const OUT = arg("out", "");
 
-interface Entry {
-  seq: number;
-  type: string;
-  payload: string | null;
-  created_at: number;
-}
-
-function readUser(payload: string | null): { author: string; text: string } | null {
-  if (!payload) return null;
-  let p: any;
-  try {
-    p = JSON.parse(payload);
-  } catch {
-    return null;
-  }
-  const author = p.author ?? p.authorId ?? p.from ?? p.userId ?? p.principalId ?? p.user ?? p.name ?? "unknown";
-  let text = JSON.stringify(p).slice(0, 200);
-  if (typeof p.text === "string") text = p.text;
-  else if (typeof p.content === "string") text = p.content;
-  return { author: String(author), text };
+interface ItemRow {
+  kind: string;
+  variant: string | null;
+  text: string | null;
+  author: string | null;
+  name: string | null;
 }
 
 async function main(): Promise<void> {
@@ -64,27 +50,21 @@ async function main(): Promise<void> {
     }
     const mined: Mined[] = [];
     for (const s of sessions) {
-      const { rows: entries } = await client.query<Entry>(
-        `SELECT seq, CASE WHEN kind IN ('UserMessage', 'SteeringMessage') THEN 'user'
-                      WHEN kind = 'AgentMessage' AND body ->> 'variant' IS NULL THEN 'assistant'
-                      ELSE kind END AS type,
-                body::text AS payload, (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_at
-           FROM items WHERE session_id = $1 ORDER BY seq`,
+      const { rows } = await client.query<ItemRow>(
+        `SELECT kind, variant, text, author, body ->> 'name' AS name FROM items WHERE session_id = $1 ORDER BY seq`,
         [s.id],
       );
       const transcript: Array<{ author: string; text: string }> = [];
       const humans = new Set<string>();
       let botReplied = false;
-      for (const e of entries) {
-        if (e.type === "user") {
-          const u = readUser(e.payload);
-          if (u) {
-            humans.add(u.author);
-            transcript.push(u);
-          }
-        } else if (e.type === "assistant") {
+      for (const r of rows) {
+        if (r.kind === "UserMessage" || r.kind === "SteeringMessage") {
+          const author = r.name ?? r.author ?? "unknown";
+          humans.add(author);
+          transcript.push({ author, text: r.text ?? "" });
+        } else if (r.kind === "AgentMessage" && r.variant === null) {
           botReplied = true;
-          transcript.push({ author: "agent", text: readUser(e.payload)?.text ?? "" });
+          transcript.push({ author: "agent", text: r.text ?? "" });
         }
       }
       if (humans.size >= MIN_HUMANS) {

@@ -1,4 +1,4 @@
-import { RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
+import { parseRenderSandboxImage, RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
 import type { LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import { parseScopeId } from "../types.ts";
@@ -160,14 +160,18 @@ function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
 interface RenderSandboxEnv {
   apiKey?: string;
   workspaceId?: string;
+  image?: string;
   defaultTimeoutSec?: number;
 }
 
 function renderSandboxEnv(env: NodeJS.ProcessEnv): RenderSandboxEnv {
   const defaultTimeoutSec = numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC);
+  const image = env.RENDER_SANDBOX_IMAGE?.trim();
+  if (image) parseRenderSandboxImage(image);
   return {
     ...(env.RENDER_API_KEY?.trim() ? { apiKey: env.RENDER_API_KEY.trim() } : {}),
     ...(env.RENDER_WORKSPACE_ID?.trim() ? { workspaceId: env.RENDER_WORKSPACE_ID.trim() } : {}),
+    ...(image ? { image } : {}),
     ...(defaultTimeoutSec !== undefined ? { defaultTimeoutSec } : {}),
   };
 }
@@ -404,7 +408,7 @@ export function enabledSandboxBackends(config: SandboxSettings): SandboxBackendN
     modal: Boolean(config.modalSandbox?.tokenId && config.modalSandbox?.tokenSecret),
     aws: Boolean(config.awsSandbox?.s3Bucket),
     porter: Boolean(config.porterSandbox?.token),
-    render: Boolean(config.renderSandbox?.apiKey && config.renderSandbox?.workspaceId),
+    render: Boolean(config.renderSandbox?.apiKey && config.renderSandbox?.workspaceId && config.renderSandbox?.image),
   };
   const enabled = new Set<SandboxBackendName>([config.sandboxBackend]);
   for (const [name, on] of Object.entries(credentialed)) {
@@ -510,12 +514,15 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
     throw new Error("Render providers require RENDER_WORKSPACE_ID");
   if (sandboxBackend === "render" && env.WORKSPACE_STORE !== "postgres")
     throw new Error("SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres");
+  if (sandboxBackend === "render" && !env.RENDER_SANDBOX_IMAGE?.trim())
+    throw new Error("SANDBOX_BACKEND=render requires RENDER_SANDBOX_IMAGE");
   const renderSandboxEnabled =
-    sandboxBackend === "render" || Boolean(env.RENDER_API_KEY?.trim() && env.RENDER_WORKSPACE_ID?.trim());
+    sandboxBackend === "render" ||
+    Boolean(env.RENDER_API_KEY?.trim() && env.RENDER_WORKSPACE_ID?.trim() && env.RENDER_SANDBOX_IMAGE?.trim());
   if (renderSandboxEnabled) {
     if ((numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) ?? 600) + 60 >= RENDER_SANDBOX_TTL_SEC)
       throw new Error(
-        `SANDBOX_TIMEOUT_SEC must stay more than 60 seconds below the ${RENDER_SANDBOX_TTL_SEC} second Render sandbox lifetime`,
+        `SANDBOX_TIMEOUT_SEC must stay more than 60 seconds below the ${RENDER_SANDBOX_TTL_SEC} second lifetime of disposable Render sandboxes`,
       );
   }
   const legacySandboxScopeDefaults: LegacySandboxScopeDefaults = {};

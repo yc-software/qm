@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { harness } from "./deep-link-boot-fixture.ts";
@@ -32,7 +33,7 @@ test("overlapping passages offer each chat and delayed expansion never overrides
     forkBoundarySeq: 0,
     sideChat: { entrySeq: 0, quote: "durable", occurrence: 0, expanded: false },
   }));
-  const entries = [{ seq: 0, type: "user", createdAt: Date.now(), payload: { text: "Use a durable queue" } }];
+  const items = [item("UserMessage", { seq: 0, createdAt: Date.now(), text: "Use a durable queue" })];
   let release!: () => void;
   let held = new Promise<void>((resolve) => {
     release = resolve;
@@ -43,7 +44,7 @@ test("overlapping passages offer each chat and delayed expansion never overrides
     path: "/s/source",
     session: source,
     listSessions: [source, other, ...sides],
-    entries,
+    items,
     api(path) {
       if (path === "/api/sessions/side-1/expand") {
         expanding = true;
@@ -59,9 +60,9 @@ test("overlapping passages offer each chat and delayed expansion never overrides
         waiting = true;
         return held.then(() => Response.json({ sessions: [source, other, ...sides], nextCursor: null }));
       }
-      if (path.startsWith("/api/sessions/other?")) return Response.json({ session: other, entries });
+      if (path.startsWith("/api/sessions/other?")) return Response.json({ session: other, items });
       for (const side of sides)
-        if (path.startsWith(`/api/sessions/${side.id}?`)) return Response.json({ session: side, entries });
+        if (path.startsWith(`/api/sessions/${side.id}?`)) return Response.json({ session: side, items });
       return undefined;
     },
   });

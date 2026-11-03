@@ -53,6 +53,7 @@ export interface IngestEvent extends SurfaceKey {
   botId?: string;
   authorName?: string;
   text?: string;
+  raw?: Record<string, unknown>;
   mentions?: Record<string, string>;
   self?: boolean;
   bot?: boolean;
