@@ -11,6 +11,7 @@ import {
   streamingTextTail,
   buildTimeline,
   workTimelineSegments,
+  toolBody,
   toolCategory,
   toolRowKind,
   toolExecutionOutput,
@@ -816,4 +817,15 @@ test("NULL legacy call IDs preserve the existing adjacent-result fallback", () =
     assert.equal(timeline[0].row.result?.seq, 11);
     assert.equal(toolRowKind(timeline[0].row, work.status), "ok");
   }
+});
+
+test("tool rows read the call's arguments without the replay wire block", () => {
+  const call = item("ToolCall", {
+    seq: 1,
+    createdAt: 1,
+    tool: "web_search",
+    callId: "c1",
+    body: { query: "qm", wire: { message: { id: "m1" } } },
+  });
+  assert.deepEqual(toolBody(call), { query: "qm" });
 });

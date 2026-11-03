@@ -76,7 +76,8 @@ function isTerminalWorkStatus(status: WorkBlock["status"]): boolean {
 export type ToolRowKind = "running" | "ok" | "failed" | "attempted" | "approval";
 
 export function toolBody(item: Item | null | undefined): ToolPayload {
-  return (item?.body ?? {}) as ToolPayload;
+  const { wire: _wire, ...body } = item?.body ?? {};
+  return body as ToolPayload;
 }
 
 export function rowTool(row: Pick<ToolRowModel, "call" | "result">): string | null {
