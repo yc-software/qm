@@ -12,6 +12,8 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { useOwnerDatabase } from "./tenants/owner-pool.ts";
+import { inTenantOf } from "./tenants/claim.ts";
+import { withoutTenant } from "./tenants/context.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 
 const config = loadConfig();
@@ -93,25 +95,32 @@ if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
 const slackRuntime = createSlackRuntimeReconciler({
   startPaused: Boolean(config.backgroundDeploymentId),
   load: async () => {
-    const status = await built.slackInstallation.status();
-    const stored = await built.slackInstallation.get();
-    if (stored) {
-      if (stored.installId && !managedSlack) return null;
-      const dynamic = slackPluginConfigFromEnv(
-        {
-          ...process.env,
-          SLACK_BOT_TOKEN: stored.botToken,
-          SLACK_APP_TOKEN: stored.appToken,
-          SLACK_EVENTS_MODE: stored.appToken ? "socket" : process.env.SLACK_EVENTS_MODE,
-        },
-        stored.installId && managedSlack ? (staging) => managedSlack.receiver(stored.installId!, staging) : undefined,
-      );
-      if (dynamic && stored.installId) dynamic.installationId = stored.installId;
-      return dynamic ? { version: stored.version, config: dynamic } : null;
-    }
-    if (status.managed) return null;
-    if (slackConfig) return { version: "environment", config: slackConfig };
-    return null;
+    const tenants = await withoutTenant(() => built.slackInstallation.tenantIds());
+    if (tenants.length > 1)
+      throw new Error("Slack is installed for more than one tenant, and one Slack runtime serves a single tenant");
+    const tenantId = tenants[0];
+    return inTenantOf(tenantId, async () => {
+      const status = await built.slackInstallation.status();
+      const stored = await built.slackInstallation.get();
+      if (stored) {
+        if (stored.installId && !managedSlack) return null;
+        const dynamic = slackPluginConfigFromEnv(
+          {
+            ...process.env,
+            SLACK_BOT_TOKEN: stored.botToken,
+            SLACK_APP_TOKEN: stored.appToken,
+            SLACK_EVENTS_MODE: stored.appToken ? "socket" : process.env.SLACK_EVENTS_MODE,
+          },
+          stored.installId && managedSlack ? (staging) => managedSlack.receiver(stored.installId!, staging) : undefined,
+        );
+        if (dynamic && stored.installId) dynamic.installationId = stored.installId;
+        if (dynamic && tenantId) dynamic.tenantId = tenantId;
+        return dynamic ? { version: stored.version, config: dynamic } : null;
+      }
+      if (status.managed) return null;
+      if (slackConfig) return { version: "environment", config: slackConfig };
+      return null;
+    });
   },
   startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
   onError: reportFailureAs("slack plugin reconciliation", undefined),
