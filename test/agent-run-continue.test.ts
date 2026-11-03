@@ -5,7 +5,7 @@ import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { SessionEntry } from "../src/types.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 type Sink = {
   entries: Array<{ seq: number; type: string; payload: unknown }>;
@@ -113,78 +113,69 @@ function userTexts(requests: RequestBody[]): string[] {
     .flatMap((b) => (b.type === "text" && b.text ? [b.text] : []));
 }
 
-tenantTest(
-  "a genuine resume whose context ends at a recorded tool result continues the assistant turn silently",
-  async () => {
-    const { result, sink, requests, llmTurnSeqs } = await runResume([ASK, CALL, RESULT], {
-      continueTurn: true,
-      resumeUserSeq: ASK.seq,
-    });
-    assert.equal(result.reply, "done: two files");
-    assert.deepEqual(llmTurnSeqs, [ASK.seq], "model requests are attributed to the run's original user entry");
-    assert.equal(requests.length, 1);
-    const last = requests[0]!.messages.at(-1)!;
-    assert.equal(last.role, "user");
-    assert.ok(
-      (last.content as Array<{ type: string }>).some((block) => block.type === "tool_result"),
-      "the model resumes right after the recorded tool result",
-    );
-    assert.deepEqual(
-      userTexts(requests),
-      ["── Wednesday, December 31, 1969 ──\nlist the files"],
-      "the request reaches the model once and nothing else is prompted",
-    );
-    assert.deepEqual(
-      sink.entries.map((e) => e.type),
-      ["assistant"],
-      "no user entry is appended for the resumed attempt",
-    );
-  },
-);
+test("a genuine resume whose context ends at a recorded tool result continues the assistant turn silently", async () => {
+  const { result, sink, requests, llmTurnSeqs } = await runResume([ASK, CALL, RESULT], {
+    continueTurn: true,
+    resumeUserSeq: ASK.seq,
+  });
+  assert.equal(result.reply, "done: two files");
+  assert.deepEqual(llmTurnSeqs, [ASK.seq], "model requests are attributed to the run's original user entry");
+  assert.equal(requests.length, 1);
+  const last = requests[0]!.messages.at(-1)!;
+  assert.equal(last.role, "user");
+  assert.ok(
+    (last.content as Array<{ type: string }>).some((block) => block.type === "tool_result"),
+    "the model resumes right after the recorded tool result",
+  );
+  assert.deepEqual(
+    userTexts(requests),
+    ["── Wednesday, December 31, 1969 ──\nlist the files"],
+    "the request reaches the model once and nothing else is prompted",
+  );
+  assert.deepEqual(
+    sink.entries.map((e) => e.type),
+    ["assistant"],
+    "no user entry is appended for the resumed attempt",
+  );
+});
 
-tenantTest(
-  "a resume that re-runs a retry-safe call continues the assistant turn right after the re-run result",
-  async () => {
-    const queries: string[] = [];
-    const { result, sink, requests } = await runResume([ASK, SAFE_CALL], {
-      continueTurn: true,
-      resumeUserSeq: ASK.seq,
-      resumeToolCall: { callId: "c-budget", tool: "history", input: { query: "budget" } },
-      tools: {
-        async history(q: string) {
-          queries.push(q);
-          return ["user#1: the budget doc is in shared/q2.md"];
-        },
-      } as unknown as ToolContext,
-    });
-    assert.equal(result.reply, "done: two files");
-    assert.deepEqual(queries, ["budget"], "the interrupted call ran exactly once");
-    assert.deepEqual(
-      sink.entries.map((e) => e.type),
-      ["tool_result", "assistant"],
-      "no note entry follows the re-run",
-    );
-    const flattened = JSON.stringify(requests[0]!.messages);
-    assert.ok(flattened.includes("shared/q2.md"), "the model sees the re-run result");
-    assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
-    assert.ok(!flattened.includes("[interrupted"));
-  },
-);
+test("a resume that re-runs a retry-safe call continues the assistant turn right after the re-run result", async () => {
+  const queries: string[] = [];
+  const { result, sink, requests } = await runResume([ASK, SAFE_CALL], {
+    continueTurn: true,
+    resumeUserSeq: ASK.seq,
+    resumeToolCall: { callId: "c-budget", tool: "history", input: { query: "budget" } },
+    tools: {
+      async history(q: string) {
+        queries.push(q);
+        return ["user#1: the budget doc is in shared/q2.md"];
+      },
+    } as unknown as ToolContext,
+  });
+  assert.equal(result.reply, "done: two files");
+  assert.deepEqual(queries, ["budget"], "the interrupted call ran exactly once");
+  assert.deepEqual(
+    sink.entries.map((e) => e.type),
+    ["tool_result", "assistant"],
+    "no note entry follows the re-run",
+  );
+  const flattened = JSON.stringify(requests[0]!.messages);
+  assert.ok(flattened.includes("shared/q2.md"), "the model sees the re-run result");
+  assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
+  assert.ok(!flattened.includes("[interrupted"));
+});
 
-tenantTest(
-  "a resume whose last tool call never recorded a result continues silently after the interrupted result",
-  async () => {
-    const { sink, requests } = await runResume([ASK, CALL], { continueTurn: true, resumeUserSeq: ASK.seq });
-    assert.ok(JSON.stringify(requests[0]!.messages.at(-1)).includes(INTERRUPTED_TOOL_RESULT));
-    assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
-    assert.deepEqual(
-      sink.entries.map((e) => e.type),
-      ["assistant"],
-    );
-  },
-);
+test("a resume whose last tool call never recorded a result continues silently after the interrupted result", async () => {
+  const { sink, requests } = await runResume([ASK, CALL], { continueTurn: true, resumeUserSeq: ASK.seq });
+  assert.ok(JSON.stringify(requests[0]!.messages.at(-1)).includes(INTERRUPTED_TOOL_RESULT));
+  assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
+  assert.deepEqual(
+    sink.entries.map((e) => e.type),
+    ["assistant"],
+  );
+});
 
-tenantTest("a resume that died before any work continues from the recorded request without re-sending it", async () => {
+test("a resume that died before any work continues from the recorded request without re-sending it", async () => {
   const { sink, requests } = await runResume([ASK], { continueTurn: true, resumeUserSeq: ASK.seq });
   assert.equal(requests[0]!.messages.length, 1);
   assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
@@ -194,45 +185,42 @@ tenantTest("a resume that died before any work continues from the recorded reque
   );
 });
 
-tenantTest(
-  "a resume that died before delivering its reply drops that reply and continues without a prompt",
-  async () => {
-    const partialReply = entry(
-      "text",
-      {
-        text: "Here are",
-        step: {
-          id: "s1",
-          index: 0,
-          stopReason: "stop",
-          api: "anthropic-messages",
-          provider: "anthropic",
-          model: "claude-test",
-        },
+test("a resume that died before delivering its reply drops that reply and continues without a prompt", async () => {
+  const partialReply = entry(
+    "text",
+    {
+      text: "Here are",
+      step: {
+        id: "s1",
+        index: 0,
+        stopReason: "stop",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-test",
       },
-      4,
-    );
-    const { sink, requests } = await runResume([ASK, CALL, RESULT, partialReply], {
-      continueTurn: true,
-      resumeUserSeq: ASK.seq,
-    });
-    assert.equal(requests[0]!.messages.at(-1)!.role, "user");
-    assert.ok(!JSON.stringify(requests[0]!.messages).includes("Here are"));
-    assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
-    assert.deepEqual(
-      sink.entries.map((e) => e.type),
-      ["assistant"],
-    );
-  },
-);
+    },
+    4,
+  );
+  const { sink, requests } = await runResume([ASK, CALL, RESULT, partialReply], {
+    continueTurn: true,
+    resumeUserSeq: ASK.seq,
+  });
+  assert.equal(requests[0]!.messages.at(-1)!.role, "user");
+  assert.ok(!JSON.stringify(requests[0]!.messages).includes("Here are"));
+  assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
+  assert.deepEqual(
+    sink.entries.map((e) => e.type),
+    ["assistant"],
+  );
+});
 
-tenantTest("without the resume signal a context ending at a tool result is prompted normally", async () => {
+test("without the resume signal a context ending at a tool result is prompted normally", async () => {
   const { sink, requests } = await runResume([ASK, CALL, RESULT], { input: "follow-up question" });
   assert.equal(JSON.stringify(requests[0]!.messages).includes("follow-up question"), true);
   assert.equal(sink.entries[0]?.type, "user");
 });
 
-tenantTest("continuableContext trims a trailing assistant and needs a user or tool result to continue from", () => {
+test("continuableContext trims a trailing assistant and needs a user or tool result to continue from", () => {
   const result = { role: "toolResult" };
   const reply = { role: "assistant" };
   assert.deepEqual(continuableContext([{ role: "user" }, result]), [{ role: "user" }, result]);

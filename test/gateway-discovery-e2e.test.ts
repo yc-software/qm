@@ -8,7 +8,7 @@ import { resolveModel } from "../src/model/pi-models.ts";
 import { oneShot } from "../src/agent/agent-run.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { scopeId } from "../src/types.ts";
@@ -24,7 +24,7 @@ const metadata = {
 };
 
 for (const protocol of ["openai", "anthropic", "unknown"] as const)
-  tenantTest(`live ${protocol} gateway discovery, picker and tool continuation`, async (t) => {
+  test(`live ${protocol} gateway discovery, picker and tool continuation`, async (t) => {
     const expectedPath = { openai: "/v1/responses", anthropic: "/v1/messages", unknown: "/v1/chat/completions" }[
       protocol
     ];
@@ -285,7 +285,7 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
     );
   });
 
-tenantTest("gateway outage leaves direct providers available", async () => {
+test("gateway outage leaves direct providers available", async () => {
   const built = stopAtEnd(
     buildApp(
       testConfig({

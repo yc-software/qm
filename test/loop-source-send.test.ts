@@ -5,7 +5,7 @@ import { buildGmailReplyMime, gmailAdapter, replySubject } from "../src/loops/so
 import { renderSlackSendText, slackAdapter, slackReplyThreadTs } from "../src/loops/sources/slack.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/delivery.ts";
 import { adapterForItem } from "../src/loops/sources/index.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 function item(source: string, payload: Record<string, unknown>, proposal?: Record<string, unknown>): LoopItem {
   return {
@@ -60,7 +60,7 @@ function slackSpy(fail?: string): { calls: SlackCall[]; factory: (token: string)
   };
 }
 
-tenantTest("gmail reply MIME threads correctly and survives a UTF-8 body", async () => {
+test("gmail reply MIME threads correctly and survives a UTF-8 body", async () => {
   const mime = (await buildGmailReplyMime(gmailItem, { body: "Confirmed — see attached. ✅" }))!.toString();
   assert.match(mime, /^To: ada@example\.com\r$/m);
   assert.match(mime, /^Subject: Re: Quarterly numbers\r$/m);
@@ -70,7 +70,7 @@ tenantTest("gmail reply MIME threads correctly and survives a UTF-8 body", async
   assert.equal(Buffer.from(body.replaceAll("\r\n", ""), "base64").toString("utf8"), "Confirmed — see attached. ✅");
 });
 
-tenantTest("subjects keep an existing Re: and non-ASCII subjects get RFC 2047 encoding", async () => {
+test("subjects keep an existing Re: and non-ASCII subjects get RFC 2047 encoding", async () => {
   assert.equal(
     replySubject(item("gmail", { gmail: { threadId: "t", subject: "RE: hello" } }), { body: "x" }),
     "RE: hello",
@@ -83,7 +83,7 @@ tenantTest("subjects keep an existing Re: and non-ASCII subjects get RFC 2047 en
   assert.match(mime, /^Subject: =\?UTF-8\?[BQ]\?[\x21-\x7e]+\?=\r$/m);
 });
 
-tenantTest("a gmail item with no recipient anywhere refuses to send", async () => {
+test("a gmail item with no recipient anywhere refuses to send", async () => {
   const result = await gmailAdapter.act(
     { owner: "josh", tokens: tokens({ "gmail.googleapis.com": "tok" }) },
     item("gmail", { gmail: { threadId: "t1" } }),
@@ -93,7 +93,7 @@ tenantTest("a gmail item with no recipient anywhere refuses to send", async () =
   assert.deepEqual(result, { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" });
 });
 
-tenantTest("gmail send posts base64url raw with the thread id", async () => {
+test("gmail send posts base64url raw with the thread id", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const fetchImpl = (async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
     calls.push({ url: String(url), init: init! });
@@ -115,7 +115,7 @@ tenantTest("gmail send posts base64url raw with the thread id", async () => {
   assert.doesNotMatch(body.raw, /[+/=]/);
 });
 
-tenantTest("a Gmail send refusal reports the upstream status and response excerpt", async () => {
+test("a Gmail send refusal reports the upstream status and response excerpt", async () => {
   const result = await gmailAdapter.act(
     {
       owner: "josh",
@@ -133,7 +133,7 @@ tenantTest("a Gmail send refusal reports the upstream status and response excerp
   });
 });
 
-tenantTest("the held proposal is what goes out when the action carries no draft", async () => {
+test("the held proposal is what goes out when the action carries no draft", async () => {
   let sent = "";
   const fetchImpl = (async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const raw = (JSON.parse(String(init?.body)) as { raw: string }).raw;
@@ -155,7 +155,7 @@ tenantTest("the held proposal is what goes out when the action carries no draft"
   assert.equal(sent.split("\r\n\r\n")[1], "the held draft\r\n");
 });
 
-tenantTest("a missing connector reads as not_connected, not an exception", async () => {
+test("a missing connector reads as not_connected, not an exception", async () => {
   const result = await gmailAdapter.act({ owner: "josh", tokens: tokens({}) }, gmailItem, "send", { body: "x" });
   assert.equal(result.ok, false);
   if (!result.ok) assert.equal(result.reason, "not_connected");
@@ -164,7 +164,7 @@ tenantTest("a missing connector reads as not_connected, not an exception", async
   if (!slackResult.ok) assert.equal(slackResult.reason, "not_connected");
 });
 
-tenantTest("slack replies thread on channel messages and stay inline in DMs and group DMs", () => {
+test("slack replies thread on channel messages and stay inline in DMs and group DMs", () => {
   assert.equal(slackReplyThreadTs(slackItem), "111.222");
   assert.equal(
     slackReplyThreadTs(item("slack", { slack: { channelId: "G9", ts: "3.4", isDirectMessage: true } })),
@@ -182,7 +182,7 @@ tenantTest("slack replies thread on channel messages and stay inline in DMs and 
   );
 });
 
-tenantTest("slack send posts as the user through the slack client", async () => {
+test("slack send posts as the user through the slack client", async () => {
   const spy = slackSpy();
   const ok = await slackAdapter.act(
     { owner: "josh", tokens: tokens({ "slack.com": "xoxp-1" }), slackClient: spy.factory },
@@ -196,7 +196,7 @@ tenantTest("slack send posts as the user through the slack client", async () => 
   assert.deepEqual(spy.calls[0]!.args, { channel: "C1", text: "on it", parse: "none", thread_ts: "111.222" });
 });
 
-tenantTest("a slack-level refusal surfaces its error code rather than an opaque failure", async () => {
+test("a slack-level refusal surfaces its error code rather than an opaque failure", async () => {
   const spy = slackSpy("not_in_channel");
   const bad = await slackAdapter.act(
     { owner: "josh", tokens: tokens({ "slack.com": "x" }), slackClient: spy.factory },
@@ -211,7 +211,7 @@ tenantTest("a slack-level refusal surfaces its error code rather than an opaque 
   }
 });
 
-tenantTest("react adds the emoji in slack and annotates the item without closing it", async () => {
+test("react adds the emoji in slack and annotates the item without closing it", async () => {
   const spy = slackSpy();
   const deps = { owner: "josh", tokens: tokens({ "slack.com": "xoxp-1" }), slackClient: spy.factory };
   const first = await slackAdapter.act(deps, slackItem, "react", { name: ":eyes:" });
@@ -224,7 +224,7 @@ tenantTest("react adds the emoji in slack and annotates the item without closing
   if (second.ok) assert.deepEqual(second.payloadPatch, { reactions: ["eyes", "tada"] });
 });
 
-tenantTest("react accepts a raw emoji character and refuses a name it cannot resolve", async () => {
+test("react accepts a raw emoji character and refuses a name it cannot resolve", async () => {
   const spy = slackSpy();
   const deps = { owner: "josh", tokens: tokens({ "slack.com": "x" }), slackClient: spy.factory };
   const fromChar = await slackAdapter.act(deps, slackItem, "react", { name: "\u{1F440}" });
@@ -235,7 +235,7 @@ tenantTest("react accepts a raw emoji character and refuses a name it cannot res
   if (!nameless.ok) assert.equal(nameless.reason, "bad_item");
 });
 
-tenantTest("a reaction slack refuses reads as an upstream failure", async () => {
+test("a reaction slack refuses reads as an upstream failure", async () => {
   const spy = slackSpy("restricted_action");
   const out = await slackAdapter.act(
     { owner: "josh", tokens: tokens({ "slack.com": "x" }), slackClient: spy.factory },
@@ -247,13 +247,13 @@ tenantTest("a reaction slack refuses reads as an upstream failure", async () => 
   if (!out.ok) assert.equal(out.reason, "upstream");
 });
 
-tenantTest("reacting with no connected slack account reads as not_connected", async () => {
+test("reacting with no connected slack account reads as not_connected", async () => {
   const out = await slackAdapter.act({ owner: "josh", tokens: tokens({}) }, slackItem, "react", { name: "eyes" });
   assert.equal(out.ok, false);
   if (!out.ok) assert.equal(out.reason, "not_connected");
 });
 
-tenantTest("an empty draft never leaves the house", async () => {
+test("an empty draft never leaves the house", async () => {
   const result = await slackAdapter.act({ owner: "josh", tokens: tokens({ "slack.com": "x" }) }, slackItem, "send", {
     body: "   ",
   });
@@ -261,7 +261,7 @@ tenantTest("an empty draft never leaves the house", async () => {
   if (!result.ok) assert.equal(result.reason, "bad_item");
 });
 
-tenantTest("an unknown action kind is refused rather than guessed at", async () => {
+test("an unknown action kind is refused rather than guessed at", async () => {
   const result = await slackAdapter.act({ owner: "josh", tokens: tokens({ "slack.com": "x" }) }, slackItem, "publish", {
     body: "hi",
   });
@@ -270,7 +270,7 @@ tenantTest("an unknown action kind is refused rather than guessed at", async () 
   assert.deepEqual([...slackAdapter.actions], ["send", "react"]);
 });
 
-tenantTest("adapters parse their own source shape into an opaque payload", () => {
+test("adapters parse their own source shape into an opaque payload", () => {
   const parsed = gmailAdapter.parse({
     source: "gmail",
     sourceKey: "thread-9",
@@ -288,7 +288,7 @@ tenantTest("adapters parse their own source shape into an opaque payload", () =>
   assert.deepEqual(parsed.proposal?.data, { body: "sure", to: ["ada@example.com"] });
 });
 
-tenantTest("adapters reject items missing the fields their send path needs", () => {
+test("adapters reject items missing the fields their send path needs", () => {
   assert.deepEqual(
     gmailAdapter.parse({ source: "gmail", sourceKey: "k", title: "t", from: "f", snippet: "s", receivedAt: 1 }),
     {
@@ -302,7 +302,7 @@ tenantTest("adapters reject items missing the fields their send path needs", () 
   assert.deepEqual(slackAdapter.parse({ source: "slack", title: "t" }), { error: "from required" });
 });
 
-tenantTest("an item resolves to the adapter that owns its source", () => {
+test("an item resolves to the adapter that owns its source", () => {
   assert.equal(adapterForItem(gmailItem)?.id, "gmail");
   assert.equal(adapterForItem(slackItem)?.id, "slack");
   assert.equal(adapterForItem(item("sentry", {})), undefined);
@@ -311,7 +311,7 @@ tenantTest("an item resolves to the adapter that owns its source", () => {
 const agentDraft = "Hi <@U7|ada>, see <!here> and <!subteam^S1|@eng>: **done** — `x`";
 const slackMeta = { slack: { channelId: "C1", ts: "1.1" } };
 
-tenantTest("an untouched agent draft goes out as written, with every mention disarmed", () => {
+test("an untouched agent draft goes out as written, with every mention disarmed", () => {
   const held = item("slack", slackMeta, { body: agentDraft });
   assert.equal(renderSlackSendText(held, agentDraft), "Hi @ada, see @\u200bhere and @eng: **done** — `x`");
   const native = item("slack", slackMeta, { body: "*bold* and _quiet_ <!channel>" });
@@ -322,7 +322,7 @@ tenantTest("an untouched agent draft goes out as written, with every mention dis
   );
 });
 
-tenantTest("a human-edited body goes out verbatim, except mentions carried over from the agent draft", () => {
+test("a human-edited body goes out verbatim, except mentions carried over from the agent draft", () => {
   const held = item("slack", slackMeta, { body: agentDraft });
   const edited = "Team <!here> please read; also <!channel> and <@U7> plus <@U9|bob> **bold**";
   assert.equal(
@@ -331,11 +331,11 @@ tenantTest("a human-edited body goes out verbatim, except mentions carried over 
   );
 });
 
-tenantTest("a draft the human wrote from scratch is never rewritten", () => {
+test("a draft the human wrote from scratch is never rewritten", () => {
   assert.equal(renderSlackSendText(item("slack", slackMeta), "Ping <!here> **bold**"), "Ping <!here> **bold**");
 });
 
-tenantTest("every agent draft the item ever had contributes to the disarm set, even after a redraft", () => {
+test("every agent draft the item ever had contributes to the disarm set, even after a redraft", () => {
   const held = item("slack", slackMeta, { body: "human words <!channel>" });
   held.proposal!.by = "human";
   held.agentDrafts = [
@@ -346,7 +346,7 @@ tenantTest("every agent draft the item ever had contributes to the disarm set, e
   assert.equal(renderSlackSendText(held, "calmer second draft"), "calmer second draft");
 });
 
-tenantTest("an agent posting through the API and an item with unknown provenance get every mention disarmed", () => {
+test("an agent posting through the API and an item with unknown provenance get every mention disarmed", () => {
   const fresh = item("slack", slackMeta, { body: "x" });
   assert.equal(renderSlackSendText(fresh, "go <!here> <@U9>", "agent"), "go @\u200bhere @U9");
   const unknownProvenance = item("slack", slackMeta, { body: "edited before deploy <!here>" });
@@ -361,7 +361,7 @@ tenantTest("an agent posting through the API and an item with unknown provenance
   assert.equal(renderSlackSendText(scratch, "mine <!here>"), "mine <!here>", "a person's own item stays live");
 });
 
-tenantTest("a long send is posted as fence-safe parts and the record is what actually went out", async () => {
+test("a long send is posted as fence-safe parts and the record is what actually went out", async () => {
   const spy = slackSpy();
   const body = `intro\n\`\`\`\n${"line of code\n".repeat(400)}\`\`\`\nafter`;
   const out = await slackAdapter.act(
@@ -377,7 +377,7 @@ tenantTest("a long send is posted as fence-safe parts and the record is what act
   assert.equal(out.ok && out.result, texts.join("\n"));
 });
 
-tenantTest("a part Slack refuses mid-way reports how much landed instead of pretending success", async () => {
+test("a part Slack refuses mid-way reports how much landed instead of pretending success", async () => {
   let n = 0;
   const failing: SlackUserClient = {
     chat: {
@@ -399,7 +399,7 @@ tenantTest("a part Slack refuses mid-way reports how much landed instead of pret
   assert.match(out.ok ? "" : out.message, /posted 1 of 3 parts.*ratelimited/);
 });
 
-tenantTest("a mention that fell out of the bounded draft history is still disarmed through the kept identities", () => {
+test("a mention that fell out of the bounded draft history is still disarmed through the kept identities", () => {
   const held = item("slack", slackMeta, { body: "human kept <!here>" });
   held.proposal!.by = "human";
   held.agentDrafts = [{ data: { body: "calm v11" } as unknown as LoopSourcePayload, by: "agent", at: 11 }];
@@ -407,7 +407,7 @@ tenantTest("a mention that fell out of the bounded draft history is still disarm
   assert.equal(renderSlackSendText(held, "human kept <!here>"), "human kept @\u200bhere");
 });
 
-tenantTest("Gmail sends only through the explicitly bound account, including legacy sent chats", async () => {
+test("Gmail sends only through the explicitly bound account, including legacy sent chats", async () => {
   for (const accountType of ["default", "personal", "company", undefined]) {
     for (const connected of [true, false]) {
       const requested: (string | undefined)[] = [];
@@ -443,7 +443,7 @@ tenantTest("Gmail sends only through the explicitly bound account, including leg
   }
 });
 
-tenantTest("Gmail drafts preserve recipient lists and reject invalid recipients without falling back", async () => {
+test("Gmail drafts preserve recipient lists and reject invalid recipients without falling back", async () => {
   const addresses = Array.from({ length: 15 }, (_, i) => `person${i}@example.com`);
   const mime = (await buildGmailReplyMime(gmailItem, { body: "Hi", to: addresses, cc: [] }))!.toString();
   assert.ok(mime.replaceAll("\r\n ", " ").startsWith(`To: ${addresses.join(", ")}\r\n`));
@@ -468,7 +468,7 @@ tenantTest("Gmail drafts preserve recipient lists and reject invalid recipients 
   }
 });
 
-tenantTest("Slack rejects an explicit invalid draft instead of sending the saved draft", async () => {
+test("Slack rejects an explicit invalid draft instead of sending the saved draft", async () => {
   const spy = slackSpy();
   const held = item("slack", slackMeta, { body: "OLD SAVED DRAFT" });
   for (const invalid of [{ body: "NEW", to: null }, { body: "NEW", cc: ["x".repeat(8001)] }, { body: null }]) {

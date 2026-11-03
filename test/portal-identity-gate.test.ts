@@ -16,7 +16,7 @@ import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, tenantIt, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+import { it, inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -51,23 +51,23 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   const get = (headers: Record<string, string> = {}) =>
     fetch(`${base}/v1/sessions/nope?viewer=U1`, { headers: { ...testTenantHeaders(), ...headers } });
 
-  tenantIt("passes the gate when a valid portal identity matches the requested viewer", async () => {
+  it("passes the gate when a valid portal identity matches the requested viewer", async () => {
     assert.equal((await get({ ...testTenantHeaders(), "x-portal-identity": await token("U1") })).status, 404);
   });
 
-  tenantIt("rejects (401) when no portal identity is forwarded", async () => {
+  it("rejects (401) when no portal identity is forwarded", async () => {
     assert.equal((await get()).status, 401);
   });
 
-  tenantIt("rejects (403) when the portal identity names a different user than the viewer", async () => {
+  it("rejects (403) when the portal identity names a different user than the viewer", async () => {
     assert.equal((await get({ "x-portal-identity": await token("U2") })).status, 403);
   });
 
-  tenantIt("rejects (401) a portal identity forged with the source-auth secret (what a surface holds)", async () => {
+  it("rejects (401) a portal identity forged with the source-auth secret (what a surface holds)", async () => {
     assert.equal((await get({ "x-portal-identity": await token("U1", SOURCE) })).status, 401);
   });
 
-  tenantIt("run event streams require a verified actor and preserve run visibility", async () => {
+  it("run event streams require a verified actor and preserve run visibility", async () => {
     const actor = { id: "internal:U1", type: "internal" as const };
     const run = await inTestTenant(async () => {
       const { run } = await built.runs.enqueue({
@@ -119,7 +119,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     }
   });
 
-  tenantIt("production implies signed identity on the raw deployment proxy", async () => {
+  it("production implies signed identity on the raw deployment proxy", async () => {
     const prodServer = createInsecureTestServer(built.app, { production: true, portalIdentitySecret: PID });
     await new Promise<void>((resolve) => prodServer.listen(0, resolve));
     try {
@@ -137,7 +137,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       body: JSON.stringify(body),
     });
 
-  tenantIt("per-user reads bind their caller-named identity field to the portal actor", async () => {
+  it("per-user reads bind their caller-named identity field to the portal actor", async () => {
     const alice = await token("U1");
     for (const path of [
       "/v1/memory?principalId=",
@@ -159,7 +159,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     }
   });
 
-  tenantIt("session sharing mutations bind the portal actor", async () => {
+  it("session sharing mutations bind the portal actor", async () => {
     for (const method of ["POST"]) {
       for (const headers of [{}, { ...testTenantHeaders(), "x-portal-identity": await token("U1") }]) {
         const response = await fetch(`${base}/v1/sessions/s1/share`, {
@@ -172,7 +172,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     }
   });
 
-  tenantIt("memory edits bind their body principalId to the portal actor", async () => {
+  it("memory edits bind their body principalId to the portal actor", async () => {
     const patch = (headers: Record<string, string>) =>
       fetch(`${base}/v1/memory`, {
         method: "PATCH",
@@ -184,7 +184,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.equal(r.status, 403, "editing another person's memory must not pass on a bare valid actor");
   });
 
-  tenantIt("directory resolve requires a portal actor even though it names no identity field", async () => {
+  it("directory resolve requires a portal actor even though it names no identity field", async () => {
     assert.equal((await fetch(`${base}/v1/directory/resolve?q=alice`)).status, 401);
     const r = await fetch(`${base}/v1/directory/resolve?q=alice`, {
       headers: { ...testTenantHeaders(), "x-portal-identity": await token("U1") },
@@ -192,19 +192,16 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.ok(r.status !== 401, "a verified actor may resolve names");
   });
 
-  tenantIt(
-    "a user-scoped write (skills) rejects a body principalId that doesn't match the portal identity",
-    async () => {
-      const r = await post(
-        "/v1/skills",
-        { principalId: "U2", name: "x", body: "y" },
-        { ...testTenantHeaders(), "x-portal-identity": await token("U1") },
-      );
-      assert.equal(r.status, 403);
-    },
-  );
+  it("a user-scoped write (skills) rejects a body principalId that doesn't match the portal identity", async () => {
+    const r = await post(
+      "/v1/skills",
+      { principalId: "U2", name: "x", body: "y" },
+      { ...testTenantHeaders(), "x-portal-identity": await token("U1") },
+    );
+    assert.equal(r.status, 403);
+  });
 
-  tenantIt("Project reads and every mutation bind principalId to the portal identity", async () => {
+  it("Project reads and every mutation bind principalId to the portal identity", async () => {
     assert.equal((await fetch(`${base}/v1/projects?principalId=U1`)).status, 401);
     assert.equal(
       (
@@ -237,7 +234,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     }
   });
 
-  tenantIt("direct cron reads and mutations require the portal actor as principalId", async () => {
+  it("direct cron reads and mutations require the portal actor as principalId", async () => {
     const cron = await built.app.createCron({
       ownerScopeId: "personal:U1",
       owner: "U1",
@@ -303,7 +300,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     );
   });
 
-  tenantIt("binds webhook, deployment, and approval routes to the verified actor", async () => {
+  it("binds webhook, deployment, and approval routes to the verified actor", async () => {
     const alice = await token("U1");
     const aliceHeaders = { "content-type": "application/json", ...testTenantHeaders(), "x-portal-identity": alice };
     const webhook = await inTestTenant(() =>
@@ -385,7 +382,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.equal(pendingBody.pending, null);
   });
 
-  tenantIt("a web turn whose body actor doesn't match the portal identity is rejected", async () => {
+  it("a web turn whose body actor doesn't match the portal identity is rejected", async () => {
     const r = await post(
       "/v1/turns",
       { surface: "web", text: "hi", actor: { externalId: "U2" }, conversation: { kind: "dm", threadRef: "t" } },
@@ -394,7 +391,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.equal(r.status, 403);
   });
 
-  tenantIt("a web turn is gated whichever way its path is spelled", async () => {
+  it("a web turn is gated whichever way its path is spelled", async () => {
     const turn = {
       surface: "web",
       text: "hi",
@@ -407,7 +404,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.equal((await post("/v1/%74urns", turn)).status, 404);
   });
 
-  tenantIt("a slack turn carries no portal identity and is not gated (different trust authority)", async () => {
+  it("a slack turn carries no portal identity and is not gated (different trust authority)", async () => {
     const r = await post("/v1/turns", {
       surface: "slack",
       text: "hi",
@@ -418,14 +415,14 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.notEqual(r.status, 403);
   });
 
-  tenantIt("an admin route with no portal identity is rejected (x-admin-actor alone no longer suffices)", async () => {
+  it("an admin route with no portal identity is rejected (x-admin-actor alone no longer suffices)", async () => {
     assert.equal(
       (await fetch(`${base}/v1/admin/whoami`, { headers: { "x-admin-actor": "U1@default-org" } })).status,
       401,
     );
   });
 
-  tenantIt("POST /v1/session-cap mints a REAL capability token for the portal-verified user", async () => {
+  it("POST /v1/session-cap mints a REAL capability token for the portal-verified user", async () => {
     const r = await post("/v1/session-cap", {}, { ...testTenantHeaders(), "x-portal-identity": await token("U1") });
     assert.equal(r.status, 200);
     const body = (await r.json()) as { token: unknown };
@@ -438,17 +435,14 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 });
 
 describe("service-to-service writes are classified", () => {
-  tenantIt(
-    "every auth-broker source write declares its actor, so production gating cannot demand a portal identity from a plugin",
-    () => {
-      const undeclared = authBrokerRoutes
-        .filter((route) => "path" in route && route.auth === "source" && route.method !== "GET" && !route.actor)
-        .map((route) => `${(route as { method: string }).method} ${(route as { path: string }).path}`);
-      assert.deepEqual(
-        undeclared,
-        [],
-        'a write defaults to requiring a portal identity under REQUIRE_SIGNED_PORTAL_IDENTITY; declare actor: "system" or "person" on the route',
-      );
-    },
-  );
+  it("every auth-broker source write declares its actor, so production gating cannot demand a portal identity from a plugin", () => {
+    const undeclared = authBrokerRoutes
+      .filter((route) => "path" in route && route.auth === "source" && route.method !== "GET" && !route.actor)
+      .map((route) => `${(route as { method: string }).method} ${(route as { path: string }).path}`);
+    assert.deepEqual(
+      undeclared,
+      [],
+      'a write defaults to requiring a portal identity under REQUIRE_SIGNED_PORTAL_IDENTITY; declare actor: "system" or "person" on the route',
+    );
+  });
 });

@@ -15,7 +15,7 @@ import {
 } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
-import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const key = "company-gateway-secret";
 const endUser = createHmac("sha256", TEST_CAPABILITY_SECRET).update("U1").digest("hex").slice(0, 32);
@@ -29,7 +29,7 @@ async function listen(server: ReturnType<typeof httpServer>): Promise<string> {
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
 
-tenantTest("sandbox SDK calls reach the company gateway with the sandbox token as their API key", async (t) => {
+test("sandbox SDK calls reach the company gateway with the sandbox token as their API key", async (t) => {
   const calls: Array<{ url: string; headers: IncomingHttpHeaders; body: Record<string, unknown> }> = [];
   let status = 200;
   const upstream = httpServer(async (req, res) => {
@@ -174,7 +174,7 @@ tenantTest("sandbox SDK calls reach the company gateway with the sandbox token a
   assert.equal(calls.length, 8);
 });
 
-tenantTest("a sandbox-model token is refused on every other route", async (t) => {
+test("a sandbox-model token is refused on every other route", async (t) => {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
   const built = buildApp(config);
   await inTestTenant(() => built.identity.ready());
@@ -206,7 +206,7 @@ tenantTest("a sandbox-model token is refused on every other route", async (t) =>
   assert.equal(admin.status, 403);
 });
 
-tenantTest("gateway deployments hand the sandbox a gateway URL and turn token, never the gateway key", async () => {
+test("gateway deployments hand the sandbox a gateway URL and turn token, never the gateway key", async () => {
   const config = testConfig({
     signingSecret: "ingress-secret".repeat(3),
     apiBaseUrl: "https://core.example.test/",
@@ -245,7 +245,7 @@ tenantTest("gateway deployments hand the sandbox a gateway URL and turn token, n
   assert.doesNotMatch((await turn("!sysprompt", "strict-prompt")).reply ?? "", /MODEL_GATEWAY/);
 });
 
-tenantTest("deployments without a gateway leave the sandbox gateway variables unset", async () => {
+test("deployments without a gateway leave the sandbox gateway variables unset", async () => {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3), apiBaseUrl: "https://core.example.test" });
   const built = buildApp(config);
   await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));

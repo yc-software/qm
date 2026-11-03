@@ -3,9 +3,9 @@ import { createTurnStream } from "../src/runs/turn-stream.ts";
 import { emitRunText, type RunStreamEvent } from "../src/runs/run-stream-events.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { MAX_NOTIFY_PAYLOAD_BYTES } from "../src/persistence/postgres-notify-bus.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
-tenantTest("text publications push exact offsets immediately, including block boundaries and the buffer cap", () => {
+test("text publications push exact offsets immediately, including block boundaries and the buffer cap", () => {
   const changes: string[] = [];
   const deltas: Array<{ runId: string; text: string; offset: number }> = [];
   const stream = createTurnStream({
@@ -32,7 +32,7 @@ tenantTest("text publications push exact offsets immediately, including block bo
   assert.deepEqual(changes, ["run", "run"]);
 });
 
-tenantTest("cross-process text frames stay under Postgres' payload limit and preserve Unicode and offsets", () => {
+test("cross-process text frames stay under Postgres' payload limit and preserve Unicode and offsets", () => {
   const bus = createMemoryEventBus<RunStreamEvent>("test");
   const parts: Array<Extract<RunStreamEvent, { kind: "delta" }>> = [];
   bus.subscribe((event) => {
@@ -49,7 +49,7 @@ tenantTest("cross-process text frames stay under Postgres' payload limit and pre
   assert.equal(parts.map((part) => part.text).join(""), text);
 });
 
-tenantTest("a boundary near the cap remains complete and later deltas keep absolute offsets", () => {
+test("a boundary near the cap remains complete and later deltas keep absolute offsets", () => {
   const frames: Array<[string, number, number]> = [];
   const stream = createTurnStream({
     maxChars: 5,

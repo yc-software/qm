@@ -13,7 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import type { ReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testConfig } from "./support/test-config.ts";
-import { tenantTest, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+import { test, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SECRET = "auth-broker-claim-test-secret".repeat(2);
 const CLAIM_PATH = "/v1/auth/broker/claim";
@@ -76,7 +76,7 @@ async function claim(
 
 const soon = (): number => Date.now() + 60_000;
 
-tenantTest("the broker claim route hands out each id exactly once", async (t) => {
+test("the broker claim route hands out each id exactly once", async (t) => {
   const srv = start();
   t.after(() => srv.close());
   const first = await claim(srv.base, { ids: ["link:abc"], expiresAtMs: soon() });
@@ -85,7 +85,7 @@ tenantTest("the broker claim route hands out each id exactly once", async (t) =>
   assert.deepEqual((await claim(srv.base, { ids: ["link:abc"], expiresAtMs: soon() })).json, { claimed: null });
 });
 
-tenantTest("a batch claims the first free slot and reports exhaustion", async (t) => {
+test("a batch claims the first free slot and reports exhaustion", async (t) => {
   const srv = start();
   t.after(() => srv.close());
   const slots = ["rate:e:h:1:0", "rate:e:h:1:1", "rate:e:h:1:2"];
@@ -95,7 +95,7 @@ tenantTest("a batch claims the first free slot and reports exhaustion", async (t
   assert.equal((await claim(srv.base, { ids: slots, expiresAtMs: soon() })).json.claimed, null);
 });
 
-tenantTest("broker ids live in their own namespace and cannot poison another subsystem's nonces", async (t) => {
+test("broker ids live in their own namespace and cannot poison another subsystem's nonces", async (t) => {
   const srv = start();
   t.after(() => srv.close());
   assert.equal(
@@ -109,14 +109,14 @@ tenantTest("broker ids live in their own namespace and cannot poison another sub
   );
 });
 
-tenantTest("the claim route refuses unsigned callers", async (t) => {
+test("the claim route refuses unsigned callers", async (t) => {
   const srv = start();
   t.after(() => srv.close());
   const unsigned = await claim(srv.base, { ids: ["link:abc"], expiresAtMs: soon() }, false);
   assert.equal(unsigned.status, 401);
 });
 
-tenantTest("the claim route validates its input", async (t) => {
+test("the claim route validates its input", async (t) => {
   const srv = start();
   t.after(() => srv.close());
   const cases: unknown[] = [
@@ -138,7 +138,7 @@ tenantTest("the claim route validates its input", async (t) => {
   }
 });
 
-tenantTest("broker sessions cross the production identity gate, but revocation requires the owner", async (t) => {
+test("broker sessions cross the production identity gate, but revocation requires the owner", async (t) => {
   const revoked: string[] = [];
   const token = "a".repeat(43);
   const sessions: BrokerSessionStore = {

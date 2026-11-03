@@ -14,7 +14,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -153,85 +153,79 @@ async function runTurn(
   }
 }
 
-tenantTest(
-  "the next turn's anthropic request replays the previous turn byte-for-byte: thinking, narration, tool call, result, reply",
-  async () => {
-    const step1: Reply = [
-      { type: "thinking", thinking: "I should search history.", signature: "sig-one" },
-      { type: "text", text: "Checking the history first." },
-      { type: "tool_use", id: "toolu_1", name: "history", input: { query: "budget", limit: 5 } },
-      { type: "tool_use", id: "toolu_2", name: "history", input: { query: "boom" } },
-      { type: "tool_use", id: "toolu_3", name: "no_such_tool", input: { x: 1 } },
-      { type: "tool_use", id: "toolu_4", name: "history", input: { limit: "many" } },
-    ];
-    const step2: Reply = [
+test("the next turn's anthropic request replays the previous turn byte-for-byte: thinking, narration, tool call, result, reply", async () => {
+  const step1: Reply = [
+    { type: "thinking", thinking: "I should search history.", signature: "sig-one" },
+    { type: "text", text: "Checking the history first." },
+    { type: "tool_use", id: "toolu_1", name: "history", input: { query: "budget", limit: 5 } },
+    { type: "tool_use", id: "toolu_2", name: "history", input: { query: "boom" } },
+    { type: "tool_use", id: "toolu_3", name: "no_such_tool", input: { x: 1 } },
+    { type: "tool_use", id: "toolu_4", name: "history", input: { limit: "many" } },
+  ];
+  const step2: Reply = [
+    { type: "thinking", thinking: "Found it.", signature: "sig-two" },
+    { type: "text", text: "It is in shared/q2.md." },
+  ];
+  const first = await runTurn(
+    "where is the budget doc?",
+    [],
+    [() => anthropicSse(step1, "tool_use"), () => anthropicSse(step2, "end_turn")],
+  );
+  assert.equal(first.result.reply, "It is in shared/q2.md.");
+  assert.equal(first.bodies.length, 2);
+  const invalid = first.emitted.filter((e) => (e.payload as { callId?: string }).callId === "toolu_4");
+  assert.deepEqual(
+    invalid.map((e) => [e.type, (e.payload as { isError?: boolean }).isError]),
+    [
+      ["tool_call", undefined],
+      ["tool_result", true],
+    ],
+  );
+
+  const second = await runTurn("thanks, and the Q3 one?", forModelContext(first.emitted), [
+    () => anthropicSse([{ type: "text", text: "No Q3 doc yet." }], "end_turn"),
+  ]);
+  const before = withoutCacheControl(first.bodies[1]!.messages) as unknown[];
+  const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
+  const finalAssistant = {
+    role: "assistant",
+    content: [
       { type: "thinking", thinking: "Found it.", signature: "sig-two" },
       { type: "text", text: "It is in shared/q2.md." },
-    ];
-    const first = await runTurn(
-      "where is the budget doc?",
-      [],
-      [() => anthropicSse(step1, "tool_use"), () => anthropicSse(step2, "end_turn")],
-    );
-    assert.equal(first.result.reply, "It is in shared/q2.md.");
-    assert.equal(first.bodies.length, 2);
-    const invalid = first.emitted.filter((e) => (e.payload as { callId?: string }).callId === "toolu_4");
-    assert.deepEqual(
-      invalid.map((e) => [e.type, (e.payload as { isError?: boolean }).isError]),
-      [
-        ["tool_call", undefined],
-        ["tool_result", true],
-      ],
-    );
+    ],
+  };
+  assert.equal(JSON.stringify(after.slice(0, before.length + 1)), JSON.stringify([...before, finalAssistant]));
+  assert.deepEqual(after.slice(before.length + 1), [
+    { role: "user", content: [{ type: "text", text: "thanks, and the Q3 one?" }] },
+  ]);
+});
 
-    const second = await runTurn("thanks, and the Q3 one?", forModelContext(first.emitted), [
-      () => anthropicSse([{ type: "text", text: "No Q3 doc yet." }], "end_turn"),
+test("a turn on a later day is prompted under that day's marker and replays it byte-for-byte on the next turn", async () => {
+  const reply = (text: string) => () => anthropicSse([{ type: "text", text }], "end_turn");
+  const userTexts = (body: Body) =>
+    (body.messages as Array<{ role: string; content: Array<{ type: string; text?: string }> }>)
+      .filter((m) => m.role === "user")
+      .map((m) => m.content.find((b) => b.type === "text")?.text);
+  mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-16T17:00:00Z") });
+  try {
+    const friday = await runTurn("the deadline is Friday", [], [reply("Noted.")]);
+    mock.timers.setTime(Date.parse("2026-10-19T18:00:00Z"));
+    const monday = await runTurn("has the deadline passed?", forModelContext(friday.emitted), [reply("Yes.")]);
+    assert.deepEqual(userTexts(monday.bodies[0]!), [
+      "── Friday, October 16, 2026 ──\nthe deadline is Friday",
+      "── Monday, October 19, 2026 ──\nhas the deadline passed?",
     ]);
-    const before = withoutCacheControl(first.bodies[1]!.messages) as unknown[];
-    const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
-    const finalAssistant = {
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "Found it.", signature: "sig-two" },
-        { type: "text", text: "It is in shared/q2.md." },
-      ],
-    };
-    assert.equal(JSON.stringify(after.slice(0, before.length + 1)), JSON.stringify([...before, finalAssistant]));
-    assert.deepEqual(after.slice(before.length + 1), [
-      { role: "user", content: [{ type: "text", text: "thanks, and the Q3 one?" }] },
-    ]);
-  },
-);
+    const later = await runTurn("thanks", forModelContext([...friday.emitted, ...monday.emitted]), [reply("Sure.")]);
+    const before = withoutCacheControl(monday.bodies[0]!.messages) as unknown[];
+    const after = withoutCacheControl(later.bodies[0]!.messages) as unknown[];
+    assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
+    assert.equal(userTexts(later.bodies[0]!).at(-1), "thanks");
+  } finally {
+    mock.timers.reset();
+  }
+});
 
-tenantTest(
-  "a turn on a later day is prompted under that day's marker and replays it byte-for-byte on the next turn",
-  async () => {
-    const reply = (text: string) => () => anthropicSse([{ type: "text", text }], "end_turn");
-    const userTexts = (body: Body) =>
-      (body.messages as Array<{ role: string; content: Array<{ type: string; text?: string }> }>)
-        .filter((m) => m.role === "user")
-        .map((m) => m.content.find((b) => b.type === "text")?.text);
-    mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-16T17:00:00Z") });
-    try {
-      const friday = await runTurn("the deadline is Friday", [], [reply("Noted.")]);
-      mock.timers.setTime(Date.parse("2026-10-19T18:00:00Z"));
-      const monday = await runTurn("has the deadline passed?", forModelContext(friday.emitted), [reply("Yes.")]);
-      assert.deepEqual(userTexts(monday.bodies[0]!), [
-        "── Friday, October 16, 2026 ──\nthe deadline is Friday",
-        "── Monday, October 19, 2026 ──\nhas the deadline passed?",
-      ]);
-      const later = await runTurn("thanks", forModelContext([...friday.emitted, ...monday.emitted]), [reply("Sure.")]);
-      const before = withoutCacheControl(monday.bodies[0]!.messages) as unknown[];
-      const after = withoutCacheControl(later.bodies[0]!.messages) as unknown[];
-      assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
-      assert.equal(userTexts(later.bodies[0]!).at(-1), "thanks");
-    } finally {
-      mock.timers.reset();
-    }
-  },
-);
-
-tenantTest("connector tool_search and mcp_call calls replay byte-for-byte on the next turn", async () => {
+test("connector tool_search and mcp_call calls replay byte-for-byte on the next turn", async () => {
   const calls: Array<[string, unknown]> = [];
   const overrides: Partial<AgentTurnInput> = {
     tools: {
@@ -280,71 +274,68 @@ tenantTest("connector tool_search and mcp_call calls replay byte-for-byte on the
   assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
 });
 
-tenantTest(
-  "the next turn's OpenAI Responses request replays the previous turn's reasoning items, messages and calls exactly",
-  async () => {
-    const reasoning = (id: string, text: string) => ({
-      type: "reasoning",
-      id,
-      summary: [{ type: "summary_text", text }],
-      encrypted_content: `enc-${id}`,
-    });
-    const message = (id: string, text: string) => ({
+test("the next turn's OpenAI Responses request replays the previous turn's reasoning items, messages and calls exactly", async () => {
+  const reasoning = (id: string, text: string) => ({
+    type: "reasoning",
+    id,
+    summary: [{ type: "summary_text", text }],
+    encrypted_content: `enc-${id}`,
+  });
+  const message = (id: string, text: string) => ({
+    type: "message",
+    id,
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text, annotations: [] }],
+  });
+  const step1: Reply = [
+    reasoning("rs_1", "Search history."),
+    message("msg_1", "Checking the history first."),
+    {
+      type: "function_call",
+      id: "fc_1",
+      call_id: "call_1",
+      name: "history",
+      arguments: '{"query":"budget","limit":5}',
+    },
+  ];
+  const step2: Reply = [reasoning("rs_2", ""), message("msg_2", "It is in shared/q2.md.")];
+  const overrides: Partial<AgentTurnInput> = {
+    runtime: { modelId: "gpt-5.4" },
+    providerKeys: { openai: "sk-openai" },
+  };
+  const first = await runTurn(
+    "where is the budget doc?",
+    [],
+    [() => openaiSse(step1), () => openaiSse(step2)],
+    overrides,
+  );
+  assert.equal(first.result.reply, "It is in shared/q2.md.");
+  const second = await runTurn(
+    "thanks, and the Q3 one?",
+    forModelContext(first.emitted),
+    [() => openaiSse([message("msg_3", "No Q3 doc yet.")])],
+    overrides,
+  );
+  const before = first.bodies[1]!.input!;
+  const after = second.bodies[0]!.input!;
+  const finalItems = [
+    reasoning("rs_2", ""),
+    {
       type: "message",
-      id,
       role: "assistant",
+      content: [{ type: "output_text", text: "It is in shared/q2.md.", annotations: [] }],
       status: "completed",
-      content: [{ type: "output_text", text, annotations: [] }],
-    });
-    const step1: Reply = [
-      reasoning("rs_1", "Search history."),
-      message("msg_1", "Checking the history first."),
-      {
-        type: "function_call",
-        id: "fc_1",
-        call_id: "call_1",
-        name: "history",
-        arguments: '{"query":"budget","limit":5}',
-      },
-    ];
-    const step2: Reply = [reasoning("rs_2", ""), message("msg_2", "It is in shared/q2.md.")];
-    const overrides: Partial<AgentTurnInput> = {
-      runtime: { modelId: "gpt-5.4" },
-      providerKeys: { openai: "sk-openai" },
-    };
-    const first = await runTurn(
-      "where is the budget doc?",
-      [],
-      [() => openaiSse(step1), () => openaiSse(step2)],
-      overrides,
-    );
-    assert.equal(first.result.reply, "It is in shared/q2.md.");
-    const second = await runTurn(
-      "thanks, and the Q3 one?",
-      forModelContext(first.emitted),
-      [() => openaiSse([message("msg_3", "No Q3 doc yet.")])],
-      overrides,
-    );
-    const before = first.bodies[1]!.input!;
-    const after = second.bodies[0]!.input!;
-    const finalItems = [
-      reasoning("rs_2", ""),
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "It is in shared/q2.md.", annotations: [] }],
-        status: "completed",
-        id: "msg_2",
-      },
-    ];
-    assert.equal(JSON.stringify(after.slice(0, before.length + 2)), JSON.stringify([...before, ...finalItems]));
-    assert.deepEqual(after.slice(before.length + 2), [
-      { role: "user", content: [{ type: "input_text", text: "thanks, and the Q3 one?" }] },
-    ]);
-  },
-);
+      id: "msg_2",
+    },
+  ];
+  assert.equal(JSON.stringify(after.slice(0, before.length + 2)), JSON.stringify([...before, ...finalItems]));
+  assert.deepEqual(after.slice(before.length + 2), [
+    { role: "user", content: [{ type: "input_text", text: "thanks, and the Q3 one?" }] },
+  ]);
+});
 
-tenantTest("a steer and an empty-ending re-prompt replay as the exact user messages the model saw", () =>
+test("a steer and an empty-ending re-prompt replay as the exact user messages the model saw", () =>
   inTestTenant(async () => {
     const signals = createPostgresRunSignalStore(testDatabaseUrl());
     const first = await runTurn(
@@ -386,150 +377,137 @@ tenantTest("a steer and an empty-ending re-prompt replay as the exact user messa
         { role: "assistant", content: [{ type: "text", text: "Q2 is in shared/q2.md; no Q3 doc." }] },
       ]),
     );
-  }),
-);
+  }));
 
 const PNG_A = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const PNG_B = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
-tenantTest(
-  "user and steer images replay as the exact image blocks the model saw, restored from their durable files",
-  () =>
-    inTestTenant(async () => {
-      const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-      for (const [id, data] of [
-        ["art-photo", PNG_A],
-        ["art-steer", PNG_B],
-      ] as const)
-        await files.put({
-          id,
-          ownerScopeId: "personal:tester" as never,
-          createdBy: "tester",
-          name: `${id}.png`,
-          path: `${id}.png`,
-          mimetype: "image/png",
-          data: Buffer.from(data, "base64"),
-          direction: "in",
-          createdAt: 1,
-        });
-      const signals = createPostgresRunSignalStore(testDatabaseUrl());
-      const first = await runTurn(
-        "what is in this photo?",
-        [],
-        [
-          () =>
-            anthropicSse([{ type: "tool_use", id: "toolu_1", name: "history", input: { query: "photo" } }], "tool_use"),
-          () => anthropicSse([{ type: "text", text: "A single pixel, twice." }], "end_turn"),
-        ],
-        {
-          images: [{ mimeType: "image/png", dataBase64: PNG_A, artifactId: "art-photo" }],
-          prepareSteer: async (text) => ({
-            text,
-            images: [{ mimeType: "image/png", dataBase64: PNG_B, artifactId: "art-steer" }],
-          }),
-        },
-        signals,
-        async () => {
-          await signals.send("run-1", { kind: "steer", text: "and this one", ts: "steer.img" });
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        },
-      );
-      assert.equal(first.result.reply, "A single pixel, twice.");
-      assert.doesNotMatch(JSON.stringify(first.emitted), new RegExp(PNG_A.slice(30, 60)), "no image bytes in entries");
-
-      const second = await runTurn(
-        "thanks",
-        forModelContext(first.emitted),
-        [() => anthropicSse([{ type: "text", text: "Anytime." }], "end_turn")],
-        { loadImage: artifactImageLoader(files, () => true) },
-      );
-      const before = withoutCacheControl(first.bodies[1]!.messages) as unknown[];
-      const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
-      const image = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
-      const sent = JSON.stringify(before);
-      assert.ok(sent.includes(JSON.stringify(image(PNG_A))) && sent.includes(JSON.stringify(image(PNG_B))));
-      assert.equal(
-        JSON.stringify(after.slice(0, before.length + 1)),
-        JSON.stringify([...before, { role: "assistant", content: [{ type: "text", text: "A single pixel, twice." }] }]),
-      );
-    }),
-);
-
-tenantTest(
-  "a tool result that cannot be recorded stops the turn with that error before the model sees it",
-  async () => {
-    const failing = new Error("session store unavailable");
-    let modelCalledAgain = false;
-    await assert.rejects(
-      runTurn(
-        "where is the budget doc?",
-        [],
-        [
-          () =>
-            anthropicSse(
-              [{ type: "tool_use", id: "toolu_1", name: "history", input: { query: "budget" } }],
-              "tool_use",
-            ),
-          () => {
-            modelCalledAgain = true;
-            return anthropicSse([{ type: "text", text: "unreachable" }], "end_turn");
-          },
-        ],
-        {
-          emit: async (item) => {
-            if (item.kind === "ToolResult") throw failing;
-            return storedItem(item, { sessionId: "fidelity", seq: 1, createdAt: 0 });
-          },
-        },
-      ),
-      (err) => err === failing,
-    );
-    assert.equal(modelCalledAgain, false);
-  },
-);
-
-tenantTest(
-  "a parallel call's result is recorded as soon as its tool returns, while a sibling is still running",
-  async () => {
-    const recorded: Array<{ kind: string; callId?: unknown }> = [];
-    let seenBeforeSlowFinished: string[] = [];
-    let seq = 1;
-    const result = await runTurn(
-      "check both",
+test("user and steer images replay as the exact image blocks the model saw, restored from their durable files", () =>
+  inTestTenant(async () => {
+    const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    for (const [id, data] of [
+      ["art-photo", PNG_A],
+      ["art-steer", PNG_B],
+    ] as const)
+      await files.put({
+        id,
+        ownerScopeId: "personal:tester" as never,
+        createdBy: "tester",
+        name: `${id}.png`,
+        path: `${id}.png`,
+        mimetype: "image/png",
+        data: Buffer.from(data, "base64"),
+        direction: "in",
+        createdAt: 1,
+      });
+    const signals = createPostgresRunSignalStore(testDatabaseUrl());
+    const first = await runTurn(
+      "what is in this photo?",
       [],
       [
         () =>
-          anthropicSse(
-            [
-              { type: "tool_use", id: "toolu_fast", name: "history", input: { query: "fast" } },
-              { type: "tool_use", id: "toolu_slow", name: "history", input: { query: "slow" } },
-            ],
-            "tool_use",
-          ),
-        () => anthropicSse([{ type: "text", text: "done" }], "end_turn"),
+          anthropicSse([{ type: "tool_use", id: "toolu_1", name: "history", input: { query: "photo" } }], "tool_use"),
+        () => anthropicSse([{ type: "text", text: "A single pixel, twice." }], "end_turn"),
       ],
       {
-        tools: {
-          async history(query: string) {
-            if (query === "slow") {
-              await new Promise((resolve) => setTimeout(resolve, 100));
-              seenBeforeSlowFinished = recorded.filter((e) => e.kind === "ToolResult").map((e) => String(e.callId));
-            }
-            return [`result for ${query}`];
-          },
-        } as unknown as ToolContext,
-        emit: async (item) => {
-          recorded.push({ kind: item.kind, callId: item.callId });
-          return storedItem(item, { sessionId: "fidelity", seq: seq++, createdAt: 0 });
-        },
+        images: [{ mimeType: "image/png", dataBase64: PNG_A, artifactId: "art-photo" }],
+        prepareSteer: async (text) => ({
+          text,
+          images: [{ mimeType: "image/png", dataBase64: PNG_B, artifactId: "art-steer" }],
+        }),
+      },
+      signals,
+      async () => {
+        await signals.send("run-1", { kind: "steer", text: "and this one", ts: "steer.img" });
+        await new Promise((resolve) => setTimeout(resolve, 30));
       },
     );
-    assert.equal(result.result.reply, "done");
-    assert.deepEqual(seenBeforeSlowFinished, ["toolu_fast"]);
-  },
-);
+    assert.equal(first.result.reply, "A single pixel, twice.");
+    assert.doesNotMatch(JSON.stringify(first.emitted), new RegExp(PNG_A.slice(30, 60)), "no image bytes in entries");
 
-tenantTest("a replayed image is read from the file store once, not on every turn", () =>
+    const second = await runTurn(
+      "thanks",
+      forModelContext(first.emitted),
+      [() => anthropicSse([{ type: "text", text: "Anytime." }], "end_turn")],
+      { loadImage: artifactImageLoader(files, () => true) },
+    );
+    const before = withoutCacheControl(first.bodies[1]!.messages) as unknown[];
+    const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
+    const image = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+    const sent = JSON.stringify(before);
+    assert.ok(sent.includes(JSON.stringify(image(PNG_A))) && sent.includes(JSON.stringify(image(PNG_B))));
+    assert.equal(
+      JSON.stringify(after.slice(0, before.length + 1)),
+      JSON.stringify([...before, { role: "assistant", content: [{ type: "text", text: "A single pixel, twice." }] }]),
+    );
+  }));
+
+test("a tool result that cannot be recorded stops the turn with that error before the model sees it", async () => {
+  const failing = new Error("session store unavailable");
+  let modelCalledAgain = false;
+  await assert.rejects(
+    runTurn(
+      "where is the budget doc?",
+      [],
+      [
+        () =>
+          anthropicSse([{ type: "tool_use", id: "toolu_1", name: "history", input: { query: "budget" } }], "tool_use"),
+        () => {
+          modelCalledAgain = true;
+          return anthropicSse([{ type: "text", text: "unreachable" }], "end_turn");
+        },
+      ],
+      {
+        emit: async (item) => {
+          if (item.kind === "ToolResult") throw failing;
+          return storedItem(item, { sessionId: "fidelity", seq: 1, createdAt: 0 });
+        },
+      },
+    ),
+    (err) => err === failing,
+  );
+  assert.equal(modelCalledAgain, false);
+});
+
+test("a parallel call's result is recorded as soon as its tool returns, while a sibling is still running", async () => {
+  const recorded: Array<{ kind: string; callId?: unknown }> = [];
+  let seenBeforeSlowFinished: string[] = [];
+  let seq = 1;
+  const result = await runTurn(
+    "check both",
+    [],
+    [
+      () =>
+        anthropicSse(
+          [
+            { type: "tool_use", id: "toolu_fast", name: "history", input: { query: "fast" } },
+            { type: "tool_use", id: "toolu_slow", name: "history", input: { query: "slow" } },
+          ],
+          "tool_use",
+        ),
+      () => anthropicSse([{ type: "text", text: "done" }], "end_turn"),
+    ],
+    {
+      tools: {
+        async history(query: string) {
+          if (query === "slow") {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            seenBeforeSlowFinished = recorded.filter((e) => e.kind === "ToolResult").map((e) => String(e.callId));
+          }
+          return [`result for ${query}`];
+        },
+      } as unknown as ToolContext,
+      emit: async (item) => {
+        recorded.push({ kind: item.kind, callId: item.callId });
+        return storedItem(item, { sessionId: "fidelity", seq: seq++, createdAt: 0 });
+      },
+    },
+  );
+  assert.equal(result.result.reply, "done");
+  assert.deepEqual(seenBeforeSlowFinished, ["toolu_fast"]);
+});
+
+test("a replayed image is read from the file store once, not on every turn", () =>
   inTestTenant(async () => {
     const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
     await files.put({
@@ -553,8 +531,7 @@ tenantTest("a replayed image is read from the file store once, not on every turn
     const first = await load({ artifactId: "art-once", mimeType: "image/png" }, 10_000_000);
     const second = await load({ artifactId: "art-once", mimeType: "image/png" }, 10_000_000);
     assert.deepEqual([first, second, opens], [{ data: PNG_A, sizeBytes: 70 }, { data: PNG_A, sizeBytes: 70 }, 1]);
-  }),
-);
+  }));
 
 const PG_URL = process.env.DATABASE_URL;
 
@@ -598,7 +575,7 @@ const pgTools = {
   },
 } as unknown as ToolContext;
 
-tenantTest(
+test(
   "after a round trip through Postgres items, the next anthropic request replays a cut result and a delivery byte-for-byte",
   { skip: PG_URL ? false : "set DATABASE_URL" },
   () =>
@@ -653,7 +630,7 @@ tenantTest(
     }),
 );
 
-tenantTest(
+test(
   "after a round trip through Postgres items, the next OpenAI Responses request replays the previous turn exactly",
   { skip: PG_URL ? false : "set DATABASE_URL" },
   () =>

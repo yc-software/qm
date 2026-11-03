@@ -9,7 +9,7 @@ import type { Session } from "../src/types.ts";
 import type { Monitor } from "../src/triggers/types.ts";
 import { isTerminal, type Run } from "../src/runs/run-store.ts";
 import { testMap } from "./support/test-database.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 function deferred() {
   let resolve!: () => void;
@@ -115,7 +115,7 @@ function fixture() {
   };
 }
 
-tenantTest("cards require opt-in, a reply thread and non-private engagement", async () => {
+test("cards require opt-in, a reply thread and non-private engagement", async () => {
   const f = fixture();
   const run = f.add("r1");
   await f.start(run.id);
@@ -130,33 +130,30 @@ tenantTest("cards require opt-in, a reply thread and non-private engagement", as
   assert.deepEqual(await f.store.all(), []);
 });
 
-tenantTest(
-  "concurrent starts share one card, terminal runs cannot clear active work, and later work gets a fresh card",
-  async () => {
-    const f = fixture();
-    await f.enable();
-    const old = f.add("old");
-    const next = f.add("next");
-    await Promise.all([f.start(old.id), f.start(next.id), f.start(old.id)]);
-    assert.equal(f.cards.length, 1);
-    old.status = "done";
-    await f.reconcile();
-    await f.start(old.id);
-    assert.equal(f.cards.length, 1);
-    next.status = "failed";
-    await f.reconcile();
-    assert.equal(f.card()[0]?.title, "No active work");
-    assert.equal(f.card()[0]?.status, "complete");
-    assert.deepEqual(await f.store.all(), []);
-    const oldCard = f.card()[0]?.task_id;
-    f.add("later");
-    await f.start("later");
-    assert.equal(f.cards.at(-1)?.method, "chat.postMessage");
-    assert.notEqual(f.card()[0]?.task_id, oldCard);
-  },
-);
+test("concurrent starts share one card, terminal runs cannot clear active work, and later work gets a fresh card", async () => {
+  const f = fixture();
+  await f.enable();
+  const old = f.add("old");
+  const next = f.add("next");
+  await Promise.all([f.start(old.id), f.start(next.id), f.start(old.id)]);
+  assert.equal(f.cards.length, 1);
+  old.status = "done";
+  await f.reconcile();
+  await f.start(old.id);
+  assert.equal(f.cards.length, 1);
+  next.status = "failed";
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "No active work");
+  assert.equal(f.card()[0]?.status, "complete");
+  assert.deepEqual(await f.store.all(), []);
+  const oldCard = f.card()[0]?.task_id;
+  f.add("later");
+  await f.start("later");
+  assert.equal(f.cards.at(-1)?.method, "chat.postMessage");
+  assert.notEqual(f.card()[0]?.task_id, oldCard);
+});
 
-tenantTest("restart preserves card identity and pending or expired-lease work is waiting, not working", async () => {
+test("restart preserves card identity and pending or expired-lease work is waiting, not working", async () => {
   const f = fixture();
   await f.enable();
   const run = f.add("r1");
@@ -177,45 +174,42 @@ tenantTest("restart preserves card identity and pending or expired-lease work is
   assert.ok(f.cards.slice(1).every((call) => call.args.ts === "card.1"));
 });
 
-tenantTest(
-  "background lifecycle survives restart and gains a canonical link after five minutes including waits",
-  async () => {
-    const f = fixture();
-    await f.enable();
-    const run = f.add("r1");
-    await f.start(run.id);
-    const job = f.background();
-    run.status = "done";
-    await f.reconcile();
-    assert.equal(f.card()[0]?.title, "Background work");
-    const monitor = f.watch();
-    await f.manager().reconcile(f.client, "T1:B1");
-    assert.equal(f.card()[0]?.title, "Monitoring");
-    f.advance(300_000);
-    await f.reconcile();
-    assert.equal(f.card().length, 1);
-    f.advance(1);
-    await f.reconcile();
-    assert.deepEqual(f.card()[1], {
-      type: "context",
-      elements: [{ type: "mrkdwn", text: "<https://qm.example.test/web-ui/s/canonical-uuid|Follow via QM Web>" }],
-    });
-    const wake = f.add("wake");
-    await f.reconcile();
-    assert.equal(f.card()[0]?.title, "Working");
-    assert.equal((await f.store.all())[0]?.startedAt, 1_000);
-    wake.status = "done";
-    job.status = "exited";
-    monitor.enabled = false;
-    await f.reconcile();
-    assert.equal(f.card()[0]?.title, "No active work");
-    assert.equal(f.card().length, 2);
-    assert.equal(f.cards.filter((call) => call.method === "chat.postMessage").length, 1);
-    assert.ok(!JSON.stringify(f.cards).includes("secret-"));
-  },
-);
+test("background lifecycle survives restart and gains a canonical link after five minutes including waits", async () => {
+  const f = fixture();
+  await f.enable();
+  const run = f.add("r1");
+  await f.start(run.id);
+  const job = f.background();
+  run.status = "done";
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "Background work");
+  const monitor = f.watch();
+  await f.manager().reconcile(f.client, "T1:B1");
+  assert.equal(f.card()[0]?.title, "Monitoring");
+  f.advance(300_000);
+  await f.reconcile();
+  assert.equal(f.card().length, 1);
+  f.advance(1);
+  await f.reconcile();
+  assert.deepEqual(f.card()[1], {
+    type: "context",
+    elements: [{ type: "mrkdwn", text: "<https://qm.example.test/web-ui/s/canonical-uuid|Follow via QM Web>" }],
+  });
+  const wake = f.add("wake");
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "Working");
+  assert.equal((await f.store.all())[0]?.startedAt, 1_000);
+  wake.status = "done";
+  job.status = "exited";
+  monitor.enabled = false;
+  await f.reconcile();
+  assert.equal(f.card()[0]?.title, "No active work");
+  assert.equal(f.card().length, 2);
+  assert.equal(f.cards.filter((call) => call.method === "chat.postMessage").length, 1);
+  assert.ok(!JSON.stringify(f.cards).includes("secret-"));
+});
 
-tenantTest("unrelated, expired, disabled, private and nonengaged work never keeps a card active", async () => {
+test("unrelated, expired, disabled, private and nonengaged work never keeps a card active", async () => {
   const f = fixture();
   await f.enable();
   const run = f.add("r1");
@@ -236,7 +230,7 @@ tenantTest("unrelated, expired, disabled, private and nonengaged work never keep
   assert.equal(f.card()[0]?.title, "No active work");
 });
 
-tenantTest("opt-out settles only this account's card without cancelling work", async () => {
+test("opt-out settles only this account's card without cancelling work", async () => {
   const f = fixture();
   await f.enable();
   f.add("r1");
@@ -254,7 +248,7 @@ tenantTest("opt-out settles only this account's card without cancelling work", a
   );
 });
 
-tenantTest("transient failures retry the same card after restart; inaccessible threads retire", async () => {
+test("transient failures retry the same card after restart; inaccessible threads retire", async () => {
   const f = fixture();
   await f.enable();
   const run = f.add("r1");
@@ -278,7 +272,7 @@ tenantTest("transient failures retry the same card after restart; inaccessible t
   assert.deepEqual(await f.store.all(), []);
 });
 
-tenantTest("delayed insert after lease loss cannot replace a newer card", async () => {
+test("delayed insert after lease loss cannot replace a newer card", async () => {
   const f = fixture();
   await f.enable();
   const old = f.add("old");
@@ -312,7 +306,7 @@ tenantTest("delayed insert after lease loss cannot replace a newer card", async 
 });
 
 for (const method of ["chat.postMessage", "chat.update"]) {
-  tenantTest(`late ${method} after lease loss retains its receipt and repairs stale content`, async () => {
+  test(`late ${method} after lease loss retains its receipt and repairs stale content`, async () => {
     const f = fixture();
     await f.enable();
     const run = f.add("r1");
@@ -347,7 +341,7 @@ for (const method of ["chat.postMessage", "chat.update"]) {
   });
 }
 
-tenantTest("core engagement is signaled once for local or durable replies, never quiet ambient turns", async () => {
+test("core engagement is signaled once for local or durable replies, never quiet ambient turns", async () => {
   for (const mode of ["quiet", "local", "remote"]) {
     const stream = createTurnStream();
     let polls = 0,

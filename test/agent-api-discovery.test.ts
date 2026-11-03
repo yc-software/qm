@@ -12,7 +12,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "discovery-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -67,40 +67,37 @@ const listApis = async (base: string, cap: string) => {
 };
 const paths = (body: any): string[] => body.endpoints.map((e: any) => e.path);
 
-tenantTest(
-  "discovery for a regular user: base surface + whoami, no admin rows, no memory rows without claims",
-  async () => {
-    const s = await start();
-    try {
-      const { status, body } = await listApis(s.base, await capFor("U1"));
-      assert.equal(status, 200);
-      assert.deepEqual(body.admin, { isAdmin: false });
-      const p = paths(body);
-      assert.ok(p.includes("/v1/apis"));
-      assert.ok(!p.includes("/v1/crons"), "cron is a typed tool now, not a discovery row");
-      assert.ok(!p.includes("/v1/webhooks"), "webhook is a typed tool now, not a discovery row");
-      assert.ok(!p.includes("/v1/soul"), "soul is a typed tool now, not a discovery row");
-      assert.ok(p.includes("/v1/skills"), "saving a personal skill is a discoverable self-API endpoint");
-      assert.ok(p.includes("/v1/keychain/overview"), "the keychain overview gate is represented in discovery");
-      assert.ok(p.includes("/v1/admin/whoami"), "everyone can ask whether the user is an admin");
-      assert.ok(!p.includes("/v1/admin/scopes"), "admin rows must not render for a non-admin");
-      assert.ok(!p.some((x: string) => x.startsWith("/v1/memory")), "no memory rows without memory claims");
-      assert.doesNotMatch(JSON.stringify(body), /auto-grant/i);
-      assert.match(
-        body.endpoints.find((endpoint: any) => endpoint.path === "/v1/connectors/oauth/consent/mint")?.summary ?? "",
-        /stays private.*explicit credential grant/i,
-      );
-      assert.match(
-        body.endpoints.find((endpoint: any) => endpoint.path === "/v1/loops")?.summary ?? "",
-        /governor.*staleFireMs/,
-      );
-    } finally {
-      await s.close();
-    }
-  },
-);
+test("discovery for a regular user: base surface + whoami, no admin rows, no memory rows without claims", async () => {
+  const s = await start();
+  try {
+    const { status, body } = await listApis(s.base, await capFor("U1"));
+    assert.equal(status, 200);
+    assert.deepEqual(body.admin, { isAdmin: false });
+    const p = paths(body);
+    assert.ok(p.includes("/v1/apis"));
+    assert.ok(!p.includes("/v1/crons"), "cron is a typed tool now, not a discovery row");
+    assert.ok(!p.includes("/v1/webhooks"), "webhook is a typed tool now, not a discovery row");
+    assert.ok(!p.includes("/v1/soul"), "soul is a typed tool now, not a discovery row");
+    assert.ok(p.includes("/v1/skills"), "saving a personal skill is a discoverable self-API endpoint");
+    assert.ok(p.includes("/v1/keychain/overview"), "the keychain overview gate is represented in discovery");
+    assert.ok(p.includes("/v1/admin/whoami"), "everyone can ask whether the user is an admin");
+    assert.ok(!p.includes("/v1/admin/scopes"), "admin rows must not render for a non-admin");
+    assert.ok(!p.some((x: string) => x.startsWith("/v1/memory")), "no memory rows without memory claims");
+    assert.doesNotMatch(JSON.stringify(body), /auto-grant/i);
+    assert.match(
+      body.endpoints.find((endpoint: any) => endpoint.path === "/v1/connectors/oauth/consent/mint")?.summary ?? "",
+      /stays private.*explicit credential grant/i,
+    );
+    assert.match(
+      body.endpoints.find((endpoint: any) => endpoint.path === "/v1/loops")?.summary ?? "",
+      /governor.*staleFireMs/,
+    );
+  } finally {
+    await s.close();
+  }
+});
 
-tenantTest("discovery follows the token's memory claims, including the org selector", async () => {
+test("discovery follows the token's memory claims, including the org selector", async () => {
   const s = await start();
   try {
     const U1 = scopeId("personal", "U1");
@@ -121,44 +118,38 @@ tenantTest("discovery follows the token's memory claims, including the org selec
   }
 });
 
-tenantTest(
-  "discovery for an org admin's LIVE turn includes the admin plane (live grant check), with guidance",
-  async () => {
-    const s = await start();
-    try {
-      const { body } = await listApis(s.base, await capFor("admin-alice", { liveActor: true }));
-      assert.deepEqual(body.admin, { isAdmin: true, role: "org_admin" });
-      const p = paths(body);
-      assert.ok(p.includes("/v1/admin/scopes"));
-      assert.ok(p.includes("/v1/admin/users"));
-      assert.ok(!p.includes("/v1/admin/grants"), "grant management is portal-only and must not be advertised");
-      assert.ok(body.guidance.some((g: string) => g.includes("confirm before any mutation")));
-      assert.match(JSON.stringify(body), /content reads require a DM or effective Open sharing for the live admin/);
-      assert.doesNotMatch(JSON.stringify(body), /DM only|only from a DM|bulk config imports require/);
-      assert.equal(p.filter((x: string) => x === "/v1/admin/whoami").length, 1, "whoami listed once, not duplicated");
-    } finally {
-      await s.close();
-    }
-  },
-);
+test("discovery for an org admin's LIVE turn includes the admin plane (live grant check), with guidance", async () => {
+  const s = await start();
+  try {
+    const { body } = await listApis(s.base, await capFor("admin-alice", { liveActor: true }));
+    assert.deepEqual(body.admin, { isAdmin: true, role: "org_admin" });
+    const p = paths(body);
+    assert.ok(p.includes("/v1/admin/scopes"));
+    assert.ok(p.includes("/v1/admin/users"));
+    assert.ok(!p.includes("/v1/admin/grants"), "grant management is portal-only and must not be advertised");
+    assert.ok(body.guidance.some((g: string) => g.includes("confirm before any mutation")));
+    assert.match(JSON.stringify(body), /content reads require a DM or effective Open sharing for the live admin/);
+    assert.doesNotMatch(JSON.stringify(body), /DM only|only from a DM|bulk config imports require/);
+    assert.equal(p.filter((x: string) => x === "/v1/admin/whoami").length, 1, "whoami listed once, not duplicated");
+  } finally {
+    await s.close();
+  }
+});
 
-tenantTest(
-  "an admin's AUTONOMOUS turn (no liveActor) is shown no admin plane — matching what the gate enforces",
-  async () => {
-    const s = await start();
-    try {
-      const { body } = await listApis(s.base, await capFor("admin-alice"));
-      assert.equal(body.admin.isAdmin, true, "status is still reported truthfully");
-      const p = paths(body);
-      assert.ok(!p.includes("/v1/admin/scopes"), "no admin rows without a live-actor token");
-      assert.ok(p.includes("/v1/admin/whoami"), "introspection stays available");
-    } finally {
-      await s.close();
-    }
-  },
-);
+test("an admin's AUTONOMOUS turn (no liveActor) is shown no admin plane — matching what the gate enforces", async () => {
+  const s = await start();
+  try {
+    const { body } = await listApis(s.base, await capFor("admin-alice"));
+    assert.equal(body.admin.isAdmin, true, "status is still reported truthfully");
+    const p = paths(body);
+    assert.ok(!p.includes("/v1/admin/scopes"), "no admin rows without a live-actor token");
+    assert.ok(p.includes("/v1/admin/whoami"), "introspection stays available");
+  } finally {
+    await s.close();
+  }
+});
 
-tenantTest("a granted autonomous turn discovers only the unattended read family", async () => {
+test("a granted autonomous turn discovers only the unattended read family", async () => {
   const s = await start();
   try {
     const { body } = await listApis(s.base, await capFor("admin-alice", { grants: ["admin.sessions.read"] }));
@@ -176,7 +167,7 @@ tenantTest("a granted autonomous turn discovers only the unattended read family"
   }
 });
 
-tenantTest("discovery requires a capability token", async () => {
+test("discovery requires a capability token", async () => {
   const s = await start();
   try {
     assert.equal((await fetch(`${s.base}/v1/apis`, { headers: testTenantHeaders() })).status, 401);
@@ -185,7 +176,7 @@ tenantTest("discovery requires a capability token", async () => {
   }
 });
 
-tenantTest("discovery advertises the deployment share endpoint, with guidance", async () => {
+test("discovery advertises the deployment share endpoint, with guidance", async () => {
   const s = await start();
   try {
     const { body } = await listApis(s.base, await capFor("U1"));
@@ -203,7 +194,7 @@ tenantTest("discovery advertises the deployment share endpoint, with guidance", 
   }
 });
 
-tenantTest("discovery includes admin routes for a verified human thread reply", async () => {
+test("discovery includes admin routes for a verified human thread reply", async () => {
   const s = await start();
   try {
     const { body } = await listApis(
@@ -228,7 +219,7 @@ tenantTest("discovery includes admin routes for a verified human thread reply", 
   }
 });
 
-tenantTest("disabled swarms are absent from discovery and reject direct API calls", async () => {
+test("disabled swarms are absent from discovery and reject direct API calls", async () => {
   const { base, built, close } = await start(false);
   try {
     assert.equal(built.app.swarms, undefined);

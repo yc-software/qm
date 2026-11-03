@@ -1,4 +1,4 @@
-import { it, test, type TestContext, type TestOptions } from "node:test";
+import { it as nodeIt, test as nodeTest, type TestContext, type TestOptions } from "node:test";
 import { TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { isTenantId, withTenant } from "../../src/tenants/context.ts";
 
@@ -25,11 +25,11 @@ export function testTenantHeaders(tenant = testTenants()[0]): Record<string, str
 
 type Body = (t: TestContext) => void | Promise<void>;
 
-export function tenantTest(name: string, ...args: [Body] | [TestOptions, Body]): void {
+export function test(name: string, ...args: [Body] | [TestOptions, Body]): void {
   const fn = args.length === 1 ? args[0] : args[1];
-  test(name, args.length === 1 ? {} : args[0], (t) => inTestTenant(() => fn(t)));
+  nodeTest(name, args.length === 1 ? {} : args[0], (t) => inTestTenant(() => fn(t)));
 }
 
-export function tenantIt(name: string, fn: Body): void {
-  it(name, (t) => inTestTenant(() => fn(t)));
+export function it(name: string, fn: Body): void {
+  nodeIt(name, (t) => inTestTenant(() => fn(t)));
 }

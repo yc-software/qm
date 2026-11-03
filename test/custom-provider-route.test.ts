@@ -12,7 +12,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -57,7 +57,7 @@ const BODY = {
   apiKey: "sk-acme-secret",
 };
 
-tenantTest("custom provider lifecycle: register, list, resolve, delete — admin only, no key leakage", async () => {
+test("custom provider lifecycle: register, list, resolve, delete — admin only, no key leakage", async () => {
   const validated: string[] = [];
   const srv = start(async (input) => {
     validated.push(String(input));
@@ -102,7 +102,7 @@ tenantTest("custom provider lifecycle: register, list, resolve, delete — admin
   }
 });
 
-tenantTest("a rejected key blocks registration unless validate:false", async () => {
+test("a rejected key blocks registration unless validate:false", async () => {
   const srv = start(async () => new Response(null, { status: 401 }));
   try {
     const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
@@ -124,7 +124,7 @@ tenantTest("a rejected key blocks registration unless validate:false", async () 
   }
 });
 
-tenantTest("bad specs are refused with a reason", async () => {
+test("bad specs are refused with a reason", async () => {
   const srv = start();
   try {
     for (const [patch, reason] of [

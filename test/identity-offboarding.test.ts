@@ -14,7 +14,7 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, tenantIt, testTenantHeaders } from "./support/test-tenants.ts";
+import { it, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "offboarding-secret".repeat(3);
 
@@ -57,7 +57,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  tenantIt("a roster swap that drops a member deactivates them; reappearing reactivates", async () => {
+  it("a roster swap that drops a member deactivates them; reappearing reactivates", async () => {
     await inTestTenant(() => built.app.upsertDirectory([member("U-stay"), member("U-leave")]));
     assert.equal(built.identity.classify("U-leave").type, "internal");
 
@@ -79,7 +79,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     );
   });
 
-  tenantIt("a Slack roster omission does not deactivate or hide a configured email-auth principal", async () => {
+  it("a Slack roster omission does not deactivate or hide a configured email-auth principal", async () => {
     await inTestTenant(() => built.app.upsertDirectory([member("U-stay"), member("allowed@example.com")]));
     await inTestTenant(() => built.app.upsertDirectory([member("U-stay")]));
 
@@ -97,7 +97,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     );
   });
 
-  tenantIt("the deactivate/reactivate routes flip classification and are audited", async () => {
+  it("the deactivate/reactivate routes flip classification and are audited", async () => {
     const off = await signedPost("/v1/principals/U-manual/deactivate");
     assert.equal(off.status, 200);
     assert.deepEqual(await off.json(), { ok: true, principalId: "U-manual", active: false });
@@ -117,7 +117,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     );
   });
 
-  tenantIt("an agent capability token cannot reach the principals routes (source-auth only)", async () => {
+  it("an agent capability token cannot reach the principals routes (source-auth only)", async () => {
     const cap = await mintCapabilityToken(
       { actorId: "U-stay", scopeId: scopeId("personal", "U-stay"), exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,

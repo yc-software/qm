@@ -4,7 +4,7 @@ import { createAgent } from "../src/agent/agent-run.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { entryFromItem, storedItem } from "../src/sessions/items.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const sessionGoals = new Map<string, GoalRecord>();
 const savedGoal = (sessionId: string) => sessionGoals.get(sessionId) ?? null;
@@ -38,7 +38,7 @@ function goalTurn(
   };
 }
 
-tenantTest("an active goal stops continuing once a model round fails at the provider", async () => {
+test("an active goal stops continuing once a model round fails at the provider", async () => {
   const agent = createAgent({ apiKey: "sk-test" });
   const controller = new AbortController();
   const entries: Array<{ type: string; payload: unknown }> = [];
@@ -104,7 +104,7 @@ function textStream(text: string, stopReason = "end_turn"): Response {
   );
 }
 
-tenantTest("a refused goal round falls back to another model and the goal keeps going", async () => {
+test("a refused goal round falls back to another model and the goal keeps going", async () => {
   const agent = createAgent({ apiKey: "sk-test" });
   const controller = new AbortController();
   const entries: Array<{ type: string; payload: unknown }> = [];
@@ -129,7 +129,7 @@ tenantTest("a refused goal round falls back to another model and the goal keeps 
   }
 });
 
-tenantTest("a goal never falls back to a model that already refused in the same turn", async () => {
+test("a goal never falls back to a model that already refused in the same turn", async () => {
   const agent = createAgent({ apiKey: "sk-test" });
   const controller = new AbortController();
   const entries: Array<{ type: string; payload: unknown }> = [];

@@ -9,7 +9,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
@@ -54,7 +54,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   return { crons, cron, deliveries, idempotency, ask, deps };
 }
 
-tenantTest("cron credential resolution resumes in the original conversation exactly once", async () => {
+test("cron credential resolution resumes in the original conversation exactly once", async () => {
   const requests: TurnRequest[] = [];
   const f = await fixture(async (request) => {
     requests.push(request);
@@ -78,7 +78,7 @@ tenantTest("cron credential resolution resumes in the original conversation exac
   assert.equal(pending[0]!.text, "dummy scheduled result");
 });
 
-tenantTest("failed cron credential resolution notifies only the owner", async () => {
+test("failed cron credential resolution notifies only the owner", async () => {
   let runs = 0;
   const f = await fixture(async () => {
     runs++;
@@ -98,7 +98,7 @@ tenantTest("failed cron credential resolution notifies only the owner", async ()
   assert.equal(pending.filter((delivery) => delivery.destination.target === "U_BOB").length, 0);
 });
 
-tenantTest("a concurrent sweep cannot mark an in-flight resume notified before it finishes", async () => {
+test("a concurrent sweep cannot mark an in-flight resume notified before it finishes", async () => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<TurnResult>();
   let runs = 0;

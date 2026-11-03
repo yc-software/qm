@@ -25,7 +25,7 @@ import {
   testDatabaseUrl,
 } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
@@ -45,7 +45,7 @@ interface Widget {
   nested: { n: number };
 }
 
-tenantTest("pg map: put/get/all/upsert/delete with a JSONB value round-trip", { skip }, async () => {
+test("pg map: put/get/all/upsert/delete with a JSONB value round-trip", { skip }, async () => {
   const m = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
   await migrateTestDatabase(URL);
   assert.deepEqual(await m.all(), []);
@@ -75,7 +75,7 @@ tenantTest("pg map: put/get/all/upsert/delete with a JSONB value round-trip", { 
   assert.deepEqual(await m.all(), []);
 });
 
-tenantTest("pg map: a value persists across map instances (no per-process cache to diverge)", { skip }, async () => {
+test("pg map: a value persists across map instances (no per-process cache to diverge)", { skip }, async () => {
   const writer = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
   await writer.put("shared", { name: "shared", tags: ["s"], nested: { n: 9 } });
   const reader = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
@@ -83,7 +83,7 @@ tenantTest("pg map: a value persists across map instances (no per-process cache 
   assert.equal((await reader.get("shared"))!.nested.n, 9);
 });
 
-tenantTest("pg map: an artifact store rides the map (a cron round-trips through Postgres)", { skip }, async () => {
+test("pg map: an artifact store rides the map (a cron round-trips through Postgres)", { skip }, async () => {
   const store = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"), {
     fires: createPostgresCronFireStore(testDatabaseUrl()),
   });
@@ -105,7 +105,7 @@ tenantTest("pg map: an artifact store rides the map (a cron round-trips through 
   assert.equal(got?.lastFiredAt, 123);
 });
 
-tenantTest(
+test(
   "pg map: putIfAbsent inserts once and returns the existing row on a conflict (atomic claim)",
   { skip },
   async () => {
@@ -120,14 +120,14 @@ tenantTest(
   },
 );
 
-tenantTest("pg map: rejects an unsafe table name (the DDL/DML interpolation guard)", () => {
+test("pg map: rejects an unsafe table name (the DDL/DML interpolation guard)", () => {
   const factory = createPostgresMapFactory("postgres://unused");
   assert.throws(() => factory.map("bad name"), /invalid table name/);
   assert.throws(() => factory.map("crons;--"), /invalid table name/);
   assert.throws(() => factory.map<{ owner: string }>("map_widgets", ["bad field" as "owner"]), /invalid index field/);
 });
 
-tenantTest(
+test(
   "pg map: merge does field-level updates (sets fields, removes undefined keys, null when absent)",
   { skip },
   async () => {
@@ -143,7 +143,7 @@ tenantTest(
   },
 );
 
-tenantTest("pg map: all()/entries() stay coherent across instances despite the read cache", { skip }, async () => {
+test("pg map: all()/entries() stay coherent across instances despite the read cache", { skip }, async () => {
   const writer = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
   const reader = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
   await migrateTestDatabase(URL);
@@ -171,7 +171,7 @@ tenantTest("pg map: all()/entries() stay coherent across instances despite the r
   assert.ok(!(await reader.entries()).some(([id]) => id === "c1"), "take is visible");
 });
 
-tenantTest("pg map: a caller mutating an all() result cannot poison the cache", { skip }, async () => {
+test("pg map: a caller mutating an all() result cannot poison the cache", { skip }, async () => {
   const m = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
   await migrateTestDatabase(URL);
   await m.put("mut", { name: "mut", tags: ["a"], nested: { n: 1 } });
@@ -183,7 +183,7 @@ tenantTest("pg map: a caller mutating an all() result cannot poison the cache", 
   assert.equal(again.nested.n, 1);
 });
 
-tenantTest("pg map: update transforms a row under a lock", { skip }, async () => {
+test("pg map: update transforms a row under a lock", { skip }, async () => {
   const m = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
   await migrateTestDatabase(URL);
   await m.put("upd", { name: "upd", tags: [], nested: { n: 0 } });
@@ -197,7 +197,7 @@ tenantTest("pg map: update transforms a row under a lock", { skip }, async () =>
   assert.equal(after?.tags.length, 5);
 });
 
-tenantTest("pg map: select mirrors the memory map — folded field filter, projection, id order", { skip }, async () => {
+test("pg map: select mirrors the memory map — folded field filter, projection, id order", { skip }, async () => {
   type Owned = Widget & { owner: string; secretEnc?: string };
   const rows: Array<[string, Owned]> = [
     ["sel-a", { name: "sel-a", tags: ["t"], nested: { n: 1 }, owner: "U7", secretEnc: "enc-a" }],
@@ -291,7 +291,7 @@ tenantTest("pg map: select mirrors the memory map — folded field filter, proje
   }
 });
 
-tenantTest("pg map: indexed fields accept wide values through migration and later writes", { skip }, async () => {
+test("pg map: indexed fields accept wide values through migration and later writes", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const first = randomBytes(3000).toString("hex");
   const second = randomBytes(3000).toString("hex");
@@ -314,7 +314,7 @@ tenantTest("pg map: indexed fields accept wide values through migration and late
   }
 });
 
-tenantTest("pg map: original folded-index migration upgrades without changing its ledger", { skip }, async () => {
+test("pg map: original folded-index migration upgrades without changing its ledger", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const unindexed = factory.map<{ owner: string }>("map_wide_widgets");
   await migrateTestDatabase(URL);
@@ -353,7 +353,7 @@ tenantTest("pg map: original folded-index migration upgrades without changing it
   }
 });
 
-tenantTest("pg keychain: listByOwner is a per-owner projected read with no secret material", { skip }, async () => {
+test("pg keychain: listByOwner is a per-owner projected read with no secret material", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
@@ -389,7 +389,7 @@ tenantTest("pg keychain: listByOwner is a per-owner projected read with no secre
   }
 });
 
-tenantTest("pg keychain: separate processes refresh a rotating connector token once", { skip }, async () => {
+test("pg keychain: separate processes refresh a rotating connector token once", { skip }, async () => {
   const factories = [createPostgresMapFactory(URL!), createPostgresMapFactory(URL!)];
   const provider = { valid: "rt-0", calls: 0 };
   const keychains = factories.map((factory) =>
@@ -424,7 +424,7 @@ tenantTest("pg keychain: separate processes refresh a rotating connector token o
   }
 });
 
-tenantTest("pg map: concurrent keychain instances claim a once grant exactly once", { skip }, async () => {
+test("pg map: concurrent keychain instances claim a once grant exactly once", { skip }, async () => {
   const first = createPostgresMapFactory(URL!);
   const second = createPostgresMapFactory(URL!);
   const key = deriveConnectorKey("postgres-keychain-test-key");
@@ -471,7 +471,7 @@ tenantTest("pg map: concurrent keychain instances claim a once grant exactly onc
   }
 });
 
-tenantTest("pg map: webhook history retains concurrent deliveries across store instances", { skip }, async () => {
+test("pg map: webhook history retains concurrent deliveries across store instances", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const makeStore = () =>
     createWebhookStore(factory.map<Webhook>("map_webhooks"), factory.map<WebhookHistory>("map_webhook_history"));
@@ -508,7 +508,7 @@ tenantTest("pg map: webhook history retains concurrent deliveries across store i
 });
 
 for (const postgres of [false, true]) {
-  tenantTest(
+  test(
     `${postgres ? "pg" : "memory"} map: nested projection excludes large fields and preserves default reads`,
     { skip: postgres && skip },
     async () => {
@@ -555,7 +555,7 @@ for (const postgres of [false, true]) {
   );
 }
 
-tenantTest("pg map: an indexed select plans both branches through their indexes", { skip }, async () => {
+test("pg map: an indexed select plans both branches through their indexes", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const pg = factory.pool;
   const indexed = factory.map<{ owner: string; blob: string }>("map_scoped_widgets", ["owner"]);
@@ -611,7 +611,7 @@ tenantTest("pg map: an indexed select plans both branches through their indexes"
   }
 });
 
-tenantTest("pg map: trigger stores list only the owner's rows", { skip }, async () => {
+test("pg map: trigger stores list only the owner's rows", { skip }, async () => {
   const f = createPostgresMapFactory(URL!);
   const crons = createCronStore(f.map<Cron>("map_owned_crons", ["ownerScopeId"]), {
     fires: createPostgresCronFireStore(URL!),

@@ -1,19 +1,19 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { boundTenant, currentTenant, isTenantId, withoutTenant, withTenant } from "../src/tenants/context.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const a = randomUUID();
 const b = randomUUID();
 
-tenantTest("withoutTenant leaves work unbound and currentTenant refuses it", () => {
+test("withoutTenant leaves work unbound and currentTenant refuses it", () => {
   withoutTenant(() => {
     assert.equal(boundTenant(), undefined);
     assert.throws(() => currentTenant(), /No tenant is bound/);
   });
 });
 
-tenantTest("withTenant binds across awaits and nests", async () => {
+test("withTenant binds across awaits and nests", async () => {
   await withoutTenant(() =>
     withTenant(a, async () => {
       await new Promise((resolve) => setTimeout(resolve, 1));
@@ -29,7 +29,7 @@ tenantTest("withTenant binds across awaits and nests", async () => {
   );
 });
 
-tenantTest("tenant ids must be lowercase uuids", () => {
+test("tenant ids must be lowercase uuids", () => {
   assert.equal(isTenantId(a), true);
   for (const id of [a.toUpperCase(), "", "tenant", `${a} `, a.replaceAll("-", "")]) {
     assert.equal(isTenantId(id), false);

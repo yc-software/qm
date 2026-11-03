@@ -11,7 +11,7 @@ import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { storedItem } from "../src/sessions/items.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const transactions: Record<string, any>[] = [];
 const collector = createServer(async (req, res) => {
@@ -58,92 +58,89 @@ function anthropicStream(block: Record<string, unknown>, delta: Record<string, u
     .join("");
 }
 
-tenantTest(
-  "a Pi tool step is traced as model requests, first tokens, and a step gap that holds the named tool",
-  async (t) => {
-    let requests = 0;
-    const model = createServer(async (req, res) => {
-      await new Promise((resolve) => req.resume().on("end", resolve));
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      res.writeHead(200, { "content-type": "text/event-stream" });
-      res.end(
-        ++requests === 1
-          ? anthropicStream(
-              { type: "tool_use", id: "read-memory", name: "memory", input: {} },
-              { type: "input_json_delta", partial_json: JSON.stringify({ action: "read" }) },
-              "tool_use",
-            )
-          : anthropicStream({ type: "text", text: "" }, { type: "text_delta", text: "done" }, "end_turn"),
-      );
-    });
-    await new Promise<void>((resolve) => model.listen(0, "127.0.0.1", resolve));
-    t.after(() => new Promise<void>((resolve) => model.close(() => resolve())));
-    const modelUrl = `http://127.0.0.1:${(model.address() as AddressInfo).port}/v1/messages`;
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) =>
-      realFetch(modelUrl, { method: "POST", body: init?.body ?? null, signal: init?.signal ?? null })) as typeof fetch;
-    t.after(() => {
-      globalThis.fetch = realFetch;
-    });
-    const agent = createAgent({ apiKey: "sk-test" });
-    t.after(() => agent.close?.());
-    let seq = 0;
-    const result = await traceQueued(undefined, "run", { "qm.origin": "human" }, () =>
-      agent.runTurn({
-        session: { id: "traced-tool-step" } as AgentTurnInput["session"],
-        input: "read my memory",
-        systemPrompt: "BASE",
-        history: [],
-        tools: {
-          memoryRead: async () => {
-            await new Promise((resolve) => setTimeout(resolve, 40));
-            return "saved facts";
-          },
-        } as AgentTurnInput["tools"],
-        scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
-        orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
-        emit: async (item) => storedItem(item, { sessionId: "traced-tool-step", seq: seq++, createdAt: Date.now() }),
-        recordModelCall: () => {},
-        cancel: AbortSignal.timeout(10_000),
-      }),
+test("a Pi tool step is traced as model requests, first tokens, and a step gap that holds the named tool", async (t) => {
+  let requests = 0;
+  const model = createServer(async (req, res) => {
+    await new Promise((resolve) => req.resume().on("end", resolve));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(
+      ++requests === 1
+        ? anthropicStream(
+            { type: "tool_use", id: "read-memory", name: "memory", input: {} },
+            { type: "input_json_delta", partial_json: JSON.stringify({ action: "read" }) },
+            "tool_use",
+          )
+        : anthropicStream({ type: "text", text: "" }, { type: "text_delta", text: "done" }, "end_turn"),
     );
-    assert.equal(result.reply, "done");
-    for (let i = 0; i < 40 && !transactions.some((event) => event.transaction === "run"); i++) {
-      await flushErrorReporting();
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    const run = transactions.find((event) => event.transaction === "run");
-    assert.ok(run, "the run transaction arrived");
-    const spans: Array<{
-      op: string;
-      description: string;
-      span_id: string;
-      parent_span_id: string;
-      start_timestamp: number;
-      timestamp: number;
-    }> = run.spans;
-    const byOp = (op: string) =>
-      spans.filter((span) => span.op === op).sort((a, b) => a.start_timestamp - b.start_timestamp);
-    const [firstToken, nextFirstToken, ...extraFirstTokens] = byOp("model.first_token");
-    assert.ok(firstToken && nextFirstToken, "each model request has a first-token span");
-    assert.equal(extraFirstTokens.length, 0);
-    assert.equal(byOp("http.client").length, 2, "each model request has an HTTP span");
-    const [gap, ...extraGaps] = byOp("step.gap");
-    assert.ok(gap, "the tool step has a gap span");
-    assert.equal(extraGaps.length, 0, "the final answer opens no gap");
-    const [tool, ...extraTools] = byOp("step.tool");
-    assert.ok(tool);
-    assert.equal(extraTools.length, 0);
-    assert.equal(tool.description, "memory");
-    assert.equal(tool.parent_span_id, gap.span_id, "the tool runs inside its step's gap");
-    assert.ok(tool.timestamp - tool.start_timestamp >= 0.035, "the tool span covers the tool's own work");
-    assert.ok(gap.start_timestamp >= firstToken.timestamp, "the gap opens after the first response streamed");
-    assert.ok(gap.timestamp <= nextFirstToken.start_timestamp + 0.001, "the gap closes at the next model request");
-    assert.ok(tool.start_timestamp >= gap.start_timestamp && tool.timestamp <= gap.timestamp);
-  },
-);
+  });
+  await new Promise<void>((resolve) => model.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => model.close(() => resolve())));
+  const modelUrl = `http://127.0.0.1:${(model.address() as AddressInfo).port}/v1/messages`;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) =>
+    realFetch(modelUrl, { method: "POST", body: init?.body ?? null, signal: init?.signal ?? null })) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = realFetch;
+  });
+  const agent = createAgent({ apiKey: "sk-test" });
+  t.after(() => agent.close?.());
+  let seq = 0;
+  const result = await traceQueued(undefined, "run", { "qm.origin": "human" }, () =>
+    agent.runTurn({
+      session: { id: "traced-tool-step" } as AgentTurnInput["session"],
+      input: "read my memory",
+      systemPrompt: "BASE",
+      history: [],
+      tools: {
+        memoryRead: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          return "saved facts";
+        },
+      } as AgentTurnInput["tools"],
+      scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+      orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
+      emit: async (item) => storedItem(item, { sessionId: "traced-tool-step", seq: seq++, createdAt: Date.now() }),
+      recordModelCall: () => {},
+      cancel: AbortSignal.timeout(10_000),
+    }),
+  );
+  assert.equal(result.reply, "done");
+  for (let i = 0; i < 40 && !transactions.some((event) => event.transaction === "run"); i++) {
+    await flushErrorReporting();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const run = transactions.find((event) => event.transaction === "run");
+  assert.ok(run, "the run transaction arrived");
+  const spans: Array<{
+    op: string;
+    description: string;
+    span_id: string;
+    parent_span_id: string;
+    start_timestamp: number;
+    timestamp: number;
+  }> = run.spans;
+  const byOp = (op: string) =>
+    spans.filter((span) => span.op === op).sort((a, b) => a.start_timestamp - b.start_timestamp);
+  const [firstToken, nextFirstToken, ...extraFirstTokens] = byOp("model.first_token");
+  assert.ok(firstToken && nextFirstToken, "each model request has a first-token span");
+  assert.equal(extraFirstTokens.length, 0);
+  assert.equal(byOp("http.client").length, 2, "each model request has an HTTP span");
+  const [gap, ...extraGaps] = byOp("step.gap");
+  assert.ok(gap, "the tool step has a gap span");
+  assert.equal(extraGaps.length, 0, "the final answer opens no gap");
+  const [tool, ...extraTools] = byOp("step.tool");
+  assert.ok(tool);
+  assert.equal(extraTools.length, 0);
+  assert.equal(tool.description, "memory");
+  assert.equal(tool.parent_span_id, gap.span_id, "the tool runs inside its step's gap");
+  assert.ok(tool.timestamp - tool.start_timestamp >= 0.035, "the tool span covers the tool's own work");
+  assert.ok(gap.start_timestamp >= firstToken.timestamp, "the gap opens after the first response streamed");
+  assert.ok(gap.timestamp <= nextFirstToken.start_timestamp + 0.001, "the gap closes at the next model request");
+  assert.ok(tool.start_timestamp >= gap.start_timestamp && tool.timestamp <= gap.timestamp);
+});
 
-tenantTest("a human web turn persists its entries inside step.persist spans of the run", () =>
+test("a human web turn persists its entries inside step.persist spans of the run", () =>
   inTestTenant(async () => {
     transactions.length = 0;
     const built = buildApp(testConfig());
@@ -162,10 +159,9 @@ tenantTest("a human web turn persists its entries inside step.persist spans of t
     assert.ok(run, "the run transaction arrived");
     const persisted = run.spans.filter((span: { op: string }) => span.op === "step.persist");
     assert.ok(persisted.length >= 2, "the user entry and the reply are each persisted in a span");
-  }),
-);
+  }));
 
-tenantTest("a turn whose agent fails still sends its dispatch span", () =>
+test("a turn whose agent fails still sends its dispatch span", () =>
   inTestTenant(async () => {
     transactions.length = 0;
     const built = buildApp(testConfig());
@@ -185,5 +181,4 @@ tenantTest("a turn whose agent fails still sends its dispatch span", () =>
     const run = transactions.find((event) => event.contexts?.trace?.op === "queue.process");
     assert.ok(run, "the run transaction arrived");
     assert.ok(run.spans.some((span: { op: string }) => span.op === "turn.dispatch"));
-  }),
-);
+  }));

@@ -5,23 +5,23 @@ import {
   turnModelOptions,
 } from "../src/agent/runtime-choice.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
-tenantTest("triggered turns default to extra-high thinking and non-fast mode", () => {
+test("triggered turns default to extra-high thinking and non-fast mode", () => {
   assert.deepEqual(turnModelOptions({ triggered: true }), {
     thinkingLevel: NON_INTERACTIVE_THINKING_LEVEL,
     fastMode: NON_INTERACTIVE_FAST_MODE,
   });
 });
 
-tenantTest("explicit turn model options win over triggered defaults", () => {
+test("explicit turn model options win over triggered defaults", () => {
   assert.deepEqual(turnModelOptions({ triggered: true, thinkingLevel: "low", fastMode: true }), {
     thinkingLevel: "low",
     fastMode: true,
   });
 });
 
-tenantTest("web model controls are bounded by admin configuration", () => {
+test("web model controls are bounded by admin configuration", () => {
   assert.equal(
     validateWebTurnModelOptions({ model: "claude-sonnet-4-6" }, ["claude-opus-4-8"]),
     "that model is not enabled for the web UI",
@@ -30,11 +30,11 @@ tenantTest("web model controls are bounded by admin configuration", () => {
   assert.equal(validateWebTurnModelOptions({ model: "claude-opus-4-8", thinkingLevel: "high" }, null), null);
 });
 
-tenantTest("interactive turns do not force model options", () => {
+test("interactive turns do not force model options", () => {
   assert.deepEqual(turnModelOptions({}), {});
 });
 
-tenantTest("a triggered turn with an explicit low thinking level overrides the xhigh trigger default", () => {
+test("a triggered turn with an explicit low thinking level overrides the xhigh trigger default", () => {
   assert.deepEqual(turnModelOptions({ triggered: true, thinkingLevel: "low" }), {
     thinkingLevel: "low",
     fastMode: NON_INTERACTIVE_FAST_MODE,

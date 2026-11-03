@@ -11,7 +11,7 @@ const headers = {
   "x-admin-actor": "admin-alice@default-org",
   ...testTenantHeaders(),
 };
-tenantTest("admin lookup recognizes an existing model without asking for a clone template", async () => {
+test("admin lookup recognizes an existing model without asking for a clone template", async () => {
   const config = testConfig({ anthropicApiKey: "test-only" });
   const built = stopAtEnd(buildApp(config));
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
@@ -49,7 +49,7 @@ const credentials = () =>
     fallback: { openai: "test-openai-key", anthropic: "test-anthropic-key" },
   });
 
-tenantTest("exact catalog lookup returns documented values without network or other-model guesses", async () => {
+test("exact catalog lookup returns documented values without network or other-model guesses", async () => {
   const result = await lookupModel({ provider: "anthropic", id: "claude-opus-4-6" }, credentials(), async () => {
     throw Error("must not fetch");
   });
@@ -61,7 +61,7 @@ tenantTest("exact catalog lookup returns documented values without network or ot
   await assert.rejects(lookupModel({ provider: "openai", id: "claude-opus-4-6" }), /different provider/);
 });
 
-tenantTest("provider lookup only imports exact bounded metadata, never pricing from a similar model", async () => {
+test("provider lookup only imports exact bounded metadata, never pricing from a similar model", async () => {
   setProviderBaseUrls({ anthropic: "http://127.0.0.1:19998" });
   let calls = 0;
   const result = await lookupModel(
@@ -92,7 +92,7 @@ tenantTest("provider lookup only imports exact bounded metadata, never pricing f
   assert.doesNotMatch(JSON.stringify(result), /private|test-anthropic-key/);
 });
 
-tenantTest("OpenAI minimal metadata and missing credentials leave unknown fields visibly missing", async () => {
+test("OpenAI minimal metadata and missing credentials leave unknown fields visibly missing", async () => {
   const result = await lookupModel({ provider: "openai", id: "future-openai-model" }, credentials(), async () =>
     Response.json({ id: "future-openai-model", object: "model" }),
   );
@@ -107,7 +107,7 @@ tenantTest("OpenAI minimal metadata and missing credentials leave unknown fields
   assert.match(absent.message, /provider key/);
 });
 
-tenantTest("bad responses degrade to manual fields with no partial or mismatched metadata", async () => {
+test("bad responses degrade to manual fields with no partial or mismatched metadata", async () => {
   for (const response of [
     Response.json({ id: "wrong-model", display_name: "Wrong", max_input_tokens: 1, max_tokens: 1 }),
     Response.json({ id: "future-model", max_tokens: -1 }),
@@ -131,7 +131,7 @@ tenantTest("bad responses degrade to manual fields with no partial or mismatched
   assert.match(offline.message, /Retry lookup/);
 });
 
-tenantTest("live lookup is admin-only and builtin enable verifies without a duplicate or changed default", async () => {
+test("live lookup is admin-only and builtin enable verifies without a duplicate or changed default", async () => {
   const upstream = await verificationUpstream();
   const config = testConfig({
     anthropicApiKey: "lookup-key",
@@ -189,7 +189,7 @@ tenantTest("live lookup is admin-only and builtin enable verifies without a dupl
   }
 });
 
-tenantTest("enable rechecks serving credentials before mutating the picker", async () => {
+test("enable rechecks serving credentials before mutating the picker", async () => {
   let onProbe: () => Promise<void> = async () => {};
   const config = testConfig({ anthropicApiKey: "test-key" });
   const built = stopAtEnd(buildApp(config, { modelVerificationProbe: async () => onProbe() }));
@@ -211,7 +211,7 @@ tenantTest("enable rechecks serving credentials before mutating the picker", asy
   }
 });
 
-tenantTest("identity schema rejects URL-like and extra inputs before lookup", async () => {
+test("identity schema rejects URL-like and extra inputs before lookup", async () => {
   const { modelLookupInput } = await import("../src/model/model-lookup.ts");
   for (const body of [
     { provider: "openai", id: "https://example.invalid/model" },
@@ -224,9 +224,9 @@ tenantTest("identity schema rejects URL-like and extra inputs before lookup", as
 
 import { createServer } from "node:http";
 import { testMap } from "./support/test-database.ts";
-import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
-tenantTest("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
+test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";
   let sinkRequests = 0;
   const server = createServer((req, res) => {

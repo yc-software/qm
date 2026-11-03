@@ -6,7 +6,7 @@ import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-a
 import { resolveModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { buildModelRuntime } from "../src/model/model-runtime.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const BINDING_BETA = "thinking-binding-controls-2026-08-01";
 const DROP_BLOCK = { prefix_mismatch_behavior: "drop_block" };
@@ -99,45 +99,39 @@ async function send(model: Model<Api>, reasoning?: "high"): Promise<void> {
   assert.equal(reply.stopReason, "stop", reply.errorMessage);
 }
 
-tenantTest(
-  "a custom anthropic model of a known adaptive model sends thinking binding even with reasoning off",
-  async () => {
-    const upstream = await fakeAnthropic();
-    try {
-      register(upstream.url, [{ id: "claude-opus-5-5" }]);
-      const model = resolveModel("custom/direct/claude-opus-5-5") as Model<Api>;
-      await send(model);
-      const [call] = upstream.seen;
-      assert.ok(call);
-      assert.equal(call.body.model, "claude-opus-5-5");
-      assert.ok(String(call.headers["anthropic-beta"]).split(",").includes(BINDING_BETA));
-      assert.deepEqual(call.body.thinking, { type: "adaptive", display: "summarized", block_binding: DROP_BLOCK });
-      const replayed = (call.body.messages as Array<{ content: unknown }>)[1]!.content as Array<{ type: string }>;
-      assert.equal(replayed[0]!.type, "thinking");
-    } finally {
-      upstream.close();
-    }
-  },
-);
+test("a custom anthropic model of a known adaptive model sends thinking binding even with reasoning off", async () => {
+  const upstream = await fakeAnthropic();
+  try {
+    register(upstream.url, [{ id: "claude-opus-5-5" }]);
+    const model = resolveModel("custom/direct/claude-opus-5-5") as Model<Api>;
+    await send(model);
+    const [call] = upstream.seen;
+    assert.ok(call);
+    assert.equal(call.body.model, "claude-opus-5-5");
+    assert.ok(String(call.headers["anthropic-beta"]).split(",").includes(BINDING_BETA));
+    assert.deepEqual(call.body.thinking, { type: "adaptive", display: "summarized", block_binding: DROP_BLOCK });
+    const replayed = (call.body.messages as Array<{ content: unknown }>)[1]!.content as Array<{ type: string }>;
+    assert.equal(replayed[0]!.type, "thinking");
+  } finally {
+    upstream.close();
+  }
+});
 
-tenantTest(
-  "reasoning on a custom anthropic model of a known adaptive model uses adaptive thinking with binding",
-  async () => {
-    const upstream = await fakeAnthropic();
-    try {
-      register(upstream.url, [{ id: "claude-opus-5-5", reasoning: true }]);
-      await send(resolveModel("custom/direct/claude-opus-5-5") as Model<Api>, "high");
-      const thinking = upstream.seen[0]!.body.thinking as Record<string, unknown>;
-      assert.equal(thinking.type, "adaptive");
-      assert.deepEqual(thinking.block_binding, DROP_BLOCK);
-      assert.equal(thinking.budget_tokens, undefined);
-    } finally {
-      upstream.close();
-    }
-  },
-);
+test("reasoning on a custom anthropic model of a known adaptive model uses adaptive thinking with binding", async () => {
+  const upstream = await fakeAnthropic();
+  try {
+    register(upstream.url, [{ id: "claude-opus-5-5", reasoning: true }]);
+    await send(resolveModel("custom/direct/claude-opus-5-5") as Model<Api>, "high");
+    const thinking = upstream.seen[0]!.body.thinking as Record<string, unknown>;
+    assert.equal(thinking.type, "adaptive");
+    assert.deepEqual(thinking.block_binding, DROP_BLOCK);
+    assert.equal(thinking.budget_tokens, undefined);
+  } finally {
+    upstream.close();
+  }
+});
 
-tenantTest("a custom anthropic model with an unrecognized id keeps the plain request", async () => {
+test("a custom anthropic model with an unrecognized id keeps the plain request", async () => {
   const upstream = await fakeAnthropic();
   try {
     register(upstream.url, [{ id: "compat-large" }]);
@@ -150,7 +144,7 @@ tenantTest("a custom anthropic model with an unrecognized id keeps the plain req
   }
 });
 
-tenantTest("only anthropic-protocol custom models take on a known model's thinking traits", () => {
+test("only anthropic-protocol custom models take on a known model's thinking traits", () => {
   register("https://llm.example.test/v1", [{ id: "claude-opus-5-5" }], "openai");
   const model = resolveModel("custom/direct/claude-opus-5-5");
   assert.equal(model?.api, "openai-completions");
@@ -158,22 +152,19 @@ tenantTest("only anthropic-protocol custom models take on a known model's thinki
   assert.equal(model?.thinkingLevelMap, undefined);
 });
 
-tenantTest(
-  "a custom model whose provider is gone fails as unavailable instead of sending its id upstream",
-  async () => {
-    const upstream = await fakeAnthropic();
-    try {
-      register(upstream.url, [{ id: "claude-opus-5-5" }]);
-      const model = resolveModel("custom/direct/claude-opus-5-5") as Model<Api>;
-      const runtime = await buildModelRuntime({ direct: "sk-direct" });
-      setCustomProviders([]);
-      const reply = await runtime.streamSimple(model, replayContext(model, "hi"), {}).result();
-      assert.equal(reply.stopReason, "error");
-      assert.match(String(reply.errorMessage), /Model is unavailable: custom\/direct\/claude-opus-5-5/);
-      assert.equal((reply as { providerError?: { type?: string } }).providerError?.type, "model_unavailable");
-      assert.equal(upstream.seen.length, 0);
-    } finally {
-      upstream.close();
-    }
-  },
-);
+test("a custom model whose provider is gone fails as unavailable instead of sending its id upstream", async () => {
+  const upstream = await fakeAnthropic();
+  try {
+    register(upstream.url, [{ id: "claude-opus-5-5" }]);
+    const model = resolveModel("custom/direct/claude-opus-5-5") as Model<Api>;
+    const runtime = await buildModelRuntime({ direct: "sk-direct" });
+    setCustomProviders([]);
+    const reply = await runtime.streamSimple(model, replayContext(model, "hi"), {}).result();
+    assert.equal(reply.stopReason, "error");
+    assert.match(String(reply.errorMessage), /Model is unavailable: custom\/direct\/claude-opus-5-5/);
+    assert.equal((reply as { providerError?: { type?: string } }).providerError?.type, "model_unavailable");
+    assert.equal(upstream.seen.length, 0);
+  } finally {
+    upstream.close();
+  }
+});

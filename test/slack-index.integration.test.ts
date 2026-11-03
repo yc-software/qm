@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mock } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -446,7 +446,7 @@ async function fixture(
   return { app, client: app.client, core, stop: () => plugin.stop() };
 }
 
-tenantTest("config is all-or-nothing and numeric tuning fails closed", () => {
+test("config is all-or-nothing and numeric tuning fails closed", () => {
   assert.equal(slackPluginConfigFromEnv({ SLACK_BOT_TOKEN: "xoxb" }), null);
   assert.equal(slackPluginConfigFromEnv({ SLACK_APP_TOKEN: "xapp" }), null);
   const config = slackPluginConfigFromEnv({
@@ -459,55 +459,52 @@ tenantTest("config is all-or-nothing and numeric tuning fails closed", () => {
   assert.deepEqual(config, { botToken: "xoxb", appToken: "xapp", maxPrivateChannels: 10 });
 });
 
-tenantTest(
-  "a core failure the user is told about counts as handled; a quiet one reports failure and forgets the dedup key",
-  async () => {
-    const f = await fixture();
-    try {
-      const gate: string[] = [];
-      const ackGate = {
-        persisted: () => gate.push("persisted"),
-        failed: (reason?: string) => gate.push(`failed:${typeof reason}`),
-      };
-      f.core.submitError = new Error("db down");
-      await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "ask", ts: "700.1" }, "Ev-700", {
-        ackGate,
-      });
-      assert.deepEqual(gate, [], "the error note the user saw is the outcome; nothing is left for replay");
-      assert.ok(
-        f.client.posts.some((m: any) => String(m.text).includes("⚠️")) ||
-          f.client.ephemerals.some((m: any) => String(m.text).includes("⚠️")),
-      );
+test("a core failure the user is told about counts as handled; a quiet one reports failure and forgets the dedup key", async () => {
+  const f = await fixture();
+  try {
+    const gate: string[] = [];
+    const ackGate = {
+      persisted: () => gate.push("persisted"),
+      failed: (reason?: string) => gate.push(`failed:${typeof reason}`),
+    };
+    f.core.submitError = new Error("db down");
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "ask", ts: "700.1" }, "Ev-700", {
+      ackGate,
+    });
+    assert.deepEqual(gate, [], "the error note the user saw is the outcome; nothing is left for replay");
+    assert.ok(
+      f.client.posts.some((m: any) => String(m.text).includes("⚠️")) ||
+        f.client.ephemerals.some((m: any) => String(m.text).includes("⚠️")),
+    );
 
-      f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
-      f.client.membersByChannel.set("G1", ["U1", "U2", "UBOT"]);
-      f.client.messagesByChannel.set("G1", [
-        { channel: "G1", user: "U1", text: "kick off", ts: "300.1" },
-        { channel: "G1", user: "UBOT", text: "on it", ts: "300.2", thread_ts: "300.1" },
-      ]);
-      const quiet = {
-        channel: "G1",
-        channel_type: "mpim",
-        user: "U2",
-        text: "also this",
-        ts: "300.3",
-        thread_ts: "300.1",
-      };
-      await f.app.emitMessage(quiet, "Ev-300", { ackGate });
-      assert.deepEqual(gate, ["failed:string"], "a quiet failure keeps the staged envelope for replay");
-      const turnsBefore = f.core.turns.length;
-      f.core.submitError = undefined;
-      f.core.queuedRunId = "R9";
-      await f.app.emitMessage(quiet, "Ev-300-replay", { ackGate });
-      assert.equal(f.core.turns.length, turnsBefore + 1, "the replay is not swallowed by the in-process deduper");
-      assert.deepEqual(gate, ["failed:string", "persisted"]);
-    } finally {
-      await f.stop();
-    }
-  },
-);
+    f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
+    f.client.membersByChannel.set("G1", ["U1", "U2", "UBOT"]);
+    f.client.messagesByChannel.set("G1", [
+      { channel: "G1", user: "U1", text: "kick off", ts: "300.1" },
+      { channel: "G1", user: "UBOT", text: "on it", ts: "300.2", thread_ts: "300.1" },
+    ]);
+    const quiet = {
+      channel: "G1",
+      channel_type: "mpim",
+      user: "U2",
+      text: "also this",
+      ts: "300.3",
+      thread_ts: "300.1",
+    };
+    await f.app.emitMessage(quiet, "Ev-300", { ackGate });
+    assert.deepEqual(gate, ["failed:string"], "a quiet failure keeps the staged envelope for replay");
+    const turnsBefore = f.core.turns.length;
+    f.core.submitError = undefined;
+    f.core.queuedRunId = "R9";
+    await f.app.emitMessage(quiet, "Ev-300-replay", { ackGate });
+    assert.equal(f.core.turns.length, turnsBefore + 1, "the replay is not swallowed by the in-process deduper");
+    assert.deepEqual(gate, ["failed:string", "persisted"]);
+  } finally {
+    await f.stop();
+  }
+});
 
-tenantTest("a redelivery of a message still in flight on this instance is not treated as handled", async () => {
+test("a redelivery of a message still in flight on this instance is not treated as handled", async () => {
   const f = await fixture();
   try {
     const gate: string[] = [];
@@ -541,7 +538,7 @@ tenantTest("a redelivery of a message still in flight on this instance is not tr
   }
 });
 
-tenantTest("a mid-turn message that STEERS the live run does not post the reply twice", async () => {
+test("a mid-turn message that STEERS the live run does not post the reply twice", async () => {
   const f = await fixture();
   try {
     // Core folds a message that lands mid-run into the LIVE run and answers the steering
@@ -573,7 +570,7 @@ tenantTest("a mid-turn message that STEERS the live run does not post the reply 
   }
 });
 
-tenantTest("a queued run's ok reply carries the recovery delivery's marker, so a replay reuses it", async () => {
+test("a queued run's ok reply carries the recovery delivery's marker, so a replay reuses it", async () => {
   const f = await fixture();
   try {
     f.core.holdRun("R7");
@@ -602,7 +599,7 @@ tenantTest("a queued run's ok reply carries the recovery delivery's marker, so a
   }
 });
 
-tenantTest("a DM becomes one scoped live turn and one Slack reply", async () => {
+test("a DM becomes one scoped live turn and one Slack reply", async () => {
   const f = await fixture();
   try {
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "100.1" });
@@ -629,7 +626,7 @@ tenantTest("a DM becomes one scoped live turn and one Slack reply", async () => 
   }
 });
 
-tenantTest("a forwarded Slack message reaches the turn with labeled nested content and files", async (t) => {
+test("a forwarded Slack message reaches the turn with labeled nested content and files", async (t) => {
   const fetchMock = t.mock.method(
     globalThis,
     "fetch",
@@ -709,7 +706,7 @@ tenantTest("a forwarded Slack message reaches the turn with labeled nested conte
   }
 });
 
-tenantTest("public channel rosters stay current in the core directory", async () => {
+test("public channel rosters stay current in the core directory", async () => {
   const f = await fixture();
   try {
     assert.ok(f.core.directories.some((d: any) => d.channelMembers));
@@ -738,7 +735,7 @@ tenantTest("public channel rosters stay current in the core directory", async ()
   }
 });
 
-tenantTest("full directory refreshes bound concurrent Slack roster reads", async () => {
+test("full directory refreshes bound concurrent Slack roster reads", async () => {
   const f = await fixture({ extraChannels: 5, membershipDelayMs: 10 });
   try {
     assert.equal(f.client.membershipListings.size, 8);
@@ -750,7 +747,7 @@ tenantTest("full directory refreshes bound concurrent Slack roster reads", async
   }
 });
 
-tenantTest("large public channels publish their complete roster and accept internal turns", async () => {
+test("large public channels publish their complete roster and accept internal turns", async () => {
   const f = await fixture();
   try {
     const members = Array.from({ length: 201 }, (_, i) => `UL${i}`);
@@ -777,7 +774,7 @@ tenantTest("large public channels publish their complete roster and accept inter
   }
 });
 
-tenantTest("failed background roster reads are marked unknown instead of clearing known capabilities", async () => {
+test("failed background roster reads are marked unknown instead of clearing known capabilities", async () => {
   const f = await fixture();
   try {
     assert.ok(f.core.directories.at(-1).channelRosterIds.includes("CPX"));
@@ -791,7 +788,7 @@ tenantTest("failed background roster reads are marked unknown instead of clearin
   }
 });
 
-tenantTest("a failed refresh after a leave event revokes only the departing member", async () => {
+test("a failed refresh after a leave event revokes only the departing member", async () => {
   const f = await fixture();
   try {
     f.client.membershipFailures.add("CPX");
@@ -806,7 +803,7 @@ tenantTest("a failed refresh after a leave event revokes only the departing memb
   }
 });
 
-tenantTest("a failed email-mode refresh revokes the departing canonical principal", async () => {
+test("a failed email-mode refresh revokes the departing canonical principal", async () => {
   const f = await fixture({ identityEmail: "1" });
   try {
     f.client.membershipFailures.add("CPX");
@@ -821,7 +818,7 @@ tenantTest("a failed email-mode refresh revokes the departing canonical principa
   }
 });
 
-tenantTest("Slack Connect directory rosters contain only internal principals", async () => {
+test("Slack Connect directory rosters contain only internal principals", async () => {
   const f = await fixture({ externalParticipants: true });
   try {
     const pushed = f.core.directories.at(-1);
@@ -849,7 +846,7 @@ tenantTest("Slack Connect directory rosters contain only internal principals", a
   }
 });
 
-tenantTest("a human's DM sets the conversation header to the serving model + web surface", async () => {
+test("a human's DM sets the conversation header to the serving model + web surface", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello", ts: "100.1" });
@@ -868,7 +865,7 @@ tenantTest("a human's DM sets the conversation header to the serving model + web
   }
 });
 
-tenantTest("joining a channel posts the welcome and a pinned header naming the model and project page", async () => {
+test("joining a channel posts the welcome and a pinned header naming the model and project page", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {
     f.core.headerPinScopes.add("channel:C1");
@@ -884,7 +881,7 @@ tenantTest("joining a channel posts the welcome and a pinned header naming the m
   }
 });
 
-tenantTest("joining a channel with the toggle off (the default) posts only the welcome — no pin", async () => {
+test("joining a channel with the toggle off (the default) posts only the welcome — no pin", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {
     await f.app.emitEvent("member_joined_channel", { user: "UBOT", channel: "C1", event_ts: "100.1" }, "Ev-bot-join");
@@ -896,7 +893,7 @@ tenantTest("joining a channel with the toggle off (the default) posts only the w
   }
 });
 
-tenantTest("flipping the toggle on creates the pinned header; flipping it off removes it", async () => {
+test("flipping the toggle on creates the pinned header; flipping it off removes it", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {
     assert.equal(f.core.headerPinChangeListeners.length, 1, "the plugin subscribes to toggle changes");
@@ -918,7 +915,7 @@ tenantTest("flipping the toggle on creates the pinned header; flipping it off re
   }
 });
 
-tenantTest("a mention in a channel with no pinned header never creates one", async () => {
+test("a mention in a channel with no pinned header never creates one", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {
     const mention = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> hi", ts: "100.1" };
@@ -932,7 +929,7 @@ tenantTest("a mention in a channel with no pinned header never creates one", asy
   }
 });
 
-tenantTest("a scope's model change rewrites its channel's pinned header without waiting for a message", async () => {
+test("a scope's model change rewrites its channel's pinned header without waiting for a message", async () => {
   const f = await fixture({ webUiPublicUrl: "https://claw.example.dev" });
   try {
     assert.equal(f.core.modelChangeListeners.length, 1, "the plugin subscribes to core's model changes");
@@ -964,7 +961,7 @@ tenantTest("a scope's model change rewrites its channel's pinned header without 
   }
 });
 
-tenantTest("an external guest's DM never reveals the model or the web surface", async () => {
+test("an external guest's DM never reveals the model or the web surface", async () => {
   const f = await fixture({ externalParticipants: true, webUiPublicUrl: "https://claw.example.dev" });
   try {
     await f.app.emitMessage({ channel: "DX", channel_type: "im", user: "UX", text: "hello", ts: "100.1" });
@@ -975,7 +972,7 @@ tenantTest("an external guest's DM never reveals the model or the web surface", 
   }
 });
 
-tenantTest("a DM containing !version follows the ordinary turn path", async () => {
+test("a DM containing !version follows the ordinary turn path", async () => {
   const f = await fixture();
   try {
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "!version", ts: "100.2" });
@@ -990,7 +987,7 @@ tenantTest("a DM containing !version follows the ordinary turn path", async () =
   }
 });
 
-tenantTest("Slack redelivery and app_mention/message fan-out cannot duplicate a turn", async () => {
+test("Slack redelivery and app_mention/message fan-out cannot duplicate a turn", async () => {
   const f = await fixture();
   try {
     const dm = { channel: "D1", channel_type: "im", user: "U1", text: "once", ts: "101.1" };
@@ -1009,7 +1006,7 @@ tenantTest("Slack redelivery and app_mention/message fan-out cannot duplicate a 
   }
 });
 
-tenantTest("an unknown user fails closed even when Slack lookup returns no record", async () => {
+test("an unknown user fails closed even when Slack lookup returns no record", async () => {
   const f = await fixture();
   try {
     await f.app.emitMessage({ channel: "DU", channel_type: "im", user: "UUNKNOWN", text: "hello", ts: "101.3" });
@@ -1024,7 +1021,7 @@ tenantTest("an unknown user fails closed even when Slack lookup returns no recor
   }
 });
 
-tenantTest("an external principal is refused in a DM before core sees the text", async () => {
+test("an external principal is refused in a DM before core sees the text", async () => {
   const f = await fixture();
   try {
     await f.app.emitMessage({ channel: "DX", channel_type: "im", user: "UX", text: "exfiltrate this", ts: "102.1" });
@@ -1040,7 +1037,7 @@ tenantTest("an external principal is refused in a DM before core sees the text",
   }
 });
 
-tenantTest("a bot-authored mention can become a turn", async () => {
+test("a bot-authored mention can become a turn", async () => {
   const f = await fixture();
   try {
     f.client.usersById.set("B1", {
@@ -1067,7 +1064,7 @@ tenantTest("a bot-authored mention can become a turn", async () => {
   }
 });
 
-tenantTest("a bot-authored mention without a user resolves its bot principal", async () => {
+test("a bot-authored mention without a user resolves its bot principal", async () => {
   const f = await fixture();
   try {
     f.client.usersById.set("B1", {
@@ -1093,7 +1090,7 @@ tenantTest("a bot-authored mention without a user resolves its bot principal", a
   }
 });
 
-tenantTest("a verified legacy bot without a user principal can become a turn", async () => {
+test("a verified legacy bot without a user principal can become a turn", async () => {
   const f = await fixture();
   try {
     f.client.botsById.set("B-LEGACY", { id: "B-LEGACY", name: "Legacy Bot" });
@@ -1111,7 +1108,7 @@ tenantTest("a verified legacy bot without a user principal can become a turn", a
   }
 });
 
-tenantTest("a bot-authored stop can abort a live run", async () => {
+test("a bot-authored stop can abort a live run", async () => {
   const f = await fixture();
   try {
     f.client.usersById.set("B1", {
@@ -1139,7 +1136,7 @@ tenantTest("a bot-authored stop can abort a live run", async () => {
   }
 });
 
-tenantTest("a Slack Connect mention is refused ephemerally and never mirrored", async () => {
+test("a Slack Connect mention is refused ephemerally and never mirrored", async () => {
   const f = await fixture();
   try {
     f.core.activeRun = "run-active";
@@ -1157,7 +1154,7 @@ tenantTest("a Slack Connect mention is refused ephemerally and never mirrored", 
   }
 });
 
-tenantTest("an unreadable channel roster fails closed before core or mirror ingestion", async () => {
+test("an unreadable channel roster fails closed before core or mirror ingestion", async () => {
   const f = await fixture();
   try {
     f.client.membershipFailures.add("C1");
@@ -1176,7 +1173,7 @@ tenantTest("an unreadable channel roster fails closed before core or mirror inge
   }
 });
 
-tenantTest("the admin external-participant toggle permits capability without hiding the guest audience", async () => {
+test("the admin external-participant toggle permits capability without hiding the guest audience", async () => {
   const f = await fixture({ externalParticipants: true });
   try {
     const event = { channel: "CX", channel_type: "channel", user: "U1", text: "<@UBOT> collaborate", ts: "103.3" };
@@ -1197,7 +1194,7 @@ tenantTest("the admin external-participant toggle permits capability without hid
   }
 });
 
-tenantTest("a core boundary refusal stays requester-only in a channel", async () => {
+test("a core boundary refusal stays requester-only in a channel", async () => {
   const f = await fixture({ externalParticipants: true });
   try {
     f.core.result = { status: "refused", reason: "conversation must be fully internal" };
@@ -1213,31 +1210,28 @@ tenantTest("a core boundary refusal stays requester-only in a channel", async ()
   }
 });
 
-tenantTest(
-  "a blocked-thread result without approval details tells only the sender instead of posting a dead approval card",
-  async () => {
-    const f = await fixture();
-    try {
-      f.core.result = {
-        status: "pending_approval",
-        sessionId: "S1",
-        reason: "This conversation is waiting for someone else to resolve a pending approval.",
-      };
-      const event = { channel: "C1", channel_type: "channel", user: "U2", text: "<@UBOT> any update?", ts: "105.1" };
-      f.client.messagesByChannel.set("C1", [event]);
-      await f.app.emitEvent("app_mention", event);
-      assert.equal(f.core.turns.length, 1);
-      assert.equal(f.client.posts.length, 0, "no public post and no approval buttons for a non-requester");
-      assert.equal(f.client.ephemerals.length, 1);
-      assert.match(f.client.ephemerals[0].text, /waiting for someone else/);
-      assert.equal(f.client.ephemerals[0].blocks, undefined);
-    } finally {
-      await f.stop();
-    }
-  },
-);
+test("a blocked-thread result without approval details tells only the sender instead of posting a dead approval card", async () => {
+  const f = await fixture();
+  try {
+    f.core.result = {
+      status: "pending_approval",
+      sessionId: "S1",
+      reason: "This conversation is waiting for someone else to resolve a pending approval.",
+    };
+    const event = { channel: "C1", channel_type: "channel", user: "U2", text: "<@UBOT> any update?", ts: "105.1" };
+    f.client.messagesByChannel.set("C1", [event]);
+    await f.app.emitEvent("app_mention", event);
+    assert.equal(f.core.turns.length, 1);
+    assert.equal(f.client.posts.length, 0, "no public post and no approval buttons for a non-requester");
+    assert.equal(f.client.ephemerals.length, 1);
+    assert.match(f.client.ephemerals[0].text, /waiting for someone else/);
+    assert.equal(f.client.ephemerals[0].blocks, undefined);
+  } finally {
+    await f.stop();
+  }
+});
 
-tenantTest("a DM thread reply carries its reply thread as a typed Slack source field", async () => {
+test("a DM thread reply carries its reply thread as a typed Slack source field", async () => {
   const f = await fixture();
   try {
     await f.app.emitMessage({
@@ -1256,7 +1250,7 @@ tenantTest("a DM thread reply carries its reply thread as a typed Slack source f
   }
 });
 
-tenantTest("an internal channel mention carries the complete audience and thread context", async () => {
+test("an internal channel mention carries the complete audience and thread context", async () => {
   const f = await fixture();
   try {
     const event = { channel: "C1", channel_type: "channel", user: "U1", text: "<@UBOT> status?", ts: "104.1" };
@@ -1278,7 +1272,7 @@ tenantTest("an internal channel mention carries the complete audience and thread
   }
 });
 
-tenantTest("an unaddressed top-level channel message is mirrored but never becomes a turn", async () => {
+test("an unaddressed top-level channel message is mirrored but never becomes a turn", async () => {
   const f = await fixture();
   try {
     await f.app.emitMessage({
@@ -1299,7 +1293,7 @@ tenantTest("an unaddressed top-level channel message is mirrored but never becom
   }
 });
 
-tenantTest("a group-DM thread-follow runs unprompted yet attests its author's liveness", async () => {
+test("a group-DM thread-follow runs unprompted yet attests its author's liveness", async () => {
   const f = await fixture();
   try {
     f.client.channelsById.set("G1", { id: "G1", name: "", is_member: true, is_private: true, is_mpim: true });
@@ -1327,7 +1321,7 @@ tenantTest("a group-DM thread-follow runs unprompted yet attests its author's li
   }
 });
 
-tenantTest("a message from an unseen group DM resyncs the directory so it becomes addressable", async () => {
+test("a message from an unseen group DM resyncs the directory so it becomes addressable", async () => {
   const f = await fixture();
   try {
     f.client.channelsById.set("G9", { id: "G9", name: "", is_member: true, is_private: true, is_mpim: true });
@@ -1355,7 +1349,7 @@ tenantTest("a message from an unseen group DM resyncs the directory so it become
   }
 });
 
-tenantTest("a failed group listing pushes its fallback rows under the OLD stamp, never a fresh one", async () => {
+test("a failed group listing pushes its fallback rows under the OLD stamp, never a fresh one", async () => {
   const f = await fixture();
   try {
     f.client.channelsById.set("G7", { id: "G7", name: "", is_member: true, is_private: true, is_mpim: true });
@@ -1382,7 +1376,7 @@ tenantTest("a failed group listing pushes its fallback rows under the OLD stamp,
   }
 });
 
-tenantTest("a failed group member read marks only that roster unknown", async () => {
+test("a failed group member read marks only that roster unknown", async () => {
   const f = await fixture();
   try {
     f.client.channelsById.set("G5", { id: "G5", name: "", is_member: true, is_private: true, is_mpim: true });
@@ -1406,7 +1400,7 @@ tenantTest("a failed group member read marks only that roster unknown", async ()
   }
 });
 
-tenantTest("all listed group DMs reach the directory past the legacy private-channel cap", async () => {
+test("all listed group DMs reach the directory past the legacy private-channel cap", async () => {
   const f = await fixture();
   try {
     for (let i = 0; i < 51; i++) {
@@ -1423,7 +1417,7 @@ tenantTest("all listed group DMs reach the directory past the legacy private-cha
   }
 });
 
-tenantTest("a group DM whose listing fails is retried at most once, never once per message", async () => {
+test("a group DM whose listing fails is retried at most once, never once per message", async () => {
   const f = await fixture();
   try {
     f.client.channelsById.set("G8", { id: "G8", name: "", is_member: true, is_private: true, is_mpim: true });
@@ -1444,7 +1438,7 @@ tenantTest("a group DM whose listing fails is retried at most once, never once p
   }
 });
 
-tenantTest("a peer bot's thread reply dispatches without attesting liveness", async () => {
+test("a peer bot's thread reply dispatches without attesting liveness", async () => {
   const f = await fixture();
   try {
     f.client.usersById.set("UB2", { id: "UB2", team_id: "T1", name: "copilot", is_bot: true });
@@ -1471,7 +1465,7 @@ tenantTest("a peer bot's thread reply dispatches without attesting liveness", as
   }
 });
 
-tenantTest("an untrusted inbound file URL is never fetched and reaches core only as a missing-file note", async (t) => {
+test("an untrusted inbound file URL is never fetched and reaches core only as a missing-file note", async (t) => {
   const f = await fixture();
   const fetchMock = t.mock.method(globalThis, "fetch", async () => {
     throw new Error("untrusted URL was fetched");
@@ -1494,7 +1488,7 @@ tenantTest("an untrusted inbound file URL is never fetched and reaches core only
   }
 });
 
-tenantTest("message edits and deletes update the mirror without creating turns", async () => {
+test("message edits and deletes update the mirror without creating turns", async () => {
   const f = await fixture();
   try {
     await f.app.emitMessage({
@@ -1552,7 +1546,7 @@ tenantTest("message edits and deletes update the mirror without creating turns",
   }
 });
 
-tenantTest("a stalled run keeps its still-working wording instead of the generic failure", async () => {
+test("a stalled run keeps its still-working wording instead of the generic failure", async () => {
   const f = await fixture();
   try {
     f.core.submitError = Object.assign(new Error("run stalled"), { code: "run_stalled" });
@@ -1564,7 +1558,7 @@ tenantTest("a stalled run keeps its still-working wording instead of the generic
   }
 });
 
-tenantTest("raw core failures never leak through Slack", async () => {
+test("raw core failures never leak through Slack", async () => {
   const f = await fixture();
   try {
     f.core.submitError = new Error("password=super-secret postgres://internal-db/run/abc");
@@ -1578,7 +1572,7 @@ tenantTest("raw core failures never leak through Slack", async () => {
   }
 });
 
-tenantTest("stop aborts the active run without enqueuing a second turn", async () => {
+test("stop aborts the active run without enqueuing a second turn", async () => {
   const f = await fixture();
   try {
     f.core.activeRun = "run-active";
@@ -1591,7 +1585,7 @@ tenantTest("stop aborts the active run without enqueuing a second turn", async (
   }
 });
 
-tenantTest("an allowFrom account answers listed members and is silent to everyone else", async () => {
+test("an allowFrom account answers listed members and is silent to everyone else", async () => {
   const f = await fixture({ identityEmail: "1", allowFrom: ["example.com"] });
   try {
     await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hello agent", ts: "300.1" });
@@ -1602,7 +1596,7 @@ tenantTest("an allowFrom account answers listed members and is silent to everyon
   }
 });
 
-tenantTest("an allowFrom account drops unlisted members before any core work", async () => {
+test("an allowFrom account drops unlisted members before any core work", async () => {
   const f = await fixture({ identityEmail: "1", allowFrom: ["staff@example.com"] });
   try {
     await f.app.emitMessage({ channel: "D2", channel_type: "im", user: "U2", text: "hey there", ts: "301.1" });
@@ -1617,7 +1611,7 @@ tenantTest("an allowFrom account drops unlisted members before any core work", a
   }
 });
 
-tenantTest("a non-singleton account still serves turns but runs no core-singleton subsystems", async () => {
+test("a non-singleton account still serves turns but runs no core-singleton subsystems", async () => {
   const f = await fixture({ coreSingleton: false });
   try {
     assert.deepEqual(f.core.directories, []);
@@ -1633,7 +1627,7 @@ tenantTest("a non-singleton account still serves turns but runs no core-singleto
   }
 });
 
-tenantTest("the default account keeps every core-singleton subsystem", async () => {
+test("the default account keeps every core-singleton subsystem", async () => {
   const f = await fixture();
   try {
     assert.equal(f.core.deliverySubscriptions, 1);
@@ -1646,7 +1640,7 @@ tenantTest("the default account keeps every core-singleton subsystem", async () 
   }
 });
 
-tenantTest("a gated account joining a channel stays silent — no welcome, no header", async () => {
+test("a gated account joining a channel stays silent — no welcome, no header", async () => {
   const f = await fixture({
     identityEmail: "1",
     allowFrom: ["staff@example.com"],
@@ -1663,7 +1657,7 @@ tenantTest("a gated account joining a channel stays silent — no welcome, no he
   }
 });
 
-tenantTest("the default account still pushes the core directory", async () => {
+test("the default account still pushes the core directory", async () => {
   const f = await fixture();
   try {
     await waitFor(() => f.core.directories.length >= 1);
@@ -1672,7 +1666,7 @@ tenantTest("the default account still pushes the core directory", async () => {
   }
 });
 
-tenantTest("a gated account with a denyMessage answers direct approaches with it, once per user", async () => {
+test("a gated account with a denyMessage answers direct approaches with it, once per user", async () => {
   const f = await fixture({
     identityEmail: "1",
     allowFrom: ["staff@example.com"],
@@ -1698,7 +1692,7 @@ tenantTest("a gated account with a denyMessage answers direct approaches with it
   }
 });
 
-tenantTest("a denyMessage account stays silent on ambient channel chatter from unlisted members", async () => {
+test("a denyMessage account stays silent on ambient channel chatter from unlisted members", async () => {
   const f = await fixture({
     identityEmail: "1",
     allowFrom: ["staff@example.com"],
@@ -1714,7 +1708,7 @@ tenantTest("a denyMessage account stays silent on ambient channel chatter from u
   }
 });
 
-tenantTest("thread status is detached from reply delivery and steering cannot take ownership", async () => {
+test("thread status is detached from reply delivery and steering cannot take ownership", async () => {
   const f = await fixture({ coreSingleton: false });
   const starts: unknown[][] = [];
   let release!: () => void;
@@ -1751,7 +1745,7 @@ tenantTest("thread status is detached from reply delivery and steering cannot ta
   }
 });
 
-tenantTest("top-level DM replies remain top-level and never start native thread status", async () => {
+test("top-level DM replies remain top-level and never start native thread status", async () => {
   const f = await fixture();
   let starts = 0;
   f.core.sessionStatus = {
@@ -1774,7 +1768,7 @@ tenantTest("top-level DM replies remain top-level and never start native thread 
   }
 });
 
-tenantTest("own task-card status events never enter the mirror, but ordinary bot edits remain", async () => {
+test("own task-card status events never enter the mirror, but ordinary bot edits remain", async () => {
   const f = await fixture();
   const status = {
     user: "UBOT",

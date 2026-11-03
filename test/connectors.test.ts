@@ -11,7 +11,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import type { DurableMap } from "../src/persistence/durable-map.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
@@ -36,7 +36,7 @@ function makeKeychain(
   return keychain;
 }
 
-tenantTest("operator token fallback can model per-user credentials and host-wide service credentials", async () => {
+test("operator token fallback can model per-user credentials and host-wide service credentials", async () => {
   const empty = makeKeychain();
   const tokens = withOperatorTokenFallback(
     empty,
@@ -53,17 +53,14 @@ tenantTest("operator token fallback can model per-user credentials and host-wide
   assert.equal(await tokens.connectorAccessToken("api.x.com", "U1"), null);
 });
 
-tenantTest(
-  "envKey: the host-wide form keeps its documented shape; per-user keys never collide across principals",
-  () => {
-    assert.equal(envKey("gmail.googleapis.com"), "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM");
-    assert.notEqual(envKey("gmail.googleapis.com", "a.b@c.com"), envKey("gmail.googleapis.com", "a-b@c.com"));
-    assert.notEqual(envKey("gmail.googleapis.com", "a.b@c.com"), envKey("gmail.googleapis.com", "a_b@c.com"));
-    assert.equal(envKey("gmail.googleapis.com", "a.b@c.com"), envKey("gmail.googleapis.com", "a.b@c.com"));
-  },
-);
+test("envKey: the host-wide form keeps its documented shape; per-user keys never collide across principals", () => {
+  assert.equal(envKey("gmail.googleapis.com"), "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM");
+  assert.notEqual(envKey("gmail.googleapis.com", "a.b@c.com"), envKey("gmail.googleapis.com", "a-b@c.com"));
+  assert.notEqual(envKey("gmail.googleapis.com", "a.b@c.com"), envKey("gmail.googleapis.com", "a_b@c.com"));
+  assert.equal(envKey("gmail.googleapis.com", "a.b@c.com"), envKey("gmail.googleapis.com", "a.b@c.com"));
+});
 
-tenantTest("connector tokens: per-user token + refresh; least-privilege (no shared fallback by default)", async () => {
+test("connector tokens: per-user token + refresh; least-privilege (no shared fallback by default)", async () => {
   let refreshed = 0;
   const tokens = withOperatorTokenFallback(
     makeKeychain({
@@ -113,7 +110,7 @@ tenantTest("connector tokens: per-user token + refresh; least-privilege (no shar
   assert.equal(await tokens.connectorAccessToken("search.public.test", "U9"), "public-key");
 });
 
-tenantTest("disconnect revokes connector grants so reconnect does not resurrect sharing", async () => {
+test("disconnect revokes connector grants so reconnect does not resurrect sharing", async () => {
   const keychain = makeKeychain();
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "first" });
   const grant = await keychain.grantConnectorToScope({
@@ -131,79 +128,76 @@ tenantTest("disconnect revokes connector grants so reconnect does not resurrect 
   assert.deepEqual(await keychain.grantsForScope("channel:C1"), []);
 });
 
-tenantTest(
-  "connector token refresh: concurrent callers single-flight; connection metadata survives the rewrite",
-  async () => {
-    let nowAt = 10_000;
-    let calls = 0;
-    let lastCtx: { orgId?: string; accountType?: string; clientRef?: string } | undefined;
-    let release = () => {};
-    const gate = new Promise<void>((r) => {
-      release = r;
-    });
-    const keychain = makeKeychain({
-      now: () => nowAt,
-      skewMs: 0,
-      refresh: async (_host, _t, ctx) => {
-        calls++;
-        lastCtx = ctx;
-        await gate;
-        return { accessToken: "fresh", refreshToken: "rt-rotated", expiresAt: 1_000_000 };
-      },
-    });
-    await keychain.setConnectorToken(
-      "gmail.googleapis.com",
-      "U1",
-      {
-        accessToken: "stale",
-        refreshToken: "rt",
-        expiresAt: 5_000,
-        clientRef: "org:default-org:google",
-        accountType: "company",
-      },
-      "company",
-    );
+test("connector token refresh: concurrent callers single-flight; connection metadata survives the rewrite", async () => {
+  let nowAt = 10_000;
+  let calls = 0;
+  let lastCtx: { orgId?: string; accountType?: string; clientRef?: string } | undefined;
+  let release = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const keychain = makeKeychain({
+    now: () => nowAt,
+    skewMs: 0,
+    refresh: async (_host, _t, ctx) => {
+      calls++;
+      lastCtx = ctx;
+      await gate;
+      return { accessToken: "fresh", refreshToken: "rt-rotated", expiresAt: 1_000_000 };
+    },
+  });
+  await keychain.setConnectorToken(
+    "gmail.googleapis.com",
+    "U1",
+    {
+      accessToken: "stale",
+      refreshToken: "rt",
+      expiresAt: 5_000,
+      clientRef: "org:default-org:google",
+      accountType: "company",
+    },
+    "company",
+  );
 
-    const p1 = keychain.connectorAccessToken("gmail.googleapis.com", "U1", "company");
-    const p2 = keychain.connectorAccessToken("gmail.googleapis.com", "U1", "company");
-    await new Promise((r) => setImmediate(r));
-    release();
-    assert.deepEqual(await Promise.all([p1, p2]), ["fresh", "fresh"]);
-    assert.equal(calls, 1, "a provider that rotates refresh tokens must not see two racing refreshes");
-    assert.deepEqual(lastCtx, { accountType: "company", clientRef: "org:default-org:google" });
+  const p1 = keychain.connectorAccessToken("gmail.googleapis.com", "U1", "company");
+  const p2 = keychain.connectorAccessToken("gmail.googleapis.com", "U1", "company");
+  await new Promise((r) => setImmediate(r));
+  release();
+  assert.deepEqual(await Promise.all([p1, p2]), ["fresh", "fresh"]);
+  assert.equal(calls, 1, "a provider that rotates refresh tokens must not see two racing refreshes");
+  assert.deepEqual(lastCtx, { accountType: "company", clientRef: "org:default-org:google" });
 
-    nowAt = 2_000_000;
-    let secondToken: OAuthToken | undefined;
-    const seen: OAuthToken[] = [];
-    const again = makeKeychain({
-      now: () => nowAt,
-      skewMs: 0,
-      refresh: async (_host, t) => {
-        seen.push(t);
-        secondToken = t;
-        return { accessToken: "fresh-2", refreshToken: t.refreshToken, expiresAt: 3_000_000 };
-      },
-    });
-    await again.setConnectorToken(
-      "gmail.googleapis.com",
-      "U1",
-      {
-        accessToken: "fresh",
-        refreshToken: "rt-rotated",
-        expiresAt: 1_000_000,
-        clientRef: "org:default-org:google",
-        accountType: "company",
-      },
-      "company",
-    );
-    assert.equal(await again.connectorAccessToken("gmail.googleapis.com", "U1", "company"), "fresh-2");
-    assert.equal(secondToken?.refreshToken, "rt-rotated");
-    assert.equal(secondToken?.clientRef, "org:default-org:google");
-    assert.equal(seen.length, 1);
-  },
-);
+  nowAt = 2_000_000;
+  let secondToken: OAuthToken | undefined;
+  const seen: OAuthToken[] = [];
+  const again = makeKeychain({
+    now: () => nowAt,
+    skewMs: 0,
+    refresh: async (_host, t) => {
+      seen.push(t);
+      secondToken = t;
+      return { accessToken: "fresh-2", refreshToken: t.refreshToken, expiresAt: 3_000_000 };
+    },
+  });
+  await again.setConnectorToken(
+    "gmail.googleapis.com",
+    "U1",
+    {
+      accessToken: "fresh",
+      refreshToken: "rt-rotated",
+      expiresAt: 1_000_000,
+      clientRef: "org:default-org:google",
+      accountType: "company",
+    },
+    "company",
+  );
+  assert.equal(await again.connectorAccessToken("gmail.googleapis.com", "U1", "company"), "fresh-2");
+  assert.equal(secondToken?.refreshToken, "rt-rotated");
+  assert.equal(secondToken?.clientRef, "org:default-org:google");
+  assert.equal(seen.length, 1);
+});
 
-tenantTest("connector token refresh failures are logged and never poison the stored token", async (t) => {
+test("connector token refresh failures are logged and never poison the stored token", async (t) => {
   const errors: string[] = [];
   t.mock.method(console, "error", (...args: unknown[]) => {
     errors.push(args.map(String).join(" "));
@@ -266,7 +260,7 @@ tenantTest("connector token refresh failures are logged and never poison the sto
   );
 });
 
-tenantTest("connector tokens: expired non-refreshable connector tokens need reconnect", async () => {
+test("connector tokens: expired non-refreshable connector tokens need reconnect", async () => {
   const keychain = makeKeychain({ now: () => 10_000, skewMs: 0 });
   await keychain.setConnectorToken("slack.com", "U1", { accessToken: "stale-slack", expiresAt: 5_000 });
 
@@ -278,7 +272,7 @@ tenantTest("connector tokens: expired non-refreshable connector tokens need reco
   });
 });
 
-tenantTest("connector token keys are Postgres-safe (no NUL byte) — round-trip through Postgres", async () => {
+test("connector token keys are Postgres-safe (no NUL byte) — round-trip through Postgres", async () => {
   const keychain = makeKeychain({ creds: testMap<KeychainCredential>() });
 
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "tok" }, "personal");
@@ -288,39 +282,36 @@ tenantTest("connector token keys are Postgres-safe (no NUL byte) — round-trip 
   assert.equal(await keychain.connectorAccessToken("slack.com", "U2"), "tok2");
 });
 
-tenantTest(
-  "connector token account-type sub-key: a principal holds personal AND company tokens for one host",
-  async () => {
-    const keychain = makeKeychain({ now: () => 10_000, skewMs: 0 });
+test("connector token account-type sub-key: a principal holds personal AND company tokens for one host", async () => {
+  const keychain = makeKeychain({ now: () => 10_000, skewMs: 0 });
 
-    await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "legacy-default" });
-    await keychain.setConnectorToken(
-      "gmail.googleapis.com",
-      "U1",
-      { accessToken: "personal-tok", accountType: "personal" },
-      "personal",
-    );
-    await keychain.setConnectorToken(
-      "gmail.googleapis.com",
-      "U1",
-      { accessToken: "company-tok", accountType: "company" },
-      "company",
-    );
+  await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "legacy-default" });
+  await keychain.setConnectorToken(
+    "gmail.googleapis.com",
+    "U1",
+    { accessToken: "personal-tok", accountType: "personal" },
+    "personal",
+  );
+  await keychain.setConnectorToken(
+    "gmail.googleapis.com",
+    "U1",
+    { accessToken: "company-tok", accountType: "company" },
+    "company",
+  );
 
-    assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1"), "legacy-default");
-    assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1", "personal"), "personal-tok");
-    assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1", "company"), "company-tok");
+  assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1"), "legacy-default");
+  assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1", "personal"), "personal-tok");
+  assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1", "company"), "company-tok");
 
-    assert.equal((await keychain.connectorTokenStatus("gmail.googleapis.com", "U1", "company")).accountType, "company");
+  assert.equal((await keychain.connectorTokenStatus("gmail.googleapis.com", "U1", "company")).accountType, "company");
 
-    await keychain.deleteConnectorToken("gmail.googleapis.com", "U1", "personal");
-    assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1", "personal"), null);
-    assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1", "company"), "company-tok");
-    assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1"), "legacy-default");
-  },
-);
+  await keychain.deleteConnectorToken("gmail.googleapis.com", "U1", "personal");
+  assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1", "personal"), null);
+  assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1", "company"), "company-tok");
+  assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1"), "legacy-default");
+});
 
-tenantTest("disconnect revokes connector grants so reconnect cannot restore old access", async () => {
+test("disconnect revokes connector grants so reconnect cannot restore old access", async () => {
   const keychain = makeKeychain({ now: () => 10_000, skewMs: 0 });
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "first" });
   const grant = await keychain.grantConnectorToScope({
@@ -338,7 +329,7 @@ tenantTest("disconnect revokes connector grants so reconnect cannot restore old 
   assert.deepEqual(await keychain.grantsForScope("channel:C1"), []);
 });
 
-tenantTest("connector tokens are hidden from keychain listings and own-credential materialization", async () => {
+test("connector tokens are hidden from keychain listings and own-credential materialization", async () => {
   const creds = testMap<KeychainCredential>();
   const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0 });
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "tok" });
@@ -360,7 +351,7 @@ tenantTest("connector tokens are hidden from keychain listings and own-credentia
   assert.equal(await keychain.connectorAccessToken("gmail.googleapis.com", "U1"), "tok");
 });
 
-tenantTest("oauthRevoke: a capability token disconnects its own connector, but not a non-member's", async () => {
+test("oauthRevoke: a capability token disconnects its own connector, but not a non-member's", async () => {
   const deleted: Array<{ host: string; principalId: string }> = [];
   const deps = {
     connectorTokens: {
@@ -405,7 +396,7 @@ tenantTest("oauthRevoke: a capability token disconnects its own connector, but n
   assert.equal(deleted.length, 0);
 });
 
-tenantTest("operator token fallback: an empty per-user secret falls through to the host-wide token", async () => {
+test("operator token fallback: an empty per-user secret falls through to the host-wide token", async () => {
   const tokens = withOperatorTokenFallback(makeKeychain(), ["gmail.googleapis.com"], {
     get: async (name) => {
       if (name === envKey("gmail.googleapis.com", "U1")) return "";

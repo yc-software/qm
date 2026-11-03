@@ -7,11 +7,11 @@ import { join } from "node:path";
 import { createTurnStream, goalView } from "../src/runs/turn-stream.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-tenantTest("accumulates deltas per run and isolates runs", () => {
+test("accumulates deltas per run and isolates runs", () => {
   const s = createTurnStream();
   assert.equal(s.snapshot("r1"), null, "unknown run has no partial");
   s.publish("r1", "Hel");
@@ -21,7 +21,7 @@ tenantTest("accumulates deltas per run and isolates runs", () => {
   assert.equal(s.snapshot("r2"), "world");
 });
 
-tenantTest("ignores empty deltas", () => {
+test("ignores empty deltas", () => {
   const s = createTurnStream();
   s.publish("r1", "");
   assert.equal(s.snapshot("r1"), null);
@@ -30,7 +30,7 @@ tenantTest("ignores empty deltas", () => {
   assert.equal(s.snapshot("r1"), "x");
 });
 
-tenantTest("publishBlockStart() joins text blocks with a paragraph break, never leads or doubles", () => {
+test("publishBlockStart() joins text blocks with a paragraph break, never leads or doubles", () => {
   const s = createTurnStream();
   s.publishBlockStart("r1");
   assert.equal(s.snapshot("r1"), null, "a boundary before any text is a no-op");
@@ -45,7 +45,7 @@ tenantTest("publishBlockStart() joins text blocks with a paragraph break, never 
   assert.equal(s.snapshot("r1"), "First block.\n\nSecond block.\n\nThird.", "no double break after trailing one");
 });
 
-tenantTest("begin() marks a run replying BEFORE any token, without producing a partial", () => {
+test("begin() marks a run replying BEFORE any token, without producing a partial", () => {
   const s = createTurnStream();
   assert.equal(s.replying("r1"), false, "unknown run is not replying");
   s.begin("r1");
@@ -56,13 +56,13 @@ tenantTest("begin() marks a run replying BEFORE any token, without producing a p
   assert.equal(s.snapshot("r1"), "Hi", "the deferred text streams into the same entry");
 });
 
-tenantTest("a streamed delta implies replying even without an explicit begin()", () => {
+test("a streamed delta implies replying even without an explicit begin()", () => {
   const s = createTurnStream();
   s.publish("r1", "Hello");
   assert.equal(s.replying("r1"), true, "a delta means the agent is replying");
 });
 
-tenantTest("begin() is idempotent and never clobbers buffered text", () => {
+test("begin() is idempotent and never clobbers buffered text", () => {
   const s = createTurnStream();
   s.publish("r1", "Hello");
   s.begin("r1");
@@ -70,7 +70,7 @@ tenantTest("begin() is idempotent and never clobbers buffered text", () => {
   assert.equal(s.replying("r1"), true);
 });
 
-tenantTest("caps a run's buffer at maxChars", () => {
+test("caps a run's buffer at maxChars", () => {
   const s = createTurnStream({ maxChars: 5 });
   s.publish("r1", "abc");
   s.publish("r1", "defghij");
@@ -78,7 +78,7 @@ tenantTest("caps a run's buffer at maxChars", () => {
   assert.equal(s.startOffset("r1"), 8);
 });
 
-tenantTest("end() evicts a finished run's buffer after the grace period", async () => {
+test("end() evicts a finished run's buffer after the grace period", async () => {
   const s = createTurnStream({ graceMs: 20 });
   s.publish("r1", "done reply");
   s.end("r1");
@@ -87,7 +87,7 @@ tenantTest("end() evicts a finished run's buffer after the grace period", async 
   assert.equal(s.snapshot("r1"), null, "buffer evicted after grace");
 });
 
-tenantTest("a late delta after end() cancels eviction and keeps streaming", async () => {
+test("a late delta after end() cancels eviction and keeps streaming", async () => {
   const s = createTurnStream({ graceMs: 20 });
   s.publish("r1", "a");
   s.end("r1");
@@ -96,7 +96,7 @@ tenantTest("a late delta after end() cancels eviction and keeps streaming", asyn
   assert.equal(s.snapshot("r1"), "ab", "eviction was cancelled by the late delta");
 });
 
-tenantTest("markReplyDone flags the reply as final independently of the run lifecycle", () => {
+test("markReplyDone flags the reply as final independently of the run lifecycle", () => {
   const s = createTurnStream();
   assert.equal(s.isReplyDone("r1"), false, "unknown run: reply not done");
   s.publish("r1", "the answer");
@@ -106,7 +106,7 @@ tenantTest("markReplyDone flags the reply as final independently of the run life
   assert.equal(s.snapshot("r1"), "the answer", "the buffered reply is still readable");
 });
 
-tenantTest("a queued run surfaces replyComplete via getRun once the reply is final", async () => {
+test("a queued run surfaces replyComplete via getRun once the reply is final", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
@@ -136,7 +136,7 @@ tenantTest("a queued run surfaces replyComplete via getRun once the reply is fin
   }
 });
 
-tenantTest("a queued tool-using run surfaces its activity + timings via getRun()", async () => {
+test("a queued tool-using run surfaces its activity + timings via getRun()", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
@@ -173,7 +173,7 @@ tenantTest("a queued tool-using run surfaces its activity + timings via getRun()
   }
 });
 
-tenantTest("a queued run exposes the agent's in-flight reply via getRun().partial", async () => {
+test("a queued run exposes the agent's in-flight reply via getRun().partial", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
@@ -207,7 +207,7 @@ tenantTest("a queued run exposes the agent's in-flight reply via getRun().partia
   }
 });
 
-tenantTest("first block: captured until noteToolCall closes it; later text never leaks in", () => {
+test("first block: captured until noteToolCall closes it; later text never leaks in", () => {
   const s = createTurnStream();
   assert.equal(s.firstBlock("r1"), null, "unknown run has no first block");
   s.publish("r1", "On it — ");
@@ -228,7 +228,7 @@ tenantTest("first block: captured until noteToolCall closes it; later text never
   );
 });
 
-tenantTest("first block: a second text block before any tool call disqualifies the harvest", () => {
+test("first block: a second text block before any tool call disqualifies the harvest", () => {
   const s = createTurnStream();
   s.publish("r1", "First thought.");
   s.publishBlockStart("r1");
@@ -241,7 +241,7 @@ tenantTest("first block: a second text block before any tool call disqualifies t
   );
 });
 
-tenantTest("first block: a turn that goes straight to tools has none", () => {
+test("first block: a turn that goes straight to tools has none", () => {
   const s = createTurnStream();
   s.noteToolCall("r1");
   s.publishBlockStart("r1");
@@ -249,7 +249,7 @@ tenantTest("first block: a turn that goes straight to tools has none", () => {
   assert.equal(s.firstBlock("r1"), null, "no text before the tool call → nothing to harvest");
 });
 
-tenantTest("surfacePosted: false until marked, then sticky for the run", () => {
+test("surfacePosted: false until marked, then sticky for the run", () => {
   const s = createTurnStream();
   assert.equal(s.surfacePosted("r1"), false);
   s.markSurfacePosted("r1");
@@ -257,7 +257,7 @@ tenantTest("surfacePosted: false until marked, then sticky for the run", () => {
   assert.equal(s.surfacePosted("r2"), false, "isolated per run");
 });
 
-tenantTest("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed", async () => {
+test("a DM turn's opening text block rides getRun as firstBlock/firstBlockClosed", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
@@ -288,7 +288,7 @@ tenantTest("a DM turn's opening text block rides getRun as firstBlock/firstBlock
   }
 });
 
-tenantTest("a harvested first block is stripped from the final reply (never shown twice)", async () => {
+test("a harvested first block is stripped from the final reply (never shown twice)", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
@@ -317,7 +317,7 @@ tenantTest("a harvested first block is stripped from the final reply (never show
   }
 });
 
-tenantTest("a long first block is harvested too (no length gate) and stripped from the reply", async () => {
+test("a long first block is harvested too (no length gate) and stripped from the reply", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
@@ -350,7 +350,7 @@ tenantTest("a long first block is harvested too (no length gate) and stripped fr
   }
 });
 
-tenantTest("a non-slack surface never strips the first block from the reply", async () => {
+test("a non-slack surface never strips the first block from the reply", async () => {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "ts-")),
@@ -381,7 +381,7 @@ tenantTest("a non-slack surface never strips the first block from the reply", as
   }
 });
 
-tenantTest("subscribe leaks nothing for a run this instance is not executing", () => {
+test("subscribe leaks nothing for a run this instance is not executing", () => {
   const stream = createTurnStream();
   let posted = false;
   const unsubscribe = stream.subscribe("other-instance-run", { onSurfacePosted: () => (posted = true) });
@@ -394,7 +394,7 @@ tenantTest("subscribe leaks nothing for a run this instance is not executing", (
   assert.equal(posted, true, "listeners still fire for a run this instance executes");
 });
 
-tenantTest("a stale double-unsubscribe cannot evict a newer subscriber's listener set", () => {
+test("a stale double-unsubscribe cannot evict a newer subscriber's listener set", () => {
   const stream = createTurnStream();
   const unsubscribe = stream.subscribe("r1", { onSurfacePosted: () => {} });
   unsubscribe();
@@ -406,7 +406,7 @@ tenantTest("a stale double-unsubscribe cannot evict a newer subscriber's listene
   assert.equal(posted, true, "the newer subscriber must still hear events after a stale unsubscribe fires twice");
 });
 
-tenantTest("turn-stream: noteGoal/goal snapshots", () => {
+test("turn-stream: noteGoal/goal snapshots", () => {
   const stream = createTurnStream();
   stream.begin("r1");
   assert.equal(stream.goal("r1"), null);
@@ -417,7 +417,7 @@ tenantTest("turn-stream: noteGoal/goal snapshots", () => {
   assert.equal(stream.goal("r1")?.status, "complete");
 });
 
-tenantTest("goalView renders a goal record's status and floor", () => {
+test("goalView renders a goal record's status and floor", () => {
   const record = {
     objective: "work for a while",
     status: "active" as const,
@@ -442,7 +442,7 @@ tenantTest("goalView renders a goal record's status and floor", () => {
   });
 });
 
-tenantTest("monitor wakes persist engagement after the reply gate", async () => {
+test("monitor wakes persist engagement after the reply gate", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ts-monitor-")), workers: 1 }));
   built.runtime.start();
   try {
@@ -463,7 +463,7 @@ tenantTest("monitor wakes persist engagement after the reply gate", async () => 
   }
 });
 
-tenantTest("reasoning streams per block beside the reply text, capped, and settles when persisted", () => {
+test("reasoning streams per block beside the reply text, capped, and settles when persisted", () => {
   const published: Array<{ step: string; index: number; text: string; offset: number }> = [];
   const s = createTurnStream({
     onReasoning: (_runId, block, text, offset) => published.push({ ...block, text, offset }),

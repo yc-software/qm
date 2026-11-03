@@ -10,7 +10,7 @@ import {
 } from "../src/model/provider-endpoints.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { loadConfig } from "../src/config.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const BASE_ENV = {} as NodeJS.ProcessEnv;
 
@@ -18,11 +18,11 @@ afterEach(() => {
   setProviderBaseUrls({});
 });
 
-tenantTest("parseProviderBaseUrl normalizes trailing slashes and whitespace", () => {
+test("parseProviderBaseUrl normalizes trailing slashes and whitespace", () => {
   assert.equal(parseProviderBaseUrl("X", " https://gw.example.com/v1// "), "https://gw.example.com/v1");
 });
 
-tenantTest("parseProviderBaseUrl rejects bad values", () => {
+test("parseProviderBaseUrl rejects bad values", () => {
   assert.throws(() => parseProviderBaseUrl("X", "not a url"));
   assert.throws(() => parseProviderBaseUrl("X", "ftp://gw.example.com"));
   assert.throws(() => parseProviderBaseUrl("X", "https://user:pw@gw.example.com"));
@@ -30,7 +30,7 @@ tenantTest("parseProviderBaseUrl rejects bad values", () => {
   assert.throws(() => parseProviderBaseUrl("X", "https://gw.example.com/#frag"));
 });
 
-tenantTest("providerBaseUrlsFromEnv reads the three provider variables", () => {
+test("providerBaseUrlsFromEnv reads the three provider variables", () => {
   const urls = providerBaseUrlsFromEnv({
     ANTHROPIC_BASE_URL: "https://a.example.com",
     OPENAI_BASE_URL: "https://o.example.com/v1/",
@@ -39,28 +39,28 @@ tenantTest("providerBaseUrlsFromEnv reads the three provider variables", () => {
   assert.deepEqual(urls, { anthropic: "https://a.example.com", openai: "https://o.example.com/v1" });
 });
 
-tenantTest("providerBaseUrl answers only for configured, known providers", () => {
+test("providerBaseUrl answers only for configured, known providers", () => {
   setProviderBaseUrls({ anthropic: "https://a.example.com" });
   assert.equal(providerBaseUrl("anthropic"), "https://a.example.com");
   assert.equal(providerBaseUrl("openai"), undefined);
   assert.equal(providerBaseUrl("weird"), undefined);
 });
 
-tenantTest("resolveModel routes a built-in model through the override", () => {
+test("resolveModel routes a built-in model through the override", () => {
   assert.equal(resolveModel("claude-opus-4-8")?.baseUrl, "https://api.anthropic.com");
   setProviderBaseUrls({ anthropic: "https://gw.example.com" });
   assert.equal(resolveModel("claude-opus-4-8")?.baseUrl, "https://gw.example.com");
   assert.equal(resolveModel("gpt-5.6-sol")?.baseUrl, "https://api.openai.com/v1");
 });
 
-tenantTest("a cloned model follows its template's override", () => {
+test("a cloned model follows its template's override", () => {
   setProviderBaseUrls({ anthropic: "https://gw.example.com" });
   const clone = resolveModel("claude-opus-5");
   assert.equal(clone?.baseUrl, "https://gw.example.com");
   assert.equal(clone?.id, "claude-opus-5");
 });
 
-tenantTest("loadConfig parses provider base URLs", () => {
+test("loadConfig parses provider base URLs", () => {
   const config = loadConfig({
     ...BASE_ENV,
     ANTHROPIC_BASE_URL: "https://a.example.com/",
@@ -72,15 +72,15 @@ tenantTest("loadConfig parses provider base URLs", () => {
   });
 });
 
-tenantTest("loadConfig rejects an invalid provider base URL", () => {
+test("loadConfig rejects an invalid provider base URL", () => {
   assert.throws(() => loadConfig({ ...BASE_ENV, OPENAI_BASE_URL: "nope" } as NodeJS.ProcessEnv));
 });
 
-tenantTest("loadConfig leaves provider base URLs empty when no override is set", () => {
+test("loadConfig leaves provider base URLs empty when no override is set", () => {
   assert.deepEqual(loadConfig(BASE_ENV).providerBaseUrls, {});
 });
 
-tenantTest("loadConfig accepts a complete model gateway and rejects partial or malformed routing", () => {
+test("loadConfig accepts a complete model gateway and rejects partial or malformed routing", () => {
   const config = loadConfig({
     ...BASE_ENV,
     MODEL_GATEWAY_URL: "http://gateway.internal:8080/",
@@ -119,7 +119,7 @@ tenantTest("loadConfig accepts a complete model gateway and rejects partial or m
   );
 });
 
-tenantTest("the gateway key header cannot share a name with a request context header", () => {
+test("the gateway key header cannot share a name with a request context header", () => {
   for (const header of [...Object.keys(MODEL_REQUEST_CONTEXT_HEADERS), "X-QM-Purpose"])
     assert.throws(
       () =>
@@ -134,7 +134,7 @@ tenantTest("the gateway key header cannot share a name with a request context he
     );
 });
 
-tenantTest("gateway-mapped built-in models send session-affinity headers", () => {
+test("gateway-mapped built-in models send session-affinity headers", () => {
   const gateway = {
     url: "http://gateway.internal/v1",
     apiKey: "k",

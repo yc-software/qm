@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "x-admin-actor": "admin-alice@default-org",
@@ -119,7 +119,7 @@ function start() {
   };
 }
 
-tenantTest("register → browse → import → list → remove a git skill pack (org scope)", async () => {
+test("register → browse → import → list → remove a git skill pack (org scope)", async () => {
   const repo = makeFixtureRepo();
   const s = start();
   try {
@@ -194,49 +194,46 @@ tenantTest("register → browse → import → list → remove a git skill pack 
   }
 });
 
-tenantTest(
-  "pack removal and re-import identify pack skills by their pack record, not their creator label",
-  async () => {
-    const repo = makeFixtureRepo();
-    const s = start();
-    try {
-      const reg = await json(
-        await fetch(`${s.base}/v1/admin/skill-packs`, {
-          method: "POST",
-          headers: ADMIN,
-          body: JSON.stringify({ url: repo.dir, ref: repo.sha, config: { exclude: ["trusted/*"] } }),
-        }),
-      );
-      const id = reg.pack.id as string;
-      const lookalike = await s.built.skills.create({
-        scopeId: "org:default-org",
-        manifest: { name: "reg-alpha", description: "native", body: "native body", requiredCapabilities: [] },
-        createdBy: `pack:${id}`,
-      });
-      await s.built.skills.review(lookalike.id, "admin-alice@default-org", []);
-      await s.built.skills.publish(lookalike.id);
+test("pack removal and re-import identify pack skills by their pack record, not their creator label", async () => {
+  const repo = makeFixtureRepo();
+  const s = start();
+  try {
+    const reg = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ url: repo.dir, ref: repo.sha, config: { exclude: ["trusted/*"] } }),
+      }),
+    );
+    const id = reg.pack.id as string;
+    const lookalike = await s.built.skills.create({
+      scopeId: "org:default-org",
+      manifest: { name: "reg-alpha", description: "native", body: "native body", requiredCapabilities: [] },
+      createdBy: `pack:${id}`,
+    });
+    await s.built.skills.review(lookalike.id, "admin-alice@default-org", []);
+    await s.built.skills.publish(lookalike.id);
 
-      const imp = await json(
-        await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
-          method: "POST",
-          headers: ADMIN,
-          body: JSON.stringify({ selected: ["reg-alpha", "reg-beta"] }),
-        }),
-      );
-      assert.deepEqual(imp.imported, ["reg-beta"]);
-      assert.equal((await s.built.skills.get(lookalike.id))?.manifest.body, "native body", "import leaves it alone");
+    const imp = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ selected: ["reg-alpha", "reg-beta"] }),
+      }),
+    );
+    assert.deepEqual(imp.imported, ["reg-beta"]);
+    assert.equal((await s.built.skills.get(lookalike.id))?.manifest.body, "native body", "import leaves it alone");
 
-      const del = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}`, { method: "DELETE", headers: ADMIN }));
-      assert.equal(del.removed, 1);
-      assert.equal((await s.built.skills.get(lookalike.id))?.status, "published", "pack removal leaves it alone");
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-      await s.close();
-    }
-  },
-);
+    const del = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}`, { method: "DELETE", headers: ADMIN }));
+    assert.equal(del.removed, 1);
+    assert.equal((await s.built.skills.get(lookalike.id))?.status, "published", "pack removal leaves it alone");
+  } finally {
+    rmSync(repo.dir, { recursive: true, force: true });
+    await s.close();
+  }
+});
 
-tenantTest("register works with only a url (defaults to the repo's default branch)", async () => {
+test("register works with only a url (defaults to the repo's default branch)", async () => {
   const repo = makeFixtureRepo();
   const s = start();
   try {
@@ -263,7 +260,7 @@ tenantTest("register works with only a url (defaults to the repo's default branc
   }
 });
 
-tenantTest("a legacy published skill with an unsafe name does not block unrelated pack reconciliation", async () => {
+test("a legacy published skill with an unsafe name does not block unrelated pack reconciliation", async () => {
   const repo = makeFixtureRepo();
   const s = start();
   try {
@@ -296,7 +293,7 @@ tenantTest("a legacy published skill with an unsafe name does not block unrelate
   }
 });
 
-tenantTest("supporting files are namespaced per pack, so same paths never clobber", async () => {
+test("supporting files are namespaced per pack, so same paths never clobber", async () => {
   const a = makeRepoWithSharedLib("col-alpha");
   const b = makeRepoWithSharedLib("col-beta");
   const s = start();
@@ -348,7 +345,7 @@ tenantTest("supporting files are namespaced per pack, so same paths never clobbe
   }
 });
 
-tenantTest("pack reconciliation and deployment-layer replacement serialize their materialization claims", async () => {
+test("pack reconciliation and deployment-layer replacement serialize their materialization claims", async () => {
   const repo = makeRepoWithLayerCollision();
   const s = start();
   try {
@@ -402,7 +399,7 @@ tenantTest("pack reconciliation and deployment-layer replacement serialize their
   }
 });
 
-tenantTest("pack removal waits for an in-flight reconciliation and leaves no orphan records", async () => {
+test("pack removal waits for an in-flight reconciliation and leaves no orphan records", async () => {
   const repo = makeFixtureRepo();
   const s = start();
   try {
@@ -459,7 +456,7 @@ tenantTest("pack removal waits for an in-flight reconciliation and leaves no orp
   }
 });
 
-tenantTest("an older tracked-pack fetch cannot roll back a newer reconciliation", async () => {
+test("an older tracked-pack fetch cannot roll back a newer reconciliation", async () => {
   const repo = makeFixtureRepo();
   const s = start();
   try {
@@ -535,7 +532,7 @@ tenantTest("an older tracked-pack fetch cannot roll back a newer reconciliation"
   }
 });
 
-tenantTest("re-import archives removed/renamed/now-ineligible skills and keeps unchanged ones", async () => {
+test("re-import archives removed/renamed/now-ineligible skills and keeps unchanged ones", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-recon-"));
   const env = {
     ...process.env,
@@ -615,89 +612,86 @@ tenantTest("re-import archives removed/renamed/now-ineligible skills and keeps u
   }
 });
 
-tenantTest(
-  "sync refreshes IMPORTED skills (update + archive) but does NOT add un-imported ones; PATCH flips syncMode",
-  async () => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-sync-"));
-    const env = {
-      ...process.env,
-      GIT_AUTHOR_NAME: "t",
-      GIT_AUTHOR_EMAIL: "t@t",
-      GIT_COMMITTER_NAME: "t",
-      GIT_COMMITTER_EMAIL: "t@t",
-    };
-    const g = (...a: string[]): void => {
-      execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
-    };
-    const writeSkill = (name: string, desc = "d"): void => {
-      mkdirSync(join(dir, "skills", name), { recursive: true });
-      writeFileSync(join(dir, "skills", name, "SKILL.md"), md(`name: ${name}\ndescription: ${desc}\nscope: company`));
-    };
-    g("init", "-q");
-    writeSkill("sync-a");
-    writeSkill("sync-keep");
-    g("add", "-A");
-    g("commit", "-q", "-m", "init");
+test("sync refreshes IMPORTED skills (update + archive) but does NOT add un-imported ones; PATCH flips syncMode", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-sync-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...a: string[]): void => {
+    execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
+  };
+  const writeSkill = (name: string, desc = "d"): void => {
+    mkdirSync(join(dir, "skills", name), { recursive: true });
+    writeFileSync(join(dir, "skills", name, "SKILL.md"), md(`name: ${name}\ndescription: ${desc}\nscope: company`));
+  };
+  g("init", "-q");
+  writeSkill("sync-a");
+  writeSkill("sync-keep");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
 
-    const s = start();
-    try {
-      const reg = await json(
-        await fetch(`${s.base}/v1/admin/skill-packs`, {
-          method: "POST",
-          headers: ADMIN,
-          body: JSON.stringify({ url: dir }),
-        }),
-      );
-      const id = reg.pack.id as string;
-      await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
+  const s = start();
+  try {
+    const reg = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs`, {
         method: "POST",
         headers: ADMIN,
-        body: JSON.stringify({ selected: "all" }),
-      });
+        body: JSON.stringify({ url: dir }),
+      }),
+    );
+    const id = reg.pack.id as string;
+    await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ selected: "all" }),
+    });
 
-      const patched = await json(
-        await fetch(`${s.base}/v1/admin/skill-packs/${id}`, {
-          method: "PATCH",
-          headers: ADMIN,
-          body: JSON.stringify({ syncMode: "tracked" }),
-        }),
-      );
-      assert.equal(patched.pack.syncMode, "tracked");
+    const patched = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs/${id}`, {
+        method: "PATCH",
+        headers: ADMIN,
+        body: JSON.stringify({ syncMode: "tracked" }),
+      }),
+    );
+    assert.equal(patched.pack.syncMode, "tracked");
 
-      writeSkill("sync-new");
-      writeSkill("sync-a", "CHANGED");
-      rmSync(join(dir, "skills", "sync-keep"), { recursive: true, force: true });
-      g("add", "-A");
-      g("commit", "-q", "-m", "evolve");
+    writeSkill("sync-new");
+    writeSkill("sync-a", "CHANGED");
+    rmSync(join(dir, "skills", "sync-keep"), { recursive: true, force: true });
+    g("add", "-A");
+    g("commit", "-q", "-m", "evolve");
 
-      const synced = await json(
-        await fetch(`${s.base}/v1/admin/skill-packs/${id}/sync`, { method: "POST", headers: ADMIN, body: "{}" }),
-      );
-      assert.deepEqual(synced.updated, ["sync-a"], "a changed imported skill is updated");
-      assert.deepEqual(synced.archived, ["sync-keep"], "an imported skill removed upstream is archived");
-      assert.ok(!synced.imported.includes("sync-new"), "sync does NOT add a skill that was never imported");
+    const synced = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs/${id}/sync`, { method: "POST", headers: ADMIN, body: "{}" }),
+    );
+    assert.deepEqual(synced.updated, ["sync-a"], "a changed imported skill is updated");
+    assert.deepEqual(synced.archived, ["sync-keep"], "an imported skill removed upstream is archived");
+    assert.ok(!synced.imported.includes("sync-new"), "sync does NOT add a skill that was never imported");
 
-      const afterSync = await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }));
-      assert.equal(afterSync.packs[0].lastImport.counts.imported, 0, "sync adds nothing new");
-      assert.equal(afterSync.packs[0].lastImport.counts.updated, 1, "the changed imported skill counts as updated");
-      assert.equal(afterSync.packs[0].lastImport.counts.archived, 1, "the removed imported skill counts as archived");
+    const afterSync = await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }));
+    assert.equal(afterSync.packs[0].lastImport.counts.imported, 0, "sync adds nothing new");
+    assert.equal(afterSync.packs[0].lastImport.counts.updated, 1, "the changed imported skill counts as updated");
+    assert.equal(afterSync.packs[0].lastImport.counts.archived, 1, "the removed imported skill counts as archived");
 
-      const published = (
-        await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }))
-      ).skills
-        .filter((k: any) => k.status === "published")
-        .map((k: any) => k.name);
-      assert.ok(published.includes("sync-a"), "the updated skill stays live");
-      assert.ok(!published.includes("sync-keep"), "the removed-upstream skill is archived");
-      assert.ok(!published.includes("sync-new"), "the new upstream skill is NOT auto-added by sync");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-      await s.close();
-    }
-  },
-);
+    const published = (
+      await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }))
+    ).skills
+      .filter((k: any) => k.status === "published")
+      .map((k: any) => k.name);
+    assert.ok(published.includes("sync-a"), "the updated skill stays live");
+    assert.ok(!published.includes("sync-keep"), "the removed-upstream skill is archived");
+    assert.ok(!published.includes("sync-new"), "the new upstream skill is NOT auto-added by sync");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await s.close();
+  }
+});
 
-tenantTest("a single imported skill can be un-indexed (archived) via DELETE /admin/skills/:id", async () => {
+test("a single imported skill can be un-indexed (archived) via DELETE /admin/skills/:id", async () => {
   const repo = makeFixtureRepo();
   const s = start();
   try {
@@ -737,7 +731,7 @@ tenantTest("a single imported skill can be un-indexed (archived) via DELETE /adm
   }
 });
 
-tenantTest("an admin can replace an archived seeded org skill with a same-named pack skill", async () => {
+test("an admin can replace an archived seeded org skill with a same-named pack skill", async () => {
   const repo = makeFixtureRepo();
   const s = start();
   try {
@@ -803,7 +797,7 @@ tenantTest("an admin can replace an archived seeded org skill with a same-named 
   }
 });
 
-tenantTest("remove then re-register the same repo re-imports cleanly (no stuck-archived records)", async () => {
+test("remove then re-register the same repo re-imports cleanly (no stuck-archived records)", async () => {
   const repo = makeFixtureRepo();
   const s = start();
   try {
@@ -858,7 +852,7 @@ tenantTest("remove then re-register the same repo re-imports cleanly (no stuck-a
   }
 });
 
-tenantTest("skill-pack routes are admin-only and audited", async () => {
+test("skill-pack routes are admin-only and audited", async () => {
   const s = start();
   try {
     assert.equal(
@@ -882,116 +876,110 @@ const packSkillsIn = async (base: string, scope: string, packId: string): Promis
     .map((k: any) => k.name)
     .sort();
 
-tenantTest(
-  "imports a pack into MULTIPLE scopes at once; catalog reports per-scope; importedCount is distinct",
-  async () => {
-    const repo = makeFixtureRepo();
-    const s = start();
-    try {
-      const reg = await json(
-        await fetch(`${s.base}/v1/admin/skill-packs`, {
-          method: "POST",
-          headers: ADMIN,
-          body: JSON.stringify({ url: repo.dir, ref: repo.sha, config: { exclude: ["trusted/*"] } }),
-        }),
-      );
-      const id = reg.pack.id as string;
+test("imports a pack into MULTIPLE scopes at once; catalog reports per-scope; importedCount is distinct", async () => {
+  const repo = makeFixtureRepo();
+  const s = start();
+  try {
+    const reg = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ url: repo.dir, ref: repo.sha, config: { exclude: ["trusted/*"] } }),
+      }),
+    );
+    const id = reg.pack.id as string;
 
-      const imp = await json(
-        await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
-          method: "POST",
-          headers: ADMIN,
-          body: JSON.stringify({ selected: "all", scopeIds: ["org:default-org", "personal:admin-alice"] }),
-        }),
-      );
-      assert.equal(imp.imported.length, 4, "2 eligible skills × 2 scopes = 4 installs");
-
-      assert.deepEqual(await packSkillsIn(s.base, "org:default-org", id), ["reg-alpha", "reg-beta"]);
-      assert.deepEqual(await packSkillsIn(s.base, "personal:admin-alice", id), ["reg-alpha", "reg-beta"]);
-
-      const cat = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}/catalog`, { headers: ADMIN }));
-      assert.deepEqual(cat.candidates.find((c: any) => c.upstreamName === "reg-alpha")?.importedScopes.sort(), [
-        "org:default-org",
-        "personal:admin-alice",
-      ]);
-
-      const list = await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }));
-      assert.equal(list.packs[0].importedCount, 2, "distinct skills imported, not per-scope records");
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-      await s.close();
-    }
-  },
-);
-
-tenantTest(
-  "re-importing into ONE scope archives only that scope's deselected skills, not another scope's",
-  async () => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-scoped-"));
-    const env = {
-      ...process.env,
-      GIT_AUTHOR_NAME: "t",
-      GIT_AUTHOR_EMAIL: "t@t",
-      GIT_COMMITTER_NAME: "t",
-      GIT_COMMITTER_EMAIL: "t@t",
-    };
-    const g = (...a: string[]): void => {
-      execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
-    };
-    const writeSkill = (name: string): void => {
-      mkdirSync(join(dir, "skills", name), { recursive: true });
-      writeFileSync(join(dir, "skills", name, "SKILL.md"), md(`name: ${name}\ndescription: d\nscope: company`));
-    };
-    g("init", "-q");
-    writeSkill("scoped-a");
-    writeSkill("scoped-b");
-    g("add", "-A");
-    g("commit", "-q", "-m", "init");
-
-    const s = start();
-    try {
-      const reg = await json(
-        await fetch(`${s.base}/v1/admin/skill-packs`, {
-          method: "POST",
-          headers: ADMIN,
-          body: JSON.stringify({ url: dir }),
-        }),
-      );
-      const id = reg.pack.id as string;
-
+    const imp = await json(
       await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
         method: "POST",
         headers: ADMIN,
         body: JSON.stringify({ selected: "all", scopeIds: ["org:default-org", "personal:admin-alice"] }),
-      });
+      }),
+    );
+    assert.equal(imp.imported.length, 4, "2 eligible skills × 2 scopes = 4 installs");
 
-      const imp2 = await json(
-        await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
-          method: "POST",
-          headers: ADMIN,
-          body: JSON.stringify({ selected: ["scoped-a"], scopeIds: ["personal:admin-alice"] }),
-        }),
-      );
-      assert.deepEqual(imp2.archived, ["scoped-b"], "alice's deselected skill is archived");
+    assert.deepEqual(await packSkillsIn(s.base, "org:default-org", id), ["reg-alpha", "reg-beta"]);
+    assert.deepEqual(await packSkillsIn(s.base, "personal:admin-alice", id), ["reg-alpha", "reg-beta"]);
 
-      assert.deepEqual(
-        await packSkillsIn(s.base, "org:default-org", id),
-        ["scoped-a", "scoped-b"],
-        "the OTHER scope's skills are untouched",
-      );
-      assert.deepEqual(
-        await packSkillsIn(s.base, "personal:admin-alice", id),
-        ["scoped-a"],
-        "only the re-imported skill remains in the targeted scope",
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-      await s.close();
-    }
-  },
-);
+    const cat = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}/catalog`, { headers: ADMIN }));
+    assert.deepEqual(cat.candidates.find((c: any) => c.upstreamName === "reg-alpha")?.importedScopes.sort(), [
+      "org:default-org",
+      "personal:admin-alice",
+    ]);
 
-tenantTest("sync refreshes EVERY scope the pack was imported into", async () => {
+    const list = await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }));
+    assert.equal(list.packs[0].importedCount, 2, "distinct skills imported, not per-scope records");
+  } finally {
+    rmSync(repo.dir, { recursive: true, force: true });
+    await s.close();
+  }
+});
+
+test("re-importing into ONE scope archives only that scope's deselected skills, not another scope's", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-scoped-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...a: string[]): void => {
+    execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
+  };
+  const writeSkill = (name: string): void => {
+    mkdirSync(join(dir, "skills", name), { recursive: true });
+    writeFileSync(join(dir, "skills", name, "SKILL.md"), md(`name: ${name}\ndescription: d\nscope: company`));
+  };
+  g("init", "-q");
+  writeSkill("scoped-a");
+  writeSkill("scoped-b");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+
+  const s = start();
+  try {
+    const reg = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ url: dir }),
+      }),
+    );
+    const id = reg.pack.id as string;
+
+    await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ selected: "all", scopeIds: ["org:default-org", "personal:admin-alice"] }),
+    });
+
+    const imp2 = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ selected: ["scoped-a"], scopeIds: ["personal:admin-alice"] }),
+      }),
+    );
+    assert.deepEqual(imp2.archived, ["scoped-b"], "alice's deselected skill is archived");
+
+    assert.deepEqual(
+      await packSkillsIn(s.base, "org:default-org", id),
+      ["scoped-a", "scoped-b"],
+      "the OTHER scope's skills are untouched",
+    );
+    assert.deepEqual(
+      await packSkillsIn(s.base, "personal:admin-alice", id),
+      ["scoped-a"],
+      "only the re-imported skill remains in the targeted scope",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await s.close();
+  }
+});
+
+test("sync refreshes EVERY scope the pack was imported into", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-syncmulti-"));
   const env = {
     ...process.env,
@@ -1053,7 +1041,7 @@ tenantTest("sync refreshes EVERY scope the pack was imported into", async () => 
   }
 });
 
-tenantTest("import rejects malformed scopeIds with a 400", async () => {
+test("import rejects malformed scopeIds with a 400", async () => {
   const repo = makeFixtureRepo();
   const s = start();
   try {
@@ -1077,61 +1065,58 @@ tenantTest("import rejects malformed scopeIds with a 400", async () => {
   }
 });
 
-tenantTest(
-  "a pack skill whose name collides with a native skill in ANOTHER scope still imports into its own scope",
-  async () => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-xscope-"));
-    const env = {
-      ...process.env,
-      GIT_AUTHOR_NAME: "t",
-      GIT_AUTHOR_EMAIL: "t@t",
-      GIT_COMMITTER_NAME: "t",
-      GIT_COMMITTER_EMAIL: "t@t",
-    };
-    const g = (...a: string[]): void => {
-      execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
-    };
-    mkdirSync(join(dir, "skills", "shared-name"), { recursive: true });
-    writeFileSync(
-      join(dir, "skills", "shared-name", "SKILL.md"),
-      md("name: shared-name\ndescription: from pack\nscope: company"),
-    );
-    g("init", "-q");
-    g("add", "-A");
-    g("commit", "-q", "-m", "init");
+test("a pack skill whose name collides with a native skill in ANOTHER scope still imports into its own scope", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-xscope-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...a: string[]): void => {
+    execFileSync("git", a, { cwd: dir, env, stdio: "ignore" });
+  };
+  mkdirSync(join(dir, "skills", "shared-name"), { recursive: true });
+  writeFileSync(
+    join(dir, "skills", "shared-name", "SKILL.md"),
+    md("name: shared-name\ndescription: from pack\nscope: company"),
+  );
+  g("init", "-q");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
 
-    const s = start();
-    try {
-      const nat = await s.built.skills.create({
-        scopeId: "org:default-org",
-        manifest: { name: "shared-name", description: "native", requiredCapabilities: [], body: "x" },
-        createdBy: "system:native",
-      });
-      await s.built.skills.review(nat.id, "system:native", []);
-      await s.built.skills.publish(nat.id);
+  const s = start();
+  try {
+    const nat = await s.built.skills.create({
+      scopeId: "org:default-org",
+      manifest: { name: "shared-name", description: "native", requiredCapabilities: [], body: "x" },
+      createdBy: "system:native",
+    });
+    await s.built.skills.review(nat.id, "system:native", []);
+    await s.built.skills.publish(nat.id);
 
-      const reg = await json(
-        await fetch(`${s.base}/v1/admin/skill-packs`, {
-          method: "POST",
-          headers: ADMIN,
-          body: JSON.stringify({ url: dir }),
-        }),
-      );
-      const imp = await fetch(`${s.base}/v1/admin/skill-packs/${reg.pack.id}/import`, {
+    const reg = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs`, {
         method: "POST",
         headers: ADMIN,
-        body: JSON.stringify({ selected: "all", scopeIds: ["personal:admin-alice"] }),
-      });
-      assert.equal(imp.status, 200, "org's same-named native skill must not clobber-block a sub-scope import");
-      assert.deepEqual((await json(imp)).imported, ["shared-name"], "the pack skill imports into its own scope");
-      assert.deepEqual(await packSkillsIn(s.base, "personal:admin-alice", reg.pack.id), ["shared-name"]);
-      const orgNative = (
-        await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }))
-      ).skills.find((k: any) => k.name === "shared-name" && k.ownerScopeId === "org:default-org");
-      assert.equal(orgNative?.status, "published", "the org native skill is untouched");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-      await s.close();
-    }
-  },
-);
+        body: JSON.stringify({ url: dir }),
+      }),
+    );
+    const imp = await fetch(`${s.base}/v1/admin/skill-packs/${reg.pack.id}/import`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ selected: "all", scopeIds: ["personal:admin-alice"] }),
+    });
+    assert.equal(imp.status, 200, "org's same-named native skill must not clobber-block a sub-scope import");
+    assert.deepEqual((await json(imp)).imported, ["shared-name"], "the pack skill imports into its own scope");
+    assert.deepEqual(await packSkillsIn(s.base, "personal:admin-alice", reg.pack.id), ["shared-name"]);
+    const orgNative = (
+      await json(await fetch(`${s.base}/v1/admin/skills?scope=org:default-org`, { headers: ADMIN }))
+    ).skills.find((k: any) => k.name === "shared-name" && k.ownerScopeId === "org:default-org");
+    assert.equal(orgNative?.status, "published", "the org native skill is untouched");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await s.close();
+  }
+});

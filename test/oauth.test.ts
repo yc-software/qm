@@ -17,7 +17,7 @@ import {
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { createOAuthFlowStore } from "../src/connectors/oauth-flow-store.ts";
 import { testMap } from "./support/test-database.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const env = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",
@@ -37,7 +37,7 @@ const env = {
 const resolve = createSecretClientResolver(createEnvSecretSource(env));
 const googleClient = (): Promise<ResolvedClient> => resolve("google", {});
 
-tenantTest("authorizeUrl builds a consent URL with client id, scopes, redirect, state", async () => {
+test("authorizeUrl builds a consent URL with client id, scopes, redirect, state", async () => {
   const url = authorizeUrl("google", { redirectUri: "https://app/cb", state: "st-1", client: await googleClient() });
   const u = new URL(url);
   assert.equal(u.origin + u.pathname, PROVIDERS.google!.authUrl);
@@ -50,12 +50,12 @@ tenantTest("authorizeUrl builds a consent URL with client id, scopes, redirect, 
   assert.match(u.searchParams.get("scope") ?? "", /spreadsheets/);
 });
 
-tenantTest("createSecretClientResolver refuses when the provider isn't configured (creds = the only gap)", async () => {
+test("createSecretClientResolver refuses when the provider isn't configured (creds = the only gap)", async () => {
   const bare = createSecretClientResolver(createEnvSecretSource({} as NodeJS.ProcessEnv));
   await assert.rejects(bare("google", {}), /GOOGLE_OAUTH_CLIENT_ID/);
 });
 
-tenantTest("the env resolver pins the Google hosted-domain for the company account-type", async () => {
+test("the env resolver pins the Google hosted-domain for the company account-type", async () => {
   const r = createSecretClientResolver(createEnvSecretSource({ ...env, GOOGLE_WORKSPACE_DOMAIN: "example.com" }));
   const url = new URL(
     authorizeUrl("google", {
@@ -77,7 +77,7 @@ tenantTest("the env resolver pins the Google hosted-domain for the company accou
   assert.equal(personal.searchParams.get("hd"), null);
 });
 
-tenantTest("exchangeCode returns a token for the provider's hosts (default authorization_code adapter)", async () => {
+test("exchangeCode returns a token for the provider's hosts (default authorization_code adapter)", async () => {
   const fetchImpl: FetchLike = async (url, init) => {
     assert.equal(url, PROVIDERS.google!.tokenUrl);
     assert.match(init.body, /grant_type=authorization_code/);
@@ -99,7 +99,7 @@ tenantTest("exchangeCode returns a token for the provider's hosts (default autho
   assert.deepEqual(token.grantedScopes, ["a", "b"]);
 });
 
-tenantTest("makeRefresh exchanges a refresh token, keeping it if the provider omits a new one", async () => {
+test("makeRefresh exchanges a refresh token, keeping it if the provider omits a new one", async () => {
   const fetchImpl: FetchLike = async (_url, init) => {
     assert.match(init.body, /grant_type=refresh_token/);
     return { ok: true, status: 200, json: async () => ({ access_token: "at2", expires_in: 3600 }) };
@@ -111,7 +111,7 @@ tenantTest("makeRefresh exchanges a refresh token, keeping it if the provider om
   assert.equal(fresh.expiresAt, 2_000 + 3600_000);
 });
 
-tenantTest("refresh dispatches by host (calendar host → google provider)", async () => {
+test("refresh dispatches by host (calendar host → google provider)", async () => {
   let hit = "";
   const fetchImpl: FetchLike = async (url) => {
     hit = url;
@@ -122,7 +122,7 @@ tenantTest("refresh dispatches by host (calendar host → google provider)", asy
   assert.equal(hit, PROVIDERS.google!.tokenUrl);
 });
 
-tenantTest("google company-slot exchange verifies the id_token hosted domain server-side", async () => {
+test("google company-slot exchange verifies the id_token hosted domain server-side", async () => {
   const r = createSecretClientResolver(createEnvSecretSource({ ...env, GOOGLE_WORKSPACE_DOMAIN: "example.com" }));
   const client = await r("google", { accountType: "company" });
   const idToken = (hd?: string) =>
@@ -176,7 +176,7 @@ tenantTest("google company-slot exchange verifies the id_token hosted domain ser
   assert.equal(personal.token.accessToken, "at");
 });
 
-tenantTest("github refresh asks for JSON and surfaces GitHub's 200-with-error bodies", async () => {
+test("github refresh asks for JSON and surfaces GitHub's 200-with-error bodies", async () => {
   const good: FetchLike = async (url, init) => {
     assert.equal(url, PROVIDERS.github!.tokenUrl);
     assert.equal(init.headers.accept, "application/json");
@@ -211,7 +211,7 @@ tenantTest("github refresh asks for JSON and surfaces GitHub's 200-with-error bo
   );
 });
 
-tenantTest("github exchange asks for JSON and surfaces GitHub's 200-with-error bodies", async () => {
+test("github exchange asks for JSON and surfaces GitHub's 200-with-error bodies", async () => {
   const errBody: FetchLike = async (url, init) => {
     assert.equal(url, PROVIDERS.github!.tokenUrl);
     assert.equal(init.headers.accept, "application/json");
@@ -232,7 +232,7 @@ tenantTest("github exchange asks for JSON and surfaces GitHub's 200-with-error b
   );
 });
 
-tenantTest("makeRefresh never returns an empty access token (parseable junk can't poison the keychain)", async () => {
+test("makeRefresh never returns an empty access token (parseable junk can't poison the keychain)", async () => {
   const empty: FetchLike = async () => ({ ok: true, status: 200, json: async () => ({ token_type: "bearer" }) });
   await assert.rejects(
     () =>
@@ -244,7 +244,7 @@ tenantTest("makeRefresh never returns an empty access token (parseable junk can'
   );
 });
 
-tenantTest("Slack uses oauth.v2.access and keeps the USER token, scopes in user_scope", async () => {
+test("Slack uses oauth.v2.access and keeps the USER token, scopes in user_scope", async () => {
   const url = new URL(
     authorizeUrl("slack", { redirectUri: "https://app/cb", state: "s", client: await resolve("slack", {}) }),
   );
@@ -272,7 +272,7 @@ tenantTest("Slack uses oauth.v2.access and keeps the USER token, scopes in user_
   assert.deepEqual(token.grantedScopes, ["users:read", "chat:write"]);
 });
 
-tenantTest("Slack consent requests the canvas scopes so fresh connections can edit canvases", async () => {
+test("Slack consent requests the canvas scopes so fresh connections can edit canvases", async () => {
   const url = new URL(
     authorizeUrl("slack", { redirectUri: "https://app/cb", state: "s", client: await resolve("slack", {}) }),
   );
@@ -281,7 +281,7 @@ tenantTest("Slack consent requests the canvas scopes so fresh connections can ed
   assert.ok(scopes.includes("canvases:write"), "canvases:write missing from Slack user_scope");
 });
 
-tenantTest("Slack surfaces a provider-side oauth error", async () => {
+test("Slack surfaces a provider-side oauth error", async () => {
   const fetchImpl: FetchLike = async () => ({
     ok: true,
     status: 200,
@@ -294,7 +294,7 @@ tenantTest("Slack surfaces a provider-side oauth error", async () => {
   );
 });
 
-tenantTest("Slack/Notion reject a degenerate ok-but-no-token response (no empty token persisted)", async () => {
+test("Slack/Notion reject a degenerate ok-but-no-token response (no empty token persisted)", async () => {
   const slackClient = await resolve("slack", {});
   const notionClient = await resolve("notion", {});
   const slackEmpty: FetchLike = async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) });
@@ -309,7 +309,7 @@ tenantTest("Slack/Notion reject a degenerate ok-but-no-token response (no empty 
   );
 });
 
-tenantTest("Notion exchanges via HTTP Basic + JSON body and does not refresh", async () => {
+test("Notion exchanges via HTTP Basic + JSON body and does not refresh", async () => {
   const fetchImpl: FetchLike = async (u, init) => {
     assert.equal(u, PROVIDERS.notion!.tokenUrl);
     assert.match(init.headers.authorization ?? "", /^Basic /);
@@ -327,7 +327,7 @@ tenantTest("Notion exchanges via HTTP Basic + JSON body and does not refresh", a
   );
 });
 
-tenantTest("Linear refreshes via the standard refresh_token grant", async () => {
+test("Linear refreshes via the standard refresh_token grant", async () => {
   const fetchImpl: FetchLike = async (u, init) => {
     assert.equal(u, PROVIDERS.linear!.tokenUrl);
     assert.match(init.body, /grant_type=refresh_token/);
@@ -346,13 +346,13 @@ tenantTest("Linear refreshes via the standard refresh_token grant", async () => 
   assert.equal(fresh.refreshToken, "rt-new");
 });
 
-tenantTest("scopesFor: BYO client scopes override the provider default", async () => {
+test("scopesFor: BYO client scopes override the provider default", async () => {
   const byo: ResolvedClient = { id: "x", secret: "y", clientRef: "org:default-org:google", scopes: ["only.this"] };
   assert.deepEqual(scopesFor(PROVIDERS.google!, byo), ["only.this"]);
   assert.deepEqual(scopesFor(PROVIDERS.google!, await googleClient()), PROVIDERS.google!.scopes);
 });
 
-tenantTest("OAuth state is sealed, scoped (org/accountType/clientRef), and expires", async () => {
+test("OAuth state is sealed, scoped (org/accountType/clientRef), and expires", async () => {
   const state = await sealOAuthState(
     {
       provider: "google",
@@ -383,19 +383,19 @@ tenantTest("OAuth state is sealed, scoped (org/accountType/clientRef), and expir
   );
 });
 
-tenantTest("codeChallengeS256 matches the RFC 7636 test vector", () => {
+test("codeChallengeS256 matches the RFC 7636 test vector", () => {
   const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
   assert.equal(codeChallengeS256(verifier), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
 });
 
-tenantTest("generateCodeVerifier is URL-safe and high-entropy", () => {
+test("generateCodeVerifier is URL-safe and high-entropy", () => {
   const v = generateCodeVerifier();
   assert.match(v, /^[A-Za-z0-9_-]+$/, "base64url, no padding");
   assert.ok(v.length >= 43, "at least 256 bits of entropy encoded");
   assert.notEqual(v, generateCodeVerifier(), "fresh each call");
 });
 
-tenantTest("authorizeUrl adds code_challenge + S256 only when a challenge is supplied", async () => {
+test("authorizeUrl adds code_challenge + S256 only when a challenge is supplied", async () => {
   const client = await googleClient();
   const withPkce = new URL(
     authorizeUrl("google", { redirectUri: "https://app/cb", state: "s", client, codeChallenge: "CHAL" }),
@@ -407,14 +407,14 @@ tenantTest("authorizeUrl adds code_challenge + S256 only when a challenge is sup
   assert.equal(without.searchParams.get("code_challenge_method"), null);
 });
 
-tenantTest("only X opts into PKCE; the other providers leave the seam inert (regression guard)", () => {
+test("only X opts into PKCE; the other providers leave the seam inert (regression guard)", () => {
   for (const [name, p] of Object.entries(PROVIDERS)) {
     if (name === "x") assert.equal(p.pkce, true, "X requires PKCE");
     else assert.notEqual(p.pkce, true, `${name} must not enable PKCE`);
   }
 });
 
-tenantTest("exchangeCode sends code_verifier in the token body when provided, omits it otherwise", async () => {
+test("exchangeCode sends code_verifier in the token body when provided, omits it otherwise", async () => {
   const client = await googleClient();
   const bodies: string[] = [];
   const capture: FetchLike = async (_url, init) => {
@@ -432,7 +432,7 @@ tenantTest("exchangeCode sends code_verifier in the token body when provided, om
   assert.doesNotMatch(bodies[1]!, /code_verifier/, "no verifier when none provided");
 });
 
-tenantTest("OAuth state round-trips the PKCE verifier", async () => {
+test("OAuth state round-trips the PKCE verifier", async () => {
   const sealed = await sealOAuthState(
     { provider: "x", principalId: "U1", redirectUri: "https://app/cb", codeVerifier: "ver-abc" },
     { secret: "state-secret" },
@@ -443,7 +443,7 @@ tenantTest("OAuth state round-trips the PKCE verifier", async () => {
 
 const xClient = (): Promise<ResolvedClient> => resolve("x", {});
 
-tenantTest("X authorize URL targets x.com with the tweet scopes and offline.access", async () => {
+test("X authorize URL targets x.com with the tweet scopes and offline.access", async () => {
   const u = new URL(
     authorizeUrl("x", { redirectUri: "https://app/cb", state: "s", client: await xClient(), codeChallenge: "CH" }),
   );
@@ -455,41 +455,38 @@ tenantTest("X authorize URL targets x.com with the tweet scopes and offline.acce
     assert.match(scope, new RegExp(s.replace(".", "\\.")));
 });
 
-tenantTest(
-  "X exchange uses HTTP Basic client auth, sends the PKCE verifier, keeps secret out of the body",
-  async () => {
-    let seen: { url: string; auth?: string; body: string } | null = null;
-    const fetchImpl: FetchLike = async (url, init) => {
-      seen = { url, auth: init.headers.authorization, body: init.body };
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ access_token: "xat", refresh_token: "xrt", expires_in: 7200 }),
-      };
+test("X exchange uses HTTP Basic client auth, sends the PKCE verifier, keeps secret out of the body", async () => {
+  let seen: { url: string; auth?: string; body: string } | null = null;
+  const fetchImpl: FetchLike = async (url, init) => {
+    seen = { url, auth: init.headers.authorization, body: init.body };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "xat", refresh_token: "xrt", expires_in: 7200 }),
     };
-    const { hosts, token } = await exchangeCode("x", "code-x", "https://app/cb", {
-      client: await xClient(),
-      fetchImpl,
-      now: 1_000,
-      codeVerifier: "verif",
-    });
-    assert.equal(seen!.url, "https://api.x.com/2/oauth2/token");
-    assert.equal(
-      seen!.auth,
-      `Basic ${Buffer.from("xid:xsecret").toString("base64")}`,
-      "client creds ride the Basic header",
-    );
-    assert.match(seen!.body, /grant_type=authorization_code/);
-    assert.match(seen!.body, /code_verifier=verif/, "PKCE verifier is sent");
-    assert.doesNotMatch(seen!.body, /client_secret/, "secret is never in the body under Basic auth");
-    assert.deepEqual(hosts, ["api.x.com"]);
-    assert.equal(token.accessToken, "xat");
-    assert.equal(token.refreshToken, "xrt");
-    assert.equal(token.expiresAt, 1_000 + 7200_000);
-  },
-);
+  };
+  const { hosts, token } = await exchangeCode("x", "code-x", "https://app/cb", {
+    client: await xClient(),
+    fetchImpl,
+    now: 1_000,
+    codeVerifier: "verif",
+  });
+  assert.equal(seen!.url, "https://api.x.com/2/oauth2/token");
+  assert.equal(
+    seen!.auth,
+    `Basic ${Buffer.from("xid:xsecret").toString("base64")}`,
+    "client creds ride the Basic header",
+  );
+  assert.match(seen!.body, /grant_type=authorization_code/);
+  assert.match(seen!.body, /code_verifier=verif/, "PKCE verifier is sent");
+  assert.doesNotMatch(seen!.body, /client_secret/, "secret is never in the body under Basic auth");
+  assert.deepEqual(hosts, ["api.x.com"]);
+  assert.equal(token.accessToken, "xat");
+  assert.equal(token.refreshToken, "xrt");
+  assert.equal(token.expiresAt, 1_000 + 7200_000);
+});
 
-tenantTest("X refresh captures the ROTATED refresh token (single-use) — the connection survives past 2h", async () => {
+test("X refresh captures the ROTATED refresh token (single-use) — the connection survives past 2h", async () => {
   const fetchImpl: FetchLike = async (_url, init) => {
     assert.match(init.body, /grant_type=refresh_token/);
     assert.match(init.body, /refresh_token=old-rt/);
@@ -510,7 +507,7 @@ tenantTest("X refresh captures the ROTATED refresh token (single-use) — the co
   assert.equal(fresh.expiresAt, 5_000 + 7200_000);
 });
 
-tenantTest("token failures keep the provider's error detail", async () => {
+test("token failures keep the provider's error detail", async () => {
   const failing =
     (status: number, json: () => Promise<unknown>): FetchLike =>
     async () => ({ ok: false, status, json });
@@ -552,7 +549,7 @@ tenantTest("token failures keep the provider's error detail", async () => {
   );
 });
 
-tenantTest("oauth flow store — a short opaque state resolves once, then expires", async () => {
+test("oauth flow store — a short opaque state resolves once, then expires", async () => {
   const store = createOAuthFlowStore(testMap<OAuthState>(), { now: () => 1_000 });
   const flowId = await store.start({
     provider: "x",

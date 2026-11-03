@@ -9,7 +9,7 @@ import type { Destination, TurnRequest } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const recipient: Destination = {
   type: "principal",
@@ -58,45 +58,42 @@ async function fixture() {
   return { crons, cron, deps, ask, deliveries, requests };
 }
 
-tenantTest(
-  "cron credential approval resumes the original fire once and delivers to the current destination",
-  async () => {
-    const f = await fixture();
-    const destination: Destination = {
-      type: "principal",
-      target: "U_CAROL",
-      audienceScopeId: "personal:U_CAROL",
-      onBehalfOf: "U_ALICE",
-    };
-    await f.crons.setDestination(f.cron.id, destination);
-    await f.crons.update(f.cron.id, { unattendedGrants: ["allowed-job-grant"] });
+test("cron credential approval resumes the original fire once and delivers to the current destination", async () => {
+  const f = await fixture();
+  const destination: Destination = {
+    type: "principal",
+    target: "U_CAROL",
+    audienceScopeId: "personal:U_CAROL",
+    onBehalfOf: "U_ALICE",
+  };
+  await f.crons.setDestination(f.cron.id, destination);
+  await f.crons.update(f.cron.id, { unattendedGrants: ["allowed-job-grant"] });
 
-    await fireAskResolution(f.deps, f.ask);
-    await fireAskResolution(f.deps, f.ask);
+  await fireAskResolution(f.deps, f.ask);
+  await fireAskResolution(f.deps, f.ask);
 
-    assert.equal(f.requests.length, 1);
-    const request = f.requests[0]!;
-    assert.equal(request.triggered, true);
-    assert.equal(request.actor.externalId, "U_ALICE");
-    assert.equal(request.conversation.threadRef, f.ask.requesterThreadRef);
-    assert.deepEqual(request.triggerDestination, destination);
-    assert.deepEqual(
-      request.unattendedGrants,
-      ["allowed-job-grant"],
-      "grants stay with the owner's home cron wherever its output goes",
-    );
-    assert.match(request.text, /approved access until revoked/);
-    assert.ok(!request.text.includes(f.ask.id) && !request.text.includes(f.ask.purpose));
-    const pending = await f.deliveries.pending("principal");
-    assert.equal(pending.length, 1);
-    assert.equal(pending[0]!.destination.target, "U_CAROL");
-    assert.equal(pending[0]!.text, "dummy scheduled result");
-    assert.equal(pending[0]!.provenance?.sourceThreadRef, f.ask.requesterThreadRef);
-  },
-);
+  assert.equal(f.requests.length, 1);
+  const request = f.requests[0]!;
+  assert.equal(request.triggered, true);
+  assert.equal(request.actor.externalId, "U_ALICE");
+  assert.equal(request.conversation.threadRef, f.ask.requesterThreadRef);
+  assert.deepEqual(request.triggerDestination, destination);
+  assert.deepEqual(
+    request.unattendedGrants,
+    ["allowed-job-grant"],
+    "grants stay with the owner's home cron wherever its output goes",
+  );
+  assert.match(request.text, /approved access until revoked/);
+  assert.ok(!request.text.includes(f.ask.id) && !request.text.includes(f.ask.purpose));
+  const pending = await f.deliveries.pending("principal");
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]!.destination.target, "U_CAROL");
+  assert.equal(pending[0]!.text, "dummy scheduled result");
+  assert.equal(pending[0]!.provenance?.sourceThreadRef, f.ask.requesterThreadRef);
+});
 
 for (const changed of ["missing", "archived", "scope", "owner"] as const) {
-  tenantTest(`cron credential approval fails closed when the original cron is ${changed}`, async () => {
+  test(`cron credential approval fails closed when the original cron is ${changed}`, async () => {
     const f = await fixture();
     if (changed === "missing") await f.crons.delete(f.cron.id);
     else if (changed === "archived") await f.crons.update(f.cron.id, { archived: true });
@@ -116,7 +113,7 @@ for (const changed of ["missing", "archived", "scope", "owner"] as const) {
   });
 }
 
-tenantTest("cron credential approval fails closed when no cron lookup is available", async () => {
+test("cron credential approval fails closed when no cron lookup is available", async () => {
   const f = await fixture();
   delete f.deps.getCron;
 
@@ -127,7 +124,7 @@ tenantTest("cron credential approval fails closed when no cron lookup is availab
   assert.equal((await f.deliveries.pending("principal")).length, 0);
 });
 
-tenantTest("cron credential approval does not restore a removed delivery destination", async () => {
+test("cron credential approval does not restore a removed delivery destination", async () => {
   const f = await fixture();
   await f.crons.setDestination(f.cron.id, undefined);
 
@@ -139,23 +136,20 @@ tenantTest("cron credential approval does not restore a removed delivery destina
 });
 
 for (const schedule of [{ everyMs: 60_000 }, { cron: "0 9 * * *", timezone: "UTC" }]) {
-  tenantTest(
-    `cron credential approval does not resume a paused recurring job (${JSON.stringify(schedule)})`,
-    async () => {
-      const f = await fixture();
-      await f.crons.update(f.cron.id, { schedule });
-      await f.crons.setEnabled(f.cron.id, false);
+  test(`cron credential approval does not resume a paused recurring job (${JSON.stringify(schedule)})`, async () => {
+    const f = await fixture();
+    await f.crons.update(f.cron.id, { schedule });
+    await f.crons.setEnabled(f.cron.id, false);
 
-      const outcome = await fireAskResolution(f.deps, f.ask);
+    const outcome = await fireAskResolution(f.deps, f.ask);
 
-      assert.equal(outcome.ran, false);
-      assert.equal(f.requests.length, 0);
-      assert.equal((await f.deliveries.pending("principal")).length, 0);
-    },
-  );
+    assert.equal(outcome.ran, false);
+    assert.equal(f.requests.length, 0);
+    assert.equal((await f.deliveries.pending("principal")).length, 0);
+  });
 }
 
-tenantTest("cron credential approval resumes a disabled one-shot job in its original fire", async () => {
+test("cron credential approval resumes a disabled one-shot job in its original fire", async () => {
   const f = await fixture();
   await f.crons.update(f.cron.id, { schedule: { firstFireAt: Date.now() + 60_000 } });
   await f.crons.setEnabled(f.cron.id, false);

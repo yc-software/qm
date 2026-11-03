@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { getRequiredModel, modelRequestOverrides } from "../src/model/pi-models.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 // Exercise the real AgentSession and SDK serializer, not just the effort setter.
 for (const [modelId, upper, allowed, off, minimal] of [
@@ -20,7 +20,7 @@ for (const [modelId, upper, allowed, off, minimal] of [
   ["gpt-6-astra", "max", ["low", "medium", "high", "xhigh", "max"], "low", "low"],
   ["gpt-6-astra-ultrafast", "max", ["low", "medium", "high", "xhigh", "max"], "low", "low"],
 ] as const) {
-  tenantTest(`Pi sends supported reasoning through HTTP for ${modelId}`, async (t) => {
+  test(`Pi sends supported reasoning through HTTP for ${modelId}`, async (t) => {
     const bodies: Array<{
       reasoning?: { effort?: string };
       include?: string[];

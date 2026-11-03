@@ -13,7 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const PUBLIC = "https://core.public.example";
@@ -55,7 +55,7 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
 
 const incoming = (id: string) => `${PUBLIC}/v1/webhooks/incoming/${id}`;
 
-tenantTest("create scopes the webhook to the user; list, disable, and re-enable are owner-gated", async () => {
+test("create scopes the webhook to the user; list, disable, and re-enable are owner-gated", async () => {
   const createRes = await fetch(
     `${webBase}/api/webhooks`,
     asUser("alice", {
@@ -108,7 +108,7 @@ tenantTest("create scopes the webhook to the user; list, disable, and re-enable 
   assert.equal(afterEnable.webhooks[0]?.enabled, true);
 });
 
-tenantTest("removed Project members cannot list or disable their former Project webhook", async () => {
+test("removed Project members cannot list or disable their former Project webhook", async () => {
   await inTestTenant(() =>
     built.app.upsertDirectory([
       { principalId: "project-owner", displayName: "Project Owner", type: "internal" },
@@ -172,7 +172,7 @@ tenantTest("removed Project members cannot list or disable their former Project 
   );
 });
 
-tenantTest("a provided secret is passed through verbatim (no auto-generation)", async () => {
+test("a provided secret is passed through verbatim (no auto-generation)", async () => {
   const createRes = await fetch(
     `${webBase}/api/webhooks`,
     asUser("carol", {
@@ -185,7 +185,7 @@ tenantTest("a provided secret is passed through verbatim (no auto-generation)", 
   assert.equal(created.webhook.verification.secret, "my-own-secret");
 });
 
-tenantTest("webhook routes require a signed-in principal (401 without a cookie)", async () => {
+test("webhook routes require a signed-in principal (401 without a cookie)", async () => {
   assert.equal((await fetch(`${webBase}/api/webhooks`)).status, 401);
   const create = await fetch(`${webBase}/api/webhooks`, {
     method: "POST",
@@ -195,7 +195,7 @@ tenantTest("webhook routes require a signed-in principal (401 without a cookie)"
   assert.equal(create.status, 401);
 });
 
-tenantTest("create requires an action (400)", async () => {
+test("create requires an action (400)", async () => {
   const res = await fetch(
     `${webBase}/api/webhooks`,
     asUser("alice", { method: "POST", body: JSON.stringify({ verification: { scheme: "hmac-sha256" } }) }),
@@ -203,47 +203,44 @@ tenantTest("create requires an action (400)", async () => {
   assert.equal(res.status, 400);
 });
 
-tenantTest(
-  "public web creation rejects unauthenticated verification and malformed filters or destinations",
-  async () => {
-    const none = await fetch(
-      `${webBase}/api/webhooks`,
-      asUser("alice", { method: "POST", body: JSON.stringify({ action: "unsafe", verification: { scheme: "none" } }) }),
-    );
-    assert.equal(none.status, 400);
-    const nonStringScheme = await fetch(
-      `${webBase}/api/webhooks`,
-      asUser("alice", {
-        method: "POST",
-        body: JSON.stringify({ action: "x", verification: { scheme: null, secret: "my-github-secret" } }),
+test("public web creation rejects unauthenticated verification and malformed filters or destinations", async () => {
+  const none = await fetch(
+    `${webBase}/api/webhooks`,
+    asUser("alice", { method: "POST", body: JSON.stringify({ action: "unsafe", verification: { scheme: "none" } }) }),
+  );
+  assert.equal(none.status, 400);
+  const nonStringScheme = await fetch(
+    `${webBase}/api/webhooks`,
+    asUser("alice", {
+      method: "POST",
+      body: JSON.stringify({ action: "x", verification: { scheme: null, secret: "my-github-secret" } }),
+    }),
+  );
+  assert.equal(nonStringScheme.status, 400);
+  assert.match(await nonStringScheme.text(), /verification requires a scheme/);
+  const filters = await fetch(
+    `${webBase}/api/webhooks`,
+    asUser("alice", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "weakened",
+        verification: { scheme: "github" },
+        filters: [{ path: "action", in: [] }],
       }),
-    );
-    assert.equal(nonStringScheme.status, 400);
-    assert.match(await nonStringScheme.text(), /verification requires a scheme/);
-    const filters = await fetch(
-      `${webBase}/api/webhooks`,
-      asUser("alice", {
-        method: "POST",
-        body: JSON.stringify({
-          action: "weakened",
-          verification: { scheme: "github" },
-          filters: [{ path: "action", in: [] }],
-        }),
-      }),
-    );
-    assert.equal(filters.status, 400);
-    const destination = await fetch(
-      `${webBase}/api/webhooks`,
-      asUser("alice", {
-        method: "POST",
-        body: JSON.stringify({ action: "partial", verification: { scheme: "github" }, destination: { type: "slack" } }),
-      }),
-    );
-    assert.equal(destination.status, 400);
-  },
-);
+    }),
+  );
+  assert.equal(filters.status, 400);
+  const destination = await fetch(
+    `${webBase}/api/webhooks`,
+    asUser("alice", {
+      method: "POST",
+      body: JSON.stringify({ action: "partial", verification: { scheme: "github" }, destination: { type: "slack" } }),
+    }),
+  );
+  assert.equal(destination.status, 400);
+});
 
-tenantTest("webhook history is relayed with the authenticated viewer, not a query-string impersonation", async () => {
+test("webhook history is relayed with the authenticated viewer, not a query-string impersonation", async () => {
   const res = await fetch(
     `${webBase}/api/webhooks`,
     asUser("history-owner", {
@@ -260,21 +257,18 @@ tenantTest("webhook history is relayed with the authenticated viewer, not a quer
   assert.equal(stranger.status, 404);
 });
 
-tenantTest(
-  "create accepts every scheme core verifies, including Linear, and core rejects unknown schemes",
-  async () => {
-    const create = (scheme: string) =>
-      fetch(
-        `${webBase}/api/webhooks`,
-        asUser("linear-user", {
-          method: "POST",
-          body: JSON.stringify({ action: "triage Linear issues", verification: { scheme } }),
-        }),
-      );
-    const linear = await create("linear");
-    assert.equal(linear.status, 200);
-    const created = (await linear.json()) as { webhook: { verification: { scheme: string } } };
-    assert.equal(created.webhook.verification.scheme, "linear");
-    assert.equal((await create("bitbucket")).status, 400);
-  },
-);
+test("create accepts every scheme core verifies, including Linear, and core rejects unknown schemes", async () => {
+  const create = (scheme: string) =>
+    fetch(
+      `${webBase}/api/webhooks`,
+      asUser("linear-user", {
+        method: "POST",
+        body: JSON.stringify({ action: "triage Linear issues", verification: { scheme } }),
+      }),
+    );
+  const linear = await create("linear");
+  assert.equal(linear.status, 200);
+  const created = (await linear.json()) as { webhook: { verification: { scheme: string } } };
+  assert.equal(created.webhook.verification.scheme, "linear");
+  assert.equal((await create("bitbucket")).status, 400);
+});

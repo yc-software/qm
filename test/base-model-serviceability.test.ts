@@ -11,7 +11,7 @@ import { baseModelProviders, configuredModel, providerKeysPresent } from "../src
 import { defaultModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
-import { tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -44,7 +44,7 @@ async function effectiveModel(base: string): Promise<string> {
   return ((await res.json()) as { effective: { modelId: string } }).effective.modelId;
 }
 
-tenantTest("base-model set rejects a model whose provider key is absent (would fail provider-side)", async () => {
+test("base-model set rejects a model whose provider key is absent (would fail provider-side)", async () => {
   const srv = start();
   try {
     const bad = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
@@ -66,14 +66,14 @@ tenantTest("base-model set rejects a model whose provider key is absent (would f
   }
 });
 
-tenantTest("ChatGPT OAuth stays separate from OpenAI API-key availability", () => {
+test("ChatGPT OAuth stays separate from OpenAI API-key availability", () => {
   const config = testConfig({ codexAuthCredential: "company-chatgpt" });
   const configured = providerKeysPresent(config);
   assert.equal(configured.openai, false);
   assert.equal(configured.codexOAuth, true);
 });
 
-tenantTest("a deployment that declares a provider runs that provider's base model", async () => {
+test("a deployment that declares a provider runs that provider's base model", async () => {
   for (const [modelProvider, key, expected] of [
     ["anthropic", "anthropicApiKey", "claude-opus-5"],
     ["openai", "openaiApiKey", "gpt-6.1-sol"],
@@ -92,7 +92,7 @@ tenantTest("a deployment that declares a provider runs that provider's base mode
   }
 });
 
-tenantTest("an undeclared deployment keeps the shipped default, whatever keys it holds", async () => {
+test("an undeclared deployment keeps the shipped default, whatever keys it holds", async () => {
   for (const overrides of [{}, { openrouterApiKey: "k" }, { openaiApiKey: "k" }] as const) {
     const srv = start(overrides);
     try {
@@ -107,7 +107,7 @@ tenantTest("an undeclared deployment keeps the shipped default, whatever keys it
   }
 });
 
-tenantTest("the declaration outranks a stray key from another vendor", async () => {
+test("the declaration outranks a stray key from another vendor", async () => {
   const srv = start({
     modelProvider: "openrouter",
     openrouterApiKey: "deployment-openrouter-key",
@@ -120,7 +120,7 @@ tenantTest("the declaration outranks a stray key from another vendor", async () 
   }
 });
 
-tenantTest("company ChatGPT-only deployments offer their plain GPT default through managed availability", async () => {
+test("company ChatGPT-only deployments offer their plain GPT default through managed availability", async () => {
   const srv = start({ codexAuthCredential: "company-chatgpt" });
   try {
     const res = await fetch(`${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`, {

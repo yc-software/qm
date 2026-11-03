@@ -8,7 +8,7 @@ import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-sch
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { ownerUrlOf, testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
 
@@ -49,7 +49,7 @@ after(async () => {
   await owner?.end();
 });
 
-tenantTest("qm_bound_tenant raises when no tenant is bound and returns the bound one", { skip }, async () => {
+test("qm_bound_tenant raises when no tenant is bound and returns the bound one", { skip }, async () => {
   await assert.rejects(owner.query("SELECT qm_bound_tenant()"), { code: "42501", message: /No tenant is bound/ });
   const client = await owner.connect();
   try {
@@ -62,7 +62,7 @@ tenantTest("qm_bound_tenant raises when no tenant is bound and returns the bound
   }
 });
 
-tenantTest("the pool binds the current tenant to each query and transaction in one batch", { skip }, async () => {
+test("the pool binds the current tenant to each query and transaction in one batch", { skip }, async () => {
   const pool = createPgPool(asRole(url, role));
   try {
     const setting = "SELECT current_setting('qm.tenant_id', true) AS t";
@@ -105,7 +105,7 @@ tenantTest("the pool binds the current tenant to each query and transaction in o
   }
 });
 
-tenantTest("an open transaction refuses work for a different tenant until it has ended", { skip }, async () => {
+test("an open transaction refuses work for a different tenant until it has ended", { skip }, async () => {
   await withTenant(a, () =>
     withPgTransaction(app, async (client) => {
       assert.throws(() => withTenant(b, () => 0), /already open for another tenant/);
@@ -151,7 +151,7 @@ tenantTest("an open transaction refuses work for a different tenant until it has
   }
 });
 
-tenantTest("upgrading copies the existing tenant into tenants", { skip }, async () => {
+test("upgrading copies the existing tenant into tenants", { skip }, async () => {
   const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
   try {
     const previous = SESSION_MIGRATIONS.filter((m) => m !== TENANCY_BASE && m !== TENANT_BACKFILL);

@@ -8,7 +8,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { testConfig } from "./support/test-config.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../src/model/model-catalog.ts";
-import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org" };
 
@@ -30,7 +30,7 @@ async function warm(base: string) {
   ).arrayBuffer();
 }
 
-tenantTest("settings projections preserve values while excluding unrelated payloads", async (t) => {
+test("settings projections preserve values while excluding unrelated payloads", async (t) => {
   const srv = start();
   t.after(srv.close);
   await inTestTenant(() =>
@@ -78,7 +78,7 @@ tenantTest("settings projections preserve values while excluding unrelated paylo
   }
 });
 
-tenantTest("Customize completes within 500 ms with unrelated model and connector services unavailable", async (t) => {
+test("Customize completes within 500 ms with unrelated model and connector services unavailable", async (t) => {
   const fail = () => {
     throw new Error("Unrelated dependency must not be called");
   };
@@ -96,7 +96,7 @@ tenantTest("Customize completes within 500 ms with unrelated model and connector
   assert.ok(performance.now() - started < 500);
 });
 
-tenantTest("independent governance reads overlap rather than accumulating network round trips", async (t) => {
+test("independent governance reads overlap rather than accumulating network round trips", async (t) => {
   const srv = start();
   t.after(srv.close);
   const reads = [
@@ -126,7 +126,7 @@ tenantTest("independent governance reads overlap rather than accumulating networ
   assert.equal(maxActive, reads.length);
 });
 
-tenantTest("each settings projection retains authorization before reading configuration", async (t) => {
+test("each settings projection retains authorization before reading configuration", async (t) => {
   let reads = 0;
   const srv = start({
     refreshModels: async () => {
@@ -158,7 +158,7 @@ tenantTest("each settings projection retains authorization before reading config
   );
 });
 
-tenantTest("Models settings do not wait for a cold external model catalog", async (t) => {
+test("Models settings do not wait for a cold external model catalog", async (t) => {
   const pending = Promise.withResolvers<Response>();
   const fetcher: typeof fetch = () => pending.promise;
   const srv = start({ modelCredentialFetch: fetcher });
@@ -193,34 +193,31 @@ tenantTest("Models settings do not wait for a cold external model catalog", asyn
   assert.ok(performance.now() - started < 500);
 });
 
-tenantTest(
-  "a configured base model the cold catalog cannot resolve stays listed without a guessed provider",
-  async (t) => {
-    const pending = Promise.withResolvers<Response>();
-    const srv = start({ modelCredentialFetch: () => pending.promise });
-    t.after(srv.close);
-    t.after(() => pending.resolve(Response.json({ data: [] })));
-    t.mock.method(srv.built.modelCredentials, "availability", async () => ({
-      anthropic: true,
-      openai: true,
-      openrouter: true,
-    }));
-    for (const modelId of ["settings/saved-base-model", "saved-base-model-without-vendor"]) {
-      await inTestTenant(() => srv.built.config.setBaseModel("org:default-org", modelId));
-      const response = await fetch(srv.base + scopePath + "?view=models", {
-        headers: { ...testTenantHeaders(), ...ADMIN },
-      });
-      assert.equal(response.status, 200);
-      const body = (await response.json()) as { baseModelOptions: { id: string; name: string; provider: string }[] };
-      assert.deepEqual(
-        body.baseModelOptions.find((model) => model.id === modelId),
-        { id: modelId, name: `${modelId} (configured)`, provider: "" },
-      );
-    }
-  },
-);
+test("a configured base model the cold catalog cannot resolve stays listed without a guessed provider", async (t) => {
+  const pending = Promise.withResolvers<Response>();
+  const srv = start({ modelCredentialFetch: () => pending.promise });
+  t.after(srv.close);
+  t.after(() => pending.resolve(Response.json({ data: [] })));
+  t.mock.method(srv.built.modelCredentials, "availability", async () => ({
+    anthropic: true,
+    openai: true,
+    openrouter: true,
+  }));
+  for (const modelId of ["settings/saved-base-model", "saved-base-model-without-vendor"]) {
+    await inTestTenant(() => srv.built.config.setBaseModel("org:default-org", modelId));
+    const response = await fetch(srv.base + scopePath + "?view=models", {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { baseModelOptions: { id: string; name: string; provider: string }[] };
+    assert.deepEqual(
+      body.baseModelOptions.find((model) => model.id === modelId),
+      { id: modelId, name: `${modelId} (configured)`, provider: "" },
+    );
+  }
+});
 
-tenantTest("cached model catalogs refresh in the background and retain dynamic entries after expiry", async (t) => {
+test("cached model catalogs refresh in the background and retain dynamic entries after expiry", async (t) => {
   let requests = 0;
   let release = Promise.withResolvers<Response>();
   const fetcher: typeof fetch = () => {

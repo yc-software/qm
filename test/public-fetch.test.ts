@@ -8,7 +8,7 @@ import { createMcpClient } from "../src/mcp/mcp-client.ts";
 import { discoverOAuth } from "../src/mcp/oauth-discovery.ts";
 import { exchangeCode, setPublicOAuthClients } from "../src/connectors/oauth.ts";
 import { errMessage } from "../src/util/errors.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 async function listen(
   t: TestContext,
@@ -25,7 +25,7 @@ async function listen(
   return { port: (server.address() as AddressInfo).port, hits: () => hits };
 }
 
-tenantTest("publicFetch refuses loopback, link-local, private, and unspecified address literals", async () => {
+test("publicFetch refuses loopback, link-local, private, and unspecified address literals", async () => {
   for (const url of [
     "http://127.0.0.1/",
     "http://[::1]/",
@@ -45,7 +45,7 @@ tenantTest("publicFetch refuses loopback, link-local, private, and unspecified a
   }
 });
 
-tenantTest("publicFetch checks the address a hostname resolves to before connecting", async (t) => {
+test("publicFetch checks the address a hostname resolves to before connecting", async (t) => {
   const target = await listen(t, (_req, res) => res.end("secret"));
   await assert.rejects(publicFetch(`http://localhost:${target.port}/`), (e: unknown) =>
     /localhost resolves to a private network address/.test(errMessage(e)),
@@ -60,79 +60,73 @@ tenantTest("publicFetch checks the address a hostname resolves to before connect
   assert.equal(target.hits(), 1);
 });
 
-tenantTest(
-  "address-guarded fetch sends bodies and headers and returns status, headers, and streamed bodies",
-  async (t) => {
-    const target = await listen(t, (req, res) => {
-      if (req.url === "/empty") return void res.writeHead(204).end();
-      if (req.url === "/moved") return void res.writeHead(302, { location: "/elsewhere" }).end();
-      const chunks: Buffer[] = [];
-      req.on("data", (c: Buffer) => chunks.push(c));
-      req.on("end", () => {
-        res.writeHead(201, { "content-type": "application/json", "x-seen": String(req.headers["x-probe"]) });
-        res.end(
-          JSON.stringify({
-            method: req.method,
-            type: req.headers["content-type"],
-            body: Buffer.concat(chunks).toString(),
-          }),
-        );
-      });
+test("address-guarded fetch sends bodies and headers and returns status, headers, and streamed bodies", async (t) => {
+  const target = await listen(t, (req, res) => {
+    if (req.url === "/empty") return void res.writeHead(204).end();
+    if (req.url === "/moved") return void res.writeHead(302, { location: "/elsewhere" }).end();
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      res.writeHead(201, { "content-type": "application/json", "x-seen": String(req.headers["x-probe"]) });
+      res.end(
+        JSON.stringify({
+          method: req.method,
+          type: req.headers["content-type"],
+          body: Buffer.concat(chunks).toString(),
+        }),
+      );
     });
-    const loopback = addressGuardedFetch(() => false);
-    const base = `http://127.0.0.1:${target.port}`;
-    const posted = await loopback(`${base}/echo`, {
-      method: "POST",
-      headers: { "x-probe": "1" },
-      body: new URLSearchParams({ a: "b" }),
-    });
-    assert.equal(posted.status, 201);
-    assert.equal(posted.headers.get("x-seen"), "1");
-    assert.deepEqual(await posted.json(), {
-      method: "POST",
-      type: "application/x-www-form-urlencoded;charset=UTF-8",
-      body: "a=b",
-    });
-    assert.equal((await loopback(`${base}/empty`)).status, 204);
-    assert.equal((await loopback(`${base}/moved`)).status, 302);
-    await assert.rejects(loopback(`${base}/moved`, { redirect: "error" }), /redirect from .* refused/);
-  },
-);
+  });
+  const loopback = addressGuardedFetch(() => false);
+  const base = `http://127.0.0.1:${target.port}`;
+  const posted = await loopback(`${base}/echo`, {
+    method: "POST",
+    headers: { "x-probe": "1" },
+    body: new URLSearchParams({ a: "b" }),
+  });
+  assert.equal(posted.status, 201);
+  assert.equal(posted.headers.get("x-seen"), "1");
+  assert.deepEqual(await posted.json(), {
+    method: "POST",
+    type: "application/x-www-form-urlencoded;charset=UTF-8",
+    body: "a=b",
+  });
+  assert.equal((await loopback(`${base}/empty`)).status, 204);
+  assert.equal((await loopback(`${base}/moved`)).status, 302);
+  await assert.rejects(loopback(`${base}/moved`, { redirect: "error" }), /redirect from .* refused/);
+});
 
-tenantTest("address-guarded fetch gives up on an endpoint that never answers", async (t) => {
+test("address-guarded fetch gives up on an endpoint that never answers", async (t) => {
   const silent = await listen(t, () => undefined);
   const impatient = addressGuardedFetch(() => false, { timeoutMs: 100 });
   await assert.rejects(impatient(`http://127.0.0.1:${silent.port}/`), /timed out/);
 });
 
-tenantTest(
-  "MCP clients, OAuth discovery, and OAuth token exchange refuse private network endpoints by default",
-  async (t) => {
-    const target = await listen(t, (_req, res) => res.writeHead(500).end());
-    const base = `http://127.0.0.1:${target.port}`;
-    await assert.rejects(createMcpClient({ url: `${base}/mcp`, auth: { mode: "none" } }).listTools(), (e: unknown) =>
-      /private network address/.test(errMessage(e)),
-    );
-    const discovered = await discoverOAuth(new URL(`${base}/mcp`));
-    assert.match(discovered.errors.join("; "), /127\.0\.0\.1 is a private network address/);
-    t.after(() => setPublicOAuthClients([]));
-    setPublicOAuthClients([
-      {
-        name: "internal-crm",
-        host: "crm.example.com",
-        authUrl: "https://crm.example.com/authorize",
-        tokenUrl: `${base}/token`,
-        scopes: [],
-        clientId: "public-client",
-        label: "CRM",
-      },
-    ]);
-    await assert.rejects(
-      exchangeCode("internal-crm", "code", "https://qm.example/cb", {
-        client: { id: "public-client", secret: "", clientRef: "public:internal-crm" },
-      }),
-      PrivateNetworkAddressError,
-    );
-    assert.equal(target.hits(), 0);
-  },
-);
+test("MCP clients, OAuth discovery, and OAuth token exchange refuse private network endpoints by default", async (t) => {
+  const target = await listen(t, (_req, res) => res.writeHead(500).end());
+  const base = `http://127.0.0.1:${target.port}`;
+  await assert.rejects(createMcpClient({ url: `${base}/mcp`, auth: { mode: "none" } }).listTools(), (e: unknown) =>
+    /private network address/.test(errMessage(e)),
+  );
+  const discovered = await discoverOAuth(new URL(`${base}/mcp`));
+  assert.match(discovered.errors.join("; "), /127\.0\.0\.1 is a private network address/);
+  t.after(() => setPublicOAuthClients([]));
+  setPublicOAuthClients([
+    {
+      name: "internal-crm",
+      host: "crm.example.com",
+      authUrl: "https://crm.example.com/authorize",
+      tokenUrl: `${base}/token`,
+      scopes: [],
+      clientId: "public-client",
+      label: "CRM",
+    },
+  ]);
+  await assert.rejects(
+    exchangeCode("internal-crm", "code", "https://qm.example/cb", {
+      client: { id: "public-client", secret: "", clientRef: "public:internal-crm" },
+    }),
+    PrivateNetworkAddressError,
+  );
+  assert.equal(target.hits(), 0);
+});

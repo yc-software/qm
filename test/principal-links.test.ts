@@ -32,7 +32,7 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { inTestTenant, tenantIt, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+import { it, inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
@@ -40,7 +40,7 @@ const OIDC = "oidc:1111111111111111111111111111111111111111111111111111111111111
 const EVIDENCE = "SSO email jordan@acme.test matched the Slack-verified directory email";
 
 describe("principal link service: one person, several sign-ins", () => {
-  tenantIt("links a sign-in to a canonical principal and resolves both directions", async () => {
+  it("links a sign-in to a canonical principal and resolves both directions", async () => {
     const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
     const row = await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
     assert.equal(row.canonicalId, EMAIL);
@@ -54,7 +54,7 @@ describe("principal link service: one person, several sign-ins", () => {
     assert.equal(await links.unlink(OIDC), null);
   });
 
-  tenantIt("refuses self-links, chains, reversed links, missing evidence, and conflicting re-links", async () => {
+  it("refuses self-links, chains, reversed links, missing evidence, and conflicting re-links", async () => {
     const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
     const reject = async (input: Parameters<typeof links.link>[0], status: number, re: RegExp) => {
       await assert.rejects(links.link(input), (e: unknown) => {
@@ -96,7 +96,7 @@ describe("principal link service: one person, several sign-ins", () => {
     );
   });
 
-  tenantIt("reads links written by another process on refresh", async () => {
+  it("reads links written by another process on refresh", async () => {
     const backing = testMap<PrincipalLink>();
     const links = createPrincipalLinkService(backing, testAdvisoryLock());
     await links.refresh(true);
@@ -123,7 +123,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     return links;
   }
 
-  tenantIt("personKey, samePerson, canonicalPerson and personIds agree", async () => {
+  it("personKey, samePerson, canonicalPerson and personIds agree", async () => {
     assert.equal(samePerson(OIDC, EMAIL), false, "unlinked ids are different people");
     await installed();
     assert.equal(personKey(OIDC), EMAIL);
@@ -137,35 +137,31 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     assert.equal(samePerson(OIDC, "casey@acme.test"), false);
   });
 
-  tenantIt("the directory bridge reaches a linked sign-in through the roster row", () =>
+  it("the directory bridge reaches a linked sign-in through the roster row", () =>
     inTestTenant(async () => {
       await installed();
       const dir = createPostgresDirectoryStore(testDatabaseUrl());
       await dir.replace([{ principalId: EMAIL, displayName: "Jordan", type: "internal", slackId: SLACK }]);
       assert.equal(await samePersonInDirectory(dir, OIDC, SLACK), true);
       assert.equal(await samePersonInDirectory(dir, OIDC, "U0CASEY"), false);
-    }),
-  );
+    }));
 
-  tenantIt(
-    "the identity service classifies a linked sign-in as the canonical principal and deactivates the person",
-    async () => {
-      const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
-      await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
-      installPrincipalLinks(links);
-      const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
-      await identity.refresh(true);
-      assert.equal(identity.classify(OIDC).id, EMAIL);
-      assert.equal(identity.resolve({ externalId: OIDC }).id, EMAIL);
-      assert.equal(identity.classify("U0STRANGER").id, "U0STRANGER");
-      await identity.deactivate(OIDC);
-      assert.equal(identity.classify(EMAIL).type, "guest", "deactivating one sign-in deactivates the person");
-      await identity.reactivate(EMAIL);
-      assert.equal(identity.classify(OIDC).type, "internal");
-    },
-  );
+  it("the identity service classifies a linked sign-in as the canonical principal and deactivates the person", async () => {
+    const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
+    await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
+    installPrincipalLinks(links);
+    const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
+    await identity.refresh(true);
+    assert.equal(identity.classify(OIDC).id, EMAIL);
+    assert.equal(identity.resolve({ externalId: OIDC }).id, EMAIL);
+    assert.equal(identity.classify("U0STRANGER").id, "U0STRANGER");
+    await identity.deactivate(OIDC);
+    assert.equal(identity.classify(EMAIL).type, "guest", "deactivating one sign-in deactivates the person");
+    await identity.reactivate(EMAIL);
+    assert.equal(identity.classify(OIDC).type, "internal");
+  });
 
-  tenantIt("a deactivation recorded before the link is still reversible after it", async () => {
+  it("a deactivation recorded before the link is still reversible after it", async () => {
     installPrincipalLinks(null);
     const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
     const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
@@ -198,40 +194,37 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     assert.equal(identity.externalMember("guest@partner.test"), undefined, "removal survives a reload");
   });
 
-  tenantIt(
-    "the keychain stores new credentials under the canonical owner and lists legacy ones from either id",
-    async () => {
-      await installed();
-      const creds = testMap<KeychainCredential>();
-      const keychain = createKeychain({
-        lock: testAdvisoryLock(),
-        creds,
-        grants: testMap(),
-        asks: testMap(),
-        key: deriveConnectorKey("principal-links-test-key"),
-      });
-      const saved = await keychain.save({ ownerId: OIDC, service: "github", secret: "ghp_x", envKey: "GITHUB_TOKEN" });
-      assert.equal(saved.ownerId, EMAIL);
-      const rotated = await keychain.save({
-        ownerId: EMAIL,
-        service: "github",
-        secret: "ghp_y",
-        envKey: "GITHUB_TOKEN",
-      });
-      assert.equal(rotated.id, saved.id, "the same person saving the same service rotates one record");
-      assert.equal(await keychain.readOwnSecret(OIDC, saved.id), "ghp_y");
-      const legacy = await keychain.save({ ownerId: EMAIL, service: "linear", secret: "lin_x", envKey: "LINEAR_KEY" });
-      await creds.merge(legacy.id, { ownerId: OIDC });
-      const mine = await keychain.listByOwner(EMAIL);
-      assert.deepEqual(mine.map((c) => c.service).sort(), ["github", "linear"]);
-      const viaSignIn = await keychain.listByOwner(OIDC);
-      assert.deepEqual(viaSignIn.map((c) => c.service).sort(), ["github", "linear"]);
-      assert.equal(await keychain.readOwnSecret(OIDC, legacy.id), "lin_x");
-      assert.equal(await keychain.readOwnSecret("casey@acme.test", legacy.id), null);
-    },
-  );
+  it("the keychain stores new credentials under the canonical owner and lists legacy ones from either id", async () => {
+    await installed();
+    const creds = testMap<KeychainCredential>();
+    const keychain = createKeychain({
+      lock: testAdvisoryLock(),
+      creds,
+      grants: testMap(),
+      asks: testMap(),
+      key: deriveConnectorKey("principal-links-test-key"),
+    });
+    const saved = await keychain.save({ ownerId: OIDC, service: "github", secret: "ghp_x", envKey: "GITHUB_TOKEN" });
+    assert.equal(saved.ownerId, EMAIL);
+    const rotated = await keychain.save({
+      ownerId: EMAIL,
+      service: "github",
+      secret: "ghp_y",
+      envKey: "GITHUB_TOKEN",
+    });
+    assert.equal(rotated.id, saved.id, "the same person saving the same service rotates one record");
+    assert.equal(await keychain.readOwnSecret(OIDC, saved.id), "ghp_y");
+    const legacy = await keychain.save({ ownerId: EMAIL, service: "linear", secret: "lin_x", envKey: "LINEAR_KEY" });
+    await creds.merge(legacy.id, { ownerId: OIDC });
+    const mine = await keychain.listByOwner(EMAIL);
+    assert.deepEqual(mine.map((c) => c.service).sort(), ["github", "linear"]);
+    const viaSignIn = await keychain.listByOwner(OIDC);
+    assert.deepEqual(viaSignIn.map((c) => c.service).sort(), ["github", "linear"]);
+    assert.equal(await keychain.readOwnSecret(OIDC, legacy.id), "lin_x");
+    assert.equal(await keychain.readOwnSecret("casey@acme.test", legacy.id), null);
+  });
 
-  tenantIt("an admin grant held by either id makes the person an admin, and the users list shows one row", async () => {
+  it("an admin grant held by either id makes the person an admin, and the users list shows one row", async () => {
     await installed();
     const grants = [{ principalId: OIDC, scopeId: scopeId("org", "acme"), role: "org_admin" as const }];
     assert.equal(adminStatusFromGrants(grants, EMAIL).isAdmin, true);
@@ -301,55 +294,52 @@ describe("linked sign-ins across the HTTP surface", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  tenantIt(
-    "only an org admin manages links, the agent never does, and a directory member stays canonical",
-    async () => {
-      const body = JSON.stringify({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE });
-      assert.equal(
-        (await signed("POST", "/v1/admin/principal-links", body, { "x-admin-actor": "U0STRANGER@default-org" })).status,
-        403,
-      );
-      const agent = await fetch(`${base}/v1/admin/principal-links`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-agent-capability": await capFor("admin-alice") },
-        body,
-      });
-      assert.equal(agent.status, 403);
-      for (const memberSide of [EMAIL, EMAIL.toUpperCase(), SLACK]) {
-        const reversed = await signed(
-          "POST",
-          "/v1/admin/principal-links",
-          JSON.stringify({ principalId: memberSide, canonicalId: OIDC, evidence: EVIDENCE }),
-          admin,
-        );
-        assert.equal(reversed.status, 400, `${memberSide} is a directory member and stays canonical`);
-        assert.match(((await reversed.json()) as { message: string }).message, /directory member/);
-      }
-      const escalation = await signed(
+  it("only an org admin manages links, the agent never does, and a directory member stays canonical", async () => {
+    const body = JSON.stringify({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE });
+    assert.equal(
+      (await signed("POST", "/v1/admin/principal-links", body, { "x-admin-actor": "U0STRANGER@default-org" })).status,
+      403,
+    );
+    const agent = await fetch(`${base}/v1/admin/principal-links`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-agent-capability": await capFor("admin-alice") },
+      body,
+    });
+    assert.equal(agent.status, 403);
+    for (const memberSide of [EMAIL, EMAIL.toUpperCase(), SLACK]) {
+      const reversed = await signed(
         "POST",
         "/v1/admin/principal-links",
-        JSON.stringify({ principalId: "admin-alice", canonicalId: "casey@acme.test", evidence: EVIDENCE }),
+        JSON.stringify({ principalId: memberSide, canonicalId: OIDC, evidence: EVIDENCE }),
         admin,
       );
-      assert.equal(escalation.status, 400, "an admin sign-in cannot make a non-admin canonical principal an admin");
-      assert.match(((await escalation.json()) as { message: string }).message, /admin grant/);
-      assert.equal(
-        adminStatusFromGrants(await inTestTenant(() => built.admin.listGrants()), "casey@acme.test").isAdmin,
-        false,
-      );
-      const created = await signed("POST", "/v1/admin/principal-links", body, admin);
-      assert.equal(created.status, 200);
-      const listed = (await (await signed("GET", "/v1/admin/principal-links", "", admin)).json()) as {
-        links: PrincipalLink[];
-      };
-      assert.equal(listed.links.length, 1);
-      assert.equal(listed.links[0]!.linkedBy, "admin-alice");
-      const audit = await inTestTenant(() => built.auditLog.tail({ limit: 50, action: "principal_link.create" }));
-      assert.ok(audit.some((e) => e.resource === `${OIDC} -> ${EMAIL}`));
-    },
-  );
+      assert.equal(reversed.status, 400, `${memberSide} is a directory member and stays canonical`);
+      assert.match(((await reversed.json()) as { message: string }).message, /directory member/);
+    }
+    const escalation = await signed(
+      "POST",
+      "/v1/admin/principal-links",
+      JSON.stringify({ principalId: "admin-alice", canonicalId: "casey@acme.test", evidence: EVIDENCE }),
+      admin,
+    );
+    assert.equal(escalation.status, 400, "an admin sign-in cannot make a non-admin canonical principal an admin");
+    assert.match(((await escalation.json()) as { message: string }).message, /admin grant/);
+    assert.equal(
+      adminStatusFromGrants(await inTestTenant(() => built.admin.listGrants()), "casey@acme.test").isAdmin,
+      false,
+    );
+    const created = await signed("POST", "/v1/admin/principal-links", body, admin);
+    assert.equal(created.status, 200);
+    const listed = (await (await signed("GET", "/v1/admin/principal-links", "", admin)).json()) as {
+      links: PrincipalLink[];
+    };
+    assert.equal(listed.links.length, 1);
+    assert.equal(listed.links[0]!.linkedBy, "admin-alice");
+    const audit = await inTestTenant(() => built.auditLog.tail({ limit: 50, action: "principal_link.create" }));
+    assert.ok(audit.some((e) => e.resource === `${OIDC} -> ${EMAIL}`));
+  });
 
-  tenantIt("surfaces resolve a sign-in to its canonical principal", async () => {
+  it("surfaces resolve a sign-in to its canonical principal", async () => {
     const r = await signed("GET", `/v1/principals/${encodeURIComponent(OIDC)}/canonical`);
     assert.equal(r.status, 200);
     assert.deepEqual(await r.json(), { principalId: OIDC, canonicalId: EMAIL });
@@ -357,7 +347,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     assert.deepEqual(await plain.json(), { principalId: EMAIL, canonicalId: EMAIL });
   });
 
-  tenantIt("a secret drop minted for the Slack identity opens and redeems under the linked sign-in", async () => {
+  it("a secret drop minted for the Slack identity opens and redeems under the linked sign-in", async () => {
     const minted = await fetch(`${base}/v1/keychain/drops`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-agent-capability": await capFor(EMAIL) },
@@ -394,7 +384,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     assert.equal(await inTestTenant(() => built.keychain!.readOwnSecret(OIDC, credential.id)), "sk_live_x");
   });
 
-  tenantIt("deleting the link restores two separate principals", async () => {
+  it("deleting the link restores two separate principals", async () => {
     const removed = await signed("DELETE", `/v1/admin/principal-links/${encodeURIComponent(OIDC)}`, "", admin);
     assert.equal(removed.status, 200);
     assert.equal(
@@ -441,7 +431,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
       },
     });
 
-  tenantIt("passes for the canonical viewer, the sign-in itself, and rejects another person", async () => {
+  it("passes for the canonical viewer, the sign-in itself, and rejects another person", async () => {
     assert.equal((await get(OIDC, EMAIL)).status, 404);
     assert.equal((await get(OIDC, OIDC)).status, 404);
     assert.equal((await get(EMAIL, OIDC)).status, 404);
@@ -450,7 +440,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
 });
 
 describe("link mutation serialization", () => {
-  tenantIt("rejects concurrent chains", async () => {
+  it("rejects concurrent chains", async () => {
     const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
     const results = await Promise.allSettled([
       links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" }),
@@ -459,7 +449,7 @@ describe("link mutation serialization", () => {
     assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
     assert.equal((await links.list()).length, 1);
   });
-  tenantIt("does not reuse a snapshot begun before the mutation lock", async () => {
+  it("does not reuse a snapshot begun before the mutation lock", async () => {
     const backing = testMap<PrincipalLink>();
     const lock = testAdvisoryLock();
     const delayed = Promise.withResolvers<void>();
@@ -489,7 +479,7 @@ describe("link mutation serialization", () => {
     await pending;
     await assert.rejects(result, /itself linked/);
   });
-  tenantIt("manual blocks win over directory records during hydration and refresh in either order", async () => {
+  it("manual blocks win over directory records during hydration and refresh in either order", async () => {
     for (const reverse of [false, true]) {
       const links = createPrincipalLinkService(testMap(), testAdvisoryLock());
       await links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" });
@@ -518,62 +508,59 @@ describe("link mutation serialization", () => {
 });
 
 describe("canonical portal claims retain proof of the original sign-in", () => {
-  tenantIt(
-    "verifies a linked sign-in without reloading identity, and reloads once to see a link made elsewhere",
-    async () => {
-      const secret = "authenticated-as-test-secret-0123456789";
-      const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-link-reload-")) }));
-      const backing = testMap<PrincipalLink>();
-      let loads = 0;
-      const counted = new Proxy(backing, {
-        get: (target, key, receiver) =>
-          key === "all"
-            ? () => {
-                loads++;
-                return target.all();
-              }
-            : Reflect.get(target, key, receiver),
-      });
-      const links = createPrincipalLinkService(counted, testAdvisoryLock());
-      const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
-      installPrincipalLinks(links);
-      await identity.refresh(true);
-      const server = createInsecureTestServer(app.app, {
-        portalIdentitySecret: secret,
-        requireSignedPortalIdentity: true,
-        identity,
-      });
-      await new Promise<void>((resolve) => server.listen(0, resolve));
-      const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-      const get = async () =>
-        (
-          await fetch(`${base}/v1/sessions/missing?viewer=${encodeURIComponent(EMAIL)}`, {
-            headers: {
-              ...testTenantHeaders(),
-              "x-portal-identity": await mintSignedPayload(
-                { t: testTenants()[0], p: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 },
-                secret,
-              ),
-            },
-          })
-        ).status;
-      try {
-        assert.equal(await get(), 401);
-        const replica = createPrincipalLinkService(backing, testAdvisoryLock());
-        await replica.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
-        assert.equal(await get(), 404, "a link made on another replica is honored on the next request");
-        const settled = loads;
-        assert.equal(await get(), 404);
-        assert.equal(await get(), 404);
-        assert.equal(loads, settled, "a verified sign-in does not reload identity from Postgres");
-      } finally {
-        installPrincipalLinks(null);
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-      }
-    },
-  );
+  it("verifies a linked sign-in without reloading identity, and reloads once to see a link made elsewhere", async () => {
+    const secret = "authenticated-as-test-secret-0123456789";
+    const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-link-reload-")) }));
+    const backing = testMap<PrincipalLink>();
+    let loads = 0;
+    const counted = new Proxy(backing, {
+      get: (target, key, receiver) =>
+        key === "all"
+          ? () => {
+              loads++;
+              return target.all();
+            }
+          : Reflect.get(target, key, receiver),
+    });
+    const links = createPrincipalLinkService(counted, testAdvisoryLock());
+    const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
+    installPrincipalLinks(links);
+    await identity.refresh(true);
+    const server = createInsecureTestServer(app.app, {
+      portalIdentitySecret: secret,
+      requireSignedPortalIdentity: true,
+      identity,
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    const get = async () =>
+      (
+        await fetch(`${base}/v1/sessions/missing?viewer=${encodeURIComponent(EMAIL)}`, {
+          headers: {
+            ...testTenantHeaders(),
+            "x-portal-identity": await mintSignedPayload(
+              { t: testTenants()[0], p: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 },
+              secret,
+            ),
+          },
+        })
+      ).status;
+    try {
+      assert.equal(await get(), 401);
+      const replica = createPrincipalLinkService(backing, testAdvisoryLock());
+      await replica.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
+      assert.equal(await get(), 404, "a link made on another replica is honored on the next request");
+      const settled = loads;
+      assert.equal(await get(), 404);
+      assert.equal(await get(), 404);
+      assert.equal(loads, settled, "a verified sign-in does not reload identity from Postgres");
+    } finally {
+      installPrincipalLinks(null);
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 
-  tenantIt("accepts a linked sign-in and rejects its stale canonical claim after unlink", async () => {
+  it("accepts a linked sign-in and rejects its stale canonical claim after unlink", async () => {
     const secret = "authenticated-as-test-secret-0123456789";
     const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-link-proof-")) }));
     await inTestTenant(async () => {

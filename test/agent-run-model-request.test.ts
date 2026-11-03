@@ -3,11 +3,11 @@ import { createServer } from "node:http";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { modelRequestOverrides } from "../src/model/pi-models.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const modelId = "gpt-5.4";
 
-tenantTest("Pi reports each model request to the turn before the reply streams, and only to that turn", async (t) => {
+test("Pi reports each model request to the turn before the reply streams, and only to that turn", async (t) => {
   const order: string[] = [];
   const server = createServer(async (req, res) => {
     await new Promise((resolve) => req.resume().on("end", resolve));

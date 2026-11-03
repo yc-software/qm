@@ -19,7 +19,7 @@ import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
 import { loadConfig } from "../src/config.ts";
 import { testConfigStore } from "./support/test-database.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const config = {
   url: "https://gateway.example/prefix/v1",
@@ -69,7 +69,7 @@ function fixture(models = [group()], aliases = {}) {
 }
 afterEach(() => setGatewayModels([]));
 
-tenantTest("gateway configuration no longer requires a model list", () => {
+test("gateway configuration no longer requires a model list", () => {
   const parsed = loadConfig({
     MODEL_GATEWAY_URL: config.url,
     MODEL_GATEWAY_API_KEY: config.apiKey,
@@ -78,7 +78,7 @@ tenantTest("gateway configuration no longer requires a model list", () => {
   assert.deepEqual(parsed.modelGateway?.models, {});
 });
 
-tenantTest("discovers unknown tool models through the company key without leaking transport metadata", async () => {
+test("discovers unknown tool models through the company key without leaking transport metadata", async () => {
   const f = fixture([group("vendor/new-model", { api_base: "https://evil.example", api_key: "metadata-secret" })]);
   await Promise.all([f.catalog.refresh(), f.catalog.refresh()]);
   assert.equal(f.calls.length, 2);
@@ -115,7 +115,7 @@ tenantTest("discovers unknown tool models through the company key without leakin
   );
 });
 
-tenantTest("only models present in both responses with valid chat capabilities are selectable", async () => {
+test("only models present in both responses with valid chat capabilities are selectable", async () => {
   const f = fixture([
     group(),
     group("embed", { mode: "embedding" }),
@@ -136,31 +136,28 @@ tenantTest("only models present in both responses with valid chat capabilities a
   );
 });
 
-tenantTest(
-  "successful revocation clears legacy aliases and cached models and cannot be undone by a failure",
-  async () => {
-    const f = fixture([group()], { "claude-opus-5": "vendor/new-model" });
-    await f.catalog.refresh();
-    const stale = resolveModel("gateway/vendor/new-model")!;
-    const native = resolveModel("claude-opus-5")!;
-    assert.ok(f.catalog.transport.models["claude-opus-5"]);
-    f.tick();
-    f.listing([]);
-    await f.catalog.refresh();
-    assert.deepEqual(f.catalog.transport.models, {});
-    assert.equal(resolveModel(stale.id), undefined);
-    assert.match(modelUnavailableReason(stale.id) ?? "", /unavailable/);
-    assert.throws(() => modelGatewayRequest(f.catalog.transport, stale), /unavailable/);
-    assert.throws(() => modelGatewayRequest(f.catalog.transport, native), /unavailable/);
-    f.tick();
-    f.status(503);
-    await f.catalog.refresh();
-    assert.deepEqual(f.catalog.transport.models, {});
-    assert.throws(() => modelGatewayRequest(undefined, stale), /unavailable/);
-  },
-);
+test("successful revocation clears legacy aliases and cached models and cannot be undone by a failure", async () => {
+  const f = fixture([group()], { "claude-opus-5": "vendor/new-model" });
+  await f.catalog.refresh();
+  const stale = resolveModel("gateway/vendor/new-model")!;
+  const native = resolveModel("claude-opus-5")!;
+  assert.ok(f.catalog.transport.models["claude-opus-5"]);
+  f.tick();
+  f.listing([]);
+  await f.catalog.refresh();
+  assert.deepEqual(f.catalog.transport.models, {});
+  assert.equal(resolveModel(stale.id), undefined);
+  assert.match(modelUnavailableReason(stale.id) ?? "", /unavailable/);
+  assert.throws(() => modelGatewayRequest(f.catalog.transport, stale), /unavailable/);
+  assert.throws(() => modelGatewayRequest(f.catalog.transport, native), /unavailable/);
+  f.tick();
+  f.status(503);
+  await f.catalog.refresh();
+  assert.deepEqual(f.catalog.transport.models, {});
+  assert.throws(() => modelGatewayRequest(undefined, stale), /unavailable/);
+});
 
-tenantTest("legacy routes work without discovery support, then discovery adds models and governs access", async () => {
+test("legacy routes work without discovery support, then discovery adds models and governs access", async () => {
   const f = fixture([group()], { "claude-opus-5": "vendor/new-model" });
   f.status(404);
   await f.catalog.refresh();
@@ -175,7 +172,7 @@ tenantTest("legacy routes work without discovery support, then discovery adds mo
   assert.deepEqual(f.catalog.transport.models, {});
 });
 
-tenantTest("a transient discovery blip keeps last known routes; a prolonged outage hides them", async () => {
+test("a transient discovery blip keeps last known routes; a prolonged outage hides them", async () => {
   const f = fixture([group()], { "claude-opus-5": "vendor/new-model" });
   await f.catalog.refresh();
   const native = resolveModel("claude-opus-5")!;
@@ -198,7 +195,7 @@ tenantTest("a transient discovery blip keeps last known routes; a prolonged outa
   assert.ok(resolveModel("gateway/new"));
 });
 
-tenantTest("malformed and oversized catalogs cannot grant access", async () => {
+test("malformed and oversized catalogs cannot grant access", async () => {
   for (const response of [
     Response.json({ nope: [] }),
     Response.json({ data: Array(1001).fill({ id: "m" }) }),
@@ -211,7 +208,7 @@ tenantTest("malformed and oversized catalogs cannot grant access", async () => {
   }
 });
 
-tenantTest("custom provider models live in their own namespace, never the gateway one", () => {
+test("custom provider models live in their own namespace, never the gateway one", () => {
   assert.doesNotThrow(() =>
     validateCustomProviderSpec({
       id: "gateway",
@@ -240,7 +237,7 @@ tenantTest("custom provider models live in their own namespace, never the gatewa
   );
 });
 
-tenantTest("removed gateway selections never fall back to a different org or direct model", async () => {
+test("removed gateway selections never fall back to a different org or direct model", async () => {
   const store = testConfigStore("default-org");
   const org = "org:default-org" as const;
   const personal = "personal:alice" as const;
@@ -258,7 +255,7 @@ tenantTest("removed gateway selections never fall back to a different org or dir
   );
 });
 
-tenantTest("gateway aliases hide duplicate picker options while preserving saved routes", async () => {
+test("gateway aliases hide duplicate picker options while preserving saved routes", async () => {
   const target = "anthropic/claude-opus-5";
   const f = fixture([group(target)], { "claude-opus-5": target });
   await f.catalog.refresh();
@@ -284,20 +281,20 @@ tenantTest("gateway aliases hide duplicate picker options while preserving saved
   assert.equal(resolveModel(`gateway/${target}`), undefined);
 });
 
-tenantTest("unknown aliases do not hide the usable discovered model", async () => {
+test("unknown aliases do not hide the usable discovered model", async () => {
   const f = fixture([group()], { "unknown-alias": "vendor/new-model" });
   await f.catalog.refresh();
   assert.ok(builtInModelCatalog().some((m) => m.id === "gateway/vendor/new-model"));
 });
 
-tenantTest("resolvable aliases outside the picker do not hide discovered models", async () => {
+test("resolvable aliases outside the picker do not hide discovered models", async () => {
   assert.ok(resolveModel("gpt-4o"));
   const f = fixture([group("openai/gpt-4o")], { "gpt-4o": "openai/gpt-4o" });
   await f.catalog.refresh();
   assert.ok(builtInModelCatalog().some((m) => m.id === "gateway/openai/gpt-4o"));
 });
 
-tenantTest("gateway-only fallback retains models hidden by picker aliases", async () => {
+test("gateway-only fallback retains models hidden by picker aliases", async () => {
   const target = "openai/gpt-5.6-sol";
   const f = fixture([group(target)], { "gpt-5.6-sol": target });
   await f.catalog.refresh();
@@ -316,7 +313,7 @@ tenantTest("gateway-only fallback retains models hidden by picker aliases", asyn
   );
 });
 
-tenantTest("gateway document support uses provider metadata rather than vision alone", async () => {
+test("gateway document support uses provider metadata rather than vision alone", async () => {
   const f = fixture([
     group("openai-docs", { providers: ["openai"] }),
     group("google-docs", { providers: ["gemini"] }),
@@ -338,7 +335,7 @@ tenantTest("gateway document support uses provider metadata rather than vision a
     assert.equal(nativeDocumentFormat(resolveModel(`gateway/${id}`)!, pdf), undefined);
 });
 
-tenantTest("gateway models send session-affinity headers on every API", async () => {
+test("gateway models send session-affinity headers on every API", async () => {
   const f = fixture([
     group("chat-model"),
     group("anthropic-model", { providers: ["anthropic"] }),

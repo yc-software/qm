@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { countTokens } from "../src/util/tokens.ts";
 import { createAgent, stableCwd } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
@@ -37,7 +37,7 @@ async function runIgnoringPromptError(agent: ReturnType<typeof createAgent>, tur
   }
 }
 
-tenantTest("every turn composes the freshly resolved system prompt", async () => {
+test("every turn composes the freshly resolved system prompt", async () => {
   const agent = createAgent();
   const recorded: Array<{ model: string; inputTokens: number; entryCount: number }> = [];
   const first = "BASE\n\n## What you remember\nA";
@@ -51,12 +51,12 @@ tenantTest("every turn composes the freshly resolved system prompt", async () =>
   assert.equal(recorded[1]!.inputTokens, countTokens(second) + countTokens(prompt));
 });
 
-tenantTest("the cwd pi appends to the system prompt is one constant path per agent", () => {
+test("the cwd pi appends to the system prompt is one constant path per agent", () => {
   assert.equal(stableCwd("pi"), join(tmpdir(), "pi-cwd"));
   assert.equal(stableCwd("pi"), stableCwd("pi"));
 });
 
-tenantTest("each turn removes its agent directory and reuses one constant cwd", async () => {
+test("each turn removes its agent directory and reuses one constant cwd", async () => {
   const prefix = `pi-turn-${process.pid}`;
   const agent = createAgent({ tempDirPrefix: prefix });
   const recorded: Array<{ model: string; inputTokens: number; entryCount: number }> = [];
@@ -69,7 +69,7 @@ tenantTest("each turn removes its agent directory and reuses one constant cwd", 
   rmSync(stableCwd(prefix), { recursive: true, force: true });
 });
 
-tenantTest("a squatted shared cwd falls back to a per-turn cwd that is removed afterwards", async () => {
+test("a squatted shared cwd falls back to a per-turn cwd that is removed afterwards", async () => {
   const prefix = `pi-squat-${process.pid}`;
   writeFileSync(stableCwd(prefix), "not a directory");
   const agent = createAgent({ tempDirPrefix: prefix });
@@ -83,7 +83,7 @@ tenantTest("a squatted shared cwd falls back to a per-turn cwd that is removed a
   rmSync(stableCwd(prefix), { force: true });
 });
 
-tenantTest("the agent exposes no session-reset hook after removing session state", () => {
+test("the agent exposes no session-reset hook after removing session state", () => {
   assert.equal(createAgent().resetSession, undefined);
 });
 
@@ -119,7 +119,7 @@ async function ackRequest(input: string | URL | Request, init?: RequestInit) {
   return { url, headers, body };
 }
 
-tenantTest("ack emoji keeps working on a non-Anthropic base model when an Anthropic key is present", async () => {
+test("ack emoji keeps working on a non-Anthropic base model when an Anthropic key is present", async () => {
   const agent = createAgent({
     defaultModelId: "gpt-5.6-sol",
     resolveProviderKeys: async () => ({ anthropic: "sk-ant-test" }),
@@ -143,7 +143,7 @@ tenantTest("ack emoji keeps working on a non-Anthropic base model when an Anthro
   }
 });
 
-tenantTest("ack emoji stays home when the deployment has no Anthropic key at all", async () => {
+test("ack emoji stays home when the deployment has no Anthropic key at all", async () => {
   const agent = createAgent({
     defaultModelId: "gpt-5.6-sol",
     resolveProviderKeys: async () => ({ openai: "sk-openai-test" }),
@@ -162,7 +162,7 @@ tenantTest("ack emoji stays home when the deployment has no Anthropic key at all
   }
 });
 
-tenantTest("model utilities resolve provider credentials for every call", async () => {
+test("model utilities resolve provider credentials for every call", async () => {
   let resolutions = 0;
   const agent = createAgent({
     resolveProviderKeys: async () => {
@@ -176,7 +176,7 @@ tenantTest("model utilities resolve provider credentials for every call", async 
   assert.equal(resolutions, 2);
 });
 
-tenantTest("prior-turn bootstrap reaches the model before the first prompt", async () => {
+test("prior-turn bootstrap reaches the model before the first prompt", async () => {
   const agent = createAgent({ apiKey: "sk-test" });
   const bodies: string[] = [];
   const realFetch = globalThis.fetch;
@@ -202,7 +202,7 @@ tenantTest("prior-turn bootstrap reaches the model before the first prompt", asy
   assert.match(bodies[0]!, /tell me more/);
 });
 
-tenantTest("ack emoji on a Claude subscription token signs the call as a subscription request", async () => {
+test("ack emoji on a Claude subscription token signs the call as a subscription request", async () => {
   const agent = createAgent({
     defaultModelId: "claude-sonnet-5",
     resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-ack" }),
@@ -225,7 +225,7 @@ tenantTest("ack emoji on a Claude subscription token signs the call as a subscri
   }
 });
 
-tenantTest("an ack emoji provider failure surfaces its error instead of reading as a declined pick", async () => {
+test("an ack emoji provider failure surfaces its error instead of reading as a declined pick", async () => {
   const agent = createAgent({
     defaultModelId: "claude-sonnet-5",
     resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-revoked" }),

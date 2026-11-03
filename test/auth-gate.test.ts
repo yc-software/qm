@@ -13,11 +13,11 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
-import { tenantTest, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
+import { test, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SECRET = "test-signing-secret".repeat(3);
 
-tenantTest("the normal server refuses to start without source-auth material", () => {
+test("the normal server refuses to start without source-auth material", () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-required-")) }));
   assert.throws(() => createServer(built.app), /CORE_SIGNING_SECRET must be at least 32 characters/);
 });
@@ -54,7 +54,7 @@ const turnBody = (actorId: string) =>
     text: "hello",
   });
 
-tenantTest("with a signing secret, an UNSIGNED turn is rejected 401 (no impersonation)", async () => {
+test("with a signing secret, an UNSIGNED turn is rejected 401 (no impersonation)", async () => {
   const srv = start(SECRET);
   try {
     const res = await fetch(`${srv.base}/v1/turns`, {
@@ -68,7 +68,7 @@ tenantTest("with a signing secret, an UNSIGNED turn is rejected 401 (no imperson
   }
 });
 
-tenantTest("a FORGED actor whose body differs from what was signed is rejected", async () => {
+test("a FORGED actor whose body differs from what was signed is rejected", async () => {
   const srv = start(SECRET);
   try {
     const headers = sign("POST", "/v1/turns", turnBody("U-real"));
@@ -79,26 +79,23 @@ tenantTest("a FORGED actor whose body differs from what was signed is rejected",
   }
 });
 
-tenantTest(
-  "a non-numeric x-timestamp is rejected even when the signature matches the NaN canonical string",
-  async () => {
-    const srv = start(SECRET);
-    try {
-      const body = turnBody("U1");
-      const headers = {
-        "content-type": "application/json",
-        "x-timestamp": "not-a-number",
-        "x-signature": signRequest(SECRET, Number.NaN, `POST\n/v1/turns\n${body}`),
-      };
-      const res = await fetch(`${srv.base}/v1/turns`, { method: "POST", headers, body });
-      assert.equal(res.status, 401);
-    } finally {
-      await srv.close();
-    }
-  },
-);
+test("a non-numeric x-timestamp is rejected even when the signature matches the NaN canonical string", async () => {
+  const srv = start(SECRET);
+  try {
+    const body = turnBody("U1");
+    const headers = {
+      "content-type": "application/json",
+      "x-timestamp": "not-a-number",
+      "x-signature": signRequest(SECRET, Number.NaN, `POST\n/v1/turns\n${body}`),
+    };
+    const res = await fetch(`${srv.base}/v1/turns`, { method: "POST", headers, body });
+    assert.equal(res.status, 401);
+  } finally {
+    await srv.close();
+  }
+});
 
-tenantTest("a correctly-signed turn is accepted", async () => {
+test("a correctly-signed turn is accepted", async () => {
   const srv = start(SECRET);
   try {
     const body = turnBody("U1");
@@ -110,7 +107,7 @@ tenantTest("a correctly-signed turn is accepted", async () => {
   }
 });
 
-tenantTest("a signature for one route can't be replayed against another (method+path bound)", async () => {
+test("a signature for one route can't be replayed against another (method+path bound)", async () => {
   const srv = start(SECRET);
   try {
     const headers = sign("GET", "/v1/deliveries?type=slack", "");
@@ -121,7 +118,7 @@ tenantTest("a signature for one route can't be replayed against another (method+
   }
 });
 
-tenantTest("a replayed signature is rejected (dedup) on a mutating route", async () => {
+test("a replayed signature is rejected (dedup) on a mutating route", async () => {
   const srv = start(SECRET);
   try {
     const body = turnBody("U1");
@@ -135,23 +132,20 @@ tenantTest("a replayed signature is rejected (dedup) on a mutating route", async
   }
 });
 
-tenantTest(
-  "an identical signed GET re-sent in the same second is accepted (reads are not replay-deduped)",
-  async () => {
-    const srv = start(SECRET);
-    try {
-      const headers = sign("GET", "/v1/deliveries?type=slack", "");
-      const first = await fetch(`${srv.base}/v1/deliveries?type=slack`, { headers });
-      assert.equal(first.status, 200);
-      const second = await fetch(`${srv.base}/v1/deliveries?type=slack`, { headers });
-      assert.equal(second.status, 200);
-    } finally {
-      await srv.close();
-    }
-  },
-);
+test("an identical signed GET re-sent in the same second is accepted (reads are not replay-deduped)", async () => {
+  const srv = start(SECRET);
+  try {
+    const headers = sign("GET", "/v1/deliveries?type=slack", "");
+    const first = await fetch(`${srv.base}/v1/deliveries?type=slack`, { headers });
+    assert.equal(first.status, 200);
+    const second = await fetch(`${srv.base}/v1/deliveries?type=slack`, { headers });
+    assert.equal(second.status, 200);
+  } finally {
+    await srv.close();
+  }
+});
 
-tenantTest("deployment ingress /d/:id is rejected 401 without a valid signature", async () => {
+test("deployment ingress /d/:id is rejected 401 without a valid signature", async () => {
   const srv = start(SECRET);
   try {
     const res = await fetch(`${srv.base}/d/some-id/`, { headers: { "x-as-principal": "U-attacker" } });
@@ -161,7 +155,7 @@ tenantTest("deployment ingress /d/:id is rejected 401 without a valid signature"
   }
 });
 
-tenantTest("the explicit insecure test server leaves the boundary open", async () => {
+test("the explicit insecure test server leaves the boundary open", async () => {
   const srv = start();
   try {
     const res = await fetch(`${srv.base}/v1/turns`, {
@@ -175,7 +169,7 @@ tenantTest("the explicit insecure test server leaves the boundary open", async (
   }
 });
 
-tenantTest("POST /v1/blobs requires x-content-sha256 when authed, then binds the body (spec §13)", async () => {
+test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body (spec §13)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "blobauth-")) }));
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -215,40 +209,37 @@ tenantTest("POST /v1/blobs requires x-content-sha256 when authed, then binds the
   }
 });
 
-tenantTest(
-  "egress-audit ingest requires source auth: unsigned is 401, signed lands — including under portal-identity enforcement",
-  async () => {
-    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-egress-")) }));
-    const server = createServer(built.app, {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-      signingSecret: SECRET,
-      egressAudit: built.egressAudit,
-      requireSignedPortalIdentity: true,
-      capabilitySecret: `${SECRET}-cap`,
-      portalIdentitySecret: `${SECRET}-portal`,
+test("egress-audit ingest requires source auth: unsigned is 401, signed lands — including under portal-identity enforcement", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-egress-")) }));
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    egressAudit: built.egressAudit,
+    requireSignedPortalIdentity: true,
+    capabilitySecret: `${SECRET}-cap`,
+    portalIdentitySecret: `${SECRET}-portal`,
+  });
+  server.listen(0);
+  const srv = {
+    base: `http://localhost:${(server.address() as AddressInfo).port}`,
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
+  try {
+    const body = JSON.stringify({ records: [{ host: "api.github.com", verdict: "ok", scopeLabel: "personal:U1" }] });
+    const unsigned = await fetch(`${srv.base}/v1/egress-audit`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
     });
-    server.listen(0);
-    const srv = {
-      base: `http://localhost:${(server.address() as AddressInfo).port}`,
-      close: () => new Promise<void>((r) => server.close(() => r())),
-    };
-    try {
-      const body = JSON.stringify({ records: [{ host: "api.github.com", verdict: "ok", scopeLabel: "personal:U1" }] });
-      const unsigned = await fetch(`${srv.base}/v1/egress-audit`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body,
-      });
-      assert.equal(unsigned.status, 401);
-      const signed = await fetch(`${srv.base}/v1/egress-audit`, {
-        method: "POST",
-        headers: sign("POST", "/v1/egress-audit", body),
-        body,
-      });
-      assert.equal(signed.status, 200);
-      assert.deepEqual(await signed.json(), { accepted: 1, rejected: 0 });
-    } finally {
-      await srv.close();
-    }
-  },
-);
+    assert.equal(unsigned.status, 401);
+    const signed = await fetch(`${srv.base}/v1/egress-audit`, {
+      method: "POST",
+      headers: sign("POST", "/v1/egress-audit", body),
+      body,
+    });
+    assert.equal(signed.status, 200);
+    assert.deepEqual(await signed.json(), { accepted: 1, rejected: 0 });
+  } finally {
+    await srv.close();
+  }
+});

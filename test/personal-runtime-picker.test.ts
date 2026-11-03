@@ -7,7 +7,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { userRuntimeConfigBody } from "../src/api/runtime-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
-import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -38,7 +38,7 @@ async function setup() {
   return { built, get, put, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-tenantTest("personal API-key picker works without company keys and saves model, effort and Fast", async () => {
+test("personal API-key picker works without company keys and saves model, effort and Fast", async () => {
   const s = await setup();
   try {
     await inTestTenant(() => s.built.userModelCredentials.setApiKey("U1", "openai", "synthetic-openai"));
@@ -64,7 +64,7 @@ tenantTest("personal API-key picker works without company keys and saves model, 
 });
 
 for (const provider of ["anthropic", "openai"] as const) {
-  tenantTest(`personal ${provider} OAuth picker advertises only compatible runtimes`, async () => {
+  test(`personal ${provider} OAuth picker advertises only compatible runtimes`, async () => {
     const s = await setup();
     try {
       await inTestTenant(() =>
@@ -90,7 +90,7 @@ for (const provider of ["anthropic", "openai"] as const) {
   });
 }
 
-tenantTest("personal picker keeps org restrictions and shared-scope caller isolation", async () => {
+test("personal picker keeps org restrictions and shared-scope caller isolation", async () => {
   const s = await setup();
   try {
     await inTestTenant(() => s.built.userModelCredentials.setApiKey("U1", "openai", "synthetic-openai"));

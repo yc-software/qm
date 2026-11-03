@@ -11,7 +11,7 @@ import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { scopeId, type SessionEntry } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
   return {
@@ -39,7 +39,7 @@ const entries = [
   entry("assistant", { text: "UNPUBLISHED_SECRET" }, 11),
 ];
 
-tenantTest("shared transcript allowlists visible message fields and published replies", () => {
+test("shared transcript allowlists visible message fields and published replies", () => {
   assert.deepEqual(sharedMessages(entries), [
     { role: "user", text: "Hello" },
     { role: "assistant", text: "Hello back" },
@@ -56,7 +56,7 @@ tenantTest("shared transcript allowlists visible message fields and published re
   );
 });
 
-tenantTest("a delivery into the conversation is shared as the assistant's message", () => {
+test("a delivery into the conversation is shared as the assistant's message", () => {
   assert.deepEqual(
     sharedMessages([entry("user", { text: "remind me" }, 1), entry("assistant", { text: "Standup now" }, 2)]),
     [
@@ -66,7 +66,7 @@ tenantTest("a delivery into the conversation is shared as the assistant's messag
   );
 });
 
-tenantTest("work phases and approval decisions remain outside the shared message snapshot", () => {
+test("work phases and approval decisions remain outside the shared message snapshot", () => {
   assert.deepEqual(
     sharedMessages([
       entry("user", { text: "Run the check" }, 1),
@@ -86,7 +86,7 @@ tenantTest("work phases and approval decisions remain outside the shared message
   );
 });
 
-tenantTest("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
+test("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
   const store = testMap<SessionShare>();
   const bytes = createMemoryDurableByteStore();
   let puts = 0;
@@ -256,7 +256,7 @@ tenantTest("fresh shares freeze messages and authorized attachments with separat
   assert.equal((await fetch(`${base}/v1/sessions/s1/share`, { method: "DELETE" })).status, 404);
 });
 
-tenantTest("attachment projection includes only user and delivered attachments", () => {
+test("attachment projection includes only user and delivered attachments", () => {
   const messages = sharedMessages([
     entry("user", { attachments: [{ artifactId: "user" }] }, 1),
     entry("tool_result", { tool: "execute", files: [{ artifactId: "private" }] }, 2),
@@ -275,7 +275,7 @@ tenantTest("attachment projection includes only user and delivered attachments",
   ]);
 });
 
-tenantTest("snapshot authorization checks mixed tenure bounds without reading transcript payloads", async () => {
+test("snapshot authorization checks mixed tenure bounds without reading transcript payloads", async () => {
   let allowed = true;
   let window = {
     principalId: "alice",
@@ -307,7 +307,7 @@ tenantTest("snapshot authorization checks mixed tenure bounds without reading tr
   assert.equal(await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, minCreatedAt: 100 }), false);
 });
 
-tenantTest("staged tool attachments are never shared without confirmed delivery", () => {
+test("staged tool attachments are never shared without confirmed delivery", () => {
   const staged = entry("tool_result", { tool: "attach", ok: true, files: [{ artifactId: "PRIVATE_STAGED_FILE" }] }, 1);
   for (const following of [
     [],

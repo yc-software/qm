@@ -7,7 +7,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
-import { tenantIt } from "./support/test-tenants.ts";
+import { it } from "./support/test-tenants.ts";
 
 function dir(): VisibilityDirectory & {
   get(id: string): Promise<{ displayName: string } | null>;
@@ -41,27 +41,27 @@ function dir(): VisibilityDirectory & {
 }
 
 describe("isVisible: the shared action gate", () => {
-  tenantIt("dm: visible only to the owner", async () => {
+  it("dm: visible only to the owner", async () => {
     const d = dir();
     assert.equal(await isVisible(d, "U-carol", { kind: "dm", ownerId: "U-carol" }), true);
     assert.equal(await isVisible(d, "U-alice", { kind: "dm", ownerId: "U-carol" }), false);
   });
 
-  tenantIt("group: member yes, non-member no", async () => {
+  it("group: member yes, non-member no", async () => {
     const d = dir();
     assert.equal(await isVisible(d, "U-carol", { kind: "group", groupId: "G-jrs" }), true);
     assert.equal(await isVisible(d, "U-alice", { kind: "group", groupId: "G-jrs" }), false);
     assert.equal(await isVisible(d, "U-carol", { kind: "group", groupId: "G-unknown" }), false);
   });
 
-  tenantIt("channel, privacy known: public always visible, private only to members", async () => {
+  it("channel, privacy known: public always visible, private only to members", async () => {
     const d = dir();
     assert.equal(await isVisible(d, "U-anyone", { kind: "channel", channelId: "C-eng", isPrivate: false }), true);
     assert.equal(await isVisible(d, "U-carol", { kind: "channel", channelId: "C-secret", isPrivate: true }), true);
     assert.equal(await isVisible(d, "U-alice", { kind: "channel", channelId: "C-secret", isPrivate: true }), false);
   });
 
-  tenantIt("channel, privacy unknown: resolved via listChannelsFor (fail-closed on unknown)", async () => {
+  it("channel, privacy unknown: resolved via listChannelsFor (fail-closed on unknown)", async () => {
     const d = dir();
     assert.equal(await isVisible(d, "U-carol", { kind: "channel", channelId: "C-eng" }), true, "public, bot in it");
     assert.equal(await isVisible(d, "U-carol", { kind: "channel", channelId: "C-secret" }), true, "private member");
@@ -73,7 +73,7 @@ describe("isVisible: the shared action gate", () => {
     assert.equal(await isVisible(d, "U-carol", { kind: "channel", channelId: "C-nope" }), false, "unknown channel");
   });
 
-  tenantIt("channel, privacy unknown but no listChannelsFor: fails closed", async () => {
+  it("channel, privacy unknown but no listChannelsFor: fails closed", async () => {
     const d = dir();
     const noList: VisibilityDirectory = { channelMember: d.channelMember, groupMember: d.groupMember };
     assert.equal(await isVisible(noList, "U-carol", { kind: "channel", channelId: "C-eng" }), false);
@@ -91,7 +91,7 @@ function triggerDeps(run: (req: TurnRequest) => Promise<TurnResult>): TriggerDep
 }
 
 describe("runTrigger: fire-time visibility gate", () => {
-  tenantIt("delivers when the owner can still see the channel", async () => {
+  it("delivers when the owner can still see the channel", async () => {
     const deps = triggerDeps(async () => ({ status: "ok", reply: "standup" }));
     const destination: Destination = { type: "slack", target: "C-eng", audienceScopeId: scopeId("channel", "C-eng") };
     const out = await runTrigger(deps, {
@@ -106,7 +106,7 @@ describe("runTrigger: fire-time visibility gate", () => {
     assert.equal((await deps.deliveries.pending("slack")).length, 1);
   });
 
-  tenantIt("skips delivery (without disabling) when the owner can no longer see the private channel", async () => {
+  it("skips delivery (without disabling) when the owner can no longer see the private channel", async () => {
     const deps = triggerDeps(async () => ({ status: "ok", reply: "leaked digest" }));
     const destination: Destination = {
       type: "slack",
@@ -127,7 +127,7 @@ describe("runTrigger: fire-time visibility gate", () => {
     assert.equal(out.status, "refused", "a withheld delivery is not recorded as a success");
   });
 
-  tenantIt("skips the run entirely (§10 leg a) when the actor lost the HOME scope — the exfil shape", async () => {
+  it("skips the run entirely (§10 leg a) when the actor lost the HOME scope — the exfil shape", async () => {
     let ranTurn = false;
     const deps = triggerDeps(async () => {
       ranTurn = true;
@@ -153,7 +153,7 @@ describe("runTrigger: fire-time visibility gate", () => {
     assert.match(out.note ?? "", /no longer a member/);
   });
 
-  tenantIt("fails closed when the directory has never seen the home channel", async () => {
+  it("fails closed when the directory has never seen the home channel", async () => {
     let ranTurn = false;
     const deps = triggerDeps(async () => {
       ranTurn = true;
@@ -178,7 +178,7 @@ describe("runTrigger: fire-time visibility gate", () => {
     assert.equal((await deps.deliveries.pending("principal")).length, 0);
   });
 
-  tenantIt("skips a verbatim relay into a now-invisible group DM", async () => {
+  it("skips a verbatim relay into a now-invisible group DM", async () => {
     const deps = triggerDeps(async () => {
       throw new Error("a relay must not re-run a turn");
     });
@@ -196,7 +196,7 @@ describe("runTrigger: fire-time visibility gate", () => {
     assert.match(out.note ?? "", /no longer visible/);
   });
 
-  tenantIt("a thread-targeted channel destination (id:threadTs) still resolves visibility on the channel", async () => {
+  it("a thread-targeted channel destination (id:threadTs) still resolves visibility on the channel", async () => {
     const deps = triggerDeps(async () => ({ status: "ok", reply: "into the thread" }));
     const destination: Destination = {
       type: "slack",
@@ -219,29 +219,26 @@ describe("runTrigger: fire-time visibility gate", () => {
     assert.equal(out.note, undefined);
   });
 
-  tenantIt(
-    "a DM-created cron ('this conversation' in the owner's own DM) delivers — an im channel is not a directory channel",
-    async () => {
-      const deps = triggerDeps(async () => ({ status: "ok", reply: "morning digest" }));
-      const destination: Destination = {
-        type: "slack",
-        target: "D-carol",
-        audienceScopeId: scopeId("personal", "U-carol"),
-      };
-      const out = await runTrigger(deps, {
-        owner: "U-carol",
-        ownerScopeId: scopeId("personal", "U-carol"),
-        input: "digest",
-        fireKey: "f6",
-        surface: "cron",
-        destination,
-      });
-      assert.equal(out.note, undefined, "an im target must not be treated as an unknown directory channel");
-      assert.equal((await deps.deliveries.pending("slack")).length, 1, "the owner's own DM is always visible to them");
-    },
-  );
+  it("a DM-created cron ('this conversation' in the owner's own DM) delivers — an im channel is not a directory channel", async () => {
+    const deps = triggerDeps(async () => ({ status: "ok", reply: "morning digest" }));
+    const destination: Destination = {
+      type: "slack",
+      target: "D-carol",
+      audienceScopeId: scopeId("personal", "U-carol"),
+    };
+    const out = await runTrigger(deps, {
+      owner: "U-carol",
+      ownerScopeId: scopeId("personal", "U-carol"),
+      input: "digest",
+      fireKey: "f6",
+      surface: "cron",
+      destination,
+    });
+    assert.equal(out.note, undefined, "an im target must not be treated as an unknown directory channel");
+    assert.equal((await deps.deliveries.pending("slack")).length, 1, "the owner's own DM is always visible to them");
+  });
 
-  tenantIt("a personal-audience slack destination fails closed for anyone but the scope owner", async () => {
+  it("a personal-audience slack destination fails closed for anyone but the scope owner", async () => {
     const deps = triggerDeps(async () => ({ status: "ok", reply: "not yours" }));
     const destination: Destination = {
       type: "slack",
@@ -260,7 +257,7 @@ describe("runTrigger: fire-time visibility gate", () => {
     assert.match(out.note ?? "", /no longer visible/);
   });
 
-  tenantIt("a teammate-DM (principal) destination is never gated by channel visibility", async () => {
+  it("a teammate-DM (principal) destination is never gated by channel visibility", async () => {
     const deps = triggerDeps(async () => ({ status: "ok", reply: "fyi" }));
     const destination: Destination = {
       type: "principal",

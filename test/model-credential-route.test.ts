@@ -14,7 +14,7 @@ import { createModelCredentialStore, type StoredModelCredential } from "../src/m
 import { getRequiredModel, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
 import { testMap } from "./support/test-database.ts";
-import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -55,7 +55,7 @@ function start(
   };
 }
 
-tenantTest("admin model credentials are encrypted, write-only, live, and removable", async () => {
+test("admin model credentials are encrypted, write-only, live, and removable", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
     const initial = await fetch(`${srv.base}/v1/admin/model-providers`, { headers: ADMIN });
@@ -131,7 +131,7 @@ tenantTest("admin model credentials are encrypted, write-only, live, and removab
   }
 });
 
-tenantTest("model gateway credentials stay separate and advertise only routed models", async () => {
+test("model gateway credentials stay separate and advertise only routed models", async () => {
   const partial = buildApp(
     testConfig({
       modelGateway: {
@@ -216,7 +216,7 @@ tenantTest("model gateway credentials stay separate and advertise only routed mo
   assert.equal(await direct.modelCredentials.resolve("anthropic"), "direct-provider-key");
 });
 
-tenantTest("OpenRouter validation uses an authenticated endpoint", async () => {
+test("OpenRouter validation uses an authenticated endpoint", async () => {
   let requested = "";
   const srv = start({}, async (input) => {
     requested = String(input);
@@ -236,7 +236,7 @@ tenantTest("OpenRouter validation uses an authenticated endpoint", async () => {
   }
 });
 
-tenantTest("OpenRouter catalog exposes runtime-supported tool models as selectable base models", async () => {
+test("OpenRouter catalog exposes runtime-supported tool models as selectable base models", async () => {
   let requested = "";
   let catalogRequests = 0;
   const srv = start({ openrouterApiKey: "deployment-openrouter-key" }, async (input) => {
@@ -352,7 +352,7 @@ tenantTest("OpenRouter catalog exposes runtime-supported tool models as selectab
   }
 });
 
-tenantTest("web turns keep a persisted OpenRouter model enabled when the refreshed catalog omits it", async () => {
+test("web turns keep a persisted OpenRouter model enabled when the refreshed catalog omits it", async () => {
   const srv = start({ openrouterApiKey: "deployment-openrouter-key" }, async () =>
     Response.json({
       data: [
@@ -392,7 +392,7 @@ tenantTest("web turns keep a persisted OpenRouter model enabled when the refresh
   }
 });
 
-tenantTest("an oversized OpenRouter catalog falls back to the built-in models", async () => {
+test("an oversized OpenRouter catalog falls back to the built-in models", async () => {
   const srv = start({ openrouterApiKey: "deployment-openrouter-key" }, async () =>
     Response.json({
       data: [
@@ -419,7 +419,7 @@ tenantTest("an oversized OpenRouter catalog falls back to the built-in models", 
   }
 });
 
-tenantTest("admin scope keeps the selected runtime model visible when its provider is unavailable", async () => {
+test("admin scope keeps the selected runtime model visible when its provider is unavailable", async () => {
   const srv = start();
   try {
     await inTestTenant(() => srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-5" }));
@@ -442,7 +442,7 @@ tenantTest("admin scope keeps the selected runtime model visible when its provid
   }
 });
 
-tenantTest("web turns refuse a model whose provider has no key", async () => {
+test("web turns refuse a model whose provider has no key", async () => {
   const srv = start();
   try {
     const unkeyed = await inTestTenant(() =>
@@ -462,7 +462,7 @@ tenantTest("web turns refuse a model whose provider has no key", async () => {
   }
 });
 
-tenantTest("a rejected rotation preserves the prior key and disabling suppresses environment fallback", async () => {
+test("a rejected rotation preserves the prior key and disabling suppresses environment fallback", async () => {
   let accepts = true;
   const srv = start(
     { anthropicApiKey: "deployment-anthropic-key" },
@@ -497,7 +497,7 @@ tenantTest("a rejected rotation preserves the prior key and disabling suppresses
   }
 });
 
-tenantTest("surface-config reports whether any model provider is configured", async () => {
+test("surface-config reports whether any model provider is configured", async () => {
   const srv = start();
   try {
     const before = await fetch(`${srv.base}/v1/surface-config`, { headers: testTenantHeaders() });
@@ -514,7 +514,7 @@ tenantTest("surface-config reports whether any model provider is configured", as
   }
 });
 
-tenantTest("surface-config respects an admin-disabled environment provider", async () => {
+test("surface-config respects an admin-disabled environment provider", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
     const before = await fetch(`${srv.base}/v1/surface-config`, { headers: testTenantHeaders() });
@@ -531,7 +531,7 @@ tenantTest("surface-config respects an admin-disabled environment provider", asy
   }
 });
 
-tenantTest("surface-config reports company ChatGPT OAuth without making it a Pi API credential", async () => {
+test("surface-config reports company ChatGPT OAuth without making it a Pi API credential", async () => {
   const srv = start({ codexAuthCredential: "company-chatgpt" });
   try {
     const surface = await fetch(`${srv.base}/v1/surface-config`, { headers: testTenantHeaders() });
@@ -542,7 +542,7 @@ tenantTest("surface-config reports company ChatGPT OAuth without making it a Pi 
   }
 });
 
-tenantTest("a Claude subscription token is reported as company subscription auth", async () => {
+test("a Claude subscription token is reported as company subscription auth", async () => {
   const srv = start({ anthropicApiKey: "sk-ant-oat-test" });
   try {
     const surface = await fetch(`${srv.base}/v1/surface-config`, { headers: testTenantHeaders() });
@@ -558,7 +558,7 @@ tenantTest("a Claude subscription token is reported as company subscription auth
   }
 });
 
-tenantTest("admin model credentials survive a second app instance on the same durable store", async () => {
+test("admin model credentials survive a second app instance on the same durable store", async () => {
   const backing = testMap<StoredModelCredential>();
   const first = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });
   await first.set("openrouter", "durable-openrouter-key", "admin-alice@default-org");
@@ -569,7 +569,7 @@ tenantTest("admin model credentials survive a second app instance on the same du
   assert.doesNotMatch(JSON.stringify(await second.statuses()), /durable-openrouter-key/);
 });
 
-tenantTest("a stored scope runtime remains usable outside the legacy configured picker", async () => {
+test("a stored scope runtime remains usable outside the legacy configured picker", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
     await inTestTenant(() => srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" }));
@@ -601,7 +601,7 @@ tenantTest("a stored scope runtime remains usable outside the legacy configured 
   }
 });
 
-tenantTest("inbox runtime overrides use the web model allowlist without changing defaults", async () => {
+test("inbox runtime overrides use the web model allowlist without changing defaults", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
     await inTestTenant(() => srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" }));
@@ -629,7 +629,7 @@ tenantTest("inbox runtime overrides use the web model allowlist without changing
   }
 });
 
-tenantTest("company runtime reads exclude personal-only models without changing the regular picker", async () => {
+test("company runtime reads exclude personal-only models without changing the regular picker", async () => {
   const srv = start({ anthropicApiKey: undefined, openaiApiKey: undefined });
   try {
     await inTestTenant(() => srv.built.userModelCredentials.setApiKey("alice", "openai", "synthetic-openai"));

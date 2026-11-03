@@ -9,9 +9,9 @@ import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/br
 import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
 import { zeroUsage } from "../src/model/model-runtime.ts";
 import { stopAtEnd } from "./support/build-app.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
-tenantTest("browser follows durable user AI access and personal model defaults", async () => {
+test("browser follows durable user AI access and personal model defaults", async () => {
   const built = stopAtEnd(buildApp(testConfig()));
   const input = {
     actorId: "U1",
@@ -40,7 +40,7 @@ tenantTest("browser follows durable user AI access and personal model defaults",
   assert.equal(selected.model, undefined);
 });
 
-tenantTest("ChatGPT browser inference uses refreshed subscription auth and native structured output", async () => {
+test("ChatGPT browser inference uses refreshed subscription auth and native structured output", async () => {
   const built = stopAtEnd(buildApp(testConfig()));
   await built.userModelCredentials.setOAuth("U1", "openai", {
     accessToken: "original-access",
@@ -126,7 +126,7 @@ tenantTest("ChatGPT browser inference uses refreshed subscription auth and nativ
   });
 });
 
-tenantTest("Claude subscription browser requests fail without deriving or sending credentials", async () => {
+test("Claude subscription browser requests fail without deriving or sending credentials", async () => {
   const built = stopAtEnd(buildApp(testConfig()));
   await built.userModelCredentials.setOAuth("U1", "anthropic", {
     accessToken: "claude-subscription",
@@ -160,7 +160,7 @@ tenantTest("Claude subscription browser requests fail without deriving or sendin
   );
 });
 
-tenantTest("personal API keys bypass organization provider endpoint overrides", async (t) => {
+test("personal API keys bypass organization provider endpoint overrides", async (t) => {
   const built = stopAtEnd(buildApp(testConfig()));
   setProviderBaseUrls({ openai: "https://organization.invalid/v1", anthropic: "https://organization.invalid" });
   t.after(() => setProviderBaseUrls({}));
@@ -205,41 +205,91 @@ tenantTest("personal API keys bypass organization provider endpoint overrides", 
   }
 });
 
-tenantTest(
-  "company ChatGPT subscription auth uses the native subscription transport without API-key fallback",
-  async () => {
-    const claims = Buffer.from(
-      JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company" } }),
-    ).toString("base64url");
-    const built = stopAtEnd(
-      buildApp(
-        testConfig({
-          codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL,
-          openaiApiKey: "must-not-fallback",
-        }),
-      ),
-    );
-    await saveCompanyChatGPTLogin(built.keychain, {
-      auth_mode: "chatgpt",
-      tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
-    });
-    const selection = { account: "company" as const, model: "gpt-5.6-sol", routing: null };
-    const keys = await built.resolveBrowserCompanyKeys();
-    assert.equal(keys["openai-codex"], "company-access");
-    assert.equal((await built.resolveBrowserCompanyKeys(false))["openai-codex"], undefined);
+test("company ChatGPT subscription auth uses the native subscription transport without API-key fallback", async () => {
+  const claims = Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company" } }),
+  ).toString("base64url");
+  const built = stopAtEnd(
+    buildApp(
+      testConfig({
+        codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL,
+        openaiApiKey: "must-not-fallback",
+      }),
+    ),
+  );
+  await saveCompanyChatGPTLogin(built.keychain, {
+    auth_mode: "chatgpt",
+    tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
+  });
+  const selection = { account: "company" as const, model: "gpt-5.6-sol", routing: null };
+  const keys = await built.resolveBrowserCompanyKeys();
+  assert.equal(keys["openai-codex"], "company-access");
+  assert.equal((await built.resolveBrowserCompanyKeys(false))["openai-codex"], undefined);
+  const input = {
+    selection,
+    actorId: "U1",
+    companyProviderKeys: keys,
+    companySubscriptionProvider: "openai" as const,
+    body: { messages: [{ role: "user", content: "test" }] },
+    signal: new AbortController().signal,
+  };
+  const result = await nativeBrowserCompletion(input, async (auth) => {
+    assert.deepEqual(auth, { "openai-codex": "company-access" });
+    return {
+      completeSimple: async (model) => {
+        assert.equal(model.provider, "openai-codex");
+        return {
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: zeroUsage(),
+          timestamp: Date.now(),
+          stopReason: "stop",
+          content: [{ type: "text", text: "done" }],
+        };
+      },
+    };
+  });
+  assert.equal(result.choices[0]?.message.content, "done");
+  await assert.rejects(
+    nativeBrowserCompletion({ ...input, companyProviderKeys: { openai: "must-not-fallback" } }),
+    (error: unknown) => error instanceof BrowserCompletionError && error.status === 503,
+  );
+  await assert.rejects(
+    nativeBrowserCompletion({
+      ...input,
+      selection: { ...selection, model: "claude-opus-5" },
+      companySubscriptionProvider: "anthropic",
+    }),
+    (error: unknown) => error instanceof BrowserCompletionError && error.status === 422,
+  );
+});
+
+for (const mapped of [true, false]) {
+  test(`Ultrafast browser inference retains native routing with ${mapped ? "mapped" : "unrelated"} gateway`, async () => {
+    const id = "gpt-6-astra-ultrafast";
+    const gateway: NonNullable<Parameters<typeof nativeBrowserCompletion>[0]["modelGateway"]> = {
+      url: "https://gateway.example.test/v1",
+      apiKey: "gateway-key",
+      apiKeyHeader: "api-key",
+      models: mapped ? { [id]: "router/astra" } : { "claude-opus-5": "router/opus" },
+    };
     const input = {
-      selection,
+      selection: { account: "company" as const, model: id, routing: null },
       actorId: "U1",
-      companyProviderKeys: keys,
-      companySubscriptionProvider: "openai" as const,
+      modelGateway: gateway,
+      companyProviderKeys: mapped ? {} : { openai: "direct-key" },
       body: { messages: [{ role: "user", content: "test" }] },
       signal: new AbortController().signal,
     };
-    const result = await nativeBrowserCompletion(input, async (auth) => {
-      assert.deepEqual(auth, { "openai-codex": "company-access" });
+    const result = await nativeBrowserCompletion(input, async (keys, transport) => {
+      assert.deepEqual(keys, input.companyProviderKeys);
+      assert.equal(transport, gateway);
       return {
         completeSimple: async (model) => {
-          assert.equal(model.provider, "openai-codex");
+          assert.equal(model.id, id);
+          assert.equal(model.api, "openai-responses");
           return {
             role: "assistant",
             api: model.api,
@@ -255,68 +305,12 @@ tenantTest(
     });
     assert.equal(result.choices[0]?.message.content, "done");
     await assert.rejects(
-      nativeBrowserCompletion({ ...input, companyProviderKeys: { openai: "must-not-fallback" } }),
-      (error: unknown) => error instanceof BrowserCompletionError && error.status === 503,
-    );
-    await assert.rejects(
       nativeBrowserCompletion({
         ...input,
-        selection: { ...selection, model: "claude-opus-5" },
-        companySubscriptionProvider: "anthropic",
+        modelGateway: { ...gateway, models: {}, reservedModelIds: new Set([id]) },
+        companyProviderKeys: { openai: "must-not-fallback" },
       }),
-      (error: unknown) => error instanceof BrowserCompletionError && error.status === 422,
+      /Gateway model is unavailable/,
     );
-  },
-);
-
-for (const mapped of [true, false]) {
-  tenantTest(
-    `Ultrafast browser inference retains native routing with ${mapped ? "mapped" : "unrelated"} gateway`,
-    async () => {
-      const id = "gpt-6-astra-ultrafast";
-      const gateway: NonNullable<Parameters<typeof nativeBrowserCompletion>[0]["modelGateway"]> = {
-        url: "https://gateway.example.test/v1",
-        apiKey: "gateway-key",
-        apiKeyHeader: "api-key",
-        models: mapped ? { [id]: "router/astra" } : { "claude-opus-5": "router/opus" },
-      };
-      const input = {
-        selection: { account: "company" as const, model: id, routing: null },
-        actorId: "U1",
-        modelGateway: gateway,
-        companyProviderKeys: mapped ? {} : { openai: "direct-key" },
-        body: { messages: [{ role: "user", content: "test" }] },
-        signal: new AbortController().signal,
-      };
-      const result = await nativeBrowserCompletion(input, async (keys, transport) => {
-        assert.deepEqual(keys, input.companyProviderKeys);
-        assert.equal(transport, gateway);
-        return {
-          completeSimple: async (model) => {
-            assert.equal(model.id, id);
-            assert.equal(model.api, "openai-responses");
-            return {
-              role: "assistant",
-              api: model.api,
-              provider: model.provider,
-              model: model.id,
-              usage: zeroUsage(),
-              timestamp: Date.now(),
-              stopReason: "stop",
-              content: [{ type: "text", text: "done" }],
-            };
-          },
-        };
-      });
-      assert.equal(result.choices[0]?.message.content, "done");
-      await assert.rejects(
-        nativeBrowserCompletion({
-          ...input,
-          modelGateway: { ...gateway, models: {}, reservedModelIds: new Set([id]) },
-          companyProviderKeys: { openai: "must-not-fallback" },
-        }),
-        /Gateway model is unavailable/,
-      );
-    },
-  );
+  });
 }

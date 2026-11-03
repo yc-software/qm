@@ -15,7 +15,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
-import { tenantIt } from "./support/test-tenants.ts";
+import { it } from "./support/test-tenants.ts";
 
 function fakeDirectory(): ReachDirectory & {
   get(id: string): Promise<{ displayName: string } | null>;
@@ -86,7 +86,7 @@ function fakeDirectory(): ReachDirectory & {
 describe("Reach: resolveReachTarget (addressing + reachability gate)", () => {
   const dir = fakeDirectory();
 
-  tenantIt("DMs any internal teammate (no membership gate — a human could DM anyone)", async () => {
+  it("DMs any internal teammate (no membership gate — a human could DM anyone)", async () => {
     const r = await resolveReachTarget(dir, { recipient: "Alice" }, "U-carol");
     assert.equal(r.ok, true);
     assert.equal((r as any).destination.type, "principal");
@@ -96,7 +96,7 @@ describe("Reach: resolveReachTarget (addressing + reachability gate)", () => {
     assert.equal((r as any).recipient.displayName, "Alice");
   });
 
-  tenantIt("404 not-found, 409 ambiguous", async () => {
+  it("404 not-found, 409 ambiguous", async () => {
     const miss = await resolveReachTarget(dir, { recipient: "Nobody" }, "U-carol");
     assert.equal(miss.ok, false);
     assert.equal((miss as any).status, 404);
@@ -105,7 +105,7 @@ describe("Reach: resolveReachTarget (addressing + reachability gate)", () => {
     assert.equal((amb as any).candidates.length, 2);
   });
 
-  tenantIt("public channel: any internal member may post; private channel: only a member (403 otherwise)", async () => {
+  it("public channel: any internal member may post; private channel: only a member (403 otherwise)", async () => {
     const pub = await resolveReachTarget(dir, { channel: "eng" }, "U-alice");
     assert.equal(pub.ok, true);
     assert.equal((pub as any).destination.type, "slack");
@@ -118,21 +118,18 @@ describe("Reach: resolveReachTarget (addressing + reachability gate)", () => {
     assert.equal((noPriv as any).status, 403);
   });
 
-  tenantIt(
-    "denial is legible: a known non-member → not_a_member; an actor not in the directory → identity_unverified",
-    async () => {
-      const notMember = await resolveReachTarget(dir, { channel: "secret" }, "U-alice");
-      assert.equal((notMember as any).error, "not_a_member");
+  it("denial is legible: a known non-member → not_a_member; an actor not in the directory → identity_unverified", async () => {
+    const notMember = await resolveReachTarget(dir, { channel: "secret" }, "U-alice");
+    assert.equal((notMember as any).error, "not_a_member");
 
-      const unverified = await resolveReachTarget(dir, { channel: "secret" }, "U-ghost");
-      assert.equal(unverified.ok, false);
-      assert.equal((unverified as any).status, 403);
-      assert.equal((unverified as any).error, "identity_unverified");
-      assert.match((unverified as any).message, /link|linked|sign|connect/i);
-    },
-  );
+    const unverified = await resolveReachTarget(dir, { channel: "secret" }, "U-ghost");
+    assert.equal(unverified.ok, false);
+    assert.equal((unverified as any).status, 403);
+    assert.equal((unverified as any).error, "identity_unverified");
+    assert.match((unverified as any).message, /link|linked|sign|connect/i);
+  });
 
-  tenantIt("group DM: resolved by the participant SET (sender folded in); member-only (parity)", async () => {
+  it("group DM: resolved by the participant SET (sender folded in); member-only (parity)", async () => {
     const ok = await resolveReachTarget(dir, { participants: ["U-alice", "U-sam1"] }, "U-carol");
     assert.equal(ok.ok, true);
     assert.equal((ok as any).destination.type, "group");
@@ -155,7 +152,7 @@ describe("Reach: resolveReachTarget (addressing + reachability gate)", () => {
     assert.equal((nonMember as any).status, 404);
   });
 
-  tenantIt("400 when more than one / no target is named", async () => {
+  it("400 when more than one / no target is named", async () => {
     const both = await resolveReachTarget(dir, { recipient: "Alice", channel: "eng" }, "U-carol");
     assert.equal((both as any).status, 400);
     const withGroup = await resolveReachTarget(dir, { channel: "eng", participants: ["U-alice"] }, "U-carol");
@@ -169,28 +166,25 @@ describe("Reach: resolveReachTarget (addressing + reachability gate)", () => {
 });
 
 describe("Reach: person-keyed parity (delivery never re-derives it from scope labels)", () => {
-  tenantIt(
-    "a run composed in one room delivers verbatim into ANOTHER room its authority may post to (forwarding, §10)",
-    async () => {
-      const deliveries = createDeliveryStore();
-      const toOtherChannel: Destination = {
-        type: "slack",
-        target: "C-win",
-        audienceScopeId: scopeId("channel", "C-win"),
-      };
-      const d = await reachEnqueue({
-        deliveries,
-        destination: toOtherChannel,
-        text: "Cross-room update",
-        idempotencyKey: "kx1",
-      });
-      assert.equal(d.text, "Cross-room update");
-    },
-  );
+  it("a run composed in one room delivers verbatim into ANOTHER room its authority may post to (forwarding, §10)", async () => {
+    const deliveries = createDeliveryStore();
+    const toOtherChannel: Destination = {
+      type: "slack",
+      target: "C-win",
+      audienceScopeId: scopeId("channel", "C-win"),
+    };
+    const d = await reachEnqueue({
+      deliveries,
+      destination: toOtherChannel,
+      text: "Cross-room update",
+      idempotencyKey: "kx1",
+    });
+    assert.equal(d.text, "Cross-room update");
+  });
 });
 
 describe("Reach: verbatim relay attribution", () => {
-  tenantIt("reachEnqueue attributes a third-party DM but not a self-reminder or a channel post", async () => {
+  it("reachEnqueue attributes a third-party DM but not a self-reminder or a channel post", async () => {
     const deliveries = createDeliveryStore();
     const toAlice: Destination = {
       type: "principal",
@@ -234,7 +228,7 @@ describe("Reach: verbatim relay attribution", () => {
     assert.equal(d3.text, "heads up team");
   });
 
-  tenantIt("reachEnqueue carries attachments onto the SAME delivery (text + files, one placement)", async () => {
+  it("reachEnqueue carries attachments onto the SAME delivery (text + files, one placement)", async () => {
     const deliveries = createDeliveryStore();
     const toChannelThread: Destination = {
       type: "slack",
@@ -255,7 +249,7 @@ describe("Reach: verbatim relay attribution", () => {
     assert.equal(d.attachments?.[0]?.name, "cover.png");
   });
 
-  tenantIt("composed task output (no attributeAs) is never prefixed", async () => {
+  it("composed task output (no attributeAs) is never prefixed", async () => {
     const deliveries = createDeliveryStore();
     const toAlice: Destination = {
       type: "principal",
@@ -272,7 +266,7 @@ describe("Reach: verbatim relay attribution", () => {
     assert.equal(d.text, "Here is the channel summary…");
   });
 
-  tenantIt("a reaction enqueues an empty-text delivery carrying the react, bypassing attribution", async () => {
+  it("a reaction enqueues an empty-text delivery carrying the react, bypassing attribution", async () => {
     const deliveries = createDeliveryStore();
     const reactDest = withReact(
       { type: "slack", target: "C-eng", audienceScopeId: scopeId("channel", "C-eng") },
@@ -289,7 +283,7 @@ describe("Reach: verbatim relay attribution", () => {
     assert.deepEqual(d.destination.react, { messageTs: "1782340476.7", emoji: "white_check_mark" });
   });
 
-  tenantIt("a deletion enqueues an empty-text delivery carrying the delete, bypassing attribution", async () => {
+  it("a deletion enqueues an empty-text delivery carrying the delete, bypassing attribution", async () => {
     const deliveries = createDeliveryStore();
     const delDest = withDelete(
       { type: "slack", target: "C-eng", audienceScopeId: scopeId("channel", "C-eng") },
@@ -306,7 +300,7 @@ describe("Reach: verbatim relay attribution", () => {
     assert.deepEqual(d.destination.delete, { messageTs: "1782340476.7" });
   });
 
-  tenantIt("an edit carries the target message and its new text, delivered verbatim", async () => {
+  it("an edit carries the target message and its new text, delivered verbatim", async () => {
     const deliveries = createDeliveryStore();
     const editDest = withEdit(
       { type: "slack", target: "C-eng", audienceScopeId: scopeId("channel", "C-eng") },
@@ -334,7 +328,7 @@ function triggerDeps(run: (req: TurnRequest) => Promise<TurnResult>): TriggerDep
 }
 
 describe("runTrigger: cron produces deliveries, Reach gates them", () => {
-  tenantIt("'summarize THIS channel, DM it to Alice' — channel read scope → teammate DM, gate passes", async () => {
+  it("'summarize THIS channel, DM it to Alice' — channel read scope → teammate DM, gate passes", async () => {
     const deps = triggerDeps(async () => ({ status: "ok", reply: "3 PRs merged, 1 incident resolved." }));
     const destination: Destination = {
       type: "principal",
@@ -357,66 +351,60 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
     assert.equal(pending[0]!.destination.target, "U-alice");
   });
 
-  tenantIt(
-    "conversation-owned cron → an individual's DM including a NON-member of the channel — gate passes, no withhold",
-    async () => {
-      const deps = triggerDeps(async () => ({ status: "ok", reply: "team digest" }));
-      const destination: Destination = {
-        type: "principal",
-        target: "U-alice",
-        audienceScopeId: scopeId("personal", "U-alice"),
-        onBehalfOf: "U-carol",
-      };
-      const members: Principal[] = [
-        { id: "U-carol", type: "internal" },
-        { id: "U-alice", type: "internal" },
-      ];
-      deps.currentScopeMembers = async () => members;
-      const out = await runTrigger(deps, {
-        owner: "system:channel:C-secret",
-        ownerScopeId: scopeId("channel", "C-secret"),
-        input: "digest",
-        fireKey: "cron:team1:slot",
-        surface: "cron",
-        destination,
-      });
-      assert.equal(out.authzFailed, false);
-      const pending = await deps.deliveries.pending("principal");
-      assert.equal(pending.length, 1);
-      assert.equal(pending[0]!.text, "team digest");
-    },
-  );
+  it("conversation-owned cron → an individual's DM including a NON-member of the channel — gate passes, no withhold", async () => {
+    const deps = triggerDeps(async () => ({ status: "ok", reply: "team digest" }));
+    const destination: Destination = {
+      type: "principal",
+      target: "U-alice",
+      audienceScopeId: scopeId("personal", "U-alice"),
+      onBehalfOf: "U-carol",
+    };
+    const members: Principal[] = [
+      { id: "U-carol", type: "internal" },
+      { id: "U-alice", type: "internal" },
+    ];
+    deps.currentScopeMembers = async () => members;
+    const out = await runTrigger(deps, {
+      owner: "system:channel:C-secret",
+      ownerScopeId: scopeId("channel", "C-secret"),
+      input: "digest",
+      fireKey: "cron:team1:slot",
+      surface: "cron",
+      destination,
+    });
+    assert.equal(out.authzFailed, false);
+    const pending = await deps.deliveries.pending("principal");
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.text, "team digest");
+  });
 
-  tenantIt(
-    "a verbatim message relay (cron) to a third party is attributed with the sender's name at fire time",
-    async () => {
-      const deps = triggerDeps(async () => {
-        throw new Error("a literal message must NOT re-run a turn");
-      });
-      const destination: Destination = {
-        type: "principal",
-        target: "U-alice",
-        audienceScopeId: scopeId("personal", "U-alice"),
-        onBehalfOf: "U-carol",
-      };
-      const out = await runTrigger(deps, {
-        owner: "U-carol",
-        ownerScopeId: scopeId("personal", "U-carol"),
-        input: "",
-        message: "the deploy is done 🚀",
-        fireKey: "cron:relay1:slot",
-        surface: "cron",
-        destination,
-      });
-      assert.equal(out.authzFailed, false);
-      const pending = await deps.deliveries.pending("principal");
-      assert.equal(pending.length, 1);
-      assert.equal(pending[0]!.text, "the deploy is done 🚀");
-      assert.equal(pending[0]!.destination.relaySender, "Carol");
-    },
-  );
+  it("a verbatim message relay (cron) to a third party is attributed with the sender's name at fire time", async () => {
+    const deps = triggerDeps(async () => {
+      throw new Error("a literal message must NOT re-run a turn");
+    });
+    const destination: Destination = {
+      type: "principal",
+      target: "U-alice",
+      audienceScopeId: scopeId("personal", "U-alice"),
+      onBehalfOf: "U-carol",
+    };
+    const out = await runTrigger(deps, {
+      owner: "U-carol",
+      ownerScopeId: scopeId("personal", "U-carol"),
+      input: "",
+      message: "the deploy is done 🚀",
+      fireKey: "cron:relay1:slot",
+      surface: "cron",
+      destination,
+    });
+    assert.equal(out.authzFailed, false);
+    const pending = await deps.deliveries.pending("principal");
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.text, "the deploy is done 🚀");
+    assert.equal(pending[0]!.destination.relaySender, "Carol");
+  });
 
-  tenantIt("a fire's attachments ride the delivery with the reply (the tweet-digest regression)", async () => {
+  it("a fire's attachments ride the delivery with the reply (the tweet-digest regression)", async () => {
     const files = [
       {
         name: "1_tweet.png",
@@ -459,7 +447,7 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
     );
   });
 
-  tenantIt("an attachments-only fire (no reply text) still delivers, as a file-only post", async () => {
+  it("an attachments-only fire (no reply text) still delivers, as a file-only post", async () => {
     const files = [{ name: "chart.png", mimetype: "image/png", sizeBytes: 9, blobId: "b3" }];
     const deps = triggerDeps(async () => ({ status: "ok", attachments: files }));
     const destination: Destination = {
@@ -483,7 +471,7 @@ describe("runTrigger: cron produces deliveries, Reach gates them", () => {
     assert.equal(pending[0]!.attachments?.length, 1);
   });
 
-  tenantIt("a channel cron whose output is composed from the channel delivers unprefixed", async () => {
+  it("a channel cron whose output is composed from the channel delivers unprefixed", async () => {
     const deps = triggerDeps(async () => ({ status: "ok", reply: "standup posted" }));
     const destination: Destination = { type: "slack", target: "C-eng", audienceScopeId: scopeId("channel", "C-eng") };
     const out = await runTrigger(deps, {

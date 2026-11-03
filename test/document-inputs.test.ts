@@ -15,7 +15,7 @@ import { mimeFromName } from "../src/core/attachments.ts";
 import type { AttachmentMeta, SessionEntry } from "../src/types.ts";
 import type { FileArtifact, FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/agent/provider-payload.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const openai = { api: "openai-responses", provider: "openai", input: ["text", "image"] };
 const anthropic = { api: "anthropic-messages", provider: "anthropic", input: ["text", "image"] };
@@ -55,7 +55,7 @@ for (const ext of [
   "srt",
   "vtt",
 ]) {
-  tenantTest(`Responses sends original ${ext} bytes as native file input`, async () => {
+  test(`Responses sends original ${ext} bytes as native file input`, async () => {
     const document = await fixture(ext);
     const payload = (await withDocumentInputs(
       { model: "test", input: [{ role: "user", content: [{ type: "input_text", text: "Summarize" }] }] },
@@ -98,7 +98,7 @@ for (const ext of [
   "srt",
   "vtt",
 ]) {
-  tenantTest(`automatic ${ext} fallback extracts the fixture's verification code`, async () => {
+  test(`automatic ${ext} fallback extracts the fixture's verification code`, async () => {
     const document = await fixture(ext);
     const text = await documentFallbackText(document);
     assert.ok(text.includes(`${ext.toUpperCase()}-QUARTZ-731`));
@@ -107,7 +107,7 @@ for (const ext of [
   });
 }
 
-tenantTest("Anthropic receives PDF document bytes and text document content", async () => {
+test("Anthropic receives PDF document bytes and text document content", async () => {
   const pdf = await fixture("pdf");
   const blocks = await documentBlocks([pdf, await fixture("txt")], anthropic);
   assert.deepEqual(blocks[0], {
@@ -119,7 +119,7 @@ tenantTest("Anthropic receives PDF document bytes and text document content", as
   assert.match(JSON.stringify(blocks[1]), /QUARTZ-731/);
 });
 
-tenantTest("unsupported routes use extraction instead of unsupported wire types", async () => {
+test("unsupported routes use extraction instead of unsupported wire types", async () => {
   for (const model of [
     { ...openai, provider: "custom:test" },
     { ...openai, api: "openai-codex-responses" },
@@ -131,7 +131,7 @@ tenantTest("unsupported routes use extraction instead of unsupported wire types"
   assert.equal(nativeDocumentFormat({ ...openai, input: ["text"] }, await fixture("pdf")), undefined);
 });
 
-tenantTest("OpenRouter uses native PDF processing without silently selecting an OCR service", async () => {
+test("OpenRouter uses native PDF processing without silently selecting an OCR service", async () => {
   const payload = (await withDocumentInputs(
     { messages: [{ role: "user", content: "Summarize" }] },
     { api: "openai-completions", provider: "openrouter", id: "anthropic/claude-sonnet", input: ["image"] },
@@ -141,7 +141,7 @@ tenantTest("OpenRouter uses native PDF processing without silently selecting an 
   assert.equal(payload.messages[0]!.content.at(-1)!.type, "file");
 });
 
-tenantTest("Google document parts preserve PDFs and use text for office files", async () => {
+test("Google document parts preserve PDFs and use text for office files", async () => {
   const payload = (await withDocumentInputs(
     { contents: [{ role: "user", parts: [{ text: "Summarize" }] }] },
     { api: "google-generative-ai", input: ["image"] },
@@ -151,14 +151,14 @@ tenantTest("Google document parts preserve PDFs and use text for office files", 
   assert.match(String(payload.contents[0]!.parts.at(-1)!.text), /QUARTZ-731/);
 });
 
-tenantTest("invalid binary documents and empty scans never masquerade as read documents", async () => {
+test("invalid binary documents and empty scans never masquerade as read documents", async () => {
   const document = await fixture("pdf");
   document.dataBase64 = Buffer.from("not a PDF").toString("base64");
   assert.match(await documentFallbackText(document), /could not be included/);
   assert.match(await documentFallbackText(await fixture("doc")), /Do not summarize it from another file/);
 });
 
-tenantTest("request byte budgets replace all native document wire formats with explicit notices", async () => {
+test("request byte budgets replace all native document wire formats with explicit notices", async () => {
   for (const [model, payload] of [
     [openai, { input: [{ role: "user", content: [] }] }],
     [anthropic, { messages: [{ role: "user", content: [] }] }],
@@ -175,7 +175,7 @@ tenantTest("request byte budgets replace all native document wire formats with e
   }
 });
 
-tenantTest("requests clearly under the byte budget are sent without serializing them", (t) => {
+test("requests clearly under the byte budget are sent without serializing them", (t) => {
   const payload = {
     messages: [
       {
@@ -193,7 +193,7 @@ tenantTest("requests clearly under the byte budget are sent without serializing 
   assert.equal(stringify.mock.callCount(), 0);
 });
 
-tenantTest("chat-completions image URLs over the byte budget are shed like other inline images", () => {
+test("chat-completions image URLs over the byte budget are shed like other inline images", () => {
   const payload = {
     messages: [
       {
@@ -211,7 +211,7 @@ tenantTest("chat-completions image URLs over the byte budget are shed like other
   assert.match(trimmed, /describe/);
 });
 
-tenantTest("escape-heavy text near the byte budget still sheds inline images", () => {
+test("escape-heavy text near the byte budget still sheds inline images", () => {
   const payload = {
     messages: [
       {
@@ -230,7 +230,7 @@ tenantTest("escape-heavy text near the byte budget still sheds inline images", (
   assert.match(trimmed, /"upload"/);
 });
 
-tenantTest("empty documents restore as empty content on every turn", async () => {
+test("empty documents restore as empty content on every turn", async () => {
   const { store, meta } = storeFor(Buffer.alloc(0));
   for (let turn = 0; turn < 2; turn++) {
     const result = await loadDocumentInputs(store, [meta], () => true);
@@ -271,7 +271,7 @@ function storeFor(data = Buffer.from("QUARTZ-731")) {
   return { artifact, store, meta, opens: () => opens };
 }
 
-tenantTest("restores stopped/restarted turns from durable document metadata and deduplicates retries", async () => {
+test("restores stopped/restarted turns from durable document metadata and deduplicates retries", async () => {
   const { store, meta, opens } = storeFor();
   const history = [
     { type: "user", payload: { attachments: [meta] } },
@@ -283,7 +283,7 @@ tenantTest("restores stopped/restarted turns from durable document metadata and 
   assert.match(await documentFallbackText(inputs.documents[0]!), /QUARTZ-731/);
 });
 
-tenantTest("reuploaded identical documents consume the input budget once and retain the newest artifact", async () => {
+test("reuploaded identical documents consume the input budget once and retain the newest artifact", async () => {
   const { store, meta, artifact, opens } = storeFor();
   store.get = async (id) => ({ ...artifact, id });
   const open = store.open.bind(store);
@@ -309,29 +309,26 @@ tenantTest("reuploaded identical documents consume the input budget once and ret
   assert.ok(checked.includes("new-upload"));
 });
 
-tenantTest(
-  "steered reuploads already in the turn do not consume another document slot or emit budget notices",
-  async () => {
-    const { store, meta, artifact, opens } = storeFor();
-    const initial = await loadDocumentInputs(store, [meta], () => true);
-    store.get = async (id) => ({ ...artifact, id });
-    const checked: string[] = [];
-    const steered = await loadDocumentInputs(
-      store,
-      [{ ...meta, artifactId: "steered-upload" }],
-      (file) => {
-        checked.push(file.id);
-        return true;
-      },
-      { maxBytes: 0, maxDocuments: 0, existingDocuments: initial.documents },
-    );
-    assert.deepEqual(steered, { documents: [], notices: [], tokens: 0 });
-    assert.deepEqual(checked, ["steered-upload"]);
-    assert.equal(opens(), 1);
-  },
-);
+test("steered reuploads already in the turn do not consume another document slot or emit budget notices", async () => {
+  const { store, meta, artifact, opens } = storeFor();
+  const initial = await loadDocumentInputs(store, [meta], () => true);
+  store.get = async (id) => ({ ...artifact, id });
+  const checked: string[] = [];
+  const steered = await loadDocumentInputs(
+    store,
+    [{ ...meta, artifactId: "steered-upload" }],
+    (file) => {
+      checked.push(file.id);
+      return true;
+    },
+    { maxBytes: 0, maxDocuments: 0, existingDocuments: initial.documents },
+  );
+  assert.deepEqual(steered, { documents: [], notices: [], tokens: 0 });
+  assert.deepEqual(checked, ["steered-upload"]);
+  assert.equal(opens(), 1);
+});
 
-tenantTest("later turns reuse verified document bytes but still check current access", async () => {
+test("later turns reuse verified document bytes but still check current access", async () => {
   const { store, meta, artifact, opens } = storeFor(Buffer.from("SAPPHIRE-204"));
   const first = await loadDocumentInputs(store, [meta], () => true);
   const second = await loadDocumentInputs(store, [meta], () => true);
@@ -350,7 +347,7 @@ tenantTest("later turns reuse verified document bytes but still check current ac
   assert.equal(opens(), 2);
 });
 
-tenantTest("document replay follows compaction boundaries", () => {
+test("document replay follows compaction boundaries", () => {
   const { meta } = storeFor();
   const recent = { ...meta, artifactId: "recent" };
   const history = [
@@ -362,7 +359,7 @@ tenantTest("document replay follows compaction boundaries", () => {
   assert.deepEqual((history[0]!.payload as { attachments: AttachmentMeta[] }).attachments, [meta]);
 });
 
-tenantTest("document restoration checks current access and budgets before opening bytes", async () => {
+test("document restoration checks current access and budgets before opening bytes", async () => {
   const { store, meta, opens } = storeFor();
   assert.equal((await loadDocumentInputs(store, [meta], () => false)).documents.length, 0);
   assert.equal(opens(), 0);
@@ -372,7 +369,7 @@ tenantTest("document restoration checks current access and budgets before openin
   assert.equal(opens(), 0);
 });
 
-tenantTest("document restoration rejects tampered bytes", async () => {
+test("document restoration rejects tampered bytes", async () => {
   const { store, meta, artifact } = storeFor();
   artifact.sha256 = "bad";
   const result = await loadDocumentInputs(store, [meta], () => true);
@@ -380,7 +377,7 @@ tenantTest("document restoration rejects tampered bytes", async () => {
   assert.match(result.notices[0]!, /integrity/);
 });
 
-tenantTest("fallback text has one aggregate model-aware budget across all attachments", async () => {
+test("fallback text has one aggregate model-aware budget across all attachments", async () => {
   const documents = Array.from({ length: 10 }, (_, i) => ({
     name: `large-${i}.txt`,
     mimeType: "text/plain",
@@ -395,7 +392,7 @@ tenantTest("fallback text has one aggregate model-aware budget across all attach
   assert.match(JSON.stringify(payload), /truncated to fit/);
 });
 
-tenantTest("document text reports truncation as a flag, not from the extracted wording", async () => {
+test("document text reports truncation as a flag, not from the extracted wording", async () => {
   const text = (body: string, name = "notes.txt") => ({
     name,
     mimeType: name.endsWith(".rtf") ? "application/rtf" : "text/plain",
@@ -411,7 +408,7 @@ tenantTest("document text reports truncation as a flag, not from the extracted w
   assert.match(office.text, /\[Document text truncated at 200000 characters\.\]$/);
 });
 
-tenantTest("Bedrock fallback uses its actual provider request shape", async () => {
+test("Bedrock fallback uses its actual provider request shape", async () => {
   const documents = [await fixture("txt")];
   const bedrock = (await withDocumentInputs(
     { messages: [{ role: "user", content: [{ text: "Summarize" }] }] },
@@ -422,7 +419,7 @@ tenantTest("Bedrock fallback uses its actual provider request shape", async () =
   assert.match(String(bedrock.messages[0]!.content.at(-1)!.text), /QUARTZ-731/);
 });
 
-tenantTest("one failed historical document does not prevent loading another document", async () => {
+test("one failed historical document does not prevent loading another document", async () => {
   const { store, meta } = storeFor();
   const get = store.get.bind(store);
   store.get = async (id) => {
@@ -434,7 +431,7 @@ tenantTest("one failed historical document does not prevent loading another docu
   assert.match(result.notices[0]!, /unavailable/);
 });
 
-tenantTest("document loading aborts active streams promptly", async () => {
+test("document loading aborts active streams promptly", async () => {
   const { store, meta, artifact } = storeFor();
   const stream = new Readable({ read() {} });
   store.open = async () => ({ artifact, sizeBytes: artifact.sizeBytes, stream });
@@ -445,7 +442,7 @@ tenantTest("document loading aborts active streams promptly", async () => {
   assert.equal(stream.destroyed, true);
 });
 
-tenantTest("extensionless documents use their MIME type for native and fallback input", async () => {
+test("extensionless documents use their MIME type for native and fallback input", async () => {
   const pdf = { ...(await fixture("pdf")), name: "download" };
   assert.equal(isDocumentAttachment({ name: pdf.name, mimetype: pdf.mimeType }), true);
   assert.equal(nativeDocumentFormat(anthropic, pdf), "anthropic");
@@ -460,7 +457,7 @@ tenantTest("extensionless documents use their MIME type for native and fallback 
   assert.match(await documentFallbackText(txt), /mime-only-text/);
 });
 
-tenantTest("scanned PDFs explicitly report unavailable text on a text-only route", async () => {
+test("scanned PDFs explicitly report unavailable text on a text-only route", async () => {
   const dataBase64 = (await readFile(new URL("./fixtures/documents/scanned.pdf", import.meta.url))).toString("base64");
   assert.match(
     await documentFallbackText({ name: "scan.pdf", mimeType: "application/pdf", dataBase64 }),
@@ -468,27 +465,27 @@ tenantTest("scanned PDFs explicitly report unavailable text on a text-only route
   );
 });
 
-tenantTest("native file inputs normalize text MIME types rejected by the provider", async () => {
+test("native file inputs normalize text MIME types rejected by the provider", async () => {
   for (const ext of ["xml", "ts", "yaml"]) {
     const blocks = await documentBlocks([await fixture(ext)], openai);
     assert.match(String(blocks.at(-1)?.file_data), /^data:text\/plain;base64,/);
   }
 });
 
-tenantTest("unknown vision gateways do not assume native PDF support", async () => {
+test("unknown vision gateways do not assume native PDF support", async () => {
   assert.equal(
     nativeDocumentFormat({ api: "openai-completions", provider: "qm:gateway", input: ["image"] }, await fixture("pdf")),
     undefined,
   );
 });
 
-tenantTest("RTF uses reliable text extraction on Responses routes", async () => {
+test("RTF uses reliable text extraction on Responses routes", async () => {
   const blocks = await documentBlocks([await fixture("rtf")], openai);
   assert.equal(blocks[0]?.type, "input_text");
   assert.match(String(blocks[0]?.text), /RTF-QUARTZ-731/);
 });
 
-tenantTest("encrypted PDFs do not expose content through text fallback", async () => {
+test("encrypted PDFs do not expose content through text fallback", async () => {
   const dataBase64 = (await readFile(new URL("./fixtures/documents/encrypted.pdf", import.meta.url))).toString(
     "base64",
   );
@@ -503,7 +500,7 @@ for (const model of [
   { api: "google-generative-ai", provider: "google", input: ["text", "image"] },
   { api: "openai-completions", provider: "openai", input: ["text", "image"] },
 ]) {
-  tenantTest(`${model.api} isolates invalid documents while retaining scanned native PDFs`, async () => {
+  test(`${model.api} isolates invalid documents while retaining scanned native PDFs`, async () => {
     const documents = await Promise.all(
       ["scanned", "malformed", "encrypted"].map(async (name) => ({
         name: `${name}.pdf`,
@@ -528,7 +525,7 @@ for (const model of [
   });
 }
 
-tenantTest("output budgeting does not count native document base64 as text tokens", () => {
+test("output budgeting does not count native document base64 as text tokens", () => {
   const data = "a".repeat(1_200_000);
   for (const content of [
     { type: "input_file", file_data: `data:application/pdf;base64,${data}` },

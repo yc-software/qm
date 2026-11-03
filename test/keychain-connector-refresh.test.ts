@@ -4,7 +4,7 @@ import type { DurableMap } from "../src/persistence/durable-map.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { decryptSecret, deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { tenantTest } from "./support/test-tenants.ts";
+import { test } from "./support/test-tenants.ts";
 
 const KEY = deriveConnectorKey("keychain-refresh-test-key");
 const HOST = "gmail.googleapis.com";
@@ -41,7 +41,7 @@ const storedRefreshToken = async (creds: DurableMap<KeychainCredential>) => {
   return decryptSecret(rec.refresh!.refreshTokenEnc!, KEY);
 };
 
-tenantTest("processes sharing a store refresh a rotating token once and keep the live refresh token", async () => {
+test("processes sharing a store refresh a rotating token once and keep the live refresh token", async () => {
   const creds = testMap<KeychainCredential>();
   const lock = testAdvisoryLock();
   const provider = rotatingProvider();
@@ -55,7 +55,7 @@ tenantTest("processes sharing a store refresh a rotating token once and keep the
   assert.equal(await storedRefreshToken(creds), provider.state.valid);
 });
 
-tenantTest("a reconnect that lands during a refresh is not overwritten by the refreshed token", async () => {
+test("a reconnect that lands during a refresh is not overwritten by the refreshed token", async () => {
   const creds = testMap<KeychainCredential>();
   const lock = testAdvisoryLock();
   const refresh: OAuthRefresh = async () => {
@@ -68,7 +68,7 @@ tenantTest("a reconnect that lands during a refresh is not overwritten by the re
   assert.equal(await storedRefreshToken(creds), "rt-new");
 });
 
-tenantTest("recording a refresh failure never overwrites a rotation that landed concurrently", async () => {
+test("recording a refresh failure never overwrites a rotation that landed concurrently", async () => {
   const inner = testMap<KeychainCredential>();
   const lock = testAdvisoryLock();
   let rotateBeforeWrite = false;
@@ -99,7 +99,7 @@ tenantTest("recording a refresh failure never overwrites a rotation that landed 
   assert.equal(status.refreshFailedAt, undefined);
 });
 
-tenantTest("a failed refresh inside the margin falls back to the still-valid access token", async () => {
+test("a failed refresh inside the margin falls back to the still-valid access token", async () => {
   const creds = testMap<KeychainCredential>();
   const k = keychain(creds, testAdvisoryLock(), async () => {
     throw new Error("provider unavailable");
@@ -117,7 +117,7 @@ tenantTest("a failed refresh inside the margin falls back to the still-valid acc
   assert.equal(await k.connectorAccessToken(HOST, "U2"), null);
 });
 
-tenantTest("a refresh that cannot take its lock still serves the unexpired token", async () => {
+test("a refresh that cannot take its lock still serves the unexpired token", async () => {
   const lock: AdvisoryLock = {
     ...testAdvisoryLock(),
     withLock: async () => {
