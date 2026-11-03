@@ -21,11 +21,20 @@ export function createMcpMemoryProvider(opts: {
   write?: McpMemoryOperation;
   attestActor?: boolean;
 }): MemoryService {
-  const call = async (op: McpMemoryOperation, args: Record<string, unknown>, actorId: string | undefined) => {
+  const call = async (
+    op: McpMemoryOperation,
+    args: Record<string, unknown>,
+    actorId: string | undefined,
+    deadline = Date.now() + op.timeoutMs,
+  ) => {
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
     if (person) args[op.actorArg ?? "acting_user"] = person;
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
-    const result = await withTimeout(() => op.client.callTool(op.tool, args, headers), op.timeoutMs, "memory provider");
+    const result = await withTimeout(
+      () => op.client.callTool(op.tool, args, headers),
+      Math.max(0, deadline - Date.now()),
+      "memory provider",
+    );
     reportEnvelope(mcpEnvelope(result));
     return result;
   };
@@ -60,19 +69,20 @@ export function createMcpMemoryProvider(opts: {
       const actor = opts.attestActor ? context?.actorId : (context?.actorId ?? author);
       const provenance = (context?.conversationScopeId ?? scopeId).slice(0, MAX_PROVENANCE_CHARS);
       const size = op.factsArg ? MAX_FACTS_PER_WRITE : facts.length;
+      const deadline = Date.now() + op.timeoutMs;
       for (let start = 0; start < facts.length; start += size) {
         const batch = facts.slice(start, start + size);
         const args: Record<string, unknown> = op.factsArg
           ? { [op.factsArg]: batch.map((fact) => ({ fact, provenance })) }
           : { [op.contentArg ?? "content"]: batch.join("\n") };
-        if (context?.input && op.inputArg) args[op.inputArg] = context.input;
-        if (context?.reply && op.replyArg) args[op.replyArg] = context.reply;
+        if (!start && context?.input && op.inputArg) args[op.inputArg] = context.input;
+        if (!start && context?.reply && op.replyArg) args[op.replyArg] = context.reply;
         if (op.capturedAtArg) args[op.capturedAtArg] = at;
         if (op.sourceArg) args[op.sourceArg] = context?.mode ?? "explicit";
         if (context?.idempotencyKey && op.idempotencyArg)
           args[op.idempotencyArg] = start ? `${context.idempotencyKey}:${start / size}` : context.idempotencyKey;
         if (op.scopeArg) args[op.scopeArg] = scopeId;
-        const { code } = mcpEnvelope(await call(op, args, actor));
+        const { code } = mcpEnvelope(await call(op, args, actor, deadline));
         if (code && DENIED_CODES.has(code))
           throw new McpCallError(`memory provider refused the write (${code})`, { code });
       }
