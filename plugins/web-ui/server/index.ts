@@ -2745,7 +2745,7 @@ const apiRoutes: readonly WebRoute[] = [
         ...(proactiveOpener ? { proactiveOpener: true } : {}),
         ...(desktopClientId && !proactiveOpener ? { desktopClientId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
-        midTurn: midTurn ?? "queue",
+        ...(midTurn ? { midTurn } : {}),
       };
       return postTurnAndMint(req, res, turn, user, threadRef);
     },

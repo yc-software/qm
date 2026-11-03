@@ -332,13 +332,20 @@ export function createAmbientHelpers(deps: AppDeps, app: App, h: AppHelpers) {
         hasFiles: false,
         actorId: req.actor.externalId,
         modelAccount: "company",
+        ...(req.idempotencyKey ? { dedupKey: req.idempotencyKey } : {}),
         routed: false,
       },
       liveTurnOf(live),
       { midTurn: "steer" },
     );
     if (route.kind !== "steer") return false;
-    await h.steerRun(live, { kind: "steer", text: req.text, ts: latestTs, request: req });
+    await h.steerRun(live, {
+      kind: "steer",
+      text: req.text,
+      ts: latestTs,
+      request: req,
+      ...(req.idempotencyKey ? { dedupeKey: req.idempotencyKey } : {}),
+    });
     return true;
   }
 

@@ -11,7 +11,7 @@ import {
   liveTurnOf,
   mayMeetLiveTurn,
   routeIncoming,
-  isHalt,
+  stopsLiveWork,
   type Incoming,
   type LiveTurn,
 } from "../wake/route-incoming.ts";
@@ -463,11 +463,7 @@ export function createTurnMethods(
           spineRouted && origin.kind === "human" && origin.messageTs
             ? `${req.surface}:${conversation.channelRef ?? conversation.threadRef}:ambient:${origin.messageTs}`
             : undefined;
-        const candidates = await liveTurnsFor(
-          conversation.threadRef,
-          ambientRef,
-          isHalt(incoming.text, incoming.selfHandle),
-        );
+        const candidates = await liveTurnsFor(conversation.threadRef, ambientRef, stopsLiveWork(incoming, true));
         if (redeliveryKey && candidates.some(({ run }) => run?.dedupKey === redeliveryKey)) return { status: "silent" };
         const prefs = { midTurn: req.midTurn ?? "steer" } as const;
         const routes = candidates.map((candidate) => ({
