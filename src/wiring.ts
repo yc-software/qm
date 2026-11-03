@@ -128,8 +128,6 @@ import { personalScope, scopeId } from "./types.ts";
 import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
-import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
-import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
@@ -484,7 +482,6 @@ export interface BuiltApp {
   webhookReceiver: WebhookReceiver;
   loopIngress: LoopIngressService;
   admin: AdminService;
-  rateLimiter: RateLimiter;
   budget: BudgetTracker | undefined;
   errors: ErrorLog;
   crons: CronStore;
@@ -718,8 +715,6 @@ export function buildApp(
       (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
     );
   }
-  const rateLimitOpts = { maxPerWindow: config.rateLimitPerWindow, windowMs: config.rateLimitWindowMs };
-  const rateLimiter = createPostgresRateLimiter(databaseUrl, rateLimitOpts);
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
@@ -2090,7 +2085,6 @@ export function buildApp(
     swarms,
     connectorTokens,
     auditLog,
-    rateLimiter,
     budget,
     agent,
     memory,
@@ -2149,7 +2143,6 @@ export function buildApp(
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
     managedGroups: projects,
     projects,
-    ...(config.reachExecEnabled ? { reachExec: true } : {}),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
     environments,
     brokeredTools,
@@ -3007,7 +3000,6 @@ export function buildApp(
     webhookReceiver,
     loopIngress,
     admin,
-    rateLimiter,
     errors,
     crons,
     credentialUsage,
@@ -3131,7 +3123,6 @@ export function serverDeps(
     ...(config.resendApiKey && config.emailFrom
       ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
-    rateLimiter: built.rateLimiter,
     budget: built.budget,
     acl: built.acl,
     credentialUsage: built.credentialUsage,

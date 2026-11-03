@@ -90,11 +90,11 @@ test("pg participant presence checks seek into the visible history window", { sk
   const owner = `window-${randomUUID()}`;
   const session = await store.getOrCreateByThread(owner, "channel", scopeId("channel", owner));
   const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
+  const raw = new pg.Pool({ connectionString: tenantBoundUrl(URL!) });
   try {
     await raw.query(
       `INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at)
-       SELECT qm_tenant_id(), $1, n, 'UserMessage', '{"text":"window fixture"}', to_timestamp(n * 10 / 1000.0)
+       SELECT (SELECT tenant_id FROM sessions WHERE id = $1), $1, n, 'UserMessage', '{"text":"window fixture"}', to_timestamp(n * 10 / 1000.0)
          FROM generate_series(0, 3999) n`,
       [session.id],
     );
@@ -1588,7 +1588,7 @@ test("pg null-byte payloads: stripped on write and counted alongside raw items",
   const raw = new pg.Pool({ connectionString: URL });
   try {
     await raw.query(
-      "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
+      "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES ((SELECT tenant_id FROM sessions WHERE id = $1),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
       [a.id, 1, { text: "xy" }, Date.now()],
     );
     await raw.query("UPDATE sessions SET messages = NULL, turns = NULL, last_activity = NULL WHERE id = $1", [a.id]);
@@ -1653,7 +1653,7 @@ test(
       assert.equal(legacy.lastActivity, entries[entries.length - 1]!.createdAt, "last-activity = newest entry");
 
       await raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
+        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES ((SELECT tenant_id FROM sessions WHERE id = $1),$1,$2,'UserMessage',$3,to_timestamp($4 / 1000.0))",
         [a.id, 4, { text: "from the old instance" }, Date.now()],
       );
       const { lease: lease2 } = await s2.acquireLease(a.id);
@@ -1664,7 +1664,7 @@ test(
       assert.equal(healed.turns, 3, "seq/messages mismatch triggers a full turns recount");
 
       await raw.query(
-        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES (qm_tenant_id(),$1,0,'UserMessage',$2,to_timestamp($3 / 1000.0)), (qm_tenant_id(),$1,1,'AgentMessage',$4,to_timestamp($5 / 1000.0))",
+        "INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at) VALUES ((SELECT tenant_id FROM sessions WHERE id = $1),$1,0,'UserMessage',$2,to_timestamp($3 / 1000.0)), ((SELECT tenant_id FROM sessions WHERE id = $1),$1,1,'AgentMessage',$4,to_timestamp($5 / 1000.0))",
         [b.id, { text: "drained turn" }, Date.now(), { text: "reply" }, Date.now() + 1],
       );
       await raw.query("UPDATE sessions SET messages = 0, turns = 0 WHERE id = $1", [b.id]);
