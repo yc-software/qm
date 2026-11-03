@@ -163,8 +163,12 @@ export function createTurnMethods(
         (req.spawned && isSessionTurn(req)) ||
         (sameApprovedMessage && approvedRequest && isSessionTurn(approvedRequest));
 
+      const seatTurn =
+        req.surface === "web" && req.model === SEAT_MODEL_ID && (await deps.seat?.enabled(actor.id)) === true;
+      if (seatTurn && conversationScope(req.conversation, actor.id) !== scopeId("personal", actor.id))
+        return { status: "refused", reason: SEAT_PERSONAL_ONLY };
       const modelAccount =
-        !req.externalSlack && deps.userModelCredentials && origin.kind === "human" && !sessionTurn
+        !seatTurn && !req.externalSlack && deps.userModelCredentials && origin.kind === "human" && !sessionTurn
           ? await deps.config.getModelAccountDurable(actor.id)
           : "company";
       const individualAuth = modelAccount !== "company";
@@ -183,10 +187,6 @@ export function createTurnMethods(
         if (error) return { status: "refused", reason: error };
       }
       let requestedModel = req.model;
-      const seatTurn =
-        req.surface === "web" && req.model === SEAT_MODEL_ID && (await deps.seat?.enabled(actor.id)) === true;
-      if (seatTurn && conversationScope(req.conversation, actor.id) !== scopeId("personal", actor.id))
-        return { status: "refused", reason: SEAT_PERSONAL_ONLY };
       if (req.surface === "web" && !seatTurn) {
         const org = scopeId("org", orgIdOf());
         const targetScope = conversationScope(req.conversation, actor.id);

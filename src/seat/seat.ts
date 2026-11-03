@@ -15,7 +15,11 @@ import { buildModelRuntime, type ProviderKeys } from "../model/model-runtime.ts"
 import { DEFAULT_AGENT_MODEL_ID, resolveModel } from "../model/pi-models.ts";
 import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { currentModelRequestContext, type ModelRequestContext } from "../model/request-context.ts";
+import {
+  currentModelRequestContext,
+  withModelRequestContext,
+  type ModelRequestContext,
+} from "../model/request-context.ts";
 import { SEAT_MODEL_ID } from "../model/seat-model.ts";
 import { scopeId } from "../types.ts";
 import { errMessage, swallow } from "../util/errors.ts";
@@ -232,13 +236,15 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
   const pollMs = opts.pollMs ?? POLL_MS;
   const leaseMs = opts.leaseMs ?? LEASE_MS;
 
+  const purge = () => query("DELETE FROM seat_steps WHERE held_until < now()");
+
   async function hold(context: ModelRequestContext, request: unknown, signal: AbortSignal | undefined) {
     const { actorId, sessionId } = context;
     if (!actorId || !sessionId || context.scopeId !== scopeId("personal", actorId)) throw new Error(SEAT_PERSONAL_ONLY);
     if (!(await opts.enabled(actorId))) throw new Error(SEAT_OFF);
     signal?.throwIfAborted();
     const id = randomUUID();
-    await query("DELETE FROM seat_steps WHERE held_until < now() - interval '1 hour'");
+    await purge();
     await query(
       `INSERT INTO seat_steps (id, owner_id, session_id, request, held_until)
        VALUES ($1, $3, $4, $5, ${LEASED})`,
@@ -259,7 +265,10 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
           throw new Error(`No move was made at the Agent Seat within ${Math.round(timeoutMs / 60_000)} minutes.`);
         }
         const renew = now >= renewAt;
-        if (renew) renewAt = now + leaseMs / 3;
+        if (renew) {
+          renewAt = now + leaseMs / 3;
+          if (!(await opts.enabled(actorId))) throw new Error(SEAT_OFF);
+        }
         const [row] = renew
           ? await q(`UPDATE seat_steps SET held_until = ${LEASED} WHERE id = $1 RETURNING move`, [id, leaseMs])
           : await q("SELECT move FROM seat_steps WHERE id = $1", [id]);
@@ -314,6 +323,7 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
 
     async pending(ownerId) {
       await guard(ownerId);
+      await purge();
       const rows = await q(
         `SELECT id, session_id, ${CREATED_MS} FROM seat_steps WHERE owner_id = $1 AND ${OPEN} ORDER BY created_at, id`,
         [ownerId],
@@ -345,7 +355,10 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
       await guard(ownerId);
       const found = await step(ownerId, id);
       if (!found) throw new SeatError("step_closed", SEAT_CLOSED);
-      return opts.ask(found.request, signal);
+      return withModelRequestContext(
+        { actorId: ownerId, scopeId: scopeId("personal", ownerId), sessionId: found.sessionId },
+        () => opts.ask(found.request, signal),
+      );
     },
   };
 }

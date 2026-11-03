@@ -26,7 +26,7 @@ import {
   isCustomModelId,
   resolveCustomModel,
 } from "./custom-providers.ts";
-import { SEAT_MODEL_ID, seatModel } from "./seat-model.ts";
+import { SEAT_MODEL_ID } from "./seat-model.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -276,7 +276,6 @@ export function resolveBuiltinModel(id: string): PiModel | undefined {
 }
 
 function resolveBaseModel(id: string): PiModel | undefined {
-  if (id === SEAT_MODEL_ID) return seatModel();
   if (isGatewayModelId(id)) return resolveGatewayModel(id);
   if (overlayUnavailableReason(id) !== undefined) return undefined;
   const builtin = resolveBuiltinModel(id);
@@ -349,7 +348,6 @@ export function modelHasPrices(model: Pick<Model<Api>, "cost">): boolean {
 }
 
 export function modelSupported(id: string | undefined): boolean {
-  if (id === SEAT_MODEL_ID) return false;
   if (id && modelRequestOverrides(id)) return true;
   if (id && isGatewayModelId(id)) return Boolean(resolveGatewayModel(id));
   if (!id || overlayUnavailableReason(id) !== undefined) return false;
@@ -445,8 +443,7 @@ export function defaultInteractiveThinkingLevel(model: Pick<PiModel, "api" | "pr
 
 export const DEFAULT_AGENT_INPUT_USD_PER_MTOK = 5;
 
-export function safeModelMetadata(id: string) {
-  const model = resolveModel(id);
+export function safeModelMetadata(id: string, model = resolveModel(id)) {
   if (!model) return undefined;
   const entry = REGISTRY_BY_ID.get(id);
   const name = modelDisplayName(id) === id ? model.name : modelDisplayName(id);

@@ -387,7 +387,6 @@ import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 import { createSeat, seatAsk, type Seat } from "./seat/seat.ts";
-import { SEAT_MODEL_ID } from "./model/seat-model.ts";
 
 export interface Runtime {
   start(): void;
@@ -1494,8 +1493,7 @@ export function buildApp(
     );
     const routed = await routeTurnRuntime(decision, resolve, async () => {
       if (input.runtimePinned && input.runtime?.modelId) {
-        if (input.runtime.modelId !== SEAT_MODEL_ID && !modelSupported(input.runtime.modelId))
-          throw new Error(`Unsupported model: ${input.runtime.modelId}`);
+        if (!modelSupported(input.runtime.modelId)) throw new Error(`Unsupported model: ${input.runtime.modelId}`);
         return { ...input.runtime, modelId: input.runtime.modelId };
       }
       return resolve(input.runtime);

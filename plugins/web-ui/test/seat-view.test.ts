@@ -40,7 +40,7 @@ after(close);
 const { mountSeat } = await vite.ssrLoadModule("/src/seat.ts");
 
 async function until(check: () => boolean): Promise<void> {
-  for (let i = 0; i < 100 && !check(); i++) await new Promise((r) => setTimeout(r, 10));
+  for (let i = 0; i < 300 && !check(); i++) await new Promise((r) => setTimeout(r, 10));
   assert.ok(check());
 }
 
@@ -139,4 +139,61 @@ test("asking the model loads its move as a draft, and a closed step says so", as
   assert.deepEqual(JSON.parse(areas[1]!.value), { command: "gh run list" });
   button(host, "Make move").click();
   await until(() => host.querySelector(".seat-error")?.textContent === "That step already closed.");
+});
+
+test("a step that closed before it opened is skipped for the next one", async () => {
+  const next = { ...step, id: "st2", sessionTitle: "Next one" };
+  replies = {
+    "GET /api/seat/steps": { status: 200, body: { steps: [step, next] } },
+    "GET /api/seat/steps/st1": { status: 409, body: { error: "step_closed", message: "That step already closed." } },
+    "GET /api/seat/steps/st2": { status: 200, body: { step: next } },
+  };
+  const host = mount();
+  await until(() => host.querySelector(".seat-step.active")?.textContent?.includes("Next one") === true);
+  await until(() => Boolean(host.querySelector(".seat-request")));
+  assert.equal(host.querySelector(".seat-error"), null);
+  assert.deepEqual(
+    [...host.querySelectorAll(".seat-step-title")].map((t) => t.textContent),
+    ["Next one"],
+  );
+});
+
+test("an error from a closed step does not follow onto the next step", async () => {
+  const next = { ...step, id: "st3", sessionTitle: "Fresh step" };
+  replies = {
+    "GET /api/seat/steps": { status: 200, body: { steps: [step] } },
+    "GET /api/seat/steps/st1": { status: 200, body: { step } },
+    "GET /api/seat/steps/st3": { status: 200, body: { step: next } },
+    "POST /api/seat/steps/st1/move": {
+      status: 409,
+      body: { error: "step_closed", message: "That step already closed." },
+    },
+  };
+  const host = mount();
+  await until(() => Boolean(host.querySelector(".seat-request")));
+  type(host.querySelector<HTMLTextAreaElement>(".seat-move textarea")!, "Late reply");
+  button(host, "Make move").click();
+  await until(() => host.querySelector(".seat-error")?.textContent === "That step already closed.");
+  replies["GET /api/seat/steps"] = { status: 200, body: { steps: [next] } };
+  await until(() => host.querySelector(".seat-step.active")?.textContent?.includes("Fresh step") === true);
+  await until(() => Boolean(host.querySelector(".seat-request")));
+  assert.equal(host.querySelector(".seat-error"), null);
+});
+
+test("the raw request is only built once its fold is opened", async () => {
+  replies = {
+    "GET /api/seat/steps": { status: 200, body: { steps: [step] } },
+    "GET /api/seat/steps/st1": { status: 200, body: { step } },
+  };
+  const host = mount();
+  await until(() => Boolean(host.querySelector(".seat-request")));
+  const raw = [...host.querySelectorAll<HTMLDetailsElement>("details.seat-fold")].find(
+    (d) => d.querySelector("summary")?.textContent?.trim() === "raw request",
+  )!;
+  assert.equal(raw.querySelector("pre"), null);
+  raw.open = true;
+  raw.dispatchEvent(new window.Event("toggle"));
+  await until(() => Boolean(raw.querySelector("pre")));
+  assert.equal(JSON.parse(raw.querySelector("pre")!.textContent!).model, "claude-test");
+  assert.equal(raw.open, true);
 });

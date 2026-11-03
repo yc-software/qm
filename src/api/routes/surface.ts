@@ -19,9 +19,9 @@ import {
   modelOfferedInWebui,
   thinkingLevelsFor,
   fastModeModelIds,
-  modelCatalogFor,
+  safeModelMetadata,
 } from "../../model/pi-models.ts";
-import { SEAT_MODEL_ID } from "../../model/seat-model.ts";
+import { SEAT_MODEL_ID, seatModel } from "../../model/seat-model.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
@@ -1320,7 +1320,7 @@ async function withSeatModel<T extends { models: string[]; modelCatalog: Record<
   return {
     ...body,
     models: [...body.models, SEAT_MODEL_ID],
-    modelCatalog: { ...body.modelCatalog, ...modelCatalogFor([SEAT_MODEL_ID]) },
+    modelCatalog: { ...body.modelCatalog, [SEAT_MODEL_ID]: safeModelMetadata(SEAT_MODEL_ID, seatModel()) },
   };
 }
 

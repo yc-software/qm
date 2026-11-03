@@ -1,4 +1,5 @@
 import { html, nothing, render, type TemplateResult } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { keyed } from "lit/directives/keyed.js";
 import { live } from "lit/directives/live.js";
 import "./seat.css";
@@ -12,6 +13,7 @@ import {
   preview,
   systemTexts,
   withoutImageData,
+  type MessageView,
   type MoveDraft,
   type RenderedBlock,
   type SeatBlock,
@@ -24,6 +26,13 @@ const SEAT_POLL_MS = 1500;
 const FRESH_MS = 6000;
 const LONG_TEXT = 600;
 
+interface StepDerived {
+  id: string;
+  system: string[];
+  messages: MessageView[];
+  raw: string | null;
+}
+
 interface SeatView {
   host: HTMLElement;
   steps: SeatStepSummary[] | null;
@@ -32,6 +41,7 @@ interface SeatView {
   off: string | null;
   listError: string | null;
   selected: SeatStep | null;
+  derived: StepDerived | null;
   loading: string | null;
   draft: MoveDraft;
   draftModel: string | null;
@@ -56,6 +66,7 @@ export function mountSeat(host: HTMLElement): void {
     off: null,
     listError: null,
     selected: null,
+    derived: null,
     loading: null,
     draft: emptyDraft(),
     draftModel: null,
@@ -106,6 +117,7 @@ function ensureSelection(v: SeatView): void {
 
 function clearSelection(v: SeatView): void {
   v.selected = null;
+  v.derived = null;
   v.draft = emptyDraft();
   v.draftModel = null;
 }
@@ -119,12 +131,13 @@ async function select(v: SeatView, id: string): Promise<void> {
     if (!isLive(v) || v.loading !== id) return;
     clearSelection(v);
     v.selected = step;
+    v.error = null;
     v.loading = null;
     drawAtEnd(v);
   } catch (error) {
     if (!isLive(v) || v.loading !== id) return;
     v.loading = null;
-    if (error instanceof ApiError && error.status === 404) {
+    if (error instanceof ApiError && (error.status === 404 || error.status === 409)) {
       v.steps = (v.steps ?? []).filter((s) => s.id !== id);
       ensureSelection(v);
     } else v.error = errorText(error);
@@ -273,18 +286,29 @@ function block(b: RenderedBlock): TemplateResult {
   `;
 }
 
-function stepView(v: SeatView, step: SeatStep): TemplateResult {
+function derive(v: SeatView, step: SeatStep): StepDerived {
+  if (v.derived?.id !== step.id)
+    v.derived = { id: step.id, system: systemTexts(step.request), messages: messageViews(step.request), raw: null };
+  return v.derived;
+}
+
+function toggleRaw(v: SeatView, step: SeatStep, e: Event): void {
+  const d = derive(v, step);
+  if (!(e.currentTarget as HTMLDetailsElement).open || d.raw !== null) return;
+  d.raw = JSON.stringify(withoutImageData(step.request), null, 2);
+  draw(v);
+}
+
+function requestView(v: SeatView, step: SeatStep, d: StepDerived): TemplateResult {
   const r = step.request;
-  const system = systemTexts(r);
   const tools = r.tools ?? [];
-  const messages = messageViews(r);
   const meta = [r.model, r.max_tokens !== undefined ? `max_tokens ${String(r.max_tokens)}` : ""].filter(Boolean);
   return html`
     <section class="seat-request" aria-label="Request">
       <div class="seat-meta">${meta.join(" · ")}</div>
-      ${system.map((text, i) =>
+      ${d.system.map((text, i) =>
         fold(
-          system.length > 1 ? `system ${i + 1}` : "system",
+          d.system.length > 1 ? `system ${i + 1}` : "system",
           preview(text),
           text.length <= LONG_TEXT,
           html`<pre class="seat-text">${text}</pre>`,
@@ -301,16 +325,25 @@ function stepView(v: SeatView, step: SeatStep): TemplateResult {
           : nothing
       }
       ${fold(
-        `messages (${messages.length})`,
+        `messages (${d.messages.length})`,
         "",
         true,
-        messages.map((m) => fold(m.role, m.preview, m.open, m.blocks.map(block), `seat-message seat-role-${m.role}`)),
+        d.messages.map((m) => fold(m.role, m.preview, m.open, m.blocks.map(block), `seat-message seat-role-${m.role}`)),
         "seat-messages",
       )}
-      ${fold("raw request", "", false, html`<pre class="seat-text seat-code">${JSON.stringify(withoutImageData(r), null, 2)}</pre>`)}
+      <details class="seat-fold" @toggle=${(e: Event) => toggleRaw(v, step, e)}>
+        <summary><span class="seat-label">raw request</span></summary>
+        <div class="seat-fold-body">
+          ${d.raw === null ? nothing : html`<pre class="seat-text seat-code">${d.raw}</pre>`}
+        </div>
+      </details>
     </section>
-    ${composer(v, tools)}
   `;
+}
+
+function stepView(v: SeatView, step: SeatStep): TemplateResult {
+  const d = derive(v, step);
+  return html` ${guard([step.id, d.raw], () => requestView(v, step, d))} ${composer(v, step.request.tools ?? [])} `;
 }
 
 function toolView(t: SeatTool): TemplateResult {

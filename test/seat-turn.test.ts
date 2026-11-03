@@ -87,7 +87,7 @@ test("the seat is hidden until the feature is on, then only offered in the perso
     assert.equal((await srv.call("GET", "/v1/seat/steps?principalId=alice")).status, 403);
     const refused = await webTurn(built, "web:alice:seat-off");
     assert.equal(refused.status, "refused");
-    assert.match(refused.reason ?? "", /not enabled for the web UI/);
+    assert.match(refused.reason ?? "", /isn't available on this deployment/);
 
     await built.featureFlags.setEnabled("agent_seat", scopeId("personal", "alice"), true, "admin");
     const offered = await picker();
@@ -120,6 +120,12 @@ test("a web turn on the seat runs through the real harness: the human calls a to
   sideCalls(t);
   const built = buildApp(testConfig({ anthropicApiKey: "sk-ant-api03-company" }), { agent: undefined });
   await built.featureFlags.setEnabled("agent_seat", scopeId("personal", "alice"), true, "admin");
+  await built.userModelCredentials.setOAuth("alice", "anthropic", {
+    accessToken: "sk-ant-oat01-alice",
+    refreshToken: "refresh",
+    expiresAt: Date.now() + 3_600_000,
+  });
+  await built.config.setPersonalModelAuth("alice", true, "anthropic");
   const srv = serve(built);
   const submitted = await webTurn(built, "web:alice:seat-e2e");
   assert.equal(submitted.status, "queued", submitted.reason);

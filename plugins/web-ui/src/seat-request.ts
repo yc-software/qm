@@ -50,7 +50,7 @@ export interface RenderedBlock {
   code: boolean;
 }
 
-interface MessageView {
+export interface MessageView {
   role: string;
   preview: string;
   open: boolean;

@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { createSeat, SEAT_OFF, SEAT_PERSONAL_ONLY, type Seat, type SeatOptions } from "../src/seat/seat.ts";
 import { seatModel } from "../src/model/seat-model.ts";
-import { withModelRequestContext } from "../src/model/request-context.ts";
+import { currentModelRequestContext, withModelRequestContext } from "../src/model/request-context.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
@@ -138,6 +138,17 @@ test("cancelling the turn withdraws the step", async () => {
   await assert.rejects(seat.move("alice", id, [{ type: "text", text: "late" }]), { code: "step_closed" });
 });
 
+test("turning the feature off ends a waiting model call instead of leaving the turn stuck", async () => {
+  let on = true;
+  const seat = seats(testDatabaseUrl(), { enabled: async () => on, leaseMs: 300 });
+  const reply = play(seat, "alice");
+  await waitForStep(seat, "alice");
+  on = false;
+  const message = await reply;
+  assert.equal(message.stopReason, "error");
+  assert.equal(message.errorMessage, SEAT_OFF);
+});
+
 test("an unanswered step times out with an error the turn can show", async () => {
   const seat = seats(testDatabaseUrl(), { timeoutMs: 200 });
   const message = await play(seat, "alice");
@@ -164,11 +175,12 @@ test("a step whose holder stopped renewing is no longer offered or answerable", 
   }
 });
 
-test("ask sends the stored request to the configured model and returns its draft", async () => {
-  const asked: unknown[] = [];
+test("ask replays the stored request as the step owner and returns the model's draft", async () => {
+  const asked: Array<{ request: unknown; actorId?: string; scopeId?: string; sessionId?: string }> = [];
   const seat = seats(testDatabaseUrl(), {
     ask: async (request) => {
-      asked.push(request);
+      const { actorId, scopeId, sessionId } = currentModelRequestContext();
+      asked.push({ request, actorId, scopeId, sessionId });
       return {
         model: "claude-x",
         content: [{ type: "tool_use" as const, name: "execute", input: { command: "ls" } }],
@@ -176,11 +188,24 @@ test("ask sends the stored request to the configured model and returns its draft
       };
     },
   });
-  const reply = play(seat, "alice");
-  const id = await waitForStep(seat, "alice");
-  const draft = await seat.ask("alice", id, new AbortController().signal);
-  assert.equal(draft.model, "claude-x");
-  assert.deepEqual(asked, [(await seat.step("alice", id))!.request]);
-  await seat.move("alice", id, draft.content);
-  assert.equal((await reply).stopReason, "toolUse");
+  const controller = new AbortController();
+  const reply = play(seat, "alice", { signal: controller.signal });
+  try {
+    const id = await waitForStep(seat, "alice");
+    const draft = await seat.ask("alice", id, new AbortController().signal);
+    assert.equal(draft.model, "claude-x");
+    assert.deepEqual(asked, [
+      {
+        request: (await seat.step("alice", id))!.request,
+        actorId: "alice",
+        scopeId: "personal:alice",
+        sessionId: "session-alice",
+      },
+    ]);
+    await seat.move("alice", id, draft.content);
+    assert.equal((await reply).stopReason, "toolUse");
+  } finally {
+    controller.abort();
+    await reply;
+  }
 });
