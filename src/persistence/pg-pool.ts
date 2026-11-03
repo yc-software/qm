@@ -497,7 +497,7 @@ export function createPgPool(
       queryError = error instanceof Error ? error : new Error(String(error));
       throw error;
     } finally {
-      if (signal?.aborted) client.connection.stream.destroy();
+      if (queryError && signal?.aborted) client.connection.stream.destroy();
       client.release(queryError);
     }
   }
