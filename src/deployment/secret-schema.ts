@@ -54,7 +54,6 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
     requiredWhen: "postgres",
     reason: "migrations and cross-tenant claims run as the table owner while requests use the row-level-secured login",
   },
-  { name: "DATABASE_READER_URL", requiredWhen: "production" },
   { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
   { name: "SMOLMACHINES_TOKEN", requiredWhen: "smolmachines" },
   { name: "AGENT37_API_KEY", requiredWhen: "agent37" },

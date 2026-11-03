@@ -48,6 +48,7 @@ export type RenderWorkload = RenderBuild & {
   plan: string;
   plugin?: ResolvedPlugin;
   command?: string;
+  preDeploy?: string;
   health?: string;
   diskSizeGB?: number;
 };
@@ -151,24 +152,7 @@ export function renderServiceEnv(
       ...(connections.webUiUrl ? { WEB_UI_UPSTREAM: connections.webUiUrl } : {}),
       ADMIN_UPSTREAM: connections.webUiUrl && config.services.includes("admin") ? `${connections.webUiUrl}/admin` : "",
     });
-    if (config.services.includes("auth")) {
-      for (const key of ["AUTH_ALLOWED_EMAIL_DOMAIN", "OIDC_ALLOWED_EMAIL_DOMAIN"])
-        out[key] = config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN ?? "";
-    } else {
-      out.AUTH_EMBEDDED = "0";
-      for (const [key, value] of Object.entries({
-        AUTH_BROKER_UPSTREAM: "",
-        OIDC_AUTH_ENDPOINT: "https://slack.com/openid/connect/authorize",
-        OIDC_TOKEN_ENDPOINT: "https://slack.com/api/openid.connect.token",
-        OIDC_USERINFO_ENDPOINT: "https://slack.com/api/openid.connect.userInfo",
-        OIDC_ISSUER: "https://slack.com",
-        OIDC_JWKS_URI: "https://slack.com/openid/connect/keys",
-        OIDC_SCOPES: "openid profile email",
-        OIDC_PRINCIPAL_CLAIM: "email",
-        OIDC_ALLOWED_EMAIL_DOMAIN: "",
-      }))
-        out[key] = config.env.portal?.[key] ?? value;
-    }
+    if (!config.services.includes("auth")) Object.assign(out, { AUTH_EMBEDDED: "0", AUTH_BROKER_UPSTREAM: "" });
   }
   return withoutTenantSettings(out);
 }

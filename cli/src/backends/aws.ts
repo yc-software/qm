@@ -833,11 +833,11 @@ export async function awsMigrateCandidate(config: QmConfig, configDir: string, c
     if (aws.predeployDbSnapshot === false)
       note("pre-migration database restore point: disabled (aws.predeployDbSnapshot)");
     else assertPredeployDbRestorePoint(config);
-    await runAwsCandidateMigration(config, coreImage, candidate.label);
+    await runAwsMigrationTask(config, coreImage, candidate.label);
   });
 }
 
-async function runAwsCandidateMigration(
+async function runAwsMigrationTask(
   config: QmConfig,
   coreImage: string,
   label: string,
@@ -877,7 +877,7 @@ async function runAwsCandidateMigration(
       writeFileSync(definitionPath, JSON.stringify(definition));
       taskDefinition = registerTaskDefinition(config, definitionPath);
     }
-    header(`qm migrate — ${config.deploymentId} (AWS candidate ${label})`);
+    header(`database migrations and logins — ${config.deploymentId} (${label})`);
     const started = awsJson<{
       tasks?: Array<{ taskArn?: string }>;
       failures?: Array<{ arn?: string; reason?: string; detail?: string }>;
@@ -907,7 +907,7 @@ async function runAwsCandidateMigration(
     }
     step(`migration task: ${taskArn}`);
     await awaitEcsTaskExit(aws, taskArn, "migration");
-    ok(`candidate ${label} migrations applied`);
+    ok(`${label}: migrations applied and database logins set`);
   } finally {
     if (taskDefinition && !existingTaskDefinition) {
       try {
@@ -917,6 +917,27 @@ async function runAwsCandidateMigration(
       }
     }
     rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+export function awsOperatorSecret(config: QmConfig, name: string): string | undefined {
+  const aws = requireAws(config);
+  try {
+    return capture(process.env.AWS_BIN ?? "aws", [
+      "secretsmanager",
+      "get-secret-value",
+      "--secret-id",
+      `${aws.secretsPrefix}${name}`,
+      "--query",
+      "SecretString",
+      "--output",
+      "text",
+      "--region",
+      aws.region,
+    ]).trim();
+  } catch (error) {
+    if (/ResourceNotFoundException/.test(errMessage(error))) return undefined;
+    throw error;
   }
 }
 
@@ -2547,9 +2568,9 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       const taskDefinition = registerTaskDefinition(config, file);
       targets[item.service] = taskDefinition;
     }
-    if (candidate?.images.core && services.includes("core")) {
-      await runAwsCandidateMigration(config, candidate.images.core, candidate.label, targets.core!);
-      migratedCandidate = true;
+    if (services.includes("core")) {
+      await runAwsMigrationTask(config, images.core!, candidate?.label ?? releaseId, targets.core!);
+      migratedCandidate = !!candidate?.images.core;
     }
     const rolloutTargets = Object.fromEntries(
       services

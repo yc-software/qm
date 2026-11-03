@@ -161,8 +161,7 @@ test("Render core receives scoped storage credentials and assigned URLs", (t) =>
   assert.equal(core.PUBLIC_WEB_URL, config.publicUrl);
   assert.equal(core.DATABASE_OWNER_URL, connections.databaseOwnerUrl);
   assert.match(core.DATABASE_URL!, /^postgres:\/\/qm_app:[A-Za-z0-9_-]{43}@postgres\/qm$/);
-  assert.match(core.DATABASE_READER_URL!, /^postgres:\/\/qm_reader:[A-Za-z0-9_-]{43}@postgres\/qm$/);
-  assert.notEqual(new URL(core.DATABASE_URL!).password, new URL(core.DATABASE_READER_URL!).password);
+  assert.equal(core.DATABASE_READER_URL, undefined);
   assert.equal(core.CORE_SIGNING_SECRET, "qm-signing-key");
   assert.equal(core.WORKERS, undefined);
   assert.equal(core.WORKSPACE_STORE, "postgres");

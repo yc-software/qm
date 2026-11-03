@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { DATABASE_LOGIN_ENV_NAMES, OWNER_LOGIN, derivedLoginPassword, loginUrl } from "../database-logins.ts";
+import { OWNER_LOGIN, derivedLoginPassword, loginUrl } from "../database-logins.ts";
 import { CliError } from "../log.ts";
 import { capture, readEnvFile } from "../util.ts";
 import { scramVerifier } from "../scram-verifier.ts";
@@ -56,16 +56,7 @@ export function bootstrapDockerOwner(container: string, superuserPassword: strin
 
 export function externalDockerOwnerUrl(envFile: string | undefined): string | undefined {
   const file = envFile ? readEnvFile(envFile) : new Map<string, string>();
-  const owner = process.env.DATABASE_OWNER_URL ?? file.get("DATABASE_OWNER_URL");
-  if (owner) return owner;
-  const stale = DATABASE_LOGIN_ENV_NAMES.filter((name) => name !== "DATABASE_OWNER_URL").find(
-    (name) => process.env[name] ?? file.get(name),
-  );
-  if (stale)
-    throw new CliError(
-      `${stale} is now derived by qm; to use your own Postgres, set DATABASE_OWNER_URL to the login that owns the tables`,
-    );
-  return undefined;
+  return process.env.DATABASE_OWNER_URL ?? file.get("DATABASE_OWNER_URL");
 }
 
 export function pgContainerPassword(container: string): string | undefined {

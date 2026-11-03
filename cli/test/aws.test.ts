@@ -419,7 +419,7 @@ else if (a.includes("ecs describe-service-revisions")) {
   }) }));
 }
 else if (a.includes("ecs list-tasks") && s.taskInventory) console.log(JSON.stringify({ taskArns: (s.taskInventory[after("--service-name")] || []).filter(task => task.desiredStatus === after("--desired-status")).map(task => task.taskArn) }));
-else if (a.includes("ecs describe-tasks") && s.taskInventory) {
+else if (a.includes("ecs describe-tasks") && s.taskInventory && Object.values(s.taskInventory).flat().some(task => args.includes(task.taskArn))) {
   const requested = args.slice(args.indexOf("--tasks") + 1).filter(arg => arg.startsWith("arn:"));
   console.log(JSON.stringify({tasks: Object.values(s.taskInventory).flat().filter(task => requested.includes(task.taskArn) && task.taskArn !== s.omitTask), failures: s.inventoryFailures || []}));
 }
@@ -1997,7 +1997,6 @@ test("AWS task definitions are digest-pinned and route only computed secrets", (
     "CONNECTOR_SECRET_KEY",
     "CORE_SIGNING_SECRET",
     "DATABASE_OWNER_URL",
-    "DATABASE_READER_URL",
     "DATABASE_URL",
     "DEPLOYMENT_CONTROL_SECRET",
     "FLY_RESIDENT_ENV_ACME_API_KEY",

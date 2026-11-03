@@ -22,7 +22,6 @@ const productionEnv = {
   SANDBOX_BACKEND: "local",
   DATABASE_URL: "postgres://qm_app:app@localhost/qm",
   DATABASE_OWNER_URL: "postgres://qm@localhost/qm",
-  DATABASE_READER_URL: "postgres://qm_reader:reader@localhost/qm",
 } as const;
 
 test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {

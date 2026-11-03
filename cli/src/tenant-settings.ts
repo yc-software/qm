@@ -87,45 +87,55 @@ export function tenantSettingsEnv(config: QmConfig, values: ReadonlyMap<string, 
   };
 }
 
-export interface DeployedTenantEnv {
-  values: Record<string, string>;
-  remove(): Promise<string[]>;
+export interface TenantSettingsTarget {
+  coreLink(): Promise<CoreLink>;
+  operatorSecret?: (name: string) => string | undefined;
+  retireTenantEnv?: (names: readonly string[]) => string[];
+}
+
+function readStoredValues(
+  config: QmConfig,
+  values: Map<string, string>,
+  target: TenantSettingsTarget,
+  mode: "up" | "push",
+): void {
+  if (!target.operatorSecret) return;
+  for (const { name, aliases } of computedSecrets(config)) {
+    if (deploymentSecretValue(name, values.get(name)) !== undefined) continue;
+    if (!isTenantSetting(name) && !(aliases ?? []).some((alias) => isTenantSetting(alias.name))) continue;
+    let stored: string | undefined;
+    try {
+      stored = target.operatorSecret(name);
+    } catch (error) {
+      const message = `could not read ${name} from the deployment's secret store: ${errMessage(error)}`;
+      if (mode === "push") throw new CliError(message);
+      warn(`tenant settings: ${message}`);
+      continue;
+    }
+    if (stored) values.set(name, stored);
+  }
 }
 
 export async function seedTenantSettings(
   opts: { config: QmConfig; configDir: string; envFile?: string },
-  link: () => Promise<CoreLink>,
-  fallback?: (name: string) => string | undefined,
-  mode: "up" | "push" = "push",
-  deployed?: () => Promise<DeployedTenantEnv>,
+  target: TenantSettingsTarget,
+  mode: "up" | "push",
 ): Promise<void> {
   const envPath = opts.envFile ?? join(opts.configDir, ".env");
   const values = new Map(existsSync(envPath) ? readEnvFile(envPath) : []);
-  for (const { name, aliases } of fallback ? computedSecrets(opts.config) : []) {
-    if (deploymentSecretValue(name, values.get(name)) !== undefined) continue;
-    if (!isTenantSetting(name) && !(aliases ?? []).some((alias) => isTenantSetting(alias.name))) continue;
-    try {
-      const stored = fallback!(name);
-      if (stored) values.set(name, stored);
-    } catch {
-      continue;
-    }
-  }
+  readStoredValues(opts.config, values, target, mode);
   let credentials: ReturnType<typeof operatorCredentials>;
   try {
-    credentials = operatorCredentials(values, fallback);
+    credentials = operatorCredentials(values, target.operatorSecret);
   } catch (error) {
     if (mode === "push") throw error;
     warn(`tenant settings: skipped (${errMessage(error)}); run \`qm settings push\` with them in .env`);
     return;
   }
   const settings = tenantSettingsEnv(opts.config, values);
-  const carried = deployed ? await deployed() : undefined;
-  for (const [name, value] of Object.entries(carried?.values ?? {}))
-    if (isTenantSetting(name) && !settings[name]?.trim()) settings[name] = value;
   let core: CoreLink;
   try {
-    core = await link();
+    core = await target.coreLink();
   } catch (error) {
     if (!(error instanceof CoreUnreachableError)) throw error;
     warn(`tenant settings: ${errMessage(error)}; run \`qm settings push\` once core is reachable`);
@@ -142,7 +152,7 @@ export async function seedTenantSettings(
         throw new CoreUnreachableError(`core did not answer ${path}: ${errMessage(error)}`);
       });
       if (response.status < 200 || response.status >= 300)
-        throw new CliError(`${path} failed (${response.status}): ${response.body.slice(0, 300)}`);
+        throw new CliError(`${path} failed (${response.status}): ${response.body}`);
     }
   } catch (error) {
     if (mode === "push" || !(error instanceof CoreUnreachableError)) throw error;
@@ -152,6 +162,6 @@ export async function seedTenantSettings(
     core.close();
   }
   step(`tenant settings: ${Object.keys(settings).sort().join(", ") || "nothing to seed"}`);
-  const removed = carried ? await carried.remove() : [];
-  if (removed.length) step(`tenant settings: removed ${removed.join(", ")} from the deployed service env`);
+  const retired = target.retireTenantEnv?.(Object.keys(settings)) ?? [];
+  if (retired.length) step(`tenant settings: removing ${retired.join(", ")} from the service env at the next deploy`);
 }

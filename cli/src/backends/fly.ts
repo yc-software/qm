@@ -970,13 +970,24 @@ function unsetRetiredSecrets(config: QmConfig, appPrefix: string, workloads: rea
     const app = `${appPrefix}-${workload}`;
     const expected = new Set(computedSecrets(config).flatMap((secret) => runtimeSecretNames("core", secret)));
     const stale = [...(secretNames(app) ?? [])].filter(
-      (name) =>
-        isTenantSetting(name) || (workload === "core" && name.startsWith("FLY_RESIDENT_ENV_") && !expected.has(name)),
+      (name) => workload === "core" && name.startsWith("FLY_RESIDENT_ENV_") && !expected.has(name),
     );
     if (!stale.length) continue;
     fly(["secrets", "unset", "--stage", "-a", app, ...stale]);
-    note(`removed tenant-owned and retired settings from ${app} env: ${stale.join(", ")}`);
+    note(`removed retired settings from ${app} env: ${stale.join(", ")}`);
   }
+}
+
+export function flyRetireTenantEnv(config: QmConfig, pushed: readonly string[]): string[] {
+  const removed = new Set<string>();
+  for (const workload of runnableServices(config.services)) {
+    const app = `${appPrefixOf(config)}-${workload}`;
+    const present = [...(secretNames(app) ?? [])].filter((name) => pushed.includes(name));
+    if (!present.length) continue;
+    fly(["secrets", "unset", "--stage", "-a", app, ...present]);
+    for (const name of present) removed.add(name);
+  }
+  return [...removed].sort();
 }
 
 function unsetDisabledFlyPublisherToken(config: QmConfig, appPrefix: string): void {
@@ -1667,7 +1678,9 @@ export async function flySecretsPush(config: QmConfig, configDir: string, envFil
   const plugins = discoverPlugins(configDir, config).plugins;
   const pluginNames = plugins.map((plugin) => plugin.name);
   const corePluginNames = plugins.filter((plugin) => plugin.coreAccess !== false).map((plugin) => plugin.name);
-  const operatorSecrets = computedSecrets(config).filter((item) => item.managedBy === "operator");
+  const operatorSecrets = computedSecrets(config).filter(
+    (item) => item.managedBy === "operator" && !isTenantSetting(item.name),
+  );
   for (const secret of operatorSecrets) {
     const supplied = deploymentSecretValue(secret.name, values.get(secret.name));
     if (secret.required && supplied !== undefined && isInvalidSecret(secret.name, supplied)) {

@@ -16,6 +16,7 @@ primary_region = "sjc"
   FLY_DEPLOY_APP_PREFIX = "qm-d"
 [deploy]
   strategy = "bluegreen"
+  release_command = "node src/migrate-main.ts"
 
 [[restart]]
   policy = "always"

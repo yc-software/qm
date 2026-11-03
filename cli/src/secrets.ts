@@ -260,13 +260,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     managedBy: { default: "terraform", render: "render" },
   },
   {
-    name: "DATABASE_READER_URL",
-    service: "core",
-    required: { when: { kind: "target", target: "aws" } },
-    description: "Postgres URL of the qm_reader login, limited to reading its tenant's rows.",
-    managedBy: { default: "terraform", render: "render" },
-  },
-  {
     name: "DATABASE_POOL_URL",
     service: "core",
     required: false,

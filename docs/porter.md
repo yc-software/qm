@@ -64,10 +64,11 @@ any other way.
    zone, `NS` delegation in the parent, wildcard record inside — then reconcile; see
    below), and so is the LoadBalancer in front of the egress proxy ("Forcing sandbox
    egress through the proxy" — without it egress runs fail-open).
-4. **Provision Postgres and set `DATABASE_OWNER_URL`, `DATABASE_URL` and
-   `DATABASE_READER_URL` before first boot.** The owner URL runs migrations; the
-   other two name the `qm_app` and `qm_reader` logins the migrations create, and core
-   sets their passwords from the URLs. Sign-in is not
+4. **Provision Postgres and set `DATABASE_OWNER_URL` and `DATABASE_URL` before
+   first boot.** The owner URL runs migrations; `DATABASE_URL` names the `qm_app`
+   login the migrations create. Run `node src/migrate-main.ts` with core's
+   environment before core starts (a pre-deploy job); it applies the migrations and
+   sets the `qm_app` password from `DATABASE_URL`. Sign-in is not
    optional here: the auth broker's single-use claim endpoint needs core's durable
    store, so an instance without a database accepts no sign-ins at all. The Porter
    path has no `qm`-CLI database provisioning — create a datastore in the dashboard
@@ -81,8 +82,8 @@ any other way.
    `PUT /v1/install/tenant {"tenant":"main"}` and write both with
    `PUT /v1/tenant-settings {"tenant":"main","env":{…}}` (source-signed, with
    `Authorization: Bearer <DEPLOYMENT_CONTROL_SECRET>`); the Helm chart's hook Job does
-   this from `tenantSettings`. This is the step the old docs
-   never mentioned: with Postgres and no `ADMIN_GRANTS`, the instance boots, everyone
+   this from `tenantSettings`. Do not skip this step: with Postgres and no
+   `ADMIN_GRANTS`, the instance boots, everyone
    allowed can sign in, and the admin console is permanently unreachable — there is no
    in-product way to grant the first admin afterwards.
 6. **Build, push, and apply**: images built `--platform linux/amd64` and pushed to

@@ -531,7 +531,7 @@ test("Render creates one project and wires MinIO credentials, URLs, Postgres, an
   assert.equal(core.RENDER_ENVIRONMENT_ID, "evm-acme");
   assert.equal(core.DATABASE_OWNER_URL, "postgresql://qm:private-password@pg/qm");
   assert.match(core.DATABASE_URL!, /^postgresql:\/\/qm_app:[A-Za-z0-9_-]{43}@pg\/qm$/);
-  assert.match(core.DATABASE_READER_URL!, /^postgresql:\/\/qm_reader:[A-Za-z0-9_-]{43}@pg\/qm$/);
+  assert.equal(core.DATABASE_READER_URL, undefined);
   assert.equal(core.SANDBOX_BACKEND, undefined, "the sandbox backend is a tenant setting");
   assert.equal(core.PUBLIC_API_URL, "https://acme-core-assigned.onrender.com");
   assert.equal(minio.MINIO_API_CORS_ALLOW_ORIGIN, "https://acme-web-ui-assigned.onrender.com");
@@ -1276,41 +1276,19 @@ test("Render updates retain stored operator secrets for the core", async (t) => 
   assert.equal(c.envs.get("srv-acme-web-ui")!.RESEND_API_KEY, undefined);
 });
 
-test("Render upgrades keep deployed tenant settings until they are imported, then remove them", async (t) => {
+test("Render keeps tenant settings out of service env and runs the database release before core", async (t) => {
   const d = deployment(t, true);
   const c = cloud(t, d);
   await d.backend.up({ dryRun: false });
-  const tenantKeys = () => [...c.envs.values()].flatMap((env) => Object.keys(env).filter(isTenantSetting));
-  assert.deepEqual(tenantKeys(), []);
-  Object.assign(c.envs.get("srv-acme-core")!, { ANTHROPIC_API_KEY: "sk-deployed", PI_MODEL: "core-model" });
-  Object.assign(c.envs.get("srv-acme-portal")!, {
-    OIDC_CLIENT_ID: "client",
-    PI_MODEL: "portal-model",
-    OIDC_PROMPT: "",
-  });
-  c.envs.get("srv-acme-web-ui")!.LOOPS_USERS = "alice@example.com";
-  await d.backend.up({ dryRun: false });
-  assert.equal(c.envs.get("srv-acme-core")!.ANTHROPIC_API_KEY, "sk-deployed");
-  assert.equal(c.envs.get("srv-acme-portal")!.OIDC_CLIENT_ID, "client");
-  assert.equal(c.envs.get("srv-acme-web-ui")!.LOOPS_USERS, "alice@example.com");
-  const deployed = await hostingProvider("render").deployedTenantEnv!(d.ctx);
-  assert.deepEqual(deployed.values, {
-    ANTHROPIC_API_KEY: "sk-deployed",
-    PI_MODEL: "core-model",
-    OIDC_CLIENT_ID: "client",
-    LOOPS_USERS: "alice@example.com",
-  });
-  assert.deepEqual(await deployed.remove(), [
-    "ANTHROPIC_API_KEY",
-    "LOOPS_USERS",
-    "OIDC_CLIENT_ID",
-    "OIDC_PROMPT",
-    "PI_MODEL",
-  ]);
-  assert.deepEqual(tenantKeys(), []);
-  await d.backend.up({ dryRun: false });
-  assert.deepEqual(tenantKeys(), []);
-  assert.deepEqual((await hostingProvider("render").deployedTenantEnv!(d.ctx)).values, {});
+  assert.deepEqual(
+    [...c.envs.values()].flatMap((env) => Object.keys(env).filter(isTenantSetting)),
+    [],
+  );
+  const core = c.services.get("srv-acme-core")!.serviceDetails as { preDeployCommand?: string };
+  assert.equal(core.preDeployCommand, "node src/migrate-main.ts");
+  for (const [id, service] of c.services)
+    if (id !== "srv-acme-core")
+      assert.equal((service.serviceDetails as { preDeployCommand?: string }).preDeployCommand, undefined, id);
 });
 
 test("Render rejects disk shrink, plain HTTP URLs, and a shared hostname", async (t) => {

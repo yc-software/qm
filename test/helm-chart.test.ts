@@ -282,6 +282,31 @@ test("Helm imports LOOPS_USERS only when set and the web UI runs, and keeps it o
   assert.equal(without.LOOPS_USERS, undefined);
 });
 
+test("Helm runs the database release in the core pod with core's environment before core starts", options, () => {
+  const resources = render({ services: { core: { persistence: { enabled: true } } } });
+  const pod = deployment(resources, "core").spec.template.spec as unknown as {
+    initContainers?: Array<{
+      name: string;
+      command: string[];
+      env?: unknown;
+      envFrom?: unknown;
+      volumeMounts?: unknown;
+    }>;
+  };
+  const core = container(resources, "core");
+  assert.equal(pod.initContainers?.length, 1);
+  const init = pod.initContainers![0]!;
+  assert.deepEqual(init.command, ["node", "src/migrate-main.ts"]);
+  assert.deepEqual(init.env, core.env);
+  assert.deepEqual(init.envFrom, (core as { envFrom?: unknown }).envFrom);
+  assert.deepEqual(init.volumeMounts, [{ name: "data", mountPath: "/data" }]);
+  for (const service of ["portal", "web-ui"])
+    assert.equal(
+      (deployment(resources, service).spec.template.spec as { initContainers?: unknown }).initContainers,
+      undefined,
+    );
+});
+
 test("Helm refuses tenant settings placed in service env", options, () => {
   for (const values of [
     { env: { AUTH_ALLOWED_EMAILS: "member@example.com" } },

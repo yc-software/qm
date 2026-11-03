@@ -56,10 +56,14 @@ test(
         [`${schema}_other`],
       );
       assert.equal(strayOwner[0]?.tableowner, new URL(URL_!).username || "postgres");
-      configurePgPooling({ databaseUrl: appUrl.toString() });
-      const unowned = createPgPool(appUrl.toString(), [migration("unowned")]);
-      await assert.rejects(unowned.q("SELECT 1"), /Schema migrations need DATABASE_OWNER_URL/);
-      await unowned.close();
+      assert.throws(
+        () => configurePgPooling({ databaseUrl: appUrl.toString() }),
+        /DATABASE_URL and DATABASE_OWNER_URL must be set together/,
+      );
+      assert.throws(
+        () => configurePgPooling({ ownerUrl: ownerUrl.toString() }),
+        /DATABASE_URL and DATABASE_OWNER_URL must be set together/,
+      );
     } finally {
       configurePgPooling({});
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);

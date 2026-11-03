@@ -1,10 +1,11 @@
 import { join } from "node:path";
-import { derivedLoginPassword } from "../../../cli/src/database-logins.ts";
 import { operatorInit } from "../../../cli/src/operator-request.ts";
 import { isTenantSetting } from "../../../cli/src/tenant-setting-names.ts";
 import { ensureInstallTenant } from "../../../src/tenants/install.ts";
 import { envFileGet } from "../lib/envctx.ts";
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
+import { run } from "../lib/proc.ts";
+import type { ChildSpec } from "../lib/types.ts";
 import { errMessage } from "../lib/util.ts";
 
 type Phase = (name: string, state: "start" | "ok" | "warn" | "fail", detail?: string) => void;
@@ -59,7 +60,10 @@ export async function prepareDurability(opts: {
       );
     }
   }
-  const durableAdminPrincipal = await firstAdminPrincipal(worktree, databaseUrl).catch(() => "");
+  const durableAdminPrincipal = await firstAdminPrincipal(worktree, databaseUrl).catch((err) => {
+    phase("durability", "warn", `could not read the first durable admin principal: ${errMessage(err)}`);
+    return "";
+  });
   phase("durability", "ok", `Postgres (${grants} durable grant(s))`);
   return { databaseUrl, adminGrantsSeed, durableAdminPrincipal };
 }
@@ -89,14 +93,14 @@ export async function prepareDevTenant(
   phase("tenant", "ok", `wrote ${Object.keys(env).sort().join(", ")} to the install tenant`);
 }
 
-export function devDatabaseEnv(ownerUrl: string): Record<string, string> {
-  const owner = new URL(ownerUrl);
-  const secret = decodeURIComponent(owner.password) || ownerUrl;
-  const login = (name: string): string => {
-    const url = new URL(ownerUrl);
-    url.username = name;
-    url.password = derivedLoginPassword(secret, name);
-    return url.toString();
-  };
-  return { DATABASE_OWNER_URL: ownerUrl, DATABASE_URL: login("qm_app"), DATABASE_READER_URL: login("qm_reader") };
+export async function runDatabaseRelease(spec: ChildSpec, phase: Phase): Promise<void> {
+  phase("database", "start");
+  const result = await run("node", ["--env-file-if-exists=.env", "src/migrate-main.ts"], {
+    cwd: spec.cwd,
+    env: spec.env,
+    timeoutMs: 300_000,
+  });
+  if (result.code !== 0)
+    throw new Error(`database migrations and logins failed: ${(result.stderr || result.stdout).trim()}`);
+  phase("database", "ok", result.stdout.trim().split("\n").at(-1));
 }

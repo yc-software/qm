@@ -138,11 +138,9 @@ else console.log("ok");
     assert.doesNotMatch(calls, /mpg users create pg-1 --username qm_reader/, "an existing login is reused");
     assert.match(calls, /DATABASE_OWNER_URL=-\n {2}value postgresql:\/\/u:p@direct\.pg-1\.flympg\.net\/db/);
     assert.match(calls, /DATABASE_URL=-\n {2}value postgresql:\/\/qm_app:rotated-qm_app@direct\.pg-1\.flympg\.net\/db/);
-    assert.match(calls, /DATABASE_READER_URL=-\n {2}value postgresql:\/\/qm_reader:rotated-qm_reader@direct/);
-    assert.match(
-      calls,
-      /secrets unset --stage -a acme-core SECURITY_SCREEN_PROXY_TOKEN ANTHROPIC_API_KEY FLY_RESIDENT_ENV_STALE_TOKEN\n/,
-    );
+    assert.doesNotMatch(calls, /DATABASE_READER_URL/);
+    assert.match(calls, /secrets unset --stage -a acme-core FLY_RESIDENT_ENV_STALE_TOKEN\n/);
+    assert.doesNotMatch(calls, /secrets unset[^\n]*(SECURITY_SCREEN_PROXY_TOKEN|ANTHROPIC_API_KEY)/);
     assert.ok(calls.indexOf("secrets unset") < calls.indexOf("deploy"));
     assert.ok(calls.indexOf("storage create") < calls.indexOf("deploy"));
     assert.equal(

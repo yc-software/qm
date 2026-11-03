@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CONFIG_FILENAME, loadConfigAt, type QmConfig } from "../src/config.ts";
+import type { QmConfig } from "../src/config.ts";
 import { derivedTomlFor, flyDown } from "../src/backends/fly.ts";
 import { dockerServiceEnv } from "../src/backends/docker.ts";
 import { readState } from "../src/render-state.ts";
@@ -12,26 +12,6 @@ import { awsObjectStoreBucket } from "../src/terraform.ts";
 import type { DeployContext } from "../src/backends/registry.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-
-const base = {
-  contract: 1,
-  publicUrl: "https://agent.example.com",
-  target: "docker",
-  services: ["core"],
-} as const;
-
-test("a config still spelling orgId is refused with the rename to deploymentId", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-deployment-id-"));
-  try {
-    const path = join(dir, CONFIG_FILENAME);
-    writeFileSync(path, JSON.stringify({ ...base, orgId: "acme" }));
-    assert.throws(() => loadConfigAt(path), /"orgId" is now "deploymentId" — rename the key and keep its value/);
-    writeFileSync(path, JSON.stringify({ ...base, deploymentId: "acme" }));
-    assert.equal(loadConfigAt(path).config.deploymentId, "acme");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 const flyConfig = (): QmConfig => ({
   contract: 1,

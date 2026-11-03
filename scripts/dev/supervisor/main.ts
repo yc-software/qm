@@ -17,7 +17,7 @@ import { slotPorts, slotTokens, poolStore } from "../lib/pool.ts";
 import { assembleEnv, completeDevSecuritySecrets, currentBranch, gitHead, seedEnvFromMain } from "../lib/envctx.ts";
 import { ensureDeps } from "../lib/deps.ts";
 import { destroyLocalDevSandboxes, resolveSandbox, type SandboxResolution } from "../lib/sandbox.ts";
-import { prepareDevTenant, prepareDurability } from "./durability.ts";
+import { prepareDevTenant, prepareDurability, runDatabaseRelease } from "./durability.ts";
 import { killTree } from "../lib/proc.ts";
 import { envSha as computeEnvSha, errMessage, nowEpoch, sleep } from "../lib/util.ts";
 import { discoverCanaryChannel } from "../lib/canary.ts";
@@ -379,6 +379,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
 async function startChildren(inputs: SpecInputs): Promise<{ ok: boolean; failedChild?: ChildName; detail?: string }> {
   const specs = buildChildSpecs(inputs);
   for (const spec of specs) {
+    if (spec.name === "core" && inputs.databaseUrl) await runDatabaseRelease(spec, phase);
     phase(spec.name, "start");
     let child = children.get(spec.name);
     if (child) child.update(spec);

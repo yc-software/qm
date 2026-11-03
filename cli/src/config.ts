@@ -543,11 +543,6 @@ function validate(raw: unknown, path: string): QmConfig {
   if (!isPlainObject(raw)) throw new CliError(`${path}: expected a JSON object`);
   const o = raw;
 
-  if ("orgId" in o) {
-    throw new CliError(
-      `${path}: "orgId" is now "deploymentId" — rename the key and keep its value so existing resources stay recognized`,
-    );
-  }
   for (const key of Object.keys(o)) {
     if (key !== "//" && !VALID_TOP_LEVEL_KEYS.has(key)) {
       throw new CliError(`${path}: unknown top-level field ${JSON.stringify(key)}`);

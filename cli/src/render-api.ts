@@ -22,6 +22,7 @@ export interface RenderService {
     numInstances: number;
     runtime: string;
     healthCheckPath?: string;
+    preDeployCommand?: string;
     maxShutdownDelaySeconds?: number;
     envSpecificDetails: { dockerCommand?: string; dockerfilePath?: string; dockerContext?: string };
     disk?: { id: string; mountPath: string; sizeGB: number };
@@ -164,12 +165,4 @@ export async function list<T>(request: RenderRequest, path: string, key: string)
     seen.add(next);
     cursor = next;
   }
-}
-export async function envVars(request: RenderRequest, id: string): Promise<Record<string, string>> {
-  return Object.fromEntries(
-    (await list<{ key: string; value: string }>(request, `/services/${id}/env-vars`, "envVar")).map((item) => [
-      item.key,
-      item.value,
-    ]),
-  );
 }

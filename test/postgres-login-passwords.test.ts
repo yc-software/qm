@@ -8,8 +8,9 @@ import {
   migrateRegisteredPgSchemas,
   ownerDatabaseUrl,
 } from "../src/persistence/pg-pool.ts";
-import { setLoginPasswords, setPoolLoginPasswords } from "../src/persistence/login-passwords.ts";
+import { setLoginPasswords } from "../src/persistence/login-passwords.ts";
 import { scramVerifier } from "../cli/src/scram-verifier.ts";
+import { derivedLoginPassword } from "../cli/src/database-logins.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the managed login password test";
@@ -22,47 +23,49 @@ test("scramVerifier emits a SCRAM-SHA-256 verifier and refuses non-ASCII passwor
   assert.throws(() => scramVerifier("pässword"), /printable ASCII/);
 });
 
-test("setLoginPasswords only touches qm_app and qm_reader and reports missing roles", async () => {
-  const statements: string[] = [];
-  const complete = await setLoginPasswords(
-    async (text, params) => {
-      statements.push(text);
-      return { rows: params?.[0] === "qm_reader" ? [] : [{}] };
-    },
-    ["postgres://qm_app:one@db/qm", "postgres://qm_reader:two@db/qm", "postgres://postgres:three@db/qm", undefined],
-  );
-  assert.equal(complete, false);
-  assert.equal(statements.filter((sql) => sql.startsWith("ALTER ROLE")).length, 1);
-  assert.match(
-    statements.find((sql) => sql.startsWith("ALTER ROLE"))!,
-    /^ALTER ROLE qm_app PASSWORD 'SCRAM-SHA-256\$/,
-  );
-  assert.ok(statements.every((sql) => !sql.includes("one") && !sql.includes("two") && !sql.includes("three")));
-});
+const ROLES = `DO $$ BEGIN
+  CREATE ROLE qm_app LOGIN NOSUPERUSER NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+  DO $$ BEGIN CREATE ROLE qm_reader LOGIN NOSUPERUSER NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$`;
 
-test("setLoginPasswords leaves provider-managed logins alone when the owner may not alter them", async () => {
-  const denied = Object.assign(new Error("MPG system roles cannot be modified"), { code: "42501" });
-  assert.equal(
-    await setLoginPasswords(
-      async (text) => {
-        if (text.startsWith("ALTER ROLE")) throw denied;
-        return { rows: [{}] };
-      },
-      ["postgres://qm_app:one@db/qm"],
-    ),
-    true,
-  );
-  await assert.rejects(
-    setLoginPasswords(
-      async (text) => {
-        if (text.startsWith("ALTER ROLE")) throw Object.assign(new Error("boom"), { code: "XX000" });
-        return { rows: [{}] };
-      },
-      ["postgres://qm_app:one@db/qm"],
-    ),
-    /boom/,
-  );
-});
+async function logsIn(url: string): Promise<boolean> {
+  const client = new pg.Client({ connectionString: url });
+  try {
+    await client.connect();
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "28P01") return false;
+    throw error;
+  }
+  await client.end();
+  return true;
+}
+
+test(
+  "the release step sets the qm_app and qm_reader passwords only when DATABASE_URL does not log in",
+  { skip },
+  async () => {
+    const admin = new pg.Client({ connectionString: URL! });
+    await admin.connect();
+    try {
+      await admin.query(ROLES);
+      const appUrl = new globalThis.URL(URL!);
+      appUrl.username = "qm_app";
+      appUrl.password = randomBytes(24).toString("base64url");
+      const readerUrl = new globalThis.URL(URL!);
+      readerUrl.username = "qm_reader";
+      readerUrl.password = derivedLoginPassword(decodeURIComponent(new globalThis.URL(URL!).password), "qm_reader");
+      await admin.query(`ALTER ROLE qm_app PASSWORD '${scramVerifier(randomBytes(24).toString("base64url"))}'`);
+      assert.equal(await logsIn(appUrl.toString()), false);
+      assert.deepEqual(await setLoginPasswords(URL!, appUrl.toString()), ["qm_app", "qm_reader"]);
+      assert.equal(await logsIn(appUrl.toString()), true);
+      assert.equal(await logsIn(readerUrl.toString()), true);
+      assert.deepEqual(await setLoginPasswords(URL!, appUrl.toString()), [], "a working login is left alone");
+      const owner = new globalThis.URL(URL!);
+      await assert.rejects(setLoginPasswords(URL!, owner.toString()), /DATABASE_URL must log in as qm_app/);
+    } finally {
+      await admin.end();
+    }
+  },
+);
 
 test(
   "migrations run as the owner login and the app login connects with its configured password",
@@ -77,9 +80,7 @@ test(
     appUrl.username = "qm_app";
     appUrl.password = password;
     await admin.query(`CREATE SCHEMA ${schema}`);
-    await admin.query(
-      `DO $$ BEGIN CREATE ROLE qm_app LOGIN NOSUPERUSER NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
-    );
+    await admin.query(ROLES);
     configurePgPooling({ databaseUrl: appUrl.toString(), ownerUrl: ownerUrl.toString() });
     const store = createPgPool(appUrl.toString(), [
       {
@@ -95,6 +96,7 @@ test(
       assert.equal(ownerDatabaseUrl(appUrl.toString()), ownerUrl.toString(), "pg-boss and migrations use the owner");
       assert.equal(ownerDatabaseUrl("postgres://other@db/x"), "postgres://other@db/x");
       await migrateRegisteredPgSchemas(appUrl.toString());
+      await setLoginPasswords(ownerUrl.toString(), appUrl.toString());
       const owner = await admin.query(`SELECT tableowner FROM pg_tables WHERE schemaname = $1`, [schema]);
       assert.equal(owner.rows[0].tableowner, decodeURIComponent(ownerUrl.username));
       await store.q(`INSERT INTO login_probe VALUES (1)`);
@@ -110,16 +112,3 @@ test(
     }
   },
 );
-
-test("instances booting together serialize their login password updates", { skip }, async () => {
-  const pools = Array.from({ length: 8 }, () => new pg.Pool({ connectionString: URL!, max: 1 }));
-  await pools[0]!.query(
-    `DO $$ BEGIN CREATE ROLE qm_app LOGIN NOSUPERUSER NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
-  );
-  try {
-    for (let round = 0; round < 5; round++)
-      await Promise.all(pools.map((pool) => setPoolLoginPasswords(pool, ["postgres://qm_app:same-password@db/qm"])));
-  } finally {
-    await Promise.all(pools.map((pool) => pool.end()));
-  }
-});

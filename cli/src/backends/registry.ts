@@ -4,7 +4,6 @@ import type { Target } from "../providers.ts";
 import { syncDeploymentLayer, type DeploymentLayerTransport } from "../deployment-layer.ts";
 import { fetchCoreAt, type CoreLink } from "../operator-request.ts";
 import { httpsOrigin } from "../render-domains.ts";
-import { capture } from "../util.ts";
 import { flyCoreLink } from "./fly-proxy.ts";
 import { TARGET_ENV_DEFAULTS, type TargetEnvDefaults } from "../target-env-defaults.ts";
 import { renderTerraformVars } from "../terraform.ts";
@@ -30,6 +29,7 @@ import {
   awsUp,
   awsDeploymentLayerTransport,
   awsCoreRequest,
+  awsOperatorSecret,
 } from "./aws.ts";
 import {
   dockerDeploymentLayerTransport,
@@ -49,12 +49,10 @@ import {
   flyStatus,
   flyUp,
   flyDeploymentLayerTransport,
+  flyRetireTenantEnv,
 } from "./fly.ts";
 import type { Backend, BackendUpOptions } from "./types.ts";
-import { api as renderApi, createRenderBackend, renderConfigErrors, renderDeploymentLayerTransport } from "./render.ts";
-import { readState as readRenderState } from "../render-state.ts";
-import { renderDeployedTenantEnv } from "../render-tenant-env.ts";
-import type { DeployedTenantEnv } from "../tenant-settings.ts";
+import { createRenderBackend, renderConfigErrors, renderDeploymentLayerTransport } from "./render.ts";
 
 export interface DeployContext {
   config: QmConfig;
@@ -73,7 +71,7 @@ export interface HostingProvider {
   deploymentLayerTransport: DeploymentLayerTransport;
   coreLink(ctx: DeployContext): Promise<CoreLink>;
   operatorSecret?: (config: QmConfig, name: string) => string | undefined;
-  deployedTenantEnv?: (ctx: DeployContext) => Promise<DeployedTenantEnv>;
+  retireTenantEnv?: (config: QmConfig, names: readonly string[]) => string[];
   /** Per-target env defaults applied when a service env var is not set explicitly. */
   envDefaults: TargetEnvDefaults;
   /** Optional `qm infra` operations; targets without managed infra omit this. */
@@ -173,6 +171,7 @@ const fly: HostingProvider = {
   id: "fly",
   deploymentLayerTransport: flyDeploymentLayerTransport,
   coreLink: (ctx) => flyCoreLink(ctx.config),
+  retireTenantEnv: flyRetireTenantEnv,
   envDefaults: TARGET_ENV_DEFAULTS.fly,
   scaffold: flyScaffold,
   upFlags: ["build-from", "only", "image-label", "image-from", "image-repo-prefix", "build-only"],
@@ -263,21 +262,7 @@ const aws: HostingProvider = {
     },
     close: () => {},
   }),
-  operatorSecret: (config, name) =>
-    config.aws
-      ? capture(process.env.AWS_BIN ?? "aws", [
-          "secretsmanager",
-          "get-secret-value",
-          "--secret-id",
-          `${config.aws.secretsPrefix}${name}`,
-          "--query",
-          "SecretString",
-          "--output",
-          "text",
-          "--region",
-          config.aws.region,
-        ]).trim()
-      : undefined,
+  operatorSecret: awsOperatorSecret,
   envDefaults: TARGET_ENV_DEFAULTS.aws,
   infra: {
     render: (ctx) => renderTerraformVars(ctx.config, ctx.configDir),
@@ -397,7 +382,6 @@ const render: HostingProvider = {
     if (!origin) throw new CliError("Render requires an HTTPS apiUrl to reach core");
     return { request: fetchCoreAt(origin), close: () => {} };
   },
-  deployedTenantEnv: (ctx) => renderDeployedTenantEnv(renderApi(ctx), readRenderState(ctx, true).services),
   envDefaults: TARGET_ENV_DEFAULTS.render,
   scaffold: renderScaffold,
   upFlags: ["upgrade-minio"],

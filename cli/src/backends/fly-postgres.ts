@@ -88,7 +88,7 @@ function jsonField(value: unknown, ...names: string[]): string | undefined {
   return found as string | undefined;
 }
 
-function mpgLoginPassword(clusterId: string, login: string, role: "writer" | "reader"): string {
+function ensureMpgLogin(clusterId: string, login: string, role: "writer" | "reader"): void {
   let users: unknown;
   try {
     users = JSON.parse(fly(["mpg", "users", "list", clusterId, "--json"]) || "[]");
@@ -100,6 +100,9 @@ function mpgLoginPassword(clusterId: string, login: string, role: "writer" | "re
     fly(["mpg", "users", "create", clusterId, "--username", login, "--role", role]);
     note(`postgres: created ${role} login ${login}`);
   }
+}
+
+function mpgLoginPassword(clusterId: string, login: string): string {
   const rotated = flySensitive(
     ["mpg", "users", "rotate-password", clusterId, "--username", login, "--yes", "--json"],
     `failed to set the Managed Postgres password for ${login}`,
@@ -119,8 +122,8 @@ function flyDatabaseLogins(target: FlyPostgresTarget, existing: ReadonlySet<stri
   if (!ownerUrl) {
     if (existing?.has("DATABASE_URL")) {
       throw new CliError(
-        `${target.appPrefix}-core has a DATABASE_URL from before the runtime and owner database logins were split. ` +
-          `Put that URL (the login that owns the tables) in .env as DATABASE_OWNER_URL and run qm up again; ` +
+        `${target.appPrefix}-core has a DATABASE_URL but .env has no DATABASE_OWNER_URL. ` +
+          `Put the URL of the login that owns the tables in .env as DATABASE_OWNER_URL and run qm up again; ` +
           `for the managed cluster ${target.appPrefix}-pg it is the direct_uri from \`fly mpg status <cluster> --json\``,
       );
     }
@@ -132,10 +135,9 @@ function flyDatabaseLogins(target: FlyPostgresTarget, existing: ReadonlySet<stri
   }
   const clusterId = mpgClusterOfUrl(ownerUrl);
   if (!clusterId) return databaseLoginEnv(ownerUrl);
-  return databaseLoginEnv(ownerUrl, {
-    app: mpgLoginPassword(clusterId, APP_LOGIN, "writer"),
-    reader: mpgLoginPassword(clusterId, READER_LOGIN, "reader"),
-  });
+  ensureMpgLogin(clusterId, APP_LOGIN, "writer");
+  ensureMpgLogin(clusterId, READER_LOGIN, "reader");
+  return databaseLoginEnv(ownerUrl, mpgLoginPassword(clusterId, APP_LOGIN));
 }
 
 export function ensureFlyPostgres(target: FlyPostgresTarget): void {
@@ -146,5 +148,5 @@ export function ensureFlyPostgres(target: FlyPostgresTarget): void {
     return;
   }
   for (const [name, value] of Object.entries(flyDatabaseLogins(target, existing))) stageSecret(app, name, value);
-  note(`postgres: owner, qm_app and qm_reader connections staged on ${app}`);
+  note(`postgres: owner and qm_app connections staged on ${app}`);
 }

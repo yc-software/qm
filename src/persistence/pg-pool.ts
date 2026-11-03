@@ -5,7 +5,6 @@ import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { tenantPgPool } from "../tenants/pg.ts";
-import { setPoolLoginPasswords } from "./login-passwords.ts";
 
 export type { Pool, PoolClient };
 
@@ -14,7 +13,6 @@ export type Rows = Record<string, unknown>[];
 interface PgPoolingConfig {
   databaseUrl?: string;
   ownerUrl?: string;
-  readerUrl?: string;
   poolUrl?: string;
   caCert?: string;
   queryMax?: number;
@@ -25,8 +23,8 @@ let poolingConfig: PgPoolingConfig = {};
 
 export function configurePgPooling(config: PgPoolingConfig): void {
   if (config.poolUrl && !config.databaseUrl) throw new Error("DATABASE_POOL_URL requires DATABASE_URL");
-  if ((config.ownerUrl || config.readerUrl) && !config.databaseUrl)
-    throw new Error("DATABASE_OWNER_URL and DATABASE_READER_URL require DATABASE_URL");
+  if (Boolean(config.ownerUrl) !== Boolean(config.databaseUrl))
+    throw new Error("DATABASE_URL and DATABASE_OWNER_URL must be set together");
   for (const [name, value] of [
     ["DATABASE_POOL_MAX", config.queryMax],
     ["DATABASE_DIRECT_POOL_MAX", config.sessionMax],
@@ -36,11 +34,10 @@ export function configurePgPooling(config: PgPoolingConfig): void {
     }
   }
   poolingConfig = { ...config };
-  loginPasswordsSet = false;
 }
 
 export const ownerDatabaseUrl = (connectionString: string): string =>
-  connectionString === poolingConfig.databaseUrl && poolingConfig.ownerUrl ? poolingConfig.ownerUrl : connectionString;
+  connectionString === poolingConfig.databaseUrl ? poolingConfig.ownerUrl! : connectionString;
 
 function sameDatabase(a: string, b: string): boolean {
   const left = new URL(a);
@@ -53,22 +50,14 @@ function sameDatabase(a: string, b: string): boolean {
 }
 
 export function migrationDatabaseUrl(connectionString: string): string {
-  const { databaseUrl, ownerUrl } = poolingConfig;
-  if (!databaseUrl) return connectionString;
-  if (!ownerUrl) throw new Error("Schema migrations need DATABASE_OWNER_URL");
+  const { ownerUrl } = poolingConfig;
+  if (!ownerUrl) return connectionString;
   if (sameDatabase(connectionString, ownerUrl)) return ownerUrl;
   const owner = new URL(ownerUrl);
   const other = new URL(connectionString);
   other.username = owner.username;
   other.password = owner.password;
   return other.toString();
-}
-
-let loginPasswordsSet = false;
-
-async function setManagedLoginPasswords(connectionString: string, pool: Pool): Promise<void> {
-  if (loginPasswordsSet || connectionString !== poolingConfig.databaseUrl || !poolingConfig.ownerUrl) return;
-  loginPasswordsSet = await setPoolLoginPasswords(pool, [poolingConfig.databaseUrl, poolingConfig.readerUrl]);
 }
 
 const migrationQueue = createKeyedQueue();
@@ -441,7 +430,6 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
           pool,
           [...registered.values()].sort((a, b) => a.id.localeCompare(b.id)),
         );
-        await setManagedLoginPasswords(databaseUrl, pool);
       } finally {
         await pool.end();
       }
@@ -478,7 +466,6 @@ export function createPgPool(
     await (readyP ??= withMigrationPool(async (instance) => {
       await applyPgMigrations(instance, migrations);
       await applyPgMaintenance(instance, maintenance);
-      await setManagedLoginPasswords(connectionString, instance);
     }).catch((error) => {
       readyP = null;
       throw error;

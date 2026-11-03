@@ -4,30 +4,26 @@ import { databaseLoginEnv, derivedLoginPassword } from "../src/database-logins.t
 import { dockerOwnerBootstrapSql, managedDockerOwnerUrl } from "../src/backends/docker-postgres.ts";
 import { mpgClusterOfUrl } from "../src/backends/fly-postgres.ts";
 
-test("the app and reader logins are derived from the owner login and keep its host, database and options", () => {
+test("the app login is derived from the owner login and keeps its host, database and options", () => {
   const owner = "postgres://owner:s3cret@db.internal:5432/qm?sslmode=require";
   const env = databaseLoginEnv(owner);
+  assert.deepEqual(Object.keys(env).sort(), ["DATABASE_OWNER_URL", "DATABASE_URL"]);
   assert.equal(env.DATABASE_OWNER_URL, owner);
   const app = new URL(env.DATABASE_URL);
-  const reader = new URL(env.DATABASE_READER_URL);
   assert.equal(app.username, "qm_app");
-  assert.equal(reader.username, "qm_reader");
   assert.equal(app.password, derivedLoginPassword("s3cret", "qm_app"));
-  assert.notEqual(app.password, reader.password);
+  assert.notEqual(app.password, derivedLoginPassword("s3cret", "qm_reader"));
   assert.notEqual(app.password, "s3cret");
-  for (const url of [app, reader]) {
-    assert.equal(url.host, "db.internal:5432");
-    assert.equal(url.pathname, "/qm");
-    assert.equal(url.searchParams.get("sslmode"), "require");
-  }
+  assert.equal(app.host, "db.internal:5432");
+  assert.equal(app.pathname, "/qm");
+  assert.equal(app.searchParams.get("sslmode"), "require");
   assert.deepEqual(databaseLoginEnv(owner), env, "derivation is stable across runs");
   assert.notEqual(databaseLoginEnv(owner.replace("s3cret", "rotated")).DATABASE_URL, env.DATABASE_URL);
 });
 
-test("provider-issued login passwords are used as given", () => {
-  const env = databaseLoginEnv("postgresql://u:p@direct.pg-1.flympg.net/db", { app: "a-pw", reader: "r-pw" });
+test("a provider-issued app password is used as given", () => {
+  const env = databaseLoginEnv("postgresql://u:p@direct.pg-1.flympg.net/db", "a-pw");
   assert.equal(env.DATABASE_URL, "postgresql://qm_app:a-pw@direct.pg-1.flympg.net/db");
-  assert.equal(env.DATABASE_READER_URL, "postgresql://qm_reader:r-pw@direct.pg-1.flympg.net/db");
   assert.equal(mpgClusterOfUrl(env.DATABASE_OWNER_URL), "pg-1");
   assert.equal(mpgClusterOfUrl("postgres://u:p@db.example.com/qm"), undefined);
 });

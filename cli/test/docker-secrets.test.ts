@@ -180,7 +180,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     );
     assert.ok(envFiles.includes("DATABASE_OWNER_URL=postgres://owner:owner-pw@external/db"));
     assert.match(envFiles, /\nDATABASE_URL=postgres:\/\/qm_app:[A-Za-z0-9_-]{43}@external\/db\n/);
-    assert.match(envFiles, /\nDATABASE_READER_URL=postgres:\/\/qm_reader:[A-Za-z0-9_-]{43}@external\/db\n/);
+    assert.doesNotMatch(envFiles, /DATABASE_READER_URL/);
     assert.ok(!envFiles.includes("EXAMPLE_SCREEN_TOKEN"), "tenant-owned secrets stay out of core env");
     assert.ok(
       envFiles.includes(`FLY_RESIDENT_ENV_SB_TOKEN=${SECRETS.SB_TOKEN}`),
@@ -248,7 +248,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
 });
 
 test(
-  "managed Postgres: core gets the qm_owner, qm_app and qm_reader logins, never the superuser; state.json is 0600",
+  "managed Postgres: core gets the qm_owner and qm_app logins, never the superuser; state.json is 0600",
   { timeout: 60_000 },
   async () => {
     const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-pg-"));

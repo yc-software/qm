@@ -556,7 +556,6 @@ export function buildApp(
   configurePgPooling({
     databaseUrl,
     ...(config.databaseOwnerUrl ? { ownerUrl: config.databaseOwnerUrl } : {}),
-    ...(config.databaseReaderUrl ? { readerUrl: config.databaseReaderUrl } : {}),
     ...(config.databasePoolUrl ? { poolUrl: config.databasePoolUrl } : {}),
     ...(config.databasePoolCaCert ? { caCert: config.databasePoolCaCert } : {}),
     ...(config.databasePoolMax !== undefined ? { queryMax: config.databasePoolMax } : {}),

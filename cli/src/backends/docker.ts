@@ -497,6 +497,18 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
   return { args, cleanup };
 }
 
+function runDatabaseRelease(ctx: DockerCtx, image: string): void {
+  step("applying database migrations and setting database logins");
+  const args = ["run", "--rm", "--network", ctx.network];
+  const cleanup = pushEnvArgs(args, serviceEnv(ctx, "core"), secretEnvKeys(ctx, "core"));
+  args.push(image, "node", "src/migrate-main.ts");
+  try {
+    dockerInherit(args, "the core image could not apply migrations or set the qm_app and qm_reader passwords");
+  } finally {
+    cleanup();
+  }
+}
+
 function skillMounts(ctx: DockerCtx): string[] {
   return ctx.config.skills.map((s, i) => `${resolve(ctx.configDir, s)}:/app/plugins/deployment-skills-${i}/skills:ro`);
 }
@@ -687,6 +699,7 @@ export async function dockerUp(
 
   for (const def of ordered(runnableServices(config.services))) {
     const image = resolveImage(ctx, def.name);
+    if (def.name === "core") runDatabaseRelease(ctx, image);
     docker(["rm", "-f", cname(ctx, def.name)], /No such container|is not running/);
     step(`starting ${def.name}`);
     const run = runArgs(ctx, def.name, image);
