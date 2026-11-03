@@ -28,21 +28,23 @@ struct WorkspaceContext: Decodable, Identifiable, Hashable {
   let sessionCount: Int
   let project: WorkspaceProject?
   var id: String { scopeId }
+  private var scopeKind: Substring { scopeId.prefix { $0 != ":" } }
+  var isPersonal: Bool { scopeKind == "personal" }
   var icon: String {
-    if kind == "personal" { return "person" }
+    if isPersonal { return "person" }
     if project != nil { return "folder" }
-    if kind == "group" || scopeId.hasPrefix("group:") { return "person.2" }
-    if kind == "channel" || scopeId.hasPrefix("channel:") { return "number" }
+    if scopeKind == "group" { return "person.2" }
+    if scopeKind == "channel" { return "number" }
     return "folder"
   }
   var section: String {
-    if kind == "personal" { return "Personal" }
-    if project != nil || kind == "project" { return "Projects" }
-    if kind == "channel" || scopeId.hasPrefix("channel:") { return "Channels" }
+    if isPersonal { return "Personal" }
+    if project != nil { return "Projects" }
+    if scopeKind == "channel" { return "Channels" }
     return "Shared spaces"
   }
   var title: String {
-    project?.name ?? name ?? (kind == "personal" ? "Personal" : "Shared workspace")
+    project?.name ?? name ?? (isPersonal ? "Personal" : "Shared workspace")
   }
 }
 
@@ -278,95 +280,151 @@ struct ProjectDetailView: View {
       QMPageHeading(
         title: context.title,
         subtitle:
-          "\(conversations.count) \(conversations.count == 1 ? "conversation" : "conversations") · \(context.kind == "personal" ? "Your workspace" : "Shared workspace")"
+          "\(conversations.count) \(conversations.count == 1 ? "conversation" : "conversations") · \(context.isPersonal ? "Your workspace" : "Shared workspace")"
       )
-      LazyVGrid(
-        columns: [
-          GridItem(.adaptive(minimum: dynamicTypeSize.isAccessibilitySize ? 140 : 72), spacing: 10)
-        ],
-        spacing: 10
-      ) {
-        Button {
-          selectedResource = .files
-        } label: {
-          resource("Files", icon: "doc.on.doc")
-        }
-        Button {
-          selectedResource = .apps
-        } label: {
-          resource("Apps", icon: "square.stack.3d.up")
-        }
-        Button {
-          selectedResource = .skills
-        } label: {
-          resource("Skills", icon: "shippingbox")
-        }
-        Button {
-          selectedResource = .model
-        } label: {
-          resource("Model", icon: "slider.horizontal.3")
-        }
-      }.buttonStyle(.plain).listRowSeparator(.hidden)
-
+      resourceGrid
       if let error = model.error { Text(error).foregroundStyle(.red) }
-      Section("Conversations") {
-        if conversations.isEmpty {
-          Text("Start a conversation to put this workspace to work.")
-            .foregroundStyle(.secondary).padding(.vertical, 16)
-        }
-        ForEach(conversations) { conversation in
-          NavigationLink {
-            ChatView(
-              model: ChatModel(
-                conversation: conversation, client: model.client, user: identity.user,
-                knownSession: conversation.localOnly != true))
-          } label: {
-            NativeConversationRow(conversation: conversation, showsContext: false)
-          }
-        }
-      }
-      if let project {
-        Section("People") {
-          ForEach(project.members) { member in
-            HStack {
-              VStack(alignment: .leading, spacing: 4) {
-                Text(member.displayName)
-                if member.principalId == project.ownerId {
-                  Text("Owner").font(.caption).foregroundStyle(.secondary)
-                } else if member.viaChannel == true {
-                  Text("Via Slack channel").font(.caption).foregroundStyle(.secondary)
-                }
-              }
-              Spacer()
-              if owner && member.principalId != project.ownerId && member.viaChannel != true {
-                Button("Remove", role: .destructive) { removing = member }.font(.caption)
-              }
-            }
-          }
-          Button("Add people", systemImage: "person.badge.plus") { addingMember = true }
-        }
-        Section("Slack channel") {
-          if let channel = project.slackChannel {
-            Label(channel.channelName, systemImage: "number")
-            if owner { Button("Unlink channel", role: .destructive) { unlinkingSlack = true } }
-          } else {
-            Text("No linked channel").foregroundStyle(.secondary)
-            if owner {
-              Button("Link Slack channel") {
-                slackChannel = ""
-                editingSlack = true
-              }
-            }
-          }
-        }
-      }
+      conversationsSection
+      if let project { projectSections(project) }
     }
     .disabled(model.busy)
     .scrollContentBackground(.hidden).background(QMTheme.paper)
     .navigationTitle(context.title).navigationBarTitleDisplayMode(.inline)
     .task { await model.load() }
     .refreshable { await model.load() }
-    .toolbar {
+    .toolbar { toolbarContent }
+    .navigationDestination(item: $selectedResource) { resource in
+      resourceDestination(resource)
+    }
+    .navigationDestination(item: $newConversation) { conversation in
+      ChatView(
+        model: ChatModel(
+          conversation: conversation, client: model.client, user: identity.user, knownSession: false
+        ))
+    }
+    .sheet(isPresented: $addingMember) {
+      if let project { ProjectMemberPicker(model: model, project: project) }
+    }
+    .alert("Rename project", isPresented: $editingName) {
+      TextField("Name", text: $name)
+      Button("Cancel", role: .cancel) {}
+      Button("Save") { Task { await rename() } }
+        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.count > 200)
+    }
+    .alert("Link Slack channel", isPresented: $editingSlack) {
+      TextField("Channel name or ID", text: $slackChannel)
+      Button("Cancel", role: .cancel) {}
+      Button("Link") { Task { await linkSlack() } }
+    } message: {
+      Text("Channel members will gain access to this project.")
+    }
+    .confirmationDialog(
+      "Remove this person from the project?",
+      isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
+    ) {
+      Button("Remove person", role: .destructive) {
+        if let project, let removing {
+          Task { await remove(removing, from: project) }
+        }
+        removing = nil
+      }
+    }
+    .confirmationDialog("Unlink the Slack channel?", isPresented: $unlinkingSlack) {
+      Button("Unlink channel", role: .destructive) { Task { await unlinkSlack() } }
+    } message: {
+      Text("People whose access comes from the channel will lose access to this project.")
+    }
+  }
+
+  private var resourceGrid: some View {
+    LazyVGrid(
+      columns: [
+        GridItem(.adaptive(minimum: dynamicTypeSize.isAccessibilitySize ? 140 : 72), spacing: 10)
+      ],
+      spacing: 10
+    ) {
+      Button {
+        selectedResource = .files
+      } label: {
+        resource("Files", icon: "doc.on.doc")
+      }
+      Button {
+        selectedResource = .apps
+      } label: {
+        resource("Apps", icon: "square.stack.3d.up")
+      }
+      Button {
+        selectedResource = .skills
+      } label: {
+        resource("Skills", icon: "shippingbox")
+      }
+      Button {
+        selectedResource = .model
+      } label: {
+        resource("Model", icon: "slider.horizontal.3")
+      }
+    }.buttonStyle(.plain).listRowSeparator(.hidden)
+  }
+
+  private var conversationsSection: some View {
+    Section("Conversations") {
+      if conversations.isEmpty {
+        Text("Start a conversation to put this workspace to work.")
+          .foregroundStyle(.secondary).padding(.vertical, 16)
+      }
+      ForEach(conversations) { conversation in
+        NavigationLink {
+          ChatView(
+            model: ChatModel(
+              conversation: conversation, client: model.client, user: identity.user,
+              knownSession: conversation.localOnly != true))
+        } label: {
+          NativeConversationRow(conversation: conversation, showsContext: false)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func projectSections(_ project: WorkspaceProject) -> some View {
+    Section("People") {
+      ForEach(project.members) { member in
+        HStack {
+          VStack(alignment: .leading, spacing: 4) {
+            Text(member.displayName)
+            if member.principalId == project.ownerId {
+              Text("Owner").font(.caption).foregroundStyle(.secondary)
+            } else if member.viaChannel == true {
+              Text("Via Slack channel").font(.caption).foregroundStyle(.secondary)
+            }
+          }
+          Spacer()
+          if owner && member.principalId != project.ownerId && member.viaChannel != true {
+            Button("Remove", role: .destructive) { removing = member }.font(.caption)
+          }
+        }
+      }
+      Button("Add people", systemImage: "person.badge.plus") { addingMember = true }
+    }
+    Section("Slack channel") {
+      if let channel = project.slackChannel {
+        Label(channel.channelName, systemImage: "number")
+        if owner { Button("Unlink channel", role: .destructive) { unlinkingSlack = true } }
+      } else {
+        Text("No linked channel").foregroundStyle(.secondary)
+        if owner {
+          Button("Link Slack channel") {
+            slackChannel = ""
+            editingSlack = true
+          }
+        }
+      }
+    }
+  }
+
+  @ToolbarContentBuilder
+  private var toolbarContent: some ToolbarContent {
+    ToolbarItemGroup {
       Button("New conversation", systemImage: "square.and.pencil") {
         let id = UUID().uuidString.lowercased()
         newConversation = Conversation(
@@ -381,79 +439,42 @@ struct ProjectDetailView: View {
         }
       }
     }
-    .navigationDestination(item: $selectedResource) { resource in
-      switch resource {
-      case .apps: NativeAppsView(client: model.client, user: identity.user, scope: context.scopeId)
-      case .files: NativeFilesView(client: model.client, scope: context.scopeId)
-      case .skills:
-        NativeSkillsView(client: model.client, user: identity.user, scope: context.scopeId)
-      case .model: RuntimeControlsView(client: model.client, scopeID: context.scopeId)
-      }
+  }
+
+  @ViewBuilder
+  private func resourceDestination(_ resource: Resource) -> some View {
+    switch resource {
+    case .apps: NativeAppsView(client: model.client, user: identity.user, scope: context.scopeId)
+    case .files: NativeFilesView(client: model.client, scope: context.scopeId)
+    case .skills:
+      NativeSkillsView(client: model.client, user: identity.user, scope: context.scopeId)
+    case .model: RuntimeControlsView(client: model.client, scopeID: context.scopeId)
     }
-    .navigationDestination(item: $newConversation) { conversation in
-      ChatView(
-        model: ChatModel(
-          conversation: conversation, client: model.client, user: identity.user, knownSession: false
-        ))
-    }
-    .sheet(isPresented: $addingMember) {
-      if let project { ProjectMemberPicker(model: model, project: project) }
-    }
-    .alert("Rename project", isPresented: $editingName) {
-      TextField("Name", text: $name)
-      Button("Cancel", role: .cancel) {}
-      Button("Save") {
-        Task {
-          if let project {
-            _ = await model.mutate(
-              "api/projects/\(project.id.apiComponent)", body: ["name": name], method: "PATCH")
-          }
-        }
-      }
-      .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.count > 200)
-    }
-    .alert("Link Slack channel", isPresented: $editingSlack) {
-      TextField("Channel name or ID", text: $slackChannel)
-      Button("Cancel", role: .cancel) {}
-      Button("Link") {
-        Task {
-          if let project {
-            _ = await model.mutate(
-              "api/projects/\(project.id.apiComponent)/slack-channel",
-              body: ["channel": slackChannel], method: "PUT")
-          }
-        }
-      }
-    } message: {
-      Text("Channel members will gain access to this project.")
-    }
-    .confirmationDialog(
-      "Remove this person from the project?",
-      isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })
-    ) {
-      Button("Remove person", role: .destructive) {
-        if let project, let removing {
-          Task {
-            _ = await model.mutate(
-              "api/projects/\(project.id.apiComponent)/members/\(removing.principalId.apiComponent)",
-              method: "DELETE")
-          }
-        }
-        removing = nil
-      }
-    }
-    .confirmationDialog("Unlink the Slack channel?", isPresented: $unlinkingSlack) {
-      Button("Unlink channel", role: .destructive) {
-        Task {
-          if let project {
-            _ = await model.mutate(
-              "api/projects/\(project.id.apiComponent)/slack-channel", method: "DELETE")
-          }
-        }
-      }
-    } message: {
-      Text("People whose access comes from the channel will lose access to this project.")
-    }
+  }
+
+  private func rename() async {
+    guard let project else { return }
+    _ = await model.mutate(
+      "api/projects/\(project.id.apiComponent)", body: ["name": name], method: "PATCH")
+  }
+
+  private func linkSlack() async {
+    guard let project else { return }
+    _ = await model.mutate(
+      "api/projects/\(project.id.apiComponent)/slack-channel",
+      body: ["channel": slackChannel], method: "PUT")
+  }
+
+  private func remove(_ member: WorkspaceProject.Member, from project: WorkspaceProject) async {
+    _ = await model.mutate(
+      "api/projects/\(project.id.apiComponent)/members/\(member.principalId.apiComponent)",
+      method: "DELETE")
+  }
+
+  private func unlinkSlack() async {
+    guard let project else { return }
+    _ = await model.mutate(
+      "api/projects/\(project.id.apiComponent)/slack-channel", method: "DELETE")
   }
 }
 
