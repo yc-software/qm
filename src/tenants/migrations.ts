@@ -19,7 +19,7 @@ END $qm_bound_tenant$`,
     `DO $adopt_tenant$
 BEGIN
   IF to_regclass('qm_tenant') IS NOT NULL THEN
-    INSERT INTO tenants(id, slug, name) SELECT id, id::text, id::text FROM qm_tenant ON CONFLICT (id) DO NOTHING;
+    INSERT INTO tenants(id) SELECT id FROM qm_tenant ON CONFLICT (id) DO NOTHING;
   END IF;
 END $adopt_tenant$`,
   ],
