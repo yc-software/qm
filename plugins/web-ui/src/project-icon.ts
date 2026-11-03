@@ -33,7 +33,7 @@ export function onCustomEmojiLoaded(listener: () => void): void {
   customListeners.add(listener);
 }
 
-export function loadCustomEmoji(): Promise<void> {
+function loadCustomEmoji(): Promise<void> {
   customLoad ??= api<{ emoji?: Record<string, string> }>("/api/custom-emoji")
     .then((body) => {
       customEmoji = body.emoji ?? {};
@@ -196,7 +196,7 @@ export function openProjectIconPicker(options: PickerOptions): void {
   });
 }
 
-export function closeProjectIconPicker(): void {
+function closeProjectIconPicker(): void {
   if (!host) return;
   document.removeEventListener("pointerdown", onOutside, true);
   window.removeEventListener("resize", closeProjectIconPicker);
