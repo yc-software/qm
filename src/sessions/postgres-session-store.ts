@@ -413,7 +413,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
   const db = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS]);
-  const { pool, q, query } = db;
+  const { pool, q } = db;
 
   async function refreshTenantSpend(): Promise<void> {
     const started = Date.now();

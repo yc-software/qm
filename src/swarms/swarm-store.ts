@@ -226,7 +226,7 @@ export function createSwarmStore(
     async pending(afterId) {
       return (await backing.acrossTenants())
         .filter(({ id, value }) => value.pending && (afterId === undefined || id > afterId))
-        .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+        .sort((left, right) => (left.id < right.id ? -1 : Number(left.id > right.id)))
         .slice(0, SWARM_LIMITS.sweepBatch)
         .map(({ tenantId, value }) => ({ ...decode(value), tenantId }));
     },
