@@ -7,7 +7,7 @@ image="qm-$service:runtime-smoke"
 container="qm-$service-runtime-smoke-${GITHUB_RUN_ID:-$$}"
 
 case "$service" in
-  admin | web-ui | portal | auth) container_port=8080 ;;
+  web-ui | portal | auth) container_port=8080 ;;
   *) echo "unsupported service: $service" >&2; exit 2 ;;
 esac
 
@@ -68,9 +68,7 @@ port="$(docker port "$container" "$container_port/tcp" | sed 's/.*://')"
 
 for _ in {1..30}; do
   if curl -fs "http://127.0.0.1:$port/healthz" >/dev/null; then
-    if [[ "$service" == "web-ui" ]]; then
-      curl -fs "http://127.0.0.1:$port/admin/" >/dev/null
-    elif [[ "$service" == "portal" ]]; then
+    if [[ "$service" == "portal" ]]; then
       docker exec "$container" node -e "fetch('http://127.0.0.1:8099/.well-known/jwks.json').then(async r=>{const j=await r.json();process.exit(r.ok&&j.keys?.length===1?0:1)}).catch(()=>process.exit(1))"
       status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/idp/.well-known/jwks.json")"
       [[ "$status" != 200 ]]

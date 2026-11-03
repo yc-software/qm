@@ -1,5 +1,6 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { reportBackendError } from "./error-reporting.ts";
 import { gzipAccepted, withVary } from "./http.ts";
@@ -8,8 +9,6 @@ import { signedRequestHeaders } from "./source-auth-sign.ts";
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export const CAPABILITY_HEADER = "x-agent-capability";
-
-export { signedRequestHeaders };
 
 export function signedHeaders(
   secret: string | undefined,
@@ -153,4 +152,30 @@ export async function relayCoreStream(
   }
   res.writeHead(upstream.statusCode ?? 502, headers);
   await pipeline(upstream, res).catch(() => undefined);
+}
+
+export async function relayCoreDownload(
+  res: ServerResponse,
+  input: {
+    origin: string;
+    secret?: string;
+    path: string;
+    headers?: Record<string, string>;
+    copyHeaders: string[];
+    responseHeaders?: Record<string, string>;
+  },
+): Promise<void> {
+  const path = withSourceAuthNonce(input.path, input.secret);
+  const upstream = await fetch(`${input.origin}${path}`, {
+    headers: { ...signedHeaders(input.secret, "GET", path, ""), ...input.headers },
+    redirect: "manual",
+  });
+  const headers: Record<string, string> = { ...input.responseHeaders };
+  for (const name of input.copyHeaders) {
+    const value = upstream.headers.get(name);
+    if (value) headers[name] = value;
+  }
+  res.writeHead(upstream.status, headers);
+  if (!upstream.body) return void res.end();
+  await pipeline(Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]), res).catch(() => undefined);
 }

@@ -91,7 +91,6 @@ Object.assign(process.env, {
   PORTAL_TRUSTED_OIDC_ADMIN: adminEnabled ? "1" : "0",
   PORTAL_TRUSTED_OIDC_LABEL: preferenceEnabled ? "Company SSO" : "",
   WEB_UI_UPSTREAM: issuer,
-  ADMIN_UPSTREAM: issuer,
   OIDC_AUTH_ENDPOINT: "https://primary.example.test/authorize",
   OIDC_CLIENT_ID: "primary-client",
   PORTAL_LOCAL_AUTH_BYPASS: "0",
@@ -200,11 +199,11 @@ test(
     });
     assert.equal(logout.status, 200);
     assert.ok(logout.headers.getSetCookie().includes(preference));
-    const response = await fetch(`${base}/auth/login?returnTo=%2Fadmin%2F`, {
+    const response = await fetch(`${base}/auth/login?returnTo=%2Fsettings%2F`, {
       redirect: "manual",
       headers: { cookie: preference.split(";")[0]! },
     });
-    assert.equal(response.headers.get("location"), "/auth/trusted/login?returnTo=%2Fadmin%2F");
+    assert.equal(response.headers.get("location"), "/auth/trusted/login?returnTo=%2Fsettings%2F");
     assert.ok(!response.headers.getSetCookie().some((cookie) => cookie.startsWith("portal_session=")));
     const external = await fetch(`${base}/auth/login?returnTo=https://evil.example`, {
       redirect: "manual",
@@ -228,7 +227,7 @@ test("unknown provider preferences retain primary sign-in", async () => {
 });
 
 test("switching from email retains its signed return destination", async () => {
-  const email = await fetch(`${base}/auth/login?provider=primary&returnTo=%2Fadmin%2F`, { redirect: "manual" });
+  const email = await fetch(`${base}/auth/login?provider=primary&returnTo=%2Fsettings%2F`, { redirect: "manual" });
   const cookie = email.headers.getSetCookie()[0]!.split(";")[0]!;
   const trusted = await fetch(`${base}/auth/trusted/login`, { redirect: "manual", headers: { cookie } });
   const url = new URL(trusted.headers.get("location")!);
@@ -239,7 +238,7 @@ test("switching from email retains its signed return destination", async () => {
     headers: { cookie: trusted.headers.getSetCookie()[0]!.split(";")[0]! },
   });
   assert.equal(response.status, 302);
-  assert.equal(response.headers.get("location"), "/admin/");
+  assert.equal(response.headers.get("location"), "/settings/");
 });
 
 test(

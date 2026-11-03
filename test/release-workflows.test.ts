@@ -84,7 +84,7 @@ test("the published package pins real image digests, never the checked-in sentin
     workflow.indexOf("Pin published image digests") < workflow.indexOf("npm publish"),
     "digests are resolved before the package is published",
   );
-  assert.match(workflow, /for service in core web-ui admin portal auth egress-proxy sandbox-base; do/);
+  assert.match(workflow, /for service in core web-ui portal auth egress-proxy sandbox-base; do/);
   assert.match(workflow, /printf '%s\\n' "\$out" > cli\/manifest\.json/);
   assert.match(workflow, /no published image for \$repo at \$IMAGES_REF/);
   assert.match(workflow, /\{63\}\$"\) \| not\)/);
@@ -94,7 +94,7 @@ test("the published package pins real image digests, never the checked-in sentin
     services: Record<string, string>;
   };
   const refs = [sentinel.sandboxBase, ...Object.values(sentinel.services)];
-  assert.equal(refs.length, 7);
+  assert.equal(refs.length, 6);
   assert.ok(
     refs.every((ref) => ref.startsWith("registry.invalid/")),
     "the checked-in manifest stays a sentinel so a source checkout never pulls a stale digest",

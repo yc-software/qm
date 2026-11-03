@@ -14,7 +14,6 @@ import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
-import { seedTestTenants } from "./support/tenant-seed.ts";
 
 const fact = "Prefers validating changes with before-and-after browser tests.";
 const filler = Array.from(
@@ -46,7 +45,6 @@ async function isolatedDatabase(t: TestContext) {
   const url = new URL(database!);
   url.pathname = `/${name}`;
   fixture.url = url.toString();
-  await seedTestTenants(fixture.url);
   return fixture;
 }
 

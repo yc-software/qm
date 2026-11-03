@@ -47,7 +47,6 @@ export function deployedHealthUrls(flyAppName: string | undefined, publicWebUrl:
   const prefix = flyAppName.slice(0, -"-core".length);
   return [
     "http://127.0.0.1:8080/healthz",
-    `http://${prefix}-admin.internal:8080/healthz`,
     `http://${prefix}-web-ui.flycast/healthz`,
     `http://${prefix}-portal.internal:8080/healthz`,
     new URL("/healthz", publicWebUrl).toString(),

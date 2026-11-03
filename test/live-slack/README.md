@@ -240,6 +240,8 @@ ECR and checks its embedded source SHA against the checkout. The runner builds
 the local sandbox from that source, then invokes the candidate's real application,
 Pi harness, model, and sandbox tools. Only the probe and transcript assertion are
 mounted into the core container; application code comes from the candidate image.
+The probe keeps its state in a disposable Postgres container that the script
+starts beside it and removes afterwards.
 Provide AWS ECR access and `ANTHROPIC_API_KEY`. Require this job alongside cloud
 qualification before promotion. If capturing output through a pipe, use a shell
 with `pipefail` so a failed probe cannot become a successful job.

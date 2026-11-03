@@ -994,15 +994,9 @@ export function createMockAgent(): Agent {
       return Promise.resolve(JSON.stringify({ act: false }));
     },
 
-    async screenSecurity({
-      payload,
-      modelId,
-      systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT,
-      signal,
-      recordModelCall,
-      recordLlmRequest,
-    }) {
-      const model = modelId ?? "mock-security";
+    async screenSecurity({ payload, signal, recordModelCall, recordLlmRequest }) {
+      const systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT;
+      const model = "mock-security";
       recordModelCall({
         model,
         inputTokens: countTokens(systemPrompt) + countTokens(payload),

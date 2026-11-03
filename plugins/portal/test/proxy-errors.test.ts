@@ -8,10 +8,12 @@ import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 
 let whoamiMode: "ok" | "down" | "fail-once" | "malformed" = "ok";
 let whoamiRequests = 0;
+let lastWhoamiHeaders: IncomingMessage["headers"] = {};
 
 const upstream = createServer((req: IncomingMessage, res) => {
-  if (req.url === "/api/whoami") {
+  if (req.url?.startsWith("/v1/admin/whoami")) {
     whoamiRequests++;
+    lastWhoamiHeaders = req.headers;
     if (whoamiMode === "down" || (whoamiMode === "fail-once" && whoamiRequests === 1)) {
       res.writeHead(502, { "content-type": "application/json" });
       return void res.end(JSON.stringify({ error: "core_unreachable" }));
@@ -20,10 +22,9 @@ const upstream = createServer((req: IncomingMessage, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       return void res.end("{}");
     }
-    const m = (req.headers.cookie ?? "").match(/admin=([^;]+)/);
-    const sub = m ? decodeURIComponent(m[1] ?? "") : "";
+    const actor = req.headers["x-admin-actor"];
     res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ isAdmin: sub.startsWith("U-admin") }));
+    return void res.end(JSON.stringify({ isAdmin: typeof actor === "string" && actor.startsWith("U-admin") }));
   }
   if ((req.url ?? "").startsWith("/api/echo-cookie")) {
     res.writeHead(200, { "content-type": "application/json" });
@@ -53,7 +54,6 @@ process.env.CORE_SIGNING_SECRET = "proxy-errors-test-core-secret";
 process.env.PORTAL_IDENTITY_SECRET = "proxy-errors-test-identity-secret";
 process.env.PORTAL_DEPLOYMENTS_ENABLED = "1";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
-process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 
 const { server, consumeState, consumedStates } = await import("../src/index.ts");
@@ -186,37 +186,49 @@ test("a prototype-chain segment like /constructor/ never matches a keyed surface
   }
 });
 
+function startImpersonation(sub: string): Promise<Response> {
+  return fetch(`${base}/auth/impersonate?target=alice@acme`, {
+    method: "POST",
+    headers: { cookie: sessionCookie(sub), origin: PUBLIC },
+  });
+}
+
+test("the admin probe asks core with source auth, the admin actor and the signed portal identity", async () => {
+  whoamiMode = "ok";
+  const ok = await startImpersonation("U-admin-headers");
+  assert.equal(ok.status, 200);
+  assert.equal(lastWhoamiHeaders["x-admin-actor"], "U-admin-headers@acme");
+  assert.match(String(lastWhoamiHeaders["x-signature"] ?? ""), /^v0=/);
+  assert.equal(
+    verifyPortalIdentity(
+      String(lastWhoamiHeaders["x-portal-identity"] ?? ""),
+      "proxy-errors-test-identity-secret",
+      Date.now(),
+    )?.p,
+    "U-admin-headers",
+  );
+});
+
 test("a transient admin-probe failure is retried before denying access", async () => {
   whoamiRequests = 0;
   whoamiMode = "fail-once";
-  const ok = await fetch(`${base}/admin/api/me`, { headers: { cookie: sessionCookie("U-admin-transient") } });
+  const ok = await startImpersonation("U-admin-transient");
   assert.equal(ok.status, 200);
   assert.equal(whoamiRequests, 2);
   whoamiMode = "ok";
 });
 
-test("an admin-probe outage is reported as unavailable and is NOT negative-cached", async () => {
-  whoamiMode = "down";
-  const denied = await fetch(`${base}/admin/`, {
-    headers: { cookie: sessionCookie("U-admin-outage"), accept: "text/html" },
+for (const mode of ["down", "malformed"] as const) {
+  test(`an admin probe that is ${mode} denies access without caching the denial`, async () => {
+    const sub = `U-admin-${mode}`;
+    whoamiMode = mode;
+    const denied = await startImpersonation(sub);
+    assert.equal(denied.status, 403);
+    whoamiMode = "ok";
+    const ok = await startImpersonation(sub);
+    assert.equal(ok.status, 200);
   });
-  assert.equal(denied.status, 403);
-  assert.match(await denied.text(), /temporarily unavailable/i, "an outage must not read as 'you are not an admin'");
-
-  whoamiMode = "ok";
-  const ok = await fetch(`${base}/admin/api/me`, { headers: { cookie: sessionCookie("U-admin-outage") } });
-  assert.equal(ok.status, 200);
-});
-
-test("a malformed admin verdict fails readiness instead of being cached as non-admin", async () => {
-  whoamiMode = "malformed";
-  const denied = await fetch(`${base}/admin/`, {
-    headers: { cookie: sessionCookie("U-admin-malformed"), accept: "text/html" },
-  });
-  assert.equal(denied.status, 403);
-  assert.match(await denied.text(), /temporarily unavailable/i);
-  whoamiMode = "ok";
-});
+}
 
 test("consumeState: single-use, TTL-bounded, never wholesale-wiped", () => {
   assert.equal(consumeState("state-a"), true);

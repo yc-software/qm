@@ -53,23 +53,8 @@ BEGIN
     'REVOKE INSERT, UPDATE, DELETE ON tenants, qm_schema_migrations FROM qm_app',
     'GRANT SELECT ON tenants, qm_schema_migrations TO qm_app, qm_reader'
   ] LOOP
-    BEGIN
-      EXECUTE grant_sql;
-    EXCEPTION WHEN insufficient_privilege THEN
-      RAISE WARNING 'Skipped tenant grant the host refused: %', grant_sql;
-    END;
+    EXECUTE grant_sql;
   END LOOP;
 END $tenant_grants$`,
   ],
 };
-
-export function tenantTableStatements(table: string): string[] {
-  return [
-    `ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()`,
-    `ALTER TABLE ${table} ADD CONSTRAINT ${table}_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)`,
-    `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
-    `CREATE POLICY tenant_app ON ${table} FOR ALL TO qm_app
-       USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())`,
-    `CREATE POLICY tenant_reader ON ${table} FOR SELECT TO qm_reader USING (tenant_id = qm_bound_tenant())`,
-  ];
-}

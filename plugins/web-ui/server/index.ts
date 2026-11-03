@@ -7,6 +7,7 @@ import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
+import { adminRoutes } from "./admin-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
@@ -21,6 +22,7 @@ import {
   signedHeaders,
   withSourceAuthNonce,
   CAPABILITY_HEADER,
+  relayCoreDownload,
   type HttpMethod,
 } from "../../chassis/src/core-client.ts";
 import { findRoute } from "../../chassis/src/router.ts";
@@ -961,10 +963,9 @@ async function uploadBlobFromRequest(req: IncomingMessage, res: ServerResponse, 
 async function uploadFileFromRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  user: string,
-  scope: string | null,
   sha256: string,
   name: string,
+  register: { path: string; fields: Record<string, string>; headers?: Record<string, string> },
 ): Promise<void> {
   if (!/^[0-9a-f]{64}$/.test(sha256)) {
     req.resume();
@@ -978,14 +979,21 @@ async function uploadFileFromRequest(
   }
   const stagedBody = JSON.parse(stagedText) as { blobId: string };
   const body = JSON.stringify({
-    principalId: user,
-    ...(scope ? { scopeId: scope } : {}),
+    ...register.fields,
     name,
     mimetype:
       typeof req.headers["content-type"] === "string" ? req.headers["content-type"] : "application/octet-stream",
     blobId: stagedBody.blobId,
   });
-  const registered = await coreFetch("POST", "/v1/files/upload", body);
+  const portalTok = portalTokenStore.getStore();
+  const registered = await fetchCoreText({
+    origin: CORE,
+    secret: CORE_SIGNING_SECRET,
+    method: "POST",
+    path: register.path,
+    body,
+    headers: register.headers ?? (portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined),
+  });
   return sendBuffered(res, registered.status, { "content-type": "application/json" }, registered.text);
 }
 
@@ -1490,14 +1498,11 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/files/upload",
     handle: async (c) => {
       const { req, res, url, user } = c;
-      return uploadFileFromRequest(
-        req,
-        res,
-        user,
-        url.searchParams.get("scope"),
-        declaredSha(url),
-        uploadFileName(url),
-      );
+      const scope = url.searchParams.get("scope");
+      return uploadFileFromRequest(req, res, declaredSha(url), uploadFileName(url), {
+        path: "/v1/files/upload",
+        fields: { principalId: user, ...(scope ? { scopeId: scope } : {}) },
+      });
     },
   },
   {
@@ -1780,6 +1785,20 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
     },
   },
+  ...adminRoutes({
+    origin: CORE,
+    secret: CORE_SIGNING_SECRET,
+    org: ORG,
+    portalHeaders: (): Record<string, string> => {
+      const token = portalTokenStore.getStore();
+      return token ? { [PORTAL_IDENTITY_HEADER]: token } : {};
+    },
+    impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
+    readBody,
+    uploadFile: uploadFileFromRequest,
+    refreshBranding: () => brandingCache.refreshNow(),
+    json,
+  }),
   ...uiCanvasRoutes({
     impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
     coreFetch,
@@ -3429,31 +3448,20 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (!external && !user) return json(res, 401, { error: "sign in" });
     const corePath = `/v1/${external ? "public-shares" : "shared-sessions"}/${match[2]}${match[3] ? `/files/${match[3]}` : ""}?${external ? "" : `viewer=${encodeURIComponent(user!)}&`}inline=${url.searchParams.get("inline") === "1" ? "1" : "0"}`;
     if (match[3]) {
-      const signedPath = withSourceAuthNonce(corePath, CORE_SIGNING_SECRET);
       const portalTok = external ? null : portalTokenStore.getStore();
-      const response = await fetch(`${CORE}${signedPath}`, {
-        headers: {
-          ...signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
-          ...(portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {}),
+      return relayCoreDownload(res, {
+        origin: CORE,
+        secret: CORE_SIGNING_SECRET,
+        path: corePath,
+        headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : {},
+        copyHeaders: ["content-type", "content-length", "content-disposition"],
+        responseHeaders: {
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'none'; sandbox",
         },
-        redirect: "manual",
       });
-      const headers: Record<string, string> = {
-        "cache-control": "no-store",
-        "referrer-policy": "no-referrer",
-        "x-content-type-options": "nosniff",
-        "content-security-policy": "default-src 'none'; sandbox",
-      };
-      for (const name of ["content-type", "content-length", "content-disposition"]) {
-        const value = response.headers.get(name);
-        if (value) headers[name] = value;
-      }
-      res.writeHead(response.status, headers);
-      if (!response.body) return res.end();
-      const stream = Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
-      res.on("close", () => stream.destroy());
-      stream.on("error", () => res.destroy());
-      return stream.pipe(res);
     }
     const result = await coreFetch("GET", corePath);
     const dev = vite && !external;
@@ -3536,23 +3544,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   json(res, 404, { error: "not found" });
 };
 
-let adminModule: Promise<typeof import("../../admin/src/index.ts")> | undefined;
-
 export const handler = async (req: IncomingMessage, res: ServerResponse) => {
-  const originalUrl = req.url ?? "/";
-  const path = originalUrl.split("?")[0]!;
-  if (process.env.ADMIN_ENABLED !== "0" && (path === "/admin" || path.startsWith("/admin/"))) {
-    req.url = originalUrl.slice("/admin".length) || "/";
-    if (req.url.startsWith("?")) req.url = `/${req.url}`;
-    try {
-      process.env.ADMIN_BASE_PATH ??= "/admin";
-      adminModule ??= import("../../admin/src/index.ts");
-      await (await adminModule).handler(req, res);
-    } finally {
-      req.url = originalUrl;
-    }
-    return;
-  }
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");

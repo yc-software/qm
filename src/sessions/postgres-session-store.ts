@@ -26,7 +26,6 @@ import type {
   NewEntry,
   NewLlmRequest,
   ParticipantWindow,
-  ScreenSample,
   SessionOrigin,
   SessionOriginFilter,
   SessionPage,
@@ -59,7 +58,6 @@ import {
   USER_ITEM_KINDS,
   USER_KINDS,
 } from "./items.ts";
-import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
 const LLM_CAPTURE_PURGE_BATCH = 100;
 const ENVELOPE_TOUCH_MS = 24 * 60 * 60_000;
@@ -167,7 +165,7 @@ function rowToEntry(r: Record<string, unknown>): SessionEntry {
 
 const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ts.scope_id AS scope_label, ${msOf("i.created_at")} AS created_at`;
 const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
-const TENANT = "qm_bound_tenant()";
+const TENANT = "qm_tenant_id()";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
@@ -868,43 +866,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         args,
       );
       return rows.map(rowToLlmRequest);
-    },
-
-    async listScreenSamples(limit): Promise<ScreenSample[]> {
-      const wanted = Math.max(0, Math.trunc(limit));
-      const pageSize = Math.max(wanted, 100);
-      const samples: ScreenSample[] = [];
-      let beforeAt: number | null = null;
-      let beforeId: string | null = null;
-      while (samples.length < wanted) {
-        const rows = await q(
-          `SELECT r.id, r.session_id, r.scope_label, r.created_at, r.model, e.body AS prompt_body
-             FROM session_llm_requests r JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash
-            WHERE r.step = $1
-              AND ($3::bigint IS NULL OR (r.created_at, r.id) < ($3::bigint, $4::text))
-            ORDER BY r.created_at DESC, r.id DESC
-            LIMIT $2`,
-          [SECURITY_SCREEN_STEP, pageSize, beforeAt, beforeId],
-        );
-        for (const r of rows) {
-          const payload = screenPayloadFromEnvelope(JSON.parse(r.prompt_body as string));
-          if (!payload) continue;
-          samples.push({
-            id: r.id as string,
-            sessionId: r.session_id as string,
-            scopeLabel: r.scope_label as ScopeId,
-            createdAt: Number(r.created_at),
-            model: r.model as string,
-            payload,
-          });
-          if (samples.length === wanted) return samples;
-        }
-        if (rows.length < pageSize) break;
-        const last = rows.at(-1)!;
-        beforeAt = Number(last.created_at);
-        beforeId = last.id as string;
-      }
-      return samples;
     },
 
     async purgeLlmCaptures(cutoff, opts) {

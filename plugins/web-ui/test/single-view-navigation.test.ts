@@ -136,7 +136,10 @@ test("background canvas updates preserve non-chat detail routes", async () => {
 test("single and multiview headers render mutually exclusive tools and pane controls", async () => {
   known = [];
   await canvas(session("first"));
-  assert.equal(document.querySelectorAll(".split-pane-actions .session-tool").length, 6);
+  assert.equal(
+    document.querySelectorAll(".split-pane-actions .session-tool:not(.split-group-session-action)").length,
+    6,
+  );
   const hoverTitle = () => {
     const title = document.querySelector<HTMLElement>(".split-pane-title")!;
     title.dispatchEvent(new MouseEvent("mouseenter"));
@@ -149,7 +152,10 @@ test("single and multiview headers render mutually exclusive tools and pane cont
   );
   await canvas(session("first"), session("second"));
   assert.equal(hoverTitle(), false, "split titles suppress their tooltip");
-  assert.equal(document.querySelectorAll(".split-pane-actions .session-tool").length, 0);
+  assert.equal(
+    document.querySelectorAll(".split-pane-actions .session-tool:not(.split-group-session-action)").length,
+    0,
+  );
   for (const label of ["Pane layout and tools", "Expand pane", "Close pane"])
     assert.ok(labels().includes(label), label);
   document.querySelector<HTMLButtonElement>(".split-tools-btn")!.click();
@@ -158,6 +164,9 @@ test("single and multiview headers render mutually exclusive tools and pane cont
   assert.equal(document.querySelector('.split-pane-actions [role="menu"]'), null);
   assert.equal(document.querySelector(".split-tools-btn"), null);
   assert.equal(hoverTitle(), false, "closing the split keeps the title without a tooltip");
-  assert.equal(document.querySelectorAll(".split-pane-actions .session-tool").length, 6);
+  assert.equal(
+    document.querySelectorAll(".split-pane-actions .session-tool:not(.split-group-session-action)").length,
+    6,
+  );
   assert.equal(document.querySelectorAll('.split-pane-actions [aria-label="Close pane"]').length, 0);
 });
