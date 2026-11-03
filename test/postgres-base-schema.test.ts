@@ -1,27 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the base schema tests";
 
 async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
-  const parent = new pg.Pool({ connectionString: databaseUrl });
-  const name = `base_schema_${randomUUID().replaceAll("-", "")}`;
-  await parent.query(`CREATE DATABASE ${name}`);
-  const url = new URL(databaseUrl!);
-  url.pathname = `/${name}`;
-  const admin = new pg.Pool({ connectionString: url.toString() });
+  const url = testDatabaseUrl();
+  const admin = new pg.Pool({ connectionString: url });
   try {
-    await run(url.toString(), admin);
+    await run(url, admin);
   } finally {
     await admin.end();
-    await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
-    await parent.end();
   }
 }
 
