@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLocalSandbox, localContainerName, localVolumeName } from "../src/sandbox/local-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
+import { enterTenant } from "../src/tenants/context.ts";
+
+const oneTenant = { q: async () => [{ n: 1 }] };
+
+enterTenant(randomUUID());
 
 const log = (...a: unknown[]) => console.log("[local-smoke]", ...a);
 
@@ -17,7 +23,7 @@ if (spawnSync("docker", ["version"], { stdio: "ignore" }).status !== 0) {
 
 async function main(): Promise<void> {
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "local-smoke-ws-")));
-  const sandbox = createLocalSandbox(ws, {});
+  const sandbox = createLocalSandbox(ws, { tenants: oneTenant });
   const scope = scopeId("personal", `smoke-${Date.now()}`);
   const layers = [{ scopeId: scope, mountPath: "", mode: "rw" as const }];
 

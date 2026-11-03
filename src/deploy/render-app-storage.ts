@@ -6,12 +6,14 @@ import { sleep } from "../util/async.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { shq } from "../util/shell.ts";
 import { createRenderApi, type RenderApi } from "./render-api.ts";
+import { tenantObjectKey } from "../tenants/storage.ts";
 
 export interface StoredRenderAppStorage {
   deploymentId: string;
   accessKey: string;
   secretKeyEnc: string;
   enabled: boolean;
+  prefix?: string;
 }
 
 interface Job {
@@ -76,7 +78,7 @@ export function createRenderAppStorage(opts: {
     throw new Error("Render app storage requires a MinIO service and a valid endpoint");
   const key = deriveConnectorKey(opts.keyMaterial, "render-app-storage");
   const api = opts.api ?? createRenderApi(opts);
-  const prefixFor = (id: string) => `${opts.prefix ?? ""}app-data/${id}/`;
+  const prefixFor = (id: string) => `${opts.prefix ?? ""}${tenantObjectKey("app-data", id)}/`;
   const path = `/services/${encodeURIComponent(opts.minioServiceId)}`;
   const poll = opts.pollIntervalMs ?? 2_000;
 
@@ -116,7 +118,9 @@ printf 'QM app storage enable applied\\n'
     if (!job?.id) throw new Error("Render did not return an app storage job ID");
     const status = await wait(job.id);
     if (status !== "succeeded") throw new Error(`Render app storage job ${job.id} ${status}`);
-    if (!record.enabled) await opts.store.put(record.deploymentId, { ...record, enabled: true });
+    const prefix = prefixFor(record.deploymentId);
+    if (!record.enabled || record.prefix !== prefix)
+      await opts.store.put(record.deploymentId, { ...record, enabled: true, prefix });
   }
 
   async function wait(jobId: string): Promise<string> {
@@ -142,7 +146,7 @@ printf 'QM app storage enable applied\\n'
           enabled: false,
         });
       if (record.deploymentId !== deploymentId) throw new Error("Render app storage identity does not match");
-      if (repair || !record.enabled) await provision(record);
+      if (repair || !record.enabled || record.prefix !== prefixFor(deploymentId)) await provision(record);
       return {
         AWS_ACCESS_KEY_ID: record.accessKey,
         AWS_SECRET_ACCESS_KEY: decryptSecret(record.secretKeyEnc, key),

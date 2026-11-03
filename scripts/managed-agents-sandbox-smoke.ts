@@ -10,6 +10,10 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import { randomUUID } from "node:crypto";
+import { enterTenant } from "../src/tenants/context.ts";
+
+enterTenant(randomUUID());
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");

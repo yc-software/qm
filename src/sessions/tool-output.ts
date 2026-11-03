@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -11,6 +12,7 @@ const CHARS_PER_TOKEN = 4;
 const TOOL_OUTPUT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const SETTING_CACHE_MS = 30_000;
 const TOOL_OUTPUT_PATH = "tool-output/";
+export const TOOL_OUTPUT_AREA = "tool-output";
 const DIGEST_DIR = "md5/";
 
 export interface ToolOutputRef {
@@ -85,20 +87,11 @@ async function readText(bytes: DurableByteStore, blobKey: string): Promise<strin
 
 export function createPostgresToolOutputStore(opts: {
   pool: Pick<PgPool, "q">;
-  bytesFor: (prefix: string) => DurableByteStore;
+  bytes: DurableByteStore;
   now?: () => number;
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
   let setting: { value: number; at: number } | null = null;
-  let tenant: Promise<{ id: string; bytes: DurableByteStore }> | null = null;
-  const tenantBytes = (): Promise<{ id: string; bytes: DurableByteStore }> =>
-    (tenant ??= opts.pool.q("SELECT qm_tenant_id()::text AS id").then((rows) => {
-      const id = rows[0]?.id as string;
-      return { id, bytes: opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`) };
-    })).catch((err: unknown) => {
-      tenant = null;
-      throw err;
-    });
   return {
     async inlineTokens() {
       if (setting && now() - setting.at < SETTING_CACHE_MS) return setting.value;
@@ -107,8 +100,8 @@ export function createPostgresToolOutputStore(opts: {
       return setting.value;
     },
     async save(text) {
-      const { id, bytes } = await tenantBytes();
-      const put = await bytes.put(Buffer.from(text, "utf8"));
+      const id = currentTenant();
+      const put = await opts.bytes.put(Buffer.from(text, "utf8"));
       await opts.pool.q(
         `INSERT INTO blobs(tenant_id, sha256, size, mime, storage_key, created_at, expires_at)
          VALUES ($1::uuid, decode($2, 'hex'), $3, 'text/plain; charset=utf-8', $4,
@@ -140,9 +133,11 @@ export function createPostgresToolOutputStore(opts: {
       if (row.expired === true) return { expired: true };
       if (typeof row.storage_key !== "string")
         throw new Error(`tool output ${ref.digest}: the result names a parked blob with no blobs row`);
-      const { bytes, id } = await tenantBytes();
-      const key = String(row.storage_key).slice(`${TOOL_OUTPUT_PATH}${id}/`.length);
-      const text = await readText(bytes, key);
+      const stored = String(row.storage_key);
+      const tenantPath = `${TOOL_OUTPUT_PATH}${currentTenant()}/`;
+      if (!stored.startsWith(tenantPath))
+        throw new Error(`tool output ${ref.digest}: parked blob ${stored} is outside this tenant's storage`);
+      const text = await readText(opts.bytes, stored.slice(tenantPath.length));
       if (text === null)
         throw new Error(`tool output ${ref.digest}: parked bytes ${row.storage_key} are missing from storage`);
       return { text };

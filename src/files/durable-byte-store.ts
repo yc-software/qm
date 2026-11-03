@@ -17,6 +17,8 @@ import {
 import { swallowAs } from "../util/errors.ts";
 import { asChunks, collectBytes, type ByteSource } from "../util/bytes.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { tenantDir, tenantObjectKey } from "../tenants/storage.ts";
 
 export type { ByteSource } from "../util/bytes.ts";
 
@@ -51,6 +53,12 @@ export class ByteSourceTooLargeError extends Error {
 const BLOB_KEY = /^files\/(?:[0-9a-f]{64}|uploads\/[0-9a-f]{32})$/;
 const keyFor = (sha256: string): string => `files/${sha256}`;
 
+export const FILES_AREA = "docstore";
+
+export function durableObjectKey(prefix: string, area: string, blobKey: string): string {
+  return prefix + tenantObjectKey(area, blobKey);
+}
+
 function collect(source: ByteSource, maxBytes?: number): Promise<{ data: Buffer; sha256: string }> {
   return collectBytes(source, {
     ...(maxBytes != null ? { maxBytes } : {}),
@@ -60,32 +68,32 @@ function collect(source: ByteSource, maxBytes?: number): Promise<{ data: Buffer;
 
 export function createMemoryDurableByteStore(): DurableByteStore {
   const blobs = new Map<string, Buffer>();
+  const slot = (blobKey: string): string => `${currentTenant()}/${blobKey}`;
   return {
     async put(source, opts) {
       const { data, sha256 } = await collect(source, opts?.maxBytes);
       const blobKey = keyFor(sha256);
-      if (!blobs.has(blobKey)) blobs.set(blobKey, data);
+      if (!blobs.has(slot(blobKey))) blobs.set(slot(blobKey), data);
       return { blobKey, sizeBytes: data.length, sha256 };
     },
     async open(blobKey) {
-      const hit = blobs.get(blobKey);
+      const hit = blobs.get(slot(blobKey));
       if (!hit) return null;
       return { sizeBytes: hit.length, stream: Readable.from(hit) };
     },
     async delete(blobKey) {
-      blobs.delete(blobKey);
+      blobs.delete(slot(blobKey));
     },
   };
 }
 
 export function createLocalDurableByteStore(dir: string): DurableByteStore {
-  const base = join(dir, "files");
-  let ensured: Promise<unknown> | null = null;
-  const ensureDir = (): Promise<unknown> => (ensured ??= mkdir(base, { recursive: true }));
+  const filesDir = (): string => join(tenantDir(dir), "files");
 
   return {
     async put(source, opts) {
-      await ensureDir();
+      const base = filesDir();
+      await mkdir(base, { recursive: true });
       const partPath = join(base, `${randomUUID()}.part`);
       try {
         const { sha256, sizeBytes } = await spoolBytes(source, partPath, opts?.maxBytes);
@@ -98,7 +106,7 @@ export function createLocalDurableByteStore(dir: string): DurableByteStore {
 
     async open(blobKey) {
       if (!BLOB_KEY.test(blobKey)) return null;
-      const path = join(base, blobKey.slice("files/".length));
+      const path = join(filesDir(), blobKey.slice("files/".length));
       let st;
       try {
         st = await stat(path);
@@ -112,7 +120,7 @@ export function createLocalDurableByteStore(dir: string): DurableByteStore {
 
     async delete(blobKey) {
       if (!BLOB_KEY.test(blobKey)) return;
-      await rm(join(base, blobKey.slice("files/".length)), { force: true }).catch(
+      await rm(join(filesDir(), blobKey.slice("files/".length)), { force: true }).catch(
         swallowAs("files: delete", undefined),
       );
     },
@@ -121,6 +129,7 @@ export function createLocalDurableByteStore(dir: string): DurableByteStore {
 
 export interface S3DurableByteOptions {
   bucket: string;
+  area: string;
   region?: string;
   prefix?: string;
   _client?: S3Send;
@@ -128,8 +137,7 @@ export interface S3DurableByteOptions {
 
 export function createS3DurableByteStore(options: S3DurableByteOptions): DurableByteStore {
   const bucket = options.bucket;
-  const prefix = options.prefix ?? "";
-  const s3Key = (blobKey: string): string => prefix + blobKey;
+  const s3Key = (blobKey: string): string => durableObjectKey(options.prefix ?? "", options.area, blobKey);
   const client = options._client ?? s3Client(options.region);
 
   return {

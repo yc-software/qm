@@ -19,6 +19,11 @@ export function withoutTenant<T>(fn: () => T): T {
   return bind(undefined, fn);
 }
 
+export function enterTenant(id: string): void {
+  if (!isTenantId(id)) throw new Error(`Tenant id must be a lowercase uuid, got ${JSON.stringify(id)}`);
+  binding.enterWith(id);
+}
+
 export function pinTenant<T>(fn: () => T): T {
   return pinned.run({ tenant: binding.getStore() }, fn);
 }

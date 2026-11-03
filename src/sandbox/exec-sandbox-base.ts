@@ -5,7 +5,8 @@ import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { shortHash } from "../util/crypto.ts";
+import { hashId } from "../util/crypto.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { DROPPED_PROXY_ENV, forceThroughProxyEnv, nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import type { LayerToolInstaller } from "./layer-tool-install.ts";
@@ -20,26 +21,24 @@ const RO_LAYERS_TAR = ".ro-layers.tar";
 const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const PREP_TIMEOUT_SEC = 60;
 
-// Provider instance names are DNS-style labels; Sprites rejects anything over 63 chars.
 const MAX_SANDBOX_NAME = 63;
-const HASH_LEN = 6;
+const TENANT_SEGMENT = 8;
+const HASH_LEN = 12;
+const MAX_SLUG = 40;
 
 export const sandboxScopeName = (prefix: string, id: string): string => {
+  const tenant = currentTenant();
+  const head = `${prefix}-${tenant.slice(0, TENANT_SEGMENT)}`;
+  const hash = hashId([prefix, tenant, id], HASH_LEN);
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  const name = `${prefix}-${cleaned.slice(0, 40).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
-  // Names that already fit are kept byte-for-byte so existing computers stay addressable.
-  if (name.length <= MAX_SANDBOX_NAME) return name;
-  // Over budget (long deployment prefix, or prefix + "-scratch"): shorten the readable parts and
-  // hash the full untruncated name so distinct prefixes/ids still map to distinct names.
-  const hash = shortHash(name);
-  const slugBudget = MAX_SANDBOX_NAME - prefix.length - HASH_LEN - 2;
+  const slugBudget = Math.min(MAX_SLUG, MAX_SANDBOX_NAME - head.length - HASH_LEN - 2);
   const slug = slugBudget > 0 ? cleaned.slice(0, slugBudget).replace(/-+$/, "") : "";
-  if (slug) return `${prefix}-${slug}-${hash}`;
-  const head = prefix.slice(0, MAX_SANDBOX_NAME - HASH_LEN - 1).replace(/-+$/, "");
-  return head ? `${head}-${hash}` : hash;
+  if (slug) return `${head}-${slug}-${hash}`;
+  const short = head.slice(0, MAX_SANDBOX_NAME - HASH_LEN - 1).replace(/-+$/, "");
+  return short ? `${short}-${hash}` : hash;
 };
 
 export interface ExecSandboxBaseDeps {

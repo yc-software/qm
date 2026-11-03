@@ -9,6 +9,7 @@ import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
 import { normalizeRelPath } from "./deploy-fs.ts";
+import { tenantDir } from "../tenants/storage.ts";
 
 export interface DeployGitInputFile {
   path: string;
@@ -77,7 +78,7 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
   const gitBin = opts.gitBin ?? "git";
   const archiveStore = opts.archiveStore;
   const archiveBytes = opts.archiveBytes;
-  const repoPath = (deploymentId: string): string => join(repoRoot, `${safeRepoName(deploymentId)}.git`);
+  const repoPath = (deploymentId: string): string => join(tenantDir(repoRoot), `${safeRepoName(deploymentId)}.git`);
 
   async function gitResult(args: string[], options: { cwd?: string; okExitCodes?: number[] } = {}): Promise<GitResult> {
     const ok = new Set(options.okExitCodes ?? [0]);
@@ -123,7 +124,7 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
       const bundle = join(tmp, "repo.bundle");
       const data = await archiveBundleBytes(archive);
       await rm(repo, { recursive: true, force: true });
-      await mkdir(repoRoot, { recursive: true });
+      await mkdir(dirname(repo), { recursive: true });
       await writeFile(bundle, data);
       await git(["init", "--bare", repo]);
       await git(["--git-dir", repo, "symbolic-ref", "HEAD", CURRENT_REF]);
@@ -194,7 +195,7 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
       return repo;
     }
     if (existsSync(join(repo, "HEAD"))) return repo;
-    await mkdir(repoRoot, { recursive: true });
+    await mkdir(dirname(repo), { recursive: true });
     await git(["init", "--bare", repo]);
     await git(["--git-dir", repo, "symbolic-ref", "HEAD", CURRENT_REF]);
     return repo;

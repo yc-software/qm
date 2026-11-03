@@ -3,6 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { shq } from "../src/util/shell.ts";
+import { randomUUID } from "node:crypto";
+import { enterTenant } from "../src/tenants/context.ts";
+
+enterTenant(randomUUID());
 
 export interface GitCliSmokeCommandOptions {
   requireGlab?: boolean;
