@@ -255,6 +255,7 @@ function statefulAws(
     drainPolls?: number;
     taskHealth?: "HEALTHY" | "UNKNOWN";
     priorTaskWanted?: boolean;
+    taskReadFails?: boolean;
     inactiveDeploymentRunning?: number;
     primaryFailedTasks?: boolean;
     rolloutFailed?: boolean;
@@ -435,7 +436,7 @@ else if (a.includes("ecs describe-tasks") && a.includes(":task/rollout/")) {
     const old = arn.endsWith("/old-0");
     return { taskArn: arn, startedBy: old ? "old" : service.deploymentId, taskDefinitionArn: service.taskDefinition, lastStatus: "RUNNING", healthStatus: old ? "HEALTHY" : ${JSON.stringify(opts.taskHealth ?? null)} };
   });
-  console.log(JSON.stringify({ tasks, failures: [] }));
+  console.log(JSON.stringify({ tasks, failures: ${JSON.stringify(opts.taskReadFails ?? false)} ? [{ arn: tasks[0]?.taskArn, reason: "MISSING" }] : [] }));
 }
 else if (a.includes("ecs list-tasks") && s.taskInventory) console.log(JSON.stringify({ taskArns: (s.taskInventory[after("--service-name")] || []).filter(task => task.desiredStatus === after("--desired-status")).map(task => task.taskArn) }));
 else if (a.includes("ecs describe-tasks") && s.taskInventory) {
@@ -5159,6 +5160,13 @@ for (const scenario of [
     flag: true,
     priorTaskWanted: true,
   },
+  {
+    name: "unreadable task health keeps the wait",
+    workload: "web-ui",
+    health: "HEALTHY",
+    flag: true,
+    taskReadFails: true,
+  },
   { name: "core still waits for its prior tasks to stop", workload: "core", health: "HEALTHY", flag: true },
   { name: "tasks without a health check still wait", workload: "web-ui", health: "UNKNOWN", flag: true },
   { name: "without the flag the web UI waits", workload: "web-ui", health: "HEALTHY", flag: false },
@@ -5172,7 +5180,11 @@ for (const scenario of [
       dir,
       config,
       {},
-      { taskHealth: scenario.health, priorTaskWanted: "priorTaskWanted" in scenario },
+      {
+        taskHealth: scenario.health,
+        priorTaskWanted: "priorTaskWanted" in scenario,
+        taskReadFails: "taskReadFails" in scenario,
+      },
     );
     const priorPath = process.env.PATH;
     process.env.PATH = `${dir}:${priorPath}`;
@@ -5201,11 +5213,16 @@ for (const scenario of [
         scenario.workload !== "core" &&
         scenario.health === "HEALTHY" &&
         scenario.flag &&
-        !("priorTaskWanted" in scenario);
+        !("priorTaskWanted" in scenario) &&
+        !("taskReadFails" in scenario);
       assert.equal(after.serviceDrain[service] > 0, early, "returns before prior tasks stop only when allowed");
       assert.equal(
         notes.some((line) => line.includes("not waiting for prior tasks to stop")),
         early,
+      );
+      assert.equal(
+        notes.some((line) => line.includes(`could not read ${scenario.workload} task health`)),
+        "taskReadFails" in scenario,
       );
       const currentId = after.dynamo["deployment/current"].manifestId.S;
       const current = JSON.parse(after.dynamo[`deployment/manifest/${currentId}`].manifest.S);
