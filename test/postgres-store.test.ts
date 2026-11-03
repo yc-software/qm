@@ -1876,10 +1876,10 @@ test(
       );
       const { run: recent } = await runs.enqueue({ sessionId: `${prefix}:recent`, request: turn("x") });
       const lease = (await runs.claimById(recent.id, "w", 60_000))!.leaseToken!;
-      await runs.complete(recent.id, lease, { status: "ok", sessionId: `${prefix}:recent`, text: "y" });
+      await runs.complete(recent.id, lease, { status: "ok", sessionId: `${prefix}:recent`, reply: "y" });
       const { run: boundary } = await runs.enqueue({ sessionId: `${prefix}:boundary`, request: turn("x") });
       const boundaryLease = (await runs.claimById(boundary.id, "w", 60_000))!.leaseToken!;
-      await runs.complete(boundary.id, boundaryLease, { status: "ok", sessionId: `${prefix}:boundary`, text: "y" });
+      await runs.complete(boundary.id, boundaryLease, { status: "ok", sessionId: `${prefix}:boundary`, reply: "y" });
       await raw.query("UPDATE runs SET finished_at = 2000 WHERE id = $1", [boundary.id]);
       const { run: running } = await runs.enqueue({ sessionId: `${prefix}:live`, request: turn("x") });
       await runs.claimById(running.id, "w", 60_000);
