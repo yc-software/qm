@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -47,6 +48,7 @@ test("browser inference uses the company gateway with scoped model authorization
       apiKey: `Bearer ${key}`,
       apiKeyHeader: "Authorization",
       models: routes,
+      actorKey: "test-actor-key",
     },
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -80,8 +82,8 @@ test("browser inference uses the company gateway with scoped model authorization
   });
   assert.deepEqual(contexts[0], {
     "x-qm-session-id": "session-browser",
-    "x-qm-actor": "U1",
-    "x-qm-scope": "personal:U1",
+    "x-qm-actor": gatewayActorId("U1", "test-actor-key"),
+    "x-qm-scope": `personal:${gatewayActorId("U1", "test-actor-key")}`,
     "x-qm-purpose": "browser",
     "x-qm-origin": "conversation",
   });

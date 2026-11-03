@@ -147,7 +147,7 @@ const PROTOCOLS: Record<
 
 export function createDecisionBackend(opts: {
   providers: (ids: string[]) => readonly DecisionProvider[] | Promise<readonly DecisionProvider[]>;
-  gateway?: Pick<ModelGatewayTransportConfig, "url" | "apiKey" | "apiKeyHeader">;
+  gateway?: Pick<ModelGatewayTransportConfig, "url" | "apiKey" | "apiKeyHeader" | "actorKey">;
   credential: (slug: string) => Promise<{ host: string; enabled: boolean; headers: Record<string, string> } | null>;
   fetch?: typeof fetch;
 }): DecisionBackend {

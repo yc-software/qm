@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -208,7 +209,7 @@ test("gateway provider sends the native typesafe body to the model gateway", asy
   });
   const backend = createDecisionBackend({
     providers: () => PROVIDERS,
-    gateway: { url: "http://gateway:8080/", apiKey: "gk", apiKeyHeader: "api-key" },
+    gateway: { url: "http://gateway:8080/", apiKey: "gk", apiKeyHeader: "api-key", actorKey: "test-actor-key" },
     credential: async () => null,
     fetch: fetchImpl,
   });
@@ -222,7 +223,7 @@ test("gateway provider sends the native typesafe body to the model gateway", asy
     "content-type": "application/json",
     "api-key": "gk",
     "x-qm-session-id": "session-1",
-    "x-qm-actor": "U1",
+    "x-qm-actor": gatewayActorId("U1", "test-actor-key"),
     "x-qm-scope": "channel:C1",
     "x-qm-purpose": "decision",
     "x-qm-origin": "cron",

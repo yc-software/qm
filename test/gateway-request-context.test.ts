@@ -5,6 +5,7 @@ import { createServer as httpServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { probeModel } from "../src/model/model-runtime.ts";
+import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { withResolvedRuntime } from "../src/agent/runtime-choice.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
@@ -23,7 +24,10 @@ const gateway = {
   apiKey: "gateway-key",
   apiKeyHeader: "api-key",
   models: { "claude-haiku-4-5": "router/haiku", "claude-haiku-5-5": "router/haiku-5-5" },
+  actorKey: TEST_CAPABILITY_SECRET,
 };
+
+const pseudonym = (id: string) => gatewayActorId(id, TEST_CAPABILITY_SECRET);
 
 const cronContext = {
   sessionId: "session-cron",
@@ -34,7 +38,7 @@ const cronContext = {
 
 const cronHeaders = {
   "x-qm-session-id": "session-cron",
-  "x-qm-actor": "owner@example.com",
+  "x-qm-actor": pseudonym("owner@example.com"),
   "x-qm-scope": "channel:C123",
   "x-qm-origin": "cron",
 };
@@ -68,6 +72,30 @@ test("a gateway turn carries the session, actor, scope, purpose and origin it wo
   await withModelRequestContext({ sessionId: "session-bare" }, () => harness.runTurn(turn()));
   assert.deepEqual(contextHeaders(requests.at(-1)!.headers), {
     "x-qm-session-id": "session-bare",
+    "x-qm-purpose": "turn",
+  });
+});
+
+test("the gateway gets keyed pseudonyms for people, and none without a key", async (t) => {
+  const requests = recordRequests(t);
+  const personal = { ...cronContext, scopeId: "personal:owner@example.com" };
+  await withModelRequestContext(personal, () =>
+    createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway }).runTurn(turn()),
+  );
+  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), {
+    ...cronHeaders,
+    "x-qm-scope": `personal:${pseudonym("owner@example.com")}`,
+    "x-qm-purpose": "turn",
+  });
+  assert.ok(!JSON.stringify([...requests.at(-1)!.headers]).includes("owner@example.com"));
+
+  const { actorKey: _actorKey, ...unkeyed } = gateway;
+  await withModelRequestContext(personal, () =>
+    createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway: unkeyed }).runTurn(turn()),
+  );
+  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), {
+    "x-qm-session-id": "session-cron",
+    "x-qm-origin": "cron",
     "x-qm-purpose": "turn",
   });
 });
@@ -228,10 +256,14 @@ test("app turns and their helper calls tell the gateway which session they serve
   });
   await settle(async () => !!sent("title") && !!sent("memory_capture"));
   const session = (await built.sessions.get(dm.sessionId!))!;
-  const parent = { "x-qm-session-id": session.id, "x-qm-actor": "U1", "x-qm-scope": session.scopeId };
+  const parent = {
+    "x-qm-session-id": session.id,
+    "x-qm-actor": pseudonym("U1"),
+    "x-qm-scope": `personal:${pseudonym("U1")}`,
+  };
   assert.deepEqual(sent("security_screen"), {
-    "x-qm-actor": "U1",
-    "x-qm-scope": session.scopeId,
+    "x-qm-actor": pseudonym("U1"),
+    "x-qm-scope": `personal:${pseudonym("U1")}`,
     "x-qm-purpose": "security_screen",
   });
   assert.deepEqual(sent("turn"), { ...parent, "x-qm-origin": "conversation", "x-qm-purpose": "turn" });
@@ -256,7 +288,7 @@ test("app turns and their helper calls tell the gateway which session they serve
   const channel = (await built.sessions.get(ambient.sessionId!))!;
   assert.deepEqual(sent("detect"), {
     "x-qm-session-id": channel.id,
-    "x-qm-actor": "U1",
+    "x-qm-actor": pseudonym("U1"),
     "x-qm-scope": channel.scopeId,
     "x-qm-origin": "conversation",
     "x-qm-purpose": "detect",
@@ -302,8 +334,8 @@ test("API work carries its token's turn, the admin replaying screens, or the mem
 
   await built.memory.capture("personal:U2", ["Prefers tea"], Date.now(), "U2");
   assert.deepEqual(sent("memory_classification"), {
-    "x-qm-actor": "U2",
-    "x-qm-scope": "personal:U2",
+    "x-qm-actor": pseudonym("U2"),
+    "x-qm-scope": `personal:${pseudonym("U2")}`,
     "x-qm-purpose": "memory_classification",
   });
 
@@ -326,8 +358,8 @@ test("API work carries its token's turn, the admin replaying screens, or the mem
   assert.equal(captured.status, 200, await captured.text());
   assert.deepEqual(sent("memory_classification", "session-agent"), {
     "x-qm-session-id": "session-agent",
-    "x-qm-actor": "U1",
-    "x-qm-scope": "personal:U1",
+    "x-qm-actor": pseudonym("U1"),
+    "x-qm-scope": `personal:${pseudonym("U1")}`,
     "x-qm-origin": "webhook",
     "x-qm-purpose": "memory_classification",
   });
@@ -339,7 +371,7 @@ test("API work carries its token's turn, the admin replaying screens, or the mem
   });
   assert.equal(enabled.status, 200, await enabled.text());
   assert.deepEqual(sent("probe"), {
-    "x-qm-actor": "admin-alice",
+    "x-qm-actor": pseudonym("admin-alice"),
     "x-qm-scope": "org:default-org",
     "x-qm-purpose": "probe",
   });
@@ -371,8 +403,8 @@ test("debounced memory capture keeps the context of the turn it came from, even 
   for (const [id, sessionId] of Object.entries(sessions))
     assert.deepEqual(sent("memory_capture", sessionId), {
       "x-qm-session-id": sessionId,
-      "x-qm-actor": id,
-      "x-qm-scope": `personal:${id}`,
+      "x-qm-actor": pseudonym(id),
+      "x-qm-scope": `personal:${pseudonym(id)}`,
       "x-qm-origin": "conversation",
       "x-qm-purpose": "memory_capture",
     });

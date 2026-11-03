@@ -592,7 +592,10 @@ export function buildApp(
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
   }
   const gatewayCatalog = config.modelGateway
-    ? createGatewayCatalog(config.modelGateway, overrides.modelCredentialFetch)
+    ? createGatewayCatalog(
+        { ...config.modelGateway, actorKey: config.capabilitySecret ?? config.signingSecret },
+        overrides.modelCredentialFetch,
+      )
     : undefined;
   const gatewayTransport = gatewayCatalog?.transport;
   const directProviderAvailability = providerKeysPresent(config);

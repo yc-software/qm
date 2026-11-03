@@ -1,4 +1,5 @@
 import "./support/auto-fake-sprites.ts";
+import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
@@ -90,6 +91,7 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
       apiKey: "gateway-key",
       apiKeyHeader: "x-gateway-key",
       models: { "gpt-5.5": "embed" },
+      actorKey: "test-actor-key",
     },
     async (url, init) => {
       calls.push({ url: String(url), init });
@@ -131,7 +133,7 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
   assert.deepEqual(request.init?.headers, {
     "content-type": "application/json",
     "x-gateway-key": "gateway-key",
-    "x-qm-actor": "U2",
+    "x-qm-actor": gatewayActorId("U2", "test-actor-key"),
     "x-qm-purpose": "embedding",
   });
   assert.equal(JSON.parse(String(request.init?.body)).model, "embed");

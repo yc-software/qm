@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { isGatewayModelId } from "./gateway-models.ts";
 import { currentModelRequestContext } from "./request-context.ts";
 import { attestableActor } from "../directory/person.ts";
@@ -24,6 +25,7 @@ export interface ModelGatewayTransportConfig {
   models: Readonly<Record<string, string>>;
   reservedModelIds?: ReadonlySet<string>;
   refresh?: () => Promise<void>;
+  actorKey?: string;
 }
 
 export function parseProviderBaseUrl(envName: string, value: string): string {
@@ -93,7 +95,8 @@ export type ModelRequestPurpose =
   | "embedding"
   | "decision"
   | "browser"
-  | "probe";
+  | "probe"
+  | "sandbox";
 
 export const MODEL_REQUEST_CONTEXT_HEADERS = {
   "x-qm-session-id": "sessionId",
@@ -103,11 +106,27 @@ export const MODEL_REQUEST_CONTEXT_HEADERS = {
   "x-qm-origin": "origin",
 } as const;
 
+export function gatewayActorId(actorId: string, key: string): string {
+  return createHmac("sha256", key).update(actorId).digest("hex").slice(0, 32);
+}
+
+function gatewayScopeId(scopeId: string | undefined, key: string | undefined): string | undefined {
+  if (!scopeId?.startsWith("personal:")) return scopeId;
+  return key ? `personal:${gatewayActorId(scopeId.slice("personal:".length), key)}` : undefined;
+}
+
 export function modelGatewayHeaders(
-  config: Pick<ModelGatewayTransportConfig, "apiKey" | "apiKeyHeader">,
+  config: Pick<ModelGatewayTransportConfig, "apiKey" | "apiKeyHeader" | "actorKey">,
   purpose?: ModelRequestPurpose,
 ): Record<string, string> {
-  const context = { ...currentModelRequestContext(), purpose };
+  const { actorId, scopeId, ...rest } = currentModelRequestContext();
+  const actor = attestableActor(actorId);
+  const context = {
+    ...rest,
+    actorId: actor && config.actorKey ? gatewayActorId(actor, config.actorKey) : undefined,
+    scopeId: gatewayScopeId(attestableActor(scopeId), config.actorKey),
+    purpose,
+  };
   const headers: Record<string, string> = { [config.apiKeyHeader]: config.apiKey };
   for (const [name, field] of Object.entries(MODEL_REQUEST_CONTEXT_HEADERS)) {
     const value = context[field];

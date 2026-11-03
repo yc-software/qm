@@ -1,4 +1,5 @@
 import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
+import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { MAX_SCREEN_CHARS } from "../src/security/security-posture.ts";
@@ -861,6 +862,7 @@ test("carried skill and steer screens tell the model gateway which session they 
       apiKey: "k",
       apiKeyHeader: "api-key",
       models: { "claude-haiku-4-5": "m" },
+      actorKey: "test-actor-key",
     },
   }).screenSecurity;
   const { orchestrator, config, sessions } = buildOrchestrator({
@@ -886,7 +888,7 @@ test("carried skill and steer screens tell the model gateway which session they 
   assert.match(result.reply ?? "", /Do work/);
   const turnContext = {
     "x-qm-session-id": result.sessionId!,
-    "x-qm-actor": actor.id,
+    "x-qm-actor": gatewayActorId(actor.id, "test-actor-key"),
     "x-qm-scope": "channel:C1",
     "x-qm-origin": "conversation",
     "x-qm-purpose": "security_screen",
@@ -941,6 +943,7 @@ test("a steer delivered by notification is screened in the context of the turn i
         apiKey: "k",
         apiKeyHeader: "api-key",
         models: { "claude-haiku-4-5": "m" },
+        actorKey: "test-actor-key",
       },
       signals,
     }),
@@ -971,8 +974,8 @@ test("a steer delivered by notification is screened in the context of the turn i
   assert.equal(result.status, "ok", result.reason);
   const turnContext = {
     "x-qm-session-id": result.sessionId!,
-    "x-qm-actor": actor.id,
-    "x-qm-scope": scopeId("personal", actor.id),
+    "x-qm-actor": gatewayActorId(actor.id, "test-actor-key"),
+    "x-qm-scope": `personal:${gatewayActorId(actor.id, "test-actor-key")}`,
     "x-qm-origin": "conversation",
     "x-qm-purpose": "security_screen",
   };
