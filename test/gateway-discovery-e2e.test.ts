@@ -229,6 +229,7 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
         }),
       ),
     );
+    await built.startup();
     await built.refreshModels();
     const runtime = await runtimeConfigBody(
       {

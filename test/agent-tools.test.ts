@@ -14,12 +14,12 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { itemFromEntry } from "../src/sessions/items.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
 import { connectorToolsNote, deferredMcpTools } from "../src/agent/deferred-tools.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
   return {
@@ -3732,25 +3732,27 @@ test("a client tool passes the page's isError through to the model", () =>
     assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.isError, true);
   }));
 
-test("a client tool times out with an error the model can act on", async () => {
-  const { emitted, ref } = clientToolRef();
-  const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 30)] }).slice(-1);
-  const ret = (await call(tool, {})) as { content: Array<{ text: string }> };
-  assert.equal(ret.content[0]?.text, "The page didn't respond in time. It may have been closed or navigated away.");
-  const toolResult = emitted.find((e) => e.type === "tool_result")!.payload;
-  assert.equal(toolResult.isError, true);
-  assert.equal(toolResult.timedOut, true);
-});
+test("a client tool times out with an error the model can act on", () =>
+  inTestTenant(async () => {
+    const { emitted, ref } = clientToolRef();
+    const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 30)] }).slice(-1);
+    const ret = (await call(tool, {})) as { content: Array<{ text: string }> };
+    assert.equal(ret.content[0]?.text, "The page didn't respond in time. It may have been closed or navigated away.");
+    const toolResult = emitted.find((e) => e.type === "tool_result")!.payload;
+    assert.equal(toolResult.isError, true);
+    assert.equal(toolResult.timedOut, true);
+  }));
 
-test("a client tool stops waiting when the turn is cancelled", async () => {
-  const { emitted, cancel, ref } = clientToolRef();
-  const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 60_000)] }).slice(-1);
-  const pending = call(tool, {}) as Promise<{ content: Array<{ text: string }> }>;
-  cancel.abort();
-  const ret = await pending;
-  assert.match(ret.content[0]?.text ?? "", /cancelled/);
-  assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.cancelled, true);
-});
+test("a client tool stops waiting when the turn is cancelled", () =>
+  inTestTenant(async () => {
+    const { emitted, cancel, ref } = clientToolRef();
+    const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 60_000)] }).slice(-1);
+    const pending = call(tool, {}) as Promise<{ content: Array<{ text: string }> }>;
+    cancel.abort();
+    const ret = await pending;
+    assert.match(ret.content[0]?.text ?? "", /cancelled/);
+    assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.cancelled, true);
+  }));
 
 test("context recovery drains in-flight effects, preserves an active goal, and blocks subsequent calls", async () => {
   const gate = Promise.withResolvers<void>();

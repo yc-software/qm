@@ -448,7 +448,7 @@ export interface BuiltApp {
   deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
-  startup: () => Promise<unknown>;
+  startup: () => Promise<void>;
   deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
@@ -2079,7 +2079,7 @@ export function buildApp(
     memoryStrategy,
     skills,
     skillBundles,
-    skillsReady: () => startup.begin().skills,
+    skillsReady: startup.skills,
     errors,
     signals: runSignals,
     turnStream,
@@ -2858,7 +2858,7 @@ export function buildApp(
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       releasing = null;
       flyTunnel?.monitor();
-      startup.begin();
+      void startup.begin().catch(reportFailureAs("startup: load deployment layer", undefined));
       drain.start();
       renderBasePreparing = new AbortController();
       void renderBase
@@ -2918,7 +2918,7 @@ export function buildApp(
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
-    startup: () => startup.begin().deploymentLayer,
+    startup: startup.begin,
     deploymentLayerRefresh,
     sessions,
     runs,
