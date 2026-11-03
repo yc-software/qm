@@ -73,45 +73,58 @@ test("GET /v1/loop-items/events streams every tenant's ledger writes as SSE fram
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") ?? "", /text\/event-stream/);
 
-    const ingestIn = (tenant: string) =>
-      withTenant(tenant, async () => {
-        const { loop } = await built.loops.store.create({
-          owner: "josh",
-          createdBy: "josh",
-          ownerScopeId: "personal:josh",
-          name: `Sentry triage ${tenant}`,
-          playbook: "triage",
-          successCondition: "fixed",
-        });
-        await built.loops.items.ingest([
-          { loopId: loop.id, dedupeKey: "SENTRY-1", sourcePayload: { issue: "SENTRY-1" } },
-        ]);
-        return loop.id;
-      });
     const [a, b] = testTenants();
-    const loopA = await ingestIn(a);
-    const loopB = await ingestIn(b);
-
-    const reader = res.body!.getReader();
-    let buf = "";
+    const loops = new Map<string, string>();
+    for (const tenant of [a, b])
+      loops.set(
+        tenant,
+        await withTenant(tenant, async () => {
+          const { loop } = await built.loops.store.create({
+            owner: "josh",
+            createdBy: "josh",
+            ownerScopeId: "personal:josh",
+            name: `Sentry triage ${tenant}`,
+            playbook: "triage",
+            successCondition: "fixed",
+          });
+          return loop.id;
+        }),
+      );
     const frames = new Map<string, OwnedLedgerEvent & { tenantId?: string }>();
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline && frames.size < 2) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += new TextDecoder().decode(value);
-      for (const chunk of buf.split("\n\n")) {
-        if (!chunk.split("\n").includes("event: loop_item")) continue;
-        const data = chunk
-          .split("\n")
-          .find((l) => l.startsWith("data: "))
-          ?.slice("data: ".length);
-        if (!data) continue;
-        const frame = JSON.parse(data) as OwnedLedgerEvent & { tenantId?: string };
-        frames.set(frame.loopId, frame);
+    const reader = res.body!.getReader();
+    const reading = (async () => {
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read().catch(() => ({ value: undefined, done: true }));
+        if (done) return;
+        buf += new TextDecoder().decode(value);
+        const chunks = buf.split("\n\n");
+        buf = chunks.pop() ?? "";
+        for (const chunk of chunks) {
+          const data = chunk.split("\n").includes("event: loop_item")
+            ? chunk
+                .split("\n")
+                .find((l) => l.startsWith("data: "))
+                ?.slice("data: ".length)
+            : undefined;
+          if (!data) continue;
+          const frame = JSON.parse(data) as OwnedLedgerEvent & { tenantId?: string };
+          frames.set(frame.loopId, frame);
+        }
       }
+    })();
+    const deadline = Date.now() + 10_000;
+    for (let attempt = 0; Date.now() < deadline && frames.size < 2; attempt++) {
+      for (const [tenant, loopId] of loops)
+        if (!frames.has(loopId))
+          await withTenant(tenant, () =>
+            built.loops.items.ingest([{ loopId, dedupeKey: `SENTRY-${attempt}`, sourcePayload: { attempt } }]),
+          );
+      await new Promise((r) => setTimeout(r, 250));
     }
     await reader.cancel().catch(() => {});
+    await reading;
+    const [loopA, loopB] = [loops.get(a)!, loops.get(b)!];
     for (const [loopId, tenant] of [
       [loopA, a],
       [loopB, b],
