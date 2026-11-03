@@ -1,6 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
+import { inTestTenant } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +15,13 @@ import { testConfig } from "./support/test-config.ts";
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-working-"));
   return buildApp(testConfig({ dataDir }));
+}
+
+function test(name: string, fn: (built: ReturnType<typeof freshApp>) => Promise<void>): void {
+  nodeTest(name, () => {
+    const built = freshApp();
+    return inTestTenant(() => fn(built));
+  });
 }
 
 const actor = { externalId: "U1" };
@@ -31,9 +39,7 @@ function enqueueRequest(): OrchestratorInput {
   };
 }
 
-test("listSessions flags a session with an in-flight turn as working", async () => {
-  const { app, runs } = freshApp();
-
+test("listSessions flags a session with an in-flight turn as working", async ({ app, runs }) => {
   await app.turn(dm("Just a question", "web:U1:idle"));
 
   const busyThread = "web:U1:busy";
@@ -52,8 +58,7 @@ test("listSessions flags a session with an in-flight turn as working", async () 
   assert.ok(!idleRow!.working, "a settled session is not flagged");
 });
 
-test("the working flag clears once the in-flight run settles", async () => {
-  const { app, runs } = freshApp();
+test("the working flag clears once the in-flight run settles", async ({ app, runs }) => {
   const thread = "web:U1:settle";
   await app.turn(dm("start", thread));
   await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
@@ -70,8 +75,8 @@ test("the working flag clears once the in-flight run settles", async () => {
   );
 });
 
-test("listSessions flags a subagent whose latest turn failed, and only while it stays failed", async () => {
-  const { app, runs, sessions } = freshApp();
+test("listSessions flags a subagent whose latest turn failed, and only while it stays failed", async (built) => {
+  const { app, runs, sessions } = built;
   const parent = await app.turn(dm("parent", "web:U1:parent"));
   const child = await app.turn(dm("child", "web:U1:child"));
   const loose = await app.turn(dm("loose", "web:U1:loose"));
@@ -93,8 +98,7 @@ test("listSessions flags a subagent whose latest turn failed, and only while it 
   assert.ok(!(await app.listSessions("U1")).find((s) => s.id === child.sessionId)?.lastTurnFailed);
 });
 
-test("sidebar batches visible goals from the session rows and drops inactive ones", async () => {
-  const { app, sessions, runs } = freshApp();
+test("sidebar batches visible goals from the session rows and drops inactive ones", async ({ app, sessions, runs }) => {
   const visible: string[] = [];
   const refs: string[] = [];
   for (const [index, owner] of ["U1", "U1", "hidden"].entries()) {
@@ -140,8 +144,8 @@ test("sidebar batches visible goals from the session rows and drops inactive one
   assert.equal(list.find((row) => row.id === visible[1])?.goal, undefined);
 });
 
-test("a working subagent reports its current run start and latest purpose from that run", async () => {
-  const { app, runs, sessions } = freshApp();
+test("a working subagent reports its current run start and latest purpose from that run", async (built) => {
+  const { app, runs, sessions } = built;
   const parent = await app.turn(dm("parent", "web:U1:p"));
   const child = await app.turn(dm("child", "web:U1:c"));
   await sessions.setParentSession(child.sessionId!, parent.sessionId!);

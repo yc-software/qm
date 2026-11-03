@@ -1,6 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +11,11 @@ import type { SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 
 async function seed(sessions: SessionStore, threadRef: string, principal: string, texts: string[]): Promise<string> {
   const s = await sessions.getOrCreateByThread(threadRef, "dm", scopeId("personal", principal));
@@ -96,52 +101,54 @@ test("session store: search ignores non-conversational entry types", async () =>
   assert.equal(hits[0]!.type, "text");
 });
 
-test("app.searchSessions decorates hits with session metadata and enforces visibility", async () => {
+nodeTest("app.searchSessions decorates hits with session metadata and enforces visibility", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "search-"));
   const { app, sessions } = buildApp(testConfig({ dataDir }));
+  await inTestTenant(async () => {
+    const id = await seed(sessions, "web:U1:hit", "U1", [
+      "let's plan the zanzibar trip",
+      "Zanzibar it is — I drafted an itinerary.",
+    ]);
+    const { lease } = await sessions.acquireLease(id);
+    await sessions.append(lease!, {
+      type: "tool_result",
+      payload: { tool: "execute", callId: "c1", text: "zanzibar weather outputonly" },
+      scopeLabel: scopeId("personal", "U1"),
+    });
+    await sessions.releaseLease(lease!);
+    await sessions.updateTitle(id, "Trip planning");
+    await seed(sessions, "web:U2:other", "U2", ["zanzibar for U2 only"]);
 
-  const id = await seed(sessions, "web:U1:hit", "U1", [
-    "let's plan the zanzibar trip",
-    "Zanzibar it is — I drafted an itinerary.",
-  ]);
-  const { lease } = await sessions.acquireLease(id);
-  await sessions.append(lease!, {
-    type: "tool_result",
-    payload: { tool: "execute", callId: "c1", text: "zanzibar weather outputonly" },
-    scopeLabel: scopeId("personal", "U1"),
+    sessions.listByParticipant = async () => {
+      throw new Error("search must not list every session");
+    };
+    sessions.getForParticipant = async () => {
+      throw new Error("search must not read legacy message activity");
+    };
+    assert.deepEqual(await app.searchSessions("U1", "outputonly"), []);
+    const hits = await app.searchSessions("U1", "zanzibar");
+    assert.equal(hits.length, 2, "only U1's own conversation is searched");
+    assert.ok(hits.every((h) => h.sessionId === id));
+    assert.equal(hits[0]!.title, "Trip planning");
+    assert.equal(typeof hits[0]!.seq, "number");
+    assert.ok(hits[0]!.snippet.toLowerCase().includes("zanzibar"));
+    assert.equal(hits[1]!.author, "josh");
+
+    assert.deepEqual(await app.searchSessions("U1", ""), [], "empty query is empty, not an error");
   });
-  await sessions.releaseLease(lease!);
-  await sessions.updateTitle(id, "Trip planning");
-  await seed(sessions, "web:U2:other", "U2", ["zanzibar for U2 only"]);
-
-  sessions.listByParticipant = async () => {
-    throw new Error("search must not list every session");
-  };
-  sessions.getForParticipant = async () => {
-    throw new Error("search must not read legacy message activity");
-  };
-  assert.deepEqual(await app.searchSessions("U1", "outputonly"), []);
-  const hits = await app.searchSessions("U1", "zanzibar");
-  assert.equal(hits.length, 2, "only U1's own conversation is searched");
-  assert.ok(hits.every((h) => h.sessionId === id));
-  assert.equal(hits[0]!.title, "Trip planning");
-  assert.equal(typeof hits[0]!.seq, "number");
-  assert.ok(hits[0]!.snippet.toLowerCase().includes("zanzibar"));
-  assert.equal(hits[1]!.author, "josh");
-
-  assert.deepEqual(await app.searchSessions("U1", ""), [], "empty query is empty, not an error");
 });
 
-test("app.searchSessions finds sessions by title", async () => {
+nodeTest("app.searchSessions finds sessions by title", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "search-"));
   const { app, sessions } = buildApp(testConfig({ dataDir }));
+  await inTestTenant(async () => {
+    const id = await seed(sessions, "web:U1:titled", "U1", ["hello there"]);
+    await sessions.updateTitle(id, "Quarterly roadmap review");
+    await seed(sessions, "web:U2:other2", "U2", ["hello there"]);
 
-  const id = await seed(sessions, "web:U1:titled", "U1", ["hello there"]);
-  await sessions.updateTitle(id, "Quarterly roadmap review");
-  await seed(sessions, "web:U2:other2", "U2", ["hello there"]);
+    const byTitle = await app.searchSessions("U1", "roadmap");
+    assert.ok(byTitle.some((h) => h.sessionId === id && h.entryType === "title"));
 
-  const byTitle = await app.searchSessions("U1", "roadmap");
-  assert.ok(byTitle.some((h) => h.sessionId === id && h.entryType === "title"));
-
-  assert.deepEqual(await app.searchSessions("U2", "roadmap"), [], "title matches respect participation");
+    assert.deepEqual(await app.searchSessions("U2", "roadmap"), [], "title matches respect participation");
+  });
 });
