@@ -11,7 +11,7 @@ import { canAdministerCron, canAdministerWebhook } from "../src/api/control-serv
 import type { Cron, Webhook } from "../src/triggers/types.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testSeparateDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 function it(name: string, fn: () => void | Promise<void>): void {
@@ -52,7 +52,11 @@ describe("personKey / samePerson: the canonical same-person primitive", () => {
       "no roster row, no bridge — fail closed",
     );
     assert.equal(
-      await samePersonInDirectory(createPostgresDirectoryStore(testDatabaseUrl()), "jordan@acme.test", "U-jordan"),
+      await samePersonInDirectory(
+        createPostgresDirectoryStore(testSeparateDatabaseUrl()),
+        "jordan@acme.test",
+        "U-jordan",
+      ),
       false,
       "empty directory bridges nothing",
     );
@@ -75,7 +79,7 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
       ...over,
     }) as Cron;
 
-  function appOver(dir = createPostgresDirectoryStore(testDatabaseUrl())) {
+  function appOver(dir = createPostgresDirectoryStore(testSeparateDatabaseUrl())) {
     return {
       isCurrentSharedScopeMember: async () => false,
       artifactGrantPermission: async () => null,
@@ -152,7 +156,7 @@ describe("samePersonMatcher: one roster read answers many owner checks", () => {
     const isJordan = await samePersonMatcher(dir, "U-jordan");
     assert.equal(await isJordan("jordan@acme.test"), true, "falls back to the per-pair directory bridge");
     assert.equal(await isJordan("casey@acme.test"), false);
-    const noRoster = await samePersonMatcher(createPostgresDirectoryStore(testDatabaseUrl()), "U-jordan");
+    const noRoster = await samePersonMatcher(createPostgresDirectoryStore(testSeparateDatabaseUrl()), "U-jordan");
     assert.equal(await noRoster("jordan@acme.test"), false, "no roster row anywhere — fail closed");
   });
 });

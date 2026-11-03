@@ -14,7 +14,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
 import { getRequiredModel, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
-import { testMap } from "./support/test-database.ts";
+import { testMap, testSeparateDatabaseUrl } from "./support/test-database.ts";
 import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
@@ -153,6 +153,7 @@ test("model gateway credentials stay separate and advertise only routed models",
 
   const openrouter = buildApp(
     testConfig({
+      databaseUrl: testSeparateDatabaseUrl(),
       modelGateway: {
         url: "http://gateway.internal:8080",
         apiKey: "gateway-secret",
@@ -171,6 +172,7 @@ test("model gateway credentials stay separate and advertise only routed models",
   );
   const complete = buildApp(
     testConfig({
+      databaseUrl: testSeparateDatabaseUrl(),
       modelGateway: {
         url: "http://gateway.internal:8080",
         apiKey: "gateway-secret",
@@ -205,6 +207,7 @@ test("model gateway credentials stay separate and advertise only routed models",
 
   const direct = buildApp(
     testConfig({
+      databaseUrl: testSeparateDatabaseUrl(),
       anthropicApiKey: "direct-provider-key",
       modelGateway: {
         url: "http://gateway.internal:8080",

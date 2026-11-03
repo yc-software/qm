@@ -14,7 +14,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { CoreClient } from "./live-slack/core.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testSeparateDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 const SECRET = "directory-resolve-secret".repeat(3);
@@ -192,15 +192,17 @@ describe("a deployment without the Slack surface (the directory store is never p
   );
 
   before(async () => {
+    const databaseUrl = testSeparateDatabaseUrl();
     built = buildApp(
       testConfig({
+        databaseUrl,
         dataDir: mkdtempSync(join(tmpdir(), "dir-web-only-")),
         signingSecret: SECRET,
         emailAuthPrincipals: ["dana@acme.com"],
       }),
     );
     server = createServer(built.app, {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      replayDedupe: createPostgresReplayDedupe(databaseUrl),
       signingSecret: SECRET,
       scheduler: built.scheduler,
     });

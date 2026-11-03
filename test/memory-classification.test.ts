@@ -5,7 +5,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { UNTRACKED_PROVENANCE, type MemoryProvenance } from "../src/memory/facts.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testSeparateDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
 function test(name: string, fn: () => void | Promise<void>): void {
@@ -13,7 +13,7 @@ function test(name: string, fn: () => void | Promise<void>): void {
 }
 
 async function fixture() {
-  const memory = createPostgresMemoryService(testDatabaseUrl());
+  const memory = createPostgresMemoryService(testSeparateDatabaseUrl());
   return { memory, facts: (scope: string) => memory.facts!(scope) };
 }
 

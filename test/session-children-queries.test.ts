@@ -11,10 +11,17 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import type { Principal, Session } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testSeparateDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 async function childrenQueries(children: number, busyTrees: number): Promise<number> {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "children-")), seedSkills: false }));
+  const built = buildApp(
+    testConfig({
+      databaseUrl: testSeparateDatabaseUrl(),
+      dataDir: mkdtempSync(join(tmpdir(), "children-")),
+      seedSkills: false,
+    }),
+  );
   const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

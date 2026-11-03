@@ -24,7 +24,7 @@ import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testMap, testDatabaseUrl, testSeparateDatabaseUrl } from "./support/test-database.ts";
 import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -69,6 +69,7 @@ function buildApp(...args: Parameters<typeof buildAppRaw>): ReturnType<typeof bu
 
 function freshApp(overrides: Partial<Config> = {}, securityScreener?: SecurityScreener) {
   const config = testConfig({
+    databaseUrl: overrides.databaseUrl ?? testSeparateDatabaseUrl(),
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     ...overrides,
   });

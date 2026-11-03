@@ -17,7 +17,7 @@ import { type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { ManagesArtifactHome } from "../src/resolution/scope-membership.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testMap, testSeparateDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
@@ -115,7 +115,8 @@ const cap = (actorId: string, scope?: ScopeId, liveActor = true): CapabilityClai
   }) as CapabilityClaims;
 
 function baseState(over: Partial<FakeState> = {}): FakeState {
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const databaseUrl = testSeparateDatabaseUrl();
+  const files = createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore());
   const state: FakeState = {
     artifacts: {},
     scopesByPrincipal: {},
@@ -125,7 +126,7 @@ function baseState(over: Partial<FakeState> = {}): FakeState {
     recipients: {},
     privateChannels: new Set(),
     files,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+    acl: createAclStore(createPostgresGrantStore(databaseUrl), {
       manages: (p, s, a) => manages(s, a ?? "", p),
       resolveFiles: (refs) => files.resolveByIds(refs),
     }),
