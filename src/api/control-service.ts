@@ -779,6 +779,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
           allowSharedScope: true,
           expectedVersion,
+          sessionId: capability.sessionId,
         });
         return { ok: true, version };
       } catch (e) {

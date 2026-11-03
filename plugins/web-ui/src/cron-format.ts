@@ -25,7 +25,7 @@ function humanizeCronInterval(ms: number): string {
   return `${Math.round(ms / 1000)}s`;
 }
 
-export function cronScheduleSummary(c: CronTimingView): string {
+export function cronScheduleSummary(c: Pick<CronTimingView, "schedule">): string {
   if (c.schedule.cron) return `cron ${c.schedule.cron.trim().replace(/\s+/g, " ")}`;
   return c.schedule.everyMs != null ? `every ${humanizeCronInterval(c.schedule.everyMs)}` : "one-time";
 }

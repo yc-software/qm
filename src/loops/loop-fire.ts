@@ -1,11 +1,5 @@
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
-import {
-  renderSourceInboxTask,
-  renderInboxSyncTask,
-  isReplyLoop,
-  applyReplyResolution,
-  REPLY_DECISION,
-} from "./inbox-loop.ts";
+import { renderSourceInboxTask, isReplyLoop, applyReplyResolution, REPLY_DECISION } from "./inbox-loop.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
@@ -730,7 +724,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       return { status: "silent", note: "duplicate fire key" };
     }
     const threadRef = loopFireThreadRef(loopId, fireKey);
-    if ((loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) && options?.enumerate !== false) {
+    if (loop.surface?.startsWith("inbox:") && options?.enumerate !== false) {
       if (!isRunnable(loop)) return notRunnable(loop);
       let failure: unknown;
       try {
@@ -738,7 +732,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
           loop,
           `${fireKey}:sync`,
           threadRef,
-          loop.surface === "inbox" ? renderInboxSyncTask(loop.id) : renderSourceInboxTask(loop.id, loop.sources![0]!),
+          renderSourceInboxTask(loop.id, loop.sources![0]!),
         );
         if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
         failure = stageFailure("inbox sync", outcome)?.error;
