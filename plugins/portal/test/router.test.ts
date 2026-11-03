@@ -649,7 +649,7 @@ test("admin status comes from a signed core whoami for the session subject, memo
     assert.equal(r.status, 403);
   }
   assert.equal(whoamiProbes - before, 1, "the sub is probed once then served from the 60s cache");
-  assert.equal(lastWhoamiActor, "U-fresh-ttl@acme");
+  assert.equal(lastWhoamiActor, "U-fresh-ttl");
   assert.equal(lastWhoamiSigned, true);
 });
 
