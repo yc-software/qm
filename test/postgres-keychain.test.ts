@@ -7,6 +7,10 @@ import { withTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
+import { registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { buildApp } from "../src/wiring.ts";
+import { stopAtEnd } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
 
 const skip = skipWithoutPg;
@@ -303,3 +307,28 @@ test("the conversion backfills keychain rows into the instance tenant and drops 
     },
   );
 });
+
+test(
+  "the app registers every credential, connector link and model table with the default config",
+  { skip },
+  async () => {
+    const config = testConfig();
+    stopAtEnd(buildApp(config));
+    const ids = new Set(registeredPgMigrations(config.databaseUrl!).map((migration) => migration.id));
+    for (const table of [
+      "keychain_credentials",
+      "keychain_grants",
+      "keychain_asks",
+      "oauth_flows",
+      "consent_links",
+      "secret_drops",
+      "composio_returns",
+      "browser_sessions",
+      "mcp_servers",
+      "model_credentials",
+      "custom_model_providers",
+      "model_registry",
+    ])
+      assert.ok(ids.has(`tenancy/${table}/0001-typed`), table);
+  },
+);
