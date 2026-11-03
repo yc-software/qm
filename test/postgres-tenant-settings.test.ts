@@ -6,6 +6,7 @@ import { createPgPool, migrateRegisteredPgSchemas } from "../src/persistence/pg-
 import { TENANCY_BASE, TENANT_SETTINGS_MIGRATION } from "../src/tenants/migrations.ts";
 import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { createTenantSettingsStore } from "../src/tenants/settings.ts";
+import { createAppLogin } from "./support/app-login.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tenant settings test";
@@ -28,21 +29,20 @@ async function withSettingsDb(
   const owner = createPgPool(schemaUrl.toString(), [TENANCY_BASE, TENANT_SETTINGS_MIGRATION]);
   try {
     await migrateRegisteredPgSchemas(schemaUrl.toString());
-    await admin.query(`ALTER ROLE qm_app PASSWORD 'app'`);
     const a = randomUUID();
     const b = randomUUID();
     await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'first', 'First'), ($2, 'second', 'Second')`, [
       a,
       b,
     ]);
-    const appUrl = new globalThis.URL(schemaUrl);
-    appUrl.username = "qm_app";
-    appUrl.password = "app";
-    const app = createPgPool(appUrl.toString());
+    const login = await createAppLogin(schemaUrl.toString());
+    const appUrl = new globalThis.URL(login.url);
+    const app = createPgPool(login.url);
     try {
       await fn({ app, appUrl: appUrl.toString(), admin, a, b });
     } finally {
       await app.close();
+      await login.drop();
     }
   } finally {
     await owner.close();
@@ -74,7 +74,7 @@ test("tenant settings are stored per tenant, sealed at rest, and never read acro
     assert.equal(sealed.includes("sprites-a"), false);
     assert.equal((await withTenant(b, () => app.q(`SELECT tenant_id FROM tenant_settings`))).length, 1);
     await withoutTenant(() =>
-      assert.rejects(app.q(`SELECT * FROM tenant_settings`), /No tenant is bound to this transaction/),
+      assert.rejects(app.q(`SELECT * FROM tenant_settings`), /No tenant is bound to this query/),
     );
     const stolen = await withTenant(b, () =>
       app.q(`UPDATE tenant_settings SET pi_model = 'stolen' WHERE tenant_id = $1 RETURNING 1`, [a]),
