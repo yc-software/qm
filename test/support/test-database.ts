@@ -50,9 +50,10 @@ function databaseUrl(name: string): string {
 }
 
 function ownedDatabaseUrl(name: string): string {
-  const url = databaseUrl(name);
-  useOwnerDatabase(url);
-  return url;
+  const owner = new URL(process.env.DATABASE_OWNER_URL ?? databaseUrl(name));
+  owner.pathname = `/${name}`;
+  useOwnerDatabase(owner.toString());
+  return databaseUrl(name);
 }
 
 export function testDatabaseUrl(): string {
@@ -69,7 +70,7 @@ let shared: { url: string; maps: ReturnType<typeof createPostgresMapFactory> } |
 
 function sharedDatabase(): NonNullable<typeof shared> {
   if (!shared) {
-    const url = testDatabaseUrl();
+    const url = databaseUrl(createDatabaseSync({}));
     shared = { url, maps: createPostgresMapFactory(url) };
   }
   return shared;
@@ -84,7 +85,7 @@ export function testPgPool(): PgPool {
 }
 
 export function testAdvisoryLock(): AdvisoryLock {
-  return createPostgresAdvisoryLock(createPgPool(testDatabaseUrl()));
+  return createPostgresAdvisoryLock(createPgPool(databaseUrl(createDatabaseSync({}))));
 }
 
 export function testConfigStore(orgId: string, opts: Partial<Parameters<typeof createConfigStore>[1]> = {}) {

@@ -1,3 +1,4 @@
+import { useOwnerDatabase } from "../src/tenants/claim.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -94,6 +95,9 @@ for (const backend of ["memory", "postgres"] as const) {
         const url = new URL(connectionString);
         url.searchParams.set("options", `-c search_path=${schema}`);
         connectionString = url.toString();
+        const owner = new URL(process.env.DATABASE_OWNER_URL!);
+        owner.searchParams.set("options", `-c search_path=${schema}`);
+        useOwnerDatabase(owner.toString());
       }
       let { runs } =
         backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
@@ -141,6 +145,7 @@ for (const backend of ["memory", "postgres"] as const) {
         await runs.close?.();
         if (admin) {
           try {
+            useOwnerDatabase(process.env.DATABASE_OWNER_URL);
             await admin.query(`DROP SCHEMA ${schema} CASCADE`);
           } finally {
             await admin.end();

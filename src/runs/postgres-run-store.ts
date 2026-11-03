@@ -65,7 +65,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
   const events = new EventEmitter();
   events.setMaxListeners(0);
 
-  const { query: q, close: closePool } = createPgPool(connectionString, [
+  const pg = createPgPool(connectionString, [
     {
       id: "runs/store/0011-base-schema",
       expectedChecksum: "77ca2d1c3ec5253374c0eadbf47d91d53c6d2c3fc7232079b33006bc9233a24e",
@@ -119,6 +119,7 @@ END $base_schema$`,
       ],
     },
   ]);
+  const { query: q, close: closePool } = pg;
 
   const availabilityListeners = new Map<() => void, number>();
   let availabilityTimer: ReturnType<typeof setTimeout> | undefined;
@@ -392,6 +393,7 @@ END $base_schema$`,
     },
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await claimAcrossTenants(
+        pg,
         `SELECT * FROM (
            SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
            AND session_id LIKE 'agent:main:subagent:%' AND id > $2
@@ -409,6 +411,7 @@ END $base_schema$`,
     },
     async terminalFinished(after, beforeMs, limit) {
       const { rows } = await claimAcrossTenants(
+        pg,
         `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
            AND (finished_at > $2 OR (finished_at = $2 AND id > $3))
          ORDER BY finished_at, id LIMIT $4`,
@@ -512,6 +515,7 @@ END $base_schema$`,
     ): Promise<{ requeued: number; parked: number }> {
       const now = Date.now();
       const { rows } = await claimAcrossTenants(
+        pg,
         "SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1",
         [now],
       );

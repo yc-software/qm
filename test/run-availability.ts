@@ -35,11 +35,14 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
   const url = new URL(process.env.DATABASE_URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
   url.searchParams.set("application_name", schema);
-  useOwnerDatabase(url.toString());
+  const owner = new URL(process.env.DATABASE_OWNER_URL!);
+  owner.searchParams.set("options", `-c search_path=${schema}`);
+  useOwnerDatabase(owner.toString());
   return {
     url: url.toString(),
     admin,
     async cleanup() {
+      useOwnerDatabase(process.env.DATABASE_OWNER_URL);
       await admin.query(`DROP SCHEMA ${schema} CASCADE`);
       await admin.end();
     },

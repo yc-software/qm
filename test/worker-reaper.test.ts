@@ -42,12 +42,13 @@ const turn: OrchestratorInput = {
 };
 
 test("reaper requeues a run whose lease expired (crashed worker)", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
   await runs.claim("dead-worker", 10);
   await sleep(30);
 
-  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+  const reaper = createReaper(runs, createPostgresSessionStore(url), {
     ...singleProcessDeps(),
     intervalMs: 60_000,
   });
@@ -78,9 +79,10 @@ test("a run parks once the ERROR budget (error_attempts) is exhausted", async ()
 });
 
 test("repeated lease-expiry reaps requeue forever without spending the error budget", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 })).run;
-  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+  const reaper = createReaper(runs, createPostgresSessionStore(url), {
     ...singleProcessDeps(),
     intervalMs: 60_000,
   });
@@ -99,9 +101,10 @@ test("repeated lease-expiry reaps requeue forever without spending the error bud
 });
 
 test("with maxClaims set, repeated lease-expiry reaps PARK the poison pill instead of requeuing forever", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl(), { maxClaims: 3 });
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url, { maxClaims: 3 });
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 })).run;
-  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+  const reaper = createReaper(runs, createPostgresSessionStore(url), {
     ...singleProcessDeps(),
     intervalMs: 60_000,
   });
@@ -144,7 +147,8 @@ test("a concrete error parks with its own message even when over the claim cap",
 });
 
 test("only the leader instance's interval sweep reaps expired leases", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
   await runs.claim("dead-worker", 10);
   await sleep(30);
@@ -155,7 +159,7 @@ test("only the leader instance's interval sweep reaps expired leases", async () 
       return leader ? fn(new Promise<void>(() => {})) : null;
     },
   };
-  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+  const reaper = createReaper(runs, createPostgresSessionStore(url), {
     intervalMs: 5,
     leaderLease: lease,
   });
@@ -173,7 +177,8 @@ test("only the leader instance's interval sweep reaps expired leases", async () 
 });
 
 test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling)", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 3 })).run;
   await runs.claim("dead-worker", 10);
   await sleep(30);
@@ -182,7 +187,7 @@ test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling
       return null;
     },
   };
-  const reaper = createReaper(runs, createPostgresSessionStore(testDatabaseUrl()), {
+  const reaper = createReaper(runs, createPostgresSessionStore(url), {
     intervalMs: 60_000,
     leaderLease: denyAll,
   });
@@ -192,8 +197,9 @@ test("the reaper's direct sweep() is ungated by the lease (used by tests/tooling
 });
 
 test("reaping a lease-expired run releases its stranded session lease", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
+  const sessions = createPostgresSessionStore(url);
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const { lease: held } = await sessions.acquireLease(session.id);
   assert.ok(held, "the (now-dead) worker holds the session lease");
@@ -234,8 +240,9 @@ test("reapExpired fences the dead attempt, releases its session lease, and only 
 });
 
 test("a heartbeat landing between SELECT and retire leaves the run AND its session lease untouched", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
+  const sessions = createPostgresSessionStore(url);
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const { lease: held } = await sessions.acquireLease(session.id);
   assert.ok(held, "the live worker holds the session lease");
@@ -261,8 +268,9 @@ test("a heartbeat landing between SELECT and retire leaves the run AND its sessi
 });
 
 test("shutdown cancels before handback and holds both leases until the turn unwinds", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
+  const sessions = createPostgresSessionStore(url);
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 1 })).run;
   let started!: () => void;
@@ -326,8 +334,9 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
 });
 
 test("an uncooperative turn is handed back after the settle grace, and resumes once after the old process exits", async () => {
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const { runs } = createPostgresRunStore(url);
+  const sessions = createPostgresSessionStore(url);
   const session = await sessions.getOrCreateByThread("t1", "dm", "personal:U1");
   const enq = (await runs.enqueue({ sessionId: "t1", request: turn, maxAttempts: 3 })).run;
   const started = Promise.withResolvers<void>();
