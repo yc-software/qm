@@ -2389,8 +2389,14 @@ test("pg search: only the person's own chats are searched, not subagents or auto
   await s.setParentSession(child, chat);
   await write("own-cron", "ownchat harbor from a cron", "cron");
 
-  assert.deepEqual((await s.searchEntries("UOWN", "ownchat harbor")).map((h) => h.sessionId), [chat]);
-  assert.deepEqual((await s.searchSessionTitles("UOWN", "ownchat harbor")).map((row) => row.id), [chat]);
+  assert.deepEqual(
+    (await s.searchEntries("UOWN", "ownchat harbor")).map((h) => h.sessionId),
+    [chat],
+  );
+  assert.deepEqual(
+    (await s.searchSessionTitles("UOWN", "ownchat harbor")).map((row) => row.id),
+    [chat],
+  );
 });
 
 test("pg search: participation windows filter global matches before the result limit", { skip }, async () => {
