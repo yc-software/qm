@@ -7,7 +7,7 @@ import { shownFacts } from "../memory/recall-delta.ts";
 import { RECALL_MAX_CHARS } from "../memory/notebook.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import { principalEntitledToScope } from "./context-filter.ts";
+import { entitledScopes } from "./context-filter.ts";
 import { swallowAs } from "../util/errors.ts";
 import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
 import { readContextFile } from "./context-files.ts";
@@ -159,7 +159,7 @@ export async function resolveTurnContext(input: ContextInput) {
                 input.audience,
                 input.targetScope,
                 resolution.orgScopeId,
-                principalEntitledToScope,
+                entitledScopes,
               )
               .catch(swallowAs("context: skill grants for audience", []))
           ).map((grant) => ({ id: parseRef(grant.ref).id, ownerScopeId: grant.ownerScopeId }));

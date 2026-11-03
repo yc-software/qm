@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { orgId } from "../../config.ts";
-import { principalEntitledToScope } from "../../resolution/context-filter.ts";
+import { entitledScopes } from "../../resolution/context-filter.ts";
 import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
@@ -114,7 +114,7 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
       audience,
       ctx.capability?.scopeId ?? personal,
       org,
-      principalEntitledToScope,
+      entitledScopes,
     )) ?? [];
   const allowed = new Set(grants.map((g) => parseRef(g.ref).id));
   const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(

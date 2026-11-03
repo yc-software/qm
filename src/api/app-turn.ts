@@ -26,6 +26,7 @@ import {
 import { selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
 import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
+import { steerWithheldItem } from "../core/turn-error.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { LEGACY_ORIGIN_KEYS } from "../surfaces/origin-migration.ts";
@@ -449,8 +450,13 @@ export function createTurnMethods(
               conversation,
               ...(session ? { sessionId: session.id } : {}),
             });
-            if (decision === "block")
+            if (decision === "block") {
+              if (session)
+                await deps.sessions
+                  .append({ sessionId: session.id }, steerWithheldItem(actor.displayName?.trim() || actor.id))
+                  .catch((error) => swallow("turn: withheld steer note", error));
               return req.async ? { status: "queued", runId: targetRun.id, steered: true } : drive(targetRun.id);
+            }
             if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
           }
           const fileNames = (req.attachments ?? []).map((a) =>

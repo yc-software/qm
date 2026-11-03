@@ -1,16 +1,6 @@
 import type { Principal, ScopeId } from "../types.ts";
-import { scopeId } from "../types.ts";
+import { entitledScopes } from "./context-filter.ts";
 import type { ScopedConfigStore } from "./config-store.ts";
-
-function principalScopes(p: Principal, orgScope: ScopeId, contextScope?: ScopeId): ScopeId[] {
-  return [
-    ...new Set(
-      [orgScope, contextScope, scopeId("personal", p.id), ...(p.teamIds ?? []).map((t) => scopeId("team", t))].filter(
-        (s): s is ScopeId => !!s,
-      ),
-    ),
-  ];
-}
 
 function principalHosts(
   p: Principal,
@@ -20,7 +10,7 @@ function principalHosts(
   list: "allowedHosts" | "deniedHosts",
 ): Set<string> {
   const hosts = new Set<string>();
-  for (const s of principalScopes(p, orgScope, contextScope))
+  for (const s of entitledScopes(p, contextScope ?? orgScope, orgScope))
     for (const h of config.getEgress(s)?.[list] ?? []) hosts.add(h);
   return hosts;
 }

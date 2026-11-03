@@ -445,6 +445,16 @@ test("a web-drain-recorded failure delivery suppresses the onTerminal entry by i
   assert.equal((await sessions.getItems(session.id)).length, 1);
 });
 
+test("a withheld-steer note in the transcript does not suppress the run's failure entry", async () => {
+  const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
+  const { steerWithheldItem } = await import("../src/core/turn-error.ts");
+  const { sessions, session } = await failureSessions();
+  await sessions.append({ sessionId: session.id }, steerWithheldItem("U2"));
+
+  assert.equal(await recordRunFailureEntry(sessions, testRuns(), failedRun()), true);
+  assert.equal((await sessions.getItems(session.id)).length, 2);
+});
+
 test("a done run records nothing", async () => {
   const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
   const { sessions, session } = await failureSessions();
