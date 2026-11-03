@@ -49,8 +49,24 @@ for (const backend of backends) {
         await runs.enqueue({ sessionId: "sw", request: { ...subagentOf(human, "swarm worker"), swarm } });
         await runs.enqueue({ sessionId: "shared", request: cron("background first in its conversation") });
         await runs.enqueue({ sessionId: "shared", request: request("person second in its conversation") });
+        await runs.enqueue({ sessionId: "shared", request: cron("background third in its conversation") });
         assert.equal(await runs.personWaiting(Date.now() - 60_000), false, "only turns past the grace period count");
         assert.equal(await runs.personWaiting(Date.now()), true);
+        assert.deepEqual(await runs.personWaitingIn(["shared", "cron", "absent"], Date.now() - 60_000), new Set());
+        assert.deepEqual(
+          await runs.personWaitingIn(["shared", "cron", "absent"], Date.now()),
+          new Set(),
+          "a person queued behind work that never started waits its turn",
+        );
+        assert.deepEqual(
+          (await runs.inFlightForThread("shared")).map((run) => run.request.text),
+          [
+            "background first in its conversation",
+            "person second in its conversation",
+            "background third in its conversation",
+          ],
+          "runs that never started keep their order",
+        );
         assert.deepEqual(await claimAll(runs), [
           "person",
           "subagent",
@@ -60,6 +76,7 @@ for (const backend of backends) {
           "swarm worker",
           "background first in its conversation",
           "person second in its conversation",
+          "background third in its conversation",
         ]);
       } finally {
         await runs.close?.();
@@ -96,6 +113,7 @@ function scripted(log: string[]): Orchestrator {
       log.push(`start ${input.text} #${input.attempt}${input.resumeCause ? ` after ${input.resumeCause.kind}` : ""}`);
       const [mode] = input.text.split(" ");
       if (mode === "forever" || (input.attempt === 1 && mode !== "quick")) {
+        input.park?.signal.addEventListener("abort", () => input.park!.now(), { once: true });
         await new Promise<void>((resolve) =>
           input.shutdown?.addEventListener("abort", () => resolve(), { once: true }),
         );
@@ -134,6 +152,25 @@ async function withWorkers(
 
 const status = (runs: RunStore, run: Run, want: string) => async () => (await runs.get(run.id))?.status === want;
 
+test("a person's run goes ahead of started background runs only, keeping later work behind the parked run", async () => {
+  const { runs, close } = createPostgresRunStore(testDatabaseUrl());
+  try {
+    const parked = (await runs.enqueue({ sessionId: "c", request: cron("parked cron") })).run;
+    const claimed = (await runs.claimById(parked.id, "w", 60_000))!;
+    await runs.releaseLease(claimed.id, claimed.leaseToken!, PARKED);
+    await runs.enqueue({ sessionId: "c", request: request("person") });
+    await runs.enqueue({ sessionId: "c", request: cron("later cron") });
+    assert.deepEqual(await runs.personWaitingIn(["c"], Date.now()), new Set(["c"]));
+    assert.deepEqual(
+      (await runs.inFlightForThread("c")).map((run) => run.request.text),
+      ["person", "parked cron", "later cron"],
+    );
+    assert.deepEqual(await claimAll(runs), ["person", "parked cron", "later cron"]);
+  } finally {
+    await close();
+  }
+});
+
 test("a busy worker parks a cron turn for a person's turn, then resumes it", () =>
   withWorkers(
     1,
@@ -154,6 +191,25 @@ test("a busy worker parks a cron turn for a person's turn, then resumes it", () 
     },
     1,
   ));
+
+test("a person's turn parks the background turn running in its conversation, which then resumes once", () =>
+  withWorkers(2, async ({ runs, log, sweep }) => {
+    const background = (await runs.enqueue({ sessionId: "dm", request: cron("long cron") })).run;
+    await until(status(runs, background, "running"));
+    assert.equal(await sweep(), false, "nothing waits behind it yet");
+    await runs.enqueue({ sessionId: "dm", request: request("quick person") });
+    assert.equal(await sweep(), true);
+    await until(status(runs, background, "done"));
+    const resumed = (await runs.get(background.id))!;
+    assert.deepEqual([resumed.preemptions, resumed.attempts], [1, 2]);
+    assert.deepEqual(log, [
+      "start long cron #1",
+      "start quick person #1",
+      "finish quick person",
+      "start long cron #2 after parked",
+      "finish long cron",
+    ]);
+  }));
 
 test("one waiting turn parks one run, even while that run is slow to stop", () =>
   withWorkers(3, async ({ runs, sweep }) => {

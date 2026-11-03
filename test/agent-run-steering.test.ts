@@ -4,11 +4,12 @@ import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
 import { promptEnvelopeBody } from "../src/sessions/session-store.ts";
-import { isUserItem, messageTs, storedItem, type Item } from "../src/sessions/items.ts";
+import { isAgentReply, isUserItem, messageTs, storedItem, type Item } from "../src/sessions/items.ts";
 import type { ScopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { PARKED } from "../src/runs/run-store.ts";
 
 type Sink = {
   entries: Item[];
@@ -723,3 +724,89 @@ test("a request rejected as too long retries once without its inline documents i
     globalThis.fetch = realFetch;
   }
 });
+
+for (const deploy of [false, true]) {
+  test(`a park ${deploy ? "overtaken by a deploy still stops the running tool" : "lets the running tool finish, records its real result and stops before the next model step"}`, async () => {
+    const agent = createAgent({ apiKey: "sk-test" });
+    const store = createPostgresSessionStore(testDatabaseUrl());
+    const session = await store.getOrCreateByThread(`web:park-tool-${deploy}`, "dm", "personal:tester" as ScopeId);
+    const writer = { sessionId: session.id };
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      if (++calls > 1) return sse(textReplyEvents("done"));
+      const events = textReplyEvents("");
+      events[1] = {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "read-memory", name: "memory", input: {} },
+      };
+      events[2] = {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: JSON.stringify({ action: "read", retrySafe: false }) },
+      };
+      events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
+      return sse(events);
+    }) as typeof fetch;
+    const shutdown = new AbortController();
+    const cancel = new AbortController();
+    const requestPark = new AbortController();
+    const park = {
+      signal: requestPark.signal,
+      now: () => {
+        shutdown.abort(PARKED);
+        cancel.abort();
+      },
+    };
+    let toolFinishedFirst = false;
+    const entries: Item[] = [];
+    try {
+      await agent.runTurn(
+        turnInput(
+          session.id,
+          { entries: [] },
+          {
+            session,
+            runId: `park-tool-${deploy}`,
+            cancel: cancel.signal,
+            shutdown: shutdown.signal,
+            park,
+            tools: {
+              memoryRead: async () => {
+                requestPark.abort();
+                if (deploy) {
+                  shutdown.abort();
+                  cancel.abort();
+                }
+                await new Promise((resolve) => setTimeout(resolve, 100));
+                toolFinishedFirst = !shutdown.signal.aborted;
+                return "saved facts";
+              },
+            } as AgentTurnInput["tools"],
+            emit: async (entry) => {
+              const saved = await store.append(writer, entry);
+              entries.push(saved);
+              return saved;
+            },
+          },
+        ),
+      );
+      assert.equal(calls, 1, "no model step runs after the park");
+      const results = entries.filter((entry) => entry.kind === "ToolResult");
+      assert.equal(results.length, 1);
+      assert.equal(entries.filter(isAgentReply).length, 0, "the turn stays open for resume");
+      if (deploy) {
+        assert.deepEqual(results[0]!.body.stop, { kind: "shutdown" }, "the deploy stops the tool at once");
+      } else {
+        assert.equal(toolFinishedFirst, true, "the park waits for the running tool");
+        assert.equal(shutdown.signal.reason, PARKED, "the turn is handed back as parked");
+        assert.deepEqual([results[0]!.body.interrupted, results[0]!.body.stopped], [undefined, undefined]);
+        assert.match(results[0]!.text ?? "", /saved facts/);
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+      await agent.close?.();
+    }
+  });
+}

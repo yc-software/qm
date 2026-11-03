@@ -17,11 +17,14 @@ function isResumeNote(e: Item): boolean {
 
 const isTurnStart = (e: Item): boolean => e.kind === "UserMessage" && !isOverheard(e) && !isResumeNote(e);
 
+const otherRun = (e: Item, runId: string | undefined): boolean => e.turnId !== null && e.turnId !== runId;
+
 export function findTrailingPartialTurn(items: readonly Item[], runId: string | undefined): PartialTurn | null {
   if (!runId) return null;
   let workEntries = 0;
   for (let i = items.length - 1; i >= 0; i--) {
     const e = items[i]!;
+    if (otherRun(e, runId)) continue;
     if (e.kind === "Stop") return null;
     if (isAgentReply(e)) {
       const start = items.slice(0, i).findLast(isTurnStart);
@@ -39,6 +42,13 @@ export function findTrailingPartialTurn(items: readonly Item[], runId: string | 
   return null;
 }
 
+export function overtaken(items: readonly Item[], partial: PartialTurn, runId: string | undefined): boolean {
+  return items.some((e) => e.seq > partial.userSeq && isTurnStart(e) && otherRun(e, runId));
+}
+
+export const overtakenNote = (task: string): string =>
+  `[system] This turn paused while another turn ran in this conversation. Continue this turn's original task from its recorded work without repeating completed actions, and follow any instruction given since that changes or cancels it. Original task: ${task}`;
+
 export interface RecordedTurn extends PartialTurn {
   answer?: { seq: number; text: string };
 }
@@ -50,7 +60,7 @@ export function turnAtSeq(items: readonly Item[], userSeq: number): RecordedTurn
   let answer: RecordedTurn["answer"];
   for (let i = start + 1; i < items.length; i++) {
     const e = items[i]!;
-    if (e.kind !== "UserMessage" && e.kind !== "SteeringMessage" && differentTurn(e, items[start]!)) continue;
+    if (differentTurn(e, items[start]!)) continue;
     if (isAgentReply(e)) {
       answer = { seq: e.seq, text: (e.text ?? "").trim() };
       continue;

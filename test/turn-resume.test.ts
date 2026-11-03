@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { findTrailingPartialTurn, resumeStrategy, runtimeSwitchNote, turnAtSeq } from "../src/core/turn-resume.ts";
+import {
+  findTrailingPartialTurn,
+  overtaken,
+  resumeStrategy,
+  runtimeSwitchNote,
+  turnAtSeq,
+} from "../src/core/turn-resume.ts";
 import { unrecordedToolResult } from "../src/agent/context-compaction.ts";
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 
@@ -119,7 +125,11 @@ test("an empty-reply completed turn still counts as completed (assistant entry w
 test("a resume note in the ledger is skipped by its flag, not its text", () => {
   const entries = [user("build and deploy the release", 1), toolCall(2), resumeEntry(3)];
   assert.deepEqual(findTrailingPartialTurn(entries, RUN_1), { userSeq: 1, workEntries: 1 });
-  const typed = [user("build and deploy the release", 1), toolCall(2), user(LEGACY_NOTE, 3, RUN_2)];
+  const typed = [
+    user("build and deploy the release", 1),
+    toolCall(2),
+    item({ kind: "UserMessage", text: LEGACY_NOTE }, 3),
+  ];
   assert.equal(findTrailingPartialTurn(typed, RUN_1), null, "typed text is a new request");
 });
 
@@ -318,4 +328,29 @@ test("a recorded interruption does not stop a later lone unrecorded call from be
   const killed = killedResult("c2", 3);
   const entries = [user("build and deploy the release", 1), safeCall(2, true), killed, safeCall(4, true)];
   assert.equal(resumeStrategy(entries, { userSeq: 1, workEntries: 3 }).kind, "retry");
+});
+
+const exchange = (seq: number) => [
+  user("quick question", seq, RUN_2),
+  item({ kind: "AgentMessage", text: "PONG", turnId: RUN_2 }, seq + 1),
+];
+
+test("a paused turn is found past another run's exchange, and knows it was overtaken", () => {
+  const entries = [user("nightly report", 10), toolCall(11), toolResult(12), ...exchange(13)];
+  const partial = { userSeq: 10, workEntries: 2 };
+  assert.deepEqual(findTrailingPartialTurn(entries, RUN_1), partial);
+  assert.equal(overtaken(entries, partial, RUN_1), true);
+  assert.equal(overtaken(entries.slice(0, 3), partial, RUN_1), false);
+  assert.equal(overtaken([...entries.slice(0, 3), overheard("chatter", 13)], partial, RUN_1), false);
+});
+
+test("turnAtSeq reads past another run's exchange that overtook the turn, to the turn's own answer", () => {
+  const entries = [
+    user("nightly report", 10),
+    toolCall(11),
+    ...exchange(12),
+    item({ kind: "UserMessage", text: "[system] paused", hidden: true, turnId: RUN_1, body: { resumeNote: true } }, 14),
+    item({ kind: "AgentMessage", text: "report done", turnId: RUN_1 }, 15),
+  ];
+  assert.deepEqual(turnAtSeq(entries, 10), { userSeq: 10, workEntries: 1, answer: { seq: 15, text: "report done" } });
 });

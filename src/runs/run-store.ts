@@ -45,6 +45,11 @@ export type RunStop =
 
 export const PARKED: RunStop = { kind: "parked" };
 
+export interface ParkRequest {
+  signal: AbortSignal;
+  now(): void;
+}
+
 export function stopErrorCode(stop: RunStop | undefined): { errorCode?: string } {
   return stop?.kind === "error" && stop.code ? { errorCode: stop.code } : {};
 }
@@ -116,6 +121,8 @@ export interface RunStore {
   claimForSession(sessionId: string, workerId: string, ttlMs: number): Promise<Run | null>;
 
   personWaiting(createdBefore: number): Promise<boolean>;
+
+  personWaitingIn(sessionIds: readonly string[], createdBefore: number): Promise<Set<string>>;
 
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 

@@ -150,6 +150,8 @@ import {
 import { parseRef } from "../acl/resource-ref.ts";
 import {
   findTrailingPartialTurn,
+  overtaken,
+  overtakenNote,
   resumeStrategy,
   runtimeSwitchNote,
   turnAtSeq,
@@ -2857,10 +2859,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         }
         let turnInput = baseText;
-        const continueTurn = !!partial && history.some((entry) => entry.seq === partial.userSeq) && !releasedToolOutput;
+        const overtakenTurn = !!partial && overtaken(history, partial, input.runId);
+        const continueTurn =
+          !!partial && history.some((entry) => entry.seq === partial.userSeq) && !releasedToolOutput && !overtakenTurn;
         if (partial) spine.turnUserEntrySeq = partial.userSeq;
         if (releasedToolOutput) {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
+        } else if (overtakenTurn) {
+          turnInput = overtakenNote(baseText);
         }
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
         const sessionUsedTools = visibleHistory.some(
@@ -3262,6 +3268,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             cancel: turnAbort.signal,
             ...(silentResume ? { continueTurn: true, resumeUserSeq: partial!.userSeq } : {}),
             ...(input.shutdown ? { shutdown: input.shutdown } : {}),
+            ...(input.park ? { park: input.park } : {}),
             input: continueTurn && !continuation && !silentResume ? "" : agentInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),

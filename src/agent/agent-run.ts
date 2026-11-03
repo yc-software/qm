@@ -1145,6 +1145,8 @@ export function createAgent(opts?: AgentOptions): Agent {
             }
           });
         };
+        let parkAtStepEnd = false;
+        let loopDone = false;
         const steps = createStepRecorder(turn, persist);
         activeSteps = steps;
         entry.ref.emit = steps.emit;
@@ -1172,8 +1174,10 @@ export function createAgent(opts?: AgentOptions): Agent {
         const unsubscribeMessageEnd = (
           entry.agentSession as unknown as { agent?: PiAgentWithPayloadHook }
         ).agent?.subscribe?.((event) => {
-          const e = event as { type?: string; message?: unknown };
+          const e = event as { type?: string; message?: unknown; toolResults?: unknown[] };
           if (e.type === "agent_start" && toolAbort.signal.aborted) entry.agentSession.agent.abort();
+          if (e.type === "turn_end" && parkAtStepEnd && e.toolResults?.length && !endedOnPurpose(entry.ref))
+            turn.park?.now();
           if (e.type === "message_end") noteDocumentRejection(e.message);
           return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
         });
@@ -1253,6 +1257,13 @@ export function createAgent(opts?: AgentOptions): Agent {
           if (turn.cancel.aborted) onCancel();
           else turn.cancel.addEventListener("abort", onCancel, { once: true });
         }
+        const onPark = (): void => {
+          if (!loopDone && entry.agentSession.agent.state.pendingToolCalls.size === 0) return turn.park?.now();
+          parkAtStepEnd = true;
+          steerWake.abort();
+        };
+        if (turn.park?.signal.aborted) onPark();
+        else turn.park?.signal.addEventListener("abort", onPark, { once: true });
         const steeredSeen = recordedMessageTimestamps(turn.history);
         const stopSignalPoll =
           signals && turn.runId
@@ -1423,6 +1434,7 @@ export function createAgent(opts?: AgentOptions): Agent {
               abort: () => entry.agentSession.abort(),
             },
           );
+          loopDone = true;
           if (wallClock === "ok" && !entry.ref.runtimeHandoff) await recoverFailedRound();
           const goalAfterPrompt = entry.ref.goal;
           if (wallClock === "ok" && goalAfterPrompt && !userAborted && !turn.cancel?.aborted) {
@@ -1505,6 +1517,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           wallClock = "ok";
         } finally {
           turn.cancel?.removeEventListener("abort", onCancel);
+          turn.park?.signal.removeEventListener("abort", onPark);
           await stopSignalPoll?.();
           if (pendingSteers.length) entry.agentSession.clearQueue();
           unsubscribeMessageEnd?.();

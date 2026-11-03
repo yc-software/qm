@@ -53,9 +53,11 @@ function buildScenario(interruptAfterToolResult = false) {
   const turns: string[] = [];
   const continued: Array<boolean | undefined> = [];
   const environments: Array<string | undefined> = [];
+  const histories: Item[][] = [];
   const sandbox = fakeSandbox();
   const agent: Agent = {
     async runTurn(turn) {
+      histories.push([...turn.history]);
       turns.push(turn.input);
       continued.push(turn.continueTurn);
       environments.push(turn.environment);
@@ -113,7 +115,7 @@ function buildScenario(interruptAfterToolResult = false) {
       (item) => USER_ITEM_KINDS.includes(item.kind) && (item.text ?? "").startsWith(ASK),
     );
   };
-  return { orchestrator, sessions, runs, turns, continued, environments, sandbox, input, asks };
+  return { orchestrator, sessions, runs, turns, continued, environments, histories, sandbox, input, asks };
 }
 
 test("a retry replays the answer the previous attempt recorded instead of asking again", async () => {
@@ -287,4 +289,32 @@ test("a retry does not resume another run's interrupted turn that asked the same
   assert.equal(retry.status, "ok");
   assert.deepEqual(continued, [undefined, undefined]);
   assert.equal((await asks()).length, 2);
+});
+
+test("a turn that overtakes a paused one shares its history, and the paused turn resumes after it with a note", async () => {
+  const { orchestrator, runs, continued, histories, input } = buildScenario(true);
+  const shape = (items: Item[]) => items.map((e) => `${e.kind}:${e.callId ?? e.text}`);
+  const paused = (await runs.enqueue({ sessionId: conversation.threadRef, request: input("nightly report") })).run;
+  await assert.rejects(
+    orchestrator.handleTurn(input("nightly report", { runId: paused.id, attempt: 1 })),
+    /interrupted/,
+  );
+
+  const person = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  assert.equal((await orchestrator.handleTurn(input(ASK, { runId: person.id, attempt: 1 }))).status, "ok");
+  assert.deepEqual(
+    shape(histories[1]!),
+    ["UserMessage:nightly report", "ToolCall:c1", "ToolResult:c1"],
+    "the person's turn sees the paused turn's work so far",
+  );
+
+  assert.equal((await orchestrator.handleTurn(input("nightly report", { runId: paused.id, attempt: 2 }))).status, "ok");
+  assert.deepEqual(continued, [undefined, undefined, undefined], "the paused turn is prompted, not silently continued");
+  assert.deepEqual(shape(histories[2]!), [
+    "UserMessage:nightly report",
+    "ToolCall:c1",
+    "ToolResult:c1",
+    `UserMessage:${ASK}`,
+    "AgentMessage:it runs on this conversation's computer",
+  ]);
 });

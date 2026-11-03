@@ -1,6 +1,7 @@
 import type { ModelRequestPurpose } from "../model/provider-endpoints.ts";
 import type { ReplayImageLoader } from "./replay-images.ts";
 import type { ResumableToolCall } from "../core/turn-resume.ts";
+import type { ParkRequest } from "../runs/run-store.ts";
 import type { DocumentInput } from "../core/documents.ts";
 import type { RuntimeControl, TurnHandoff } from "./runtime-types.ts";
 import type {
@@ -59,6 +60,7 @@ export interface AgentTurnInput {
   continueTurn?: boolean;
   resumeUserSeq?: number;
   shutdown?: AbortSignal;
+  park?: ParkRequest;
   input: string;
   triggerTs?: string;
   entryTs?: string;
