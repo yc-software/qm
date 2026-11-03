@@ -95,13 +95,7 @@ function runFile(file, env) {
     };
     const child = spawn(
       process.execPath,
-      [
-        "--experimental-test-module-mocks",
-        "--import",
-        OWNER_DATABASE_HOOK,
-        new URL("../test/support/tenant-bound-test.ts", import.meta.url).pathname,
-        file,
-      ],
+      ["--experimental-test-module-mocks", "--import", OWNER_DATABASE_HOOK, "--test", file],
       { detached: true, env: { ...process.env, ...tenantEnv, ...env } },
     );
     children.add(child);
