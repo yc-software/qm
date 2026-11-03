@@ -24,7 +24,19 @@ export function rowTenant(row: Record<string, unknown>): { tenantId?: string } {
   return row.tenant_id == null ? {} : { tenantId: String(row.tenant_id) };
 }
 
+export interface TenantRow {
+  id: string;
+  install: boolean;
+}
+
+export async function listTenants(store: PgPool): Promise<TenantRow[]> {
+  const { rows } = await claimAcrossTenants(
+    store,
+    "SELECT id::text AS id, id = qm_tenant_id() AS install FROM tenants ORDER BY id",
+  );
+  return rows.map((row) => ({ id: String(row.id), install: row.install === true }));
+}
+
 export async function forEachTenant(store: PgPool, fn: () => Promise<unknown>): Promise<void> {
-  const { rows } = await claimAcrossTenants(store, "SELECT id::text AS id FROM tenants ORDER BY id");
-  for (const row of rows) await withTenant(String(row.id), fn);
+  for (const tenant of await listTenants(store)) await withTenant(tenant.id, fn);
 }
