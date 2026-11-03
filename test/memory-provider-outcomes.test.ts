@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createConfiguredMemoryService } from "../src/memory/provider-factory.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
-import { installPrincipalLinks } from "../src/directory/person.ts";
+import { installPrincipalLinks, OutsideAudience } from "../src/directory/person.ts";
 import type { MemoryProviderOutcome, MemoryService } from "../src/memory/memory-service.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
@@ -126,7 +126,10 @@ test("an actor QM cannot attest makes no provider call and is recorded as denied
 });
 
 test("an attested provider is called only for the person whose private conversation it is", async (t) => {
-  installPrincipalLinks({ canonical: (key) => (key === "system:digest" ? "U1" : undefined), aliases: () => [] });
+  installPrincipalLinks({
+    canonical: (key) => ({ "system:digest": "U1", U3: "system:svc" })[key],
+    aliases: () => [],
+  });
   t.after(() => installPrincipalLinks(null));
   const mcp = await startMcpTestServer(t, { tools: TOOLS, clients: { ro: "x", rw: "y" } });
   const memory = configured(mcp.url, { attestActor: true });
@@ -136,9 +139,37 @@ test("an attested provider is called only for the person whose private conversat
     assert.deepEqual(external(write.outcomes), [{ outcome: "denied", code: "private_only" }]);
     assert.match(write.problems[0]?.fix ?? "", /own private conversation/);
   }
+  assert.equal(recallText(await memory.recall("personal:U3", { query: "launch", actorId: "U3" })), "notebook fact");
   assert.equal(mcp.requests.length, 0);
   await memory.recall("personal:U1", { query: "launch", actorId: "U1" });
   assert.deepEqual(new Set(mcp.requests.map((request) => request.actor)), new Set(["U1"]));
+});
+
+test("a write refused for its audience is recorded without failing the route or reporting an error", async () => {
+  const refusing: MemoryService = {
+    ...notebook,
+    async capture() {
+      throw new OutsideAudience("memory provider");
+    },
+  };
+  for (const failOpen of [false, true]) {
+    const errors: unknown[] = [];
+    const memory = createRoutedMemoryService({
+      providers: { default: notebook, knowledge: refusing },
+      routes: [
+        { provider: "default", scopes: ["personal"], capture: "explicit" },
+        { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen },
+      ],
+      onError: (error) => void errors.push(error),
+    });
+    const { outcomes, report } = sink();
+    assert.equal(
+      await memory.capture("personal:U1", ["fact"], 1, "admin", { mode: "explicit", actorId: "admin", report }),
+      1,
+    );
+    assert.deepEqual(external(outcomes), [{ outcome: "denied", code: "private_only" }]);
+    assert.deepEqual(errors, []);
+  }
 });
 
 test("provider refusals, codes and failures are told apart", async (t) => {
