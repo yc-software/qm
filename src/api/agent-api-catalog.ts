@@ -644,11 +644,6 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "GET",
-        path: "/v1/admin/runs?scope=",
-        summary: "queued / in-flight / recent runs (DM or effective Open sharing)",
-      },
-      {
-        method: "GET",
         path: "/v1/admin/files?scope=",
         summary:
           "document store listing; files/read?id= and files/download?id= for content (DM or effective Open sharing)",

@@ -87,7 +87,6 @@ export const adminOperations = {
     "/sessions/:id/llm",
     scopedId,
   ),
-  runs: operation("Read run history.", "GET", "/runs", scope),
   files: operation("List stored files, optionally matching q.", "GET", "/files", { ...scope, q: optionalString }),
   file: operation("Read a stored text file.", "GET", "/files/read", scopedId),
   upload_file: operation("Register a staged blob as a scope file.", "POST", "/files/upload", {
