@@ -353,10 +353,20 @@ const SESSION_TABLES = tenantTables(
 export const TENANT_BACKFILL: PgMigrationDefinition = {
   id: "sessions/store/0050-tenant-backfill",
   statements: [
-    `INSERT INTO tenants(id, slug, name)
-     SELECT id, id::text, id::text FROM qm_tenant
+    `INSERT INTO tenants(id)
+     SELECT id FROM qm_tenant
      ON CONFLICT (id) DO NOTHING`,
   ],
+};
+
+const TENANT_ROW_SECURITY: PgMigrationDefinition = {
+  id: "sessions/store/0051-tenant-row-security",
+  statements: ["items", "blobs"].flatMap((table) => [
+    `ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()`,
+    `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
+    `CREATE POLICY tenant_isolation ON ${table}
+       USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())`,
+  ]),
 };
 
 export const SESSION_MIGRATIONS = [
@@ -366,4 +376,5 @@ export const SESSION_MIGRATIONS = [
   DROP_ITEMS_SEARCH,
   TENANT_BACKFILL,
   SESSION_TABLES,
+  TENANT_ROW_SECURITY,
 ];

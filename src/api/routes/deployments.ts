@@ -14,20 +14,22 @@ import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
-import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
-import { sendJson, verifyOrReject } from "../http.ts";
+import { sendJson, tenantHeader, verifyOrReject } from "../http.ts";
+import { withRowTenant } from "../tenant-ingress.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { livePersonCapability, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
-import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
+import { type DeployGitAccess, verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
+import { notSharedHtml, REQUEST_ACCESS_PATH, signInFailedHtml } from "../../deploy/app-gate-pages.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
+import { currentTenant, withTenant } from "../../tenants/context.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
@@ -71,13 +73,13 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, principal),
+      canonicalPayload(method, pathname + url.search, principal, tenantHeader(req)),
       false,
       ctx.allowUnsignedSourceAuth,
     ))
   )
     return;
-  if (deps.requireSignedPortalIdentity || deps.production) {
+  if (!ctx.allowUnsignedSourceAuth) {
     const psecret = deps.portalIdentitySecret ?? secret;
     const rawTok = req.headers[PORTAL_IDENTITY_HEADER];
     const tok = Array.isArray(rawTok) ? rawTok[0] : rawTok;
@@ -140,7 +142,7 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, actorHeader),
+      canonicalPayload(method, pathname + url.search, actorHeader, tenantHeader(req)),
       false,
       ctx.allowUnsignedSourceAuth,
     ))
@@ -445,11 +447,6 @@ function proxyReachHttp2(
   start(false);
 }
 
-// --- cold-start warming page -------------------------------------------------
-// AWS microVMs auto-resume on first connect, which can take many seconds. During
-// that window a browser navigation would otherwise hang for the full dial timeout
-// and then land on raw gateway JSON. For document requests we instead answer
-// quickly with a small self-refreshing "warming up" page.
 const WARM_RECENT_MS = 60_000;
 const COLD_FIRST_BYTE_TIMEOUT_MS = 4_000;
 const upstreamLastOk = new Map<string, number>();
@@ -517,7 +514,6 @@ function sendWarmingPage(res: BaseCtx["res"]): void {
   });
   res.end(WARMING_PAGE_HTML);
 }
-// -----------------------------------------------------------------------------
 
 async function proxyReach(
   ctx: BaseCtx,
@@ -554,7 +550,7 @@ async function proxyReach(
 
   if (viewer && ctx.secret) {
     headers[PORTAL_IDENTITY_HEADER] = await mintPortalIdentity(
-      { p: viewer, exp: Date.now() + 60_000 },
+      { t: currentTenant(), p: viewer, exp: Date.now() + 60_000 },
       viewerIdentityKey(ctx.secret, reach.id),
     );
   }
@@ -798,7 +794,7 @@ async function fetchDeploymentResponse(
 }
 
 export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
-  const { req, res, app, deps, url, pathname } = ctx;
+  const { req, res, deps } = ctx;
   const appsDomain = deps.deployAppsDomain;
   const gateSecret = deps.deployGateSecret;
   const fromAppHost = req.headers["x-qm-app-host"] === "1";
@@ -819,12 +815,19 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     sendJson(res, 404, { error: "not_found" });
     return true;
   }
+  const row = { table: "deployments", columns: ["name", "id"], id: slug };
+  await withRowTenant(res, deps.rowTenants, row, () => proxyAppSubdomain(ctx, rawHost, slug, fromAppHost));
+  return true;
+}
+
+async function proxyAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fromAppHost: boolean): Promise<void> {
+  const { req, res, app, deps, url, pathname } = ctx;
   if (!["GET", "HEAD", "OPTIONS"].includes(ctx.method)) {
     const origin = req.headers.origin;
     const site = req.headers["sec-fetch-site"];
     if ((origin !== undefined && origin !== `https://${rawHost}`) || (site !== undefined && site !== "same-origin")) {
       sendJson(res, 403, { error: "forbidden", message: "cross-origin app request refused" });
-      return true;
+      return;
     }
   }
   const safePathname =
@@ -842,7 +845,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   };
   if ((staleAccess || staleOwner) && ctx.method === "GET") {
     cleanUrlRedirect();
-    return true;
+    return;
   }
   const deployment = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));
   const externalAllowed = deployment
@@ -864,7 +867,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (embedAncestors.length) res.setHeader("content-security-policy", frameAncestorsDirective(embedAncestors));
   if (!isPublic && (!sessionSecret || !loginUrl)) {
     sendJson(res, 503, { error: "unavailable", message: "sign-in is not configured for deployment subdomains" });
-    return true;
+    return;
   }
   if (!sub && !isPublic) {
     const qs = url.searchParams.toString();
@@ -883,7 +886,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       res.writeHead(302, { location: signIn, "cache-control": "no-store" });
       res.end();
     }
-    return true;
+    return;
   }
   const bareApp = url.searchParams.get("__qm_no_shell") === "1";
   url.searchParams.delete("__qm_no_shell");
@@ -933,7 +936,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       !!sub && (await deps.featureFlags?.enabled("app_annotations", scopeId("personal", sub))) === true;
     if (signInAttempted) {
       cleanUrlRedirect();
-      return true;
+      return;
     }
     if (isShellRequest) {
       if (pathname === "/__claw__/version" && deployment)
@@ -947,7 +950,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
         });
         res.end(appAnnotationAsset(kind));
       } else sendJson(res, 404, { error: "not_found" });
-      return true;
+      return;
     }
     recordPageView("signed_in");
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
@@ -960,7 +963,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
         path: safePathname + url.search,
       }),
     );
-    return true;
+    return;
   }
   const viewer = sub ?? "";
   const reach =
@@ -989,13 +992,11 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     const d = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));
     if (!d) {
       sendJson(res, 404, { error: "not_found" });
-      return true;
+      return;
     }
-    // The recipient is the app's owner: the personal home scope if it has one, else whoever created it.
     const [ownerKind, ownerRef] = String(d.ownerScopeId).split(":", 2);
     const ownerId = ownerKind === "personal" && ownerRef ? ownerRef : d.createdBy;
     const label = d.displayName ?? d.name ?? slug;
-    // One request per visitor per app per day — the idempotent outbox absorbs button mashing.
     const day = Math.floor(Date.now() / 86_400_000);
     try {
       await app.enqueueDelivery({
@@ -1012,7 +1013,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     } catch {
       sendJson(res, 502, { error: "delivery_failed", message: "the request could not be delivered — try again later" });
     }
-    return true;
+    return;
   }
   if (reach.status === "denied" && wantsHtml) {
     res.writeHead(403, {
@@ -1021,11 +1022,11 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       "x-content-type-options": "nosniff",
     });
     res.end(notSharedHtml(viewer));
-    return true;
+    return;
   }
   if (reach.status === "ok" && signInAttempted && ctx.method === "GET") {
     cleanUrlRedirect();
-    return true;
+    return;
   }
   if (reach.status === "ok") {
     let authMode: AppViewAuthMode = "public";
@@ -1036,42 +1037,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   await proxyReach(ctx, reach, pathname, sub && (canManage || authenticatedPermission) ? sub : undefined, {
     frameAncestors: embedAncestors,
   });
-  return true;
-}
-
-function gateCardHtml(title: string, paragraphsHtml: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title>
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0a0a0a;color:#fafafa;
-font:14px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-.card{max-width:420px;text-align:center;padding:32px 20px}h1{font-size:19px;margin:0 0 10px}
-p{color:#a3a3a3;margin:0 0 8px}b{color:#fafafa}a{color:#fafafa}</style></head>
-<body><div class="card"><h1>${escapeHtml(title)}</h1>${paragraphsHtml}</div></body></html>`;
-}
-
-const REQUEST_ACCESS_PATH = "/__claw__/request-access";
-
-function notSharedHtml(sub: string): string {
-  return gateCardHtml(
-    "This app hasn't been shared with you",
-    `<p>You're signed in as <b>${escapeHtml(sub)}</b>, but this app's owner hasn't shared it with you.</p>
-<p>Ask the owner for access, or for the app's share link.</p>
-<p><button id="req" style="margin-top:12px;padding:8px 18px;border-radius:8px;border:1px solid #3f3f3f;
-background:#fafafa;color:#0a0a0a;font:inherit;font-weight:600;cursor:pointer">Request access</button></p>
-<script>document.getElementById("req").addEventListener("click",async function(){
-var b=this;b.disabled=true;b.textContent="Sending\u2026";
-try{var r=await fetch(${JSON.stringify(REQUEST_ACCESS_PATH)},{method:"POST"});
-b.textContent=r.ok?"Request sent \u2713":"Couldn't send \u2014 try again";b.disabled=r.ok;}
-catch(e){b.textContent="Couldn't send \u2014 try again";b.disabled=false;}});</script>`,
-  );
-}
-
-function signInFailedHtml(signIn: string): string {
-  return gateCardHtml(
-    "Sign-in didn't reach this app",
-    `<p>You signed in, but this app never received your session. This usually means the app gateway is misconfigured — tell whoever runs it.</p>
-<p><a href="${escapeHtml(signIn)}">Try signing in again</a></p>`,
-  );
+  return;
 }
 
 const deploymentId = async (app: App, idOrName: string): Promise<string | undefined> =>
@@ -1222,26 +1188,32 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
   const service = gitServiceOf(parts.tail, ctx.url);
   if (!service) return sendJson(ctx.res, 403, { error: "forbidden", message: "unsupported deployment git service" });
   const isPush = service === "git-receive-pack";
-  if (isPush && !ctx.secret)
-    return sendJson(ctx.res, 503, { error: "unavailable", message: "deployment git push requires core signing" });
-  let access: Awaited<ReturnType<typeof verifyDeployGitAccess>> = null;
-  if (ctx.secret) {
-    const token = gitTokenFrom(ctx);
-    access = token ? await verifyDeployGitAccess(ctx.secret, token) : null;
-    if (!access) return rejectGitAuth(ctx.res);
-    if (access.deploymentId !== parts.id)
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "token is for a different deployment" });
-    if (isPush && access.permission !== "write")
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git token is read-only" });
-    if (
-      access.principalId &&
-      !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, access.permission))
-    ) {
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git access has been revoked" });
-    }
-    if (isPush && !access.principalId) {
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git write access has been revoked" });
-    }
+  if (!ctx.secret)
+    return sendJson(ctx.res, 503, { error: "unavailable", message: "deployment git requires core signing" });
+  const token = gitTokenFrom(ctx);
+  const access = token ? await verifyDeployGitAccess(ctx.secret, token) : null;
+  if (!access) return rejectGitAuth(ctx.res);
+  return withTenant(access.tenant, () => serveDeploymentGitAs(ctx, parts, isPush, access));
+}
+
+async function serveDeploymentGitAs(
+  ctx: BaseCtx,
+  parts: { id: string; tail: string },
+  isPush: boolean,
+  access: DeployGitAccess,
+): Promise<void> {
+  if (access.deploymentId !== parts.id)
+    return sendJson(ctx.res, 403, { error: "forbidden", message: "token is for a different deployment" });
+  if (isPush && access.permission !== "write")
+    return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git token is read-only" });
+  if (
+    access.principalId &&
+    !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, access.permission))
+  ) {
+    return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git access has been revoked" });
+  }
+  if (isPush && !access.principalId) {
+    return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git write access has been revoked" });
   }
   const repoPath = await ctx.app.deploymentGitRepoPath(parts.id);
   if (!repoPath) return sendJson(ctx.res, 404, { error: "not_found" });
@@ -1257,9 +1229,9 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
         body,
       });
     const result = isPush
-      ? await ctx.app.runDeploymentGitPush(parts.id, access?.principalId, async () => {
+      ? await ctx.app.runDeploymentGitPush(parts.id, access.principalId, async () => {
           if (
-            access?.principalId &&
+            access.principalId &&
             !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, "write"))
           ) {
             const body = Buffer.from(

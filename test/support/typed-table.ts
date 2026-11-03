@@ -1,10 +1,13 @@
-import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
-import { type AppLogin, createAppLogin } from "./app-login.ts";
+import { applyPgMigrations, definePgMigration, migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
+import { TENANCY_BASE } from "../../src/tenants/migrations.ts";
+import { createAppLogin } from "./app-login.ts";
+import { testBareDatabaseUrl } from "./test-database.ts";
+import { testTenants } from "./test-tenants.ts";
 
-export const PG_URL = process.env.DATABASE_URL;
-export const skipWithoutPg = PG_URL ? false : "set DATABASE_URL (a Postgres) to run typed-table tests";
+export const skipWithoutPg = process.env.DATABASE_URL
+  ? false
+  : "set DATABASE_URL (a Postgres) to run typed-table tests";
 
 type Closable = { close?: () => Promise<void> };
 
@@ -21,32 +24,26 @@ export async function withTypedTableDb<S extends Closable>(
   fn: (db: TypedTableDb<S>) => Promise<void>,
   seed?: (admin: pg.Pool) => Promise<void>,
 ): Promise<void> {
-  const id = randomUUID().replaceAll("-", "");
-  const schema = `typed_${id}`;
-  const ownerUrl = new URL(PG_URL!);
-  ownerUrl.searchParams.set("options", `-c search_path=${schema}`);
-  const admin = new pg.Pool({ connectionString: ownerUrl.toString() });
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const owner = make(ownerUrl.toString());
+  const [tenant, otherTenant] = testTenants();
+  const url = testBareDatabaseUrl();
+  const admin = new pg.Pool({ connectionString: url });
+  const owner = make(url);
+  let login: Awaited<ReturnType<typeof createAppLogin>> | undefined;
   let store: S | undefined;
-  let login: AppLogin | undefined;
   try {
     await seed?.(admin);
-    await migrateRegisteredPgSchemas(ownerUrl.toString());
+    await applyPgMigrations(admin, [definePgMigration(TENANCY_BASE)]);
+    await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [tenant]);
+    await migrateRegisteredPgSchemas(url);
     await owner.close?.();
-    login = await createAppLogin(ownerUrl.toString());
-    await admin.query(`GRANT CREATE ON SCHEMA ${schema} TO ${login.role}`);
-    const existing = (await admin.query<{ id: string }>(`SELECT id::text AS id FROM tenants`)).rows[0]?.id;
-    const tenant = existing ?? randomUUID();
-    if (!existing) await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'main', 'Main')`, [tenant]);
-    const otherTenant = randomUUID();
-    await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [otherTenant]);
+    await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [otherTenant]);
+    await admin.query(`GRANT CREATE ON SCHEMA public TO PUBLIC`);
+    login = await createAppLogin(url);
     store = make(login.url);
     await fn({ store, admin, url: login.url, tenant, otherTenant });
   } finally {
     await store?.close?.();
     await login?.drop();
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
     await admin.end();
   }
 }

@@ -274,8 +274,6 @@ test("a tenant added after boot loads its configuration on first use", { skip },
 });
 
 const seedLegacyConfig = async (admin: Parameters<typeof seedKeyValueTable>[0]) => {
-  await admin.query("CREATE TABLE qm_tenant(id UUID PRIMARY KEY)");
-  await admin.query("INSERT INTO qm_tenant(id) VALUES (gen_random_uuid())");
   await seedKeyValueTable(admin, "soul_configs", {
     [channel]: {
       scopeId: channel,

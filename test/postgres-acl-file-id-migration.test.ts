@@ -35,7 +35,7 @@ test("file grants move from owner paths to enabled Files record IDs", { skip }, 
       registeredPgMigrations(db).filter((migration) => !migration.id.endsWith("-tenants")),
     );
     await pool.query("DELETE FROM qm_schema_migrations WHERE id = 'acl/grants/0003-file-ids'");
-    await pool.query("INSERT INTO tenants(id, slug, name) VALUES ($1, 'test-0', 'test-0')", [testTenants()[0]]);
+    await pool.query("INSERT INTO tenants(id) VALUES ($1)", [testTenants()[0]]);
     const file = (id: string, owner: string, path: string, createdAt: number, enabled = true) =>
       pool.query(
         `INSERT INTO file_artifacts (id, owner_scope_id, path, name, mimetype, size_bytes, direction, created_by, created_at, updated_at, enabled)

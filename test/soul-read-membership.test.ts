@@ -4,13 +4,18 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createServer } from "../src/api/server.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const PID = "soul-read-portal-identity-secret-for-tests";
+const SOURCE = "soul-read-source-signing-secret-for-tests";
 
 test("source-authenticated SOUL reads require the portal-verified principal to belong to the scope", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "soul-read-")) }));
@@ -20,18 +25,22 @@ test("source-authenticated SOUL reads require the portal-verified principal to b
   );
   await built.config.setSoul(scopeId("personal", "bob"), "Bob's private instruction.");
   await built.config.setSoul(scopeId("channel", "C"), "Channel C instruction.");
-  const server = createInsecureTestServer(built.app, {
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SOURCE,
     config: built.config,
     identity: built.identity,
     portalIdentitySecret: PID,
-    requireSignedPortalIdentity: true,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const read = async (query: string, as?: string) =>
-    fetch(`${base}/v1/soul?${query}`, {
-      headers: as ? { "x-portal-identity": await mintSignedPayload({ p: as, exp: Date.now() + 60_000 }, PID) } : {},
+  const read = async (query: string, as?: string) => {
+    const identity = as ? await mintSignedPayload({ t: TEST_TENANT, p: as, exp: Date.now() + 60_000 }, PID) : null;
+    const headers: Record<string, string> = identity ? { "x-portal-identity": identity } : {};
+    return fetch(`${base}/v1/soul?${query}`, {
+      headers: signedRequestHeaders(SOURCE, "GET", `/v1/soul?${query}`, "", headers),
     });
+  };
   try {
     assert.equal((await read("scopeId=personal:bob&principalId=bob")).status, 401);
     assert.equal((await read("scopeId=personal:bob&principalId=bob", "alice")).status, 403);

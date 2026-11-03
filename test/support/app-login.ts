@@ -3,7 +3,6 @@ import pg from "pg";
 import { grantAppLogin } from "../../src/tenants/logins.ts";
 
 export interface AppLogin {
-  role: string;
   url: string;
   drop(): Promise<void>;
 }
@@ -18,7 +17,6 @@ export async function createAppLogin(databaseUrl: string): Promise<AppLogin> {
   const url = new URL(databaseUrl);
   url.searchParams.set("options", [url.searchParams.get("options"), `-c role=${role}`].filter(Boolean).join(" "));
   return {
-    role,
     url: url.toString(),
     async drop() {
       await owner.query(`DROP OWNED BY ${role}`);
