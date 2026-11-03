@@ -1,11 +1,13 @@
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
+import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
 import type { ScopeId } from "../types.ts";
 
 type FileUploadState = "pending" | "completing" | "complete" | "aborting" | "aborted" | "failed";
 
 export interface FileUpload {
   id: string;
+  tenantId?: string;
   actorId: string;
   scopeId: ScopeId;
   name: string;
@@ -74,6 +76,7 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
   ]);
   const decode = (row: Record<string, unknown>): FileUpload => ({
     ...(row.data as FileUpload),
+    ...rowTenant(row),
     state: row.state as FileUploadState,
   });
   return {
@@ -126,14 +129,16 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
     },
     async expired(now) {
       return (
-        await db.q(
-          `WITH due AS (
-             SELECT id FROM file_uploads
-             WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
-             ORDER BY next_attempt_at, expires_at, id FOR UPDATE SKIP LOCKED LIMIT 100
-           ) UPDATE file_uploads SET next_attempt_at=$1+60000 FROM due
-             WHERE file_uploads.id=due.id RETURNING file_uploads.data,file_uploads.state`,
-          [now],
+        await claimAcrossTenants(() =>
+          db.q(
+            `WITH due AS (
+               SELECT id FROM file_uploads
+               WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
+               ORDER BY next_attempt_at, expires_at, id FOR UPDATE SKIP LOCKED LIMIT 100
+             ) UPDATE file_uploads SET next_attempt_at=$1+60000 FROM due
+               WHERE file_uploads.id=due.id RETURNING file_uploads.*`,
+            [now],
+          ),
         )
       ).map(decode);
     },

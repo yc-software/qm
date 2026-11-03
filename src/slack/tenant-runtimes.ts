@@ -1,5 +1,6 @@
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import { boundTenant, currentTenant, withTenant, withoutTenant } from "../tenants/context.ts";
+import { crossTenantLoop } from "../tenants/claim.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import type { SlackPluginConfig } from "./config.ts";
 import { createDeliveryPoller, type DeliveryTenant } from "./deliveries.ts";
@@ -234,7 +235,7 @@ export function createSlackTenants(deps: {
   function tickOnce(): Promise<void> {
     if (!running) return Promise.resolve();
     ticking ??= (stopping ?? Promise.resolve())
-      .then(tick)
+      .then(crossTenantLoop(tick))
       .catch(report)
       .finally(() => {
         ticking = undefined;

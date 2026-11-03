@@ -2,6 +2,7 @@ import { createPgPool } from "../persistence/pg-pool.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 import { unitVector } from "../model/embeddings.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
+import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
 
 export interface MemoryVector {
   scope: string;
@@ -34,7 +35,7 @@ export interface MemoryVectorStore {
     dimensions?: number,
     signal?: AbortSignal,
     afterId?: string,
-  ): Promise<Array<{ scope: string; factId: string; hash: string; text: string }>>;
+  ): Promise<Array<{ tenantId?: string; scope: string; factId: string; hash: string; text: string }>>;
   prune(model: string, limit: number, dimensions?: number, signal?: AbortSignal): Promise<number>;
   close(): Promise<void>;
 }
@@ -130,18 +131,21 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       );
     },
     async missing(model, limit, dimensions, signal, afterId) {
-      const rows = await db.q(
-        `SELECT f.scope_id, f.id, f.text, f.text_hash AS hash
+      const rows = await claimAcrossTenants(() =>
+        db.q(
+          `SELECT f.scope_id, f.id, f.text, f.text_hash AS hash
          FROM memory_facts f LEFT JOIN memory_fact_vectors v
            ON v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
            AND v.fact_hash = f.text_hash
            AND ($3::integer IS NULL OR v.dimensions = $3)
          WHERE f.deleted_at IS NULL AND v.fact_id IS NULL AND ($4::bigint IS NULL OR f.id > $4)
          ORDER BY f.id LIMIT $2`,
-        [model, batchSize(limit), vectorWidth(dimensions), afterId ?? null],
-        { signal, timeoutMs: 5000 },
+          [model, batchSize(limit), vectorWidth(dimensions), afterId ?? null],
+          { signal, timeoutMs: 5000 },
+        ),
       );
       return rows.map((row) => ({
+        ...rowTenant(row),
         scope: String(row.scope_id),
         factId: String(row.id),
         hash: String(row.hash),
@@ -149,8 +153,9 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       }));
     },
     async prune(model, limit, dimensions, signal) {
-      const { rowCount } = await db.query(
-        `DELETE FROM memory_fact_vectors v USING (
+      const { rowCount } = await claimAcrossTenants(() =>
+        db.query(
+          `DELETE FROM memory_fact_vectors v USING (
           SELECT s.scope_id, s.model, s.fact_id FROM memory_fact_vectors s
           WHERE s.model <> $1 OR ($3::integer IS NOT NULL AND s.dimensions <> $3) OR NOT EXISTS (
             SELECT 1 FROM memory_facts f
@@ -160,8 +165,9 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
           LIMIT $2 FOR UPDATE OF s SKIP LOCKED
         ) stale
         WHERE v.scope_id = stale.scope_id AND v.model = stale.model AND v.fact_id = stale.fact_id`,
-        [model, batchSize(limit), vectorWidth(dimensions)],
-        { signal, timeoutMs: 30_000 },
+          [model, batchSize(limit), vectorWidth(dimensions)],
+          { signal, timeoutMs: 30_000 },
+        ),
       );
       return rowCount;
     },

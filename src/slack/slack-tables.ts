@@ -8,7 +8,8 @@ import {
 import { jsonbStringify } from "../util/text.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, tenantPolicies } from "../tenants/migrations.ts";
-import { withoutTenant } from "../tenants/context.ts";
+import { claimAcrossTenants } from "../tenants/claim.ts";
+import { z } from "zod";
 import type { StagedEnvelopeRows } from "./envelope-staging.ts";
 import type { SlackSessionStatusRows, SlackSessionStatusState } from "./session-status.ts";
 import type { TaskAckRows, TaskAckState } from "./task-ack.ts";
@@ -162,16 +163,7 @@ const SLACK_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
 
 type Row = Rows[number];
 
-async function claimAcrossTenants<T = Row>(
-  pg: PgPool,
-  sql: string,
-  params: unknown[] = [],
-): Promise<Array<T & { tenant_id: string }>> {
-  const rows = await withoutTenant(() => pg.q(sql, params));
-  if (rows.some((row) => typeof row.tenant_id !== "string"))
-    throw new Error("A cross-tenant claim must return each row's tenant_id");
-  return rows as Array<T & { tenant_id: string }>;
-}
+const envelopeBody = z.record(z.string(), z.unknown());
 
 function text(value: unknown): string | undefined {
   return value === null || value === undefined ? undefined : String(value);
@@ -285,11 +277,11 @@ function pgSlackInstallationRows(pg: PgPool): SlackInstallationRows {
   };
 }
 
-export function installedSlackTenants(pg: PgPool): Promise<Array<{ tenant_id: string; version: string }>> {
-  return claimAcrossTenants<{ version: string }>(
-    pg,
-    "SELECT tenant_id::text AS tenant_id, version FROM slack_installation WHERE NOT disabled",
+export async function installedSlackTenants(pg: PgPool): Promise<Array<{ tenant_id: string; version: string }>> {
+  const rows = await claimAcrossTenants(() =>
+    pg.q("SELECT tenant_id::text AS tenant_id, version FROM slack_installation WHERE NOT disabled"),
   );
+  return rows.map((row) => ({ tenant_id: String(row.tenant_id), version: String(row.version) }));
 }
 
 export interface DueEnvelope {
@@ -327,20 +319,13 @@ export async function claimStagedEnvelopes(
     accounts: ReadonlyArray<{ tenantId: string; account: string }>;
   },
 ): Promise<DueEnvelope[]> {
-  await claimAcrossTenants(
-    pg,
-    "DELETE FROM slack_staged_envelopes WHERE received_at < $1 RETURNING tenant_id::text AS tenant_id",
-    [opts.now - opts.abandonAfterMs],
+  await claimAcrossTenants(() =>
+    pg.q("DELETE FROM slack_staged_envelopes WHERE received_at < $1", [opts.now - opts.abandonAfterMs]),
   );
   if (!opts.accounts.length) return [];
-  const rows = await claimAcrossTenants<{
-    key: string;
-    body: Record<string, unknown>;
-    account: string;
-    attempts: number;
-  }>(
-    pg,
-    `WITH due AS (
+  const rows = await claimAcrossTenants(() =>
+    pg.q(
+      `WITH due AS (
        SELECT s.tenant_id, s.key FROM slack_staged_envelopes s
        JOIN unnest($4::uuid[], $5::text[]) AS a(tenant_id, account) ON a.tenant_id = s.tenant_id AND a.account = s.account
        WHERE s.received_at <= $1 AND s.claimed_until <= $2 AND s.attempts < $3
@@ -348,20 +333,21 @@ export async function claimStagedEnvelopes(
      UPDATE slack_staged_envelopes e SET attempts = e.attempts + 1, claimed_until = $6
      FROM due WHERE e.tenant_id = due.tenant_id AND e.key = due.key
      RETURNING e.tenant_id::text AS tenant_id, e.key, e.body, e.account, e.attempts`,
-    [
-      opts.now - opts.staleAfterMs,
-      opts.now,
-      opts.maxAttempts,
-      opts.accounts.map((a) => a.tenantId),
-      opts.accounts.map((a) => a.account),
-      opts.now + opts.claimMs,
-    ],
+      [
+        opts.now - opts.staleAfterMs,
+        opts.now,
+        opts.maxAttempts,
+        opts.accounts.map((a) => a.tenantId),
+        opts.accounts.map((a) => a.account),
+        opts.now + opts.claimMs,
+      ],
+    ),
   );
   return rows.map((row) => ({
-    tenantId: row.tenant_id,
-    key: row.key,
-    body: row.body,
-    account: row.account,
+    tenantId: String(row.tenant_id),
+    key: String(row.key),
+    body: envelopeBody.parse(row.body),
+    account: String(row.account),
     attempts: Number(row.attempts),
   }));
 }
@@ -474,10 +460,10 @@ function pgSessionStatusRows(pg: PgPool): SlackSessionStatusRows {
 }
 
 export async function tenantsWithSessionStatus(pg: PgPool): Promise<Array<{ tenant_id: string; account: string }>> {
-  return claimAcrossTenants<{ account: string }>(
-    pg,
-    "SELECT DISTINCT tenant_id::text AS tenant_id, account FROM slack_session_status",
+  const rows = await claimAcrossTenants(() =>
+    pg.q("SELECT DISTINCT tenant_id::text AS tenant_id, account FROM slack_session_status"),
   );
+  return rows.map((row) => ({ tenant_id: String(row.tenant_id), account: String(row.account) }));
 }
 
 const ACK_COLUMNS = "channel, emoji, target, previous, finished, synced";
@@ -534,10 +520,12 @@ function pgTaskAckRows(pg: PgPool): TaskAckRows {
 }
 
 export async function tenantsWithUnsettledAcks(pg: PgPool): Promise<Array<{ tenant_id: string }>> {
-  return claimAcrossTenants(
-    pg,
-    "SELECT DISTINCT tenant_id::text AS tenant_id FROM slack_task_acknowledgements WHERE NOT synced OR NOT finished",
+  const rows = await claimAcrossTenants(() =>
+    pg.q(
+      "SELECT DISTINCT tenant_id::text AS tenant_id FROM slack_task_acknowledgements WHERE NOT synced OR NOT finished",
+    ),
   );
+  return rows.map((row) => ({ tenant_id: String(row.tenant_id) }));
 }
 
 function pgSlackAccountRows(pg: PgPool): SlackAccountRows {

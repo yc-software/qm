@@ -132,19 +132,23 @@ test(
         }),
       );
       assert.deepEqual(
-        (await installedSlackTenants(owner.pool)).map((row) => row.tenant_id).sort(),
+        (await withoutTenant(() => installedSlackTenants(owner.pool))).map((row) => row.tenant_id).sort(),
         [tenant, otherTenant].sort(),
       );
-      assert.deepEqual(await tenantsWithUnsettledAcks(owner.pool), [{ tenant_id: tenant }]);
+      assert.deepEqual(await withoutTenant(() => tenantsWithUnsettledAcks(owner.pool)), [{ tenant_id: tenant }]);
       assert.deepEqual(
-        (await tenantsWithSessionStatus(owner.pool)).sort((a, b) => a.account.localeCompare(b.account)),
+        (await withoutTenant(() => tenantsWithSessionStatus(owner.pool))).sort((a, b) =>
+          a.account.localeCompare(b.account),
+        ),
         [
           { tenant_id: tenant, account: "TA:UB" },
           { tenant_id: otherTenant, account: "TB:UB" },
         ],
       );
       const claim = () =>
-        claimStagedEnvelopes(owner.pool, { now, ...replay, accounts: [{ tenantId: tenant, account: "default" }] });
+        withoutTenant(() =>
+          claimStagedEnvelopes(owner.pool, { now, ...replay, accounts: [{ tenantId: tenant, account: "default" }] }),
+        );
       const first = await claim();
       assert.deepEqual(
         first.map((row) => [row.tenantId, row.key, row.attempts]),
@@ -157,14 +161,16 @@ test(
       );
       assert.equal(abandoned[0]!.n, 0, "rows older than a day are dropped for every tenant");
       const later = () =>
-        claimStagedEnvelopes(owner.pool, {
-          now: now + 120_000,
-          ...replay,
-          accounts: [
-            { tenantId: tenant, account: "default" },
-            { tenantId: otherTenant, account: "default" },
-          ],
-        });
+        withoutTenant(() =>
+          claimStagedEnvelopes(owner.pool, {
+            now: now + 120_000,
+            ...replay,
+            accounts: [
+              { tenantId: tenant, account: "default" },
+              { tenantId: otherTenant, account: "default" },
+            ],
+          }),
+        );
       const second = await later();
       assert.deepEqual(
         second.map((row) => [row.tenantId, row.key, row.attempts]).sort(),
@@ -191,11 +197,13 @@ test("concurrent claimers never receive the same staged envelope", { skip }, asy
         });
     });
     const claim = () =>
-      claimStagedEnvelopes(owner.pool, {
-        now: 100_000,
-        ...replay,
-        accounts: [{ tenantId: tenant, account: "default" }],
-      });
+      withoutTenant(() =>
+        claimStagedEnvelopes(owner.pool, {
+          now: 100_000,
+          ...replay,
+          accounts: [{ tenantId: tenant, account: "default" }],
+        }),
+      );
     const batches = await Promise.all([claim(), claim(), claim()]);
     const keys = batches.flat().map((row) => row.key);
     assert.equal(new Set(keys).size, keys.length);
