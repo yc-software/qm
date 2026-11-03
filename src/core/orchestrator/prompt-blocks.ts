@@ -93,11 +93,9 @@ export function guidanceUpdateEvent(
   const removed = [...before].filter((line) => !after.has(line));
   if (!added.length && !removed.length) return { text: "", record };
   const elsewhere = sources.filter((s): s is string => !!s && s !== sessionId).map((s) => s.slice(0, 7));
-  const where = elsewhere.length
-    ? `In a different session (${elsewhere.join(", ")}) `
-    : sources.includes(undefined)
-      ? "Outside this session "
-      : "";
+  let where = "";
+  if (elsewhere.length) where = `In a different session (${elsewhere.join(", ")}) `;
+  else if (sources.includes(undefined)) where = "Outside this session ";
   const who = guidance.personal
     ? "the user updated their standing guidance"
     : "this conversation's standing guidance was updated";
