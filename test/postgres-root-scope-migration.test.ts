@@ -166,7 +166,7 @@ test(
   "pg upgrade moves the org onto the install's own tenant when the database already holds others",
   { skip },
   async () => {
-    const extra = [randomUUID(), randomUUID()];
+    const extra: string[] = [randomUUID(), randomUUID()];
     await upgradeFromOrg(
       async (raw) => {
         for (const id of extra) await raw.query(`INSERT INTO tenants(id) VALUES ($1)`, [id]);
