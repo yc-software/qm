@@ -1428,8 +1428,14 @@ export function buildApp(
           ? { ...directProviderAvailability, modelIds: new Set(Object.keys(gatewayTransport.models)) }
           : undefined),
     );
+  const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
+    seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
+  });
+  const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const seat = createSeat(databaseUrl, {
-    enabled: (actorId) => featureFlags.enabled("agent_seat", scopeId("personal", actorId)),
+    enabled: async (actorId) =>
+      (await admin.adminStatusOf(identity.classify(actorId))).isAdmin &&
+      (await featureFlags.enabled("agent_seat", scopeId("personal", actorId))),
     signals: runSignals,
     runLive: async (runId) => {
       const run = await runStore.runs.get(runId);
@@ -1772,10 +1778,6 @@ export function buildApp(
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",
     );
   }
-  const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
-    seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
-  });
-  const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     agent,
     memory: baseMemory,

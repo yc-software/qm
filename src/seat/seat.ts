@@ -74,13 +74,15 @@ export interface SeatOptions {
   signals: RunSignalStore;
   runLive(runId: string): Promise<boolean>;
   timeoutMs?: number;
+  recheckMs?: number;
 }
 
 export const SEAT_OFF =
-  "Agent Seat is off for you. An org admin can turn on the agent_seat feature flag for your personal scope.";
+  "Agent Seat is only for org admins who have the agent_seat feature flag on for their personal scope.";
 export const SEAT_PERSONAL_ONLY = "You (Agent Seat) only plays in your own personal conversations.";
 const SEAT_CLOSED = "This step is no longer waiting for a move. It was answered, cancelled, or timed out.";
 const TIMEOUT_MS = 30 * 60_000;
+const RECHECK_MS = 5_000;
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS seat_steps(
@@ -233,6 +235,7 @@ export function seatAsk(deps: {
 export function createSeat(connectionString: string, opts: SeatOptions): Seat {
   const { q, query } = createPgPool(connectionString, [{ id: "seat/0001", statements: SCHEMA }]);
   const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
+  const recheckMs = opts.recheckMs ?? RECHECK_MS;
 
   async function hold(
     context: ModelRequestContext,
@@ -254,13 +257,25 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
       runId,
       JSON.stringify(request),
     ]);
+    const revoked = new AbortController();
+    const recheck = setInterval(() => {
+      void opts.enabled(actorId).then(
+        (on) => on || revoked.abort(),
+        (error: unknown) => swallow("seat: access recheck", error),
+      );
+    }, recheckMs);
     try {
-      const outcome = await waitForClientResult(opts.signals, runId, id, { timeoutMs, ...(signal ? { signal } : {}) });
-      if (outcome === "cancelled") throw new DOMException("The turn was cancelled", "AbortError");
+      const outcome = await waitForClientResult(opts.signals, runId, id, {
+        timeoutMs,
+        signal: signal ? AbortSignal.any([signal, revoked.signal]) : revoked.signal,
+      });
+      if (outcome === "cancelled")
+        throw signal?.aborted ? new DOMException("The turn was cancelled", "AbortError") : new Error(SEAT_OFF);
       if (outcome === "timeout")
         throw new Error(`No move was made at the Agent Seat within ${Math.round(timeoutMs / 60_000)} minutes.`);
       return seatResponse(outcome.structured as SeatBlock[]);
     } finally {
+      clearInterval(recheck);
       await query("DELETE FROM seat_steps WHERE id = $1", [id]).catch((e) => swallow("seat: close step", e));
     }
   }
@@ -337,13 +352,16 @@ export function createSeat(connectionString: string, opts: SeatOptions): Seat {
     async move(ownerId, id, content) {
       await guard(ownerId);
       const blocks = parseSeatMove(content);
-      const [row] = await q("DELETE FROM seat_steps WHERE id = $1 AND owner_id = $2 RETURNING run_id", [id, ownerId]);
-      if (!row || !(await opts.runLive(row.run_id as string))) throw new SeatError("step_closed", SEAT_CLOSED);
-      await opts.signals.send(row.run_id as string, {
+      const [row] = await q("SELECT run_id FROM seat_steps WHERE id = $1 AND owner_id = $2", [id, ownerId]);
+      const runId = row?.run_id as string | undefined;
+      if (!runId || !(await opts.runLive(runId))) throw new SeatError("step_closed", SEAT_CLOSED);
+      const sent = await opts.signals.send(runId, {
         kind: "client_result",
         callId: id,
         result: { content: "seat move", structured: blocks },
+        dedupeKey: `client:${runId}:${id}`,
       });
+      if (!sent) throw new SeatError("step_closed", SEAT_CLOSED);
     },
 
     async ask(ownerId, id, signal) {

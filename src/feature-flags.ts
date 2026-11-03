@@ -6,7 +6,7 @@ export const FEATURES = {
   agent_seat: {
     label: "Agent Seat (play the model)",
     personalOnly: true,
-    hint: "Adds You (Agent Seat) to the selected people's model picker. In their own conversations, each model call then waits at /seat, where they read the exact request and make the model's move.",
+    hint: "Org admins only. Adds You (Agent Seat) to the selected admins' model picker. In their own conversations, each model call then waits at /seat, where they read the exact request and make the model's move.",
   },
   app_annotations: {
     label: "App annotations",
