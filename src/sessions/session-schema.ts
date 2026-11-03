@@ -6,7 +6,7 @@ export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
 
 const PREVIOUS_SCHEMA = "sessions/store/0046-spend-days-cron-rebuild";
 
-export const SESSION_SCHEMA: PgMigrationDefinition = {
+const SESSION_SCHEMA: PgMigrationDefinition = {
   id: "sessions/store/0047-base-schema",
   expectedChecksum: "09cc3da1e893709927f3a18d593d543289d9d92dc416c56f426e3a5d69957099",
   statements: [
