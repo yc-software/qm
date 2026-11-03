@@ -1,7 +1,7 @@
 import type { AdmittedWork } from "../../util/admitted-work.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { GoalCreateInput } from "../../agent/goal.ts";
-import type { RunStop } from "../../runs/run-store.ts";
+import type { RunStop, TurnPark } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../agent/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
@@ -100,6 +100,7 @@ export interface OrchestratorInput extends Omit<
   finalAttempt?: boolean;
   cancel?: AbortSignal;
   shutdown?: AbortSignal;
+  park?: TurnPark;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
   swarm?: SwarmTurn;

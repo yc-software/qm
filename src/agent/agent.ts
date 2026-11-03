@@ -21,6 +21,7 @@ import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { ProviderKeys } from "../model/model-runtime.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } from "../security/security-posture.ts";
+import type { TurnPark } from "../runs/run-store.ts";
 
 export interface RuntimeChoice {
   modelId: string;
@@ -59,6 +60,7 @@ export interface AgentTurnInput {
   continueTurn?: boolean;
   resumeUserSeq?: number;
   shutdown?: AbortSignal;
+  park?: TurnPark;
   input: string;
   triggerTs?: string;
   entryTs?: string;

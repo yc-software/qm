@@ -155,7 +155,7 @@ import {
   withoutAlreadyIngested,
 } from "./attachments.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import { findTrailingPartialTurn, reconcile, runtimeSwitchNote, turnAtSeq } from "./turn-resume.ts";
+import { findTrailingPartialTurn, overtaken, reconcile, runtimeSwitchNote, turnAtSeq } from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
   overheardItem,
@@ -2860,10 +2860,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         }
         let turnInput = baseText;
-        const continueTurn = !!partial && history.some((entry) => entry.seq === partial.userSeq) && !releasedToolOutput;
+        const overtakenTurn = !!partial && overtaken(visibleHistory, partial, input.runId);
+        const continueTurn =
+          !!partial && history.some((entry) => entry.seq === partial.userSeq) && !releasedToolOutput && !overtakenTurn;
         if (partial) spine.turnUserEntrySeq = partial.userSeq;
         if (releasedToolOutput) {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
+        } else if (overtakenTurn) {
+          turnInput = `[system] This turn paused while another turn ran in this conversation. Continue this turn's original task from its recorded work without repeating completed actions, and follow any instruction given since that changes or cancels it. Original task: ${baseText}`;
         }
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
         const sessionUsedTools = visibleHistory.some(
@@ -3284,6 +3288,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             cancel: turnAbort.signal,
             ...(silentResume ? { continueTurn: true, resumeUserSeq: partial!.userSeq } : {}),
             ...(input.shutdown ? { shutdown: input.shutdown } : {}),
+            ...(input.park ? { park: input.park } : {}),
             input: continueTurn && !continuation && !silentResume ? "" : agentInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),

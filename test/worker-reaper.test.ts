@@ -1070,3 +1070,30 @@ test("runtime shutdown contains store close failures and waits for remaining sto
     await stopping;
   }
 });
+
+test("a deploy during a park wait stops the turn as a deploy", async () => {
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const enq = (await runs.enqueue({ sessionId: "t-park", request: turn, maxAttempts: 3 })).run;
+  const started = Promise.withResolvers<void>();
+  const orchestrator = {
+    async handleTurn(input: OrchestratorInput) {
+      started.resolve();
+      await new Promise((resolve) => input.shutdown!.addEventListener("abort", resolve, { once: true }));
+      return { status: "silent" as const, sessionId: "t-park", stopped: true };
+    },
+  } as unknown as Orchestrator;
+  const worker = createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+  worker.start();
+  await started.promise;
+  worker.held()[0]!.parkRequested = true;
+  await sleep(50);
+  assert.equal((await runs.get(enq.id))!.status, "running", "a park waits for the step to end");
+  await worker.stop(1);
+  const releasedAt = Date.now();
+  await worker.releaseInFlight();
+  assert.ok(Date.now() - releasedAt < SHUTDOWN_SETTLE_MS, "the deploy does not wait for the step");
+  const handedBack = (await runs.get(enq.id))!;
+  assert.equal(handedBack.status, "pending");
+  assert.deepEqual(handedBack.lastStop, { kind: "shutdown" });
+  assert.equal(handedBack.preemptions, 0);
+});
