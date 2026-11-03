@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test as nodeTest, type TestOptions } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { createMirror, slackMessageToIngestEvent } from "../src/slack/mirror.ts";
@@ -9,6 +9,12 @@ import { createConversationSerializer } from "../src/slack/conversation-view.ts"
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, ...args: [() => void | Promise<void>] | [TestOptions, () => void | Promise<void>]): void {
+  const [options, fn] = args.length === 1 ? [{}, args[0]] : args;
+  nodeTest(name, options, () => inTestTenant(fn));
+}
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 const directory = {
