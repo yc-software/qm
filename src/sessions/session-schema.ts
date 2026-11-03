@@ -331,7 +331,7 @@ const SPEND_TRIGGERS = [
 ];
 
 const SESSION_TABLES = tenantTables(
-  "sessions/store/0050-tenant-sessions",
+  "sessions/store/0051-tenant-sessions",
   [
     { table: "sessions", unique: [{ name: "sessions_thread_ref_key", columns: "thread_ref", constraint: true }] },
     { table: "participants", primaryKey: "session_id, principal_id" },
@@ -350,11 +350,21 @@ const SESSION_TABLES = tenantTables(
     after: SPEND_TRIGGERS,
   },
 );
+const TENANT_BACKFILL: PgMigrationDefinition = {
+  id: "sessions/store/0050-tenant-backfill",
+  statements: [
+    `INSERT INTO tenants(id, slug, name)
+     SELECT id, id::text, id::text FROM qm_tenant
+      WHERE EXISTS (SELECT 1 FROM items) OR EXISTS (SELECT 1 FROM blobs)
+     ON CONFLICT (id) DO NOTHING`,
+  ],
+};
 
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,
+  TENANT_BACKFILL,
   SESSION_TABLES,
 ];

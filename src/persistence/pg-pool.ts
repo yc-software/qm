@@ -173,12 +173,17 @@ async function rollbackOrReport(client: PoolClient, context: string): Promise<Er
   }
 }
 
+async function beginTransaction(client: PoolClient): Promise<void> {
+  const settings = tenantSettings();
+  await client.query("BEGIN");
+  if (settings.length) await client.query(settingsQuery(settings));
+}
+
 export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   let rollbackError: Error | undefined;
   try {
-    const settings = tenantSettings();
-    await Promise.all([client.query("BEGIN"), settings.length ? client.query(settingsQuery(settings)) : undefined]);
+    await beginTransaction(client);
     const result = await fn(client);
     await client.query("COMMIT");
     return result;
