@@ -9,6 +9,7 @@ import { mintPortalIdentity, verifyPortalIdentity } from "../src/auth/portal-ide
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { openOAuthState, sealOAuthState } from "../src/connectors/oauth.ts";
 import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
+import * as edgeIdentity from "../plugins/chassis/src/portal-identity.ts";
 import { canonicalPayload, signedRequestHeaders, TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 
 const TENANT_A = "0d6f6f1e-5a3c-4a7e-9a52-3c1f0b8e2a11";
@@ -27,13 +28,13 @@ async function tenantSeenBy(
   headers: Record<string, string>,
   route: { auth: "source" | "public"; tenant?: "none" | "row" } = { auth: "source" },
 ) {
-  let seen: string | undefined = "rejected";
+  let seen: string | undefined = "unset";
   const req = requestWith(headers);
   const res = new ServerResponse(req);
   await withRequestTenant(req, res, route, SECRET, () => {
     seen = boundTenant();
   });
-  return { seen, status: res.statusCode };
+  return seen === "unset" ? res.statusCode : seen;
 }
 
 describe("tenant claims", () => {
@@ -53,6 +54,23 @@ describe("tenant claims", () => {
     assert.equal(await withoutTenant(() => verifyPortalIdentity(token, IDENTITY, Date.now())), null);
   });
 
+  it("edge-minted portal identities carry the bound tenant and the edge binds it back", async () => {
+    const token = withTenant(TENANT_A, () =>
+      edgeIdentity.mintPortalIdentity({ p: "U1", exp: Date.now() + 60_000 }, IDENTITY),
+    );
+    assert.equal(edgeIdentity.verifyPortalIdentity(token, IDENTITY, Date.now())?.t, TENANT_A);
+    assert.equal(
+      edgeIdentity.withIdentityTenant(token, IDENTITY, () => boundTenant()),
+      TENANT_A,
+    );
+    assert.equal((await withTenant(TENANT_A, () => verifyPortalIdentity(token, IDENTITY, Date.now())))?.p, "U1");
+    const unbound = edgeIdentity.mintPortalIdentity({ p: "U1", exp: Date.now() + 60_000 }, IDENTITY);
+    assert.equal(
+      edgeIdentity.withIdentityTenant(unbound, IDENTITY, () => boundTenant()),
+      undefined,
+    );
+  });
+
   it("OAuth state carries the tenant that started the flow", async () => {
     const state = { provider: "github", principalId: "U1", redirectUri: "https://example.test/cb" };
     const sealed = await withTenant(TENANT_A, () => sealOAuthState(state, { secret: SECRET }));
@@ -67,37 +85,30 @@ describe("tenant claims", () => {
 });
 
 describe("request ingress", () => {
-  it("binds the tenant of a verified capability token over any tenant header", async () => {
+  it("binds the tenant of a verified capability token and refuses a conflicting tenant header", async () => {
     const token = await withTenant(TENANT_B, () => mintCapabilityToken(claims, SECRET));
-    assert.deepEqual(await tenantSeenBy({ [CAPABILITY_HEADER]: token, [TENANT_HEADER]: TENANT_A }), {
-      seen: TENANT_B,
-      status: 200,
-    });
+    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token }), TENANT_B);
+    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token, [TENANT_HEADER]: TENANT_B }), TENANT_B);
+    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token, [TENANT_HEADER]: TENANT_A }), 400);
+    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: "garbage", [TENANT_HEADER]: TENANT_A }), 401);
   });
 
-  it("binds the signed tenant header and rejects malformed ones", async () => {
-    assert.deepEqual(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }), { seen: TENANT_A, status: 200 });
-    assert.deepEqual(await tenantSeenBy({ [TENANT_HEADER]: "nope" }), { seen: "rejected", status: 401 });
+  it("binds the signed tenant header and refuses malformed ones", async () => {
+    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }), TENANT_A);
+    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: "nope" }), 400);
+    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A.toUpperCase() }), 400);
   });
 
-  it("rejects public routes that name a tenant only in an unsigned header, and unverifiable tokens", async () => {
-    assert.deepEqual(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, { auth: "public" }), {
-      seen: "rejected",
-      status: 401,
-    });
-    assert.deepEqual(await tenantSeenBy({ [CAPABILITY_HEADER]: "garbage" }), { seen: "rejected", status: 401 });
+  it("refuses unlisted routes without a verifiable tenant, including public ones and unverifiable tokens", async () => {
+    assert.equal(await tenantSeenBy({}), 401);
+    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: "garbage" }), 401);
+    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, { auth: "public" }), 401);
   });
 
   it("lets listed routes in unbound so they can resolve their own tenant, binding any verified one", async () => {
-    assert.deepEqual(await tenantSeenBy({}, { auth: "public", tenant: "none" }), { seen: undefined, status: 200 });
-    assert.deepEqual(await tenantSeenBy({}, { auth: "source", tenant: "row" }), { seen: undefined, status: 200 });
-    assert.deepEqual(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, { auth: "source", tenant: "row" }), {
-      seen: TENANT_A,
-      status: 200,
-    });
-    assert.deepEqual(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, { auth: "public", tenant: "row" }), {
-      seen: undefined,
-      status: 200,
-    });
+    assert.equal(await tenantSeenBy({}, { auth: "public", tenant: "none" }), undefined);
+    assert.equal(await tenantSeenBy({}, { auth: "source", tenant: "row" }), undefined);
+    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, { auth: "source", tenant: "row" }), TENANT_A);
+    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, { auth: "public", tenant: "row" }), undefined);
   });
 });

@@ -194,35 +194,48 @@ export function createRelayAuditSink(
   const buffer: Array<{ tenant: string | undefined; record: Omit<EgressAuditRecord, "ts" | "source"> }> = [];
   let flushing = false;
   let dropped = 0;
+  async function send(tenant: string | undefined, batch: typeof buffer): Promise<void> {
+    const body = JSON.stringify({ records: batch.map((entry) => entry.record) });
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers: signedRequestHeaders(signingSecret, "POST", pathWithQuery, body, {
+        "content-type": "application/json",
+        ...(tenant ? { [TENANT_HEADER]: tenant } : {}),
+      }),
+      body,
+      signal: AbortSignal.timeout(10_000),
+    });
+    const refused = res.status === 400 || res.status === 403;
+    if (!res.ok && !refused) throw new Error(`core responded ${res.status}`);
+    if (refused)
+      console.warn(
+        `[egress-authz] core refused ${batch.length} audit records with HTTP ${res.status}: ${(await res.text()).slice(0, 500)}`,
+      );
+  }
   async function flush(): Promise<void> {
     if (flushing || buffer.length === 0) return;
     flushing = true;
+    const failed = new Set<string | undefined>();
     try {
-      const tenant = buffer[0]!.tenant;
-      const batch = buffer.filter((entry) => entry.tenant === tenant).slice(0, RELAY_MAX_BATCH);
-      const body = JSON.stringify({ records: batch.map((entry) => entry.record) });
-      const res = await fetchImpl(url, {
-        method: "POST",
-        headers: signedRequestHeaders(signingSecret, "POST", pathWithQuery, body, {
-          "content-type": "application/json",
-          ...(tenant ? { [TENANT_HEADER]: tenant } : {}),
-        }),
-        body,
-        signal: AbortSignal.timeout(10_000),
-      });
-      const refused = res.status >= 400 && res.status < 500;
-      if (!res.ok && !refused) throw new Error(`core responded ${res.status}`);
-      if (refused) console.warn(`[egress-authz] core refused ${batch.length} audit records with HTTP ${res.status}`);
-      const sent = new Set(batch);
-      buffer.splice(0, buffer.length, ...buffer.filter((entry) => !sent.has(entry)));
-      if (dropped > 0) {
-        console.warn(`[egress-authz] audit relay recovered; ${dropped} records were dropped while the buffer was full`);
-        dropped = 0;
+      for (let next = buffer[0]; next; next = buffer.find((entry) => !failed.has(entry.tenant))) {
+        const tenant = next.tenant;
+        const batch = buffer.filter((entry) => entry.tenant === tenant).slice(0, RELAY_MAX_BATCH);
+        try {
+          await send(tenant, batch);
+        } catch (e) {
+          failed.add(tenant);
+          console.warn(`[egress-authz] audit relay to ${url} failed (${buffer.length} buffered): ${errMessage(e)}`);
+          continue;
+        }
+        const sent = new Set(batch);
+        buffer.splice(0, buffer.length, ...buffer.filter((entry) => !sent.has(entry)));
       }
-    } catch (e) {
-      console.warn(`[egress-authz] audit relay to ${url} failed (${buffer.length} buffered): ${errMessage(e)}`);
     } finally {
       flushing = false;
+    }
+    if (dropped > 0 && failed.size === 0) {
+      console.warn(`[egress-authz] audit relay recovered; ${dropped} records were dropped while the buffer was full`);
+      dropped = 0;
     }
   }
   const sweeper = createSweeper(flush, RELAY_FLUSH_MS, { label: "egress-audit-relay" });

@@ -3,11 +3,18 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { createServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import {
+  CONTROL_PLANE_AUD,
+  mintCapabilityToken,
+  SPEND_EXPORT_AUD,
+  verifyCapabilityToken,
+} from "../src/auth/capability-token.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -18,26 +25,29 @@ import { inTestTenant } from "./support/test-tenants.ts";
 
 const DAY = 86_400_000;
 const sourceSecret = "source-only-secret".repeat(3);
-const exportToken = "spend-export-only-token".repeat(3);
+const capabilitySecret = "capability-only-secret".repeat(3);
+const TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
+const exportClaims = { actorId: "admin-alice", scopeId: "org:default-org", aud: SPEND_EXPORT_AUD };
+const mintFor = (claims: Parameters<typeof mintCapabilityToken>[0]) =>
+  withTenant(TENANT, () => mintCapabilityToken(claims, capabilitySecret));
+const exportToken = await mintFor({ ...exportClaims, exp: Date.now() + DAY });
 const today = Math.floor(Date.now() / DAY) * DAY;
 const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const window = `from=${iso(today - DAY)}&to=${iso(today + DAY)}`;
 
-function fixture(options: { token?: string | null; sessions?: SessionStore | null } = {}) {
+function fixture(options: { sessions?: SessionStore | null } = {}) {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
   const sessions =
     options.sessions === null ? undefined : (options.sessions ?? createPostgresSessionStore(testDatabaseUrl()));
-  const token = options.token === undefined ? exportToken : options.token;
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
-    capabilitySecret: "capability-only-secret".repeat(3),
+    capabilitySecret,
     requireSignedPortalIdentity: true,
     admin: built.admin,
     auditLog: built.auditLog,
     ...(sessions ? { sessions } : {}),
-    ...(token ? { spendExportToken: token } : {}),
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -45,16 +55,6 @@ function fixture(options: { token?: string | null; sessions?: SessionStore | nul
     fetch(base + path, { headers });
   return { built, sessions, get, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
 }
-
-test("spend export: absent unless a token is configured", async () => {
-  const s = fixture({ token: null });
-  try {
-    const res = await s.get(`/v1/spend/export?${window}`);
-    assert.equal(res.status, 404);
-  } finally {
-    await s.close();
-  }
-});
 
 test("spend export: missing, wrong, admin-identity and source-signed requests are refused before any spend read", async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
@@ -67,8 +67,13 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
   try {
     const path = `/v1/spend/export?${window}`;
     const ts = Math.floor(Date.now() / 1000);
+    const expired = await mintFor({ ...exportClaims, exp: Date.now() - 1 });
+    const demoted = await mintFor({ ...exportClaims, actorId: "rando", exp: Date.now() + DAY });
+    const control = await mintFor({ ...exportClaims, aud: CONTROL_PLANE_AUD, exp: Date.now() + DAY });
     const refused: Record<string, string>[] = [
       {},
+      { authorization: `Bearer ${expired}` },
+      { authorization: `Bearer ${demoted}` },
       { authorization: `Bearer ${exportToken}x` },
       { authorization: exportToken },
       { authorization: `Bearer ${sourceSecret}` },
@@ -79,6 +84,7 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
       const res = await s.get(path, headers);
       assert.equal(res.status, 401, JSON.stringify(headers));
     }
+    assert.equal((await s.get(path, { authorization: `Bearer ${control}` })).status, 403);
     assert.equal(reads, 0);
     assert.deepEqual(
       (await inTestTenant(() => s.built.auditLog.events())).filter((e) => e.action === "spend.export"),
@@ -144,7 +150,7 @@ test("spend export: rows keep the ledger grain with canonical people, sources an
     );
     const audited = (await inTestTenant(() => s.built.auditLog.events())).filter((e) => e.action === "spend.export");
     assert.equal(audited.length, 1);
-    assert.equal(audited[0]!.principalId, "spend-export");
+    assert.equal(audited[0]!.principalId, "admin-alice");
     assert.equal(audited[0]!.detail, `${iso(today - DAY)}..${iso(today + DAY)} rows=5`);
   } finally {
     await s.close();
@@ -242,8 +248,41 @@ test("spend export: an unavailable spend store is an error, not an empty export"
   }
 });
 
-test("spend export: core receives the configured token", () => {
-  const config = testConfig({ spendExportToken: exportToken });
-  assert.equal(serverDeps(config, buildApp(config)).spendExportToken, exportToken);
-  assert.equal(serverDeps(testConfig(), buildApp(testConfig())).spendExportToken, undefined);
+test("spend export: an org admin mints a token scoped to their tenant that authorizes the export", async () => {
+  const built = buildApp(testConfig());
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    auditLog: built.auditLog,
+    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    capabilitySecret,
+  });
+  server.listen(0);
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  const mint = (actor: string, body: unknown) =>
+    fetch(`${base}/v1/admin/spend/export-token`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-admin-actor": actor, [TENANT_HEADER]: TENANT },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal((await mint("rando@default-org", {})).status, 403);
+    for (const days of [0, 366, 1.5, "30"]) assert.equal((await mint("admin-alice@default-org", { days })).status, 400);
+    const res = await mint("admin-alice@default-org", { days: 7 });
+    assert.equal(res.status, 200);
+    const { token, expiresAt }: any = await res.json();
+    const claims = await verifyCapabilityToken(token, capabilitySecret);
+    assert.equal(claims?.tenant, TENANT);
+    assert.equal(claims?.aud, SPEND_EXPORT_AUD);
+    assert.equal(claims?.exp, expiresAt);
+    assert.ok(Math.abs(expiresAt - (Date.now() + 7 * DAY)) < 60_000);
+    const exported = await fetch(`${base}/v1/spend/export?${window}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.equal(exported.status, 200);
+    const actions = (await built.auditLog.events()).map((e) => e.action);
+    assert.ok(actions.includes("spend.export_token.create"));
+    assert.ok(actions.includes("spend.export"));
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

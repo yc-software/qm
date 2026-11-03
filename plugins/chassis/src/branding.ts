@@ -1,3 +1,4 @@
+import { withoutTenant } from "./tenant.ts";
 export interface OrgBranding {
   orgName?: string;
   accent?: string;
@@ -26,7 +27,7 @@ export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): 
     if (inflight || Date.now() < nextAt) return;
     inflight = (async () => {
       try {
-        value = await fetchBranding();
+        value = await withoutTenant(fetchBranding);
         if (process.env.BRANDING_DEBUG) console.error("[branding] fetched:", JSON.stringify(value));
         warmed = true;
         nextAt = Date.now() + REFRESH_MS;
