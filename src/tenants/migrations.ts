@@ -5,8 +5,6 @@ export const TENANCY_BASE: PgMigrationDefinition = {
   statements: [
     `CREATE TABLE IF NOT EXISTS tenants(
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      slug TEXT NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9][a-z0-9-]*$'),
-      name TEXT NOT NULL CHECK (name <> ''),
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
     `CREATE OR REPLACE FUNCTION qm_bound_tenant() RETURNS uuid LANGUAGE plpgsql STABLE PARALLEL SAFE AS $qm_bound_tenant$
