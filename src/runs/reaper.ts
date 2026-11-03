@@ -23,10 +23,7 @@ export interface Reaper {
   sweep(): Promise<{ requeued: number; parked: number }>;
 }
 
-export async function releaseStrandedSessionLeases(
-  sessions: Pick<SessionStore, "getByThread" | "forceReleaseLease">,
-  sessionIds: string[],
-): Promise<void> {
+async function releaseStrandedSessionLeases(sessions: SessionStore, sessionIds: string[]): Promise<void> {
   for (const threadRef of new Set(sessionIds)) {
     const session = await sessions.getByThread(threadRef);
     if (session) await sessions.forceReleaseLease(session.id);

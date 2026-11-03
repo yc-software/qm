@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createReaper } from "../src/runs/reaper.ts";
-import { createWorker, SHUTDOWN_SETTLE_MS } from "../src/runs/worker.ts";
+import { createWorker, SHUTDOWN_HANDBACK_MS, SHUTDOWN_SETTLE_MS } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
@@ -337,13 +337,13 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
   const orchestrator = {
     async handleTurn(input: OrchestratorInput) {
       attempts.push(input);
-      const { lease } = await sessions.acquireLease(session.id);
+      const { lease } = await sessions.acquireLease(session.id, "turn");
       assert.ok(lease, `attempt ${input.attempt} gets the session lease`);
       if (input.attempt === 1) {
         started.resolve();
         await gate.promise;
         await sessions
-          .append(lease, { type: "system", payload: { kind: "late" }, scopeLabel: "personal:U1" })
+          .append(lease, { type: "system", payload: { kind: "checkpoint" }, scopeLabel: "personal:U1" })
           .then(lateWrite.resolve, lateWrite.reject);
         return { status: "ok" as const, reply: "stale" };
       }
@@ -356,15 +356,22 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
   await started.promise;
   await old.stop(1);
   const shutdownAt = Date.now();
-  await old.releaseInFlight();
-  const handedBackAfter = Date.now() - shutdownAt;
-  assert.ok(handedBackAfter >= SHUTDOWN_SETTLE_MS - 50 && handedBackAfter < SHUTDOWN_SETTLE_MS + 2_000);
+  await Promise.race([
+    old.releaseInFlight(),
+    sleep(SHUTDOWN_SETTLE_MS + SHUTDOWN_HANDBACK_MS).then(() => assert.fail("hand-back waited on the stuck turn")),
+  ]);
+  assert.ok(Date.now() - shutdownAt >= SHUTDOWN_SETTLE_MS - 50, "the turn gets the settle window first");
   const handedBack = (await runs.get(enq.id))!;
   assert.equal(handedBack.status, "pending");
   assert.equal(handedBack.leaseToken, null);
   assert.equal(handedBack.errorAttempts, 0);
   assert.deepEqual(handedBack.lastStop, { kind: "shutdown" });
   assert.equal(await runs.claim("too-early", 5_000), null, "nothing resumes the turn while the old process may live");
+  assert.equal(
+    (await sessions.acquireLease(session.id, "turn")).lease,
+    null,
+    "the old process cannot retake the session",
+  );
   const staleToken = attempts[0]!.runLeaseToken!;
 
   gate.resolve();
@@ -373,7 +380,7 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
 
   const fresh = createWorker({ runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5, workerId: "fresh" });
   fresh.start();
-  const done = await runs.waitFor(enq.id, 10_000);
+  const done = await runs.waitFor(enq.id, 15_000);
   await fresh.stop();
   assert.equal(done.status, "done");
   assert.deepEqual(done.result, { status: "ok", reply: "resumed" });
@@ -384,9 +391,12 @@ test("an uncooperative turn is handed back after the settle grace, and resumes o
       [2, { kind: "shutdown" }],
     ],
   );
-  assert.ok(Date.now() - shutdownAt >= SHUTDOWN_SETTLE_MS + 6_000 - 50, "the resume waited for the old process exit");
+  assert.ok(
+    Date.now() - shutdownAt >= SHUTDOWN_SETTLE_MS + 2 * SHUTDOWN_HANDBACK_MS,
+    "the resume waited for the old process exit",
+  );
   assert.equal(
-    (await sessions.getEntries(session.id)).some((entry) => (entry.payload as { kind?: string }).kind === "late"),
+    (await sessions.getEntries(session.id)).some((entry) => (entry.payload as { kind?: string }).kind === "checkpoint"),
     false,
   );
 });

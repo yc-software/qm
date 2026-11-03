@@ -19,13 +19,12 @@ import {
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
-import { releaseStrandedSessionLeases } from "./reaper.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import { traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
+import { FLUSH_MS, traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
-  sessions: Pick<SessionStore, "getByThread" | "forceReleaseLease">;
+  sessions: Pick<SessionStore, "getByThread" | "fenceTurnLease">;
   orchestrator: Orchestrator;
   leaseTtlMs: number;
   heartbeatIntervalMs?: number;
@@ -34,9 +33,11 @@ export interface ProcessDeps {
 
 export const LEASE_LOST_CONSECUTIVE = 3;
 
-export const SHUTDOWN_SETTLE_MS = 2_000;
+export const SHUTDOWN_SETTLE_MS = 5_000;
 
-const SHUTDOWN_EXIT_MS = 6_000;
+export const SHUTDOWN_HANDBACK_MS = 3_000;
+
+const SHUTDOWN_EXIT_MS = 2 * SHUTDOWN_HANDBACK_MS + FLUSH_MS;
 
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 
@@ -137,6 +138,8 @@ async function attemptRun(
       ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
     });
     const result = await Promise.race([turn, strand.promise]);
+    clearTimeout(strandTimer);
+    if (stranded) turn.catch((e: unknown) => swallow(`worker: stranded run=${run.id} failed after hand-back`, e));
     stopBeat();
     if (opts?.shutdown?.aborted) return result;
     if (!(await deps.runs.complete(run.id, token, result))) {
@@ -181,11 +184,15 @@ async function handBack(
   stop: RunStop | undefined,
   stranded: boolean,
 ): Promise<void> {
-  if (stranded) {
-    console.warn(`[worker] run ${run.id} ignored shutdown; handing it back to resume after this process exits`);
-    await releaseStrandedSessionLeases(deps.sessions, [run.sessionId]);
+  if (!stranded) {
+    await deps.runs.releaseLease(run.id, token, stop);
+    return;
   }
-  await deps.runs.releaseLease(run.id, token, stop, stranded ? Date.now() + SHUTDOWN_EXIT_MS : 0);
+  console.warn(`[worker] run ${run.id} ignored shutdown; handing it back to resume after this process exits`);
+  const exited = Date.now() + SHUTDOWN_EXIT_MS;
+  const session = await deps.sessions.getByThread(run.sessionId);
+  if (session) await deps.sessions.fenceTurnLease(session.id, exited);
+  await deps.runs.releaseLease(run.id, token, stop, exited);
 }
 
 export interface WorkerDeps extends ProcessDeps {

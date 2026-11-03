@@ -317,7 +317,13 @@ import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
-import { createRunPreemption, createWorker, SHUTDOWN_SETTLE_MS, type Worker } from "./runs/worker.ts";
+import {
+  createRunPreemption,
+  createWorker,
+  SHUTDOWN_HANDBACK_MS,
+  SHUTDOWN_SETTLE_MS,
+  type Worker,
+} from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
@@ -407,13 +413,18 @@ export function stopWithBackstop(
   label: string,
   beforeExit?: () => void,
 ): void {
-  const hardExit = setTimeout(() => {
-    console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
-    void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(async () => {
-      await flushErrorReporting();
-      process.exit();
-    });
-  }, shutdownDrainMs + 5_000);
+  const hardExit = setTimeout(
+    () => {
+      console.error(`[${label}] drain overran; releasing in-flight leases before forced exit`);
+      void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_HANDBACK_MS, { unref: true })]).finally(
+        async () => {
+          await flushErrorReporting();
+          process.exit();
+        },
+      );
+    },
+    shutdownDrainMs + SHUTDOWN_SETTLE_MS + SHUTDOWN_HANDBACK_MS,
+  );
   hardExit.unref();
   void runtime.stop().then(
     async () => {
@@ -425,10 +436,12 @@ export function stopWithBackstop(
     (e: unknown) => {
       console.error(`[${label}] graceful stop failed: ${errMessage(e)}`);
       clearTimeout(hardExit);
-      void Promise.race([runtime.releaseInFlightRuns(), sleep(3_000, { unref: true })]).finally(async () => {
-        await flushErrorReporting();
-        process.exit(1);
-      });
+      void Promise.race([runtime.releaseInFlightRuns(), sleep(SHUTDOWN_HANDBACK_MS, { unref: true })]).finally(
+        async () => {
+          await flushErrorReporting();
+          process.exit(1);
+        },
+      );
     },
   );
 }
@@ -2877,9 +2890,11 @@ export function buildApp(
   async function releaseInFlightRuns(): Promise<void> {
     inlineShutdown.abort();
     await Promise.all([
-      withTimeout(() => admittedWork.drained(), SHUTDOWN_SETTLE_MS + 1_000, "inline turn handback").catch(
-        swallowAs("wiring: inline turn handback failed", undefined),
-      ),
+      withTimeout(
+        () => admittedWork.drained(),
+        SHUTDOWN_SETTLE_MS + SHUTDOWN_HANDBACK_MS,
+        "inline turn handback",
+      ).catch(swallowAs("wiring: inline turn handback failed", undefined)),
       ...workers.map((w) => w.releaseInFlight()),
     ]);
   }
