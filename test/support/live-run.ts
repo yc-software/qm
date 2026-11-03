@@ -14,6 +14,7 @@ export async function holdThread(runs: RunStore, threadRef: string): Promise<() 
     actor: { externalId: "U1" },
     conversation: { kind: "dm", threadRef },
     text: "a live turn",
+    origin: { kind: "human" },
   } as unknown as OrchestratorInput;
   const { run } = await runs.enqueue({ sessionId: threadRef, request });
   const claimed = await runs.claimById(run.id, "test-worker", 60_000);
