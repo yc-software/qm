@@ -392,7 +392,6 @@ END $base_schema$`,
     },
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await claimAcrossTenants(
-        connectionString,
         `SELECT * FROM (
            SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
            AND session_id LIKE 'agent:main:subagent:%' AND id > $2
@@ -410,7 +409,6 @@ END $base_schema$`,
     },
     async terminalFinished(after, beforeMs, limit) {
       const { rows } = await claimAcrossTenants(
-        connectionString,
         `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
            AND (finished_at > $2 OR (finished_at = $2 AND id > $3))
          ORDER BY finished_at, id LIMIT $4`,
@@ -514,7 +512,6 @@ END $base_schema$`,
     ): Promise<{ requeued: number; parked: number }> {
       const now = Date.now();
       const { rows } = await claimAcrossTenants(
-        connectionString,
         "SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1",
         [now],
       );

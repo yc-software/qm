@@ -8,6 +8,7 @@ import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
+import { useOwnerDatabase } from "../../src/tenants/claim.ts";
 
 function baseDatabaseUrl(): URL {
   const base = process.env.DATABASE_URL;
@@ -48,14 +49,20 @@ function databaseUrl(name: string): string {
   return url.toString();
 }
 
+function ownedDatabaseUrl(name: string): string {
+  const url = databaseUrl(name);
+  useOwnerDatabase(url);
+  return url;
+}
+
 export function testDatabaseUrl(): string {
-  return databaseUrl(createDatabaseSync({}));
+  return ownedDatabaseUrl(createDatabaseSync({}));
 }
 
 export function testMigratedDatabaseUrl(): string {
   const template = process.env.QM_TEST_TEMPLATE_DATABASE;
   if (!template) throw new Error("QM_TEST_TEMPLATE_DATABASE is unset: run tests through scripts/run-pg-tests.mjs");
-  return databaseUrl(createDatabaseSync({ template }));
+  return ownedDatabaseUrl(createDatabaseSync({ template }));
 }
 
 let shared: { url: string; maps: ReturnType<typeof createPostgresMapFactory> } | undefined;

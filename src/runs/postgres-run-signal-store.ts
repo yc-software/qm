@@ -133,7 +133,6 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
 
     async pendingRuns() {
       const { rows } = await claimAcrossTenants(
-        connectionString,
         `SELECT DISTINCT ON (run_id) * FROM run_signals WHERE consumed_at IS NULL ORDER BY run_id`,
       );
       return rows.map((r) => ({ runId: r.run_id as string, ...rowTenant(r) }));

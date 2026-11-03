@@ -44,7 +44,7 @@ async function withTenantColumn(url: string, table: string, tenants: Record<stri
 
 test("a cross-tenant claim refuses to run under a bound tenant", async () => {
   await assert.rejects(
-    withTenant(A, () => claimAcrossTenants("postgres://app@127.0.0.1/qm", "SELECT 1")),
+    withTenant(A, () => claimAcrossTenants("SELECT 1")),
     /A cross-tenant claim cannot run while a tenant is bound/,
   );
 });
@@ -96,7 +96,7 @@ test(
     const app = createPgPool(appUrl.toString());
     try {
       await assert.rejects(app.q("SELECT * FROM due_work"), /No tenant is bound/);
-      const { rows } = await claimAcrossTenants(appUrl.toString(), "SELECT * FROM due_work WHERE due ORDER BY id");
+      const { rows } = await claimAcrossTenants("SELECT * FROM due_work WHERE due ORDER BY id");
       assert.deepEqual(
         rows.map((row) => [row.id, row.tenant_id]),
         [

@@ -106,7 +106,7 @@ async function runIsolated(file, index) {
     if (stopping) return { file, ok: false, ms: 0, output: "" };
     return await runFile(file, {
       DATABASE_URL: databaseUrl(name),
-      DATABASE_OWNER_URL: process.env.DATABASE_OWNER_URL ?? baseUrl,
+      DATABASE_OWNER_URL: databaseUrl(name),
       QM_TEST_TEMPLATE_DATABASE: templateName,
     });
   } finally {
