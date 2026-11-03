@@ -17,6 +17,7 @@ import { loadConfig } from "../src/config.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createPostgresMonitorRows } from "../src/monitors/monitor-table.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
@@ -73,7 +74,7 @@ const threadRef = "monitor-smoke-thread";
 const destination = { type: "smoke", target: "smoke-dm", audienceScopeId: scope };
 
 const registry = createPostgresProcessRegistry(databaseUrl);
-const monitors = createMonitorStore(smokeMap("monitors"));
+const monitors = createMonitorStore(createPostgresMonitorRows(databaseUrl));
 const deliveries = createDeliveryStore();
 const broker = createBackgroundBroker({ sandbox: sb, registry, scopeId: scope, pollMs: 4000, ttlMaxMs: 60 * 60_000 });
 let h: Awaited<ReturnType<typeof sb.provision>> | undefined;

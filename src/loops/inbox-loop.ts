@@ -39,9 +39,7 @@ export async function ensureDefaultInboxLoops(store: LoopStore, owner: string): 
     ["gmail", "Email"],
     ["slack", "Slack"],
   ]) {
-    const existing = (await store.list()).find(
-      (loop) => loop.ownerScopeId === scopeId("personal", owner) && loop.surface === `inbox:${source}`,
-    );
+    const existing = await store.byScope(scopeId("personal", owner), `inbox:${source}`);
     if (existing) {
       loops.push(existing);
       continue;
@@ -104,14 +102,8 @@ export function renderSourceInboxTask(loopId: string, source: string): string {
   return `Source restriction: scan only ${source}. Never read or ingest another source. Keep a separate watermark for this Loop.\n${renderInboxSyncTask(loopId)}`;
 }
 
-function isInboxLoop(loop: Loop): boolean {
-  return loop.surface === INBOX_LOOP_SURFACE;
-}
-
 export async function findInboxLoop(store: LoopStore, owner: string): Promise<Loop | null> {
-  const scope = scopeId("personal", owner);
-  const loops = await store.list();
-  return loops.find((loop) => loop.ownerScopeId === scope && isInboxLoop(loop)) ?? null;
+  return store.byScope(scopeId("personal", owner), INBOX_LOOP_SURFACE);
 }
 
 export async function ensureInboxLoop(store: LoopStore, owner: string): Promise<Loop> {

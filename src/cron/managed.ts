@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { Cron } from "../triggers/types.ts";
 import type { CreateCronInput, CronStore } from "./cron-store.ts";
 import type { Scheduler } from "./scheduler.ts";
@@ -12,7 +11,17 @@ export interface ManagedCronClaim {
   arming?: boolean;
 }
 
-type ManagedCronDeps<T> = { store: DurableMap<T>; crons: CronStore; scheduler: Pick<Scheduler, "notifyChanged"> };
+export interface ManagedCronProfiles<T> {
+  get(key: string): Promise<T | null>;
+  insertIfAbsent(key: string, initial: T): Promise<T>;
+  update(key: string, apply: (profile: T) => T): Promise<T | null>;
+}
+
+type ManagedCronDeps<T> = {
+  store: ManagedCronProfiles<T>;
+  crons: CronStore;
+  scheduler: Pick<Scheduler, "notifyChanged">;
+};
 
 export async function claimManagedCron<T extends ManagedCronClaim>(
   deps: ManagedCronDeps<T>,
@@ -24,7 +33,7 @@ export async function claimManagedCron<T extends ManagedCronClaim>(
   const existing = await deps.store.get(key);
   if (existing?.cronId) return existing.arming ? arm(deps, key, existing.cronId) : existing;
   const cron = await deps.crons.create({ ...input, enabled: false });
-  await deps.store.putIfAbsent(key, initial);
+  await deps.store.insertIfAbsent(key, initial);
   const stored = await deps.store.update(key, (value) =>
     value.cronId ? value : { ...value, cronId: cron.id, arming: true, ...fields(cron) },
   );

@@ -18,6 +18,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testCronRows, testWebhookRows } from "./support/typed-stores.ts";
 
 const ORG = "default-org";
 const OWNER = "owner";
@@ -39,8 +40,8 @@ const groupMembers = new Set([OWNER, GROUP_MEMBER]);
 
 function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: AdvisoryLock } = {}) {
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const webhooks = createWebhookStore(testMap(), testMap());
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const webhooks = createWebhookStore(testWebhookRows());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const config = overrides.config ?? testConfigStore(ORG);
   const auditLog = createPostgresAuditLog(testDatabaseUrl());

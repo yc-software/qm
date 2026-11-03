@@ -954,15 +954,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
-    for (const loop of await deps.loops.list()) {
-      if (
-        loop.state === "enabled" &&
-        loop.governor?.staleFireMs !== undefined &&
-        now - (loop.lastFiredAt ?? loop.createdAt) > loop.governor.staleFireMs
-      ) {
-        await applyGovernor(loop.id, undefined, now);
-      }
-    }
+    for (const loop of await deps.loops.staleGoverned(now)) await applyGovernor(loop.id, undefined, now);
   }
 
   async function itemTurn(

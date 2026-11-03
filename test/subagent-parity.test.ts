@@ -20,7 +20,6 @@ import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createFeatureFlagStore, type FeatureName } from "../src/feature-flags.ts";
-import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { scopeId, type Principal, type Session } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
@@ -42,6 +41,7 @@ import {
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { testSessionMailbox } from "./support/typed-stores.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {
@@ -73,7 +73,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     advisoryLock: testAdvisoryLock(),
     sessions,
     runs,
-    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    mailbox: testSessionMailbox(),
     signals: createPostgresRunSignalStore(testDatabaseUrl()),
     maxAttempts: 1,
     conversations: {

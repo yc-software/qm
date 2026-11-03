@@ -5,9 +5,10 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testItemRows } from "./support/typed-stores.ts";
 
 async function fixture(source = "gmail", meta: Record<string, unknown> = { threadId: "t1" }) {
-  const items = createLoopItemLedger(testMap());
+  const items = createLoopItemLedger(testItemRows());
   await items.ingest([
     {
       loopId: "inbox",

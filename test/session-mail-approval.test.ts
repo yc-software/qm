@@ -19,7 +19,6 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 import { createAgentTools } from "../src/agent/agent-tools.ts";
 import { createFeatureFlagStore } from "../src/feature-flags.ts";
-import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
@@ -37,6 +36,7 @@ import {
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { testSessionMailbox } from "./support/typed-stores.ts";
 
 function fakeSandbox(): Sandbox {
   const unreached = () => {
@@ -65,7 +65,7 @@ let callSeq = 0;
 async function scenario() {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const mailbox = testSessionMailbox();
   const featureFlags = createFeatureFlagStore(testMap());
   await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
   const sessionSyscalls = createSessionSyscalls({

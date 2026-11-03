@@ -8,8 +8,8 @@ import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { fireNeedsAttention, runLoopFire, type LoopRunnerEffects, type LoopStores } from "../src/loops/runner.ts";
 import { scopeId } from "../src/types.ts";
 import type { Loop } from "../src/loops/types.ts";
-import { testMap } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
+import { testItemRows, testLoopRows, testOutputRows } from "./support/typed-stores.ts";
 
 const base = {
   owner: "U1",
@@ -23,9 +23,9 @@ const base = {
 
 function stores(): LoopStores {
   return {
-    loops: createLoopStore(testMap()),
-    items: createLoopItemLedger(testMap()),
-    outputs: createLoopOutputStore(testMap()),
+    loops: createLoopStore(testLoopRows()),
+    items: createLoopItemLedger(testItemRows()),
+    outputs: createLoopOutputStore(testOutputRows()),
   };
 }
 

@@ -4,13 +4,13 @@ import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
-import type { Cron } from "../src/triggers/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testMap, testAdvisoryLock, testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testCronRows } from "./support/typed-stores.ts";
 
 test("crons persist to the backing map (a second store instance reads them back)", async () => {
-  const map = testMap<Cron>();
+  const map = testCronRows();
   const s1 = createCronStore(map, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const c = await s1.create({
     schedule: { everyMs: 60_000 },

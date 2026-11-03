@@ -3,6 +3,7 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { searchSnippet, searchTerms, tsPrefixQuery } from "../sessions/entry-search.ts";
 import type { ScopeId } from "../types.ts";
 import type { Cron } from "../triggers/types.ts";
+import { TENANT } from "../tenants/migrations.ts";
 
 export type ResourceKind = "skills" | "crons" | "deploys" | "webhooks";
 export interface ResourceCandidate {
@@ -28,31 +29,54 @@ export interface ResourceSearchStore {
   search(kind: ResourceKind, query: string, limit: number): Promise<ResourceCandidate[]>;
 }
 
-const sources = {
+const JSON_FIELDS = `json->>'scopeId' AS "scopeId", json->>'ownerScopeId' AS "ownerScopeId",
+        json->>'createdInScope' AS "createdInScope", json->>'createdBy' AS "createdBy",
+        json->>'owner' AS owner, json->>'status' AS status,
+        json->'members' AS members, json->'destination' AS destination`;
+
+const TRIGGER_FIELDS = `owner_scope_id AS "ownerScopeId", created_by AS "createdBy", owner, destination`;
+
+const jsonSources = {
   skills: {
     table: "skills",
     title: "coalesce(json->'manifest'->>'name', '')",
     description: "coalesce(json->'manifest'->>'description', '')",
-  },
-  crons: {
-    table: "crons",
-    title: "coalesce(json->>'title', '')",
-    description: "coalesce(json->>'action', '') || ' ' || coalesce(json->>'message', '')",
   },
   deploys: {
     table: "deployments",
     title: "coalesce(json->>'displayName', json->>'name', '')",
     description: "coalesce(json->>'name', '')",
   },
+} satisfies Record<Exclude<ResourceKind, "crons" | "webhooks">, { table: string; title: string; description: string }>;
+
+export const CRON_SEARCH_TITLE = "coalesce(title, '')";
+export const CRON_SEARCH_DESCRIPTION = "coalesce(action, '') || ' ' || coalesce(message, '')";
+export const WEBHOOK_SEARCH_TITLE = "coalesce(action, '')";
+export const WEBHOOK_SEARCH_DESCRIPTION = "coalesce(verification->>'scheme', '')";
+
+const sources: Record<
+  ResourceKind,
+  { table: string; title: string; description: string; fields?: string; where?: string }
+> = {
+  ...jsonSources,
+  crons: {
+    table: "crons",
+    title: CRON_SEARCH_TITLE,
+    description: CRON_SEARCH_DESCRIPTION,
+    fields: TRIGGER_FIELDS,
+    where: `tenant_id = ${TENANT}`,
+  },
   webhooks: {
     table: "webhooks",
-    title: "coalesce(json->>'action', '')",
-    description: "coalesce(json->'verification'->>'scheme', '')",
+    title: WEBHOOK_SEARCH_TITLE,
+    description: WEBHOOK_SEARCH_DESCRIPTION,
+    fields: TRIGGER_FIELDS,
+    where: `tenant_id = ${TENANT}`,
   },
-} satisfies Record<ResourceKind, { table: string; title: string; description: string }>;
+};
 
 export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
-  const migrations = Object.entries(sources).map(([kind, source]) => ({
+  const migrations = Object.entries(jsonSources).map(([kind, source]) => ({
     id: `resource-search/${kind}/0001`,
     statements: [
       "SET LOCAL lock_timeout = '2s'",
@@ -69,7 +93,9 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
   const ensure = (kind: ResourceKind): Promise<void> => {
     let pending = ready.get(kind);
     if (!pending) {
-      pending = pg.migrate(migrations[Object.keys(sources).indexOf(kind)]!).catch((error) => {
+      const migration = migrations[Object.keys(jsonSources).indexOf(kind)];
+      if (!migration) return Promise.resolve();
+      pending = pg.migrate(migration).catch((error) => {
         ready.delete(kind);
         throw error;
       });
@@ -104,12 +130,8 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
       await ensure(kind);
       const vector = `to_tsvector('simple', ${source.title} || ' ' || ${source.description})`;
       const rows = await pg.q(
-        `SELECT id, ${source.title} AS title, ${source.description} AS description,
-        json->>'scopeId' AS "scopeId", json->>'ownerScopeId' AS "ownerScopeId",
-        json->>'createdInScope' AS "createdInScope", json->>'createdBy' AS "createdBy",
-        json->>'owner' AS owner, json->>'status' AS status,
-        json->'members' AS members, json->'destination' AS destination
-        FROM ${source.table} WHERE ${vector} @@ to_tsquery('simple', $1)
+        `SELECT id, ${source.title} AS title, ${source.description} AS description, ${source.fields ?? JSON_FIELDS}
+        FROM ${source.table} WHERE ${source.where ? `${source.where} AND ` : ""}${vector} @@ to_tsquery('simple', $1)
         ORDER BY ts_rank(${vector}, to_tsquery('simple', $1)) DESC, id
         LIMIT $2`,
         [terms, limit],

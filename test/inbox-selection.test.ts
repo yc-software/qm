@@ -15,14 +15,15 @@ import { migrateInbox } from "../src/loops/inbox-migration.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
 import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testCronRows, testItemRows, testLoopRows, testOutputRows, testShipGrantRows } from "./support/typed-stores.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
   const deps = {
-    store: createLoopStore(testMap()),
-    items: createLoopItemLedger(testMap()),
-    outputs: createLoopOutputStore(testMap()),
-    grants: createShipGrantStore(testMap()),
-    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    store: createLoopStore(testLoopRows()),
+    items: createLoopItemLedger(testItemRows()),
+    outputs: createLoopOutputStore(testOutputRows()),
+    grants: createShipGrantStore(testShipGrantRows()),
+    crons: createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
     config: testConfigStore("org"),
   };
   const uiState = testMap<PersistedUiState>();
@@ -604,7 +605,7 @@ test("email classification is projected only by the flagged inbox endpoint", asy
 });
 
 test("inbox viewers are exactly the active candidates who can administer the loop, including shared group scopes and aliases", async (t) => {
-  const store = createLoopStore(testMap());
+  const store = createLoopStore(testLoopRows());
   const base = { createdBy: "alice", playbook: "triage", successCondition: "done" };
   const { loop: personal } = await store.create({
     ...base,

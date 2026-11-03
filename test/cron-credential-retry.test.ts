@@ -10,9 +10,10 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testCronRows } from "./support/typed-stores.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",

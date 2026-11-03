@@ -501,9 +501,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   async function reconcile(): Promise<void> {
     try {
-      for (const cron of await deps.crons.list()) {
+      for (const cron of await deps.crons.scheduled()) {
         if (stopped) break;
-        if (cron.archived || !cron.enabled) continue;
         const job = nextJob(cron);
         if (job) await deps.jobQueue!.enqueueFire(job);
       }
