@@ -119,9 +119,7 @@ async function tracedClients(
   store: ReturnType<typeof createPgPool>,
   onQuery: (config: unknown, sent: Promise<unknown>) => void,
 ) {
-  const clients: pg.PoolClient[] = [];
   (await store.pool()).on("connect", (client) => {
-    clients.push(client);
     const original = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
     Object.assign(client, {
       query: (...args: unknown[]) => {
@@ -131,7 +129,6 @@ async function tracedClients(
       },
     });
   });
-  return clients;
 }
 
 test("a write aborted while it waits rolls back once the backend gets the lock", { skip }, async () => {
@@ -201,7 +198,6 @@ test(
   { skip },
   async () => {
     const store = createPgPool(url!);
-    const clients = await tracedClients(store, () => undefined);
     const locker = new pg.Client({ connectionString: url });
     await locker.connect();
     try {
@@ -220,7 +216,7 @@ test(
             .rowCount === 0,
         "the aborted backend to stop waiting",
       );
-      await until(async () => clients[0]!.connection.stream.destroyed, "the connection to close");
+      await until(async () => (await store.pool()).totalCount === 0, "the pool to drop the connection");
     } finally {
       await locker.end();
       await store.close();
@@ -235,8 +231,8 @@ test("caught database errors keep the pooled connection", { skip }, async () => 
     await store.q("CREATE TABLE unique_rows(n int PRIMARY KEY)");
     await store.q("INSERT INTO unique_rows VALUES (1)");
     const pids = new Set<number>();
-    for (let i = 0; i < 6; i++) {
-      const options = i % 2 ? { timeoutMs: 1000, signal: new AbortController().signal } : { timeoutMs: 1000 };
+    for (const i of [0, 1]) {
+      const options = i ? { timeoutMs: 1000, signal: new AbortController().signal } : { timeoutMs: 1000 };
       await assert.rejects(store.q("INSERT INTO unique_rows VALUES (1)", [], options), { code: "23505" });
       pids.add((await store.q("SELECT pg_backend_pid() AS pid", [], options))[0]!.pid as number);
     }

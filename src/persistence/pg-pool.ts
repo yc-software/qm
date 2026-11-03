@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { connect } from "node:net";
+import type { EventEmitter } from "node:events";
+import type { Socket } from "node:net";
 import type { ClientConfig, Pool, PoolClient, QueryResult } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
@@ -166,20 +167,24 @@ async function pipelinedTransaction(
   return (settled[2] as PromiseFulfilledResult<QueryResult>).value;
 }
 
-function cancelThenClose(client: PoolClient): void {
-  const { processID, secretKey } = client as PoolClient & { processID: number; secretKey: number };
-  const request = Buffer.alloc(16);
-  request.writeInt32BE(16, 0);
-  request.writeInt32BE(80877102, 4);
-  request.writeInt32BE(processID, 8);
-  request.writeInt32BE(secretKey, 12);
-  const cancel = client.host.startsWith("/")
-    ? connect(`${client.host}/.s.PGSQL.${client.port}`)
-    : connect(client.port, client.host);
-  cancel.once("connect", () => cancel.end(request));
-  cancel.setTimeout(connectionTimeoutMs, () => cancel.destroy());
-  cancel.once("error", () => cancel.destroy());
-  cancel.once("close", () => client.connection.stream.destroy());
+type CancelConnection = EventEmitter & {
+  stream: Socket;
+  connect(...target: [string] | [number, string]): void;
+  cancel(processID: number, secretKey: number): void;
+};
+
+function cancelThenClose(pg: typeof import("pg").default, client: PoolClient): void {
+  const { processID, secretKey, connection } = client as PoolClient & { processID: number; secretKey: number };
+  const stream = connection.stream as Socket;
+  const cancel = new pg.Connection() as unknown as CancelConnection;
+  cancel.on("connect", () => cancel.cancel(processID, secretKey));
+  cancel.on("error", (error) => swallow("pg-pool: cancel request", error));
+  cancel.once("end", () => stream.destroy());
+  cancel.stream.setTimeout(connectionTimeoutMs, () =>
+    cancel.stream.destroy(new Error(`cancel request got no reply within ${connectionTimeoutMs}ms`)),
+  );
+  if (client.host.startsWith("/")) cancel.connect(`${client.host}/.s.PGSQL.${client.port}`);
+  else cancel.connect(client.port, stream.remoteAddress ?? client.host);
 }
 
 async function rollbackOrReport(client: PoolClient, context: string): Promise<Error | undefined> {
@@ -523,9 +528,9 @@ export function createPgPool(
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     } catch (error) {
       const aborted = signal?.aborted === true && error === signal.reason;
-      if (aborted) cancelThenClose(client);
-      const { DatabaseError } = (await import("pg")).default;
-      if (aborted || !(error instanceof DatabaseError) || error.code === "57014")
+      const pg = (await import("pg")).default;
+      if (aborted) cancelThenClose(pg, client);
+      if (aborted || !(error instanceof pg.DatabaseError) || error.code === "57014")
         discard = error instanceof Error ? error : new Error(String(error));
       throw error;
     } finally {
