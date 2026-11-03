@@ -63,6 +63,7 @@ export interface Surface<Native = unknown> {
   readonly capabilities: SurfaceCapabilities;
   readonly promptHints: SurfacePromptHints;
   post(ref: SurfaceRef, message: OutboundMessage, idempotencyKey: string): Promise<void>;
+  threadTarget?(target: string, threadTs: string): string;
   principalFor(user: SurfaceUser): ActorAssertion;
   mention(user: SurfaceUser): string;
   readableText(text: string, mentions: Readonly<Record<string, string>> | undefined): string;

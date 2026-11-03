@@ -232,7 +232,12 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const seq = postKeys.take();
       let destination = currentDestination;
       if (opts?.ts && destination.type !== "principal") {
-        destination = { ...destination, target: replaceThreadSegment(destination.target, opts.ts) };
+        destination = {
+          ...destination,
+          target:
+            deps.surfaces.get(destination.type)?.threadTarget?.(destination.target, opts.ts) ??
+            replaceThreadSegment(destination.target, opts.ts),
+        };
       } else if (opts?.broadcast && destination.type !== "principal" && conversation.channelRef) {
         destination = { ...destination, target: conversation.channelRef };
       }

@@ -337,6 +337,10 @@ test("partner-chat principals are internal only when vouched for, otherwise exte
   const surface = createPartnerChatSurface({ deliveries: createDeliveryStore() });
   const principal = partnerChatPrincipal({ id: "5", name: "Ada Lovelace" }, false);
   assert.equal(surface.mention({ surface: "partner-chat", account: "7001", id: "5", principal }), "@Ada Lovelace");
+  assert.equal(
+    surface.threadTarget?.("partner-chat:7001:group:42", "1793649600.00000000000000001001"),
+    "partner-chat:7001:group:42:1001",
+  );
 });
 
 test("a chat with any member the deployment does not vouch for is neither mirrored nor answered", async () => {

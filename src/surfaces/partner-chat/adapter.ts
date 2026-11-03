@@ -2,7 +2,7 @@ import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import { reachEnqueue } from "../../reach/reach.ts";
 import type { ActorAssertion } from "../../types.ts";
 import type { Surface, SurfacePromptHints } from "../contract.ts";
-import { partnerChatRef, type PartnerChatUser } from "./protocol.ts";
+import { partnerChatMessageId, partnerChatRef, parsePartnerChatRef, type PartnerChatUser } from "./protocol.ts";
 
 const DEFAULT_LABEL = "Partner chat";
 
@@ -56,6 +56,10 @@ export function createPartnerChatSurface(deps: {
         idempotencyKey,
         provenance: message.provenance,
       });
+    },
+    threadTarget(target, threadTs) {
+      const ref = parsePartnerChatRef(target);
+      return ref ? partnerChatRef({ ...ref, thread: partnerChatMessageId(threadTs) }) : target;
     },
     principalFor: (user) => user.principal,
     mention: (user) => `@${user.principal.displayName ?? user.id}`,
