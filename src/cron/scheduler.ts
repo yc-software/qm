@@ -501,11 +501,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   async function reconcile(): Promise<void> {
     try {
+      const horizon = now() + 2 * REPAIR_INTERVAL_MS;
       for (const cron of await deps.crons.list()) {
         if (stopped) break;
         if (cron.archived || !cron.enabled) continue;
         const job = nextJob(cron);
-        if (job) await deps.jobQueue!.enqueueFire(job);
+        if (job && Math.max(job.scheduledAt, job.notBefore ?? 0) <= horizon) await deps.jobQueue!.enqueueFire(job);
       }
     } catch (e) {
       reportFailure("scheduler: reconcile", e);
