@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-egress-")) }));
@@ -27,7 +28,7 @@ function start() {
 
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
-  (await fetch(base + path, { headers })).json();
+  (await fetch(base + path, { headers: { ...testTenantHeaders(), ...headers } })).json();
 
 test("egress: brokered calls surface as scope-labelled audit records, org-wide", async () => {
   const s = start();
@@ -48,7 +49,7 @@ test("egress: brokered calls surface as scope-labelled audit records, org-wide",
       principalId: "U2",
     });
 
-    await settle(async () => (await s.built.credentialUsage.list()).length >= 2);
+    await settle(async () => (await inTestTenant(() => s.built.credentialUsage.list())).length >= 2);
     const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
     assert.equal(d.scopeId, "org:default-org");
     assert.equal(d.total, 2, "both brokered calls counted");
@@ -70,7 +71,7 @@ test("egress: brokered calls surface as scope-labelled audit records, org-wide",
     assert.equal(ok.upstreamStatus, 200, "upstream status is surfaced");
 
     assert.ok(
-      (await s.built.auditLog.events()).some((e) => e.action === "egress.read"),
+      (await inTestTenant(() => s.built.auditLog.events())).some((e) => e.action === "egress.read"),
       "the egress read is itself audited",
     );
   } finally {
@@ -100,8 +101,8 @@ test("egress: broker and firewall sources are unioned into one feed", async () =
       scopeLabel: "personal:U1",
     });
 
-    await settle(async () => (await s.built.credentialUsage.list()).length >= 1);
-    await settle(async () => (await s.built.egressAudit.list()).length >= 1);
+    await settle(async () => (await inTestTenant(() => s.built.credentialUsage.list())).length >= 1);
+    await settle(async () => (await inTestTenant(() => s.built.egressAudit.list())).length >= 1);
     const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
     assert.equal(d.total, 2, "both sources counted in one feed");
     assert.deepEqual(d.bySource, { broker: 1, firewall: 1 });
@@ -152,8 +153,8 @@ test("egress: a scoped read returns only that scope's records, across both sourc
       scopeLabel: "personal:U2",
     });
 
-    await settle(async () => (await s.built.credentialUsage.list()).length >= 2);
-    await settle(async () => (await s.built.egressAudit.list()).length >= 2);
+    await settle(async () => (await inTestTenant(() => s.built.credentialUsage.list())).length >= 2);
+    await settle(async () => (await inTestTenant(() => s.built.egressAudit.list())).length >= 2);
     const d = await getJson(s.base, "/v1/admin/egress?scope=personal:U1");
     assert.equal(d.total, 2, "the broker + firewall rows for this scope, and nothing else");
     assert.deepEqual(d.bySource, { broker: 1, firewall: 1 });
@@ -186,12 +187,15 @@ test("egress: authz is the boundary (scope grant required, scope required)", asy
     assert.equal(
       (
         await fetch(s.base + "/v1/admin/egress?scope=org:default-org", {
-          headers: { "x-admin-actor": "user-uma@default-org" },
+          headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma@default-org" },
         })
       ).status,
       403,
     );
-    assert.equal((await fetch(s.base + "/v1/admin/egress", { headers: ALICE })).status, 400);
+    assert.equal(
+      (await fetch(s.base + "/v1/admin/egress", { headers: { ...testTenantHeaders(), ...ALICE } })).status,
+      400,
+    );
   } finally {
     await s.close();
   }
@@ -202,7 +206,7 @@ test("egress-audit ingest: proxy-relayed decisions land as firewall rows in the 
   try {
     const res = await fetch(s.base + "/v1/egress-audit", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), "content-type": "application/json" },
       body: JSON.stringify({
         records: [
           { host: "api.github.com", verdict: "ok", scopeLabel: "personal:U1", principalId: "U1" },
@@ -230,7 +234,7 @@ test("egress-audit ingest: a hostile over-long hostname is truncated, never drop
   try {
     const res = await fetch(s.base + "/v1/egress-audit", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { ...testTenantHeaders(), "content-type": "application/json" },
       body: JSON.stringify({
         records: [{ host: `${"a".repeat(600)}.attacker.example`, verdict: "denied", scopeLabel: "personal:U1" }],
       }),
@@ -249,7 +253,7 @@ test("egress-audit ingest: an oversized or empty batch is rejected", async () =>
     const post = (body: unknown) =>
       fetch(s.base + "/v1/egress-audit", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { ...testTenantHeaders(), "content-type": "application/json" },
         body: JSON.stringify(body),
       });
     assert.equal((await post({ records: [] })).status, 400);
