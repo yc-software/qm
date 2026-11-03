@@ -1,5 +1,6 @@
 import type { ResolvedSecurityPolicy } from "./security/security-posture.ts";
 import type { SharingPosture } from "./resolution/sharing-posture.ts";
+import type { SessionOrigin } from "./sessions/session-store.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -125,6 +126,7 @@ export interface Session {
   forkBoundarySeq?: number;
   sideChat?: { entrySeq: number; quote: string; occurrence: number; expanded: boolean };
   parentSessionId?: string;
+  origin?: SessionOrigin;
   spawnMeta?: SpawnMeta;
   lastActivityAt?: number;
   hasEntries?: boolean;
@@ -137,6 +139,8 @@ export interface Session {
   crons?: number;
   goal?: { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> };
   subagents?: { running: number; waiting: number };
+  workingSince?: number;
+  purpose?: string;
 }
 
 export type EntryType =
@@ -505,7 +509,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "approval_denied" | "internal_only";
+  refusalKind?: "security_quarantine" | "model_budget" | "approval_denied" | "internal_only";
   errorCode?: string;
   adminUrl?: string;
   runId?: string;

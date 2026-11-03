@@ -722,17 +722,14 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     const session = await sessions.getOrCreateByThread(req.conversation.threadRef!, "dm", scope);
     sessionIds.push(session.id);
-    priorAssistantSeen.push((await sessions.getEntries(session.id)).filter((e) => e.type === "assistant").length);
+    priorAssistantSeen.push((await sessions.getItems(session.id)).filter((e) => e.kind === "AgentMessage").length);
     texts.push(req.text);
-    const { lease } = await sessions.acquireLease(session.id);
-    assert.ok(lease, "fires are serial, so the lease is always free");
-    await sessions.append(lease, { type: "user", payload: { text: req.text }, scopeLabel: scope });
-    await sessions.append(lease, {
-      type: "assistant",
-      payload: { text: replies[sessionIds.length - 1] ?? "ok" },
-      scopeLabel: scope,
+    const writer = { sessionId: session.id };
+    await sessions.append(writer, { kind: "UserMessage", text: req.text });
+    await sessions.append(writer, {
+      kind: "AgentMessage",
+      text: replies[sessionIds.length - 1] ?? "ok",
     });
-    await sessions.releaseLease(lease);
     return { status: "ok", reply: replies[sessionIds.length - 1] ?? "ok", sessionId: session.id };
   };
   const scheduler = createScheduler({
@@ -1375,158 +1372,6 @@ test("a note written by someone other than the fire renders attributed, and mult
   const input = calls[0]?.text ?? "";
   assert.match(input, /Note left for this fire by U7 \(2026-08-31 07:00Z\): skip the Smith account already handled/);
   assert.doesNotMatch(input, /Notes from last fire agent/);
-});
-
-function busyOnce(calls: TurnRequest[]) {
-  return async (req: TurnRequest): Promise<TurnResult> => {
-    calls.push(req);
-    return calls.length === 1
-      ? { status: "refused", refusalKind: "session_busy", reason: "busy" }
-      : { status: "ok", reply: "OUT" };
-  };
-}
-
-test("a one-shot whose session is busy is deferred, stays enabled, and fires once the deferral passes", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const calls: TurnRequest[] = [];
-  let clock = 1000;
-  const scheduler = createScheduler({
-    ...singleProcessDeps(),
-    crons,
-    deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(testMap()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    run: busyOnce(calls),
-    now: () => clock,
-  });
-  const cron = await crons.create({
-    schedule: { firstFireAt: 1000 },
-    action: "remind me once",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-  });
-
-  await scheduler.tick(clock);
-  assert.equal(calls.length, 1);
-  let stored = (await crons.get(cron.id))!;
-  assert.equal(stored.enabled, true, "a deferred one-shot is not disabled");
-  assert.equal(stored.lastFiredAt, undefined, "the slot is not marked fired");
-  assert.equal(stored.deferUntil, 31_000);
-  let fires = (await crons.listFires(cron.id)).runs;
-  assert.equal(fires.length, 1);
-  assert.equal(fires[0]!.status, "deferred");
-  assert.match(fires[0]!.note ?? "", /session busy/);
-
-  clock = 20_000;
-  await scheduler.tick(clock);
-  assert.equal(calls.length, 1, "held back while deferred");
-
-  clock = 31_000;
-  await scheduler.tick(clock);
-  assert.equal(calls.length, 2, "the same fire runs once the deferral passes");
-  stored = (await crons.get(cron.id))!;
-  assert.equal(stored.enabled, false, "the one-shot is disabled only after it actually ran");
-  assert.equal(stored.deferUntil, undefined);
-  fires = (await crons.listFires(cron.id)).runs;
-  assert.equal(fires.length, 1, "one fire key, one history row");
-  assert.equal(fires[0]!.status, "ok");
-
-  clock = 40_000;
-  await scheduler.tick(clock);
-  assert.equal(calls.length, 2);
-});
-
-test("a fire that is still busy ten minutes past its slot gives up: consumed and recorded refused", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const calls: TurnRequest[] = [];
-  const scheduler = createScheduler({
-    ...singleProcessDeps(),
-    crons,
-    deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(testMap()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    run: async (req) => {
-      calls.push(req);
-      return { status: "refused", refusalKind: "session_busy", reason: "busy" };
-    },
-    now: () => 1000 + 10 * 60_000 + 1,
-  });
-  const cron = await crons.create({
-    schedule: { firstFireAt: 1000 },
-    action: "remind me once",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-  });
-  await scheduler.tick(1000 + 10 * 60_000 + 1);
-  assert.equal(calls.length, 1);
-  const stored = (await crons.get(cron.id))!;
-  assert.equal(stored.enabled, false);
-  assert.equal(stored.deferUntil, undefined);
-  assert.equal((await crons.listFires(cron.id)).runs[0]!.status, "refused");
-});
-
-test("queue mode: a busy fire releases its slot and is re-queued to run after the deferral", async () => {
-  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const calls: TurnRequest[] = [];
-  let clock = 5000;
-  let onFire: ((job: { cronId: string; scheduledAt: number; notBefore?: number }) => Promise<void>) | undefined;
-  const enqueued: Array<{ cronId: string; scheduledAt: number; notBefore?: number }> = [];
-  const scheduler = createScheduler({
-    ...singleProcessDeps(),
-    crons,
-    deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(testMap()),
-    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-    run: busyOnce(calls),
-    now: () => clock,
-    jobQueue: {
-      async start(handlers) {
-        onFire = handlers.onFire;
-      },
-      async enqueueFire(job) {
-        enqueued.push(job);
-      },
-      healthy: () => true,
-      async stop() {},
-    },
-  });
-  scheduler.start(1000);
-  const cron = await crons.create({
-    schedule: { everyMs: 1000, firstFireAt: 1 },
-    action: "post the standup",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("channel", "C1"),
-  });
-  await settle(async () => onFire !== undefined);
-  enqueued.length = 0;
-
-  await onFire!({ cronId: cron.id, scheduledAt: 1 });
-  assert.equal(calls.length, 1);
-  let stored = (await crons.get(cron.id))!;
-  assert.equal(stored.lastFiredAt, undefined, "the busy fire gave its slot back");
-  assert.equal(stored.deferUntil, 35_000);
-  assert.deepEqual(
-    enqueued.pop(),
-    { cronId: cron.id, scheduledAt: 1, notBefore: 35_000 },
-    "same slot, held until the deferral",
-  );
-
-  clock = 10_000;
-  await onFire!({ cronId: cron.id, scheduledAt: 1 });
-  assert.equal(calls.length, 1, "a job arriving early is re-queued, not run");
-  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 1, notBefore: 35_000 });
-
-  clock = 35_000;
-  await onFire!({ cronId: cron.id, scheduledAt: 1 });
-  assert.equal(calls.length, 2, "the deferred slot runs");
-  stored = (await crons.get(cron.id))!;
-  assert.equal(stored.lastFiredAt, 35_000);
-  assert.equal(stored.deferUntil, undefined);
-  assert.deepEqual(enqueued.pop(), { cronId: cron.id, scheduledAt: 36_000 }, "the next slot is chained without a hold");
-  scheduler.stop();
 });
 
 test("scheduler stop waits for delayed queue startup and supports an awaited restart", async () => {

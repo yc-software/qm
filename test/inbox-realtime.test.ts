@@ -9,7 +9,7 @@ import type { Loop } from "../src/loops/types.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
 import { testMap } from "./support/test-database.ts";
 
-const LOOP = { id: "loop-inbox", owner: "owner@example.com", surface: "inbox" } as unknown as Loop;
+const LOOP = { id: "loop-inbox", owner: "owner@example.com", surface: "inbox:slack" } as unknown as Loop;
 
 function slackEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
   return {
@@ -18,7 +18,6 @@ function slackEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
     source: "slack",
     summary: "any update?",
     sourcePayload: {
-      source: "slack",
       title: "DM with Sam",
       from: "Sam",
       snippet: "any update?",
@@ -36,7 +35,6 @@ function gmailEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
     source: "gmail",
     summary: "contract question",
     sourcePayload: {
-      source: "gmail",
       title: "Contract question",
       from: "Ada",
       snippet: "contract question",
@@ -129,7 +127,6 @@ test("events in unrelated conversations or other sources queue nothing", async (
     slackEntry({
       dedupeKey: "C9:100.1",
       sourcePayload: {
-        source: "slack",
         title: "#eng",
         from: "Ada",
         snippet: "thread ask",
@@ -165,7 +162,6 @@ test("a thread reply reaches a channel card anchored at the thread root", async 
     slackEntry({
       dedupeKey: "C9:100.1",
       sourcePayload: {
-        source: "slack",
         title: "#eng",
         from: "Ada",
         snippet: "thread ask",

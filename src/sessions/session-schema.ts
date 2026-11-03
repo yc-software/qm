@@ -1,11 +1,12 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE } from "../tenants/migrations.ts";
 
 export const SPEND_INDEXABLE = `(spend_usage_json(usage_json) IS NOT NULL
   AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`;
 
 const PREVIOUS_SCHEMA = "sessions/store/0046-spend-days-cron-rebuild";
 
-export const SESSION_SCHEMA: PgMigrationDefinition = {
+const SESSION_SCHEMA: PgMigrationDefinition = {
   id: "sessions/store/0047-base-schema",
   expectedChecksum: "09cc3da1e893709927f3a18d593d543289d9d92dc416c56f426e3a5d69957099",
   statements: [
@@ -289,7 +290,7 @@ END $base_schema$`,
   ],
 };
 
-export const MESSAGE_SEARCH_INDEX: PgMigrationDefinition = {
+const MESSAGE_SEARCH_INDEX: PgMigrationDefinition = {
   id: "sessions/store/0048-message-search-index",
   statements: [
     `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_message_search ON items USING gin (tenant_id, search)
@@ -297,7 +298,24 @@ export const MESSAGE_SEARCH_INDEX: PgMigrationDefinition = {
   ],
 };
 
-export const DROP_ITEMS_SEARCH: PgMigrationDefinition = {
+const DROP_ITEMS_SEARCH: PgMigrationDefinition = {
   id: "sessions/store/0049-drop-items-search",
   statements: [`SET LOCAL lock_timeout = '5s'`, `DROP INDEX IF EXISTS items_search`],
 };
+
+export const TENANT_BACKFILL: PgMigrationDefinition = {
+  id: "sessions/store/0050-tenant-backfill",
+  statements: [
+    `INSERT INTO tenants(id)
+     SELECT id FROM qm_tenant
+     ON CONFLICT (id) DO NOTHING`,
+  ],
+};
+
+export const SESSION_MIGRATIONS = [
+  TENANCY_BASE,
+  SESSION_SCHEMA,
+  MESSAGE_SEARCH_INDEX,
+  DROP_ITEMS_SEARCH,
+  TENANT_BACKFILL,
+];

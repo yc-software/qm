@@ -4,6 +4,7 @@ import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { isPersonAuthored, resolveTurnOrigin } from "../core/turn-origin.ts";
 import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
+import { sleep } from "../util/async.ts";
 
 type RunStatus = "pending" | "running" | "done" | "failed";
 
@@ -110,7 +111,7 @@ export interface RunStore {
 
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
-  releaseLease(runId: string, leaseToken: string, stop?: RunStop): Promise<boolean>;
+  releaseLease(runId: string, leaseToken: string, stop?: RunStop, retryAfter?: number): Promise<boolean>;
 
   complete(runId: string, leaseToken: string, result: TurnResult): Promise<boolean>;
 
@@ -152,10 +153,10 @@ export interface RunStore {
 
   list(opts?: { limit?: number; threadRef?: string }): Promise<Run[]>;
 
-  reapExpired(
-    onRetired?: (sessionIds: string[]) => Promise<void>,
-    opts?: { maxAgeMs?: number; onReap?: (event: ReapEvent) => void },
-  ): Promise<{ requeued: number; parked: number }>;
+  reapExpired(opts?: {
+    maxAgeMs?: number;
+    onReap?: (event: ReapEvent) => void;
+  }): Promise<{ requeued: number; parked: number }>;
 
   waitFor(runId: string, timeoutMs?: number): Promise<Run>;
 
@@ -167,8 +168,30 @@ export function isTerminal(status: Run["status"]): boolean {
   return TERMINAL.has(status);
 }
 
-export function releasesDedupKey(result: TurnResult): boolean {
-  return result.refusalKind === "session_busy";
+const IDLE_POLL_MS = 250;
+
+export async function hasRunningRun(
+  runs: Pick<RunStore, "inFlightForThread">,
+  threadRef: string,
+  exceptLeaseToken?: string,
+): Promise<boolean> {
+  return (await runs.inFlightForThread(threadRef)).some(
+    (run) => run.status === "running" && (exceptLeaseToken === undefined || run.leaseToken !== exceptLeaseToken),
+  );
+}
+
+export async function waitForNoRunningRun(
+  runs: Pick<RunStore, "inFlightForThread">,
+  threadRef: string,
+  budgetMs: number,
+  exceptLeaseToken?: string,
+): Promise<boolean> {
+  const deadline = Date.now() + budgetMs;
+  while (await hasRunningRun(runs, threadRef, exceptLeaseToken)) {
+    if (Date.now() >= deadline) return false;
+    await sleep(Math.min(IDLE_POLL_MS, deadline - Date.now()), { unref: true });
+  }
+  return true;
 }
 
 export function countedClaims(run: Pick<Run, "attempts" | "preemptions">): number {

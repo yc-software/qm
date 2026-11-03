@@ -528,8 +528,8 @@ test("disabled swarms park queued notifications once without running the model o
     assert.equal(completed.result?.reason, "swarm service unavailable");
     assert.equal(swarmModelCalls, 0);
     assert.equal(runResultDelivery(completed), null);
-    const entries = await built.sessions.getEntries(root.id);
-    assert.ok(!entries.some((entry) => JSON.stringify(entry.payload).includes("turn_failure")));
+    const items = await built.sessions.getItems(root.id);
+    assert.ok(!items.some((item) => JSON.stringify(item).includes("turn_failure")));
     for (const [surface, threadRef] of [
       ["swarm", "worker"],
       ["web", "swarm:root:worker"],

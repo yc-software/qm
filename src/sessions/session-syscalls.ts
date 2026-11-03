@@ -1,3 +1,4 @@
+import { entryFromItem } from "./items.ts";
 import { commonEntrySeqs } from "./transcript-source.ts";
 import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
 import { TURN_STOPPED_KIND } from "../agent/replay.ts";
@@ -9,7 +10,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
@@ -214,7 +215,7 @@ interface SessionSyscallBinding {
 }
 
 export interface SessionSyscalls {
-  receive?(timeoutMs?: number): Promise<SessionMessage[]>;
+  receive?(timeoutMs?: number, signal?: AbortSignal): Promise<SessionMessage[]>;
   acknowledge?(ids: string[]): Promise<void>;
   open(input: SessionOpenInput): Promise<SessionOpenResult>;
   write(input: SessionWriteInput): Promise<SessionWriteResult>;
@@ -242,9 +243,8 @@ export interface SessionSyscallDeps {
     | "childrenOf"
     | "addParticipant"
     | "updateTitle"
-    | "getEntries"
-    | "latestEntrySeq"
-    | "visibleEntries"
+    | "latestItemSeq"
+    | "visibleItems"
     | "getForParticipant"
   >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey" | "get" | "withdraw">;
@@ -404,8 +404,12 @@ export async function sessionTreeRoot(sessions: Pick<SessionStore, "get">, sessi
   return (await sessionAncestors(sessions, session)).at(-1) ?? session;
 }
 
-export async function stoppableAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
-  return (await sessionAncestors(sessions, session)).filter((ancestor) => ancestor.scopeId === session.scopeId);
+export async function stoppableRoot(
+  sessions: Pick<SessionStore, "sameScopeAncestors">,
+  session: Session,
+): Promise<Session | undefined> {
+  if (!session.parentSessionId) return undefined;
+  return (await sessions.sameScopeAncestors([session.threadRef])).find((ancestor) => !ancestor.parentSessionId);
 }
 
 export async function sessionTreeWorking(
@@ -420,22 +424,14 @@ export async function sessionTreeWorking(
 }
 
 export async function workingSessionThreadRefs(
-  sessions: Pick<SessionStore, "get" | "getByThread">,
+  sessions: Pick<SessionStore, "sameScopeAncestors">,
   runs: Pick<RunStore, "activeSessionIds">,
   awaitingSessionIds: ReadonlySet<string>,
 ): Promise<Set<string>> {
   const active = await runs.activeSessionIds();
   const working = new Set(active);
-  await Promise.all(
-    active
-      .map(async (threadRef) => {
-        const session = await sessions.getByThread(threadRef);
-        if (!session?.parentSessionId) return;
-        for (const ancestor of await stoppableAncestors(sessions, session))
-          if (!awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
-      })
-      .map((lookup) => lookup.catch(swallowAs("session list: working ancestors", undefined))),
-  );
+  for (const ancestor of await sessions.sameScopeAncestors(active))
+    if (!ancestor.parentSessionId && !awaitingSessionIds.has(ancestor.id)) working.add(ancestor.threadRef);
   return working;
 }
 
@@ -558,11 +554,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           : [binding.request.actor];
         const views = await Promise.all(
           [...new Set([binding.request.actor.id, ...audience.map((p) => p.id)])].map((id) =>
-            deps.sessions.visibleEntries(target.id, id),
+            deps.sessions.visibleItems(target.id, id),
           ),
         );
         const allowed = commonEntrySeqs(views);
-        return (views[0] ?? []).filter((entry) => allowed.has(entry.seq));
+        return (views[0] ?? [])
+          .filter((item) => allowed.has(item.seq))
+          .map((item) => entryFromItem(item, target.scopeId));
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {
@@ -587,7 +585,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       }
 
       return {
-        async receive(timeoutMs = 0) {
+        async receive(timeoutMs = 0, signal) {
           const deadline = Date.now() + Math.min(60_000, Math.max(0, timeoutMs));
           do {
             binding.request.cancel?.throwIfAborted();
@@ -611,8 +609,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ]);
                   const readable = await Promise.all(
                     [...viewers].map(async (id) =>
-                      (await deps.sessions.visibleEntries(sender.id, id)).some(
-                        (entry) => entry.seq === message.sourceEntrySeq && entry.scopeLabel === binding.scopeId,
+                      (await deps.sessions.visibleItems(sender.id, id)).some(
+                        (item) => item.seq === message.sourceEntrySeq,
                       ),
                     ),
                   );
@@ -624,7 +622,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 continue;
               }
             }
-            if (visible.length || Date.now() >= deadline) return visible;
+            if (visible.length || Date.now() >= deadline || signal?.aborted) return visible;
             await sleep(Math.min(250, deadline - Date.now()));
           } while (Date.now() <= deadline);
           return [];
@@ -807,7 +805,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
               const busy = (await deps.runs.inFlightForThread(target.threadRef)).length > 0;
               const leaveMail = async (notWoken?: string): Promise<SessionWriteResult> => {
-                const sourceEntrySeq = await deps.sessions.latestEntrySeq(binding.session.id);
+                const sourceEntrySeq = await deps.sessions.latestItemSeq(binding.session.id);
                 await deps.mailbox.send({
                   id: input.requestId
                     ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
@@ -1040,7 +1038,7 @@ export interface SubagentMailDeps {
   deliveries?: Pick<DeliveryStore, "enqueue">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
+  sessions: Pick<SessionStore, "get" | "getByThread" | "latestItemSeq" | "visibleItems">;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> &
     Partial<Pick<RunStore, "latestForThread" | "get">>;
   maxAttempts: number;
@@ -1133,7 +1131,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "runLeaseToken",
     "runStartedAt",
     "finalAttempt",
-    "background",
     "cancel",
     "shutdown",
     "modelAccount",
@@ -1159,8 +1156,8 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
   if (outputSeq !== undefined && outputSeq !== null) {
     for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
-      const visible = await deps.sessions.visibleEntries(child.id, id);
-      if (!visible.some((entry) => entry.seq === outputSeq))
+      const visible = await deps.sessions.visibleItems(child.id, id);
+      if (!visible.some((item) => item.seq === outputSeq))
         throw new Error("the current parent audience cannot read this child result");
     }
   }

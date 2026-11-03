@@ -80,6 +80,10 @@ infrastructure-administrator credentials before enabling `check --live`. This
 adds the deploy role's stack-scoped permission to run and inspect the one-off
 core canary task.
 
+Core's ECS `stopTimeout` defaults to `env.core.SHUTDOWN_DRAIN_MS` (default 30000) plus 30 seconds, so a replaced core task can hand its turns to the new
+one before ECS kills it. Fargate allows at most 120 seconds, so keep the drain at
+or below 90000 or pin `aws.services.core.stopTimeout`.
+
 The package image manifest supplies first-party control-plane images. The AWS
 backend transfers them into deployment-owned ECR and records immutable digests.
 After the first successful deployment, rerun `npm exec qm -- up --yes` and

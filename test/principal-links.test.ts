@@ -497,6 +497,57 @@ describe("link mutation serialization", () => {
 });
 
 describe("canonical portal claims retain proof of the original sign-in", () => {
+  it("verifies a linked sign-in without reloading identity, and reloads once to see a link made elsewhere", async () => {
+    const secret = "authenticated-as-test-secret-0123456789";
+    const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-link-reload-")) }));
+    const backing = testMap<PrincipalLink>();
+    let loads = 0;
+    const counted = new Proxy(backing, {
+      get: (target, key, receiver) =>
+        key === "all"
+          ? () => {
+              loads++;
+              return target.all();
+            }
+          : Reflect.get(target, key, receiver),
+    });
+    const links = createPrincipalLinkService(counted, testAdvisoryLock());
+    const identity = createIdentityService(testMap(), { externalMembers: testMap(), principalLinks: links });
+    installPrincipalLinks(links);
+    await identity.refresh(true);
+    const server = createInsecureTestServer(app.app, {
+      portalIdentitySecret: secret,
+      requireSignedPortalIdentity: true,
+      identity,
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    const get = async () =>
+      (
+        await fetch(`${base}/v1/sessions/missing?viewer=${encodeURIComponent(EMAIL)}`, {
+          headers: {
+            "x-portal-identity": await mintSignedPayload(
+              { p: EMAIL, authenticatedAs: OIDC, exp: Date.now() + 60000 },
+              secret,
+            ),
+          },
+        })
+      ).status;
+    try {
+      assert.equal(await get(), 401);
+      const replica = createPrincipalLinkService(backing, testAdvisoryLock());
+      await replica.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
+      assert.equal(await get(), 404, "a link made on another replica is honored on the next request");
+      const settled = loads;
+      assert.equal(await get(), 404);
+      assert.equal(await get(), 404);
+      assert.equal(loads, settled, "a verified sign-in does not reload identity from Postgres");
+    } finally {
+      installPrincipalLinks(null);
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("accepts a linked sign-in and rejects its stale canonical claim after unlink", async () => {
     const secret = "authenticated-as-test-secret-0123456789";
     const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-link-proof-")) }));

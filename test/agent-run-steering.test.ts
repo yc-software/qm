@@ -3,7 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
-import { promptEnvelopeBody, type NewEntry } from "../src/sessions/session-store.ts";
+import { promptEnvelopeBody } from "../src/sessions/session-store.ts";
+import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -23,10 +24,10 @@ function turnInput(sessionId: string, sink: Sink, overrides: Partial<AgentTurnIn
     tools: {} as AgentTurnInput["tools"],
     scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
-    emit: async (entry: NewEntry) => {
-      const appended = { ...entry, seq: seq++, createdAt: Date.now() };
-      sink.entries.push({ seq: appended.seq, type: entry.type, payload: entry.payload });
-      return appended as unknown as SessionEntry;
+    emit: async (item) => {
+      const stored = storedItem(item, { sessionId, seq: seq++, createdAt: Date.now() });
+      sink.entries.push(entryFromItem(stored, "personal:tester"));
+      return stored;
     },
     recordModelCall: () => {},
     ...overrides,
@@ -79,7 +80,7 @@ function gatedSse(events: Array<Record<string, unknown>>, gate: Promise<void>): 
 for (const variant of ["text", "images", "documents", "finished during preparation"]) {
   const withImages = variant !== "text";
   const finishDuringPreparation = variant === "finished during preparation";
-  test(`steered input lands in consumption order, including steered ${variant}`, async () => {
+  test(`steered input lands in consumption order, including steered ${variant}`, { timeout: 60_000 }, async () => {
     const signals = createPostgresRunSignalStore(testDatabaseUrl());
     const agent = createAgent({ apiKey: "sk-test", signals });
     const sink: Sink = { entries: [] };
@@ -99,15 +100,6 @@ for (const variant of ["text", "images", "documents", "finished during preparati
       if (calls === 1) {
         setTimeout(() => {
           void signals.send("run-order", { kind: "steer", text: "actually, do it differently", ts: "1712.001" });
-          if (!finishDuringPreparation)
-            setTimeout(() => {
-              assert.equal(
-                sink.entries.filter((entry) => entry.type === "user").length,
-                1,
-                "enqueue is not model intake",
-              );
-              releaseFirstStep();
-            }, 100);
         }, 30);
         const events = textReplyEvents("first step");
         if (variant === "text") {
@@ -127,24 +119,33 @@ for (const variant of ["text", "images", "documents", "finished during preparati
     try {
       const turn = turnInput("steer-order", sink, { runId: "run-order" });
       const emit = turn.emit;
-      turn.emit = async (entry) => {
-        if (entry.type === "thinking") await new Promise((resolve) => setTimeout(resolve, 100));
-        return emit(entry);
+      turn.emit = async (item) => {
+        if (item.kind === "Reasoning") await new Promise((resolve) => setTimeout(resolve, 100));
+        return emit(item);
       };
-      if (withImages)
-        turn.prepareSteer = async (text) => {
-          if (finishDuringPreparation) {
+      turn.prepareSteer = async (text) => {
+        if (finishDuringPreparation) {
+          releaseFirstStep();
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        } else {
+          setTimeout(() => {
             releaseFirstStep();
-            await new Promise((resolve) => setTimeout(resolve, 150));
-          }
-          return {
-            text: `${text}\nFile available in inbox/photo.png`,
-            images: [{ mimeType: "image/png", dataBase64: "YWJj", artifactId: "steered-photo" }],
-            ...(variant === "documents"
-              ? { documents: [{ name: "steered.pdf", mimeType: "application/pdf", dataBase64: documentBase64 }] }
-              : {}),
-          };
+            assert.equal(
+              sink.entries.filter((entry) => entry.type === "user").length,
+              1,
+              "enqueue is not model intake",
+            );
+          });
+        }
+        if (!withImages) return { text };
+        return {
+          text: `${text}\nFile available in inbox/photo.png`,
+          images: [{ mimeType: "image/png", dataBase64: "YWJj", artifactId: "steered-photo" }],
+          ...(variant === "documents"
+            ? { documents: [{ name: "steered.pdf", mimeType: "application/pdf", dataBase64: documentBase64 }] }
+            : {}),
         };
+      };
       const result = await agent.runTurn(turn);
       if (finishDuringPreparation) {
         assert.equal(result.reply, "first step");
@@ -189,26 +190,22 @@ for (const variant of ["text", "images", "documents", "finished during preparati
   });
 }
 
-test("a lease lost mid-turn fails the turn instead of degrading silently", async () => {
+test("a session deleted mid-turn fails the turn instead of degrading silently", async () => {
   const agent = createAgent({ apiKey: "sk-test" });
   const sink: Sink = { entries: [] };
   const store = createPostgresSessionStore(testDatabaseUrl());
-  const session = await store.getOrCreateByThread("dm:lease-lost", "dm", "personal:tester" as ScopeId);
-  const attempt = await store.acquireLease(session.id, "turn");
-  const lease = attempt.lease!;
-  assert.ok(lease);
+  const session = await store.getOrCreateByThread("dm:session-deleted", "dm", "personal:tester" as ScopeId);
+  const writer = { sessionId: session.id };
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
-    await store.releaseLease(lease);
-    const thief = await store.acquireLease(session.id, "turn");
-    assert.ok(thief.lease);
-    return sse(textReplyEvents("reply after the lease was stolen"));
+    await store.deleteSession(session.id);
+    return sse(textReplyEvents("reply after the session was deleted"));
   }) as typeof globalThis.fetch;
   try {
     const turn = turnInput(session.id, sink, {
-      emit: (entry) => store.append(lease, entry),
+      emit: (entry) => store.append(writer, entry),
     });
-    await assert.rejects(agent.runTurn(turn), /without a valid session lease/);
+    await assert.rejects(agent.runTurn(turn), /foreign key/);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -220,8 +217,7 @@ test("completed Pi attach results retain openable files in viewer history", asyn
   const scopeLabel = "personal:tester" as ScopeId;
   const session = await store.getOrCreateByThread("web:tester:attach-history", "dm", scopeLabel);
   await store.addParticipant(session.id, "tester", undefined, { includeHistory: true });
-  const { lease } = await store.acquireLease(session.id);
-  assert.ok(lease);
+  const writer = { sessionId: session.id };
   const files = [
     { name: "desktop.png", mimetype: "image/png", sizeBytes: 123, artifactId: "desktop" },
     { name: "phone.png", mimetype: "image/png", sizeBytes: 456, artifactId: "phone" },
@@ -256,25 +252,24 @@ test("completed Pi attach results retain openable files in viewer history", asyn
           tools: {
             attach: async () => ({ ok: true, files, staged: files.length }),
           } as unknown as AgentTurnInput["tools"],
-          emit: (entry) => store.append(lease, entry),
+          emit: (entry) => store.append(writer, entry),
         },
       ),
     );
     assert.equal(result.reply, "Here are the previews.");
     assert.equal(calls, 2);
-    const original = (await store.getEntries(session.id)).find((e) => e.type === "tool_result");
+    const original = (await store.getItems(session.id)).find((item) => item.kind === "ToolResult");
     assert.ok(original);
-    assert.deepEqual((original.payload as { files?: unknown[] }).files, files);
+    assert.deepEqual(original.body.files, files);
     const source = createTranscriptSource(store);
     for (const read of [await source.forRender(session.id), await source.forViewer(session.id, "tester")]) {
-      const restored = read.entries.find((e) => e.type === "tool_result");
+      const restored = read.items.find((item) => item.kind === "ToolResult");
       assert.ok(restored);
-      assert.deepEqual((restored.payload as { files?: unknown[] }).files, files);
+      assert.deepEqual(restored.body.files, files);
       assert.deepEqual(restored, original);
     }
   } finally {
     globalThis.fetch = realFetch;
-    await store.releaseLease(lease);
   }
 });
 
@@ -415,12 +410,21 @@ test("Pi Responses captures exclude history and document text without changing r
 });
 
 for (const stopBeforeIntake of [false, true]) {
-  test(`steering during a tool ${stopBeforeIntake ? "survives Stop without fabricated intake" : "lands after its result in live and stored order"}`, async () => {
+  const name = `steering during a tool ${stopBeforeIntake ? "survives Stop without fabricated intake" : "lands after its result in live and stored order"}`;
+  test(name, { timeout: 60_000 }, async () => {
     const signals = createPostgresRunSignalStore(testDatabaseUrl());
+    let stopTaken = () => {};
+    const stopped = new Promise<void>((resolve) => (stopTaken = resolve));
+    const pending = signals.pending.bind(signals);
+    signals.pending = async (runId) => {
+      const rows = await pending(runId);
+      if (rows.some((row) => row.signal.kind === "abort")) setTimeout(stopTaken);
+      return rows;
+    };
     const agent = createAgent({ apiKey: "sk-test", signals });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread("web:steer-tool", "dm", "personal:tester" as ScopeId);
-    const lease = (await store.acquireLease(session.id, "turn")).lease!;
+    const writer = { sessionId: session.id };
     const realFetch = globalThis.fetch;
     let calls = 0;
     globalThis.fetch = (async () => {
@@ -440,6 +444,8 @@ for (const stopBeforeIntake of [false, true]) {
       return sse(events);
     }) as typeof fetch;
     const entries: SessionEntry[] = [];
+    let steerTaken = () => {};
+    const taken = new Promise<void>((resolve) => (steerTaken = resolve));
     try {
       await agent.runTurn(
         turnInput(
@@ -451,19 +457,23 @@ for (const stopBeforeIntake of [false, true]) {
             tools: {
               memoryRead: async () => {
                 await signals.send("tool-steer", { kind: "steer", text: "use the other file", ts: "tool.1" });
-                await new Promise((resolve) => setTimeout(resolve, 30));
+                await taken;
                 assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
                 assert.equal((await signals.pending("tool-steer")).length, 1);
                 if (stopBeforeIntake) {
                   await signals.send("tool-steer", { kind: "abort" });
-                  await new Promise((resolve) => setTimeout(resolve, 30));
+                  await stopped;
                 }
                 return "saved facts";
               },
             } as AgentTurnInput["tools"],
+            prepareSteer: async (text) => {
+              setTimeout(steerTaken);
+              return { text };
+            },
             emit: async (entry) => {
-              const saved = await store.append(lease, entry);
-              entries.push(saved);
+              const saved = await store.append(writer, entry);
+              entries.push(entryFromItem(saved, session.scopeId));
               return saved;
             },
           },
@@ -483,20 +493,80 @@ for (const stopBeforeIntake of [false, true]) {
         );
         assert.equal((users[1]!.payload as { ts?: string }).ts, "tool.1");
         assert.deepEqual(
-          (await store.getEntries(session.id)).map((entry) => [entry.seq, entry.type]),
+          (await store.getItems(session.id)).map((item) => [item.seq, entryFromItem(item, session.scopeId).type]),
           entries.map((entry) => [entry.seq, entry.type]),
         );
         assert.equal((await signals.pending("tool-steer")).length, 0);
       }
     } finally {
       globalThis.fetch = realFetch;
-      await store.releaseLease(lease);
       await agent.close?.();
     }
   });
 }
 
-test("a consumed steer is recorded when its acknowledgement fails", async () => {
+test("a steer wakes a waiting background poll and lands without waiting out the poll", async () => {
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
+  const agent = createAgent({ apiKey: "sk-test", signals });
+  const sink: Sink = { entries: [] };
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    if (++calls > 2) return sse(textReplyEvents("done"));
+    const events = textReplyEvents("");
+    events[1] = {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: `poll-job-${calls}`, name: "background", input: {} },
+    };
+    events[2] = {
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "input_json_delta",
+        partial_json: JSON.stringify({ action: "poll", process_id: "job-1", wait_seconds: calls === 1 ? 30 : 1 }),
+      },
+    };
+    events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
+    return sse(events);
+  }) as typeof fetch;
+  const waits: Array<number | undefined> = [];
+  try {
+    const started = Date.now();
+    const result = await agent.runTurn(
+      turnInput("steer-poll", sink, {
+        runId: "steer-poll",
+        tools: {
+          backgroundPoll: async (processId: string, opts?: { waitSeconds?: number }) => {
+            waits.push(opts?.waitSeconds);
+            if (opts?.waitSeconds === 30) {
+              await signals.send("steer-poll", { kind: "steer", text: "check the other job", ts: "poll.1" });
+              await new Promise((resolve) => setTimeout(resolve, 30_000).unref());
+            }
+            if (opts?.waitSeconds === 1) await new Promise((resolve) => setTimeout(resolve, 1_000));
+            return { processId, chunks: "still building", cursor: 14, status: { state: "running" } };
+          },
+        } as unknown as AgentTurnInput["tools"],
+      }),
+    );
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 10_000, "the steer does not wait out the 30 s poll");
+    assert.ok(elapsed >= 1_000, "a wait after the steer landed is not woken again");
+    assert.equal(result.reply, "done");
+    assert.deepEqual(waits, [30, undefined, 1]);
+    assert.deepEqual(
+      sink.entries.map((entry) => entry.type),
+      ["user", "tool_call", "tool_result", "user", "tool_call", "tool_result", "assistant"],
+    );
+    assert.equal((sink.entries[3]!.payload as { ts?: string }).ts, "poll.1");
+    assert.match(String((sink.entries[2]!.payload as { result?: unknown }).result), /still building/);
+  } finally {
+    globalThis.fetch = realFetch;
+    await agent.close?.();
+  }
+});
+
+test("a consumed steer is recorded when its acknowledgement fails", { timeout: 60_000 }, async () => {
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   signals.acknowledge = async () => {
     throw new Error("signal store unavailable");
@@ -521,13 +591,19 @@ test("a consumed steer is recorded when its acknowledgement fails", async () => 
     events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
     return sse(events);
   }) as typeof fetch;
+  let steerTaken = () => {};
+  const taken = new Promise<void>((resolve) => (steerTaken = resolve));
   try {
     const turn = turnInput("steer-failure", sink, {
       runId: "steer-failure",
+      prepareSteer: async (text) => {
+        setTimeout(steerTaken);
+        return { text };
+      },
       tools: {
         memoryRead: async () => {
           await signals.send("steer-failure", { kind: "steer", text: "use the other file", ts: "fail.1" });
-          await new Promise((resolve) => setTimeout(resolve, 30));
+          await taken;
           return "saved facts";
         },
       } as AgentTurnInput["tools"],
@@ -551,11 +627,11 @@ test("a consumed steer is recorded when its acknowledgement fails", async () => 
 });
 
 for (const abort of ["shutdown", "stop"] as const) {
-  test(`a Pi tool result recorded after ${abort === "shutdown" ? "shutdown is marked interrupted and leaves its call open" : "a user Stop stays a real answer"}`, async () => {
+  test(`a tool still running at ${abort === "shutdown" ? "shutdown is recorded interrupted and replays its cause" : "a user Stop is recorded stopped and answered"} without waiting for it`, async () => {
     const agent = createAgent({ apiKey: "sk-test" });
     const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
-    const lease = (await store.acquireLease(session.id, "turn")).lease!;
+    const writer = { sessionId: session.id };
     const realFetch = globalThis.fetch;
     let calls = 0;
     globalThis.fetch = (async () => {
@@ -577,6 +653,7 @@ for (const abort of ["shutdown", "stop"] as const) {
     const shutdown = new AbortController();
     const cancel = new AbortController();
     const entries: SessionEntry[] = [];
+    const toolFinished = Promise.withResolvers<void>();
     try {
       await agent.runTurn(
         turnInput(
@@ -591,35 +668,34 @@ for (const abort of ["shutdown", "stop"] as const) {
               memoryRead: async () => {
                 if (abort === "shutdown") shutdown.abort();
                 cancel.abort();
-                await new Promise((resolve) => setTimeout(resolve, 10));
+                await toolFinished.promise;
                 return "[exit 143]";
               },
             } as AgentTurnInput["tools"],
             emit: async (entry) => {
-              const saved = await store.append(lease, entry);
-              entries.push(saved);
+              const saved = await store.append(writer, entry);
+              entries.push(entryFromItem(saved, session.scopeId));
               return saved;
             },
           },
         ),
       );
-      const result = entries.find((entry) => entry.type === "tool_result");
-      assert.ok(result);
+      toolFinished.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const results = entries.filter((entry) => entry.type === "tool_result");
+      assert.equal(results.length, 1, "the late tool outcome does not add a second result");
       assert.deepEqual(
-        (({ interrupted, result }) => ({ interrupted, result }))(result.payload as Record<string, unknown>),
-        abort === "shutdown"
-          ? { interrupted: true, result: "[exit 143]" }
-          : { interrupted: undefined, result: "[exit 143]" },
+        (({ interrupted, stopped }) => ({ interrupted, stopped }))(results[0]!.payload as Record<string, unknown>),
+        abort === "shutdown" ? { interrupted: true, stopped: undefined } : { interrupted: undefined, stopped: true },
       );
       const { resumeStrategy } = await import("../src/core/turn-resume.ts");
       const userSeq = entries.find((entry) => entry.type === "user")!.seq;
       assert.equal(
         resumeStrategy(entries, { userSeq, workEntries: entries.filter((e) => e.seq > userSeq).length }).kind,
-        abort === "shutdown" ? "retry" : "continue",
+        "continue",
       );
     } finally {
       globalThis.fetch = realFetch;
-      await store.releaseLease(lease);
       await agent.close?.();
     }
   });

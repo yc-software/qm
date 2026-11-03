@@ -41,10 +41,10 @@ test("the one-shot runner builds an isolated read-only turn with no history", as
   assert.equal(turn.runtime, undefined);
   assert.equal(turn.cancel, undefined);
   assert.equal(turn.recordLlmRequest, undefined);
-  const emitted = await turn.emit({ type: "user", payload: { text: "x" }, scopeLabel: turn.scopeLabel });
+  const emitted = await turn.emit({ kind: "UserMessage", text: "x" });
   assert.equal(emitted.seq, 1);
   assert.equal(emitted.sessionId, turn.session.id);
-  assert.equal((await turn.emit({ type: "assistant", payload: { text: "y" }, scopeLabel: turn.scopeLabel })).seq, 2);
+  assert.equal((await turn.emit({ kind: "AgentMessage", text: "y" })).seq, 2);
 });
 
 test("the one-shot runner plumbs signal, instrumentation, and model override positionally", async () => {
