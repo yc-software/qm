@@ -7,6 +7,7 @@ import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/pers
 import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testDeployBackings } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the deploy access tests";
@@ -70,7 +71,7 @@ test("touch upserts deployment_access without rewriting the blob or bumping the 
   const d = await store.create(createInput());
   const versionBefore = (await raw("SELECT v FROM durable_map_versions WHERE tbl = 'deployments'"))[0]!.v;
 
-  await store.touch(d.id, 111);
+  await inTestTenant(() => store.touch(d.id, 111));
   assert.equal((await store.get(d.id))!.lastAccessAt, 111);
   assert.equal((await store.list()).find((x) => x.id === d.id)!.lastAccessAt, 111);
 
@@ -79,7 +80,7 @@ test("touch upserts deployment_access without rewriting the blob or bumping the 
   const versionAfter = (await raw("SELECT v FROM durable_map_versions WHERE tbl = 'deployments'"))[0]!.v;
   assert.equal(String(versionAfter), String(versionBefore), "touch does not invalidate the table snapshot cache");
 
-  await store.touch("missing-id", 5);
+  await inTestTenant(() => store.touch("missing-id", 5));
   assert.equal((await raw("SELECT count(*) c FROM deployment_access WHERE id = 'missing-id'"))[0]!.c, "0");
 
   await raw("DELETE FROM deployments WHERE id = $1", [d.id]);
@@ -95,21 +96,21 @@ test("touch keeps the max across instances (GREATEST) and debounces per instance
   const b = makeStore({ touchDebounceMs: 0 }).store;
   const d = await a.create(createInput());
 
-  await a.touch(d.id, 2_000);
-  await b.touch(d.id, 500);
+  await inTestTenant(() => a.touch(d.id, 2_000));
+  await inTestTenant(() => b.touch(d.id, 500));
   assert.equal((await b.get(d.id))!.lastAccessAt, 2_000, "a late lower write never regresses last-access");
-  await b.touch(d.id, 3_000);
+  await inTestTenant(() => b.touch(d.id, 3_000));
   assert.equal((await a.get(d.id))!.lastAccessAt, 3_000);
 
   const debounced = makeStore().store;
-  await debounced.touch(d.id, 10_000);
-  await debounced.touch(d.id, 50_000);
+  await inTestTenant(() => debounced.touch(d.id, 10_000));
+  await inTestTenant(() => debounced.touch(d.id, 50_000));
   assert.equal(
     Number((await raw("SELECT last_access_at FROM deployment_access WHERE id = $1", [d.id]))[0]!.last_access_at),
     10_000,
     "a touch inside the 60s window is skipped",
   );
-  await debounced.touch(d.id, 70_001);
+  await inTestTenant(() => debounced.touch(d.id, 70_001));
   assert.equal((await debounced.get(d.id))!.lastAccessAt, 70_001);
 });
 
@@ -118,7 +119,7 @@ test("getByName resolves by indexed SQL lookup and hydrates last-access", { skip
   const d = await store.create(createInput("slug-app"));
   assert.equal((await store.getByName("slug-app"))!.id, d.id);
   assert.equal(await store.getByName("no-such-app"), null);
-  await store.touch(d.id, 4_242);
+  await inTestTenant(() => store.touch(d.id, 4_242));
   assert.equal((await store.getByName("slug-app"))!.lastAccessAt, 4_242);
 });
 
@@ -142,7 +143,7 @@ test("rows never touched since the split fall back to the blob's legacy lastAcce
   const d = await store.create(createInput());
   await factory.map<Deployment>("deployments").merge(d.id, { lastAccessAt: 777 } as Partial<Deployment>);
   assert.equal((await store.get(d.id))!.lastAccessAt, 777);
-  await store.touch(d.id, 9_999);
+  await inTestTenant(() => store.touch(d.id, 9_999));
   assert.equal((await store.get(d.id))!.lastAccessAt, 9_999, "the access table wins once a touch lands");
 });
 

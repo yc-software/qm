@@ -19,6 +19,7 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 test("deploy versions are immutable and rollback flips the pointer", async () => {
   const s = createDeployStore(testDeployBackings());
@@ -183,10 +184,10 @@ test("touch records last-access for scale-to-zero (C3)", async () => {
     snapshotDir: "/snap",
   });
   assert.equal((await s.get(d.id))!.lastAccessAt, undefined);
-  await s.touch(d.id, 12345);
+  await inTestTenant(() => s.touch(d.id, 12345));
   assert.equal((await s.get(d.id))!.lastAccessAt, 12345);
   assert.equal((await s.list()).find((x) => x.id === d.id)!.lastAccessAt, 12345);
-  await s.touch("nope", 1);
+  await inTestTenant(() => s.touch("nope", 1));
 });
 
 test("the touch debounce is clamped well under the reap TTL so steady traffic never looks idle", () => {
@@ -205,10 +206,10 @@ test("touch is debounced per id within the window", async () => {
     entrypoint: "node s.js",
     snapshotDir: "/snap",
   });
-  await s.touch(d.id, 1_000);
-  await s.touch(d.id, 5_000);
+  await inTestTenant(() => s.touch(d.id, 1_000));
+  await inTestTenant(() => s.touch(d.id, 5_000));
   assert.equal((await s.get(d.id))!.lastAccessAt, 1_000, "a touch inside the window is skipped");
-  await s.touch(d.id, 11_001);
+  await inTestTenant(() => s.touch(d.id, 11_001));
   assert.equal((await s.get(d.id))!.lastAccessAt, 11_001, "a touch past the window writes");
 });
 
@@ -226,7 +227,7 @@ test("touch does not rewrite the deployment blob and falls back to the blob's le
 
   const s2 = createDeployStore({ ...backing, touchDebounceMs: 0 });
   assert.equal((await s2.get(d.id))!.lastAccessAt, 777, "a never-touched row reads the blob's value");
-  await s2.touch(d.id, 9_999);
+  await inTestTenant(() => s2.touch(d.id, 9_999));
   assert.equal((await s2.get(d.id))!.lastAccessAt, 9_999);
   assert.equal((await deployments.get(d.id))!.lastAccessAt, 777, "the blob is not rewritten by touch");
 });
