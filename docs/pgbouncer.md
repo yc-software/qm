@@ -2,7 +2,7 @@
 
 Keep DATABASE_URL pointed at PostgreSQL. Set DATABASE_POOL_URL to a transaction-mode PgBouncer endpoint with the same database and credentials. Set DATABASE_POOL_CA_CERT to the PEM CA certificate for that endpoint to verify its TLS identity independently of the direct database's configured trust.
 
-Ordinary queries and transactions use the pooled endpoint. Session advisory locks and LISTEN subscriptions use separate direct connections. Schema initialization and dynamic migrations use a separate direct migration pool. pg-boss retains its existing direct endpoint, including its notification connection.
+Ordinary queries and transactions use the pooled endpoint. Session advisory locks and LISTEN subscriptions use separate direct connections. Schema initialization and dynamic migrations use a separate direct migration pool. pg-boss uses the query pool.
 
 Each process holds at most 20 query connections and 64 session connections. Migrations use a shared one-connection pool. Count every process, database and pooler replica when calculating database capacity; PgBouncer limits are per database/user and per pooler process.
 
