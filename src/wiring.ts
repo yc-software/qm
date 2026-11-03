@@ -818,7 +818,6 @@ export function buildApp(
     createLocalSandbox(workspace, {
       ...config.localSandbox,
       onError: sandboxOnError,
-      tenants: pgArtifactMap?.pool,
     });
   const buildSprites = (): Sandbox => {
     const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;

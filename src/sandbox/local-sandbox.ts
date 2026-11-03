@@ -1,5 +1,4 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
-import type { PgPool } from "../persistence/pg-pool.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { orgId as configOrgId } from "../config.ts";
 import { arch } from "node:os";
@@ -18,6 +17,7 @@ import { dockerContainerNetworks, ensureDockerNetwork, spawnDockerExec, type Doc
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { shortHash } from "../util/crypto.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
 import type {
@@ -54,10 +54,7 @@ export interface LocalSandboxOptions {
   dockerExec?: DockerExec;
   fetchImpl?: typeof fetch;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
-  tenants: Pick<PgPool, "q"> | undefined;
 }
-
-const SINGLE_TENANT_RECHECK_MS = 60_000;
 
 const FINGERPRINT_FIXED_SOURCES = ["fly/Dockerfile", "local/Dockerfile", "cli/templates/aws/microvm-agent/agent.mjs"];
 
@@ -89,14 +86,15 @@ export const localNetworkName = (containerName: string): string =>
 const localScratchName = (key: string): string => `qm-scratch-${localSlug(key)}`;
 
 function localSlug(id: string): string {
+  const tenant = currentTenant();
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return `${cleaned.slice(0, 40).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
+  return `${tenant.slice(0, 8)}-${cleaned.slice(0, 40).replace(/-+$/, "") || "scope"}-${shortHash(`${tenant}:${id}`)}`;
 }
 
-export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandboxOptions): Sandbox {
+export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandboxOptions = {}): Sandbox {
   const image = opts.image ?? DEFAULT_LOCAL_SANDBOX_IMAGE;
   const dexec = opts.dockerExec ?? spawnDockerExec(opts.dockerBin ?? "docker");
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -109,18 +107,6 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   const scopeByContainer = new Map<string, string>();
   const scratchByKey = new Map<string, string>();
   const activeByContainer = new Map<string, number>();
-
-  let singleTenantUntil = 0;
-  async function requireSingleTenant(): Promise<void> {
-    if (Date.now() < singleTenantUntil) return;
-    if (!opts.tenants) throw new Error("The local Docker sandbox requires the QM database");
-    const tenants = Number((await opts.tenants.q("SELECT count(*) AS n FROM tenants"))[0]?.n);
-    if (tenants !== 1)
-      throw new Error(
-        `The local Docker sandbox shares the host Docker daemon and network, so it serves single-tenant installs only; this database has ${tenants} tenants`,
-      );
-    singleTenantUntil = Date.now() + SINGLE_TENANT_RECHECK_MS;
-  }
 
   let preflightDone: Promise<string> | undefined;
   let staleWarned = false;
@@ -280,6 +266,8 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       "qm.sandbox=1",
       ...(scope ? ["--label", `qm.scope=${scope}`] : []),
       "--label",
+      `qm.tenant=${currentTenant()}`,
+      "--label",
       `qm.org=${configOrgId()}`,
       "--label",
       "agent_env=dev",
@@ -401,7 +389,6 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
     ...execFileOps,
 
     async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
-      await requireSingleTenant();
       const scratch = provOpts?.scratch;
       const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
       const scope = writable?.scopeId ?? "default";

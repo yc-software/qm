@@ -16,8 +16,8 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
-
-const oneTenant = { q: async () => [{ n: 1 }] };
+import { randomUUID } from "node:crypto";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");
@@ -59,7 +59,6 @@ after(() => {
 function makeSandbox(fake: FakeDocker, opts: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "local-ws-"));
   return createLocalSandbox(createLocalWorkspaceStore(dir), {
-    tenants: oneTenant,
     dockerExec: fake.dockerExec,
     homeDir: guestHome,
     repoRoot: tmp,
@@ -68,11 +67,23 @@ function makeSandbox(fake: FakeDocker, opts: Record<string, unknown> = {}) {
 }
 const rw = (scope: string) => [{ scopeId: scope, mountPath: "", mode: "rw" as const }];
 
-test("the local Docker sandbox refuses to provision for a database with more than one tenant", async () => {
+test("two tenants with the same scope get separate containers and home volumes", async () => {
   const fake = installFakeDocker(daemonPort);
-  const sb = makeSandbox(fake, { tenants: { q: async () => [{ n: 2 }] } });
-  await assert.rejects(sb.provision(rw(scopeId("personal", "U1"))), /single-tenant installs only; this database has 2/);
-  assert.equal(fake.runCount, 0);
+  const sb = makeSandbox(fake);
+  const scope = scopeId("personal", "U1");
+  const [a, b] = [randomUUID(), randomUUID()];
+  const first = await withTenant(a, () => sb.provision(rw(scope)));
+  const second = await withTenant(b, () => sb.provision(rw(scope)));
+  assert.notEqual(first.id, second.id);
+  assert.equal(
+    first.id,
+    withTenant(a, () => localContainerName(scope)),
+  );
+  assert.notEqual(
+    withTenant(a, () => localVolumeName(scope)),
+    withTenant(b, () => localVolumeName(scope)),
+  );
+  assert.throws(() => withoutTenant(() => localContainerName(scope)), /No tenant is bound/);
 });
 
 test("profile declares the local Docker substrate honestly", () => {
@@ -247,12 +258,7 @@ test("read-only layers materialize into the workspace once per content fingerpri
   const workspace = createLocalWorkspaceStore(dir);
   const shared = scopeId("org", "default-org");
   await workspace.write(shared, "guide.md", "shared doc");
-  const sb = createLocalSandbox(workspace, {
-    tenants: oneTenant,
-    dockerExec: fake.dockerExec,
-    homeDir: guestHome,
-    repoRoot: tmp,
-  });
+  const sb = createLocalSandbox(workspace, { dockerExec: fake.dockerExec, homeDir: guestHome, repoRoot: tmp });
   const h = await sb.provision([
     { scopeId: scopeId("personal", "U10"), mountPath: "", mode: "rw" as const },
     { scopeId: shared, mountPath: "shared", mode: "ro" as const },

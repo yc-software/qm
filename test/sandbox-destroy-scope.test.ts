@@ -21,7 +21,6 @@ import { installFakeAgent37 } from "./support/fake-agent37.ts";
 import { installFakeDocker } from "./support/fake-docker.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-const oneTenant = { q: async () => [{ n: 1 }] };
 
 const workspace = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "destroy-scope-")));
 
@@ -29,7 +28,6 @@ test("Local scope deletion removes deterministic resources without provisioning,
   const calls: string[][] = [];
   let fail = false;
   const sandbox = createLocalSandbox(workspace(), {
-    tenants: oneTenant,
     dockerExec: async (args) => {
       calls.push(args);
       return fail ? { code: 1, stdout: "", stderr: "daemon unavailable" } : { code: 0, stdout: "", stderr: "" };
@@ -50,7 +48,6 @@ test("Local scope deletion fails a refused core disconnect only while the core i
   const fake = installFakeDocker(0);
   const network = localNetworkName(localContainerName("scope"));
   const sandbox = createLocalSandbox(workspace(), {
-    tenants: oneTenant,
     coreContainer: "qm-core",
     dockerExec: async (args) =>
       args[1] === "disconnect" ? { code: 1, stdout: "", stderr: "is not connected" } : fake.dockerExec(args),
@@ -131,7 +128,6 @@ test("Local deletion retries remaining disk cleanup after partial failure withou
   const calls: string[][] = [];
   let volumeBusy = true;
   const sandbox = createLocalSandbox(workspace(), {
-    tenants: oneTenant,
     dockerExec: async (args) => {
       calls.push(args);
       return args[0] === "volume" && volumeBusy

@@ -10,8 +10,6 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { withTenant } from "../src/tenants/context.ts";
 
-const oneTenant = { q: async () => [{ n: 1 }] };
-
 const log = (...a: unknown[]) => console.log("[local-smoke]", ...a);
 
 if (spawnSync("docker", ["version"], { stdio: "ignore" }).status !== 0) {
@@ -21,7 +19,7 @@ if (spawnSync("docker", ["version"], { stdio: "ignore" }).status !== 0) {
 
 async function main(): Promise<void> {
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "local-smoke-ws-")));
-  const sandbox = createLocalSandbox(ws, { tenants: oneTenant });
+  const sandbox = createLocalSandbox(ws, {});
   const scope = scopeId("personal", `smoke-${Date.now()}`);
   const layers = [{ scopeId: scope, mountPath: "", mode: "rw" as const }];
 
