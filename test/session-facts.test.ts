@@ -169,7 +169,7 @@ test("the session facts migration reads past runs whose stored JSON Postgres can
   try {
     await raw.query(
       `UPDATE runs SET request = replace(request, '"text":"hi"', '"text":"hi\\u0000"'),
-         result = replace(result, '"reply":"ok"', '"reply":"Markets error: \\u0015\\u0003\\u0003\\u0000"')
+         result = replace(result, '"reply":"ok"', '"reply":"TLS alert: \\u0015\\u0003\\u0003\\u0000"')
        WHERE id = $1`,
       [unreadable],
     );
