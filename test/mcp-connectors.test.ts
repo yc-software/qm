@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpClient, mcpResultText } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
@@ -12,6 +11,7 @@ import { settle } from "./support/settle.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { installPrincipalLinks, UnattestableActor } from "../src/directory/person.ts";
+import { test } from "./support/test-tenants.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {
@@ -472,9 +472,6 @@ test("background MCP refresh contains registry failures at startup, on change, a
   });
   t.after(() => service.close());
   const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
-  await tick();
-  assert.equal(list.mock.callCount(), 0);
-  service.start();
   await tick();
   assert.equal(list.mock.callCount(), 1);
   await store.put(server({ url: mcp.url }));

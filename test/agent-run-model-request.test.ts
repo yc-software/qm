@@ -1,9 +1,9 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { modelRequestOverrides } from "../src/model/pi-models.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { test } from "./support/test-tenants.ts";
 
 const modelId = "gpt-5.4";
 

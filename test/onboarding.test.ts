@@ -28,6 +28,7 @@ function freshApp(overrides: Partial<Config> = {}) {
 }
 
 async function waitForOnboardingSkill(skills: ReturnType<typeof buildApp>["skills"]): Promise<void> {
+  await inTestTenant(() => undefined);
   await settle(async () =>
     (await skills.list()).some((s) => s.manifest.name === "onboarding" && s.status === "published"),
   );

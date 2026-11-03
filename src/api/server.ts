@@ -37,7 +37,6 @@ import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import { tenantReady } from "../tenants/context.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -517,7 +516,6 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
     armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
-    if (boundTenant()) await tenantReady();
     const base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");

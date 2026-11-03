@@ -229,6 +229,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
     assert.match(sys.reply ?? "", /github-gitlab/);
     assert.doesNotMatch(sys.reply ?? "", /^- (?:dropbox|linear|zoom) — /m);
 
+    await built.identity.ready();
     const channelSys = await app.turn({
       surface: "test",
       actor,

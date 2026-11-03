@@ -234,7 +234,7 @@ import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tool
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
-import { perTenant, tenantReady } from "../tenants/context.ts";
+import { perTenant } from "../tenants/context.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -1078,7 +1078,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
           : "";
 
-      await tenantReady();
       const configuredProviders =
         !external && deps.resolveConnectorClient
           ? await configuredConnectorProviders(deps.resolveConnectorClient).catch(

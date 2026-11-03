@@ -1,4 +1,3 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createDeploymentLayerStore,
@@ -16,7 +15,7 @@ import { computeBundleHash, createSkillBundleStore } from "../src/skills/skill-b
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { testDatabaseUrl, testMap, testAdvisoryLock } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const tool = (advertise: string): DeploymentLayerBundle["tools"][number] => ({
   path: "tools/acme/tool.json",
@@ -456,7 +455,11 @@ test("a layer that appears mid-seed but fails to apply leaves the fallback live 
         version: 1,
         updatedAt: 1,
         updatedBy: "other-instance",
-        bundle: { contract: 1, tools: [], skills: [{ path: "skills/broken/README.md", content: "no SKILL.md here" }] },
+        bundle: {
+          contract: 1,
+          tools: [],
+          skills: [{ path: "skills/broken/README.md", content: "no SKILL.md here" }],
+        },
         resolved: (() => {
           const { dir: _dir, ...resolved } = emptyDeploymentLayer();
           return resolved;

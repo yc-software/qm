@@ -1,4 +1,4 @@
-import { test, afterEach } from "node:test";
+import { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   setCustomProviders,
@@ -12,8 +12,9 @@ import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { createCustomProviderStore, type StoredCustomProvider } from "../src/model/model-credential-store.ts";
 import { modelSupported, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { testMap } from "./support/test-database.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
-afterEach(() => setCustomProviders([]));
+afterEach(() => inTestTenant(() => setCustomProviders([])));
 
 const GATEWAY = {
   id: "acme-gateway",

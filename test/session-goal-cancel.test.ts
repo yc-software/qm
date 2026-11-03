@@ -51,6 +51,7 @@ for (const status of ["active", "paused"] as const) {
     await inTestTenant(async () => {
       const session = await sessionWithGoal(built, `web:U1:${status}`, status);
 
+      await built.identity.ready();
       assert.equal(await built.app.cancelSessionGoal(session.id, "U2"), null, "a non-participant cannot cancel");
       await built.sessions.addParticipant(session.id, "U2");
       assert.equal(

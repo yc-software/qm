@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 const binding = new AsyncLocalStorage<string | undefined>();
 const pinned = new AsyncLocalStorage<{ tenant: string | undefined; open: boolean }>();
+const loading = new AsyncLocalStorage<string>();
 const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function isTenantId(value: unknown): value is string {
@@ -25,8 +26,8 @@ function prepare(tenant: string): Promise<void> | undefined {
       pending.push(existing);
       continue;
     }
-    const run = Promise.resolve(tenant)
-      .then(hook)
+    const run = Promise.resolve()
+      .then(() => pinned.exit(() => loading.run(tenant, () => binding.run(tenant, () => hook(tenant)))))
       .then(() => void done.set(tenant, true));
     done.set(tenant, run);
     run.catch(() => done.get(tenant) === run && done.delete(tenant));
@@ -35,16 +36,10 @@ function prepare(tenant: string): Promise<void> | undefined {
   return pending.length ? Promise.all(pending).then(() => undefined) : undefined;
 }
 
-export function tenantReady(): Promise<void> {
-  const id = binding.getStore();
-  if (id === undefined) return Promise.reject(new Error("No tenant is bound to this work"));
-  return prepare(id) ?? Promise.resolve();
-}
-
-export function withTenant<T>(id: string, fn: () => T): T {
+export async function withTenant<T>(id: string, fn: () => T): Promise<Awaited<T>> {
   if (!isTenantId(id)) throw new Error(`Tenant id must be a lowercase uuid, got ${JSON.stringify(id)}`);
-  if (bindHooks.size) prepare(id)?.catch(() => undefined);
-  return bind(id, fn);
+  if (loading.getStore() !== id) await prepare(id);
+  return await bind(id, fn);
 }
 
 export function withoutTenant<T>(fn: () => T): T {

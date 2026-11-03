@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { continuableContext, createAgent } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
@@ -6,6 +5,7 @@ import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { test } from "./support/test-tenants.ts";
 
 type Sink = {
   entries: Array<{ seq: number; type: string; payload: unknown }>;

@@ -1,4 +1,5 @@
 import type { EventBus } from "../util/event-bus.ts";
+import { reportFailureAs } from "../util/errors.ts";
 import { boundTenant, currentTenant, withTenant } from "./context.ts";
 
 export function tenantScopedBus<T extends { tenant?: string }>(inner: EventBus<T>): EventBus<T> {
@@ -14,9 +15,16 @@ export function tenantScopedBus<T extends { tenant?: string }>(inner: EventBus<T
       return inner.subscribe(
         (event) => {
           if (event.tenant && (tenant === undefined || event.tenant === tenant))
-            withTenant(event.tenant, () => cb(event));
+            withTenant(event.tenant, () => cb(event)).catch(reportFailureAs("event-bus: deliver", undefined));
         },
-        onResync ? { onResync: tenant === undefined ? onResync : () => withTenant(tenant, onResync) } : {},
+        onResync
+          ? {
+              onResync:
+                tenant === undefined
+                  ? onResync
+                  : () => void withTenant(tenant, onResync).catch(reportFailureAs("event-bus: resync", undefined)),
+            }
+          : {},
       );
     },
     ...(inner.close ? { close: () => inner.close!() } : {}),

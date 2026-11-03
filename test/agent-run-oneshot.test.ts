@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { createServer } from "node:http";
@@ -31,6 +30,7 @@ import type { DetectInput, TurnLlmRequestRecord } from "../src/agent/agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 import { sanitizeLlmPayload, trimPayloadToByteBudget, transportFromModel } from "../src/agent/provider-payload.ts";
+import { test } from "./support/test-tenants.ts";
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
@@ -222,7 +222,11 @@ test("Pi title generation rejects a reply-shaped answer with the rule that fired
           },
         },
         { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sorry, I can't summarize that" } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Sorry, I can't summarize that" },
+        },
         { type: "content_block_stop", index: 0 },
         {
           type: "message_delta",

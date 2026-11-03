@@ -1,11 +1,11 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createIdentityService, type DeactivationRecord } from "../src/identity/identity-service.ts";
 import type { ExternalMember } from "../src/identity/external-members.ts";
 import { testMap } from "./support/test-database.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const id = createIdentityService(testMap(), { externalMembers: testMap() });
-await id.refresh();
+await inTestTenant(() => id.refresh());
 
 test("classifies a same-org member as internal", () => {
   const p = id.classify("U1");

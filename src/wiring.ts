@@ -36,7 +36,7 @@ import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
 import { createRunStreamBus, emitRunReasoning, emitRunText, serveRunStreamSync } from "./runs/run-stream-events.ts";
-import { onFirstBind, perTenant, withTenant } from "./tenants/context.ts";
+import { onFirstBind, perTenant } from "./tenants/context.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
@@ -313,7 +313,7 @@ import {
 } from "./runs/instance-registry.ts";
 import { createDrainController, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
-import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
+import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
 import {
   createPostgresProcessRegistry,
   PROCESS_REGISTRY_MIGRATIONS,
@@ -431,8 +431,6 @@ export interface BuiltApp {
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   deploymentLayerStore: DeploymentLayerStore;
-  startup: () => Promise<void>;
-  deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
   signals: RunSignalStore;
@@ -678,9 +676,19 @@ export function buildApp(
       : {}),
   });
   const layer = () => deploymentLayerStore.runtime();
-  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
-    label: "deployment layer refresh",
-  });
+  const installCatalogs = config.seedSkills
+    ? seedCatalogs(skills, {
+        seedDir: config.skillsSeedDir,
+        pluginDirs: config.pluginSkillDirs,
+        ...(layerSkillsDir ? { layerSkillsDir } : {}),
+        scopeId: orgScope,
+      })
+    : async () => undefined;
+  const seedTenant = () =>
+    Promise.all([
+      installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
+      deploymentLayerStore.hydrate().catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
+    ]);
   const budgetOpts = {
     ...(config.budgetUsdPerWindow !== undefined ? { limitUsd: config.budgetUsdPerWindow } : {}),
     ...(config.orgBudgetUsdPerWindow !== undefined ? { orgLimitUsd: config.orgBudgetUsdPerWindow } : {}),
@@ -1305,10 +1313,14 @@ export function buildApp(
     setCustomProviders(await customProviders.enabled());
   };
   const loadTenant = () =>
-    onFirstBind((tenant) =>
-      withTenant(tenant, () =>
-        Promise.all([tenantSettings.get(), identity.ready(), configStore.hydrate?.(), refreshCustomProviders()]),
-      ),
+    onFirstBind(() =>
+      Promise.all([
+        tenantSettings.get(),
+        identity.ready(),
+        configStore.hydrate?.(),
+        refreshCustomProviders(),
+        seedTenant(),
+      ]),
     );
   let stopTenantLoad: (() => void) | undefined = loadTenant();
   const refreshModels = async () => {
@@ -1551,22 +1563,8 @@ export function buildApp(
     onChange: refreshRunStream,
   });
   const startup = createStartup({
-    identity,
-    configStore,
-    deploymentLayer: deploymentLayerStore,
-    mcp: mcpToolService,
     blobTransfer,
     listen: () => serveRunStreamSync(runStreamEvents, turnStream),
-    ...(config.seedSkills
-      ? {
-          seedCatalogs: seedCatalogs(skills, {
-            seedDir: config.skillsSeedDir,
-            pluginDirs: config.pluginSkillDirs,
-            ...(layerSkillsDir ? { layerSkillsDir } : {}),
-            scopeId: orgScope,
-          }),
-        }
-      : {}),
   });
   runs.onTerminal((run) => refreshRunStream(run.id));
   const sessionStateBus: SessionStateBus = createPostgresSessionStateBus(databaseUrl);
@@ -2831,7 +2829,7 @@ export function buildApp(
       releasing = null;
       flyTunnel?.monitor();
       tenantSettings.start();
-      void startup.begin().catch(reportFailureAs("startup: load deployment layer", undefined));
+      startup.begin();
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
@@ -2891,8 +2889,6 @@ export function buildApp(
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
     },
     deploymentLayerStore,
-    startup: startup.begin,
-    deploymentLayerRefresh,
     sessions,
     runs,
     signals: runSignals,

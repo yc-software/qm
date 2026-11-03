@@ -1,10 +1,10 @@
 import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
-import { setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
+import { setPublicOAuthClientSource, setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
 import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { perTenant } from "../tenants/context.ts";
+import { boundTenant, perTenant } from "../tenants/context.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 import { attestedPerson } from "../directory/person.ts";
@@ -83,7 +83,6 @@ export interface McpToolService {
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
-  start(): void;
   close(): void;
 }
 
@@ -399,11 +398,11 @@ export function createMcpToolService(opts: {
     return current.filter((t) => !gated.has(t.serverId) || Boolean(t.signIn) !== ready.has(t.serverId));
   }
 
-  const refreshInBackground = (): void => {
-    if (!closed) void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
-  };
-  const unsubscribe = opts.servers.onChange(refreshInBackground);
-  let timer: NodeJS.Timeout | undefined;
+  setPublicOAuthClientSource(async () => mcpPublicOAuthClients(await opts.servers.list()));
+  const unsubscribe = opts.servers.onChange(() => {
+    if (!closed && boundTenant()) void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
+  });
+  if (boundTenant()) refreshIfStale(tenantState());
 
   return {
     toolDefs: async () => (await loaded()).snapshot,
@@ -456,12 +455,6 @@ export function createMcpToolService(opts: {
         headers: headersFor(server, principalId),
         ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
       });
-    },
-    start() {
-      if (closed || timer) return;
-      timer = setInterval(refreshInBackground, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
-      timer.unref?.();
-      refreshInBackground();
     },
     close() {
       closed = true;

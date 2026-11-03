@@ -148,12 +148,12 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
 
 test("adminStatusOf reads the grant list directly (org_admin reported; non-admin otherwise)", async () => {
   const svc = createAdminService(testAdminGrantStore());
-  const alice = inTestTenant(() => svc.resolveActor("admin-alice@default-org"))!;
+  const alice = (await inTestTenant(() => svc.resolveActor("admin-alice@default-org")))!;
   assert.deepEqual(await inTestTenant(() => svc.adminStatusOf(alice)), {
     isAdmin: true,
     role: "org_admin",
     scopeId: "org:default-org",
   });
-  const nobody = inTestTenant(() => svc.resolveActor("U-nobody@default-org"))!;
+  const nobody = (await inTestTenant(() => svc.resolveActor("U-nobody@default-org")))!;
   assert.deepEqual(await inTestTenant(() => svc.adminStatusOf(nobody)), { isAdmin: false });
 });

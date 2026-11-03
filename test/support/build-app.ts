@@ -11,9 +11,9 @@ import {
 } from "../../src/tenants/settings.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockAgent } from "./mock-agent.ts";
-import { testTenants } from "./test-tenants.ts";
+import { inTestTenant, testTenants } from "./test-tenants.ts";
 import { migrateSettings, seedSettingsTenants, settingsDatabase } from "./tenant-settings.ts";
-import { ownerUrlOf, TEST_ADMIN_GRANTS } from "./test-database.ts";
+import { atTestEnd, ownerUrlOf, TEST_ADMIN_GRANTS } from "./test-database.ts";
 
 const [TEST_TENANT] = testTenants();
 
@@ -73,14 +73,12 @@ export function testTenantSettings(values: TenantSettingValues = {}, databaseUrl
     },
   };
 }
-import { tenantReady } from "../../src/tenants/context.ts";
-import { swallowAs } from "../../src/util/errors.ts";
 
-const built: BuiltApp[] = [];
-after(() => Promise.all(built.splice(0).map((app) => app.runtime.stop())));
+const builtForFile: BuiltApp[] = [];
+after(() => Promise.all(builtForFile.splice(0).map((app) => app.runtime.stop())));
 
 export function stopAtEnd(app: BuiltApp): BuiltApp {
-  built.push(app);
+  if (!atTestEnd(() => app.runtime.stop())) builtForFile.push(app);
   return app;
 }
 
@@ -118,7 +116,6 @@ export function buildApp(
       tenantSettings: overrides.tenantSettings ?? testTenantSettings(),
     }),
   );
-  void app.startup().catch(swallowAs("test: startup", undefined));
   return Object.assign(app, { modelCalls });
 }
 
@@ -127,6 +124,6 @@ export async function buildLoadedApp(
   overrides: Parameters<typeof buildProductionApp>[1] = {},
 ): Promise<BuiltApp & { modelCalls: ModelCall[] }> {
   const app = buildApp(config, overrides);
-  await tenantReady();
+  await inTestTenant(() => undefined);
   return app;
 }

@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +5,7 @@ import { join } from "node:path";
 import { countTokens } from "../src/util/tokens.ts";
 import { createAgent, stableCwd } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { test } from "./support/test-tenants.ts";
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;

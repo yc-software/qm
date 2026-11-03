@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +8,7 @@ import { testConfig } from "./support/test-config.ts";
 import { parseToolDescriptor } from "../src/deployment/deployment-layer.ts";
 import { BASE_EPHEMERAL_CRED_LINKS, BASE_RESIDENT_AUTH_PATHS } from "../src/credentials/resident-paths.ts";
 import { evaluateCommandWithLayer } from "../src/policy/command-policy.ts";
+import { test } from "./support/test-tenants.ts";
 
 const credentialFile = (path: string) => ({ path, kind: "file" as const });
 const credentialDirectory = (path: string) => ({ path, kind: "directory" as const });

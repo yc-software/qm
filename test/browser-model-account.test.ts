@@ -1,6 +1,5 @@
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testTenants, inTestTenant } from "./support/test-tenants.ts";
@@ -11,6 +10,7 @@ import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/br
 import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
 import { zeroUsage } from "../src/model/model-runtime.ts";
 import { stopAtEnd } from "./support/build-app.ts";
+import { test } from "./support/test-tenants.ts";
 
 const [TEST_TENANT] = testTenants();
 

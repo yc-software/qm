@@ -69,7 +69,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
       assert.equal((await fetch(`${base}${path}`)).status, 401);
       assert.equal((await get(path)).status, 403);
       const response = await fetch(`${base}${path}`, {
-        headers: inTestTenant(() => signedRequestHeaders(SECRET, "GET", path)),
+        headers: signedRequestHeaders(SECRET, "GET", path, "", testTenantHeaders()),
       });
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), { member });
@@ -153,7 +153,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
       return fetch(`${base}/v1/directory`, {
         method: "POST",
         headers: {
-          ...inTestTenant(() => signedRequestHeaders(SECRET, "POST", "/v1/directory", raw)),
+          ...signedRequestHeaders(SECRET, "POST", "/v1/directory", raw, testTenantHeaders()),
           "content-type": "application/json",
         },
         body: raw,
@@ -293,7 +293,7 @@ describe("qualification membership readiness with signed portal identity enforce
     try {
       const path = "/v1/directory/resolve?q=UQA";
       const unsigned = await fetch(`${base}${path}`, {
-        headers: inTestTenant(() => signedRequestHeaders(SECRET, "GET", path)),
+        headers: signedRequestHeaders(SECRET, "GET", path, "", testTenantHeaders()),
       });
       assert.equal(unsigned.status, 401);
       process.env.PORTAL_IDENTITY_SECRET = portalSecret;

@@ -1,6 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 
-import { describe, it, before, after } from "node:test";
+import { describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,7 +29,7 @@ import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testMap, testDatabaseUrl, testIdentity } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { it, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
 const execFileAsync = promisify(execFile);

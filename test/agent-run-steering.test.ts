@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
@@ -9,6 +8,7 @@ import type { ScopeId, SessionEntry } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
 type Sink = {
   entries: Array<{ seq: number; type: string; payload: unknown }>;

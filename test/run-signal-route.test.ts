@@ -66,7 +66,7 @@ async function coreSignal(runId: string, body: unknown): Promise<{ status: numbe
   const raw = JSON.stringify(body);
   const r = await fetch(`${coreBase}${path}`, {
     method: "POST",
-    headers: inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
+    headers: await inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
     body: raw,
   });
   return { status: r.status, json: (await r.json()) as Record<string, unknown> };
@@ -237,7 +237,7 @@ test("core route: a portal identity that does not match the request actor is ref
   const r = await fetch(`${coreBase}${path}`, {
     method: "POST",
     headers: {
-      ...inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
+      ...(await inTestTenant(() => signedHeaders(SECRET, "POST", path, raw))),
       [PORTAL_IDENTITY_HEADER]: await mintTenantPortalIdentity(
         { p: "eve", t: testTenants()[0], exp: Date.now() + 60_000 },
         SECRET,
@@ -315,14 +315,15 @@ test("an orphaned steer whose own request is refused falls back to replaying on 
   assert.equal(replayed!.request.text, "still matters");
 });
 
-test("attributedSteerText prefixes foreign and ambient steers only", () => {
-  const eve = { id: "web-eve", displayName: "Eve Example" };
-  assert.equal(attributedSteerText(eve, "web-eve", "hello"), "hello");
-  assert.equal(attributedSteerText(eve, "web-alice", "hello"), "Eve Example: hello");
-  assert.equal(attributedSteerText({ id: "web-eve" }, "web-alice", "hello"), "web-eve: hello");
-  assert.equal(attributedSteerText({ id: "web-eve", displayName: "  " }, "web-alice", "hi"), "web-eve: hi");
-  assert.equal(attributedSteerText(eve, null, "hello"), "Eve Example: hello");
-});
+test("attributedSteerText prefixes foreign and ambient steers only", () =>
+  inTestTenant(() => {
+    const eve = { id: "web-eve", displayName: "Eve Example" };
+    assert.equal(attributedSteerText(eve, "web-eve", "hello"), "hello");
+    assert.equal(attributedSteerText(eve, "web-alice", "hello"), "Eve Example: hello");
+    assert.equal(attributedSteerText({ id: "web-eve" }, "web-alice", "hello"), "web-eve: hello");
+    assert.equal(attributedSteerText({ id: "web-eve", displayName: "  " }, "web-alice", "hi"), "web-eve: hi");
+    assert.equal(attributedSteerText(eve, null, "hello"), "Eve Example: hello");
+  }));
 
 test("core route: steer without text is rejected 400", async () => {
   const { run } = await inTestTenant(() => built.runs.enqueue({ sessionId: "t-notext", request: request("hi") }));
@@ -831,7 +832,7 @@ async function coreTurn(body: unknown): Promise<{ status: number; json: Record<s
   const raw = JSON.stringify(body);
   const r = await fetch(`${coreBase}${path}`, {
     method: "POST",
-    headers: inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
+    headers: await inTestTenant(() => signedHeaders(SECRET, "POST", path, raw)),
     body: raw,
   });
   return { status: r.status, json: (await r.json()) as Record<string, unknown> };

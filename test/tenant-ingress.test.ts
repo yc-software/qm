@@ -36,6 +36,8 @@ const MATCH_SAMPLES: Record<string, [string, string]> = {
 const UNBOUND_ROUTES: Record<string, { tenant: RouteTenant; gap?: string }> = {
   "GET /healthz": { tenant: "none" },
   "GET /readyz": { tenant: "none" },
+  "GET /v1/background-work": { tenant: "none" },
+  "POST /v1/background-work": { tenant: "none" },
   "POST /slack/events": { tenant: "row", gap: "T8" },
   "POST /v1/slack/managed/installation": { tenant: "row", gap: "T8" },
   "DELETE /v1/slack/managed/installation": { tenant: "row", gap: "T8" },

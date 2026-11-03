@@ -1,10 +1,10 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createGoalRecord, type GoalRecord } from "../src/agent/goal.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { entryFromItem, storedItem } from "../src/sessions/items.ts";
+import { test } from "./support/test-tenants.ts";
 
 const sessionGoals = new Map<string, GoalRecord>();
 const savedGoal = (sessionId: string) => sessionGoals.get(sessionId) ?? null;

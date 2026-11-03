@@ -1,10 +1,10 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
+import { test } from "./support/test-tenants.ts";
 
 function sse(events: Array<Record<string, unknown>>): Response {
   const body = events.map((event) => `event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`).join("");

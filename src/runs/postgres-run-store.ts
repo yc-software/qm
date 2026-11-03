@@ -10,7 +10,7 @@ import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import type { RunPriority } from "./run-store.ts";
 import { countedClaims, isTerminal, runPriority, stopErrorCode, withTraceCarrier } from "./run-store.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { errMessage, reportFailureAs, swallow } from "../util/errors.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import { claimAcrossTenants, crossTenantLoop, inTenantOf, rowTenant } from "../tenants/claim.ts";
 
@@ -140,7 +140,7 @@ END $base_schema$`,
           `SELECT EXISTS (
           SELECT 1 FROM runs r WHERE r.status='pending' AND r.retry_after <= $1
           AND NOT EXISTS (
-            SELECT 1 FROM runs blocked WHERE blocked.session_id=r.session_id
+            SELECT 1 FROM runs blocked WHERE blocked.tenant_id=r.tenant_id AND blocked.session_id=r.session_id
               AND (blocked.status='running' OR (blocked.status='pending' AND blocked.retry_after > $1))
           )
         ) AS available`,
@@ -168,7 +168,8 @@ END $base_schema$`,
   function settle(run: Run | null): void {
     if (!run || !isTerminal(run.status)) return;
     events.emit(run.id, run);
-    for (const listener of terminalListeners) inTenantOf(run.tenantId, () => listener(run));
+    for (const listener of terminalListeners)
+      inTenantOf(run.tenantId, () => listener(run)).catch(reportFailureAs("runs: terminal listener", undefined));
   }
   async function retire(
     run: Run,
@@ -213,7 +214,7 @@ END $base_schema$`,
 
   const claimable = (now: string) => `candidate.status='pending' AND candidate.retry_after <= ${now}
     AND NOT EXISTS (
-      SELECT 1 FROM runs sibling WHERE sibling.session_id=candidate.session_id
+      SELECT 1 FROM runs sibling WHERE sibling.tenant_id=candidate.tenant_id AND sibling.session_id=candidate.session_id
         AND (sibling.status='running' OR (sibling.status='pending'
           AND (sibling.retry_after > ${now} OR (sibling.created_at, sibling.seq) < (candidate.created_at, candidate.seq))))
       OFFSET 0

@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
@@ -13,7 +12,7 @@ const [TEST_TENANT] = testTenants();
 import { testConfigStore, testMap } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { storedItem } from "../src/sessions/items.ts";
-import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
+import { afterEach, inTestTenant, test, testTenantHeaders } from "./support/test-tenants.ts";
 
 const buildApp = (config: Config, overrides: Parameters<typeof buildProductionApp>[1] = {}) =>
   stopAtEnd(
@@ -60,7 +59,6 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
   }
 });
 
-import { afterEach } from "node:test";
 import {
   createModelOverlayStore as createStore,
   setModelOverlays,

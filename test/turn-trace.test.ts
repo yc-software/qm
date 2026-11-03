@@ -1,4 +1,4 @@
-import { after, test } from "node:test";
+import { after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:http";
@@ -11,7 +11,7 @@ import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { storedItem } from "../src/sessions/items.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { test, inTestTenant } from "./support/test-tenants.ts";
 
 const transactions: Record<string, any>[] = [];
 const collector = createServer(async (req, res) => {

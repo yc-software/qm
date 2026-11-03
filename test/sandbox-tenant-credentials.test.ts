@@ -284,7 +284,7 @@ const matrix: Array<[string, () => { sandbox: Sandbox; has: Array<(name: string)
 
 for (const [backend, build] of matrix) {
   test(`${backend}: the same scope in two tenants gets a machine in each tenant's account`, async () => {
-    const { sandbox, has } = inTestTenant(() => build());
+    const { sandbox, has } = await inTestTenant(() => build());
     const layers = [{ scopeId: "personal:ada@example.com", mountPath: "", mode: "rw" as const }];
     await withTenant(TEST_TENANT, () => sandbox.provision(layers));
     await withTenant(OTHER_TENANT, () => sandbox.provision(layers));

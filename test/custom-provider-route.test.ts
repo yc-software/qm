@@ -5,14 +5,14 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, afterEach } from "node:test";
+import { afterEach } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { testTenantHeaders } from "./support/test-tenants.ts";
+import { test, inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -21,7 +21,7 @@ const ADMIN = {
 };
 const USER = { "content-type": "application/json", "x-admin-actor": "bob@default-org", ...testTenantHeaders() };
 
-afterEach(() => setCustomProviders([]));
+afterEach(() => inTestTenant(() => setCustomProviders([])));
 
 function start(modelCredentialFetch: typeof fetch = async () => new Response(null, { status: 200 })): {
   base: string;

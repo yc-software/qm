@@ -5,6 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { glob, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import pg from "pg";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -15,10 +16,12 @@ import { createWorker } from "../src/runs/worker.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { createProcessReaper } from "../src/processes/process-reaper.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createSemanticMemory } from "../src/memory/semantic-memory.ts";
 import { claimAcrossTenants, crossTenantLoop, inTenantOf, useOwnerDatabase, rowTenant } from "../src/tenants/claim.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { boundTenant, withTenant } from "../src/tenants/context.ts";
+import { boundTenant, currentTenant, withTenant } from "../src/tenants/context.ts";
 import { scopeId, type Principal } from "../src/types.ts";
 import { createSweeper } from "../src/util/sweeper.ts";
 import { createAskExpirySweep } from "../src/triggers/keychain-ask.ts";
@@ -127,22 +130,16 @@ test("loop bodies and sweeps run unbound even when started under a tenant", asyn
   const seen: Array<string | undefined> = [];
   await withTenant(A, () => crossTenantLoop(async () => void seen.push(boundTenant()))());
   const sweeper = createSweeper(() => seen.push(boundTenant()), 60_000, { immediate: true });
-  withTenant(A, () => sweeper.start());
+  await withTenant(A, () => sweeper.start());
   await sweeper.stop();
   assert.deepEqual(seen, [undefined, undefined]);
 });
 
-test("a claimed row binds its own tenant, and a row without one runs unbound", () => {
+test("a claimed row binds its own tenant, and a row without one runs unbound", async () => {
   assert.deepEqual(rowTenant({ tenant_id: A }), { tenantId: A });
   assert.deepEqual(rowTenant({ tenant_id: null }), {});
-  assert.equal(
-    withTenant(B, () => inTenantOf(A, boundTenant)),
-    A,
-  );
-  assert.equal(
-    withTenant(B, () => inTenantOf(undefined, boundTenant)),
-    undefined,
-  );
+  assert.equal(await withTenant(B, () => inTenantOf(A, boundTenant)), A);
+  assert.equal(await withTenant(B, () => inTenantOf(undefined, boundTenant)), undefined);
 });
 
 test("one worker claims across tenants and runs each turn under its run's tenant", { skip }, async () => {
@@ -159,7 +156,7 @@ test("one worker claims across tenants and runs each turn under its run's tenant
         return { status: "silent" as const };
       },
     } as unknown as Orchestrator;
-    const worker = withTenant(A, () => createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 }));
+    const worker = await withTenant(A, () => createWorker({ runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 }));
     withTenant(B, () => worker.start());
     for (let i = 0; i < 400 && ran.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 5));
     await worker.stop(1);
@@ -172,6 +169,29 @@ test("one worker claims across tenants and runs each turn under its run's tenant
     await close();
   }
 });
+
+test(
+  "a running run in one tenant does not hold back another tenant's run for the same session id",
+  { skip },
+  async () => {
+    const { runs, close } = createPostgresRunStore(testDatabaseUrl());
+    try {
+      const a = (await withTenant(A, () => runs.enqueue({ sessionId: "shared", request: turn("a"), maxAttempts: 1 })))
+        .run;
+      assert.equal((await runs.claim("w1", 60_000))?.id, a.id);
+      const b = (await withTenant(B, () => runs.enqueue({ sessionId: "shared", request: turn("b"), maxAttempts: 1 })))
+        .run;
+      const subscribe = runs.subscribeAvailable;
+      assert.ok(subscribe);
+      const available = new Promise<boolean>((resolve) => subscribe(() => resolve(true), { pollMs: 5 }));
+      assert.equal(await Promise.race([available, delay(2_000, false)]), true);
+      const claimed = await runs.claim("w2", 60_000);
+      assert.deepEqual([claimed?.id, claimed?.tenantId], [b.id, B]);
+    } finally {
+      await close();
+    }
+  },
+);
 
 test("the orphan sweep reports each run with its tenant", { skip }, async () => {
   const url = testDatabaseUrl();
@@ -342,6 +362,18 @@ test("pruning ended cron fires keeps the newest per cron within each tenant", { 
   }
 });
 
+test("work a cross-tenant claim binds to a cold tenant sees that tenant's roster loaded", { skip }, async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cold-claim-")), workers: 0 }));
+  try {
+    const { rows } = await claimAcrossTenants("SELECT id AS tenant_id FROM tenants WHERE id = $1", [B]);
+    assert.equal(rows.length, 1);
+    const principal = await inTenantOf(rowTenant(rows[0]!).tenantId, () => built.identity.classify("U1"));
+    assert.equal(principal.type, "internal");
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("pruning consumed run signals deletes old consumed rows in every tenant", { skip }, async () => {
   const url = testDatabaseUrl();
   const signals = createPostgresRunSignalStore(url);
@@ -403,6 +435,67 @@ test(
       );
     } finally {
       registry.close?.();
+      await raw.end();
+    }
+  },
+);
+
+test(
+  "one vector index tick claims both tenants' pending facts and embeds each with its own tenant's model",
+  { skip },
+  async () => {
+    const url = testDatabaseUrl();
+    const models = new Map([
+      [A, "embed-a"],
+      [B, "embed-b"],
+    ]);
+    const notebook = createPostgresMemoryService(url);
+    const raw = new pg.Pool({ connectionString: ownerUrlOf(url), max: 1 });
+    const embedded: Array<[string, string | undefined]> = [];
+    let tick!: () => unknown;
+    const semantic = createSemanticMemory({
+      notebook,
+      databaseUrl: url,
+      embeddingModel: async () => models.get(currentTenant()),
+      resolveEmbedder: async (id) => ({
+        id,
+        async embed(texts) {
+          embedded.push([id, boundTenant()]);
+          return texts.map(() => (id === "embed-a" ? [1, 0] : [0, 1, 0]));
+        },
+      }),
+      leaderLease: createNoopLeaderLease(),
+      createSweeper: (fn, ...rest) => {
+        tick = fn;
+        return createSweeper(fn, ...rest);
+      },
+    });
+    try {
+      for (const [tenant, fact] of [
+        [A, "fact for a"],
+        [B, "fact for b"],
+      ] as const)
+        await withTenant(tenant, () => notebook.capture(scopeId("personal", "shared"), [fact], 1000));
+      await tick();
+      const { rows } = await raw.query(
+        `SELECT v.tenant_id, v.model, v.dimensions, f.text FROM memory_fact_vectors v
+         JOIN memory_facts f ON f.tenant_id = v.tenant_id AND f.scope_id = v.scope_id AND f.id = v.fact_id
+         ORDER BY f.text`,
+      );
+      assert.deepEqual(
+        rows.map((row) => [row.tenant_id, row.model, row.dimensions, row.text]),
+        [
+          [A, "embed-a", 2, "fact for a"],
+          [B, "embed-b", 3, "fact for b"],
+        ],
+      );
+      assert.deepEqual(
+        [...new Set(embedded.map(([model, tenant]) => `${model}:${tenant}`))].sort(),
+        [`embed-a:${A}`, `embed-b:${B}`].sort(),
+      );
+    } finally {
+      await semantic.stop();
+      await semantic.close();
       await raw.end();
     }
   },

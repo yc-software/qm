@@ -126,7 +126,7 @@ test("each tool entry nudges the run stream once it is durable", async () => {
   try {
     await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
     const turn = await inTestTenant(() => built.app.turn(dm("!run echo hi")));
-    const unsubscribe = inTestTenant(() =>
+    const unsubscribe = await inTestTenant(() =>
       built.app.subscribeRun(turn.runId!, (event) => {
         if (event.kind === "refresh") log.push("refresh");
       }),
