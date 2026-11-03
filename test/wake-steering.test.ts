@@ -209,6 +209,14 @@ test("Auto blocks a prompt-injection attempt from an unprompted mid-turn coworke
     "flagged steer data never reaches the live agent",
   );
   assert.ok((await built.auditLog.events()).some((event) => event.action === "security_posture.steer_block"));
+  const session = await built.sessions.getByThread(`ch:${channel}:${root}`);
+  const notes = (await built.sessions.getItems(session!.id)).filter((i) => i.kind === "Error");
+  assert.deepEqual(
+    notes.map((i) => [i.errorCode, i.text]),
+    [["steer_withheld", "A message from U2 arrived mid-turn and was withheld: security screening did not clear it."]],
+    "the transcript records the withheld message without its content",
+  );
+  assert.doesNotMatch(notes[0]!.text ?? "", /ignore previous/);
 });
 
 test("Auto fails open on a mid-turn coworker update when the screener is unavailable", async () => {
