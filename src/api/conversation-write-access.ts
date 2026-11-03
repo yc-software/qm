@@ -67,11 +67,12 @@ export async function conversationWriteAccess(
   if (req.surface !== "web") return access;
   const threadRef = req.conversation.threadRef;
   const existing = await deps.sessions.getByThread(threadRef);
-  if (existing?.scopeId !== undefined && existing.scopeId !== claimed)
-    return { ok: false, reason: "that conversation lives in a different context" };
-  if (existing && !(await h.mayWriteSession(actor.id, existing)))
-    return { ok: false, reason: "you can't continue that conversation from the web" };
-  if (!existing && threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`))
+  if (existing) {
+    if (existing.scopeId !== claimed) return { ok: false, reason: "that conversation lives in a different context" };
+    if (!(await h.mayWriteSession(actor.id, existing)))
+      return { ok: false, reason: "you can't continue that conversation from the web" };
+  } else if (threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`)) {
     return { ok: false, reason: "you can only start a new conversation on your own thread" };
+  }
   return access;
 }
