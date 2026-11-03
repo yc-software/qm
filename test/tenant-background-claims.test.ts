@@ -5,6 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { glob, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import pg from "pg";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
@@ -172,6 +173,27 @@ test("one worker claims across tenants and runs each turn under its run's tenant
     await close();
   }
 });
+
+test(
+  "a running run in one tenant does not hold back another tenant's run for the same session id",
+  { skip },
+  async () => {
+    const { runs, close } = createPostgresRunStore(testDatabaseUrl());
+    try {
+      const a = (await withTenant(A, () => runs.enqueue({ sessionId: "shared", request: turn("a"), maxAttempts: 1 })))
+        .run;
+      assert.equal((await runs.claim("w1", 60_000))?.id, a.id);
+      const b = (await withTenant(B, () => runs.enqueue({ sessionId: "shared", request: turn("b"), maxAttempts: 1 })))
+        .run;
+      const available = new Promise<boolean>((resolve) => runs.subscribeAvailable(() => resolve(true), { pollMs: 5 }));
+      assert.equal(await Promise.race([available, delay(2_000, false)]), true);
+      const claimed = await runs.claim("w2", 60_000);
+      assert.deepEqual([claimed?.id, claimed?.tenantId], [b.id, B]);
+    } finally {
+      await close();
+    }
+  },
+);
 
 test("the orphan sweep reports each run with its tenant", { skip }, async () => {
   const url = testDatabaseUrl();
