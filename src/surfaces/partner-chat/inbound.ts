@@ -83,7 +83,7 @@ export function createPartnerChatInbound(deps: {
     const author = bot ? partnerChatPrincipal(listed, false) : humans[members.indexOf(listed)]!;
     const thread = event.thread_id ?? undefined;
     const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
-    const own = bot ? await findMessage(cache, container, message.id, { self: true }) : undefined;
+    const own = bot ? await findMessage(cache, container, message.id, { self: true, includeDeleted: true }) : undefined;
     if (own && event.type === "message.created") {
       console.log(
         `[partner-chat] ignoring chat ${chat.id} message ${message.id}: it echoes one of the agent's own posts`,

@@ -467,6 +467,53 @@ test("a direct reply holds one placeholder that the reply replaces, or that sett
   }
 });
 
+test("a refusal notice edits an open placeholder, is posted in the reply thread when none was posted, and a bare settle without one stays silent", async () => {
+  const id = (n: number) => `00000000-0000-4000-8000-00000000002${n}`;
+  const target = `${CONTAINER}:1002`;
+  const partnerChat = await fakePartnerChat();
+  const deliveries = createDeliveryStore();
+  const fake = fakeRuns({
+    [id(1)]: { target, status: "done", editRef: "99" },
+    [id(2)]: { target, status: "done" },
+    [id(3)]: { target, status: "done" },
+    [id(4)]: { target, status: "done", editRef: "" },
+  });
+  const outbound = createPartnerChatDeliveries({
+    url: partnerChat.url,
+    secret: SECRET,
+    deliveries,
+    app: { setRunDeliveryState: fake.setRunDeliveryState, ingestSurfaceEvents: async () => ({ upserted: 0 }) },
+    runs: fake.runs,
+    surfaceCache: { readMessages: async () => [] },
+    serialize: (fn) => fn(),
+  });
+  const notice = "⚠️ I couldn't finish that turn: budget exceeded ($5.00 of $5); try again later";
+  const send = (key: string, text: string) =>
+    deliveries.enqueue({ destination: { type: "partner-chat", target }, text, idempotencyKey: key });
+  try {
+    await send(`notice:${id(1)}`, notice);
+    await send(`notice:${id(2)}`, notice);
+    await send(`placeholder:${id(2)}`, "…");
+    await send(`settle:${id(3)}`, "✓");
+    await send(`notice:${id(4)}`, notice);
+    await outbound.drain();
+    assert.deepEqual(
+      partnerChat.received.map((r) => [r.path, r.body.thread_id ?? null, r.body.body]),
+      [
+        ["/qm_surface/messages/99/update", null, notice],
+        ["/qm_surface/messages", "1002", notice],
+      ],
+    );
+    assert.deepEqual(fake.slots, [
+      [id(1), { editRef: "" }],
+      [id(2), { editRef: "" }],
+    ]);
+    assert.equal((await deliveries.pending("partner-chat")).length, 0);
+  } finally {
+    await partnerChat.close();
+  }
+});
+
 test("partner-chat rejections fail the delivery while server errors leave it for retry", async () => {
   for (const [status, failed] of [
     [404, true],
@@ -630,13 +677,13 @@ test("a followed turn queues its placeholder after the delay, and a finished dir
   assert.deepEqual(
     (await deliveries.pending("partner-chat")).map((d) => [d.idempotencyKey, d.destination.target, d.text]).sort(),
     [
-      [`placeholder:${R1}`, destination.target, "…"],
-      [`settle:${id(4)}`, destination.target, "✓"],
       [
-        `settle:${id(5)}`,
+        `notice:${id(5)}`,
         destination.target,
         "⚠️ I couldn't finish that turn: project membership changed; retry from the current project",
       ],
+      [`placeholder:${R1}`, destination.target, "…"],
+      [`settle:${id(4)}`, destination.target, "✓"],
     ],
   );
 });
@@ -849,6 +896,25 @@ test("a bot message echoing one of the agent's own posts is dropped, while its e
     assert.deepEqual(
       (await own()).map((m) => m[3]),
       [true],
+    );
+    const late = event({
+      body: "late revision",
+      eventId: "ev-echo-late",
+      messageId: posted.id,
+      thread: "1095",
+      bot: true,
+    });
+    late.type = "message.updated";
+    assert.deepEqual(await deliver(late), { status: 200, body: { ok: true } });
+    assert.deepEqual(
+      (await own()).map((m) => m[3]),
+      [true],
+    );
+    assert.deepEqual(
+      (await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true }))
+        .filter((m) => m.ts.endsWith(`.${posted.id.padStart(20, "0")}`))
+        .map((m) => m.text),
+      [],
     );
   } finally {
     await partnerChat.close();

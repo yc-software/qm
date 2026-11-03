@@ -344,6 +344,43 @@ test("inbound Linear webhooks reach the core with their signature header", async
   assert.equal(body.headers["linear-signature"], "abc123");
 });
 
+test("partner-chat events reach the core with only their body and signature headers", async () => {
+  const payload = JSON.stringify({ type: "message.created" });
+  const r = await fetch(`${base}/v1/surfaces/partner-chat/events?x=1`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-qm-timestamp": "1793649600",
+      "x-qm-signature": "v1=abc",
+      authorization: "Bearer nope",
+      cookie: sessionCookie("U1"),
+      "x-extra": "1",
+    },
+    body: payload,
+  });
+  assert.equal(r.status, 200);
+  const body = (await r.json()) as { url: string; cookie: string | null; headers: Record<string, string> };
+  assert.equal(body.url, "/v1/surfaces/partner-chat/events");
+  assert.equal(body.cookie, null);
+  assert.deepEqual(
+    Object.fromEntries(
+      ["content-type", "content-length", "x-qm-timestamp", "x-qm-signature", "authorization", "x-extra"].map((h) => [
+        h,
+        body.headers[h],
+      ]),
+    ),
+    {
+      "content-type": "application/json",
+      "content-length": String(Buffer.byteLength(payload)),
+      "x-qm-timestamp": "1793649600",
+      "x-qm-signature": "v1=abc",
+      authorization: undefined,
+      "x-extra": undefined,
+    },
+  );
+  assert.equal((await fetch(`${base}/v1/surfaces/partner-chat/events`)).status, 404);
+});
+
 test("the webhook passthrough is exact-shape + POST-only (no widening of /v1)", async () => {
   assert.equal((await fetch(`${base}/v1/webhooks/incoming/abc`)).status, 404);
   assert.equal((await fetch(`${base}/v1/webhooks/incoming/a/b`, { method: "POST" })).status, 404);

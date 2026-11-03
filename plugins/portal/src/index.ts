@@ -1142,6 +1142,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ]);
   }
 
+  if (pathname === "/v1/surfaces/partner-chat/events" && method === "POST") {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, [
+      "content-type",
+      "content-length",
+      "x-qm-timestamp",
+      "x-qm-signature",
+    ]);
+  }
+
   if (
     method === "POST" &&
     (/^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname) || /^\/v1\/loop-ingress\/[^/]+$/.test(pathname))

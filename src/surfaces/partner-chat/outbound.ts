@@ -18,10 +18,10 @@ const CLAIM_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 const MESSAGE_ID = /^\d+$/;
 const SELF_AUTHOR = "self";
-const RUN_KEY = /^(ack|placeholder|settle|post|run):([0-9a-f-]{36})(?::|$)/;
+const RUN_KEY = /^(ack|placeholder|settle|notice|post|run):([0-9a-f-]{36})(?::|$)/;
 
 interface RunKey {
-  kind: "ack" | "placeholder" | "settle" | "post" | "run";
+  kind: "ack" | "placeholder" | "settle" | "notice" | "post" | "run";
   runId: string;
 }
 
@@ -162,6 +162,13 @@ export function createPartnerChatDeliveries(deps: {
         if (!permanent(e)) throw e;
         console.log(`[partner-chat] delivery ${d.id} could not settle ${slot}: ${errMessage(e)}`);
       });
+      await setSlot(key.runId, "");
+      return;
+    }
+    if (key.kind === "notice") {
+      if (slot === "") return;
+      if (slot) await editOrPost(d, ref, slot, body);
+      else await post(d, ref, body);
       await setSlot(key.runId, "");
       return;
     }

@@ -90,13 +90,14 @@ export async function findMessage(
   cache: Pick<SurfaceCache, "readMessages">,
   container: string,
   messageId: string,
-  opts: { self?: true } = {},
+  opts: { self?: true; includeDeleted?: true } = {},
 ): Promise<CachedMessage | undefined> {
   if (!/^\d+$/.test(messageId)) return undefined;
   const [hit] = await cache.readMessages(container, {
     surface: "partner-chat",
     tsSuffix: messageIdSuffix(messageId),
     ...(opts.self ? { self: true } : {}),
+    ...(opts.includeDeleted ? { includeDeleted: true } : {}),
     limit: 1,
     noFallback: true,
   });

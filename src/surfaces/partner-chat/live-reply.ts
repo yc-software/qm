@@ -33,8 +33,10 @@ export function createPartnerChatLiveReply(deps: {
       const target = run.request.deliveryTarget;
       if (run.request.surface !== "partner-chat" || run.request.origin.kind !== "human" || !target) return;
       if (run.deliveryState?.editRef === "" || runResultDelivery(run, deps.surfaces)) return;
-      const text = run.result?.status === "refused" ? unfinishedTurnText(userFacingFailureClause(run.result)) : SETTLED;
-      void enqueue({ type: "partner-chat", target }, text, `settle:${run.id}`);
+      const destination = { type: "partner-chat", target };
+      if (run.result?.status === "refused")
+        void enqueue(destination, unfinishedTurnText(userFacingFailureClause(run.result)), `notice:${run.id}`);
+      else void enqueue(destination, SETTLED, `settle:${run.id}`);
     },
   };
 }
