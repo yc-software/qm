@@ -9,34 +9,22 @@ import {
   seedPriorTurns,
   selectOverheardToImport,
 } from "../src/agent/replay.ts";
-import type { ConversationTurn, OverheardMessage, SessionEntry } from "../src/types.ts";
+import type { ConversationTurn, OverheardMessage } from "../src/types.ts";
+import { type Item, type NewItem, storedItem } from "../src/sessions/items.ts";
 
-function entry(type: SessionEntry["type"], text: string): SessionEntry {
-  return {
-    sessionId: "s",
-    seq: 0,
-    parentSeq: null,
-    type,
-    payload: { text },
-    scopeLabel: "org:default-org",
-    createdAt: 0,
-  };
+function at(item: NewItem, seq = 0): Item {
+  return storedItem(item, { sessionId: "s", seq, createdAt: seq });
 }
 
-function overheardEntry(ts: string, name: string, text: string, files?: string[]): SessionEntry {
-  return {
-    sessionId: "s",
-    seq: 0,
-    parentSeq: null,
-    type: "user",
-    payload: { overheard: true, ts, name, text, ...(files ? { files } : {}) },
-    scopeLabel: "org:default-org",
-    createdAt: Number(ts) || 0,
-  };
+function entry(kind: "UserMessage" | "AgentMessage", text: string): Item {
+  return at({ kind, text });
 }
 
-function ent(type: SessionEntry["type"], payload: unknown, seq = 0): SessionEntry {
-  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: "org:default-org", createdAt: seq };
+function overheardEntry(ts: string, name: string, text: string, files?: string[]): Item {
+  return storedItem(
+    { kind: "UserMessage", externalId: ts, text, body: { overheard: true, name, ...(files ? { files } : {}) } },
+    { sessionId: "s", seq: 0, createdAt: Number(ts) || 0 },
+  );
 }
 
 function assertValidWire(msgs: ReturnType<typeof reconstructMessagesFromHistory>): void {
@@ -54,15 +42,20 @@ function assertValidWire(msgs: ReturnType<typeof reconstructMessagesFromHistory>
 }
 
 test("reconstructMessagesFromHistory rebuilds a faithful tool round — a fact in a tool result survives", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "sign me up for HN" }, 1),
-    ent("tool_call", { tool: "execute", command: "browse signup", callId: "c1" }, 2),
-    ent(
-      "tool_result",
-      { tool: "execute", callId: "c1", result: "username: agent42\npassword: hunter2", isError: false },
+  const history = [
+    at({ kind: "UserMessage", text: "sign me up for HN" }, 1),
+    at({ kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "browse signup" } }, 2),
+    at(
+      {
+        kind: "ToolResult",
+        callId: "c1",
+        tool: "execute",
+        isError: false,
+        text: "username: agent42\npassword: hunter2",
+      },
       3,
     ),
-    ent("assistant", { text: "Done — account created." }, 4),
+    at({ kind: "AgentMessage", text: "Done — account created." }, 4),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
@@ -90,11 +83,11 @@ test("reconstructMessagesFromHistory rebuilds a faithful tool round — a fact i
 });
 
 test("reconstructMessagesFromHistory SKIPS legacy tool entries with no callId (degrades to no tool replay)", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "hi" }, 1),
-    ent("tool_call", { tool: "read", path: "a.txt" }, 2),
-    ent("tool_result", { tool: "read", path: "a.txt", found: true }, 3),
-    ent("assistant", { text: "ok" }, 4),
+  const history = [
+    at({ kind: "UserMessage", text: "hi" }, 1),
+    at({ kind: "ToolCall", callId: "", tool: "read", body: { path: "a.txt" } }, 2),
+    at({ kind: "ToolResult", callId: "", tool: "read", body: { path: "a.txt", found: true } }, 3),
+    at({ kind: "AgentMessage", text: "ok" }, 4),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
@@ -106,11 +99,11 @@ test("reconstructMessagesFromHistory SKIPS legacy tool entries with no callId (d
 });
 
 test("a tool call with no recorded result replays with a synthetic interrupted result (turn died mid-call)", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "build and push the release" }, 1),
-    ent("tool_call", { tool: "execute", command: "make build", callId: "c1" }, 2),
-    ent("tool_result", { tool: "execute", callId: "c1", result: "built ok", isError: false }, 3),
-    ent("tool_call", { tool: "execute", command: "git push", callId: "c2" }, 4),
+  const history = [
+    at({ kind: "UserMessage", text: "build and push the release" }, 1),
+    at({ kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "make build" } }, 2),
+    at({ kind: "ToolResult", callId: "c1", tool: "execute", isError: false, text: "built ok" }, 3),
+    at({ kind: "ToolCall", callId: "c2", tool: "execute", body: { command: "git push" } }, 4),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
@@ -130,11 +123,11 @@ test("a tool call with no recorded result replays with a synthetic interrupted r
 });
 
 test("a user turn that lands right after a tool result stays adjacent — no words put in the assistant's mouth", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "check the build" }, 1),
-    ent("tool_call", { tool: "execute", command: "make build", callId: "c1" }, 2),
-    ent("tool_result", { tool: "execute", callId: "c1", result: "built ok", isError: false }, 3),
-    ent("user", { text: "actually, ship it" }, 4),
+  const history = [
+    at({ kind: "UserMessage", text: "check the build" }, 1),
+    at({ kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "make build" } }, 2),
+    at({ kind: "ToolResult", callId: "c1", tool: "execute", isError: false, text: "built ok" }, 3),
+    at({ kind: "UserMessage", text: "actually, ship it" }, 4),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
@@ -151,13 +144,13 @@ test("a user turn that lands right after a tool result stays adjacent — no wor
 });
 
 test("reconstructMessagesFromHistory replays a delivery as the agent's deliver call and keeps legacy file notes", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "make a flag" }, 1),
-    ent("assistant", { text: "here you go" }, 2),
-    ent("delivery", { text: "flag.png (image/png, 100 bytes)" }, 3),
-    ent("tool_call", { tool: "deliver", callId: "cron:1", text: "flag.png is ready", via: "cron" }, 4),
-    ent("tool_result", { tool: "deliver", callId: "cron:1", result: "delivered" }, 5),
-    ent("user", { text: "thanks" }, 6),
+  const history = [
+    at({ kind: "UserMessage", text: "make a flag" }, 1),
+    at({ kind: "AgentMessage", text: "here you go" }, 2),
+    at({ kind: "AgentMessage", variant: "files_delivered", text: "flag.png (image/png, 100 bytes)" }, 3),
+    at({ kind: "ToolCall", callId: "cron:1", tool: "deliver", body: { text: "flag.png is ready", via: "cron" } }, 4),
+    at({ kind: "ToolResult", callId: "cron:1", tool: "deliver", text: "delivered" }, 5),
+    at({ kind: "UserMessage", text: "thanks" }, 6),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
@@ -176,8 +169,8 @@ test("reconstructMessagesFromHistory replays a delivery as the agent's deliver c
 
 test("reconstructMessagesFromHistory opens with a fixed user frame when the agent spoke first", () => {
   const msgs = reconstructMessagesFromHistory([
-    ent("assistant", { text: "daily digest", deliveryKey: "cron:9" }, 1),
-    ent("user", { text: "thanks" }, 2),
+    at({ kind: "AgentMessage", text: "daily digest", body: { deliveryKey: "cron:9" } }, 1),
+    at({ kind: "UserMessage", text: "thanks" }, 2),
   ]);
   assertValidWire(msgs);
   assert.deepEqual(
@@ -191,7 +184,9 @@ test("reconstructMessagesFromHistory opens with a fixed user frame when the agen
 });
 
 test("transcript replay can start at recorded assistant work without a synthetic user", () => {
-  const messages = reconstructMessagesFromHistory([entry("assistant", "Already worked")], { requireUserStart: false });
+  const messages = reconstructMessagesFromHistory([entry("AgentMessage", "Already worked")], {
+    requireUserStart: false,
+  });
   assert.deepEqual(
     messages.map((message) => message.role),
     ["assistant"],
@@ -199,11 +194,11 @@ test("transcript replay can start at recorded assistant work without a synthetic
 });
 
 test("reconstructMessagesFromHistory coalesces consecutive assistant text entries to keep alternation", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "hi" }, 1),
-    ent("assistant", { text: "part one" }, 2),
-    ent("assistant", { text: "part two" }, 3),
-    ent("user", { text: "ok" }, 4),
+  const history = [
+    at({ kind: "UserMessage", text: "hi" }, 1),
+    at({ kind: "AgentMessage", text: "part one" }, 2),
+    at({ kind: "AgentMessage", text: "part two" }, 3),
+    at({ kind: "UserMessage", text: "ok" }, 4),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
@@ -217,16 +212,16 @@ test("reconstructMessagesFromHistory coalesces consecutive assistant text entrie
 });
 
 test("reconstructMessagesFromHistory replays a context summary as a user turn and stays valid across two tool turns", () => {
-  const history: SessionEntry[] = [
-    ent("system", { kind: "context_summary", throughSeq: 0, text: "Earlier: set up the project." }, 1),
-    ent("user", { text: "now deploy" }, 2),
-    ent("tool_call", { tool: "execute", command: "deploy", callId: "d1" }, 3),
-    ent("tool_result", { tool: "execute", callId: "d1", result: "deployed v4", isError: false }, 4),
-    ent("assistant", { text: "shipped v4" }, 5),
-    ent("user", { text: "and the logs?" }, 6),
-    ent("tool_call", { tool: "execute", command: "logs", callId: "d2" }, 7),
-    ent("tool_result", { tool: "execute", callId: "d2", result: "all green", isError: false }, 8),
-    ent("assistant", { text: "logs are green" }, 9),
+  const history = [
+    at({ kind: "ContextCompaction", throughSeq: 0, text: "Earlier: set up the project." }, 1),
+    at({ kind: "UserMessage", text: "now deploy" }, 2),
+    at({ kind: "ToolCall", callId: "d1", tool: "execute", body: { command: "deploy" } }, 3),
+    at({ kind: "ToolResult", callId: "d1", tool: "execute", isError: false, text: "deployed v4" }, 4),
+    at({ kind: "AgentMessage", text: "shipped v4" }, 5),
+    at({ kind: "UserMessage", text: "and the logs?" }, 6),
+    at({ kind: "ToolCall", callId: "d2", tool: "execute", body: { command: "logs" } }, 7),
+    at({ kind: "ToolResult", callId: "d2", tool: "execute", isError: false, text: "all green" }, 8),
+    at({ kind: "AgentMessage", text: "logs are green" }, 9),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
@@ -236,12 +231,32 @@ test("reconstructMessagesFromHistory replays a context summary as a user turn an
 });
 
 test("a recorded tool call whose wire arguments no longer parse replays with its recorded arguments", () => {
-  const step = { id: "st1", index: 0 };
+  const wire = { message: { id: "st1" } };
   const msgs = reconstructMessagesFromHistory([
-    ent("user", { text: "list files" }, 0),
-    ent("tool_call", { tool: "execute", callId: "c1", command: "ls", step, wire: { argumentsJson: "{not json" } }, 1),
-    ent("tool_result", { tool: "execute", callId: "c1", ok: true, isError: false, result: "a.txt", step }, 2),
-    ent("assistant", { text: "One file.", step: { id: "st2", index: 0 } }, 3),
+    at({ kind: "UserMessage", text: "list files" }, 0),
+    at(
+      {
+        kind: "ToolCall",
+        callId: "c1",
+        tool: "execute",
+        step: 0,
+        body: { command: "ls", wire: { ...wire, argumentsJson: "{not json" } },
+      },
+      1,
+    ),
+    at(
+      {
+        kind: "ToolResult",
+        callId: "c1",
+        tool: "execute",
+        isError: false,
+        text: "a.txt",
+        step: 0,
+        body: { ok: true, wire },
+      },
+      2,
+    ),
+    at({ kind: "AgentMessage", text: "One file.", step: 0, body: { wire: { message: { id: "st2" } } } }, 3),
   ]);
   assertValidWire(msgs);
   const call = msgs.flatMap((m) => (m.role === "assistant" ? m.content : [])).find((b) => b.type === "toolCall");
@@ -315,16 +330,11 @@ test("seedPriorTurns skips empty turns and returns [] for an empty input", () =>
   assert.deepEqual(seedPriorTurns([{ role: "user", name: "x", text: "   " }]), []);
 });
 
-function triggerEntry(ts: string, text: string): SessionEntry {
-  return {
-    sessionId: "s",
-    seq: 0,
-    parentSeq: null,
-    type: "user",
-    payload: { text, ts },
-    scopeLabel: "org:default-org",
-    createdAt: Number(ts) || 0,
-  };
+function triggerEntry(ts: string, text: string): Item {
+  return storedItem(
+    { kind: "UserMessage", externalId: ts, text },
+    { sessionId: "s", seq: 0, createdAt: Number(ts) || 0 },
+  );
 }
 
 test("recordedMessageTimestamps collects ts from BOTH overheard imports and stamped triggers", () => {
@@ -332,8 +342,8 @@ test("recordedMessageTimestamps collects ts from BOTH overheard imports and stam
   const history = [
     triggerEntry("100.002", "what did you ship?"),
     overheardEntry("100.001", "Alice", "deploying now"),
-    entry("user", "a legacy entry with no ts is ignored"),
-    entry("assistant", "shipping it"),
+    entry("UserMessage", "a legacy entry with no ts is ignored"),
+    entry("AgentMessage", "shipping it"),
     overheardEntry("100.003", "Bob", "lgtm"),
   ];
   assert.deepEqual([...recordedMessageTimestamps(history)].sort(), ["100.001", "100.002", "100.003"]);
@@ -428,8 +438,8 @@ test("renderOverheard adds a mentions attr when the payload carries resolved men
 test("reconstructMessagesFromHistory renders overheard entries as overheard user lines (cold-start survival)", () => {
   const msgs = reconstructMessagesFromHistory([
     overheardEntry("100.001", "Alice", "I posted a photo", ["cat.jpg"]),
-    entry("user", "who has a cat?"),
-    entry("assistant", "Alice does — she shared cat.jpg"),
+    entry("UserMessage", "who has a cat?"),
+    entry("AgentMessage", "Alice does — she shared cat.jpg"),
   ]);
   assertValidWire(msgs);
   const flat = msgs.map((m) => m.content.map((c) => (c.type === "text" ? c.text : "")).join("")).join("\n");
@@ -439,7 +449,7 @@ test("reconstructMessagesFromHistory renders overheard entries as overheard user
 });
 
 test("reconstructMessagesFromHistory skips an empty overheard marker (no blank line)", () => {
-  const msgs = reconstructMessagesFromHistory([overheardEntry("100.001", "", ""), entry("user", "hi")]);
+  const msgs = reconstructMessagesFromHistory([overheardEntry("100.001", "", ""), entry("UserMessage", "hi")]);
   assertValidWire(msgs);
   const texts = msgs.flatMap((m) => m.content.map((c) => (c.type === "text" ? c.text : "")));
   assert.ok(texts.some((t) => /hi/.test(t)));
@@ -448,10 +458,20 @@ test("reconstructMessagesFromHistory skips an empty overheard marker (no blank l
 
 test("a bytes-only surface call (legacy post / reach) replays with stand-in text, never {action,bytes}", () => {
   const msgs = reconstructMessagesFromHistory([
-    ent("user", { text: "hi" }, 0),
-    ent("tool_call", { tool: "web", action: "post", bytes: 873, callId: "c1" }, 1),
-    ent("tool_result", { tool: "web", action: "post", ok: true, callId: "c1", isError: false, result: "[sent]" }, 2),
-    ent("assistant", { text: "Replied in thread." }, 3),
+    at({ kind: "UserMessage", text: "hi" }, 0),
+    at({ kind: "ToolCall", callId: "c1", tool: "web", body: { action: "post", bytes: 873 } }, 1),
+    at(
+      {
+        kind: "ToolResult",
+        callId: "c1",
+        tool: "web",
+        isError: false,
+        text: "[sent]",
+        body: { action: "post", ok: true },
+      },
+      2,
+    ),
+    at({ kind: "AgentMessage", text: "Replied in thread." }, 3),
   ]);
   assertValidWire(msgs);
   const call = msgs.flatMap((m) => (m.role === "assistant" ? m.content : [])).find((b) => b.type === "toolCall");
@@ -464,10 +484,28 @@ test("a bytes-only surface call (legacy post / reach) replays with stand-in text
 
 test("a text-carrying post call replays verbatim (ts/broadcast preserved)", () => {
   const msgs = reconstructMessagesFromHistory([
-    ent("user", { text: "hi" }, 0),
-    ent("tool_call", { tool: "web", action: "post", broadcast: true, text: "the actual reply", callId: "c1" }, 1),
-    ent("tool_result", { tool: "web", action: "post", ok: true, callId: "c1", isError: false, result: "[sent]" }, 2),
-    ent("assistant", { text: "Replied." }, 3),
+    at({ kind: "UserMessage", text: "hi" }, 0),
+    at(
+      {
+        kind: "ToolCall",
+        callId: "c1",
+        tool: "web",
+        body: { action: "post", broadcast: true, text: "the actual reply" },
+      },
+      1,
+    ),
+    at(
+      {
+        kind: "ToolResult",
+        callId: "c1",
+        tool: "web",
+        isError: false,
+        text: "[sent]",
+        body: { action: "post", ok: true },
+      },
+      2,
+    ),
+    at({ kind: "AgentMessage", text: "Replied." }, 3),
   ]);
   assertValidWire(msgs);
   const call = msgs.flatMap((m) => (m.role === "assistant" ? m.content : [])).find((b) => b.type === "toolCall");
@@ -479,10 +517,28 @@ test("a text-carrying post call replays verbatim (ts/broadcast preserved)", () =
 
 test("a legacy call with a numeric files count replays without it (schema wants string[])", () => {
   const msgs = reconstructMessagesFromHistory([
-    ent("user", { text: "hi" }, 0),
-    ent("tool_call", { tool: "web", action: "reach", recipient: "bob", bytes: 100, files: 2, callId: "c1" }, 1),
-    ent("tool_result", { tool: "web", action: "reach", ok: true, callId: "c1", isError: false, result: "[sent]" }, 2),
-    ent("assistant", { text: "Sent." }, 3),
+    at({ kind: "UserMessage", text: "hi" }, 0),
+    at(
+      {
+        kind: "ToolCall",
+        callId: "c1",
+        tool: "web",
+        body: { action: "reach", recipient: "bob", bytes: 100, files: 2 },
+      },
+      1,
+    ),
+    at(
+      {
+        kind: "ToolResult",
+        callId: "c1",
+        tool: "web",
+        isError: false,
+        text: "[sent]",
+        body: { action: "reach", ok: true },
+      },
+      2,
+    ),
+    at({ kind: "AgentMessage", text: "Sent." }, 3),
   ]);
   assertValidWire(msgs);
   const call = msgs.flatMap((m) => (m.role === "assistant" ? m.content : [])).find((b) => b.type === "toolCall");
@@ -495,8 +551,15 @@ test("a legacy call with a numeric files count replays without it (schema wants 
 
 test("reconstructMessagesFromHistory replays the environment note the user message was sent with", () => {
   const history = [
-    ent("user", { text: "what's on today?", environment: "<environment>\nIt is Monday 9am\n</environment>" }, 1),
-    ent("assistant", { text: "Nothing yet." }, 2),
+    at(
+      {
+        kind: "UserMessage",
+        text: "what's on today?",
+        body: { environment: "<environment>\nIt is Monday 9am\n</environment>" },
+      },
+      1,
+    ),
+    at({ kind: "AgentMessage", text: "Nothing yet." }, 2),
   ];
   const [user] = reconstructMessagesFromHistory(history);
   assert.deepEqual(user!.content, [
@@ -523,36 +586,12 @@ test("overheard reconciliation deduplicates IDs within a batch but preserves ide
 });
 
 test("a tool_result marked interrupted replays as the interrupted placeholder, not as a real result", () => {
-  const entries: SessionEntry[] = [
-    {
-      sessionId: "s",
-      seq: 1,
-      parentSeq: null,
-      type: "user",
-      payload: { text: "run it" },
-      scopeLabel: "org:o",
-      createdAt: 1,
-    },
-    {
-      sessionId: "s",
-      seq: 2,
-      parentSeq: null,
-      type: "tool_call",
-      payload: { tool: "execute", callId: "c1", command: "make" },
-      scopeLabel: "org:o",
-      createdAt: 2,
-    },
-    {
-      sessionId: "s",
-      seq: 3,
-      parentSeq: null,
-      type: "tool_result",
-      payload: { callId: "c1", result: "[exit 143]", interrupted: true },
-      scopeLabel: "org:o",
-      createdAt: 3,
-    },
+  const items = [
+    at({ kind: "UserMessage", text: "run it" }, 1),
+    at({ kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "make" } }, 2),
+    at({ kind: "ToolResult", callId: "c1", text: "[exit 143]", body: { interrupted: true } }, 3),
   ];
-  const result = reconstructMessagesFromHistory(entries).find((m) => m.role === "toolResult")!;
+  const result = reconstructMessagesFromHistory(items).find((m) => m.role === "toolResult")!;
   assert.equal(result.role, "toolResult");
   if (result.role !== "toolResult") return;
   assert.deepEqual(result.content, [{ type: "text", text: INTERRUPTED_TOOL_RESULT }]);
@@ -560,15 +599,15 @@ test("a tool_result marked interrupted replays as the interrupted placeholder, n
 });
 
 test("reconstructMessagesFromHistory keeps parallel tool calls in one assistant message", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "check both" }, 1),
-    ent("tool_call", { tool: "read", callId: "a", path: "/a" }, 2),
-    ent("tool_call", { tool: "read", callId: "b", path: "/b" }, 3),
-    ent("tool_result", { tool: "read", callId: "a", result: "A" }, 4),
-    ent("tool_result", { tool: "read", callId: "b", result: "B" }, 5),
-    ent("tool_call", { tool: "read", callId: "c", path: "/c" }, 6),
-    ent("tool_result", { tool: "read", callId: "c", result: "C" }, 7),
-    ent("assistant", { text: "done" }, 8),
+  const history = [
+    at({ kind: "UserMessage", text: "check both" }, 1),
+    at({ kind: "ToolCall", callId: "a", tool: "read", body: { path: "/a" } }, 2),
+    at({ kind: "ToolCall", callId: "b", tool: "read", body: { path: "/b" } }, 3),
+    at({ kind: "ToolResult", callId: "a", tool: "read", text: "A" }, 4),
+    at({ kind: "ToolResult", callId: "b", tool: "read", text: "B" }, 5),
+    at({ kind: "ToolCall", callId: "c", tool: "read", body: { path: "/c" } }, 6),
+    at({ kind: "ToolResult", callId: "c", tool: "read", text: "C" }, 7),
+    at({ kind: "AgentMessage", text: "done" }, 8),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
@@ -581,11 +620,11 @@ test("reconstructMessagesFromHistory keeps parallel tool calls in one assistant 
 });
 
 test("reconstructMessagesFromHistory replays a stopped turn as a system note in user voice, after the real partial", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "write the report" }, 1),
-    ent("assistant", { text: "Draft so far", stopped: true }, 2),
-    ent("system", { kind: "turn_stopped", reason: "by the parent agent" }, 3),
-    ent("user", { text: "carry on" }, 4),
+  const history = [
+    at({ kind: "UserMessage", text: "write the report" }, 1),
+    at({ kind: "AgentMessage", text: "Draft so far", body: { stopped: true } }, 2),
+    at({ kind: "Stop", body: { reason: "by the parent agent" } }, 3),
+    at({ kind: "UserMessage", text: "carry on" }, 4),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
@@ -598,11 +637,11 @@ test("reconstructMessagesFromHistory replays a stopped turn as a system note in 
 });
 
 test("a turn stopped while a tool call ran explains the stop in that call's result, once", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "deploy it" }, 1),
-    ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
-    ent("system", { kind: "turn_stopped", reason: "by user" }, 3),
-    ent("user", { text: "what happened?" }, 4),
+  const history = [
+    at({ kind: "UserMessage", text: "deploy it" }, 1),
+    at({ kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "make deploy" } }, 2),
+    at({ kind: "Stop", body: { reason: "by user" } }, 3),
+    at({ kind: "UserMessage", text: "what happened?" }, 4),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
@@ -615,11 +654,11 @@ test("a turn stopped while a tool call ran explains the stop in that call's resu
 });
 
 test("overheard traffic between a cut-off call and the stop does not split the stop from that call", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "deploy it" }, 1),
-    ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
-    ent("user", { overheard: true, ts: "3", name: "Alice", text: "lunch?" }, 3),
-    ent("system", { kind: "turn_stopped", reason: "by user" }, 4),
+  const history = [
+    at({ kind: "UserMessage", text: "deploy it" }, 1),
+    at({ kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "make deploy" } }, 2),
+    at({ kind: "UserMessage", text: "lunch?", externalId: "3", body: { overheard: true, name: "Alice" } }, 3),
+    at({ kind: "Stop", body: { reason: "by user" } }, 4),
   ];
   const text = JSON.stringify(reconstructMessagesFromHistory(history));
   assert.match(text, /Turn stopped by user while this call was running/);
@@ -627,12 +666,12 @@ test("overheard traffic between a cut-off call and the stop does not split the s
 });
 
 test("a call killed by a Stop keeps its output and carries the stop in its result, once", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "deploy it" }, 1),
-    ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
-    ent("tool_result", { callId: "c1", result: "[stderr]\nKilled\n\n[exit 137]", stopped: true }, 3),
-    ent("system", { kind: "turn_stopped", reason: "by user" }, 4),
-    ent("user", { text: "what happened?" }, 5),
+  const history = [
+    at({ kind: "UserMessage", text: "deploy it" }, 1),
+    at({ kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "make deploy" } }, 2),
+    at({ kind: "ToolResult", callId: "c1", text: "[stderr]\nKilled\n\n[exit 137]", body: { stopped: true } }, 3),
+    at({ kind: "Stop", body: { reason: "by user" } }, 4),
+    at({ kind: "UserMessage", text: "what happened?" }, 5),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
@@ -650,19 +689,22 @@ test("a call killed by a Stop keeps its output and carries the stop in its resul
 });
 
 test("a result recorded while a Stop fired keeps its text when no stop was recorded", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "deploy it" }, 1),
-    ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
-    ent("tool_result", { callId: "c1", result: "[exit 137]", stopped: true }, 3),
+  const history = [
+    at({ kind: "UserMessage", text: "deploy it" }, 1),
+    at({ kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "make deploy" } }, 2),
+    at({ kind: "ToolResult", callId: "c1", text: "[exit 137]", body: { stopped: true } }, 3),
   ];
   assert.match(JSON.stringify(reconstructMessagesFromHistory(history)), /\[exit 137\]/);
 });
 
 test("a tool result cut off by a deploy says so in its replayed result", () => {
-  const history: SessionEntry[] = [
-    ent("user", { text: "deploy it" }, 1),
-    ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
-    ent("tool_result", { callId: "c1", result: "[exit 143]", interrupted: true, stop: { kind: "shutdown" } }, 3),
+  const history = [
+    at({ kind: "UserMessage", text: "deploy it" }, 1),
+    at({ kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "make deploy" } }, 2),
+    at(
+      { kind: "ToolResult", callId: "c1", text: "[exit 143]", body: { interrupted: true, stop: { kind: "shutdown" } } },
+      3,
+    ),
   ];
   const text = JSON.stringify(reconstructMessagesFromHistory(history));
   assert.match(text, /A routine platform deploy interrupted this call/);
@@ -670,7 +712,7 @@ test("a tool result cut off by a deploy says so in its replayed result", () => {
 
 test("replayed context marks each Pacific calendar day once, dating overheard Slack messages by when they were sent", () => {
   const imported = Date.parse("2026-10-19T18:00:00Z");
-  const overheard = (iso: string, text: string): SessionEntry => ({
+  const overheard = (iso: string, text: string): Item => ({
     ...overheardEntry(String(Date.parse(iso) / 1000), "Dana", text),
     createdAt: imported,
   });
@@ -679,7 +721,7 @@ test("replayed context marks each Pacific calendar day once, dating overheard Sl
     overheard("2026-10-16T16:00:00Z", "the deadline is Friday"),
     overheard("2026-10-17T05:30:00Z", "still Friday night here"),
     overheard("2026-10-17T08:00:00Z", "saturday early"),
-    { ...ent("user", { text: "has the deadline passed?" }, 5), createdAt: imported },
+    { ...at({ kind: "UserMessage", text: "has the deadline passed?" }, 5), createdAt: imported },
   ]);
   const lines = msgs.flatMap((m) =>
     m.content.flatMap((b) => (b.type === "text" ? b.text.split("\n").filter((l) => l.startsWith("──")) : [])),
