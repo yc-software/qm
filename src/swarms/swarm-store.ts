@@ -4,7 +4,7 @@ import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
 import type { RunStore, Run } from "../runs/run-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { versionBumpSql, type DurableMap } from "../persistence/durable-map.ts";
 import { jsonbStringify } from "../util/text.ts";
 
 import type { SwarmSettings } from "./swarm-settings.ts";
@@ -136,9 +136,7 @@ export function createSwarmStore(
           [fence.sessionId, fence.scopeId, fence.threadRef],
         );
         if (!session.rowCount) throw new Error("capability session mismatch");
-        await client.query(
-          "LOCK TABLE swarms IN ROW EXCLUSIVE MODE; INSERT INTO durable_map_versions (tbl,v) VALUES ('swarms',1) ON CONFLICT (tbl) DO UPDATE SET v=durable_map_versions.v+1",
-        );
+        await client.query(versionBumpSql("swarms"));
         const current = await client.query<{ json: SwarmStorage }>("SELECT json FROM swarms WHERE id=$1 FOR UPDATE", [
           id,
         ]);

@@ -29,18 +29,25 @@ export interface DurableMap<T> {
 }
 
 const VERSIONS_TABLE = "durable_map_versions";
+const FIRST_VERSION = "(extract(epoch FROM clock_timestamp()) * 1000)::bigint";
 const VERSION_FUNCTION = {
   id: "durable-map/0-version-function",
   statements: [
     `CREATE OR REPLACE FUNCTION durable_map_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
     BEGIN
-      INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES (TG_TABLE_NAME, 1)
+      INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES (TG_TABLE_NAME, ${FIRST_VERSION})
       ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1;
       RETURN NULL;
     END
     $fn$`,
   ],
 };
+
+export function versionBumpSql(table: string): string {
+  return `LOCK TABLE ${table} IN ROW EXCLUSIVE MODE;
+    INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', ${FIRST_VERSION})
+    ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
+}
 
 export function createPostgresMap<T>(
   pg: PgPool,
@@ -114,9 +121,7 @@ export function createPostgresMap<T>(
     }
     return readyP;
   }
-  const bumpSql = `LOCK TABLE ${table} IN ROW EXCLUSIVE MODE;
-     INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
-     ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
+  const bumpSql = versionBumpSql(table);
   async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
     await ready();
     return withPgTransaction(await pg.pool(), async (client) => {

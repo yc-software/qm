@@ -170,6 +170,28 @@ test("pg map: a write made outside the map is visible to a cached reader", { ski
   assert.ok(!(await reader.entries()).some(([id]) => id === "raw"));
 });
 
+test(
+  "pg map: a migration that locks a map table and then writes it does not deadlock a map update",
+  { skip },
+  async () => {
+    const factory = createPostgresMapFactory(URL!);
+    const m = factory.map<Widget>("map_widgets");
+    await m.put("ddl", { name: "ddl", tags: [], nested: { n: 1 } });
+    const pg = (await import("pg")).default;
+    const migration = new pg.Client({ connectionString: URL });
+    await migration.connect();
+    await migration.query("BEGIN");
+    await migration.query("LOCK TABLE map_widgets IN ACCESS EXCLUSIVE MODE");
+    const update = m.update!("ddl", (w) => ({ ...w, nested: { n: w.nested.n + 1 } }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await migration.query(`UPDATE map_widgets SET json = jsonb_set(json, '{nested,n}', '10') WHERE id = 'ddl'`);
+    await migration.query("COMMIT");
+    await migration.end();
+    await update;
+    assert.equal((await m.get("ddl"))?.nested.n, 11);
+  },
+);
+
 test("pg map: a caller mutating an all() result cannot poison the cache", { skip }, async () => {
   const m = createPostgresMapFactory(URL!).map<Widget>("map_widgets");
   await m.put("mut", { name: "mut", tags: ["a"], nested: { n: 1 } });
