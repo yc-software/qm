@@ -59,7 +59,13 @@ export function createIdentityService(
   const exclusive = <T>(fn: () => Promise<T>): Promise<T> => queue(currentTenant(), fn);
 
   const roster = perTenant(() => {
-    const state = {
+    const state: {
+      deactivated: Map<string, DeactivationRecord>;
+      externals: Map<string, ExternalMember>;
+      loaded: boolean;
+      firstLoad?: Promise<void>;
+      refresh: (force?: boolean) => Promise<void>;
+    } = {
       deactivated: new Map<string, DeactivationRecord>(),
       externals: new Map<string, ExternalMember>(),
       loaded: false,
@@ -166,7 +172,12 @@ export function createIdentityService(
     },
     refresh,
     ready(): Promise<void> {
-      return roster().loaded ? Promise.resolve() : refresh(true);
+      const state = roster();
+      if (state.loaded) return Promise.resolve();
+      state.firstLoad ??= state.refresh(true).finally(() => {
+        state.firstLoad = undefined;
+      });
+      return state.firstLoad;
     },
     resolve(actor: ActorAssertion): Principal {
       const p = classify(actor.externalId, actor.isExternalGuest);
