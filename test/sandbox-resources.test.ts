@@ -635,9 +635,12 @@ test("failed background registration kills its process and releases the resource
     signals.push(`${id}:${signal}`);
   };
   const broker = createBackgroundBroker({ sandbox: router, registry, scopeId: "personal:alice", pollMs: 0 });
-  await assert.rejects(broker.start(handle, "sleep 60", "Run background tests"), /registry unavailable/);
+  await assert.rejects(
+    inTestTenant(() => broker.start(handle, "sleep 60", "Run background tests")),
+    /registry unavailable/,
+  );
   assert.deepEqual(signals, ["unregistered:KILL"]);
-  await resources.retire("alice", record.id);
+  await inTestTenant(() => resources.retire("alice", record.id));
   assert.equal((await resources.get(record.id)).cleanupPending, false);
 });
 
@@ -914,7 +917,7 @@ test("two concurrent turns on one parking computer: only the last turn to finish
   const second = turn(b.id, "sb");
   await Promise.all([first.provision(), second.provision()]);
   await first.reclaimBox();
-  await runs.complete(a.id, a.leaseToken!, { status: "ok", reply: "done" });
+  await inTestTenant(() => runs.complete(a.id, a.leaseToken!, { status: "ok", reply: "done" }));
   assert.deepEqual(teardowns, [{ keepWarm: true }]);
   await second.reclaimBox();
   assert.deepEqual(teardowns, [{ keepWarm: true }, {}]);
