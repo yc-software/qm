@@ -760,7 +760,7 @@ test("a cron delivering into a conversation is readable there without its task, 
   const inGroup = (actorId: string) =>
     claims(actorId, group.audienceScopeId, { destinations: [group], defaultDestinationKey: group.key });
   const created = await control.createCron(
-    { title: "Daily update", schedule: { everyMs: 86_400_000 }, action: "read my private inbox" },
+    { title: "Status update", schedule: { everyMs: 3_600_000 }, action: "read my private inbox" },
     claims("U2"),
   );
   assert.ok(created.ok);
@@ -779,7 +779,7 @@ test("a cron delivering into a conversation is readable there without its task, 
   const listed = await control.listCrons(inGroup("U3"));
   assert.deepEqual(
     listed.visible.map((c) => [c.id, c.title, c.action, c.lastFireNote]),
-    [[id, "Daily update", undefined, undefined]],
+    [[id, "Status update", undefined, undefined]],
   );
   const got = await control.getCron(id, inGroup("U3"));
   assert.ok(got.ok);
