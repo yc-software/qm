@@ -13,11 +13,12 @@ const spec = {
   cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
 };
 
-test("no model can be enabled without provider verification", async () => {
-  const store = createModelOverlayStore(testMap());
-  await assert.rejects(store.upsert(spec, "admin"), /verification/i);
-  assert.deepEqual(await store.statuses(), []);
-});
+test("no model can be enabled without provider verification", () =>
+  inTestTenant(async () => {
+    const store = createModelOverlayStore(testModelTables().registry);
+    await assert.rejects(store.upsert(spec, "admin"), /verification/i);
+    assert.deepEqual(await store.statuses(), []);
+  }));
 
 import { afterEach } from "node:test";
 import {
@@ -35,103 +36,108 @@ import { GatewayModelUnavailableError } from "../src/model/provider-endpoints.ts
 const verified: ModelVerifier = async () => ({ fingerprint: "test-context", probe: async () => {} });
 afterEach(() => setModelOverlays([]));
 
-test("legacy unverified rows remain unavailable and statuses never expose proof fingerprints", async () => {
-  const backing = testMap<StoredModelOverlay>();
-  const store = createModelOverlayStore(backing, undefined, verified);
-  await backing.put(spec.id, { spec, disabled: false, updatedAt: 1, updatedBy: "admin" } as StoredModelOverlay);
-  await store.refresh();
-  assert.equal(resolveModel(spec.id), undefined);
-  assert.match(modelUnavailableReason(spec.id)!, /not been verified/);
-  await store.upsert(spec, "admin");
-  await store.refresh();
-  assert.ok(resolveModel(spec.id));
-  const status = await store.statuses();
-  assert.equal(status[0]?.verificationScope, "organization");
-  assert.ok(status[0]?.verifiedAt);
-  assert.doesNotMatch(JSON.stringify(status), /fingerprint|test-context/);
-});
-
-test("failed probes never publish new models or replace previously verified definitions", async () => {
-  let fail = false;
-  const store = createModelOverlayStore(testMap(), undefined, async () => ({
-    fingerprint: "context",
-    probe: async () => {
-      if (fail)
-        throw new ProviderTurnError("secret-credential-value", {
-          code: "auth",
-          status: 403,
-          retryable: false,
-          raw: "",
-        });
-    },
+test("legacy unverified rows remain unavailable and statuses never expose proof fingerprints", () =>
+  inTestTenant(async () => {
+    const backing = testModelTables().registry;
+    const store = createModelOverlayStore(backing, undefined, verified);
+    await backing.put(spec.id, { spec, disabled: false, updatedAt: 1, updatedBy: "admin" } as StoredModelOverlay);
+    await store.refresh();
+    assert.equal(resolveModel(spec.id), undefined);
+    assert.match(modelUnavailableReason(spec.id)!, /not been verified/);
+    await store.upsert(spec, "admin");
+    await store.refresh();
+    assert.ok(resolveModel(spec.id));
+    const status = await store.statuses();
+    assert.equal(status[0]?.verificationScope, "organization");
+    assert.ok(status[0]?.verifiedAt);
+    assert.doesNotMatch(JSON.stringify(status), /fingerprint|test-context/);
   }));
-  await store.upsert(spec, "admin");
-  fail = true;
-  await assert.rejects(store.upsert({ ...spec, name: "Unverified edit" }, "admin"), /cannot access/);
-  await assert.rejects(store.upsert({ ...spec, id: "unverified-new" }, "admin"), /cannot access/);
-  const statuses = await store.statuses();
-  assert.equal(statuses.length, 1);
-  assert.equal(statuses[0]?.spec.name, spec.name);
-  assert.doesNotMatch(JSON.stringify(statuses), /secret-credential-value/);
-});
 
-test("credential rotation invalidates availability and a successful recheck restores it", async () => {
-  let fingerprint = "key-a";
-  const store = createModelOverlayStore(testMap(), undefined, async () => ({
-    fingerprint,
-    probe: async () => {},
+test("failed probes never publish new models or replace previously verified definitions", () =>
+  inTestTenant(async () => {
+    let fail = false;
+    const store = createModelOverlayStore(testModelTables().registry, undefined, async () => ({
+      fingerprint: "context",
+      probe: async () => {
+        if (fail)
+          throw new ProviderTurnError("secret-credential-value", {
+            code: "auth",
+            status: 403,
+            retryable: false,
+            raw: "",
+          });
+      },
+    }));
+    await store.upsert(spec, "admin");
+    fail = true;
+    await assert.rejects(store.upsert({ ...spec, name: "Unverified edit" }, "admin"), /cannot access/);
+    await assert.rejects(store.upsert({ ...spec, id: "unverified-new" }, "admin"), /cannot access/);
+    const statuses = await store.statuses();
+    assert.equal(statuses.length, 1);
+    assert.equal(statuses[0]?.spec.name, spec.name);
+    assert.doesNotMatch(JSON.stringify(statuses), /secret-credential-value/);
   }));
-  await store.upsert(spec, "admin");
-  await store.refresh();
-  assert.ok(resolveModel(spec.id));
-  fingerprint = "key-b";
-  await store.refresh();
-  assert.equal(resolveModel(spec.id), undefined);
-  assert.match(modelUnavailableReason(spec.id)!, /credentials changed/);
-  await store.upsert(spec, "admin");
-  await store.refresh();
-  assert.ok(resolveModel(spec.id));
-});
 
-test("a deletion while verification runs cannot be undone by its late success", async () => {
-  let release: () => void = () => {};
-  let entered: () => void = () => {};
-  const started = new Promise<void>((r) => {
-    entered = r;
-  });
-  let hold = false;
-  const store = createModelOverlayStore(testMap(), undefined, async () => ({
-    fingerprint: "context",
-    probe: async () => {
-      if (hold) {
-        entered();
-        await new Promise<void>((r) => {
-          release = r;
-        });
-      }
-    },
+test("credential rotation invalidates availability and a successful recheck restores it", () =>
+  inTestTenant(async () => {
+    let fingerprint = "key-a";
+    const store = createModelOverlayStore(testModelTables().registry, undefined, async () => ({
+      fingerprint,
+      probe: async () => {},
+    }));
+    await store.upsert(spec, "admin");
+    await store.refresh();
+    assert.ok(resolveModel(spec.id));
+    fingerprint = "key-b";
+    await store.refresh();
+    assert.equal(resolveModel(spec.id), undefined);
+    assert.match(modelUnavailableReason(spec.id)!, /credentials changed/);
+    await store.upsert(spec, "admin");
+    await store.refresh();
+    assert.ok(resolveModel(spec.id));
   }));
-  await store.upsert(spec, "admin");
-  hold = true;
-  const update = store.upsert({ ...spec, name: "Late edit" }, "admin");
-  await started;
-  await store.delete(spec.id, "admin");
-  release();
-  await assert.rejects(update, /changed during verification/);
-  assert.equal((await store.statuses())[0]?.disabled, true);
-});
 
-test("a changed serving context during a probe is not certified", async () => {
-  let fingerprint = "old";
-  const store = createModelOverlayStore(testMap(), undefined, async () => ({
-    fingerprint,
-    probe: async () => {
-      fingerprint = "new";
-    },
+test("a deletion while verification runs cannot be undone by its late success", () =>
+  inTestTenant(async () => {
+    let release: () => void = () => {};
+    let entered: () => void = () => {};
+    const started = new Promise<void>((r) => {
+      entered = r;
+    });
+    let hold = false;
+    const store = createModelOverlayStore(testModelTables().registry, undefined, async () => ({
+      fingerprint: "context",
+      probe: async () => {
+        if (hold) {
+          entered();
+          await new Promise<void>((r) => {
+            release = r;
+          });
+        }
+      },
+    }));
+    await store.upsert(spec, "admin");
+    hold = true;
+    const update = store.upsert({ ...spec, name: "Late edit" }, "admin");
+    await started;
+    await store.delete(spec.id, "admin");
+    release();
+    await assert.rejects(update, /changed during verification/);
+    assert.equal((await store.statuses())[0]?.disabled, true);
   }));
-  await assert.rejects(store.upsert(spec, "admin"), /credentials changed/);
-  assert.deepEqual(await store.statuses(), []);
-});
+
+test("a changed serving context during a probe is not certified", () =>
+  inTestTenant(async () => {
+    let fingerprint = "old";
+    const store = createModelOverlayStore(testModelTables().registry, undefined, async () => ({
+      fingerprint,
+      probe: async () => {
+        fingerprint = "new";
+      },
+    }));
+    await assert.rejects(store.upsert(spec, "admin"), /credentials changed/);
+    assert.deepEqual(await store.statuses(), []);
+  }));
 
 test("probe failures map from structured codes and error names, never provider text", () => {
   const typed = (code: ProviderErrorCode, status?: number) =>
@@ -269,53 +275,54 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
   }
 });
 
-test("Anthropic verification exercises ordinary and fast requests, and gateway uses its serving target and credential", async () => {
-  const upstream = await verificationUpstream();
-  const config = testConfig({ anthropicApiKey: "anthropic-test-key", providerBaseUrls: { anthropic: upstream.url } });
-  const built = buildApp(config);
-  try {
-    upstream.behavior.rejectFast = true;
-    await assert.rejects(
-      built.modelRegistry.upsert(
+test("Anthropic verification exercises ordinary and fast requests, and gateway uses its serving target and credential", () =>
+  inTestTenant(async () => {
+    const upstream = await verificationUpstream();
+    const config = testConfig({ anthropicApiKey: "anthropic-test-key", providerBaseUrls: { anthropic: upstream.url } });
+    const built = buildApp(config);
+    try {
+      upstream.behavior.rejectFast = true;
+      await assert.rejects(
+        built.modelRegistry.upsert(
+          { ...spec, provider: "anthropic", template: "claude-opus-4-8", fastMode: true },
+          "admin",
+        ),
+        /rejected this configuration/,
+      );
+      assert.equal((await built.modelRegistry.statuses()).length, 0);
+      upstream.behavior.rejectFast = false;
+      upstream.requests.length = 0;
+      await built.modelRegistry.upsert(
         { ...spec, provider: "anthropic", template: "claude-opus-4-8", fastMode: true },
         "admin",
-      ),
-      /rejected this configuration/,
-    );
-    assert.equal((await built.modelRegistry.statuses()).length, 0);
-    upstream.behavior.rejectFast = false;
-    upstream.requests.length = 0;
-    await built.modelRegistry.upsert(
-      { ...spec, provider: "anthropic", template: "claude-opus-4-8", fastMode: true },
-      "admin",
-    );
-    assert.equal(upstream.requests.length, 2);
-    assert.equal(upstream.requests[0]?.body.model, spec.id);
-    assert.equal(upstream.requests[0]?.body.max_tokens, 128);
-    assert.equal(upstream.requests[0]?.key, "anthropic-test-key");
-    assert.equal(upstream.requests[0]?.body.speed, undefined);
-    assert.equal(upstream.requests[1]?.body.speed, "fast");
-    assert.match(upstream.requests[1]!.beta!, /fast-mode/);
-    const verifier = createModelVerifier({
-      credentials: built.modelCredentials,
-      keyMaterial: "test-hmac-key",
-      modelGateway: {
-        url: upstream.url + "/v1",
-        apiKey: "gateway-test-key",
-        apiKeyHeader: "x-gateway-key",
-        models: { [spec.id]: "gateway-model-target" },
-      },
-    });
-    const context = await verifier(parseModelOverlay(spec));
-    await context.probe(AbortSignal.timeout(5000));
-    assert.equal(upstream.requests.at(-1)?.body.model, "gateway-model-target");
-    assert.equal(upstream.requests.at(-1)?.authorization, "Bearer gateway-test-key");
-    assert.equal(upstream.requests.at(-1)?.gatewayKey, "gateway-test-key");
-  } finally {
-    await upstream.close();
-    setProviderBaseUrls({});
-  }
-});
+      );
+      assert.equal(upstream.requests.length, 2);
+      assert.equal(upstream.requests[0]?.body.model, spec.id);
+      assert.equal(upstream.requests[0]?.body.max_tokens, 128);
+      assert.equal(upstream.requests[0]?.key, "anthropic-test-key");
+      assert.equal(upstream.requests[0]?.body.speed, undefined);
+      assert.equal(upstream.requests[1]?.body.speed, "fast");
+      assert.match(upstream.requests[1]!.beta!, /fast-mode/);
+      const verifier = createModelVerifier({
+        credentials: built.modelCredentials,
+        keyMaterial: "test-hmac-key",
+        modelGateway: {
+          url: upstream.url + "/v1",
+          apiKey: "gateway-test-key",
+          apiKeyHeader: "x-gateway-key",
+          models: { [spec.id]: "gateway-model-target" },
+        },
+      });
+      const context = await verifier(parseModelOverlay(spec));
+      await context.probe(AbortSignal.timeout(5000));
+      assert.equal(upstream.requests.at(-1)?.body.model, "gateway-model-target");
+      assert.equal(upstream.requests.at(-1)?.authorization, "Bearer gateway-test-key");
+      assert.equal(upstream.requests.at(-1)?.gatewayKey, "gateway-test-key");
+    } finally {
+      await upstream.close();
+      setProviderBaseUrls({});
+    }
+  }));
 
 test("the streaming probe aborts a nonresponsive provider and never accepts an incomplete response", async () => {
   const upstream = await verificationUpstream();
@@ -330,233 +337,254 @@ test("the streaming probe aborts a nonresponsive provider and never accepts an i
   }
 });
 
-test("a failed recheck of the saved definition removes its prior certification", async () => {
-  let fail = false;
-  const store = createModelOverlayStore(testMap(), undefined, async () => ({
-    fingerprint: "context",
-    probe: async () => {
-      if (fail) throw new ProviderTurnError("403", { code: "auth", status: 403, retryable: false, raw: "" });
-    },
+test("a failed recheck of the saved definition removes its prior certification", () =>
+  inTestTenant(async () => {
+    let fail = false;
+    const store = createModelOverlayStore(testModelTables().registry, undefined, async () => ({
+      fingerprint: "context",
+      probe: async () => {
+        if (fail) throw new ProviderTurnError("403", { code: "auth", status: 403, retryable: false, raw: "" });
+      },
+    }));
+    await store.upsert(spec, "admin");
+    await store.refresh();
+    assert.ok(resolveModel(spec.id));
+    fail = true;
+    await assert.rejects(store.upsert(spec, "admin"), /cannot access/);
+    await store.refresh();
+    assert.equal(resolveModel(spec.id), undefined);
+    assert.equal((await store.statuses())[0]?.spec.name, spec.name);
   }));
-  await store.upsert(spec, "admin");
-  await store.refresh();
-  assert.ok(resolveModel(spec.id));
-  fail = true;
-  await assert.rejects(store.upsert(spec, "admin"), /cannot access/);
-  await store.refresh();
-  assert.equal(resolveModel(spec.id), undefined);
-  assert.equal((await store.statuses())[0]?.spec.name, spec.name);
-});
 
-test("endpoint, template metadata, credential revision, and model edits change verification fingerprints", async () => {
-  const built = buildApp(testConfig({ openaiApiKey: "test-key" }));
-  const verifier = createModelVerifier({ credentials: built.modelCredentials, keyMaterial: "stable-test-hmac" });
-  try {
-    const original = (await verifier(parseModelOverlay(spec))).fingerprint;
-    assert.equal((await verifier(parseModelOverlay(spec))).fingerprint, original);
-    assert.notEqual((await verifier(parseModelOverlay({ ...spec, template: "gpt-5.6-sol" }))).fingerprint, original);
-    assert.notEqual((await verifier(parseModelOverlay({ ...spec, maxTokens: 8000 }))).fingerprint, original);
-    setProviderBaseUrls({ openai: "http://127.0.0.1:19999/v1" });
-    assert.notEqual((await verifier(parseModelOverlay(spec))).fingerprint, original);
-    setProviderBaseUrls({});
-    await inTestTenant(() => built.modelCredentials.set("openai", "test-key", "admin"));
-    assert.notEqual((await verifier(parseModelOverlay(spec))).fingerprint, original);
-  } finally {
-    setProviderBaseUrls({});
-  }
-});
+test("endpoint, template metadata, credential revision, and model edits change verification fingerprints", () =>
+  inTestTenant(async () => {
+    const built = buildApp(testConfig({ openaiApiKey: "test-key" }));
+    const verifier = createModelVerifier({ credentials: built.modelCredentials, keyMaterial: "stable-test-hmac" });
+    try {
+      const original = (await verifier(parseModelOverlay(spec))).fingerprint;
+      assert.equal((await verifier(parseModelOverlay(spec))).fingerprint, original);
+      assert.notEqual((await verifier(parseModelOverlay({ ...spec, template: "gpt-5.6-sol" }))).fingerprint, original);
+      assert.notEqual((await verifier(parseModelOverlay({ ...spec, maxTokens: 8000 }))).fingerprint, original);
+      setProviderBaseUrls({ openai: "http://127.0.0.1:19999/v1" });
+      assert.notEqual((await verifier(parseModelOverlay(spec))).fingerprint, original);
+      setProviderBaseUrls({});
+      await inTestTenant(() => built.modelCredentials.set("openai", "test-key", "admin"));
+      assert.notEqual((await verifier(parseModelOverlay(spec))).fingerprint, original);
+    } finally {
+      setProviderBaseUrls({});
+    }
+  }));
 
-test("corrupt persisted rows and copied proofs cannot enable a different model ID", async () => {
-  const backing = testMap<StoredModelOverlay>();
-  const verifier: ModelVerifier = async (value) => ({ fingerprint: JSON.stringify(value), probe: async () => {} });
-  const store = createModelOverlayStore(backing, undefined, verifier);
-  await store.upsert(spec, "admin");
-  const saved = (await backing.get(spec.id))!;
-  await backing.put("copied-model", saved);
-  await backing.put("null-model", null as unknown as StoredModelOverlay);
-  await store.refresh();
-  assert.ok(resolveModel(spec.id));
-  assert.equal(resolveModel("copied-model"), undefined);
-  assert.equal(resolveModel("null-model"), undefined);
-  assert.equal((await store.statuses()).length, 3);
-});
+test("corrupt persisted rows and copied proofs cannot enable a different model ID", () =>
+  inTestTenant(async () => {
+    const backing = testModelTables().registry;
+    const verifier: ModelVerifier = async (value) => ({ fingerprint: JSON.stringify(value), probe: async () => {} });
+    const store = createModelOverlayStore(backing, undefined, verifier);
+    await store.upsert(spec, "admin");
+    const saved = (await backing.get(spec.id))!;
+    await backing.put("copied-model", saved);
+    await backing.put("null-model", {
+      spec: {} as StoredModelOverlay["spec"],
+      disabled: false,
+      updatedAt: 1,
+      updatedBy: "admin",
+    });
+    await store.refresh();
+    assert.ok(resolveModel(spec.id));
+    assert.equal(resolveModel("copied-model"), undefined);
+    assert.equal(resolveModel("null-model"), undefined);
+    assert.equal((await store.statuses()).length, 3);
+  }));
 
-test("concurrent successful probes cannot silently overwrite a newer saved definition", async () => {
-  let release: () => void = () => {};
-  let entered: () => void = () => {};
-  const started = new Promise<void>((r) => {
-    entered = r;
-  });
-  let holding = false;
-  const store = createModelOverlayStore(testMap(), undefined, async (value) => ({
-    fingerprint: JSON.stringify(value),
-    probe: async () => {
-      if (holding && value.name === "Slow edit") {
+test("concurrent successful probes cannot silently overwrite a newer saved definition", () =>
+  inTestTenant(async () => {
+    let release: () => void = () => {};
+    let entered: () => void = () => {};
+    const started = new Promise<void>((r) => {
+      entered = r;
+    });
+    let holding = false;
+    const store = createModelOverlayStore(testModelTables().registry, undefined, async (value) => ({
+      fingerprint: JSON.stringify(value),
+      probe: async () => {
+        if (holding && value.name === "Slow edit") {
+          entered();
+          await new Promise<void>((r) => {
+            release = r;
+          });
+        }
+      },
+    }));
+    await store.upsert(spec, "admin");
+    holding = true;
+    const slow = store.upsert({ ...spec, name: "Slow edit" }, "admin");
+    await started;
+    await store.upsert({ ...spec, name: "Newer edit" }, "admin");
+    release();
+    await assert.rejects(slow, /changed during verification/);
+    assert.equal((await store.statuses())[0]?.spec.name, "Newer edit");
+  }));
+
+test("a model stays unavailable until its pending probe completes", () =>
+  inTestTenant(async () => {
+    let release: () => void = () => {};
+    let entered: () => void = () => {};
+    const started = new Promise<void>((r) => {
+      entered = r;
+    });
+    const store = createModelOverlayStore(testModelTables().registry, undefined, async () => ({
+      fingerprint: "context",
+      probe: async () => {
         entered();
         await new Promise<void>((r) => {
           release = r;
         });
-      }
-    },
+      },
+    }));
+    const pending = store.upsert(spec, "admin");
+    await started;
+    await store.refresh();
+    assert.equal(resolveModel(spec.id), undefined);
+    assert.deepEqual(await store.statuses(), []);
+    release();
+    await pending;
+    await store.refresh();
+    assert.ok(resolveModel(spec.id));
   }));
-  await store.upsert(spec, "admin");
-  holding = true;
-  const slow = store.upsert({ ...spec, name: "Slow edit" }, "admin");
-  await started;
-  await store.upsert({ ...spec, name: "Newer edit" }, "admin");
-  release();
-  await assert.rejects(slow, /changed during verification/);
-  assert.equal((await store.statuses())[0]?.spec.name, "Newer edit");
-});
 
-test("a model stays unavailable until its pending probe completes", async () => {
-  let release: () => void = () => {};
-  let entered: () => void = () => {};
-  const started = new Promise<void>((r) => {
-    entered = r;
-  });
-  const store = createModelOverlayStore(testMap(), undefined, async () => ({
-    fingerprint: "context",
-    probe: async () => {
-      entered();
-      await new Promise<void>((r) => {
-        release = r;
-      });
-    },
-  }));
-  const pending = store.upsert(spec, "admin");
-  await started;
-  await store.refresh();
-  assert.equal(resolveModel(spec.id), undefined);
-  assert.deepEqual(await store.statuses(), []);
-  release();
-  await pending;
-  await store.refresh();
-  assert.ok(resolveModel(spec.id));
-});
-
-test("the store deadline leaves a hanging provider unverified", { timeout: 25_000 }, async () => {
-  const upstream = await verificationUpstream();
-  upstream.behavior.hang = true;
-  const built = buildApp(testConfig({ openaiApiKey: "test-key", providerBaseUrls: { openai: upstream.url + "/v1" } }));
-  try {
-    const start = Date.now();
-    await assert.rejects(
-      built.modelRegistry.upsert(spec, "admin"),
-      (error: unknown) => error instanceof ModelVerificationError && error.code === "timeout",
+test("the store deadline leaves a hanging provider unverified", { timeout: 25_000 }, () =>
+  inTestTenant(async () => {
+    const upstream = await verificationUpstream();
+    upstream.behavior.hang = true;
+    const built = buildApp(
+      testConfig({ openaiApiKey: "test-key", providerBaseUrls: { openai: upstream.url + "/v1" } }),
     );
-    assert.ok(Date.now() - start < 20_000);
-    assert.deepEqual(await built.modelRegistry.statuses(), []);
-  } finally {
-    await upstream.close();
-    setProviderBaseUrls({});
-  }
-});
+    try {
+      const start = Date.now();
+      await assert.rejects(
+        built.modelRegistry.upsert(spec, "admin"),
+        (error: unknown) => error instanceof ModelVerificationError && error.code === "timeout",
+      );
+      assert.ok(Date.now() - start < 20_000);
+      assert.deepEqual(await built.modelRegistry.statuses(), []);
+    } finally {
+      await upstream.close();
+      setProviderBaseUrls({});
+    }
+  }),
+);
 
 import { createHmac, scryptSync } from "node:crypto";
 
-test("verification fingerprints use a memory-hard credential-bound MAC key", async () => {
-  const built = buildApp(testConfig({ openaiApiKey: "fingerprint-test-key" }));
-  const keyMaterial = "deployment-fingerprint-test-key";
-  const candidate = parseModelOverlay(spec);
-  const verifier = createModelVerifier({ credentials: built.modelCredentials, keyMaterial });
-  const salt = createHmac("sha256", keyMaterial).update("qm:model-verification:credential:v2").digest();
-  const derived = scryptSync(JSON.stringify({ key: "fingerprint-test-key" }), salt, 32, {
-    N: 131_072,
-    r: 8,
-    p: 1,
-    maxmem: 256 * 1024 * 1024,
-  });
-  const expected = createHmac("sha256", derived)
-    .update(
-      JSON.stringify({
-        version: 2,
-        spec: candidate,
-        model: modelFromOverlay(candidate),
-        credentialRevision: (await built.modelCredentials.statuses()).find(
-          (status) => status.provider === candidate.provider,
-        ),
-      }),
-    )
-    .digest("hex");
-  assert.equal((await verifier(candidate)).fingerprint, expected);
-  const concurrent = await Promise.all(Array.from({ length: 8 }, () => verifier(candidate)));
-  assert.ok(concurrent.every((value) => value.fingerprint === expected));
-  const restarted = createModelVerifier({ credentials: built.modelCredentials, keyMaterial });
-  assert.equal((await restarted(candidate)).fingerprint, expected);
-  const differentDeployment = createModelVerifier({
-    credentials: built.modelCredentials,
-    keyMaterial: "other-deployment-key",
-  });
-  assert.notEqual((await differentDeployment(candidate)).fingerprint, expected);
-});
+test("verification fingerprints use a memory-hard credential-bound MAC key", () =>
+  inTestTenant(async () => {
+    const built = buildApp(testConfig({ openaiApiKey: "fingerprint-test-key" }));
+    const keyMaterial = "deployment-fingerprint-test-key";
+    const candidate = parseModelOverlay(spec);
+    const verifier = createModelVerifier({ credentials: built.modelCredentials, keyMaterial });
+    const salt = createHmac("sha256", keyMaterial).update("qm:model-verification:credential:v2").digest();
+    const derived = scryptSync(JSON.stringify({ key: "fingerprint-test-key" }), salt, 32, {
+      N: 131_072,
+      r: 8,
+      p: 1,
+      maxmem: 256 * 1024 * 1024,
+    });
+    const expected = createHmac("sha256", derived)
+      .update(
+        JSON.stringify({
+          version: 2,
+          spec: candidate,
+          model: modelFromOverlay(candidate),
+          credentialRevision: (await built.modelCredentials.statuses()).find(
+            (status) => status.provider === candidate.provider,
+          ),
+        }),
+      )
+      .digest("hex");
+    assert.equal((await verifier(candidate)).fingerprint, expected);
+    const concurrent = await Promise.all(Array.from({ length: 8 }, () => verifier(candidate)));
+    assert.ok(concurrent.every((value) => value.fingerprint === expected));
+    const restarted = createModelVerifier({ credentials: built.modelCredentials, keyMaterial });
+    assert.equal((await restarted(candidate)).fingerprint, expected);
+    const differentDeployment = createModelVerifier({
+      credentials: built.modelCredentials,
+      keyMaterial: "other-deployment-key",
+    });
+    assert.notEqual((await differentDeployment(candidate)).fingerprint, expected);
+  }));
 
-test("environment and gateway credential changes invalidate cached fingerprints", async () => {
-  const fallback = { openai: "first-environment-test-key" };
-  const credentials = createModelCredentialStore({ backing: testMap(), keyMaterial: "test-key", fallback });
-  const candidate = parseModelOverlay(spec);
-  const modelGateway = {
-    url: "https://gateway.example.invalid/v1",
-    apiKey: "first-gateway-test-key",
-    apiKeyHeader: "x-gateway-key",
-    models: { [spec.id]: "target" },
-  };
-  const direct = createModelVerifier({ credentials, keyMaterial: "test-key" });
-  const gateway = createModelVerifier({ credentials, keyMaterial: "test-key", modelGateway });
-  const directOriginal = (await direct(candidate)).fingerprint;
-  const gatewayOriginal = (await gateway(candidate)).fingerprint;
-  fallback.openai = "changed-environment-test-key";
-  assert.notEqual((await direct(candidate)).fingerprint, directOriginal);
-  assert.equal((await gateway(candidate)).fingerprint, gatewayOriginal);
-  modelGateway.apiKey = "changed-gateway-test-key";
-  const rotatedGateway = (await gateway(candidate)).fingerprint;
-  assert.notEqual(rotatedGateway, gatewayOriginal);
-  modelGateway.apiKeyHeader = "x-new-gateway-key";
-  assert.notEqual((await gateway(candidate)).fingerprint, rotatedGateway);
-});
+test("environment and gateway credential changes invalidate cached fingerprints", () =>
+  inTestTenant(async () => {
+    const fallback = { openai: "first-environment-test-key" };
+    const credentials = createModelCredentialStore({
+      backing: testModelTables().credentials,
+      keyMaterial: "test-key",
+      fallback,
+    });
+    const candidate = parseModelOverlay(spec);
+    const modelGateway = {
+      url: "https://gateway.example.invalid/v1",
+      apiKey: "first-gateway-test-key",
+      apiKeyHeader: "x-gateway-key",
+      models: { [spec.id]: "target" },
+    };
+    const direct = createModelVerifier({ credentials, keyMaterial: "test-key" });
+    const gateway = createModelVerifier({ credentials, keyMaterial: "test-key", modelGateway });
+    const directOriginal = (await direct(candidate)).fingerprint;
+    const gatewayOriginal = (await gateway(candidate)).fingerprint;
+    fallback.openai = "changed-environment-test-key";
+    assert.notEqual((await direct(candidate)).fingerprint, directOriginal);
+    assert.equal((await gateway(candidate)).fingerprint, gatewayOriginal);
+    modelGateway.apiKey = "changed-gateway-test-key";
+    const rotatedGateway = (await gateway(candidate)).fingerprint;
+    assert.notEqual(rotatedGateway, gatewayOriginal);
+    modelGateway.apiKeyHeader = "x-new-gateway-key";
+    assert.notEqual((await gateway(candidate)).fingerprint, rotatedGateway);
+  }));
 
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { probeModel } from "../src/model/model-runtime.ts";
-import { testMap } from "./support/test-database.ts";
+import { testModelTables } from "./support/credential-stores.ts";
 
-test("legacy fingerprint versions stay unavailable until a successful new verification", async () => {
-  const built = buildApp(testConfig({ openaiApiKey: "test-key" }));
-  const candidate = parseModelOverlay(spec);
-  const keyMaterial = "stable-test-key";
-  const fingerprint = createHmac("sha256", keyMaterial)
-    .update(
-      JSON.stringify({
-        version: 1,
-        spec: candidate,
-        model: modelFromOverlay(candidate),
-        key: "test-key",
-        credentialRevision: (await built.modelCredentials.statuses()).find((status) => status.provider === "openai"),
-      }),
-    )
-    .digest("hex");
-  const backing = testMap<StoredModelOverlay>();
-  await backing.put(spec.id, {
-    spec: candidate,
-    disabled: false,
-    updatedAt: 1,
-    updatedBy: "admin",
-    verification: { fingerprint, verifiedAt: 1, revision: "old-proof" },
-  });
-  let probes = 0;
-  const verifier = createModelVerifier({
-    credentials: built.modelCredentials,
-    keyMaterial,
-    probe: async () => {
-      probes++;
-    },
-  });
-  const store = createModelOverlayStore(backing, undefined, verifier);
-  await store.refresh();
-  assert.equal(probes, 0);
-  assert.equal(resolveModel(spec.id), undefined);
-  assert.match(modelUnavailableReason(spec.id)!, /verify.*again/i);
-  await store.upsert(candidate, "admin");
-  await store.refresh();
-  assert.equal(probes, 1);
-  assert.ok(resolveModel(spec.id));
-});
+test("legacy fingerprint versions stay unavailable until a successful new verification", () =>
+  inTestTenant(async () => {
+    const built = buildApp(testConfig({ openaiApiKey: "test-key" }));
+    const candidate = parseModelOverlay(spec);
+    const keyMaterial = "stable-test-key";
+    const fingerprint = createHmac("sha256", keyMaterial)
+      .update(
+        JSON.stringify({
+          version: 1,
+          spec: candidate,
+          model: modelFromOverlay(candidate),
+          key: "test-key",
+          credentialRevision: (await built.modelCredentials.statuses()).find((status) => status.provider === "openai"),
+        }),
+      )
+      .digest("hex");
+    const backing = testModelTables().registry;
+    await backing.put(spec.id, {
+      spec: candidate,
+      disabled: false,
+      updatedAt: 1,
+      updatedBy: "admin",
+      verification: { fingerprint, verifiedAt: 1, revision: "old-proof" },
+    });
+    let probes = 0;
+    const verifier = createModelVerifier({
+      credentials: built.modelCredentials,
+      keyMaterial,
+      probe: async () => {
+        probes++;
+      },
+    });
+    const store = createModelOverlayStore(backing, undefined, verifier);
+    await store.refresh();
+    assert.equal(probes, 0);
+    assert.equal(resolveModel(spec.id), undefined);
+    assert.match(modelUnavailableReason(spec.id)!, /verify.*again/i);
+    await store.upsert(candidate, "admin");
+    await store.refresh();
+    assert.equal(probes, 1);
+    assert.ok(resolveModel(spec.id));
+  }));

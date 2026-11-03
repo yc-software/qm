@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { SecretDropRows } from "../connectors/link-tables.ts";
 import type { Destination, ScopeId } from "../types.ts";
 import type { GrantMode } from "./keychain.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -40,7 +40,7 @@ export interface SecretDropStore {
 export const SECRET_DROP_TTL_MS = 7 * 24 * 60 * 60_000;
 
 export function createSecretDropStore(
-  backing: DurableMap<SecretDropRecord>,
+  backing: SecretDropRows,
   opts: { ttlMs?: number; now?: () => number } = {},
 ): SecretDropStore {
   const ttl = opts.ttlMs ?? SECRET_DROP_TTL_MS;
@@ -53,7 +53,7 @@ export function createSecretDropStore(
   return {
     async mint(rec, now) {
       const dropId = `${randomUUID()}${randomUUID().replace(/-/g, "")}`;
-      await backing.put(dropId, { ...rec, createdAt: now ?? clock() });
+      await backing.insert(dropId, { ...rec, createdAt: now ?? clock() });
       return { dropId };
     },
     async peek(dropId, now) {
@@ -63,22 +63,9 @@ export function createSecretDropStore(
       return judge(await backing.take(dropId), now ?? clock());
     },
     async siblings(rec, now) {
-      const at = now ?? clock();
-      const out: SecretDropRecord[] = [];
-      for (const [id, r] of await backing.entries()) {
-        if (at - r.createdAt > ttl) {
-          void backing.delete(id).catch(swallowAs("secret drop: delete expired drop", undefined));
-          continue;
-        }
-        if (
-          r.orgId === rec.orgId &&
-          r.audienceScopeId === rec.audienceScopeId &&
-          r.threadRef === rec.threadRef &&
-          r.service !== rec.service
-        )
-          out.push(r);
-      }
-      return out;
+      const cutoff = (now ?? clock()) - ttl;
+      void backing.deleteCreatedBefore(cutoff).catch(swallowAs("secret drop: delete expired drops", undefined));
+      return backing.siblings(rec, cutoff);
     },
   };
 }

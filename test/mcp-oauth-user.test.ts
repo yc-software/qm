@@ -11,7 +11,8 @@ import {
   withPublicOAuthClients,
 } from "../src/connectors/oauth.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
-import { testMap } from "./support/test-database.ts";
+import { testLinkTables } from "./support/credential-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const HOST = "mcp.example.com";
 
@@ -85,100 +86,104 @@ test("oauth-user servers register a PKCE public client that exchanges and refres
   assert.notEqual(oauthProvider("github")?.pkce, true, "built-in providers are never shadowed");
 });
 
-test("oauth-user tools offer a sign-in link until the caller connects, then use only their token", async (t) => {
-  const store = createMcpServerStore(testMap<McpServer>());
-  const tokens = new Map<string, string>();
-  const mcp = await startMcpTestServer(t, {
-    tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }],
-    call: (_name, args) => ({ content: [{ type: "text", text: `found ${String(args.q)}` }] }),
-    instructions: "Look up past orders.",
-  });
-  const auth = () => mcp.requests.filter((r) => r.rpc?.startsWith("tools/")).map((r) => r.authorization ?? "");
-  const service = createMcpToolService({
-    fetch: loopbackFetch,
-    servers: store,
-    userTokens: {
-      connectorAccessToken: async (_host, principalId) => tokens.get(principalId) ?? null,
-      connectorTokenStatus: async (_host, principalId) => ({ connected: tokens.has(principalId) }),
-    },
-    signInUrl: (id) => `https://qm.example/connect/${id}/self-connect`,
-  });
-  t.after(() => {
-    service.close();
-    setPublicOAuthClients([]);
-  });
-  await store.put(oauthServer({ url: `${mcp.url}/mcp` }));
-  await service.refresh();
-  assert.ok(oauthProvider("orders")?.pkce, "refresh registers the server's OAuth client");
-  assert.deepEqual(
-    (await service.toolDefsFor("internal:alice")).map((d) => d.name),
-    ["orders_sign_in"],
-  );
-  assert.equal(mcp.requests.length, 0, "no unauthenticated discovery");
-  assert.match(
-    await service.call("orders_sign_in", {}, "internal:alice"),
-    /\[Connect Orders\]\(https:\/\/qm\.example\/connect\/orders\/self-connect\)/,
-  );
+test("oauth-user tools offer a sign-in link until the caller connects, then use only their token", (t) =>
+  inTestTenant(async () => {
+    const store = createMcpServerStore(testLinkTables().mcpServers);
+    const tokens = new Map<string, string>();
+    const mcp = await startMcpTestServer(t, {
+      tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }],
+      call: (_name, args) => ({ content: [{ type: "text", text: `found ${String(args.q)}` }] }),
+      instructions: "Look up past orders.",
+    });
+    const auth = () => mcp.requests.filter((r) => r.rpc?.startsWith("tools/")).map((r) => r.authorization ?? "");
+    const service = createMcpToolService({
+      fetch: loopbackFetch,
+      servers: store,
+      userTokens: {
+        connectorAccessToken: async (_host, principalId) => tokens.get(principalId) ?? null,
+        connectorTokenStatus: async (_host, principalId) => ({ connected: tokens.has(principalId) }),
+      },
+      signInUrl: (id) => `https://qm.example/connect/${id}/self-connect`,
+    });
+    t.after(() => {
+      service.close();
+      setPublicOAuthClients([]);
+    });
+    await store.put(oauthServer({ url: `${mcp.url}/mcp` }));
+    await service.refresh();
+    assert.ok(oauthProvider("orders")?.pkce, "refresh registers the server's OAuth client");
+    assert.deepEqual(
+      (await service.toolDefsFor("internal:alice")).map((d) => d.name),
+      ["orders_sign_in"],
+    );
+    assert.equal(mcp.requests.length, 0, "no unauthenticated discovery");
+    assert.match(
+      await service.call("orders_sign_in", {}, "internal:alice"),
+      /\[Connect Orders\]\(https:\/\/qm\.example\/connect\/orders\/self-connect\)/,
+    );
 
-  tokens.set("internal:alice", "alice-token");
-  assert.match(
-    await service.call("orders_sign_in", {}, "internal:alice"),
-    /Tools now available on server "orders": search$/,
-  );
-  assert.deepEqual(
-    (await service.toolDefsFor("internal:alice")).map((d) => d.name),
-    ["orders_search"],
-  );
-  assert.deepEqual(
-    (await service.toolDefsFor("internal:bob")).map((d) => d.name),
-    ["orders_sign_in"],
-    "a teammate who has not connected sees only the sign-in tool, not the tools another person loaded",
-  );
-  assert.deepEqual(
-    (await store.get("orders"))!.tools?.map((tool) => tool.name),
-    ["search"],
-    "learned tools are stored with the server so every instance and restart sees them",
-  );
-  assert.equal((await store.get("orders"))!.about, "Look up past orders.");
-  assert.equal((await service.toolDefsFor("internal:alice"))[0]!.serverAbout, "Look up past orders.");
-  assert.equal(await service.call("orders_search", { q: "tacos" }, "internal:alice"), "found tacos");
-  assert.match(await service.call("orders_search", { q: "x" }, "internal:bob"), /Connect Orders/);
-  assert.deepEqual(auth(), ["Bearer alice-token", "Bearer alice-token"]);
-});
+    tokens.set("internal:alice", "alice-token");
+    assert.match(
+      await service.call("orders_sign_in", {}, "internal:alice"),
+      /Tools now available on server "orders": search$/,
+    );
+    assert.deepEqual(
+      (await service.toolDefsFor("internal:alice")).map((d) => d.name),
+      ["orders_search"],
+    );
+    assert.deepEqual(
+      (await service.toolDefsFor("internal:bob")).map((d) => d.name),
+      ["orders_sign_in"],
+      "a teammate who has not connected sees only the sign-in tool, not the tools another person loaded",
+    );
+    assert.deepEqual(
+      (await store.get("orders"))!.tools?.map((tool) => tool.name),
+      ["search"],
+      "learned tools are stored with the server so every instance and restart sees them",
+    );
+    assert.equal((await store.get("orders"))!.about, "Look up past orders.");
+    assert.equal((await service.toolDefsFor("internal:alice"))[0]!.serverAbout, "Look up past orders.");
+    assert.equal(await service.call("orders_search", { q: "tacos" }, "internal:alice"), "found tacos");
+    assert.match(await service.call("orders_search", { q: "x" }, "internal:bob"), /Connect Orders/);
+    assert.deepEqual(auth(), ["Bearer alice-token", "Bearer alice-token"]);
+  }));
 
-test("stored oauth-user tools survive a restart but stay hidden from callers whose connection needs repair", async (t) => {
-  const store = createMcpServerStore(testMap<McpServer>());
-  await store.put(oauthServer({ tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }] }));
-  const statuses: Record<string, { connected: boolean; needsReconnect?: boolean }> = {
-    "internal:alice": { connected: true },
-    "internal:carol": { connected: true, needsReconnect: true },
-  };
-  const service = createMcpToolService({
-    fetch: loopbackFetch,
-    servers: store,
-    userTokens: {
-      connectorAccessToken: async () => null,
-      connectorTokenStatus: async (_host, principalId) => statuses[principalId] ?? { connected: false },
-    },
-  });
-  t.after(() => {
-    service.close();
-    setPublicOAuthClients([]);
-  });
-  await service.refresh();
-  assert.deepEqual(
-    (await service.toolDefsFor("internal:alice")).map((d) => d.name),
-    ["orders_search"],
-  );
-  assert.deepEqual(
-    (await service.toolDefsFor("internal:carol")).map((d) => d.name),
-    ["orders_sign_in"],
-  );
-  assert.deepEqual(
-    (await service.toolDefsFor("internal:dave")).map((d) => d.name),
-    ["orders_sign_in"],
-  );
-});
+test("stored oauth-user tools survive a restart but stay hidden from callers whose connection needs repair", (t) =>
+  inTestTenant(async () => {
+    const store = createMcpServerStore(testLinkTables().mcpServers);
+    await store.put(
+      oauthServer({ tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }] }),
+    );
+    const statuses: Record<string, { connected: boolean; needsReconnect?: boolean }> = {
+      "internal:alice": { connected: true },
+      "internal:carol": { connected: true, needsReconnect: true },
+    };
+    const service = createMcpToolService({
+      fetch: loopbackFetch,
+      servers: store,
+      userTokens: {
+        connectorAccessToken: async () => null,
+        connectorTokenStatus: async (_host, principalId) => statuses[principalId] ?? { connected: false },
+      },
+    });
+    t.after(() => {
+      service.close();
+      setPublicOAuthClients([]);
+    });
+    await service.refresh();
+    assert.deepEqual(
+      (await service.toolDefsFor("internal:alice")).map((d) => d.name),
+      ["orders_search"],
+    );
+    assert.deepEqual(
+      (await service.toolDefsFor("internal:carol")).map((d) => d.name),
+      ["orders_sign_in"],
+    );
+    assert.deepEqual(
+      (await service.toolDefsFor("internal:dave")).map((d) => d.name),
+      ["orders_sign_in"],
+    );
+  }));
 
 test("token refresh only matches a provider's exact hosts, never subdomains of an admin-set host", async (t) => {
   t.after(() => setPublicOAuthClients([]));

@@ -1,5 +1,5 @@
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { CustomProviderRows, ModelCredentialRows } from "./model-tables.ts";
 import { MODEL_PROVIDERS, type ModelProvider, type ModelProviderAvailability } from "./pi-models.ts";
 import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
 
@@ -30,7 +30,7 @@ export interface ModelCredentialStore {
 }
 
 export function createModelCredentialStore(input: {
-  backing: DurableMap<StoredModelCredential>;
+  backing: ModelCredentialRows;
   keyMaterial: string | Buffer;
   fallback?: Partial<Record<ModelProvider, string>>;
 }): ModelCredentialStore {
@@ -52,7 +52,7 @@ export function createModelCredentialStore(input: {
       if (!secret) throw new Error("API key is required");
       const actor = updatedBy.trim();
       if (!actor) throw new Error("updatedBy is required");
-      await input.backing.put(provider, {
+      await input.backing.put({
         provider,
         secretEnc: encryptSecret(secret, key),
         disabled: false,
@@ -62,7 +62,7 @@ export function createModelCredentialStore(input: {
     },
 
     async delete(provider, updatedBy) {
-      await input.backing.put(provider, {
+      await input.backing.put({
         provider,
         disabled: true,
         updatedAt: Date.now(),
@@ -112,7 +112,7 @@ function customProviderSpec(saved: StoredCustomProvider): CustomProviderSpec {
 }
 
 export function createCustomProviderStore(input: {
-  backing: DurableMap<StoredCustomProvider>;
+  backing: CustomProviderRows;
   keyMaterial: string | Buffer;
   write?: <T>(fn: () => Promise<T>) => Promise<T>;
 }) {
@@ -121,7 +121,7 @@ export function createCustomProviderStore(input: {
 
   return {
     async enabled(): Promise<CustomProviderSpec[]> {
-      return (await input.backing.all()).filter((p) => !p.disabled).map(customProviderSpec);
+      return (await input.backing.enabled()).map(customProviderSpec);
     },
 
     async statuses() {
@@ -150,7 +150,7 @@ export function createCustomProviderStore(input: {
         const existing = await input.backing.get(spec.id);
         const trimmedKey = apiKey?.trim();
         const apiKeyEnc = trimmedKey ? encryptSecret(trimmedKey, key) : existing?.apiKeyEnc;
-        await input.backing.put(spec.id, {
+        await input.backing.put({
           ...spec,
           ...(apiKeyEnc ? { apiKeyEnc } : {}),
           disabled: false,
@@ -164,7 +164,7 @@ export function createCustomProviderStore(input: {
       return write(async () => {
         const existing = await input.backing.get(id);
         if (!existing || existing.disabled) return false;
-        await input.backing.put(id, { ...existing, disabled: true, updatedAt: Date.now(), updatedBy });
+        await input.backing.put({ ...existing, disabled: true, updatedAt: Date.now(), updatedBy });
         return true;
       });
     },

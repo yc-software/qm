@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ModelVerificationError, verificationFailure, type ModelVerifier } from "./model-verification.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { ModelRegistryRows } from "./model-tables.ts";
 import { isEmbeddingModel, parseRegisteredModel, publishModelOverlays, type RegisteredModel } from "./model-overlay.ts";
 import { catalogModelIdTaken, modelUnavailableReason, resolveBuiltinModel } from "./pi-models.ts";
 
@@ -62,7 +62,7 @@ export interface StoredModelOverlay {
 }
 
 export function createModelOverlayStore(
-  backing: DurableMap<StoredModelOverlay>,
+  backing: ModelRegistryRows,
   write: <T>(fn: () => Promise<T>) => Promise<T> = (fn) => fn(),
   verifier?: ModelVerifier,
 ) {
@@ -80,7 +80,7 @@ export function createModelOverlayStore(
   return {
     async statuses() {
       return Promise.all(
-        (await backing.entries()).map(async ([id, row]) => {
+        (await backing.all()).map(async ({ id, row }) => {
           let spec: Partial<RegisteredModel> & { id: string };
           try {
             spec = parseRegisteredModel({ ...row?.spec, id });
@@ -101,16 +101,16 @@ export function createModelOverlayStore(
       );
     },
     async refresh() {
-      const rows = await backing.entries();
+      const rows = await backing.all();
       const failures = new Map<string, string>();
-      for (const [id, row] of rows) {
+      for (const { id, row } of rows) {
         if (!row || row.disabled) continue;
         const reason = await verificationReason(row, id);
         if (reason) failures.set(id, reason);
       }
       setModelOverlays(
-        rows.filter(([, row]) => row?.disabled !== true).map(([id, row]) => ({ ...row?.spec, id })),
-        rows.filter(([, row]) => row?.disabled === true).map(([id]) => id),
+        rows.filter(({ row }) => row?.disabled !== true).map(({ id, row }) => ({ ...row?.spec, id })),
+        rows.filter(({ row }) => row?.disabled === true).map(({ id }) => id),
         failures,
       );
     },

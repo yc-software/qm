@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createKeychain, type KeychainAsk, type KeychainGrant } from "../src/credentials/keychain.ts";
+import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts";
 import { approvalCardDestination, createKeychainApprovals } from "../src/credentials/keychain-approval.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -16,22 +16,37 @@ import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
+import type { KeychainAskRows } from "../src/credentials/keychain-rows.ts";
+import { testKeychainRows } from "./support/credential-stores.ts";
+
+function failFirstApproval(asks: KeychainAskRows): void {
+  const update = asks.update.bind(asks);
+  let fail = true;
+  asks.update = async (id, fn) =>
+    update(id, (current) => {
+      const next = fn(current);
+      if (fail && current.status !== "approved" && next.status === "approved") {
+        fail = false;
+        throw new Error("injected persistence failure");
+      }
+      return next;
+    });
+}
 
 async function fixture() {
   let now = Date.now();
   let member = true;
-  const grants = testMap<KeychainGrant>();
-  const asks = testMap<KeychainAsk>();
+  const url = testDatabaseUrl();
+  const rows = testKeychainRows(url);
+  const { grants, asks } = rows;
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
-    creds: testMap(),
-    grants,
-    asks,
+    ...rows,
     key: deriveConnectorKey("native-approval-test"),
     now: () => now,
   });
   const credential = await keychain.save({ ownerId: "alice@example.com", service: "aws", secret: "fixture-secret" });
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const sessions = createPostgresSessionStore(url);
   const session = await sessions.getOrCreateByThread("web:alice:fixture", "dm", "personal:alice@example.com");
   await sessions.addParticipant(session.id, "alice@example.com");
   const { ask } = await keychain.createAsk({
@@ -222,15 +237,7 @@ test("a crash after grant persistence recovers approval before denial or expiry"
   inTestTenant(async () => {
     for (const expire of [false, true]) {
       const f = await fixture();
-      const merge = f.asks.merge.bind(f.asks);
-      let fail = true;
-      f.asks.merge = async (id, patch) => {
-        if (fail && patch.status === "approved") {
-          fail = false;
-          throw new Error("injected persistence failure");
-        }
-        return merge(id, patch);
-      };
+      failFirstApproval(f.asks);
       await assert.rejects(f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, "standing"), /injected/);
       if (expire) f.expire();
       const replay = await f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, "deny");
@@ -254,16 +261,12 @@ test("an expired notification cannot hide an approval recovered after a failed w
       const paused = new Promise<void>((resolve) => {
         release = resolve;
       });
-      f.grants.putIfAbsent = async (id, grant) => {
+      f.grants.putIfAbsent = async (grant) => {
         entered();
         await paused;
-        return put(id, grant);
+        return put(grant);
       };
-      const merge = f.asks.merge.bind(f.asks);
-      f.asks.merge = async (id, patch) => {
-        if (patch.status === "approved") throw new Error("injected persistence failure");
-        return merge(id, patch);
-      };
+      failFirstApproval(f.asks);
       const approving = assert.rejects(
         f.approvals.decide(f.ask.id, { externalId: "alice@example.com" }, "standing"),
         /injected/,

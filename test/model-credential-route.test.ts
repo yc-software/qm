@@ -11,11 +11,11 @@ import { buildApp as buildProductionApp, type BuiltApp } from "../src/wiring.ts"
 import { stopAtEnd } from "./support/build-app.ts";
 import { providerKeysPresent, companySubscriptionAuth } from "../src/config.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
+import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { getRequiredModel, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
-import { testMap } from "./support/test-database.ts";
 import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
+import { testModelTables } from "./support/credential-stores.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -132,90 +132,94 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
   }
 });
 
-test("model gateway credentials stay separate and advertise only routed models", async () => {
-  const partial = buildApp(
-    testConfig({
-      modelGateway: {
-        url: "http://gateway.internal:8080",
-        apiKey: "gateway-secret",
-        apiKeyHeader: "api-key",
-        models: { "claude-opus-5": "router/opus" },
-      },
-    }),
-  );
-  assert.equal(await partial.modelCredentials.resolve("anthropic"), null);
-  const partialAvailability = await partial.modelCredentials.availability();
-  assert.equal(partialAvailability.anthropic, false);
-  assert.equal(modelServiceable("claude-opus-5", partialAvailability), true);
-  assert.equal(modelServiceable("claude-sonnet-4-5", partialAvailability), false);
-  await partial.modelCredentials.set("anthropic", "admin-anthropic-key", "admin-alice");
-  assert.equal(modelServiceable("claude-sonnet-4-5", await partial.modelCredentials.availability()), true);
+test("model gateway credentials stay separate and advertise only routed models", () =>
+  inTestTenant(async () => {
+    const partial = buildApp(
+      testConfig({
+        modelGateway: {
+          url: "http://gateway.internal:8080",
+          apiKey: "gateway-secret",
+          apiKeyHeader: "api-key",
+          models: { "claude-opus-5": "router/opus" },
+        },
+      }),
+    );
+    assert.equal(await partial.modelCredentials.resolve("anthropic"), null);
+    const partialAvailability = await partial.modelCredentials.availability();
+    assert.equal(partialAvailability.anthropic, false);
+    assert.equal(modelServiceable("claude-opus-5", partialAvailability), true);
+    assert.equal(modelServiceable("claude-sonnet-4-5", partialAvailability), false);
+    await partial.modelCredentials.set("anthropic", "admin-anthropic-key", "admin-alice");
+    assert.equal(modelServiceable("claude-sonnet-4-5", await partial.modelCredentials.availability()), true);
 
-  const openrouter = buildApp(
-    testConfig({
-      modelGateway: {
-        url: "http://gateway.internal:8080",
-        apiKey: "gateway-secret",
-        apiKeyHeader: "api-key",
-        models: { "openrouter/auto": "router/auto" },
-      },
-    }),
-  );
-  const openrouterAvailability = await openrouter.modelCredentials.availability();
-  assert.equal(openrouterAvailability.openrouter, false);
-  assert.equal(modelServiceable("openrouter/auto", openrouterAvailability), true);
-  assert.equal(modelServiceable("openai/gpt-4o", openrouterAvailability), false);
+    const openrouter = buildApp(
+      testConfig({
+        modelGateway: {
+          url: "http://gateway.internal:8080",
+          apiKey: "gateway-secret",
+          apiKeyHeader: "api-key",
+          models: { "openrouter/auto": "router/auto" },
+        },
+      }),
+    );
+    const openrouterAvailability = await openrouter.modelCredentials.availability();
+    assert.equal(openrouterAvailability.openrouter, false);
+    assert.equal(modelServiceable("openrouter/auto", openrouterAvailability), true);
+    assert.equal(modelServiceable("openai/gpt-4o", openrouterAvailability), false);
 
-  const anthropicModels = Object.fromEntries(
-    MODEL_REGISTRY.filter(({ id }) => resolveModel(id)?.provider === "anthropic").map(({ id }) => [id, `router/${id}`]),
-  );
-  const complete = buildApp(
-    testConfig({
+    const anthropicModels = Object.fromEntries(
+      MODEL_REGISTRY.filter(({ id }) => resolveModel(id)?.provider === "anthropic").map(({ id }) => [
+        id,
+        `router/${id}`,
+      ]),
+    );
+    const complete = buildApp(
+      testConfig({
+        modelGateway: {
+          url: "http://gateway.internal:8080",
+          apiKey: "gateway-secret",
+          apiKeyHeader: "api-key",
+          models: anthropicModels,
+        },
+      }),
+    );
+    assert.equal(await complete.modelCredentials.resolve("anthropic"), null);
+    const completeAvailability = await complete.modelCredentials.availability();
+    assert.equal(completeAvailability.anthropic, false);
+    assert.ok(Object.keys(anthropicModels).every((id) => modelServiceable(id, completeAvailability)));
+
+    const srv = start({
       modelGateway: {
         url: "http://gateway.internal:8080",
         apiKey: "gateway-secret",
         apiKeyHeader: "api-key",
         models: anthropicModels,
       },
-    }),
-  );
-  assert.equal(await complete.modelCredentials.resolve("anthropic"), null);
-  const completeAvailability = await complete.modelCredentials.availability();
-  assert.equal(completeAvailability.anthropic, false);
-  assert.ok(Object.keys(anthropicModels).every((id) => modelServiceable(id, completeAvailability)));
-
-  const srv = start({
-    modelGateway: {
-      url: "http://gateway.internal:8080",
-      apiKey: "gateway-secret",
-      apiKeyHeader: "api-key",
-      models: anthropicModels,
-    },
-  });
-  try {
-    const selected = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org/runtime`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ modelId: "claude-opus-5" }),
     });
-    assert.equal(selected.status, 200);
-  } finally {
-    await srv.close();
-  }
+    try {
+      const selected = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org/runtime`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify({ modelId: "claude-opus-5" }),
+      });
+      assert.equal(selected.status, 200);
+    } finally {
+      await srv.close();
+    }
 
-  const direct = buildApp(
-    testConfig({
-      anthropicApiKey: "direct-provider-key",
-      modelGateway: {
-        url: "http://gateway.internal:8080",
-        apiKey: "gateway-secret",
-        apiKeyHeader: "api-key",
-        models: { "claude-opus-5": "router/opus" },
-      },
-    }),
-  );
-  assert.equal(await direct.modelCredentials.resolve("anthropic"), "direct-provider-key");
-});
+    const direct = buildApp(
+      testConfig({
+        anthropicApiKey: "direct-provider-key",
+        modelGateway: {
+          url: "http://gateway.internal:8080",
+          apiKey: "gateway-secret",
+          apiKeyHeader: "api-key",
+          models: { "claude-opus-5": "router/opus" },
+        },
+      }),
+    );
+    assert.equal(await direct.modelCredentials.resolve("anthropic"), "direct-provider-key");
+  }));
 
 test("OpenRouter validation uses an authenticated endpoint", async () => {
   let requested = "";
@@ -559,16 +563,17 @@ test("a Claude subscription token is reported as company subscription auth", asy
   }
 });
 
-test("admin model credentials survive a second app instance on the same durable store", async () => {
-  const backing = testMap<StoredModelCredential>();
-  const first = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });
-  await first.set("openrouter", "durable-openrouter-key", "admin-alice@default-org");
+test("admin model credentials survive a second app instance on the same durable store", () =>
+  inTestTenant(async () => {
+    const backing = testModelTables().credentials;
+    const first = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });
+    await first.set("openrouter", "durable-openrouter-key", "admin-alice@default-org");
 
-  const second = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });
-  assert.equal(await second.resolve("openrouter"), "durable-openrouter-key");
-  assert.doesNotMatch(JSON.stringify(await backing.all()), /durable-openrouter-key/);
-  assert.doesNotMatch(JSON.stringify(await second.statuses()), /durable-openrouter-key/);
-});
+    const second = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });
+    assert.equal(await second.resolve("openrouter"), "durable-openrouter-key");
+    assert.doesNotMatch(JSON.stringify(await backing.get("openrouter")), /durable-openrouter-key/);
+    assert.doesNotMatch(JSON.stringify(await second.statuses()), /durable-openrouter-key/);
+  }));
 
 test("a stored scope runtime remains usable outside the legacy configured picker", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });

@@ -594,8 +594,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
     });
   }
   const key = `${userId}:${accountId}`;
-  const saved = await ctx.deps.composioReturns?.get(key);
-  await ctx.deps.composioReturns?.delete(key);
+  const saved = await ctx.deps.composioReturns?.take(key);
   audit(ctx.deps, {
     principalId: access.principal,
     action: "composio.connected",
@@ -603,12 +602,6 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
     scopeLabel: scopeId("personal", access.principal),
   });
   return sendJson(ctx.res, 200, { returnTo: saved && saved.expiresAt > Date.now() ? saved.url : null });
-}
-
-export interface ComposioReturn {
-  url: string | null;
-  toolkit: string;
-  expiresAt: number;
 }
 
 async function identity(ctx: ApiCtx): Promise<void> {

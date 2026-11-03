@@ -9,9 +9,10 @@ import {
   validateCustomProviderSpec,
 } from "../src/model/custom-providers.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
-import { createCustomProviderStore, type StoredCustomProvider } from "../src/model/model-credential-store.ts";
+import { createCustomProviderStore } from "../src/model/model-credential-store.ts";
 import { modelSupported, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
-import { testMap } from "./support/test-database.ts";
+import { testModelTables } from "./support/credential-stores.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 afterEach(() => setCustomProviders([]));
 
@@ -105,37 +106,38 @@ test("spec validation rejects reserved ids, bad slugs, bad URLs, and empty model
   assert.throws(() => validateCustomProviderSpec({ ...GATEWAY, models: [{ id: "a" }, { id: "a" }] }), /duplicate/);
 });
 
-test("store round-trip: upsert encrypts the key, statuses never leak it, delete disables", async () => {
-  const backing = testMap<StoredCustomProvider>();
-  const store = createCustomProviderStore({ backing, keyMaterial: "test-key-material" });
+test("store round-trip: upsert encrypts the key, statuses never leak it, delete disables", () =>
+  inTestTenant(async () => {
+    const backing = testModelTables().customProviders;
+    const store = createCustomProviderStore({ backing, keyMaterial: "test-key-material" });
 
-  await store.upsert(GATEWAY, "sk-secret-123", "admin@example.com");
-  const statuses = await store.statuses();
-  assert.equal(statuses.length, 1);
-  assert.equal(statuses[0]!.hasKey, true);
-  assert.equal(JSON.stringify(statuses).includes("sk-secret-123"), false);
+    await store.upsert(GATEWAY, "sk-secret-123", "admin@example.com");
+    const statuses = await store.statuses();
+    assert.equal(statuses.length, 1);
+    assert.equal(statuses[0]!.hasKey, true);
+    assert.equal(JSON.stringify(statuses).includes("sk-secret-123"), false);
 
-  const raw = await backing.get("acme-gateway");
-  assert.ok(raw?.apiKeyEnc);
-  assert.equal(raw!.apiKeyEnc!.includes("sk-secret-123"), false);
+    const raw = await backing.get("acme-gateway");
+    assert.ok(raw?.apiKeyEnc);
+    assert.equal(raw!.apiKeyEnc!.includes("sk-secret-123"), false);
 
-  assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
-  assert.deepEqual(await store.enabled(), [GATEWAY]);
+    assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
+    assert.deepEqual(await store.enabled(), [GATEWAY]);
 
-  // Upsert without a key keeps the existing one.
-  await store.upsert({ ...GATEWAY, name: "Renamed" }, undefined, "admin@example.com");
-  assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
+    // Upsert without a key keeps the existing one.
+    await store.upsert({ ...GATEWAY, name: "Renamed" }, undefined, "admin@example.com");
+    assert.equal(await store.resolveKey("acme-gateway"), "sk-secret-123");
 
-  assert.equal(await store.delete("acme-gateway", "admin@example.com"), true);
-  assert.equal(await store.resolveKey("acme-gateway"), null);
-  assert.deepEqual(await store.enabled(), []);
-  assert.equal((await store.statuses())[0]!.disabled, true);
-  assert.equal(await store.delete("never-existed", "admin@example.com"), false);
-});
+    assert.equal(await store.delete("acme-gateway", "admin@example.com"), true);
+    assert.equal(await store.resolveKey("acme-gateway"), null);
+    assert.deepEqual(await store.enabled(), []);
+    assert.equal((await store.statuses())[0]!.disabled, true);
+    assert.equal(await store.delete("never-existed", "admin@example.com"), false);
+  }));
 
 test("store validates specs on upsert", async () => {
   const store = createCustomProviderStore({
-    backing: testMap<StoredCustomProvider>(),
+    backing: testModelTables().customProviders,
     keyMaterial: "k",
   });
   await assert.rejects(store.upsert({ ...GATEWAY, id: "anthropic" }, "k", "a@b.c"), /reserved/);
@@ -207,22 +209,23 @@ for (const field of ["contextWindow", "maxTokens"] as const) {
 
 for (const protocol of ["openai", "openai-responses", "anthropic"] as const) {
   for (const reasoning of [undefined, false, true]) {
-    test(`custom ${protocol} reasoning=${reasoning} survives persistence and runtime mappings`, async () => {
-      const spec = { ...GATEWAY, protocol, models: [{ ...GATEWAY.models[0]!, reasoning }] };
-      const backing = testMap<StoredCustomProvider>();
-      const store = createCustomProviderStore({ backing, keyMaterial: "reasoning-test" });
-      await store.upsert(spec, "local", "admin@example.com");
-      const reloaded = createCustomProviderStore({ backing, keyMaterial: "reasoning-test" });
-      setCustomProviders(await reloaded.enabled());
-      const model = resolveCustomModel("custom/acme-gateway/acme-large")!;
-      assert.equal(model.reasoning, reasoning ?? false);
-      const json = customModelsJson() as {
-        providers: Record<string, { models: Array<{ reasoning: boolean; cost: typeof model.cost }> }>;
-      };
-      assert.equal(json.providers[spec.id]!.models[0]!.reasoning, reasoning ?? false);
-      assert.deepEqual(json.providers[spec.id]!.models[0]!.cost, model.cost);
-      assert.deepEqual((await reloaded.statuses())[0]!.models, JSON.parse(JSON.stringify(spec.models)));
-    });
+    test(`custom ${protocol} reasoning=${reasoning} survives persistence and runtime mappings`, () =>
+      inTestTenant(async () => {
+        const spec = { ...GATEWAY, protocol, models: [{ ...GATEWAY.models[0]!, reasoning }] };
+        const backing = testModelTables().customProviders;
+        const store = createCustomProviderStore({ backing, keyMaterial: "reasoning-test" });
+        await store.upsert(spec, "local", "admin@example.com");
+        const reloaded = createCustomProviderStore({ backing, keyMaterial: "reasoning-test" });
+        setCustomProviders(await reloaded.enabled());
+        const model = resolveCustomModel("custom/acme-gateway/acme-large")!;
+        assert.equal(model.reasoning, reasoning ?? false);
+        const json = customModelsJson() as {
+          providers: Record<string, { models: Array<{ reasoning: boolean; cost: typeof model.cost }> }>;
+        };
+        assert.equal(json.providers[spec.id]!.models[0]!.reasoning, reasoning ?? false);
+        assert.deepEqual(json.providers[spec.id]!.models[0]!.cost, model.cost);
+        assert.deepEqual((await reloaded.statuses())[0]!.models, JSON.parse(JSON.stringify(spec.models)));
+      }));
   }
 }
 

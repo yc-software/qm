@@ -19,8 +19,8 @@ import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { createCustomProviderStore } from "../src/model/model-credential-store.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
-import { testMap } from "./support/test-database.ts";
-import { testTenantHeaders } from "./support/test-tenants.ts";
+import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
+import { testModelTables } from "./support/credential-stores.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -354,58 +354,60 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
   }
 });
 
-test("QA: registrations survive a restart (shared durable backing + same secret)", async () => {
-  // In production the backing map is the Postgres artifact store (same as
-  // model credentials); a restart is a new store instance over the same
-  // rows with the same CONNECTOR_SECRET_KEY. Simulate exactly that.
-  const backing = testMap<never>() as Parameters<typeof createCustomProviderStore>[0]["backing"];
-  const secret = "restart-secret-restart-secret-restart-secret";
-  const first = createCustomProviderStore({ backing, keyMaterial: secret });
-  await first.upsert(
-    {
-      id: "survivor",
-      name: "Survivor",
-      protocol: "openai",
-      baseUrl: "https://gw.example.com/v1",
-      models: [{ id: "survivor-model" }],
-    },
-    "sk-live-key",
-    "admin-alice@default-org",
-  );
-  // "restart": brand-new store instance over the same backing
-  const second = createCustomProviderStore({ backing, keyMaterial: secret });
-  const enabled = await second.enabled();
-  assert.equal(enabled[0]?.id, "survivor", "spec survives the restart");
-  assert.equal(await second.resolveKey("survivor"), "sk-live-key", "key decrypts after restart with the same secret");
-  // and the hydration path wires it into the runtime registry
-  setCustomProviders(enabled);
-  assert.ok(resolveModel("custom/survivor/survivor-model"), "hydrated model resolves");
-  setCustomProviders([]);
-});
+test("QA: registrations survive a restart (shared durable backing + same secret)", () =>
+  inTestTenant(async () => {
+    // In production the backing map is the Postgres artifact store (same as
+    // model credentials); a restart is a new store instance over the same
+    // rows with the same CONNECTOR_SECRET_KEY. Simulate exactly that.
+    const backing = testModelTables().customProviders;
+    const secret = "restart-secret-restart-secret-restart-secret";
+    const first = createCustomProviderStore({ backing, keyMaterial: secret });
+    await first.upsert(
+      {
+        id: "survivor",
+        name: "Survivor",
+        protocol: "openai",
+        baseUrl: "https://gw.example.com/v1",
+        models: [{ id: "survivor-model" }],
+      },
+      "sk-live-key",
+      "admin-alice@default-org",
+    );
+    // "restart": brand-new store instance over the same backing
+    const second = createCustomProviderStore({ backing, keyMaterial: secret });
+    const enabled = await second.enabled();
+    assert.equal(enabled[0]?.id, "survivor", "spec survives the restart");
+    assert.equal(await second.resolveKey("survivor"), "sk-live-key", "key decrypts after restart with the same secret");
+    // and the hydration path wires it into the runtime registry
+    setCustomProviders(enabled);
+    assert.ok(resolveModel("custom/survivor/survivor-model"), "hydrated model resolves");
+    setCustomProviders([]);
+  }));
 
-test("QA: a corrupt stored key degrades that provider only — admin surface stays intact", async () => {
-  const backing = testMap<never>() as Parameters<typeof createCustomProviderStore>[0]["backing"];
-  const writer = createCustomProviderStore({ backing, keyMaterial: "first-secret-first-secret-first-secret-1" });
-  await writer.upsert(
-    {
-      id: "corrupted",
-      name: "Corrupted",
-      protocol: "openai",
-      baseUrl: "https://gw.example.com/v1",
-      models: [{ id: "corrupted-model" }],
-    },
-    "sk-will-be-unreadable",
-    "admin-alice@default-org",
-  );
-  // reboot with a DIFFERENT secret: the stored key is undecryptable
-  const reader = createCustomProviderStore({ backing, keyMaterial: "other-secret-other-secret-other-secret-2" });
-  await assert.rejects(reader.resolveKey("corrupted"), "decryption fails with the wrong secret");
-  const statuses = await reader.statuses();
-  assert.equal(statuses[0]?.id, "corrupted");
-  assert.equal(statuses[0]?.hasKey, true, "admin surface (no secrets) unaffected");
-  const enabled = await reader.enabled();
-  assert.equal(enabled[0]?.id, "corrupted", "spec listing unaffected — only the key is lost");
-});
+test("QA: a corrupt stored key degrades that provider only — admin surface stays intact", () =>
+  inTestTenant(async () => {
+    const backing = testModelTables().customProviders;
+    const writer = createCustomProviderStore({ backing, keyMaterial: "first-secret-first-secret-first-secret-1" });
+    await writer.upsert(
+      {
+        id: "corrupted",
+        name: "Corrupted",
+        protocol: "openai",
+        baseUrl: "https://gw.example.com/v1",
+        models: [{ id: "corrupted-model" }],
+      },
+      "sk-will-be-unreadable",
+      "admin-alice@default-org",
+    );
+    // reboot with a DIFFERENT secret: the stored key is undecryptable
+    const reader = createCustomProviderStore({ backing, keyMaterial: "other-secret-other-secret-other-secret-2" });
+    await assert.rejects(reader.resolveKey("corrupted"), "decryption fails with the wrong secret");
+    const statuses = await reader.statuses();
+    assert.equal(statuses[0]?.id, "corrupted");
+    assert.equal(statuses[0]?.hasKey, true, "admin surface (no secrets) unaffected");
+    const enabled = await reader.enabled();
+    assert.equal(enabled[0]?.id, "corrupted", "spec listing unaffected — only the key is lost");
+  }));
 
 test("QA: a custom model named like a built-in registers and sends its own model id upstream", async () => {
   const seen: Array<{ model?: string; auth?: string }> = [];

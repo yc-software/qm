@@ -6,7 +6,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
+import { testConfigStore } from "./support/test-database.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { storedItem } from "../src/sessions/items.ts";
 import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
@@ -129,42 +129,43 @@ test("strict overlay validation rejects malformed fields, prices, bounds, reserv
   assert.equal(parsed.auxiliary, false);
 });
 
-test("store reload and independent readers observe edits and soft deletion without mutating in-flight models", async () => {
-  const backing = testMap<StoredModelOverlay>();
-  const writer = createModelOverlayStore(backing);
-  const reader = createModelOverlayStore(backing);
-  await writer.upsert(spec, "admin");
-  assert.equal(resolveModel(MODEL_ID), undefined);
-  await reader.refresh();
-  const inFlight = getRequiredModel(MODEL_ID);
-  assert.equal(contextTokenBudgetForModel(MODEL_ID), 150_000);
-  assert.deepEqual(inFlight.cost, spec.cost);
-  assert.ok(defaultWebuiModelIds().includes(MODEL_ID));
-  assert.equal(validateWebTurnModelOptions({ model: MODEL_ID }, null), null);
-  assert.equal(modelSupported(MODEL_ID), true);
-  assert.equal(resolveModel(`codex/${MODEL_ID}`), undefined);
-  await writer.upsert(
-    { ...spec, contextWindow: 600_000, cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } },
-    "editor",
-  );
-  await reader.refresh();
-  assert.equal(getRequiredModel(MODEL_ID).contextWindow, 600_000);
-  assert.equal(getRequiredModel(MODEL_ID).cost.input, 1);
-  assert.equal(getRequiredModel(MODEL_ID).cost.tiers, undefined);
-  assert.equal(inFlight.contextWindow, 400_000);
-  assert.deepEqual(inFlight.cost, spec.cost);
-  setModelOverlays([]);
-  await createModelOverlayStore(backing).refresh();
-  assert.equal(getRequiredModel(MODEL_ID).contextWindow, 600_000);
-  assert.equal(await writer.delete(MODEL_ID, "admin"), true);
-  await reader.refresh();
-  assert.equal(resolveModel(MODEL_ID), undefined);
-  assert.equal(modelSupported(MODEL_ID), false);
-  assert.equal(await writer.delete(MODEL_ID, "admin"), false);
-  const row = (await reader.statuses())[0]!;
-  assert.equal(row.disabled, true);
-  assert.equal(row.updatedBy, "admin");
-});
+test("store reload and independent readers observe edits and soft deletion without mutating in-flight models", () =>
+  inTestTenant(async () => {
+    const backing = testModelTables().registry;
+    const writer = createModelOverlayStore(backing);
+    const reader = createModelOverlayStore(backing);
+    await writer.upsert(spec, "admin");
+    assert.equal(resolveModel(MODEL_ID), undefined);
+    await reader.refresh();
+    const inFlight = getRequiredModel(MODEL_ID);
+    assert.equal(contextTokenBudgetForModel(MODEL_ID), 150_000);
+    assert.deepEqual(inFlight.cost, spec.cost);
+    assert.ok(defaultWebuiModelIds().includes(MODEL_ID));
+    assert.equal(validateWebTurnModelOptions({ model: MODEL_ID }, null), null);
+    assert.equal(modelSupported(MODEL_ID), true);
+    assert.equal(resolveModel(`codex/${MODEL_ID}`), undefined);
+    await writer.upsert(
+      { ...spec, contextWindow: 600_000, cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } },
+      "editor",
+    );
+    await reader.refresh();
+    assert.equal(getRequiredModel(MODEL_ID).contextWindow, 600_000);
+    assert.equal(getRequiredModel(MODEL_ID).cost.input, 1);
+    assert.equal(getRequiredModel(MODEL_ID).cost.tiers, undefined);
+    assert.equal(inFlight.contextWindow, 400_000);
+    assert.deepEqual(inFlight.cost, spec.cost);
+    setModelOverlays([]);
+    await createModelOverlayStore(backing).refresh();
+    assert.equal(getRequiredModel(MODEL_ID).contextWindow, 600_000);
+    assert.equal(await writer.delete(MODEL_ID, "admin"), true);
+    await reader.refresh();
+    assert.equal(resolveModel(MODEL_ID), undefined);
+    assert.equal(modelSupported(MODEL_ID), false);
+    assert.equal(await writer.delete(MODEL_ID, "admin"), false);
+    const row = (await reader.statuses())[0]!;
+    assert.equal(row.disabled, true);
+    assert.equal(row.updatedBy, "admin");
+  }));
 
 test("template capabilities are inherited and overlay API models cannot silently use subscription routing", () => {
   setModelOverlays([validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8" })]);
@@ -414,79 +415,81 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
   }
 });
 
-test("hydration isolates promoted builtins, incompatible providers, missing templates and malformed rows", async () => {
-  const backing = testMap<StoredModelOverlay>();
-  const store = createModelOverlayStore(backing);
-  const builtin = getRequiredModel("gpt-5.5");
-  const row = (value: unknown) =>
-    ({ spec: value, disabled: false, updatedAt: 1, updatedBy: "admin" }) as StoredModelOverlay;
-  await backing.put("gpt-5.5", row({ ...spec, id: "gpt-5.5" }));
-  await backing.put("missing-template", row({ ...spec, id: "missing-template", template: "removed-sdk-template" }));
-  await backing.put("corrupt-model", row(null));
-  await store.refresh();
-  assert.equal(getRequiredModel("gpt-5.5").contextWindow, builtin.contextWindow);
-  assert.deepEqual(getRequiredModel("gpt-5.5").cost, builtin.cost);
-  assert.equal(resolveModel("missing-template"), undefined);
-  assert.equal(resolveModel("corrupt-model"), undefined);
-  assert.equal((await store.statuses()).length, 3);
-  assert.throws(() => validateModelOverlay({ ...spec, id: "gpt-5.5" }), /already registered/);
-  await backing.put("gpt-5.5", row({ ...spec, id: "gpt-5.5", provider: "anthropic" }));
-  await store.refresh();
-  assert.equal(resolveModel("gpt-5.5"), undefined);
-  assert.ok(resolveModel("claude-opus-5"));
-  await store.upsert({ ...spec, id: "missing-template" }, "admin");
-  await store.refresh();
-  assert.ok(resolveModel("missing-template"));
-  assert.equal(await store.delete("corrupt-model", "admin"), true);
-});
+test("hydration isolates promoted builtins, incompatible providers, missing templates and malformed rows", () =>
+  inTestTenant(async () => {
+    const backing = testModelTables().registry;
+    const store = createModelOverlayStore(backing);
+    const builtin = getRequiredModel("gpt-5.5");
+    const row = (value: unknown) =>
+      ({ spec: value, disabled: false, updatedAt: 1, updatedBy: "admin" }) as StoredModelOverlay;
+    await backing.put("gpt-5.5", row({ ...spec, id: "gpt-5.5" }));
+    await backing.put("missing-template", row({ ...spec, id: "missing-template", template: "removed-sdk-template" }));
+    await backing.put("corrupt-model", row({ id: "corrupt-model", provider: 42 }));
+    await store.refresh();
+    assert.equal(getRequiredModel("gpt-5.5").contextWindow, builtin.contextWindow);
+    assert.deepEqual(getRequiredModel("gpt-5.5").cost, builtin.cost);
+    assert.equal(resolveModel("missing-template"), undefined);
+    assert.equal(resolveModel("corrupt-model"), undefined);
+    assert.equal((await store.statuses()).length, 3);
+    assert.throws(() => validateModelOverlay({ ...spec, id: "gpt-5.5" }), /already registered/);
+    await backing.put("gpt-5.5", row({ ...spec, id: "gpt-5.5", provider: "anthropic" }));
+    await store.refresh();
+    assert.equal(resolveModel("gpt-5.5"), undefined);
+    assert.ok(resolveModel("claude-opus-5"));
+    await store.upsert({ ...spec, id: "missing-template" }, "admin");
+    await store.refresh();
+    assert.ok(resolveModel("missing-template"));
+    assert.equal(await store.delete("corrupt-model", "admin"), true);
+  }));
 
-test("model refresh is limited to dependent routes and admin repair survives stale persisted definitions", async () => {
-  const config = testConfig();
-  const built = buildApp(config, {
-    modelCredentialFetch: async () => Response.json({ data: [] }),
-    modelVerificationProbe: async () => {},
-  });
-  const backing = testMap<StoredModelOverlay>();
-  await backing.put("stale", {
-    spec: { ...spec, id: "stale", template: "missing" },
-    disabled: false,
-    updatedAt: 1,
-    updatedBy: "admin",
-  } as StoredModelOverlay);
-  const registry = createModelOverlayStore(backing);
-  let refreshes = 0;
-  const deps = {
-    ...serverDeps(config, built),
-    modelRegistry: registry,
-    refreshModels: async () => {
-      refreshes++;
-      await registry.refresh();
-    },
-  };
-  const server = createInsecureTestServer(built.app, deps);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  try {
-    assert.equal((await fetch(base + "/v1/admin/whoami", { headers: ADMIN })).status, 200);
-    assert.equal(refreshes, 0);
-    assert.equal(
-      (await fetch(base + "/v1/admin/model-registry", { headers: { ...ADMIN, "x-admin-actor": "bob@default-org" } }))
-        .status,
-      403,
-    );
-    assert.equal(refreshes, 0);
-    const list = await fetch(base + "/v1/admin/model-registry", { headers: ADMIN });
-    assert.equal(list.status, 200);
-    assert.equal(refreshes, 1);
-    assert.match(JSON.stringify(await list.json()), /template is unavailable/);
-    assert.equal(
-      (await fetch(base + "/v1/admin/model-registry/stale", { method: "DELETE", headers: ADMIN })).status,
-      200,
-    );
-  } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  }
-});
+test("model refresh is limited to dependent routes and admin repair survives stale persisted definitions", () =>
+  inTestTenant(async () => {
+    const config = testConfig();
+    const built = buildApp(config, {
+      modelCredentialFetch: async () => Response.json({ data: [] }),
+      modelVerificationProbe: async () => {},
+    });
+    const backing = testModelTables().registry;
+    await backing.put("stale", {
+      spec: { ...spec, id: "stale", template: "missing" },
+      disabled: false,
+      updatedAt: 1,
+      updatedBy: "admin",
+    } as StoredModelOverlay);
+    const registry = createModelOverlayStore(backing);
+    let refreshes = 0;
+    const deps = {
+      ...serverDeps(config, built),
+      modelRegistry: registry,
+      refreshModels: async () => {
+        refreshes++;
+        await registry.refresh();
+      },
+    };
+    const server = createInsecureTestServer(built.app, deps);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      assert.equal((await fetch(base + "/v1/admin/whoami", { headers: ADMIN })).status, 200);
+      assert.equal(refreshes, 0);
+      assert.equal(
+        (await fetch(base + "/v1/admin/model-registry", { headers: { ...ADMIN, "x-admin-actor": "bob@default-org" } }))
+          .status,
+        403,
+      );
+      assert.equal(refreshes, 0);
+      const list = await fetch(base + "/v1/admin/model-registry", { headers: ADMIN });
+      assert.equal(list.status, 200);
+      assert.equal(refreshes, 1);
+      assert.match(JSON.stringify(await list.json()), /template is unavailable/);
+      assert.equal(
+        (await fetch(base + "/v1/admin/model-registry/stale", { method: "DELETE", headers: ADMIN })).status,
+        200,
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }));
 
 test("overlay resolution preserves canonical personal endpoints and upstream builtin metadata", () => {
   setModelOverlays([validateModelOverlay(spec)]);
@@ -505,6 +508,7 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { wantsFastMode } from "../src/model/model-runtime.ts";
+import { testModelTables } from "./support/credential-stores.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = testConfigStore("default-org");
