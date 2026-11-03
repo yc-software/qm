@@ -1,11 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { glob, readFile } from "node:fs/promises";
 import pg from "pg";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
-import { claimAcrossTenants, crossTenantLoop, inTenantOf, rowTenant } from "../src/tenants/claim.ts";
+import {
+  claimAcrossTenants,
+  crossTenantLoop,
+  inTenantOf,
+  requireOwnerDatabase,
+  rowTenant,
+} from "../src/tenants/claim.ts";
+import { TENANCY_BASE } from "../src/tenants/migrations.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
 import { scopeId, type Principal } from "../src/types.ts";
 import { createSweeper } from "../src/util/sweeper.ts";
@@ -39,15 +49,89 @@ async function withTenantColumn(url: string, table: string, tenants: Record<stri
 }
 
 test("a cross-tenant claim refuses to run under a bound tenant", async () => {
-  let ran = 0;
-  const pg = { query: async () => ({ rows: [{ ran: ++ran }], rowCount: 1 }) };
   await assert.rejects(
-    withTenant(A, () => claimAcrossTenants(pg, "SELECT 1")),
+    withTenant(A, () => claimAcrossTenants("postgres://app@127.0.0.1/qm", "SELECT 1")),
     /A cross-tenant claim cannot run while a tenant is bound/,
   );
-  assert.equal(ran, 0);
-  assert.deepEqual((await claimAcrossTenants(pg, "SELECT 1")).rows, [{ ran: 1 }]);
 });
+
+test("startup fails without an owner database url", () => {
+  const saved = process.env.DATABASE_OWNER_URL;
+  delete process.env.DATABASE_OWNER_URL;
+  try {
+    assert.throws(requireOwnerDatabase, /DATABASE_OWNER_URL/);
+  } finally {
+    if (saved !== undefined) process.env.DATABASE_OWNER_URL = saved;
+  }
+});
+
+test("only the claim helper reads the owner database url", async () => {
+  const readers: string[] = [];
+  for await (const file of glob("src/**/*.ts"))
+    if ((await readFile(file, "utf8")).includes("DATABASE_OWNER_URL")) readers.push(file);
+  assert.deepEqual(readers, ["src/tenants/claim.ts"]);
+});
+
+test(
+  "under the restricted app login, one claim returns both tenants' due rows and each row's work runs bound",
+  { skip },
+  async () => {
+    const url = testDatabaseUrl();
+    const role = `qmt_app_${randomBytes(6).toString("hex")}`;
+    const owner = new pg.Pool({ connectionString: url, max: 1 });
+    for (const statement of TENANCY_BASE.statements) await owner.query(statement);
+    await owner.query(`CREATE TABLE due_work(
+    id TEXT PRIMARY KEY,
+    tenant_id UUID NOT NULL DEFAULT qm_bound_tenant(),
+    due BOOLEAN NOT NULL,
+    done_by UUID
+  )`);
+    await owner.query("ALTER TABLE due_work ENABLE ROW LEVEL SECURITY");
+    await owner.query(
+      "CREATE POLICY due_work_tenant ON due_work USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())",
+    );
+    await owner.query(`CREATE ROLE ${role} NOLOGIN NOBYPASSRLS`);
+    await owner.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
+    await owner.query(`GRANT SELECT, UPDATE ON due_work TO ${role}`);
+    await owner.query(
+      "INSERT INTO due_work(id, tenant_id, due) VALUES ('a1', $1, true), ('a2', $1, false), ('b1', $2, true)",
+      [A, B],
+    );
+    const appUrl = new URL(url);
+    appUrl.searchParams.set("options", `-c role=${role}`);
+    const app = createPgPool(appUrl.toString());
+    try {
+      await assert.rejects(app.q("SELECT * FROM due_work"), /No tenant is bound/);
+      const { rows } = await claimAcrossTenants(appUrl.toString(), "SELECT * FROM due_work WHERE due ORDER BY id");
+      assert.deepEqual(
+        rows.map((row) => [row.id, row.tenant_id]),
+        [
+          ["a1", A],
+          ["b1", B],
+        ],
+      );
+      for (const row of rows)
+        await inTenantOf(rowTenant(row).tenantId, async () => {
+          assert.deepEqual(
+            (await app.q("SELECT id FROM due_work ORDER BY id")).map((visible) => visible.id),
+            row.tenant_id === A ? ["a1", "a2"] : ["b1"],
+          );
+          const updated = await app.query("UPDATE due_work SET done_by = qm_bound_tenant() WHERE id = $1", [row.id]);
+          assert.equal(updated.rowCount, 1);
+        });
+      assert.deepEqual((await owner.query("SELECT id, done_by FROM due_work ORDER BY id")).rows, [
+        { id: "a1", done_by: A },
+        { id: "a2", done_by: null },
+        { id: "b1", done_by: B },
+      ]);
+    } finally {
+      await app.close();
+      await owner.query(`DROP OWNED BY ${role}`);
+      await owner.query(`DROP ROLE ${role}`);
+      await owner.end();
+    }
+  },
+);
 
 test("loop bodies and sweeps run unbound even when started under a tenant", async () => {
   const seen: Array<string | undefined> = [];

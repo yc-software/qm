@@ -2,9 +2,11 @@ import "./instrument.ts";
 import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
+import { requireOwnerDatabase } from "../tenants/claim.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 
 const config = loadConfig();
+requireOwnerDatabase();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 await built.sandboxResources.initialize();

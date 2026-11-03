@@ -128,7 +128,7 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
     async expired(now) {
       return (
         await claimAcrossTenants(
-          db,
+          connectionString,
           `WITH due AS (
                SELECT id FROM file_uploads
                WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
@@ -141,7 +141,7 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
     },
     async completingUploadId(id) {
       const { rows } = await claimAcrossTenants(
-        db,
+        connectionString,
         "SELECT data->>'uploadId' AS upload_id FROM file_uploads WHERE id=$1 AND state='completing'",
         [id],
       );
