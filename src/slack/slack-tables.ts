@@ -269,8 +269,9 @@ function pgSlackInstallationRows(pg: PgPool): SlackInstallationRows {
 }
 
 export async function installedSlackTenants(pg: PgPool): Promise<Array<{ tenant_id: string; version: string }>> {
-  const rows = await claimAcrossTenants(() =>
-    pg.q("SELECT tenant_id::text AS tenant_id, version FROM slack_installation WHERE NOT disabled"),
+  const { rows } = await claimAcrossTenants(
+    pg,
+    "SELECT tenant_id::text AS tenant_id, version FROM slack_installation WHERE NOT disabled",
   );
   return rows.map((row) => ({ tenant_id: String(row.tenant_id), version: String(row.version) }));
 }
@@ -310,13 +311,13 @@ export async function claimStagedEnvelopes(
     accounts: ReadonlyArray<{ tenantId: string; account: string }>;
   },
 ): Promise<DueEnvelope[]> {
-  await claimAcrossTenants(() =>
-    pg.q("DELETE FROM slack_staged_envelopes WHERE received_at < $1", [opts.now - opts.abandonAfterMs]),
-  );
+  await claimAcrossTenants(pg, "DELETE FROM slack_staged_envelopes WHERE received_at < $1", [
+    opts.now - opts.abandonAfterMs,
+  ]);
   if (!opts.accounts.length) return [];
-  const rows = await claimAcrossTenants(() =>
-    pg.q(
-      `WITH due AS (
+  const { rows } = await claimAcrossTenants(
+    pg,
+    `WITH due AS (
        SELECT s.tenant_id, s.key FROM slack_staged_envelopes s
        JOIN unnest($4::uuid[], $5::text[]) AS a(tenant_id, account) ON a.tenant_id = s.tenant_id AND a.account = s.account
        WHERE s.received_at <= $1 AND s.claimed_until <= $2 AND s.attempts < $3
@@ -324,15 +325,14 @@ export async function claimStagedEnvelopes(
      UPDATE slack_staged_envelopes e SET attempts = e.attempts + 1, claimed_until = $6
      FROM due WHERE e.tenant_id = due.tenant_id AND e.key = due.key
      RETURNING e.tenant_id::text AS tenant_id, e.key, e.body, e.account, e.attempts`,
-      [
-        opts.now - opts.staleAfterMs,
-        opts.now,
-        opts.maxAttempts,
-        opts.accounts.map((a) => a.tenantId),
-        opts.accounts.map((a) => a.account),
-        opts.now + opts.claimMs,
-      ],
-    ),
+    [
+      opts.now - opts.staleAfterMs,
+      opts.now,
+      opts.maxAttempts,
+      opts.accounts.map((a) => a.tenantId),
+      opts.accounts.map((a) => a.account),
+      opts.now + opts.claimMs,
+    ],
   );
   return rows.map((row) => ({
     tenantId: String(row.tenant_id),
@@ -451,8 +451,9 @@ function pgSessionStatusRows(pg: PgPool): SlackSessionStatusRows {
 }
 
 export async function tenantsWithSessionStatus(pg: PgPool): Promise<Array<{ tenant_id: string; account: string }>> {
-  const rows = await claimAcrossTenants(() =>
-    pg.q("SELECT DISTINCT tenant_id::text AS tenant_id, account FROM slack_session_status"),
+  const { rows } = await claimAcrossTenants(
+    pg,
+    "SELECT DISTINCT tenant_id::text AS tenant_id, account FROM slack_session_status",
   );
   return rows.map((row) => ({ tenant_id: String(row.tenant_id), account: String(row.account) }));
 }
@@ -511,10 +512,9 @@ function pgTaskAckRows(pg: PgPool): TaskAckRows {
 }
 
 export async function tenantsWithUnsettledAcks(pg: PgPool): Promise<Array<{ tenant_id: string }>> {
-  const rows = await claimAcrossTenants(() =>
-    pg.q(
-      "SELECT DISTINCT tenant_id::text AS tenant_id FROM slack_task_acknowledgements WHERE NOT synced OR NOT finished",
-    ),
+  const { rows } = await claimAcrossTenants(
+    pg,
+    "SELECT DISTINCT tenant_id::text AS tenant_id FROM slack_task_acknowledgements WHERE NOT synced OR NOT finished",
   );
   return rows.map((row) => ({ tenant_id: String(row.tenant_id) }));
 }
