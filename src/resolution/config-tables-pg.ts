@@ -1,8 +1,9 @@
+import { z } from "zod";
 import { createPgPool, withPgTransaction, type Rows } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import type { StoredConnectorClient } from "../connectors/connector-client-store.ts";
-import type { SecurityPosture } from "../security/security-posture.ts";
-import type { SharingPosture } from "./sharing-posture.ts";
+import { SECURITY_POSTURES } from "../security/security-posture.ts";
+import { SHARING_POSTURES } from "./sharing-posture.ts";
 import {
   definedOnly,
   type ConfigTables,
@@ -53,54 +54,103 @@ const SCOPE_COLUMNS = [
   "individual_model_auth",
 ] as const;
 
-const value = <T>(cell: unknown): T | undefined => (cell === null || cell === undefined ? undefined : (cell as T));
-const millis = (cell: unknown): number => (cell instanceof Date ? cell.getTime() : Number(cell));
+const cell = <T extends z.ZodType>(type: T) => type.nullish().transform((v) => v ?? undefined);
+const strings = cell(z.array(z.string()));
+const flag = cell(z.boolean());
+const int = cell(z.number());
+const text = cell(z.string());
 
-function scopeFromRow(r: Row): ScopeSettings {
-  const has = (...names: string[]) => names.some((name) => r[name] !== null && r[name] !== undefined);
-  return definedOnly<ScopeSettings>({
-    commandPolicy: has("command_mode")
-      ? { mode: r.command_mode as never, rules: (r.command_rules ?? []) as never }
-      : undefined,
-    securityPosture: value<SecurityPosture>(r.security_posture),
-    sharingPosture: value<SharingPosture>(r.sharing_posture),
-    approvalGrantModes: has("approval_session")
-      ? { session: r.approval_session === true, always: r.approval_always === true }
-      : undefined,
-    egress: has("egress_allowed_hosts")
-      ? definedOnly({
-          allowedHosts: r.egress_allowed_hosts as string[],
-          deniedHosts: value<string[]>(r.egress_denied_hosts),
-          denyPrivateNetworks: value<boolean>(r.egress_deny_private_networks),
-          privateNetworkAllowedHosts: value<string[]>(r.egress_private_network_allowed_hosts),
-        })
-      : undefined,
-    unfulfilledInsights: value(r.unfulfilled_insights),
-    externalSlackParticipants: value(r.external_slack_participants),
-    channelHeaderPin: value(r.channel_header_pin),
-    webuiModels: value(r.webui_models),
-    ackEmoji: value(r.ack_emoji),
-    branding: has("brand_accent", "brand_mark", "brand_mark_url", "brand_self_label", "brand_org_name")
-      ? definedOnly({
-          accent: value<string>(r.brand_accent),
-          mark: value<string>(r.brand_mark),
-          markUrl: value<string>(r.brand_mark_url),
-          selfLabel: value<string>(r.brand_self_label),
-          orgName: value<string>(r.brand_org_name),
-        })
-      : undefined,
-    browseMaxSteps: value(r.browse_max_steps),
-    browseModel: value(r.browse_model),
-    modelAccount: value(r.model_account),
-    modelId: value(r.model_id),
-    effortLevel: value(r.effort_level),
-    fastMode: value(r.fast_mode),
-    revision: value(r.runtime_revision),
-    orgRevision: value(r.org_revision),
-    orgAmbient: value(r.org_ambient),
-    interactiveFastMode: value(r.interactive_fast_mode),
-    individualModelAuth: value(r.individual_model_auth),
-  });
+const SCOPE_ROW = z.object({
+  scope_id: z.string(),
+  command_mode: cell(z.enum(["denylist", "allowlist"])),
+  command_rules: cell(
+    z.array(
+      z.object({
+        pattern: z.string(),
+        decision: z.enum(["allow", "deny", "require_approval"]),
+        reason: z.string().optional(),
+      }),
+    ),
+  ),
+  security_posture: cell(z.enum(SECURITY_POSTURES)),
+  sharing_posture: cell(z.enum(SHARING_POSTURES)),
+  approval_session: flag,
+  approval_always: flag,
+  egress_allowed_hosts: strings,
+  egress_denied_hosts: strings,
+  egress_deny_private_networks: flag,
+  egress_private_network_allowed_hosts: strings,
+  unfulfilled_insights: flag,
+  external_slack_participants: flag,
+  channel_header_pin: flag,
+  webui_models: strings,
+  ack_emoji: strings,
+  brand_accent: text,
+  brand_mark: text,
+  brand_mark_url: text,
+  brand_self_label: text,
+  brand_org_name: text,
+  browse_max_steps: int,
+  browse_model: text,
+  model_account: cell(z.enum(["personal", "anthropic", "openai"])),
+  model_id: text,
+  effort_level: text,
+  fast_mode: flag,
+  runtime_revision: int,
+  org_revision: int,
+  org_ambient: flag,
+  interactive_fast_mode: flag,
+  individual_model_auth: flag,
+});
+
+function scopeFromRow(row: Row): [ScopeId, ScopeSettings] {
+  const r = SCOPE_ROW.parse(row);
+  const branded = [r.brand_accent, r.brand_mark, r.brand_mark_url, r.brand_self_label, r.brand_org_name];
+  return [
+    r.scope_id,
+    definedOnly<ScopeSettings>({
+      commandPolicy: r.command_mode ? { mode: r.command_mode, rules: r.command_rules ?? [] } : undefined,
+      securityPosture: r.security_posture,
+      sharingPosture: r.sharing_posture,
+      approvalGrantModes:
+        r.approval_session === undefined
+          ? undefined
+          : { session: r.approval_session, always: r.approval_always === true },
+      egress: r.egress_allowed_hosts
+        ? definedOnly({
+            allowedHosts: r.egress_allowed_hosts,
+            deniedHosts: r.egress_denied_hosts,
+            denyPrivateNetworks: r.egress_deny_private_networks,
+            privateNetworkAllowedHosts: r.egress_private_network_allowed_hosts,
+          })
+        : undefined,
+      unfulfilledInsights: r.unfulfilled_insights,
+      externalSlackParticipants: r.external_slack_participants,
+      channelHeaderPin: r.channel_header_pin,
+      webuiModels: r.webui_models,
+      ackEmoji: r.ack_emoji,
+      branding: branded.some((v) => v !== undefined)
+        ? definedOnly({
+            accent: r.brand_accent,
+            mark: r.brand_mark,
+            markUrl: r.brand_mark_url,
+            selfLabel: r.brand_self_label,
+            orgName: r.brand_org_name,
+          })
+        : undefined,
+      browseMaxSteps: r.browse_max_steps,
+      browseModel: r.browse_model,
+      modelAccount: r.model_account,
+      modelId: r.model_id,
+      effortLevel: r.effort_level,
+      fastMode: r.fast_mode,
+      revision: r.runtime_revision,
+      orgRevision: r.org_revision,
+      orgAmbient: r.org_ambient,
+      interactiveFastMode: r.interactive_fast_mode,
+      individualModelAuth: r.individual_model_auth,
+    }),
+  ];
 }
 
 function scopeToColumns(s: ScopeSettings): unknown[] {
@@ -139,41 +189,72 @@ function scopeToColumns(s: ScopeSettings): unknown[] {
   ].map((cell) => cell ?? null);
 }
 
-const soulFromRow = (r: Row): SoulRevision =>
-  definedOnly({
-    scopeId: r.scope_id as ScopeId,
-    content: String(r.content),
-    version: Number(r.version),
-    updatedAt: millis(r.updated_at),
-    updatedBy: value<string>(r.updated_by),
-  });
+const SOUL_ROW = z.object({
+  scope_id: z.string(),
+  content: z.string(),
+  version: z.number(),
+  updated_at: z.date(),
+  updated_by: text,
+});
 
-const connectorFromRow = (r: Row): StoredConnectorClient =>
-  definedOnly({
-    scopeId: String(r.scope_id),
-    provider: String(r.provider),
-    clientId: String(r.client_id),
-    secretEnc: String(r.secret_enc),
-    scopes: value<string[]>(r.scopes),
-    redirectAllowlist: value<string[]>(r.redirect_allowlist),
-    consentMode: value<StoredConnectorClient["consentMode"]>(r.consent_mode),
-    hostedDomain: value<string>(r.hosted_domain),
-    enabled: r.enabled === true,
-    updatedBy: value<string>(r.updated_by),
-    updatedAt: millis(r.updated_at),
+const soulFromRow = (row: Row): SoulRevision => {
+  const r = SOUL_ROW.parse(row);
+  return definedOnly({
+    scopeId: r.scope_id,
+    content: r.content,
+    version: r.version,
+    updatedAt: r.updated_at.getTime(),
+    updatedBy: r.updated_by,
   });
+};
 
-const operatorFromRow = (r: Row | undefined): OperatorSettings =>
-  definedOnly({
-    embeddingModelId: value<string>(r?.embedding_model_id),
-  });
+const CONNECTOR_ROW = z.object({
+  scope_id: z.string(),
+  provider: z.string(),
+  client_id: z.string(),
+  secret_enc: z.string(),
+  scopes: strings,
+  redirect_allowlist: strings,
+  consent_mode: cell(z.enum(["standard", "admin", "github_app"])),
+  hosted_domain: text,
+  enabled: z.boolean(),
+  updated_by: text,
+  updated_at: z.date(),
+});
 
-const selectionFromRow = (r: Row): RuntimeSelection =>
-  definedOnly({
-    modelId: String(r.model_id),
-    effortLevel: value<string>(r.effort_level),
-    fastMode: value<boolean>(r.fast_mode),
+const connectorFromRow = (row: Row): StoredConnectorClient => {
+  const r = CONNECTOR_ROW.parse(row);
+  return definedOnly({
+    scopeId: r.scope_id,
+    provider: r.provider,
+    clientId: r.client_id,
+    secretEnc: r.secret_enc,
+    scopes: r.scopes,
+    redirectAllowlist: r.redirect_allowlist,
+    consentMode: r.consent_mode,
+    hostedDomain: r.hosted_domain,
+    enabled: r.enabled,
+    updatedBy: r.updated_by,
+    updatedAt: r.updated_at.getTime(),
   });
+};
+
+const operatorFromRow = (row: Row | undefined): OperatorSettings =>
+  definedOnly({ embeddingModelId: text.parse(row?.embedding_model_id) });
+
+const PURPOSE_ROW = z.object({
+  purpose: z.enum(["cron", "subagent", "fallback"]),
+  model_id: z.string(),
+  effort_level: text,
+  fast_mode: flag,
+});
+
+const purposeFromRow = (row: Row): [RuntimePurpose, RuntimeSelection] => {
+  const r = PURPOSE_ROW.parse(row);
+  return [r.purpose, definedOnly({ modelId: r.model_id, effortLevel: r.effort_level, fastMode: r.fast_mode })];
+};
+
+const EMOJI_ROW = z.object({ emoji: z.record(z.string(), z.string()), updated_at: z.date() });
 
 const SCOPE_SELECT = `SELECT scope_id, ${SCOPE_COLUMNS.join(", ")} FROM scope_settings WHERE ${TENANT}`;
 const SCOPE_UPDATE = `UPDATE scope_settings SET ${SCOPE_COLUMNS.map((c, i) => `${c} = $${i + 2}`).join(", ")}
@@ -194,18 +275,16 @@ export function createPostgresConfigTables(databaseUrl: string): ConfigTables {
   return {
     close: () => db.close(),
     scopeSettings: async (ids) =>
-      (await (ids ? db.q(`${SCOPE_SELECT} AND scope_id = ANY($1)`, [ids]) : db.q(SCOPE_SELECT))).map(
-        (r) => [r.scope_id as ScopeId, scopeFromRow(r)] as [ScopeId, ScopeSettings],
-      ),
+      (await (ids ? db.q(`${SCOPE_SELECT} AND scope_id = ANY($1)`, [ids]) : db.q(SCOPE_SELECT))).map(scopeFromRow),
     async scopeSetting(id) {
       const [row] = await db.q(`${SCOPE_SELECT} AND scope_id = $1`, [id]);
-      return row ? scopeFromRow(row) : null;
+      return row ? scopeFromRow(row)[1] : null;
     },
     async updateScopeSetting(id, fn) {
       return withPgTransaction(await db.pool(), async (client) => {
         await client.query(`INSERT INTO scope_settings(scope_id) VALUES ($1) ON CONFLICT DO NOTHING`, [id]);
         const { rows } = await client.query(`${SCOPE_SELECT} AND scope_id = $1 FOR UPDATE`, [id]);
-        const next = definedOnly(fn(scopeFromRow(rows[0]!)));
+        const next = definedOnly(fn(scopeFromRow(rows[0]!)[1]));
         await client.query(SCOPE_UPDATE, [id, ...scopeToColumns(next)]);
         return next;
       });
@@ -220,7 +299,7 @@ export function createPostgresConfigTables(databaseUrl: string): ConfigTables {
       const rows = await db.q(
         `SELECT purpose, model_id, effort_level, fast_mode FROM purpose_runtimes WHERE ${TENANT}`,
       );
-      return Object.fromEntries(rows.map((r) => [r.purpose as RuntimePurpose, selectionFromRow(r)]));
+      return Object.fromEntries(rows.map(purposeFromRow));
     },
     async setPurposeRuntime(purpose, s) {
       if (!s) {
@@ -279,9 +358,9 @@ export function createPostgresConfigTables(databaseUrl: string): ConfigTables {
         `SELECT scope_id, emoji, updated_at FROM slack_emoji_catalog WHERE ${TENANT} AND scope_id = $1`,
         [id],
       );
-      return row
-        ? { scopeId: id, emoji: row.emoji as Record<string, string>, updatedAt: millis(row.updated_at) }
-        : null;
+      if (!row) return null;
+      const { emoji, updated_at } = EMOJI_ROW.parse(row);
+      return { scopeId: id, emoji, updatedAt: updated_at.getTime() };
     },
     async putSlackEmojiCatalog(c) {
       await db.q(

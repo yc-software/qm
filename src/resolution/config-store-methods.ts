@@ -161,10 +161,14 @@ export function policyMethods(
 
 const RUNTIME_FIELDS = ["modelId", "effortLevel", "fastMode", "revision", "orgRevision"] as const;
 
-const withoutRuntime = (row: ScopeSettings): ScopeSettings =>
-  Object.fromEntries(
-    Object.entries(row).filter(([key]) => !(RUNTIME_FIELDS as readonly string[]).includes(key)),
-  ) as ScopeSettings;
+const withoutRuntime = ({
+  modelId: _modelId,
+  effortLevel: _effortLevel,
+  fastMode: _fastMode,
+  revision: _revision,
+  orgRevision: _orgRevision,
+  ...row
+}: ScopeSettings): ScopeSettings => row;
 
 const selectionFields = (s: RuntimeSelection): RuntimeSelection =>
   definedOnly({ modelId: s.modelId, effortLevel: s.effortLevel, fastMode: s.fastMode });

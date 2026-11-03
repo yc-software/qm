@@ -36,7 +36,7 @@ export async function withTypedTableDb<S extends Closable>(
     await owner.close?.();
     login = await createAppLogin(ownerUrl.toString());
     await admin.query(`GRANT CREATE ON SCHEMA ${schema} TO ${login.role}`);
-    const existing = (await admin.query(`SELECT id::text AS id FROM tenants`)).rows[0]?.id as string | undefined;
+    const existing = (await admin.query<{ id: string }>(`SELECT id::text AS id FROM tenants`)).rows[0]?.id;
     const tenant = existing ?? randomUUID();
     if (!existing) await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'main', 'Main')`, [tenant]);
     const otherTenant = randomUUID();

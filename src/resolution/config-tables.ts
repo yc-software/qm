@@ -83,5 +83,8 @@ export interface ConfigTables {
   close?(): Promise<void>;
 }
 
-export const definedOnly = <T extends object>(value: T): T =>
-  Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
+export function definedOnly<T extends object>(value: T): T {
+  const copy = { ...value };
+  for (const key in copy) if (copy[key] === undefined) delete copy[key];
+  return copy;
+}
