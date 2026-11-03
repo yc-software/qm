@@ -1,8 +1,8 @@
-import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
+import { SCOPE_KINDS, parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 import { parseMemorableProvider, type MemorableMemoryProviderConfig } from "./memorable/config.ts";
 
-const KINDS = new Set<ScopeKind>(["personal", "channel", "team", "org", "group"]);
+const KINDS = new Set<ScopeKind>(SCOPE_KINDS);
 const ID = /^[a-z][a-z0-9-]{0,62}$/;
 const ARG = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const ENV = /^[A-Z][A-Z0-9_]*$/;

@@ -7,7 +7,8 @@ import { join } from "node:path";
 import pg from "pg";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
-import { createConfiguredMemoryService } from "../../src/memory/provider-factory.ts";
+import { createRegistryMemoryService } from "../../src/memory/registry-memory.ts";
+import { emptyMemoryRegistry } from "../support/memory-registry.ts";
 import { scopeId, type SessionEntry } from "../../src/types.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
 import { recallText } from "../support/recall-text.ts";
@@ -45,7 +46,7 @@ describe(
     const personal = scopeId("personal", "U1");
     let stub: Awaited<ReturnType<typeof startExtractionStub>> | undefined;
     let pool: pg.Pool;
-    let memory: ReturnType<typeof createConfiguredMemoryService>;
+    let memory: ReturnType<typeof createRegistryMemoryService>;
 
     before(async () => {
       stub = REAL ? undefined : await startExtractionStub();
@@ -75,9 +76,10 @@ describe(
         }),
         env,
       );
-      memory = createConfiguredMemoryService({
+      memory = createRegistryMemoryService({
+        registry: emptyMemoryRegistry,
         defaultMemory: createPostgresMemoryService(DB!),
-        config,
+        overlay: config,
         sessionEntries: async (id) => (id === "s-e2e" ? trace : []),
       });
     });

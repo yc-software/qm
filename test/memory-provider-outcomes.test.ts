@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createConfiguredMemoryService } from "../src/memory/provider-factory.ts";
+import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
+import { emptyMemoryRegistry } from "./support/memory-registry.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { withProviders, writeFacts } from "../src/memory/provider-outcome.ts";
 import { installPrincipalLinks } from "../src/directory/person.ts";
@@ -38,9 +39,10 @@ function configured(
   env: Record<string, string> = ENV,
   defaultMemory: MemoryService = notebook,
 ) {
-  return createConfiguredMemoryService({
+  return createRegistryMemoryService({
+    registry: emptyMemoryRegistry,
     defaultMemory,
-    config: parseMemoryProviderConfig(
+    overlay: parseMemoryProviderConfig(
       JSON.stringify({
         providers: [
           {

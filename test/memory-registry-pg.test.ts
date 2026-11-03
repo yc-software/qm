@@ -14,9 +14,9 @@ import {
   MEMORY_REGISTRY_TABLE,
   MemoryRegistryError,
   createMemoryRegistryStore,
+  deleteBinding,
   putBinding,
   putBrain,
-  releaseBinding,
   type MemoryRegistry,
 } from "../src/memory/registry.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
@@ -27,7 +27,6 @@ import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const change = { actor: "admin-alice", now: 1_762_128_000_000, overlayIds: new Set<string>() };
-const org = { ...change, owner: "org:default-org" };
 const BRAIN_FACT = "Alice's project codename is BLACKBEARD-42.";
 const plain = (rows: ReadonlyArray<{ text: string }>) =>
   rows.map(({ text }) => text.replace(/^- \(\d{4}-\d\d-\d\d\) /, ""));
@@ -43,7 +42,7 @@ async function startBrain(t: {
   const calls: BrainCall[] = [];
   const server = await startMcpTestServer(t, {
     tools: ["memory_recall", "memory_write"].map((name) => ({ name, inputSchema: { type: "object" as const } })),
-    clients: { "qm-personal": "personal-secret", "qm-scopes": "scopes-secret" },
+    clients: { "qm-personal": "personal-secret" },
     call: (tool, args) => {
       calls.push({ tool, args });
       return { content: [{ type: "text", text: tool === "memory_recall" ? BRAIN_FACT : "stored" }] };
@@ -56,57 +55,28 @@ function stores(url: string, overlay?: Parameters<typeof createMemoryRegistrySto
   const maps = createPostgresMapFactory(url);
   return createMemoryRegistryStore({
     map: maps.map<MemoryRegistry>(MEMORY_REGISTRY_TABLE),
-    pg: maps.pool,
     ...(overlay ? { overlay } : {}),
   });
 }
 
-function personalBrain(url: string) {
+function personalBrain(url: string, secret: { clientSecret?: string } = { clientSecret: "personal-secret" }) {
   return (record: MemoryRegistry) =>
     putBrain(
       record,
       "acme-personal",
-      {
-        kind: "personal",
-        preset: "gbrain-v1",
-        url,
-        clientId: "qm-personal",
-        clientSecret: "personal-secret",
-        label: "Acme personal memory",
-      },
-      org,
+      { preset: "gbrain-v1", url, clientId: "qm-personal", ...secret, label: "Acme personal memory" },
+      change,
     );
 }
 
-test("two owners racing for one pool source: exactly one claim lands", async () => {
+test("two instances racing to bind one member to one brain: exactly one binding lands", async () => {
   const url = testDatabaseUrl();
   const blue = stores(url);
   const green = stores(url);
-  await blue.update((record) =>
-    putBrain(
-      record,
-      "acme-scopes",
-      {
-        kind: "scopes",
-        preset: "gbrain-v1",
-        url: "https://brain.acme.example/mcp",
-        clientId: "qm-scopes",
-        label: "Acme",
-        pool: [{ source: "qm-shared", kinds: ["group"] }],
-      },
-      org,
-    ),
-  );
-  const claim = (store: typeof blue, project: string) =>
-    store.update((record) =>
-      putBinding(
-        record,
-        `claim-${project}`,
-        { brain: "acme-scopes", source: "qm-shared", scope: `group:web-project-${project}` },
-        change,
-      ),
-    );
-  const results = await Promise.allSettled([claim(blue, "a"), claim(green, "b"), claim(blue, "c"), claim(green, "d")]);
+  await blue.update(personalBrain("https://brain.acme.example/mcp"));
+  const bind = (store: typeof blue, id: string) =>
+    store.update((record) => putBinding(record, id, { brain: "acme-personal", scope: "personal:U1" }, change));
+  const results = await Promise.allSettled([bind(blue, "a"), bind(green, "b"), bind(blue, "c"), bind(green, "d")]);
   assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
   for (const result of results)
     if (result.status === "rejected") {
@@ -146,7 +116,7 @@ test("an already-built memory service serves a new binding, then stops at its re
   });
   assert.equal(brain.calls.filter(({ tool }) => tool === "memory_write").length, 1);
 
-  await registry.update((record) => releaseBinding(record, "alice", change));
+  await registry.update((record) => deleteBinding(record, "alice"));
   const calls = brain.calls.length;
   assert.deepEqual(await texts(), ["Alice's anchor is HMS-OSPREY-7.", "Alice prefers tea."]);
   assert.equal(brain.calls.length, calls);
@@ -186,7 +156,7 @@ test("an invalid registry version leaves the last valid one serving", async (t) 
   const url = testDatabaseUrl();
   const maps = createPostgresMapFactory(url);
   const map = maps.map<MemoryRegistry>(MEMORY_REGISTRY_TABLE);
-  const registry = createMemoryRegistryStore({ map, pg: maps.pool });
+  const registry = createMemoryRegistryStore({ map });
   const memory = createRegistryMemoryService({ defaultMemory: createPostgresMemoryService(url), registry });
   await registry.update(personalBrain(brain.url));
   await registry.update((record) =>
@@ -204,27 +174,12 @@ test("a disabled binding gives a problem line and never calls the brain", async 
   const url = testDatabaseUrl();
   const registry = stores(url);
   const memory = createRegistryMemoryService({ defaultMemory: createPostgresMemoryService(url), registry });
+  await registry.update(personalBrain(brain.url, {}));
   await registry.update((record) =>
-    putBrain(
-      record,
-      "acme-scopes",
-      {
-        kind: "scopes",
-        preset: "gbrain-v1",
-        url: brain.url,
-        clientId: "qm-scopes",
-        clientSecret: "scopes-secret",
-        label: "Acme company brain",
-        pool: [{ source: "qm-proj-1", kinds: ["group"] }],
-      },
-      org,
-    ),
-  );
-  await registry.update((record) =>
-    putBinding(record, "proj-1", { brain: "acme-scopes", source: "qm-proj-1", scope: "group:web-project-1" }, change),
+    putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1" }, change),
   );
   const { value, problems } = await withProviders("search", (report) =>
-    memory.query("group:web-project-1", "anything", 5, { actorId: "U1", report }),
+    memory.query("personal:U1", "anything", 5, { actorId: "U1", report }),
   );
   assert.deepEqual(value, []);
   assert.deepEqual(
@@ -232,8 +187,8 @@ test("a disabled binding gives a problem line and never calls the brain", async 
     [
       [
         "memory_provider_disabled",
-        "acme-scopes",
-        "Memory provider acme-scopes is registered for this scope but not serving it (scope_recall_unsupported), so QM didn't call it.",
+        "acme-personal",
+        "Memory provider acme-personal is registered for this scope but not serving it (secret_missing), so QM didn't call it.",
       ],
     ],
   );
@@ -279,7 +234,6 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
   const api = serve(built);
   t.after(api.close);
   const brain = {
-    kind: "personal",
     preset: "gbrain-v1",
     url: "https://brain2.acme.example/mcp",
     clientId: "qm-personal",
@@ -328,7 +282,7 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
   await new Promise((resolve) => setTimeout(resolve, 50));
   const rows = JSON.stringify(await built.auditLog.events());
   assert.match(rows, /memory-registry\.brain\.update/);
-  assert.match(rows, /memory-registry\.binding\.release/);
+  assert.match(rows, /memory-registry\.binding\.delete/);
   assert.doesNotMatch(rows, /never-shown-secret/);
 });
 
@@ -364,7 +318,6 @@ test("an admin's agent can register a brain but never carries its client secret"
       body: JSON.stringify(body),
     });
   const brain = {
-    kind: "personal",
     preset: "gbrain-v1",
     url: "https://brain.acme.example/mcp",
     clientId: "qm-personal",
@@ -399,7 +352,6 @@ test("blue-green: a binding written through one instance serves turns on the oth
   assert.equal(
     (
       await blueApi.call("PUT", "/v1/admin/memory-registry/brains/acme-personal", "admin-alice@default-org", {
-        kind: "personal",
         preset: "gbrain-v1",
         url: brain.url,
         clientId: "qm-personal",

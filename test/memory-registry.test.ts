@@ -3,16 +3,15 @@ import assert from "node:assert/strict";
 import {
   EMPTY_MEMORY_REGISTRY,
   MemoryRegistryError,
+  deleteBinding,
   deleteBrain,
   putBinding,
   putBrain,
-  releaseBinding,
   resolveMemoryRegistry,
   type MemoryRegistry,
 } from "../src/memory/registry.ts";
 
 const change = { actor: "admin-alice", now: 1_762_128_000_000, overlayIds: new Set<string>() };
-const org = { ...change, owner: "org:default-org" };
 
 function refused(fn: () => unknown, status: number, pattern: RegExp): void {
   assert.throws(fn, (error: unknown) => {
@@ -23,158 +22,44 @@ function refused(fn: () => unknown, status: number, pattern: RegExp): void {
   });
 }
 
-function companyBrain(record: MemoryRegistry = EMPTY_MEMORY_REGISTRY, id = "acme-scopes"): MemoryRegistry {
-  return putBrain(
-    record,
-    id,
-    {
-      kind: "scopes",
-      preset: "gbrain-v1",
-      url: "https://Brain.Acme.example/mcp/",
-      clientId: "qm-scopes",
-      clientSecret: "scopes-secret",
-      label: "Acme company brain",
-      pool: [
-        { source: "qm-proj-1", kinds: ["group"] },
-        { source: "qm-eng", kinds: ["channel"] },
-      ],
-    },
-    org,
-  );
-}
-
-function personalBrain(record: MemoryRegistry = EMPTY_MEMORY_REGISTRY): MemoryRegistry {
+function personalBrain(record: MemoryRegistry = EMPTY_MEMORY_REGISTRY, body: Record<string, unknown> = {}) {
   return putBrain(
     record,
     "acme-personal",
     {
-      kind: "personal",
       preset: "gbrain-v1",
       url: "https://brain.acme.example/mcp",
       clientId: "qm-personal",
       clientSecret: "personal-secret",
       label: "Acme personal memory",
+      ...body,
     },
-    org,
+    change,
   );
 }
 
-test("a pool source is claimed once: another scope can never take it, even after release", () => {
-  let record = putBinding(
-    companyBrain(),
-    "proj-1",
-    { brain: "acme-scopes", source: "qm-proj-1", scope: "group:web-project-1" },
-    change,
-  );
-  refused(
-    () =>
-      putBinding(record, "proj-2", { brain: "acme-scopes", source: "qm-proj-1", scope: "group:web-project-2" }, change),
-    409,
-    /already claimed by another scope/,
-  );
-  record = releaseBinding(record, "proj-1", change);
-  assert.equal(record.bindings[0]!.state, "released");
-  refused(
-    () =>
-      putBinding(record, "proj-2", { brain: "acme-scopes", source: "qm-proj-1", scope: "group:web-project-2" }, change),
-    409,
-    /already claimed by another scope/,
-  );
-  refused(
-    () =>
-      putBinding(
-        record,
-        "proj-1b",
-        { brain: "acme-scopes", source: "qm-proj-1", scope: "group:web-project-1" },
-        change,
-      ),
-    409,
-    /reserved for group:web-project-1 by binding proj-1/,
-  );
-  record = putBinding(record, "proj-1", {}, change);
-  assert.equal(record.bindings.length, 1);
-  assert.equal(record.bindings[0]!.state, "bound");
-});
-
-test("a hostile overwrite can't move a binding, or its source, to another scope or brain", () => {
-  const record = putBinding(
-    companyBrain(personalBrain()),
-    "proj-1",
-    { brain: "acme-scopes", source: "qm-proj-1", scope: "group:web-project-1" },
-    change,
-  );
-  refused(() => putBinding(record, "proj-1", { scope: "group:web-project-2" }, change), 409, /can't change/);
-  refused(() => putBinding(record, "proj-1", { source: "qm-eng" }, change), 409, /can't change/);
-  const twin = companyBrain(record, "acme-scopes-2");
-  refused(
-    () =>
-      putBinding(twin, "steal", { brain: "acme-scopes-2", source: "qm-proj-1", scope: "group:web-project-9" }, change),
-    409,
-    /already claimed/,
-  );
-});
-
-test("a scope binds at most one source per brain, and kinds must match the pool", () => {
-  const record = putBinding(
-    putBrain(
-      companyBrain(),
-      "acme-scopes",
-      {
-        pool: [
-          { source: "qm-proj-1", kinds: ["group"] },
-          { source: "qm-proj-1b", kinds: ["group"] },
-          { source: "qm-eng", kinds: ["channel"] },
-        ],
-      },
-      org,
-    ),
-    "proj-1",
-    { brain: "acme-scopes", source: "qm-proj-1", scope: "group:web-project-1" },
-    change,
-  );
-  refused(
-    () =>
-      putBinding(
-        record,
-        "proj-1-again",
-        { brain: "acme-scopes", source: "qm-proj-1b", scope: "group:web-project-1" },
-        change,
-      ),
-    409,
-    /already bound to brain acme-scopes by binding proj-1/,
-  );
-  refused(
-    () => putBinding(record, "eng", { brain: "acme-scopes", source: "qm-eng", scope: "group:web-project-1" }, change),
-    400,
-    /pool source whose kinds include/,
-  );
-  refused(
-    () => putBinding(record, "org-wide", { brain: "acme-scopes", source: "qm-eng", scope: "channel" }, change),
-    400,
-    /exact/,
-  );
-});
-
-test("a personal brain binds personal scopes with no source, and must attest the member", () => {
+test("a brain binds the kind personal or one member's personal scope, and always attests the member", () => {
   const record = personalBrain();
+  for (const scope of ["group:web-project-1", "channel", "personal:", "U1"])
+    refused(() => putBinding(record, "p", { brain: "acme-personal", scope }, change), 400, /personal memory/);
   refused(
-    () => putBinding(record, "p", { brain: "acme-personal", scope: "group:web-project-1" }, change),
+    () => putBinding(record, "p", { brain: "acme-personal", scope: "personal:U1", capture: "automatic" }, change),
     400,
-    /personal brain/,
+    /automatic/,
   );
-  refused(
-    () => putBinding(record, "p", { brain: "acme-personal", scope: "personal:U1", source: "x" }, change),
-    400,
-    /no source/,
-  );
-  refused(() => putBrain(record, "acme-personal", { attestActor: false }, org), 400, /must attest the member/);
   const bound = putBinding(
-    record,
-    "everyone",
-    { brain: "acme-personal", scope: "personal", capture: "explicit" },
+    putBinding(record, "everyone", { brain: "acme-personal", scope: "personal", capture: "explicit" }, change),
+    "alice",
+    { brain: "acme-personal", scope: "personal:U1", recall: false, capture: "explicit" },
     change,
   );
-  assert.deepEqual(resolveMemoryRegistry(bound, new Set()).config.routes, [
+  const { config, disabled } = resolveMemoryRegistry(bound, new Set());
+  assert.deepEqual(disabled, []);
+  assert.deepEqual(
+    config.providers.map((provider) => [provider.id, provider.type === "mcp" && provider.attestActor]),
+    [["acme-personal", true]],
+  );
+  assert.deepEqual(config.routes, [
     {
       provider: "acme-personal",
       scopes: ["personal"],
@@ -184,43 +69,36 @@ test("a personal brain binds personal scopes with no source, and must attest the
       label: "Acme personal memory",
       failOpen: true,
     },
+    {
+      provider: "acme-personal",
+      scopes: ["personal:U1"],
+      capture: "explicit",
+      recall: false,
+      manage: false,
+      label: "Acme personal memory",
+      failOpen: true,
+    },
   ]);
 });
 
-test("automatic capture is refused and the registry stops at 2,000 bindings", () => {
-  const record = personalBrain();
+test("a scope binds to one brain once, and a binding can move to another brain or scope", () => {
+  let record = putBinding(personalBrain(), "alice", { brain: "acme-personal", scope: "personal:U1" }, change);
   refused(
-    () => putBinding(record, "p", { brain: "acme-personal", scope: "personal:U1", capture: "automatic" }, change),
-    400,
-    /automatic/,
-  );
-  const full: MemoryRegistry = {
-    ...record,
-    bindings: Array.from({ length: 2_000 }, (_, i) => ({
-      id: `b${i}`,
-      brain: "acme-personal",
-      endpoint: record.brains[0]!.endpoint,
-      scope: `personal:U${i}`,
-      state: "released" as const,
-      capture: "off" as const,
-      recall: true,
-      failOpen: true,
-      label: "x",
-      updatedAt: 0,
-      updatedBy: "x",
-    })),
-  };
-  refused(
-    () => putBinding(full, "one-more", { brain: "acme-personal", scope: "personal:U9999" }, change),
+    () => putBinding(record, "alice-again", { brain: "acme-personal", scope: "personal:U1" }, change),
     409,
-    /at most 2000/,
+    /already bound to brain acme-personal by binding alice/,
+  );
+  record = putBinding(record, "alice", { scope: "personal:U2" }, change);
+  assert.deepEqual(
+    record.bindings.map(({ id, scope }) => [id, scope]),
+    [["alice", "personal:U2"]],
   );
 });
 
 test("env provider ids are read-only and a stored collision disables the route", () => {
   const overlayIds = new Set(["gbrain"]);
   refused(
-    () => putBrain(EMPTY_MEMORY_REGISTRY, "gbrain", { kind: "personal" }, { ...org, overlayIds }),
+    () => putBrain(EMPTY_MEMORY_REGISTRY, "gbrain", {}, { ...change, overlayIds }),
     409,
     /MEMORY_PROVIDER_CONFIG/,
   );
@@ -234,87 +112,59 @@ test("env provider ids are read-only and a stored collision disables the route",
 });
 
 test("the env validator's rules apply to registry brains", () => {
+  refused(() => personalBrain(EMPTY_MEMORY_REGISTRY, { url: "http://brain.example.com" }), 400, /must use HTTPS/);
+  refused(() => personalBrain(EMPTY_MEMORY_REGISTRY, { preset: "gbrain-v9" }), 400, /preset must be one of/);
+  refused(() => personalBrain(EMPTY_MEMORY_REGISTRY, { timeoutMs: 60_000 }), 400, /from 1 to 30000/);
   refused(
     () =>
       putBrain(
         EMPTY_MEMORY_REGISTRY,
-        "plain",
-        { kind: "personal", preset: "gbrain-v1", url: "http://brain.example.com", clientId: "c", label: "x" },
-        org,
+        "default",
+        { preset: "gbrain-v1", url: "https://brain.acme.example/mcp", clientId: "c", label: "x" },
+        change,
       ),
     400,
-    /must use HTTPS or a recognized private HTTP host/,
+    /invalid memory provider id: default/,
   );
-  refused(
-    () =>
-      putBrain(
-        EMPTY_MEMORY_REGISTRY,
-        "x",
-        { kind: "personal", preset: "gbrain-v9", url: "https://b.example", clientId: "c", label: "x" },
-        org,
-      ),
-    400,
-    /preset must be one of/,
-  );
-  refused(() => putBrain(EMPTY_MEMORY_REGISTRY, "default", {}, org), 400, /not be "default"/);
 });
 
-test("phase 1 records scope claims but serves only personal routes, with a reason for each disabled one", () => {
-  let record = putBinding(
-    companyBrain(personalBrain()),
-    "proj-1",
-    { brain: "acme-scopes", source: "qm-proj-1", scope: "group:web-project-1" },
-    change,
-  );
+test("each binding QM can't serve names its reason", () => {
+  let record = personalBrain();
   record = putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1" }, change);
-  record = putBrain(record, "acme-personal", { enabled: false }, org);
+  record = putBrain(record, "acme-personal", { url: "https://brain2.acme.example/mcp" }, change);
+  const alice = record.bindings[0]!;
   const { config, disabled } = resolveMemoryRegistry(
     {
       ...record,
       brains: [...record.brains, { ...record.brains[0]!, id: "future", preset: "gbrain-v9" }],
-      bindings: [...record.bindings, { ...record.bindings[1]!, id: "bob", brain: "future", scope: "personal:U2" }],
+      bindings: [
+        alice,
+        { ...alice, id: "bob", brain: "future", scope: "personal:U2" },
+        { ...alice, id: "gone", brain: "deleted-brain" },
+        { ...alice, id: "room", scope: "group:web-project-1" },
+      ],
     },
     new Set(),
   );
   assert.deepEqual(config.routes, []);
   assert.deepEqual(
-    disabled.map(({ binding, code }) => [binding, code]),
+    disabled.map(({ binding, code, detail }) => [binding, code, detail]),
     [
-      ["proj-1", "scope_recall_unsupported"],
-      ["alice", "brain_off"],
-      ["bob", "preset_unknown"],
+      ["alice", "secret_missing", undefined],
+      ["bob", "preset_unknown", undefined],
+      ["gone", "invalid_config", "brain deleted-brain isn't registered"],
+      ["room", "invalid_config", "group:web-project-1 isn't a personal scope"],
     ],
   );
 });
 
-test("a brain's address is its identity: it can't move under bindings, and moving drops its secret", () => {
-  let record = personalBrain();
-  record = putBrain(record, "acme-personal", { url: "https://brain2.acme.example/mcp" }, org);
+test("moving a brain drops its secret, and a brain with bindings can't be deleted", () => {
+  let record = putBinding(personalBrain(), "alice", { brain: "acme-personal", scope: "personal:U1" }, change);
+  record = putBrain(record, "acme-personal", { label: "Renamed" }, change);
+  assert.equal(record.brains[0]!.auth.clientSecret, "personal-secret");
+  record = putBrain(record, "acme-personal", { url: "https://brain2.acme.example/mcp" }, change);
   assert.equal(record.brains[0]!.auth.clientSecret, undefined);
-  assert.equal(record.brains[0]!.endpoint, "https://brain2.acme.example/mcp");
-  record = putBrain(record, "acme-personal", { clientSecret: "again" }, org);
-  record = putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1" }, change);
-  refused(
-    () => putBrain(record, "acme-personal", { url: "https://brain3.acme.example/mcp" }, org),
-    409,
-    /can't change/,
-  );
-  refused(() => deleteBrain(record, "acme-personal"), 409, /release it first/);
-  record = deleteBrain(releaseBinding(record, "alice", change), "acme-personal");
-  assert.deepEqual(record.brains, []);
-  assert.equal(record.bindings.length, 1);
-});
-
-test("a pool source in use can't be dropped from the pool", () => {
-  const record = putBinding(
-    companyBrain(),
-    "proj-1",
-    { brain: "acme-scopes", source: "qm-proj-1", scope: "group:web-project-1" },
-    change,
-  );
-  refused(
-    () => putBrain(record, "acme-scopes", { pool: [{ source: "qm-eng", kinds: ["channel"] }] }, org),
-    409,
-    /release it before/,
-  );
+  refused(() => deleteBrain(record, "acme-personal"), 409, /delete it first/);
+  record = deleteBrain(deleteBinding(record, "alice"), "acme-personal");
+  assert.deepEqual(record, EMPTY_MEMORY_REGISTRY);
 });

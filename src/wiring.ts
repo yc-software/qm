@@ -189,7 +189,12 @@ import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
 import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createRegistryMemoryService } from "./memory/registry-memory.ts";
-import { createMemoryRegistryStore, type MemoryRegistry, type MemoryRegistryStore } from "./memory/registry.ts";
+import {
+  createMemoryRegistryStore,
+  MEMORY_REGISTRY_TABLE,
+  type MemoryRegistry,
+  type MemoryRegistryStore,
+} from "./memory/registry.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
 import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
@@ -779,8 +784,7 @@ export function buildApp(
   });
   const memorySessions: { store?: SessionStore } = {};
   const memoryRegistry = createMemoryRegistryStore({
-    map: artifactMap<MemoryRegistry>("memory_registry"),
-    pg: pgArtifactMap.pool,
+    map: artifactMap<MemoryRegistry>(MEMORY_REGISTRY_TABLE),
     ...(config.memoryProviderConfig ? { overlay: config.memoryProviderConfig } : {}),
   });
   const baseMemory: MemoryService = withMemoryTidy(

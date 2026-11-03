@@ -1,11 +1,11 @@
 import {
+  deleteBinding,
   deleteBrain,
   MemoryRegistryError,
   putBinding,
   putBrain,
   readRegistry,
   redactBrain,
-  releaseBinding,
   resolveMemoryRegistry,
   type MemoryRegistry,
 } from "../../../memory/registry.ts";
@@ -27,7 +27,6 @@ async function registryAdmin(ctx: ApiCtx) {
 
 function view(record: MemoryRegistry, overlayIds: ReadonlySet<string>) {
   return {
-    memberBrains: record.memberBrains,
     brains: record.brains.map(redactBrain),
     bindings: record.bindings,
     disabled: resolveMemoryRegistry(record, overlayIds).disabled,
@@ -95,9 +94,7 @@ export const putMemoryBrain = (ctx: ApiCtx) =>
         message:
           "a brain's client secret never goes through the agent: register the brain without clientSecret, then set it through the admin API outside chat",
       })
-    : change(ctx, "memory-registry.brain.update", (record, c) =>
-        putBrain(record, ctx.params.id ?? "", ctx.body, { ...c, owner: orgScope(ctx.deps) }),
-      );
+    : change(ctx, "memory-registry.brain.update", (record, c) => putBrain(record, ctx.params.id ?? "", ctx.body, c));
 
 export const deleteMemoryBrain = (ctx: ApiCtx) =>
   change(ctx, "memory-registry.brain.delete", (record) => deleteBrain(record, ctx.params.id ?? ""));
@@ -105,5 +102,5 @@ export const deleteMemoryBrain = (ctx: ApiCtx) =>
 export const putMemoryBinding = (ctx: ApiCtx) =>
   change(ctx, "memory-registry.binding.update", (record, c) => putBinding(record, ctx.params.id ?? "", ctx.body, c));
 
-export const releaseMemoryBinding = (ctx: ApiCtx) =>
-  change(ctx, "memory-registry.binding.release", (record, c) => releaseBinding(record, ctx.params.id ?? "", c));
+export const deleteMemoryBinding = (ctx: ApiCtx) =>
+  change(ctx, "memory-registry.binding.delete", (record) => deleteBinding(record, ctx.params.id ?? ""));

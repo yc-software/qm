@@ -2,7 +2,6 @@ import { createMcpClient } from "../mcp/mcp-client.ts";
 import { errMessage } from "../util/errors.ts";
 import { createMcpMemoryProvider, type McpMemoryOperation } from "./mcp-memory-provider.ts";
 import type { MemoryProviderConfig, McpMemoryOperationConfig } from "./provider-config.ts";
-import { createRoutedMemoryService } from "./provider-router.ts";
 import type { MemoryService } from "./memory-service.ts";
 import { createMemorableMemoryProvider } from "./memorable/provider.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
@@ -55,19 +54,4 @@ export function createMemoryProviders(
     });
   }
   return providers;
-}
-
-export function createConfiguredMemoryService(opts: {
-  defaultMemory: MemoryService;
-  config?: MemoryProviderConfig;
-  /** Session trace access for providers that derive memory from tool-call history (currently "memorable"). */
-  sessionEntries?: (sessionId: string) => Promise<SessionEntry[]>;
-  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
-}): MemoryService {
-  if (!opts.config) return opts.defaultMemory;
-  return createRoutedMemoryService({
-    providers: { default: opts.defaultMemory, ...createMemoryProviders(opts.config.providers, opts) },
-    routes: opts.config.routes,
-    onError: opts.onError ?? logMemoryProviderError,
-  });
 }

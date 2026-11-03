@@ -54,13 +54,13 @@ import { deleteModelProvider, getModelProviders, putModelProvider } from "./admi
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 import {
+  deleteMemoryBinding,
   deleteMemoryBrain,
   getMemoryBinding,
   getMemoryBrain,
   getMemoryRegistry,
   putMemoryBinding,
   putMemoryBrain,
-  releaseMemoryBinding,
 } from "./admin/memory-registry.ts";
 import { listSecurityFlags } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
@@ -365,7 +365,7 @@ const routes: Route<ApiCtx>[] = [
       method: "DELETE",
       path: "/v1/admin/memory-registry/bindings/:id",
       auth: "either",
-      handle: releaseMemoryBinding,
+      handle: deleteMemoryBinding,
     },
     { method: "POST", path: "/v1/admin/memory", auth: "either", handle: adminMemory },
     { method: "PATCH", path: "/v1/admin/memory", auth: "either", handle: adminMemory },

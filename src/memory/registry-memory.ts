@@ -1,4 +1,4 @@
-import type { SessionEntry, ScopeId } from "../types.ts";
+import { SCOPE_KINDS, type SessionEntry, type ScopeId } from "../types.ts";
 import { reportFailure } from "../util/errors.ts";
 import { disclosedMemory, type MemoryDisclosure } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
@@ -19,7 +19,7 @@ import {
 
 const NOTEBOOK_ROUTE: MemoryProviderRoute = {
   provider: "default",
-  scopes: ["personal", "channel", "team", "org", "group"],
+  scopes: [...SCOPE_KINDS],
   capture: "automatic",
   manage: true,
   failOpen: false,

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createConfiguredMemoryService } from "../src/memory/provider-factory.ts";
+import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
+import { emptyMemoryRegistry } from "./support/memory-registry.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
@@ -42,9 +43,10 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
       { provider: "knowledge", scopes: ["org"], capture: "explicit", manage: false },
     ],
   });
-  const memory = createConfiguredMemoryService({
+  const memory = createRegistryMemoryService({
+    registry: emptyMemoryRegistry,
     defaultMemory,
-    config: parseMemoryProviderConfig(raw, { RO_ID: "ro", RO_SECRET: "x", RW_ID: "rw", RW_SECRET: "y" }),
+    overlay: parseMemoryProviderConfig(raw, { RO_ID: "ro", RO_SECRET: "x", RW_ID: "rw", RW_SECRET: "y" }),
   });
 
   assert.equal(recallText(await memory.recall("personal:u1", { query: "launch", actorId: "u1" })), "personal notebook");

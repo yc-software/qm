@@ -1,43 +1,27 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
-import type { PgPool } from "../persistence/pg-pool.ts";
-import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
+import { parseScopeId, type ScopeId } from "../types.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./provider-config.ts";
 import type { MemoryCapturePolicy, MemoryProviderRoute } from "./provider-router.ts";
 
 export const MEMORY_REGISTRY_TABLE = "memory_registry";
 const RECORD_ID = "org";
-const MAX_BINDINGS = 2_000;
-const ID = /^[a-z][a-z0-9-]{0,62}$/;
-const SOURCE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const SCOPE_KINDS: readonly string[] = ["personal", "channel", "team", "org", "group"];
+const BINDING_ID = /^[a-z][a-z0-9-]{0,62}$/;
 
 const BRAIN_PRESETS = {
   "gbrain-v1": {
-    scopeRecall: false,
     read: { tool: "memory_recall", queryArg: "query", maxCharsArg: "max_chars" },
     write: { tool: "memory_write", factsArg: "facts", idempotencyArg: "idempotency_key" },
   },
 } as const;
 
-interface RegistryPoolSource {
-  source: string;
-  kinds: ScopeKind[];
-}
-
 export interface RegistryBrain {
   id: string;
-  kind: "scopes" | "personal";
   preset: string;
   url: string;
-  endpoint: string;
   auth: { clientId: string; clientSecret?: string };
-  attestActor: boolean;
-  timeoutMs: number;
-  owner: ScopeId;
+  timeoutMs?: number;
   label: string;
-  pool: RegistryPoolSource[];
-  enabled: boolean;
   updatedAt: number;
   updatedBy: string;
 }
@@ -45,10 +29,7 @@ export interface RegistryBrain {
 interface RegistryBinding {
   id: string;
   brain: string;
-  endpoint: string;
-  source?: string;
-  scope: ScopeId | ScopeKind;
-  state: "bound" | "released";
+  scope: ScopeId;
   capture: Exclude<MemoryCapturePolicy, "automatic">;
   recall: boolean;
   failOpen: boolean;
@@ -59,19 +40,18 @@ interface RegistryBinding {
 
 export interface MemoryRegistry {
   schema: 1;
-  memberBrains: boolean;
   brains: RegistryBrain[];
   bindings: RegistryBinding[];
 }
 
-export const EMPTY_MEMORY_REGISTRY: MemoryRegistry = { schema: 1, memberBrains: true, brains: [], bindings: [] };
+export const EMPTY_MEMORY_REGISTRY: MemoryRegistry = { schema: 1, brains: [], bindings: [] };
 
-type RegistryDisabledCode =
-  "brain_off" | "secret_missing" | "preset_unknown" | "id_taken" | "scope_recall_unsupported" | "invalid_config";
+type RegistryDisabledCode = "secret_missing" | "preset_unknown" | "id_taken" | "invalid_config";
 
 export interface DisabledRegistryRoute extends Pick<MemoryProviderRoute, "provider" | "scopes" | "recall" | "capture"> {
   binding: string;
   code: RegistryDisabledCode;
+  detail?: string;
 }
 
 export class MemoryRegistryError extends Error {
@@ -91,9 +71,9 @@ function presetOf(brain: Pick<RegistryBrain, "preset">) {
     : undefined;
 }
 
-function brainEndpoint(url: string): string {
-  const parsed = new URL(url);
-  return `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, "") || "/mcp"}`.toLowerCase();
+function isPersonalScope(scope: string): boolean {
+  const { kind, ref } = parseScopeId(scope);
+  return scope === "personal" || (kind === "personal" && ref.length > 0);
 }
 
 function brainConfig(brain: RegistryBrain, bindings: readonly RegistryBinding[], clientSecret: string) {
@@ -107,7 +87,7 @@ function brainConfig(brain: RegistryBrain, bindings: readonly RegistryBinding[],
           type: "mcp",
           url: brain.url,
           timeoutMs: brain.timeoutMs,
-          attestActor: brain.attestActor,
+          attestActor: true,
           read: { ...preset.read, ...credentials },
           write: { ...preset.write, ...credentials },
         },
@@ -125,29 +105,10 @@ function brainConfig(brain: RegistryBrain, bindings: readonly RegistryBinding[],
   )!;
 }
 
-function scopeFits(brain: RegistryBrain, binding: Pick<RegistryBinding, "scope" | "source">): boolean {
-  const { scope, source } = binding;
-  const parsed = parseScopeId(scope);
-  const kind = SCOPE_KINDS.includes(scope) ? scope : parsed.ref && parsed.kind;
-  if (!kind) return false;
-  if (parseScopeId(brain.owner).kind !== "org" && scope !== brain.owner) return false;
-  if (brain.kind === "personal") return kind === "personal" && source === undefined;
-  return (
-    kind !== "personal" &&
-    scope !== kind &&
-    brain.pool.some((entry) => entry.source === source && (entry.kinds as string[]).includes(kind))
-  );
-}
-
 export function readRegistry(value: unknown): MemoryRegistry {
   if (value === null || value === undefined) return EMPTY_MEMORY_REGISTRY;
   const record = value as Partial<MemoryRegistry>;
-  if (
-    record.schema !== 1 ||
-    typeof record.memberBrains !== "boolean" ||
-    !Array.isArray(record.brains) ||
-    !Array.isArray(record.bindings)
-  )
+  if (record.schema !== 1 || !Array.isArray(record.brains) || !Array.isArray(record.bindings))
     throw new Error("the memory registry record has a shape this QM build doesn't know");
   return record as MemoryRegistry;
 }
@@ -155,8 +116,7 @@ export function readRegistry(value: unknown): MemoryRegistry {
 function brainBlock(brain: RegistryBrain, overlayIds: ReadonlySet<string>): RegistryDisabledCode | undefined {
   if (!presetOf(brain)) return "preset_unknown";
   if (overlayIds.has(brain.id)) return "id_taken";
-  if (!brain.enabled) return "brain_off";
-  if (!brain.auth?.clientSecret) return "secret_missing";
+  if (!brain.auth.clientSecret) return "secret_missing";
   return undefined;
 }
 
@@ -169,9 +129,8 @@ export function resolveMemoryRegistry(
   const brains = new Map(record.brains.map((brain) => [brain.id, brain]));
   const served = new Set<string>();
   for (const binding of record.bindings) {
-    if (binding.state !== "bound") continue;
     const brain = brains.get(binding.brain);
-    const disable = (code: RegistryDisabledCode) =>
+    const disable = (code: RegistryDisabledCode, detail?: string) =>
       disabled.push({
         provider: binding.brain,
         binding: binding.id,
@@ -179,14 +138,17 @@ export function resolveMemoryRegistry(
         recall: binding.recall,
         capture: binding.capture,
         code,
+        ...(detail ? { detail } : {}),
       });
-    if (!brain || brain.endpoint !== binding.endpoint || !scopeFits(brain, binding)) {
-      disable("invalid_config");
+    if (!brain) {
+      disable("invalid_config", `brain ${binding.brain} isn't registered`);
       continue;
     }
-    const code =
-      brainBlock(brain, overlayIds) ??
-      (brain.kind === "scopes" && !presetOf(brain)!.scopeRecall ? "scope_recall_unsupported" : undefined);
+    if (!isPersonalScope(binding.scope)) {
+      disable("invalid_config", `${binding.scope} isn't a personal scope`);
+      continue;
+    }
+    const code = brainBlock(brain, overlayIds);
     if (code) {
       disable(code);
       continue;
@@ -196,8 +158,8 @@ export function resolveMemoryRegistry(
       if (!served.has(brain.id)) config.providers.push(...resolved.providers);
       served.add(brain.id);
       config.routes.push(...resolved.routes);
-    } catch {
-      disable("invalid_config");
+    } catch (error) {
+      disable("invalid_config", errMessage(error));
     }
   }
   return { config, disabled };
@@ -209,8 +171,8 @@ interface Change {
   overlayIds: ReadonlySet<string>;
 }
 
-function object(value: unknown, at = "body"): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid(`${at} must be a JSON object`);
+function object(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid("body must be a JSON object");
   return value as Record<string, unknown>;
 }
 
@@ -226,86 +188,27 @@ function flag(value: unknown, field: string, fallback: boolean): boolean {
   return value;
 }
 
-function poolOf(value: unknown): RegistryPoolSource[] {
-  if (!Array.isArray(value) || value.length > MAX_BINDINGS) throw invalid("pool must be an array of { source, kinds }");
-  const seen = new Set<string>();
-  return value.map((entry, i) => {
-    const { source, kinds } = object(entry, `pool[${i}]`);
-    if (typeof source !== "string" || !SOURCE.test(source) || seen.has(source))
-      throw invalid(`pool[${i}].source must be a gbrain source id that appears once in the pool`);
-    seen.add(source);
-    if (
-      !Array.isArray(kinds) ||
-      !kinds.length ||
-      kinds.some((kind) => kind === "personal" || typeof kind !== "string" || !SCOPE_KINDS.includes(kind))
-    )
-      throw invalid(`pool[${i}].kinds must list any of channel, team, org and group`);
-    return { source, kinds: [...new Set(kinds as ScopeKind[])] };
-  });
-}
-
-export function putBrain(
-  record: MemoryRegistry,
-  id: string,
-  input: unknown,
-  change: Change & { owner: ScopeId },
-): MemoryRegistry {
-  if (!ID.test(id) || id === "default")
-    throw invalid(
-      'brain id must be up to 63 lowercase letters, digits or hyphens, start with a letter, and not be "default"',
-    );
+export function putBrain(record: MemoryRegistry, id: string, input: unknown, change: Change): MemoryRegistry {
   if (change.overlayIds.has(id)) throw conflict(`${id} comes from MEMORY_PROVIDER_CONFIG, which the API can't change`);
   const body = object(input);
   const existing = record.brains.find((brain) => brain.id === id);
-  const bindings = record.bindings.filter((binding) => binding.brain === id);
-  const kind = body.kind ?? existing?.kind;
-  if (kind !== "scopes" && kind !== "personal") throw invalid('kind must be "scopes" or "personal"');
   const preset = body.preset ?? existing?.preset;
   if (typeof preset !== "string" || !presetOf({ preset }))
     throw invalid(`preset must be one of: ${Object.keys(BRAIN_PRESETS).join(", ")}`);
   const url = text(body.url ?? existing?.url, "url", 2048);
-  let endpoint: string;
-  try {
-    endpoint = brainEndpoint(url);
-  } catch {
-    throw invalid("url must be a valid URL");
-  }
-  if (existing && bindings.length && (kind !== existing.kind || endpoint !== existing.endpoint))
-    throw conflict(`brain ${id} has bindings, so its kind and address can't change; register a new brain instead`);
   const kept = url === existing?.url ? existing.auth.clientSecret : undefined;
   const clientSecret = body.clientSecret === undefined ? kept : text(body.clientSecret, "clientSecret", 4096);
-  const attestActor = flag(body.attestActor, "attestActor", existing?.attestActor ?? true);
-  if (kind === "personal" && !attestActor)
-    throw invalid("a personal brain must attest the member: set attestActor to true");
-  const timeoutMs = body.timeoutMs ?? existing?.timeoutMs ?? 3_000;
-  if (!Number.isSafeInteger(timeoutMs) || Number(timeoutMs) < 1 || Number(timeoutMs) > 30_000)
-    throw invalid("timeoutMs must be an integer from 1 to 30000");
-  if (kind === "personal" && body.pool !== undefined && !(Array.isArray(body.pool) && !body.pool.length))
-    throw invalid("only a scopes brain has a source pool");
-  const pool = kind === "scopes" ? poolOf(body.pool ?? existing?.pool ?? []) : [];
-  const orphan = bindings.find(
-    (binding) => binding.state === "bound" && !pool.some((entry) => entry.source === binding.source),
-  );
-  if (kind === "scopes" && orphan)
-    throw conflict(
-      `binding ${orphan.id} uses source ${orphan.source}; release it before removing that source from the pool`,
-    );
+  const timeoutMs = body.timeoutMs ?? existing?.timeoutMs;
   const brain: RegistryBrain = {
     id,
-    kind,
     preset,
     url,
-    endpoint,
     auth: {
       clientId: text(body.clientId ?? existing?.auth.clientId, "clientId"),
       ...(clientSecret ? { clientSecret } : {}),
     },
-    attestActor,
-    timeoutMs: Number(timeoutMs),
-    owner: existing?.owner ?? change.owner,
+    ...(timeoutMs === undefined ? {} : { timeoutMs: timeoutMs as number }),
     label: text(body.label ?? existing?.label, "label", 80),
-    pool,
-    enabled: flag(body.enabled, "enabled", existing?.enabled ?? true),
     updatedAt: change.now,
     updatedBy: change.actor,
   };
@@ -322,13 +225,13 @@ export function putBrain(
 
 export function deleteBrain(record: MemoryRegistry, id: string): MemoryRegistry {
   if (!record.brains.some((brain) => brain.id === id)) throw new MemoryRegistryError(404, `no brain ${id}`);
-  const bound = record.bindings.find((binding) => binding.brain === id && binding.state === "bound");
-  if (bound) throw conflict(`brain ${id} still serves binding ${bound.id}; release it first`);
+  const bound = record.bindings.find((binding) => binding.brain === id);
+  if (bound) throw conflict(`brain ${id} still serves binding ${bound.id}; delete it first`);
   return { ...record, brains: record.brains.filter((brain) => brain.id !== id) };
 }
 
 export function putBinding(record: MemoryRegistry, id: string, input: unknown, change: Change): MemoryRegistry {
-  if (!ID.test(id))
+  if (!BINDING_ID.test(id))
     throw invalid("binding id must be up to 63 lowercase letters, digits or hyphens, starting with a letter");
   const body = object(input);
   const existing = record.bindings.find((binding) => binding.id === id);
@@ -336,48 +239,20 @@ export function putBinding(record: MemoryRegistry, id: string, input: unknown, c
   const brain = record.brains.find((entry) => entry.id === brainId);
   if (!brain) throw new MemoryRegistryError(404, `no brain ${String(brainId)}`);
   const scope = text(body.scope ?? existing?.scope, "scope");
-  const source = body.source === undefined ? existing?.source : text(body.source, "source", 128);
-  if (existing && (existing.brain !== brain.id || existing.scope !== scope || existing.source !== source))
-    throw conflict(
-      `binding ${id} binds ${existing.scope} to brain ${existing.brain}; its brain, source and scope can't change`,
-    );
-  if (existing && existing.endpoint !== brain.endpoint)
-    throw conflict(`binding ${id} was claimed at ${existing.endpoint}, which isn't brain ${brain.id}'s address`);
-  if (!scopeFits(brain, { scope, source }))
-    throw invalid(
-      brain.kind === "personal"
-        ? `brain ${brain.id} is a personal brain: bind a personal scope${parseScopeId(brain.owner).kind === "org" ? " (or the kind personal)" : ` (${brain.owner})`} with no source`
-        : `brain ${brain.id} is a scopes brain: bind an exact non-personal scope id to a pool source whose kinds include that scope's kind`,
-    );
+  if (!isPersonalScope(scope))
+    throw invalid(`brain ${brain.id} serves personal memory: bind the kind personal or one member's personal scope`);
   const capture = body.capture ?? existing?.capture ?? "off";
   if (capture === "automatic")
     throw invalid('automatic capture into a brain isn\'t available yet; use "off" or "explicit"');
   if (capture !== "off" && capture !== "explicit") throw invalid('capture must be "off" or "explicit"');
-  if (!existing) {
-    if (record.bindings.length >= MAX_BINDINGS) throw conflict(`the registry holds at most ${MAX_BINDINGS} bindings`);
-    const holder =
-      source === undefined
-        ? undefined
-        : record.bindings.find((binding) => binding.endpoint === brain.endpoint && binding.source === source);
-    if (holder)
-      throw conflict(
-        holder.scope === scope
-          ? `source ${source} is reserved for ${scope} by binding ${holder.id}; bind that binding again instead`
-          : `source ${source} at ${brain.endpoint} is already claimed by another scope`,
-      );
-  }
   const twin = record.bindings.find(
-    (binding) =>
-      binding.id !== id && binding.brain === brain.id && binding.scope === scope && binding.state === "bound",
+    (binding) => binding.id !== id && binding.brain === brain.id && binding.scope === scope,
   );
   if (twin) throw conflict(`${scope} is already bound to brain ${brain.id} by binding ${twin.id}`);
   const binding: RegistryBinding = {
     id,
     brain: brain.id,
-    endpoint: brain.endpoint,
-    ...(source === undefined ? {} : { source }),
     scope,
-    state: "bound",
     capture,
     recall: flag(body.recall, "recall", existing?.recall ?? true),
     failOpen: flag(body.failOpen, "failOpen", existing?.failOpen ?? true),
@@ -393,14 +268,9 @@ export function putBinding(record: MemoryRegistry, id: string, input: unknown, c
   };
 }
 
-export function releaseBinding(record: MemoryRegistry, id: string, change: Omit<Change, "overlayIds">): MemoryRegistry {
+export function deleteBinding(record: MemoryRegistry, id: string): MemoryRegistry {
   if (!record.bindings.some((binding) => binding.id === id)) throw new MemoryRegistryError(404, `no binding ${id}`);
-  return {
-    ...record,
-    bindings: record.bindings.map((binding) =>
-      binding.id === id ? { ...binding, state: "released", updatedAt: change.now, updatedBy: change.actor } : binding,
-    ),
-  };
+  return { ...record, bindings: record.bindings.filter((binding) => binding.id !== id) };
 }
 
 export function redactBrain(brain: RegistryBrain) {
@@ -419,20 +289,13 @@ export interface MemoryRegistryStore {
 
 export function createMemoryRegistryStore(opts: {
   map: DurableMap<MemoryRegistry>;
-  pg: Pick<PgPool, "q">;
   overlay?: MemoryProviderConfig;
 }): MemoryRegistryStore {
-  let ready: Promise<unknown> | undefined;
   let cached: { version: string; record: unknown } | undefined;
   return {
     overlayIds: new Set(opts.overlay?.providers.map(({ id }) => id) ?? []),
     async current() {
-      await (ready ??= opts.map.get(RECORD_ID).catch((error: unknown) => {
-        ready = undefined;
-        throw error;
-      }));
-      const rows = await opts.pg.q("SELECT v FROM durable_map_versions WHERE tbl = $1", [MEMORY_REGISTRY_TABLE]);
-      const version = rows.length ? String(rows[0]!.v) : "0";
+      const version = await opts.map.version();
       if (cached?.version !== version) cached = { version, record: await opts.map.get(RECORD_ID) };
       return cached;
     },
