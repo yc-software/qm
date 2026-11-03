@@ -11,6 +11,7 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { Session } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenantHeaders } from "./support/test-tenants.ts";
 
 function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-view-patch-")) }));
@@ -27,7 +28,7 @@ function start(): { base: string; built: BuiltApp; close: () => Promise<void> } 
 async function newSession(base: string, threadRef: string): Promise<string> {
   const r = await fetch(`${base}/v1/turns`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...testTenantHeaders() },
     body: JSON.stringify({
       surface: "test",
       actor: { externalId: "U1" },
@@ -47,7 +48,7 @@ async function patch(
 ): Promise<{ status: number; session?: Session; message?: string }> {
   const r = await fetch(`${base}/v1/sessions/${encodeURIComponent(id)}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...testTenantHeaders() },
     body: JSON.stringify(body),
   });
   const parsed = (await r.json()) as { session?: Session; message?: string };

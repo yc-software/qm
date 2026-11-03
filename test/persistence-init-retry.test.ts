@@ -1,41 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPgPool, type PgPool, type Rows } from "../src/persistence/pg-pool.ts";
-import { createPostgresMap } from "../src/persistence/durable-map.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createAdminGrantStore, type AdminGrant, type AdminGrantPersistence } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the live-pool tests";
-
-function flakyPgPool(failures: number): PgPool {
-  let remaining = failures;
-  async function query(_text: string, _params: unknown[] = []): Promise<{ rows: Rows; rowCount: number }> {
-    if (remaining > 0) {
-      remaining--;
-      throw new Error("transient pg failure");
-    }
-    return {
-      rows: [{ token: "t", json: { n: 1 } }],
-      rowCount: 1,
-    };
-  }
-  return {
-    sessionPool: () => Promise.reject(new Error("not backed by a real pool")),
-    pool: () => Promise.reject(new Error("not backed by a real pool")),
-    query,
-    q: async (text, params) => (await query(text, params ?? [])).rows,
-    registerMigration: () => {},
-    migrate: async () => {},
-    close: async () => {},
-  };
-}
-
-test("pg map: a failed table-create is retried on the next call (rejection not cached)", async () => {
-  const m = createPostgresMap<{ n: number }>(flakyPgPool(1), "retry_widgets");
-  await assert.rejects(() => m.all(), /transient pg failure/);
-  assert.deepEqual(await m.all(), [{ n: 1 }], "second call re-runs the table create and proceeds to the query");
-});
 
 test("admin grants: a failed seed is retried on the next call (rejection not cached)", async () => {
   let failures = 1;

@@ -121,11 +121,11 @@ test("terminal listener reports only exhausted failures and accepted completions
     events.push(JSON.parse(String(init?.body)).event);
     return new Response("ok");
   });
+  const request = (await humanRun()).request;
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   runs.onTerminal((run) => {
     void analytics.responseFinished(run);
   });
-  const request = (await humanRun()).request;
   const { run } = await runs.enqueue({ sessionId: "thread", request, maxAttempts: 2 });
   let claimed = (await runs.claim("worker", 10_000))!;
   await runs.fail(run.id, claimed.leaseToken!, "private first error");

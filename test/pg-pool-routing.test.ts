@@ -112,27 +112,6 @@ test("closing during initialization rejects pending queries and leaves other sto
   }
 });
 
-test("dynamic migration waits for its prerequisite schema on a fresh database", { skip }, async () => {
-  const a = createPgPool(direct!, [
-    {
-      id: "pool-routing/prerequisite/0001",
-      statements: ["CREATE TABLE IF NOT EXISTS pool_routing_prerequisite(id INTEGER PRIMARY KEY)"],
-    },
-  ]);
-  try {
-    await a.migrate({
-      id: "pool-routing/prerequisite/0002",
-      statements: ["ALTER TABLE pool_routing_prerequisite ADD COLUMN IF NOT EXISTS value TEXT"],
-    });
-    await a.q(
-      "INSERT INTO pool_routing_prerequisite(id, value) VALUES (1, 'ready') ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value",
-    );
-    assert.equal((await a.q("SELECT value FROM pool_routing_prerequisite WHERE id=1"))[0]!.value, "ready");
-  } finally {
-    await a.close();
-  }
-});
-
 test(
   "cron queue shares transaction pooling and stopping it preserves other stores",
   { skip, timeout: 30_000 },

@@ -17,6 +17,7 @@ import { McpCallError } from "../src/mcp/mcp-client.ts";
 import { TimeoutError } from "../src/util/async.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const SECRET = "memory-route-test-secret".repeat(3);
@@ -27,14 +28,16 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   let built: BuiltApp;
 
   const capFor = async (actorId: string, memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] }) =>
-    await mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scopeId("personal", actorId),
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        ...(memory ? { memory } : {}),
-      },
-      SECRET,
+    await inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId,
+          scopeId: scopeId("personal", actorId),
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          ...(memory ? { memory } : {}),
+        },
+        SECRET,
+      ),
     );
 
   before(async () => {
@@ -75,7 +78,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   const ORG = TEST_ROOT_SCOPE;
 
   it("reads and searches another authorized notebook but never writes it", async () => {
-    await built.memory.capture(ORG, ["other scope fact"], Date.parse("2026-10-01T12:00:00Z"));
+    await inTestTenant(() => built.memory.capture(ORG, ["other scope fact"], Date.parse("2026-10-01T12:00:00Z")));
     const headers = { "x-agent-capability": await capFor("U1", { read: [U1, ORG] }) };
     const read = await get(`/v1/memory/self?scope=${ORG}`, headers);
     assert.equal(read.status, 200);
@@ -89,7 +92,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
     assert.equal((await post("/v1/memory/search", { query: "x", scope: "personal:U2" }, headers)).status, 403);
     assert.equal((await post("/v1/memory/search", { query: "x", scope: [ORG] }, headers)).status, 400);
     assert.equal((await post("/v1/memory/facts", { facts: ["stolen"], scope: "org" }, headers)).status, 403);
-    assert.doesNotMatch(await built.memory.read(ORG), /stolen/);
+    assert.doesNotMatch(await inTestTenant(() => built.memory.read(ORG)), /stolen/);
   });
 
   it("appends facts to the token's writable scope and reads them back", async () => {
@@ -111,15 +114,17 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
 
   it("derives capture provenance from the capability rather than request metadata", async () => {
     const source = scopeId("personal", "provenance-user");
-    const cap = await mintCapabilityToken(
-      {
-        actorId: "provenance-user",
-        scopeId: source,
-        sessionId: "trusted-session",
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        memory: { write: source, orgWrite: ORG, read: [source, ORG] },
-      },
-      SECRET,
+    const cap = await inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId: "provenance-user",
+          scopeId: source,
+          sessionId: "trusted-session",
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          memory: { write: source, orgWrite: ORG, read: [source, ORG] },
+        },
+        SECRET,
+      ),
     );
     const capture = built.memory.capture;
     let context: Parameters<typeof capture>[4];
@@ -161,7 +166,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   });
 
   it("searches across every readable scope, labeling hits by scope", async () => {
-    await built.memory.capture(ORG, ["The org all-hands is on Fridays."], Date.now());
+    await inTestTenant(() => built.memory.capture(ORG, ["The org all-hands is on Fridays."], Date.now()));
     const cap = await capFor("U1", { write: U1, read: [U1, ORG] });
     const res = await post("/v1/memory/search", { query: "all-hands" }, { "x-agent-capability": cap });
     assert.equal(res.status, 200);
@@ -172,7 +177,9 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   });
 
   it("cannot search a scope the token does not carry", async () => {
-    await built.memory.capture(scopeId("personal", "U2"), ["U2's private fact about kumquats."], Date.now());
+    await inTestTenant(() =>
+      built.memory.capture(scopeId("personal", "U2"), ["U2's private fact about kumquats."], Date.now()),
+    );
     const cap = await capFor("U1", { write: U1, read: [U1, ORG] });
     const res = await post("/v1/memory/search", { query: "kumquats" }, { "x-agent-capability": cap });
     const { results } = (await res.json()) as any;
@@ -187,7 +194,10 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       { "x-agent-capability": cap },
     );
     assert.equal(((await res.json()) as any).scopeId, U1);
-    assert.equal(await built.memory.read(scopeId("personal", "U2")).then((c) => c.includes("forged-scope")), false);
+    assert.equal(
+      await inTestTenant(() => built.memory.read(scopeId("personal", "U2"))).then((c) => c.includes("forged-scope")),
+      false,
+    );
   });
 
   it("edits and deletes facts by id; an unknown id changes nothing", async () => {
@@ -230,8 +240,8 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
     );
     assert.equal(res.status, 200);
     assert.equal(((await res.json()) as any).scopeId, ORG);
-    assert.match(await built.memory.read(ORG), /Quarterly planning/);
-    assert.doesNotMatch(await built.memory.read(scopeId("personal", "A1")), /Quarterly planning/);
+    assert.match(await inTestTenant(() => built.memory.read(ORG)), /Quarterly planning/);
+    assert.doesNotMatch(await inTestTenant(() => built.memory.read(scopeId("personal", "A1"))), /Quarterly planning/);
 
     const self = (await (await get("/v1/memory/self?scope=org", { "x-agent-capability": cap })).json()) as any;
     assert.equal(self.scopeId, ORG);
@@ -243,7 +253,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       { "x-agent-capability": cap },
     );
     assert.equal(edited.status, 200);
-    assert.match(await built.memory.read(ORG), /org notebook curated/);
+    assert.match(await inTestTenant(() => built.memory.read(ORG)), /org notebook curated/);
   });
 
   it('without scope:"org", an admin token still writes the turn\'s own notebook', async () => {
@@ -251,7 +261,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
     const cap = await capFor("A1", { write: A1, orgWrite: ORG, read: [A1] });
     const res = await post("/v1/memory/facts", { facts: ["A1 prefers terse updates."] }, { "x-agent-capability": cap });
     assert.equal(((await res.json()) as any).scopeId, A1);
-    assert.doesNotMatch(await built.memory.read(ORG), /terse updates/);
+    assert.doesNotMatch(await inTestTenant(() => built.memory.read(ORG)), /terse updates/);
   });
 
   it('403s scope:"org" when the token carries no orgWrite (non-admin)', async () => {
@@ -268,7 +278,7 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
       (await send("DELETE", "/v1/memory/facts", { ids: ["1"], scope: "org" }, { "x-agent-capability": cap })).status,
       403,
     );
-    assert.doesNotMatch(await built.memory.read(ORG), /forged org fact/);
+    assert.doesNotMatch(await inTestTenant(() => built.memory.read(ORG)), /forged org fact/);
   });
 
   it("400s an unknown scope selector", async () => {
@@ -295,15 +305,17 @@ describe("agent memory self-API (/v1/memory/self|search|facts)", () => {
   it("rejects a memoryless or wrong-audience token", async () => {
     const noClaim = await capFor("U1");
     assert.equal((await post("/v1/memory/search", { query: "x" }, { "x-agent-capability": noClaim })).status, 403);
-    const wrongAud = await mintCapabilityToken(
-      {
-        actorId: "U1",
-        scopeId: U1,
-        aud: CREDENTIAL_BROKER_AUD,
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        memory: { write: U1, read: [U1] },
-      },
-      SECRET,
+    const wrongAud = await inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId: "U1",
+          scopeId: U1,
+          aud: CREDENTIAL_BROKER_AUD,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          memory: { write: U1, read: [U1] },
+        },
+        SECRET,
+      ),
     );
     assert.equal((await post("/v1/memory/search", { query: "x" }, { "x-agent-capability": wrongAud })).status, 403);
   });
@@ -353,14 +365,16 @@ describe("agent memory: cross-conversation writes are refused", () => {
   const GROUP = "G-jrs";
 
   const capFor = async (actorId: string, memory?: { write?: ScopeId; read: ScopeId[] }) =>
-    await mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scopeId("personal", actorId),
-        exp: Date.now() + CAPABILITY_TTL_MS,
-        ...(memory ? { memory } : {}),
-      },
-      SECRET,
+    await inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId,
+          scopeId: scopeId("personal", actorId),
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          ...(memory ? { memory } : {}),
+        },
+        SECRET,
+      ),
     );
 
   before(async () => {
@@ -370,22 +384,28 @@ describe("agent memory: cross-conversation writes are refused", () => {
         signingSecret: SECRET,
       }),
     );
-    await built.directory.replace([
-      { principalId: "U1", displayName: "Una", type: "internal" },
-      { principalId: "U-carol", displayName: "Carol", type: "internal" },
-      { principalId: "U-sam", displayName: "Sam", type: "internal" },
-    ]);
-    await built.directory.replaceChannels(
-      [
-        { channelId: CH_PUBLIC, name: "eng", isPrivate: false },
-        { channelId: CH_PRIVATE, name: "secret", isPrivate: true },
-      ],
-      [{ channelId: CH_PRIVATE, principalId: "U-carol" }],
+    await inTestTenant(() =>
+      built.directory.replace([
+        { principalId: "U1", displayName: "Una", type: "internal" },
+        { principalId: "U-carol", displayName: "Carol", type: "internal" },
+        { principalId: "U-sam", displayName: "Sam", type: "internal" },
+      ]),
     );
-    await built.directory.replaceGroups([
-      { groupId: GROUP, principalId: "U-carol" },
-      { groupId: GROUP, principalId: "U-sam" },
-    ]);
+    await inTestTenant(() =>
+      built.directory.replaceChannels(
+        [
+          { channelId: CH_PUBLIC, name: "eng", isPrivate: false },
+          { channelId: CH_PRIVATE, name: "secret", isPrivate: true },
+        ],
+        [{ channelId: CH_PRIVATE, principalId: "U-carol" }],
+      ),
+    );
+    await inTestTenant(() =>
+      built.directory.replaceGroups([
+        { groupId: GROUP, principalId: "U-carol" },
+        { groupId: GROUP, principalId: "U-sam" },
+      ]),
+    );
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
@@ -410,8 +430,8 @@ describe("agent memory: cross-conversation writes are refused", () => {
     const cap = await capFor("U1", { write: scopeId("personal", "U1"), read: [scopeId("personal", "U1")] });
     const res = await post({ channel: "eng", facts: ["#eng coordinates the ystack launch."] }, cap);
     assert.equal(res.status, 400);
-    assert.doesNotMatch(await built.memory.read(scopeId("channel", CH_PUBLIC)), /ystack launch/);
-    assert.doesNotMatch(await built.memory.read(scopeId("personal", "U1")), /ystack launch/);
+    assert.doesNotMatch(await inTestTenant(() => built.memory.read(scopeId("channel", CH_PUBLIC))), /ystack launch/);
+    assert.doesNotMatch(await inTestTenant(() => built.memory.read(scopeId("personal", "U1"))), /ystack launch/);
   });
 
   it("requires private-channel memory changes to originate in that conversation", async () => {
@@ -421,12 +441,15 @@ describe("agent memory: cross-conversation writes are refused", () => {
     });
     const ok = await post({ channel: "secret", facts: ["private channel note."] }, member);
     assert.equal(ok.status, 400);
-    assert.doesNotMatch(await built.memory.read(scopeId("channel", CH_PRIVATE)), /private channel note/);
+    assert.doesNotMatch(
+      await inTestTenant(() => built.memory.read(scopeId("channel", CH_PRIVATE))),
+      /private channel note/,
+    );
 
     const outsider = await capFor("U1", { write: scopeId("personal", "U1"), read: [scopeId("personal", "U1")] });
     const denied = await post({ channel: "secret", facts: ["sneaky note."] }, outsider);
     assert.equal(denied.status, 400);
-    assert.doesNotMatch(await built.memory.read(scopeId("channel", CH_PRIVATE)), /sneaky note/);
+    assert.doesNotMatch(await inTestTenant(() => built.memory.read(scopeId("channel", CH_PRIVATE))), /sneaky note/);
   });
 
   it("requires group memory changes to originate in that conversation", async () => {
@@ -436,21 +459,23 @@ describe("agent memory: cross-conversation writes are refused", () => {
     });
     const ok = await post({ participants: ["U-sam"], facts: ["group DM note."] }, member);
     assert.equal(ok.status, 400);
-    assert.doesNotMatch(await built.memory.read(scopeId("group", GROUP)), /group DM note/);
+    assert.doesNotMatch(await inTestTenant(() => built.memory.read(scopeId("group", GROUP))), /group DM note/);
 
     const outsider = await capFor("U1", { write: scopeId("personal", "U1"), read: [scopeId("personal", "U1")] });
     assert.equal((await post({ participants: ["U-sam", "U-carol"], facts: ["x"] }, outsider)).status, 400);
   });
 
   it("refuses even ambiguous named targets before resolution", async () => {
-    await built.directory.replaceChannels(
-      [
-        { channelId: CH_PUBLIC, name: "eng", isPrivate: false },
-        { channelId: CH_PRIVATE, name: "secret", isPrivate: true },
-        { channelId: "C-dup1", name: "dup", isPrivate: false },
-        { channelId: "C-dup2", name: "dup", isPrivate: false },
-      ],
-      [{ channelId: CH_PRIVATE, principalId: "U-carol" }],
+    await inTestTenant(() =>
+      built.directory.replaceChannels(
+        [
+          { channelId: CH_PUBLIC, name: "eng", isPrivate: false },
+          { channelId: CH_PRIVATE, name: "secret", isPrivate: true },
+          { channelId: "C-dup1", name: "dup", isPrivate: false },
+          { channelId: "C-dup2", name: "dup", isPrivate: false },
+        ],
+        [{ channelId: CH_PRIVATE, principalId: "U-carol" }],
+      ),
     );
     const cap = await capFor("U1", { write: scopeId("personal", "U1"), read: [scopeId("personal", "U1")] });
     const res = await post({ channel: "dup", facts: ["x"] }, cap);
@@ -476,15 +501,15 @@ describe("agent memory: cross-conversation writes are refused", () => {
       body: JSON.stringify({ channel: "eng", facts: [{ id: "1", text: "hijack" }] }),
     });
     assert.equal(res.status, 400);
-    assert.doesNotMatch(await built.memory.read(scopeId("channel", CH_PUBLIC)), /hijack/);
+    assert.doesNotMatch(await inTestTenant(() => built.memory.read(scopeId("channel", CH_PUBLIC))), /hijack/);
   });
 
   it("refuses a recipient (teammate personal notebook) rather than silently writing own notebook", async () => {
     const cap = await capFor("U1", { write: scopeId("personal", "U1"), read: [scopeId("personal", "U1")] });
     const res = await post({ recipient: "Carol", facts: ["about carol"] }, cap);
     assert.equal(res.status, 400);
-    assert.doesNotMatch(await built.memory.read(scopeId("personal", "U-carol")), /about carol/);
-    assert.doesNotMatch(await built.memory.read(scopeId("personal", "U1")), /about carol/);
+    assert.doesNotMatch(await inTestTenant(() => built.memory.read(scopeId("personal", "U-carol"))), /about carol/);
+    assert.doesNotMatch(await inTestTenant(() => built.memory.read(scopeId("personal", "U1"))), /about carol/);
   });
 
   it("still validates the facts array on the channel path", async () => {
@@ -500,7 +525,7 @@ describe("agent memory: cross-conversation writes are refused", () => {
     const cap = await capFor("U1", { write: scopeId("personal", "U1"), read: [scopeId("personal", "U1")] });
     const blank = await post({ channel: "   ", facts: ["should not land anywhere"] }, cap);
     assert.equal(blank.status, 400);
-    assert.doesNotMatch(await built.memory.read(scopeId("personal", "U1")), /should not land/);
+    assert.doesNotMatch(await inTestTenant(() => built.memory.read(scopeId("personal", "U1"))), /should not land/);
     assert.equal((await post({ participants: [], facts: ["x"] }, cap)).status, 400);
     assert.equal((await post({ channel: 42, facts: ["x"] }, cap)).status, 400);
   });
@@ -541,12 +566,16 @@ describe("agent memory routes report provider failures as problem+json", () => {
     after(() => new Promise<void>((resolve) => server.close(() => resolve())));
     const url = `http://localhost:${(server.address() as AddressInfo).port}`;
     const U1 = scopeId("personal", "U1");
-    await built.memory.capture(U1, ["launch checklist lives in docs/launch.md"], Date.parse("2026-10-01T12:00:00Z"));
+    await inTestTenant(() =>
+      built.memory.capture(U1, ["launch checklist lives in docs/launch.md"], Date.parse("2026-10-01T12:00:00Z")),
+    );
     const headers = {
       "content-type": "application/json",
-      "x-agent-capability": await mintCapabilityToken(
-        { actorId: "U1", scopeId: U1, exp: Date.now() + CAPABILITY_TTL_MS, memory: { write: U1, read: [U1] } },
-        SECRET,
+      "x-agent-capability": await inTestTenant(() =>
+        mintCapabilityToken(
+          { actorId: "U1", scopeId: U1, exp: Date.now() + CAPABILITY_TTL_MS, memory: { write: U1, read: [U1] } },
+          SECRET,
+        ),
       ),
     };
 
@@ -596,6 +625,6 @@ describe("agent memory routes report provider failures as problem+json", () => {
         { provider: "knowledge", outcome: "unknown" },
       ],
     );
-    assert.match(await built.memory.read(U1), /prefers terse replies/);
+    assert.match(await inTestTenant(() => built.memory.read(U1)), /prefers terse replies/);
   });
 });

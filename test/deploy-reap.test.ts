@@ -11,6 +11,7 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 function svc(managedScaleToZero: boolean) {
   const deployStore = createDeployStore(testDeployBackings());
@@ -43,47 +44,53 @@ const future = Date.now() + 1_000_000;
 
 test("unmanaged provider: an idle deployment is reaped (destroyed, stopped, endpoint cleared)", async () => {
   const { deploy, deployStore } = svc(false);
-  const d = await deploy.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-  });
-  assert.equal((await deployStore.get(d.id))!.status, "running");
+  const d = await inTestTenant(() =>
+    deploy.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+    }),
+  );
+  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "running");
 
   const stopped = await deploy.reapIdleDeployments(60_000, future);
   assert.equal(stopped, 1);
-  assert.equal((await deployStore.get(d.id))!.status, "stopped");
-  assert.equal((await deployStore.get(d.id))!.endpoint, null);
+  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "stopped");
+  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.endpoint, null);
 });
 
 test("managed provider: reap is a no-op — the platform sleeps/wakes it, endpoint stays valid", async () => {
   const { deploy, deployStore, destroys } = svc(true);
-  const d = await deploy.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-  });
+  const d = await inTestTenant(() =>
+    deploy.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+    }),
+  );
 
   const stopped = await deploy.reapIdleDeployments(60_000, future);
   assert.equal(stopped, 0);
   assert.equal(destroys, 0);
-  assert.equal((await deployStore.get(d.id))!.status, "running");
-  assert.deepEqual((await deployStore.get(d.id))!.endpoint, { host: "127.0.0.1", port: 5000 });
+  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "running");
+  assert.deepEqual((await inTestTenant(() => deployStore.get(d.id)))!.endpoint, { host: "127.0.0.1", port: 5000 });
 });
 
 test("unmanaged provider: an always-on deployment is never reaped", async () => {
   const { deploy, deployStore } = svc(false);
-  const d = await deploy.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-  });
-  await deploy.setDeploymentAlwaysOn(d.id, true);
+  const d = await inTestTenant(() =>
+    deploy.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+    }),
+  );
+  await inTestTenant(() => deploy.setDeploymentAlwaysOn(d.id, true));
 
   const stopped = await deploy.reapIdleDeployments(60_000, future);
   assert.equal(stopped, 0);
-  assert.equal((await deployStore.get(d.id))!.status, "running");
+  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "running");
 });

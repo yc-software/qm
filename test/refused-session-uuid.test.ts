@@ -5,72 +5,77 @@ import { scopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
-test("getRun resolves the threadRef to the real UUID and builds the admin link from publicWebUrl", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const threadRef = "ch:C_UUID_FIXTURE:100.1";
-  const session = await sessions.getOrCreateByThread(threadRef, "channel", TEST_ROOT_SCOPE);
+test("getRun resolves the threadRef to the real UUID and builds the admin link from publicWebUrl", () =>
+  inTestTenant(async () => {
+    const sessions = createPostgresSessionStore(testDatabaseUrl());
+    const { runs } = createPostgresRunStore(testDatabaseUrl());
+    const threadRef = "ch:C_UUID_FIXTURE:100.1";
+    const session = await sessions.getOrCreateByThread(threadRef, "channel", TEST_ROOT_SCOPE);
 
-  const { run } = await runs.enqueue({ sessionId: threadRef, request: {} as never });
-  const claimed = await runs.claimById(run.id, "w1", 60_000);
-  assert.ok(claimed, "claimed for processing");
-  await runs.fail(run.id, claimed!.leaseToken!, "An unknown error occurred", { retry: false });
+    const { run } = await runs.enqueue({ sessionId: threadRef, request: {} as never });
+    const claimed = await runs.claimById(run.id, "w1", 60_000);
+    assert.ok(claimed, "claimed for processing");
+    await runs.fail(run.id, claimed!.leaseToken!, "An unknown error occurred", { retry: false });
 
-  const app = createApp({ sessions, runs, publicWebUrl: "https://portal.example.com" } as unknown as AppDeps);
-  const got = await app.getRun(run.id);
-  assert.equal(got?.result?.status, "failed");
-  assert.equal(got?.result?.sessionId, session.id, "threadRef swapped for the real UUID");
-  assert.notEqual(got?.result?.sessionId, threadRef);
-  assert.equal(
-    got?.result?.adminUrl,
-    `https://portal.example.com/settings/history/s/${session.id}`,
-    "admin link built from the org's portal + resolved UUID",
-  );
-});
+    const app = createApp({ sessions, runs, publicWebUrl: "https://portal.example.com" } as unknown as AppDeps);
+    const got = await app.getRun(run.id);
+    assert.equal(got?.result?.status, "failed");
+    assert.equal(got?.result?.sessionId, session.id, "threadRef swapped for the real UUID");
+    assert.notEqual(got?.result?.sessionId, threadRef);
+    assert.equal(
+      got?.result?.adminUrl,
+      `https://portal.example.com/settings/history/s/${session.id}`,
+      "admin link built from the org's portal + resolved UUID",
+    );
+  }));
 
-test("getRun omits the admin link when no portal (publicWebUrl) is configured", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const threadRef = "ch:C2:2.2";
-  await sessions.getOrCreateByThread(threadRef, "channel", TEST_ROOT_SCOPE);
-  const { run } = await runs.enqueue({ sessionId: threadRef, request: {} as never });
-  const claimed = await runs.claimById(run.id, "w1", 60_000);
-  await runs.fail(run.id, claimed!.leaseToken!, "An unknown error occurred", { retry: false });
+test("getRun omits the admin link when no portal (publicWebUrl) is configured", () =>
+  inTestTenant(async () => {
+    const sessions = createPostgresSessionStore(testDatabaseUrl());
+    const { runs } = createPostgresRunStore(testDatabaseUrl());
+    const threadRef = "ch:C2:2.2";
+    await sessions.getOrCreateByThread(threadRef, "channel", TEST_ROOT_SCOPE);
+    const { run } = await runs.enqueue({ sessionId: threadRef, request: {} as never });
+    const claimed = await runs.claimById(run.id, "w1", 60_000);
+    await runs.fail(run.id, claimed!.leaseToken!, "An unknown error occurred", { retry: false });
 
-  const app = createApp({ sessions, runs } as unknown as AppDeps);
-  const got = await app.getRun(run.id);
-  assert.equal(got?.result?.status, "failed");
-  assert.equal(got?.result?.adminUrl, undefined, "no portal ⇒ no link");
-});
+    const app = createApp({ sessions, runs } as unknown as AppDeps);
+    const got = await app.getRun(run.id);
+    assert.equal(got?.result?.status, "failed");
+    assert.equal(got?.result?.adminUrl, undefined, "no portal ⇒ no link");
+  }));
 
-test("getRun leaves an already-UUID refused sessionId untouched (no false rewrite)", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const session = await sessions.getOrCreateByThread("dm:U1", "dm", scopeId("personal", "U1"));
-  const { run } = await runs.enqueue({ sessionId: "ch:C1:1.1", request: {} as never });
-  const claimed = await runs.claimById(run.id, "w1", 60_000);
-  await runs.complete(run.id, claimed!.leaseToken!, {
-    status: "refused",
-    sessionId: session.id,
-    reason: "session busy",
-  });
+test("getRun leaves an already-UUID refused sessionId untouched (no false rewrite)", () =>
+  inTestTenant(async () => {
+    const sessions = createPostgresSessionStore(testDatabaseUrl());
+    const { runs } = createPostgresRunStore(testDatabaseUrl());
+    const session = await sessions.getOrCreateByThread("dm:U1", "dm", scopeId("personal", "U1"));
+    const { run } = await runs.enqueue({ sessionId: "ch:C1:1.1", request: {} as never });
+    const claimed = await runs.claimById(run.id, "w1", 60_000);
+    await runs.complete(run.id, claimed!.leaseToken!, {
+      status: "refused",
+      sessionId: session.id,
+      reason: "session busy",
+    });
 
-  const app = createApp({ sessions, runs } as unknown as AppDeps);
-  const got = await app.getRun(run.id);
-  assert.equal(got?.result?.sessionId, session.id, "a real session id is left as-is");
-});
+    const app = createApp({ sessions, runs } as unknown as AppDeps);
+    const got = await app.getRun(run.id);
+    assert.equal(got?.result?.sessionId, session.id, "a real session id is left as-is");
+  }));
 
-test("getRun drops an unresolvable threadRef sessionId (turn failed before its session existed)", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
-  const { run } = await runs.enqueue({ sessionId: "ch:C9:9.9", request: {} as never });
-  const claimed = await runs.claimById(run.id, "w1", 60_000);
-  await runs.fail(run.id, claimed!.leaseToken!, "An unknown error occurred", { retry: false });
+test("getRun drops an unresolvable threadRef sessionId (turn failed before its session existed)", () =>
+  inTestTenant(async () => {
+    const sessions = createPostgresSessionStore(testDatabaseUrl());
+    const { runs } = createPostgresRunStore(testDatabaseUrl());
+    const { run } = await runs.enqueue({ sessionId: "ch:C9:9.9", request: {} as never });
+    const claimed = await runs.claimById(run.id, "w1", 60_000);
+    await runs.fail(run.id, claimed!.leaseToken!, "An unknown error occurred", { retry: false });
 
-  const app = createApp({ sessions, runs } as unknown as AppDeps);
-  const got = await app.getRun(run.id);
-  assert.equal(got?.result?.status, "failed");
-  assert.equal(got?.result?.sessionId, undefined, "unresolvable id is dropped, not leaked");
-});
+    const app = createApp({ sessions, runs } as unknown as AppDeps);
+    const got = await app.getRun(run.id);
+    assert.equal(got?.result?.status, "failed");
+    assert.equal(got?.result?.sessionId, undefined, "unresolvable id is dropped, not leaked");
+  }));

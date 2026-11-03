@@ -11,6 +11,7 @@ import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const org = TEST_ROOT_SCOPE;
@@ -53,7 +54,7 @@ test("external-slack-participants: the durable read sees a flip from another ins
 
 test("a Slack channel turn with an external in the audience is refused while the toggle is off", async () => {
   const { app } = freshApp();
-  const res = await app.turn(externalChannelTurn("slack"));
+  const res = await inTestTenant(() => app.turn(externalChannelTurn("slack")));
   assert.equal(res.status, "refused");
   assert.match(res.reason ?? "", /internal-only/);
 });
@@ -62,7 +63,7 @@ test("with the toggle on, an internal actor may drive a Slack turn in a room wit
   const built = freshApp();
   await built.config.setExternalSlackParticipants(org, true);
   await Promise.resolve();
-  const res = await built.app.turn(externalChannelTurn("slack"));
+  const res = await inTestTenant(() => built.app.turn(externalChannelTurn("slack")));
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /You said: hello channel/);
 });
@@ -71,7 +72,7 @@ test("the toggle relaxes only Slack: a non-Slack surface with an external audien
   const built = freshApp();
   await built.config.setExternalSlackParticipants(org, true);
   await Promise.resolve();
-  const res = await built.app.turn(externalChannelTurn("test"));
+  const res = await inTestTenant(() => built.app.turn(externalChannelTurn("test")));
   assert.equal(res.status, "refused");
   assert.match(res.reason ?? "", /internal-only/);
 });
@@ -80,26 +81,30 @@ test("the toggle never lets an external actor interact", async () => {
   const built = freshApp();
   await built.config.setExternalSlackParticipants(org, true);
   await Promise.resolve();
-  const res = await built.app.turn({
-    surface: "slack",
-    actor: guest,
-    conversation: { kind: "channel", threadRef: "ch:C1:t2", channelRef: "C1", audience: [internalActor, guest] },
-    text: "hi",
-  });
+  const res = await inTestTenant(() =>
+    built.app.turn({
+      surface: "slack",
+      actor: guest,
+      conversation: { kind: "channel", threadRef: "ch:C1:t2", channelRef: "C1", audience: [internalActor, guest] },
+      text: "hi",
+    }),
+  );
   assert.equal(res.status, "refused");
   assert.match(res.reason ?? "", /internal-only/);
 });
 
 test("a bot assertion can enter the turn pipeline", async () => {
   const built = freshApp();
-  const res = await built.app.turn({
-    surface: "slack",
-    actor: { externalId: "B1", isBot: true },
-    conversation: { kind: "dm", threadRef: "dm:B1:t1" },
-    text: "hello",
-  });
+  const res = await inTestTenant(() =>
+    built.app.turn({
+      surface: "slack",
+      actor: { externalId: "B1", isBot: true },
+      conversation: { kind: "dm", threadRef: "dm:B1:t1" },
+      text: "hello",
+    }),
+  );
   assert.equal(res.status, "ok");
-  assert.equal((await built.runs.list()).length, 1);
+  assert.equal((await inTestTenant(() => built.runs.list())).length, 1);
 });
 
 test("admin resource: org-only PUT, read-back, and the surface-config echo", async () => {
@@ -113,7 +118,11 @@ test("admin resource: org-only PUT, read-back, and the surface-config echo", asy
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
+  const ADMIN = {
+    "content-type": "application/json",
+    "x-admin-actor": "admin-alice",
+    ...testTenantHeaders(),
+  };
   try {
     const notOrg = await fetch(`${base}/v1/admin/scopes/personal:u1/external-slack-participants`, {
       method: "PUT",

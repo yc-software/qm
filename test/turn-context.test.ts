@@ -12,6 +12,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testConfigStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 async function fixture() {
   const memory = createPostgresMemoryService(testDatabaseUrl());
@@ -69,39 +70,44 @@ async function fixture() {
   };
 }
 
-test("one context recalls capped, source-labelled memory and shares authority with reads, search, and files", async () => {
-  const { input, auditLog } = await fixture();
-  const context = await resolveTurnContext(input);
-  const recalled = renderRecall(await context.recallMemory(""), new Map());
-  assert.match(recalled, /### personal:alice[\s\S]*LOCAL_FACT/);
-  assert.match(recalled, /### channel:eng[\s\S]*LAST_FACT/);
-  assert.ok(recalled.length <= 6000 && !recalled.includes("long fact"), "prompt memory stays capped");
-  assert.equal((await context.memorySnapshot()).held.get("channel:eng")!.size, 3);
-  const full = await context.readMemory("channel:eng");
-  assert.match(full ?? "", /SHARED_FACT[\s\S]*LAST_FACT/);
-  assert.ok(full!.length > 12000, "explicit reads still return the whole notebook");
-  assert.match(
-    (await context.searchMemory("SHARED_FACT", 20, "channel:eng"))!.join(),
-    /^\[channel:eng\] #\d+ \(\d{4}-\d\d-\d\d\) SHARED_FACT$/,
-  );
-  assert.equal(await context.readMemory("personal:other"), null);
-  assert.equal(await context.searchMemory("SHARED_FACT", 20, "personal:other"), null);
-  assert.match(
-    (await context.searchMemory("LAST_FACT"))!.join(),
-    /^\[channel:eng\] #\d+ \(\d{4}-\d\d-\d\d\) LAST_FACT$/,
-  );
-  assert.deepEqual(context.memoryAccess?.read, ["personal:alice", "org:test", "channel:eng"]);
-  assert.deepEqual(context.baseRecallScopes, ["personal:alice", "org:test"], "reusable tokens exclude carried sources");
-  assert.equal(context.memoryAccess?.write, "personal:alice");
-  const handle = context.listFiles().find((h) => h.ownerScopeId === "channel:eng")!;
-  const result = await context.readFile(handle.handlePath);
-  assert.ok(result && "bytes" in result);
-  assert.equal(Buffer.from(result.bytes!).toString(), "PLAN_CONTENT");
-  assert.equal(await context.readFile("shared/open-channel-other/plan.txt"), null);
-  const events = await auditLog.events();
-  assert.ok(events.some((e) => e.resource === "memory" && e.detail?.includes("channel:eng")));
-  assert.ok(events.some((e) => e.resource === "1".repeat(32) && e.detail?.includes("channel:eng")));
-});
+test("one context recalls capped, source-labelled memory and shares authority with reads, search, and files", () =>
+  inTestTenant(async () => {
+    const { input, auditLog } = await fixture();
+    const context = await resolveTurnContext(input);
+    const recalled = renderRecall(await context.recallMemory(""), new Map());
+    assert.match(recalled, /### personal:alice[\s\S]*LOCAL_FACT/);
+    assert.match(recalled, /### channel:eng[\s\S]*LAST_FACT/);
+    assert.ok(recalled.length <= 6000 && !recalled.includes("long fact"), "prompt memory stays capped");
+    assert.equal((await context.memorySnapshot()).held.get("channel:eng")!.size, 3);
+    const full = await context.readMemory("channel:eng");
+    assert.match(full ?? "", /SHARED_FACT[\s\S]*LAST_FACT/);
+    assert.ok(full!.length > 12000, "explicit reads still return the whole notebook");
+    assert.match(
+      (await context.searchMemory("SHARED_FACT", 20, "channel:eng"))!.join(),
+      /^\[channel:eng\] #\d+ \(\d{4}-\d\d-\d\d\) SHARED_FACT$/,
+    );
+    assert.equal(await context.readMemory("personal:other"), null);
+    assert.equal(await context.searchMemory("SHARED_FACT", 20, "personal:other"), null);
+    assert.match(
+      (await context.searchMemory("LAST_FACT"))!.join(),
+      /^\[channel:eng\] #\d+ \(\d{4}-\d\d-\d\d\) LAST_FACT$/,
+    );
+    assert.deepEqual(context.memoryAccess?.read, ["personal:alice", "org:test", "channel:eng"]);
+    assert.deepEqual(
+      context.baseRecallScopes,
+      ["personal:alice", "org:test"],
+      "reusable tokens exclude carried sources",
+    );
+    assert.equal(context.memoryAccess?.write, "personal:alice");
+    const handle = context.listFiles().find((h) => h.ownerScopeId === "channel:eng")!;
+    const result = await context.readFile(handle.handlePath);
+    assert.ok(result && "bytes" in result);
+    assert.equal(Buffer.from(result.bytes!).toString(), "PLAN_CONTENT");
+    assert.equal(await context.readFile("shared/open-channel-other/plan.txt"), null);
+    const events = await auditLog.events();
+    assert.ok(events.some((e) => e.resource === "memory" && e.detail?.includes("channel:eng")));
+    assert.ok(events.some((e) => e.resource === "1".repeat(32) && e.detail?.includes("channel:eng")));
+  }));
 
 for (const mode of [
   "isolated",
@@ -113,162 +119,169 @@ for (const mode of [
   "memory-writable",
   "memory-skip",
 ] as const) {
-  test(`context ${mode} excludes source memories consistently`, async () => {
-    const { input, config, removeMember } = await fixture();
-    if (mode === "isolated") input.resolution.sharingPosture = "isolated";
-    if (mode === "source-veto") await config.setSharingPosture("channel:eng", "isolated");
-    if (mode === "removed") removeMember();
-    if (mode === "speaker-switch") input.actor = { id: "bob", type: "internal" };
-    if (mode === "automation") input.trustedLiveHuman = false;
-    if (mode === "memory-off") input.memoryPolicy.recall = "off";
-    if (mode === "memory-writable") input.memoryPolicy.recall = "writable";
-    if (mode === "memory-skip") input.useMemory = false;
-    const context = await resolveTurnContext(input);
-    assert.doesNotMatch(renderRecall(await context.recallMemory(""), new Map()), /SHARED_FACT|LAST_FACT/);
-    assert.deepEqual((await context.searchMemory("LAST_FACT")) ?? [], []);
-    assert.equal(await context.readMemory("channel:eng"), null);
-    assert.equal(await context.searchMemory("LAST_FACT", 20, "channel:eng"), null);
-    if (!mode.startsWith("memory-")) {
-      assert.deepEqual(context.listFiles(), []);
-      assert.equal(await context.readFile("shared/open-channel-eng/plan.txt"), null);
-    }
-  });
+  test(`context ${mode} excludes source memories consistently`, () =>
+    inTestTenant(async () => {
+      const { input, config, removeMember } = await fixture();
+      if (mode === "isolated") input.resolution.sharingPosture = "isolated";
+      if (mode === "source-veto") await config.setSharingPosture("channel:eng", "isolated");
+      if (mode === "removed") removeMember();
+      if (mode === "speaker-switch") input.actor = { id: "bob", type: "internal" };
+      if (mode === "automation") input.trustedLiveHuman = false;
+      if (mode === "memory-off") input.memoryPolicy.recall = "off";
+      if (mode === "memory-writable") input.memoryPolicy.recall = "writable";
+      if (mode === "memory-skip") input.useMemory = false;
+      const context = await resolveTurnContext(input);
+      assert.doesNotMatch(renderRecall(await context.recallMemory(""), new Map()), /SHARED_FACT|LAST_FACT/);
+      assert.deepEqual((await context.searchMemory("LAST_FACT")) ?? [], []);
+      assert.equal(await context.readMemory("channel:eng"), null);
+      assert.equal(await context.searchMemory("LAST_FACT", 20, "channel:eng"), null);
+      if (!mode.startsWith("memory-")) {
+        assert.deepEqual(context.listFiles(), []);
+        assert.equal(await context.readFile("shared/open-channel-eng/plan.txt"), null);
+      }
+    }));
 }
 
-test("fresh turn re-resolves membership after an earlier successful read", async () => {
-  const { input, removeMember } = await fixture();
-  assert.match(renderRecall(await (await resolveTurnContext(input)).recallMemory(""), new Map()), /LAST_FACT/);
-  removeMember();
-  const next = await resolveTurnContext(input);
-  assert.doesNotMatch(renderRecall(await next.recallMemory(""), new Map()), /LAST_FACT/);
-  assert.equal(await next.readMemory("channel:eng"), null);
-  assert.equal(await next.readFile("shared/open-channel-eng/plan.txt"), null);
-});
+test("fresh turn re-resolves membership after an earlier successful read", () =>
+  inTestTenant(async () => {
+    const { input, removeMember } = await fixture();
+    assert.match(renderRecall(await (await resolveTurnContext(input)).recallMemory(""), new Map()), /LAST_FACT/);
+    removeMember();
+    const next = await resolveTurnContext(input);
+    assert.doesNotMatch(renderRecall(await next.recallMemory(""), new Map()), /LAST_FACT/);
+    assert.equal(await next.readMemory("channel:eng"), null);
+    assert.equal(await next.readFile("shared/open-channel-eng/plan.txt"), null);
+  }));
 
-test("skill discovery uses the same included scopes and audience-filtered explicit grants", async () => {
-  const { input, acl, removeMember } = await fixture();
-  await acl.grant(
-    {
-      ownerScopeId: "personal:owner",
-      ref: "skill:explicit",
-      granteeScopeId: "personal:alice",
-      permission: "read",
-      grantedBy: "owner",
-    },
-    "owner",
-  );
-  const seen: Array<{ scopes: readonly string[]; grants: unknown }> = [];
-  input.skills = {
-    visibleFor: async (scopes, grants) => {
-      seen.push({ scopes: [...scopes], grants });
-      return [];
-    },
-  } as Pick<NonNullable<typeof input.skills>, "visibleFor"> as NonNullable<typeof input.skills>;
-  await (await resolveTurnContext(input)).listSkills();
-  assert.deepEqual(seen[0], {
-    scopes: ["personal:alice", "channel:eng", "org:test"],
-    grants: [{ id: "explicit", ownerScopeId: "personal:owner" }],
-  });
-  input.audience.push({ id: "bob", type: "internal" });
-  input.targetScope = "channel:other";
-  removeMember();
-  await (await resolveTurnContext(input)).listSkills();
-  assert.deepEqual(seen[1], { scopes: ["personal:alice", "org:test"], grants: [] });
-});
+test("skill discovery uses the same included scopes and audience-filtered explicit grants", () =>
+  inTestTenant(async () => {
+    const { input, acl, removeMember } = await fixture();
+    await acl.grant(
+      {
+        ownerScopeId: "personal:owner",
+        ref: "skill:explicit",
+        granteeScopeId: "personal:alice",
+        permission: "read",
+        grantedBy: "owner",
+      },
+      "owner",
+    );
+    const seen: Array<{ scopes: readonly string[]; grants: unknown }> = [];
+    input.skills = {
+      visibleFor: async (scopes, grants) => {
+        seen.push({ scopes: [...scopes], grants });
+        return [];
+      },
+    } as Pick<NonNullable<typeof input.skills>, "visibleFor"> as NonNullable<typeof input.skills>;
+    await (await resolveTurnContext(input)).listSkills();
+    assert.deepEqual(seen[0], {
+      scopes: ["personal:alice", "channel:eng", "org:test"],
+      grants: [{ id: "explicit", ownerScopeId: "personal:owner" }],
+    });
+    input.audience.push({ id: "bob", type: "internal" });
+    input.targetScope = "channel:other";
+    removeMember();
+    await (await resolveTurnContext(input)).listSkills();
+    assert.deepEqual(seen[1], { scopes: ["personal:alice", "org:test"], grants: [] });
+  }));
 
-test("ambiguous file aliases fail closed in the shared reader", async () => {
-  const { input } = await fixture();
-  input.resolution.grantedHandles = [
-    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", fileId: "1".repeat(32), permission: "read" },
-    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", fileId: "2".repeat(32), permission: "read" },
-  ];
-  const result = await (await resolveTurnContext(input)).readFile("shared/plan.txt");
-  assert.ok(result && "error" in result);
-  assert.match(result.error, /ambiguous shared handle/);
-});
+test("ambiguous file aliases fail closed in the shared reader", () =>
+  inTestTenant(async () => {
+    const { input } = await fixture();
+    input.resolution.grantedHandles = [
+      { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", fileId: "1".repeat(32), permission: "read" },
+      { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", fileId: "2".repeat(32), permission: "read" },
+    ];
+    const result = await (await resolveTurnContext(input)).readFile("shared/plan.txt");
+    assert.ok(result && "error" in result);
+    assert.match(result.error, /ambiguous shared handle/);
+  }));
 
-test("skill discovery refreshes carried membership and explicit grants in the same turn", async () => {
-  const { input, acl, removeMember } = await fixture();
-  const seen: Array<{ scopes: readonly string[]; grants: unknown }> = [];
-  input.skills = {
-    visibleFor: async (scopes, grants) => {
-      seen.push({ scopes: [...scopes], grants });
-      return [];
-    },
-  } as Pick<NonNullable<typeof input.skills>, "visibleFor"> as NonNullable<typeof input.skills>;
-  const context = await resolveTurnContext(input);
-  assert.deepEqual((await context.listSkills()).sharingSources, ["channel:eng"]);
-  await acl.grant(
-    {
-      ownerScopeId: "personal:owner",
-      ref: "skill:new",
-      granteeScopeId: "personal:alice",
-      permission: "read",
-      grantedBy: "owner",
-    },
-    "owner",
-  );
-  await context.listSkills();
-  assert.deepEqual(seen[1]!.grants, [{ id: "new", ownerScopeId: "personal:owner" }]);
-  await acl.revoke("personal:owner", "skill:new", "personal:alice", "owner");
-  removeMember();
-  assert.deepEqual((await context.listSkills()).sharingSources, []);
-  assert.deepEqual(seen[2], { scopes: ["personal:alice", "org:test"], grants: [] });
-});
+test("skill discovery refreshes carried membership and explicit grants in the same turn", () =>
+  inTestTenant(async () => {
+    const { input, acl, removeMember } = await fixture();
+    const seen: Array<{ scopes: readonly string[]; grants: unknown }> = [];
+    input.skills = {
+      visibleFor: async (scopes, grants) => {
+        seen.push({ scopes: [...scopes], grants });
+        return [];
+      },
+    } as Pick<NonNullable<typeof input.skills>, "visibleFor"> as NonNullable<typeof input.skills>;
+    const context = await resolveTurnContext(input);
+    assert.deepEqual((await context.listSkills()).sharingSources, ["channel:eng"]);
+    await acl.grant(
+      {
+        ownerScopeId: "personal:owner",
+        ref: "skill:new",
+        granteeScopeId: "personal:alice",
+        permission: "read",
+        grantedBy: "owner",
+      },
+      "owner",
+    );
+    await context.listSkills();
+    assert.deepEqual(seen[1]!.grants, [{ id: "new", ownerScopeId: "personal:owner" }]);
+    await acl.revoke("personal:owner", "skill:new", "personal:alice", "owner");
+    removeMember();
+    assert.deepEqual((await context.listSkills()).sharingSources, []);
+    assert.deepEqual(seen[2], { scopes: ["personal:alice", "org:test"], grants: [] });
+  }));
 
-test("source selection precedes name shadowing and preserves skill-level grants", async () => {
-  const { input, acl } = await fixture();
-  await acl.grant(
-    {
-      ownerScopeId: "personal:owner",
-      ref: "skill:one",
-      granteeScopeId: "personal:alice",
-      permission: "read",
-      grantedBy: "owner",
-    },
-    "owner",
-  );
-  const seen: Array<{ scopes: readonly string[]; grants: unknown }> = [];
-  input.skills = {
-    visibleFor: async (scopes, grants) => {
-      seen.push({ scopes: [...scopes], grants });
-      return [];
-    },
-  } as Pick<NonNullable<typeof input.skills>, "visibleFor"> as NonNullable<typeof input.skills>;
-  const context = await resolveTurnContext(input);
-  await context.listSkills(["org:test"]);
-  assert.deepEqual(seen[0], { scopes: ["org:test"], grants: [] });
-  await context.listSkills(["personal:owner"]);
-  assert.deepEqual(seen[1], { scopes: [], grants: [{ id: "one", ownerScopeId: "personal:owner" }] });
-  await context.listSkills(["personal:stranger"]);
-  assert.deepEqual(seen[2], { scopes: [], grants: [] });
-});
+test("source selection precedes name shadowing and preserves skill-level grants", () =>
+  inTestTenant(async () => {
+    const { input, acl } = await fixture();
+    await acl.grant(
+      {
+        ownerScopeId: "personal:owner",
+        ref: "skill:one",
+        granteeScopeId: "personal:alice",
+        permission: "read",
+        grantedBy: "owner",
+      },
+      "owner",
+    );
+    const seen: Array<{ scopes: readonly string[]; grants: unknown }> = [];
+    input.skills = {
+      visibleFor: async (scopes, grants) => {
+        seen.push({ scopes: [...scopes], grants });
+        return [];
+      },
+    } as Pick<NonNullable<typeof input.skills>, "visibleFor"> as NonNullable<typeof input.skills>;
+    const context = await resolveTurnContext(input);
+    await context.listSkills(["org:test"]);
+    assert.deepEqual(seen[0], { scopes: ["org:test"], grants: [] });
+    await context.listSkills(["personal:owner"]);
+    assert.deepEqual(seen[1], { scopes: [], grants: [{ id: "one", ownerScopeId: "personal:owner" }] });
+    await context.listSkills(["personal:stranger"]);
+    assert.deepEqual(seen[2], { scopes: [], grants: [] });
+  }));
 
-test("semantic recall reuses the turn's memory snapshot instead of reloading notebooks", async () => {
-  const { input, memory } = await fixture();
-  await memory.capture("org:test", ["ORG_FACT"], Date.now());
-  const loads: string[] = [];
-  const counted = {
-    ...memory,
-    facts: async (scope: string) => {
-      loads.push(scope);
-      return memory.facts!(scope);
-    },
-  };
-  const embedder = { id: "test", embed: async (texts: string[]) => texts.map(() => [1, 0]) };
-  input.memory = createSemanticMemoryService(
-    counted,
-    async () => embedder,
-    scoredMemoryIndex(memory, (text) => (text === "LAST_FACT" ? 1 : 0)),
-  );
-  const context = await resolveTurnContext(input);
-  const snapshot = await context.memorySnapshot();
-  assert.deepEqual(loads.sort(), ["channel:eng", "org:test", "personal:alice"]);
-  loads.length = 0;
-  const recalled = await context.recallMemory("anything", snapshot.loaded);
-  assert.deepEqual(
-    recalled.map((fact) => fact.text),
-    ["- (" + new Date().toISOString().slice(0, 10) + ") LAST_FACT"],
-  );
-  assert.deepEqual(loads, []);
-});
+test("semantic recall reuses the turn's memory snapshot instead of reloading notebooks", () =>
+  inTestTenant(async () => {
+    const { input, memory } = await fixture();
+    await memory.capture("org:test", ["ORG_FACT"], Date.now());
+    const loads: string[] = [];
+    const counted = {
+      ...memory,
+      facts: async (scope: string) => {
+        loads.push(scope);
+        return memory.facts!(scope);
+      },
+    };
+    const embedder = { id: "test", embed: async (texts: string[]) => texts.map(() => [1, 0]) };
+    input.memory = createSemanticMemoryService(
+      counted,
+      async () => embedder,
+      scoredMemoryIndex(memory, (text) => (text === "LAST_FACT" ? 1 : 0)),
+    );
+    const context = await resolveTurnContext(input);
+    const snapshot = await context.memorySnapshot();
+    assert.deepEqual(loads.sort(), ["channel:eng", "org:test", "personal:alice"]);
+    loads.length = 0;
+    const recalled = await context.recallMemory("anything", snapshot.loaded);
+    assert.deepEqual(
+      recalled.map((fact) => fact.text),
+      ["- (" + new Date().toISOString().slice(0, 10) + ") LAST_FACT"],
+    );
+    assert.deepEqual(loads, []);
+  }));

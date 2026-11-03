@@ -9,18 +9,21 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
+import { inTestTenant, testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const PID = "soul-read-portal-identity-secret-for-tests";
 
 test("source-authenticated SOUL reads require the portal-verified principal to belong to the scope", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "soul-read-")) }));
-  await built.directory.replaceChannels(
-    [{ channelId: "C", name: "eng", isPrivate: true }],
-    [{ channelId: "C", principalId: "alice" }],
-  );
-  await built.config.setSoul(scopeId("personal", "bob"), "Bob's private instruction.");
-  await built.config.setSoul(scopeId("channel", "C"), "Channel C instruction.");
+  await inTestTenant(async () => {
+    await built.directory.replaceChannels(
+      [{ channelId: "C", name: "eng", isPrivate: true }],
+      [{ channelId: "C", principalId: "alice" }],
+    );
+    await built.config.setSoul(scopeId("personal", "bob"), "Bob's private instruction.");
+    await built.config.setSoul(scopeId("channel", "C"), "Channel C instruction.");
+  });
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     identity: built.identity,
@@ -31,7 +34,17 @@ test("source-authenticated SOUL reads require the portal-verified principal to b
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const read = async (query: string, as?: string) =>
     fetch(`${base}/v1/soul?${query}`, {
-      headers: as ? { "x-portal-identity": await mintSignedPayload({ p: as, exp: Date.now() + 60_000 }, PID) } : {},
+      headers: {
+        ...testTenantHeaders(),
+        ...(as
+          ? {
+              "x-portal-identity": await mintSignedPayload(
+                { t: testTenants()[0], p: as, exp: Date.now() + 60_000 },
+                PID,
+              ),
+            }
+          : {}),
+      },
     });
   try {
     assert.equal((await read("scopeId=personal:bob&principalId=bob")).status, 401);

@@ -5,13 +5,15 @@ import { createPostgresAdminGrantStore } from "../../src/admin/postgres-admin-gr
 import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "../../src/admin/admin-grant-store.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
-import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
+import pg from "pg";
+import { applyPgMigrations, createPgPool, registeredPgMigrations, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
+import { useOwnerDatabase } from "../../src/tenants/claim.ts";
 import { tenantRootScope } from "../../src/tenants/context.ts";
 
-function baseDatabaseUrl(): URL {
-  const base = process.env.DATABASE_URL;
-  if (!base) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
+function baseDatabaseUrl(variable: "DATABASE_URL" | "DATABASE_OWNER_URL" = "DATABASE_URL"): URL {
+  const base = process.env[variable];
+  if (!base) throw new Error(`${variable} is unset: run tests through scripts/run-pg-tests.mjs`);
   return new URL(base);
 }
 
@@ -22,7 +24,7 @@ function startDatabaseWorker(): NonNullable<typeof databaseWorker> {
     const signal = new Int32Array(new SharedArrayBuffer(4));
     const { port1, port2 } = new MessageChannel();
     const worker = new Worker(new URL("./database-worker.ts", import.meta.url), {
-      workerData: { base: baseDatabaseUrl().toString(), signal, port: port2 },
+      workerData: { base: baseDatabaseUrl("DATABASE_OWNER_URL").toString(), signal, port: port2 },
       transferList: [port2],
       execArgv: [],
     });
@@ -56,38 +58,82 @@ function createDatabaseSync(request: { template?: string }, scope: "test" | "fil
   return reply.name;
 }
 
-function databaseUrl(name: string): string {
-  const url = baseDatabaseUrl();
+function databaseUrl(name: string, variable: "DATABASE_URL" | "DATABASE_OWNER_URL" = "DATABASE_URL"): string {
+  const url = baseDatabaseUrl(variable);
   url.pathname = `/${name}`;
   return url.toString();
 }
 
+export function ownerUrlOf(databaseUrl: string): string {
+  const owner = baseDatabaseUrl("DATABASE_OWNER_URL");
+  owner.pathname = new URL(databaseUrl).pathname;
+  return owner.toString();
+}
+
+export async function migrateTestDatabase(databaseUrl = baseDatabaseUrl().toString()): Promise<void> {
+  const owner = new pg.Pool({ connectionString: ownerUrlOf(databaseUrl), max: 1 });
+  try {
+    await applyPgMigrations(owner, registeredPgMigrations(databaseUrl));
+  } finally {
+    await owner.end();
+  }
+}
+
+function ownedDatabaseUrl(name: string): string {
+  const url = databaseUrl(name);
+  useOwnerDatabase(ownerUrlOf(url));
+  return url;
+}
+
+export function pointOwnerAtSchema(schema: string): void {
+  const owner = new URL(process.env.DATABASE_OWNER_URL!);
+  owner.searchParams.set("options", `-c search_path=${schema}`);
+  useOwnerDatabase(owner.toString());
+}
+
+export function restoreFileOwner(): void {
+  useOwnerDatabase(process.env.DATABASE_OWNER_URL);
+}
+
 export function testDatabaseUrl(): string {
-  return databaseUrl(createDatabaseSync({}));
+  return ownedDatabaseUrl(createDatabaseSync({}));
 }
 
 export function testBareDatabaseUrl(): string {
-  return databaseUrl(createDatabaseSync({ template: "" }));
+  return databaseUrl(createDatabaseSync({ template: "" }), "DATABASE_OWNER_URL");
 }
 
 export function testMigratedDatabaseUrl(): string {
   const template = process.env.QM_TEST_TEMPLATE_DATABASE;
   if (!template) throw new Error("QM_TEST_TEMPLATE_DATABASE is unset: run tests through scripts/run-pg-tests.mjs");
-  return databaseUrl(createDatabaseSync({ template }));
+  return ownedDatabaseUrl(createDatabaseSync({ template }));
 }
 
 let shared: { url: string; maps: ReturnType<typeof createPostgresMapFactory> } | undefined;
 
 function sharedDatabase(): NonNullable<typeof shared> {
   if (!shared) {
-    const url = databaseUrl(createDatabaseSync({}, "file"));
+    const url = databaseUrl(createDatabaseSync({}, "file"), "DATABASE_OWNER_URL");
     shared = { url, maps: createPostgresMapFactory(url) };
   }
   return shared;
 }
 
 export function testMap<T>(indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> {
-  return sharedDatabase().maps.map<T>(`t_${randomBytes(8).toString("hex")}`, indexedFields);
+  const { url, maps } = sharedDatabase();
+  const map = maps.map<T>(`t_${randomBytes(8).toString("hex")}`, indexedFields);
+  const migrated = migrateTestDatabase(url);
+  migrated.catch(() => {});
+  return new Proxy(map, {
+    get(target, key) {
+      const value: unknown = Reflect.get(target, key);
+      if (typeof value !== "function") return value;
+      return async (...args: unknown[]) => {
+        await migrated;
+        return Reflect.apply(value, target, args);
+      };
+    },
+  });
 }
 
 export function testPgPool(): PgPool {
@@ -95,7 +141,7 @@ export function testPgPool(): PgPool {
 }
 
 export function testAdvisoryLock(): AdvisoryLock {
-  return createPostgresAdvisoryLock(createPgPool(testDatabaseUrl()));
+  return createPostgresAdvisoryLock(createPgPool(databaseUrl(createDatabaseSync({}))));
 }
 
 export function testConfigStore(opts: Partial<Parameters<typeof createConfigStore>[0]> = {}) {
@@ -105,19 +151,20 @@ export function testConfigStore(opts: Partial<Parameters<typeof createConfigStor
 export const TEST_ADMIN_GRANTS = "admin-alice:org_admin,admin-bob:org_admin";
 
 export function testAdminGrantStore(
-  seed: AdminGrant[] = ["admin-alice", "admin-bob"].map((principalId) => ({
-    principalId,
-    scopeId: tenantRootScope(),
-    role: "org_admin" as const,
-  })),
+  seed: () => AdminGrant[] = () =>
+    ["admin-alice", "admin-bob"].map((principalId) => ({
+      principalId,
+      scopeId: tenantRootScope(),
+      role: "org_admin" as const,
+    })),
 ): AdminGrantStore {
-  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed: () => seed });
+  return createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl(createDatabaseSync({}))), { seed });
 }
 
 export function testDeployBackings(
   backings: Partial<Parameters<typeof import("../../src/deploy/deploy-store.ts").createDeployStore>[0]> = {},
 ) {
-  const maps = createPostgresMapFactory(testDatabaseUrl());
+  const maps = createPostgresMapFactory(databaseUrl(createDatabaseSync({})));
   return {
     deployments: maps.map<import("../../src/deploy/deploy-store.ts").Deployment>("deployments"),
     pg: maps.pool,

@@ -1,6 +1,6 @@
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { createControlService } from "../src/api/control-service.ts";
-import { test } from "node:test";
+import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +31,11 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => void | Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;

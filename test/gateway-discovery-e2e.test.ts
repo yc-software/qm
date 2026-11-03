@@ -9,6 +9,7 @@ import { resolveModel } from "../src/model/pi-models.ts";
 import { oneShot } from "../src/agent/agent-run.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
@@ -259,12 +260,14 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
       "Discovered model replied",
     );
     assert.ok(requests.filter((r) => r.path === "/v1/models").length > beforeRefresh);
-    const result = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "discovery-tool-loop" },
-      text: "Use the execute tool, then reply.",
-    });
+    const result = await inTestTenant(() =>
+      built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "discovery-tool-loop" },
+        text: "Use the execute tool, then reply.",
+      }),
+    );
     assert.equal(result.status, "ok");
     assert.match(result.reply ?? "", /Discovered model replied/);
     assert.ok(

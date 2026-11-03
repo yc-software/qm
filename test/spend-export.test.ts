@@ -14,6 +14,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const DAY = 86_400_000;
@@ -81,7 +82,7 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
     }
     assert.equal(reads, 0);
     assert.deepEqual(
-      (await s.built.auditLog.events()).filter((e) => e.action === "spend.export"),
+      (await inTestTenant(() => s.built.auditLog.events())).filter((e) => e.action === "spend.export"),
       [],
     );
   } finally {
@@ -104,13 +105,15 @@ test("spend export: the token authorizes the export and nothing else", async () 
 test("spend export: rows keep the ledger grain with canonical people, sources and the org scope, in code-point order", async () => {
   const s = fixture();
   try {
-    const sessions = s.sessions!;
-    await bill(sessions, "dm:alice:t1", "dm", scopeId("personal", "alice"), { costUsd: 2 }, "claude-opus-5");
-    await bill(sessions, "dm:alice:t2", "dm", scopeId("personal", "alice"), { costUsd: 1 }, "claude-opus-5");
-    await bill(sessions, "cron:nightly:fire:1", "dm", scopeId("personal", "alice"), { costUsd: 0.5 }, "gpt-6-astra");
-    await bill(sessions, "webhook:w1", "channel", scopeId("channel", "C1"), { costUsd: 4 }, "claude-opus-5");
-    await bill(sessions, "ch:C1:t1", "channel", scopeId("channel", "C1"), { costUsd: 3 }, "claude-opus-5");
-    await bill(sessions, "dm:U1:t1", "dm", scopeId("personal", "U1"), { costUsd: 1 }, "claude-opus-5");
+    await inTestTenant(async () => {
+      const sessions = s.sessions!;
+      await bill(sessions, "dm:alice:t1", "dm", scopeId("personal", "alice"), { costUsd: 2 }, "claude-opus-5");
+      await bill(sessions, "dm:alice:t2", "dm", scopeId("personal", "alice"), { costUsd: 1 }, "claude-opus-5");
+      await bill(sessions, "cron:nightly:fire:1", "dm", scopeId("personal", "alice"), { costUsd: 0.5 }, "gpt-6-astra");
+      await bill(sessions, "webhook:w1", "channel", scopeId("channel", "C1"), { costUsd: 4 }, "claude-opus-5");
+      await bill(sessions, "ch:C1:t1", "channel", scopeId("channel", "C1"), { costUsd: 3 }, "claude-opus-5");
+      await bill(sessions, "dm:U1:t1", "dm", scopeId("personal", "U1"), { costUsd: 1 }, "claude-opus-5");
+    });
     const res = await s.get(`/v1/spend/export?${window}`);
     assert.equal(res.status, 200);
     const body: any = await res.json();
@@ -140,7 +143,7 @@ test("spend export: rows keep the ledger grain with canonical people, sources an
       [body.rows[3].input, body.rows[3].output, body.rows[3].cacheRead, body.rows[3].cacheWrite],
       [200, 40, 800, 80],
     );
-    const audited = (await s.built.auditLog.events()).filter((e) => e.action === "spend.export");
+    const audited = (await inTestTenant(() => s.built.auditLog.events())).filter((e) => e.action === "spend.export");
     assert.equal(audited.length, 1);
     assert.equal(audited[0]!.principalId, "spend-export");
     assert.equal(audited[0]!.detail, `${iso(today - DAY)}..${iso(today + DAY)} rows=5`);
@@ -152,24 +155,27 @@ test("spend export: rows keep the ledger grain with canonical people, sources an
 test("spend export: lists each billed cron's title, owner and schedule without its task", async () => {
   const s = fixture();
   try {
-    const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:alice",
-      owner: "alice",
-      createdBy: "alice",
-      title: "Morning digest",
-      schedule: { cron: "0 9 * * 1-5", timezone: "America/New_York" },
-      action: "summarize my unread mail",
+    const cron = await inTestTenant(async () => {
+      const created = await s.built.app.createCron({
+        ownerScopeId: "personal:alice",
+        owner: "alice",
+        createdBy: "alice",
+        title: "Morning digest",
+        schedule: { cron: "0 9 * * 1-5", timezone: "America/New_York" },
+        action: "summarize my unread mail",
+      });
+      await s.built.app.createCron({
+        ownerScopeId: "personal:alice",
+        owner: "alice",
+        createdBy: "alice",
+        title: "Never billed",
+        schedule: { everyMs: 60_000 },
+        action: "idle",
+      });
+      await bill(s.sessions!, `cron:${created.id}:fire:1`, "dm", scopeId("personal", "alice"), { costUsd: 2 }, "m1");
+      await bill(s.sessions!, "cron:deleted:fire:1", "dm", scopeId("personal", "alice"), { costUsd: 1 }, "m1");
+      return created;
     });
-    await s.built.app.createCron({
-      ownerScopeId: "personal:alice",
-      owner: "alice",
-      createdBy: "alice",
-      title: "Never billed",
-      schedule: { everyMs: 60_000 },
-      action: "idle",
-    });
-    await bill(s.sessions!, `cron:${cron.id}:fire:1`, "dm", scopeId("personal", "alice"), { costUsd: 2 }, "m1");
-    await bill(s.sessions!, "cron:deleted:fire:1", "dm", scopeId("personal", "alice"), { costUsd: 1 }, "m1");
     const body: any = await (await s.get(`/v1/spend/export?${window}`)).json();
     assert.deepEqual(
       body.rows.map((r: any) => [r.cronId, r.costUsd]),

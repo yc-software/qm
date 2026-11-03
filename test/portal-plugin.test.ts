@@ -9,6 +9,7 @@ import { createAdminGrantStore } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 test("portal signs /d/ ingress with the principal as the canonical tail (core-verifiable)", () => {
@@ -42,16 +43,17 @@ test("parseAdminGrants: parses org_admin grants and skips malformed / removed-ro
   assert.deepEqual(parseAdminGrants("", TEST_ROOT_SCOPE), []);
 });
 
-test("ADMIN_GRANTS-seeded admins resolve and authorize org-wide; non-admins do not", async () => {
-  const store = createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()) ?? [], {
-    seed: () => parseAdminGrants("U1:org_admin", TEST_ROOT_SCOPE) ?? [],
-  });
-  const svc = createAdminService(store);
-  const u1 = svc.resolveActor("U1");
-  const u2 = svc.resolveActor("U2");
-  assert.ok(u1 && u2);
-  assert.equal(await svc.canAdminister(u1, TEST_ROOT_SCOPE), true);
-  assert.equal(await svc.canAdminister(u1, scopeId("channel", "eng")), true);
-  assert.equal(await svc.canAdminister(u2, TEST_ROOT_SCOPE), false);
-  assert.equal(await svc.canAdminister(svc.resolveActor("admin-alice")!, TEST_ROOT_SCOPE), false);
-});
+test("ADMIN_GRANTS-seeded admins resolve and authorize org-wide; non-admins do not", () =>
+  inTestTenant(async () => {
+    const store = createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), {
+      seed: () => parseAdminGrants("U1:org_admin", TEST_ROOT_SCOPE) ?? [],
+    });
+    const svc = createAdminService(store);
+    const u1 = svc.resolveActor("U1");
+    const u2 = svc.resolveActor("U2");
+    assert.ok(u1 && u2);
+    assert.equal(await svc.canAdminister(u1, TEST_ROOT_SCOPE), true);
+    assert.equal(await svc.canAdminister(u1, scopeId("channel", "eng")), true);
+    assert.equal(await svc.canAdminister(u2, TEST_ROOT_SCOPE), false);
+    assert.equal(await svc.canAdminister(svc.resolveActor("admin-alice")!, TEST_ROOT_SCOPE), false);
+  }));

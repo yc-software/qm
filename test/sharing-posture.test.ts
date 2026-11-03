@@ -1,6 +1,6 @@
 import { readContextFile } from "../src/resolution/context-files.ts";
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test as nodeTest } from "node:test";
 import { composeSharingPosture, parseSharingPosture, type SharingPosture } from "../src/resolution/sharing-posture.ts";
 import {
   carriedFileHandles,
@@ -14,6 +14,11 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createIsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function test(name: string, fn: () => void | Promise<void>): void {
+  nodeTest(name, () => inTestTenant(fn));
+}
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 test("sharing posture is isolated by default and isolated wins composition", () => {

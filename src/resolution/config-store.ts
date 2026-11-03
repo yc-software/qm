@@ -9,6 +9,7 @@ import { createKeyedQueue } from "../util/async.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
+import type { SpendLimit } from "../ratelimit/spend-limits.ts";
 import {
   deriveConnectorKey,
   encryptSecret,
@@ -161,6 +162,8 @@ export interface ScopedConfigStore {
   getBranding(id: ScopeId): OrgBranding | null;
   setBranding(id: ScopeId, branding: OrgBranding | null): Promise<void>;
   getBrandingDurable(id: ScopeId): Promise<OrgBranding | null>;
+  getSpendLimitDurable(id: ScopeId): Promise<SpendLimit | null>;
+  setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
   getBrowseModel(id: ScopeId): string | null;
@@ -196,6 +199,7 @@ export interface ConfigStoreMaps {
   slackEmojiCatalog?: DurableMap<PersistedSlackEmojiCatalog>;
   branding?: DurableMap<ScopedRow<"branding", OrgBranding>>;
   browseMaxSteps?: DurableMap<ScopedRow<"steps", number>>;
+  spendLimits?: DurableMap<ScopedRow<"limit", SpendLimit>>;
   browseModels?: DurableMap<ScopedRow<"modelId", string>>;
 }
 
@@ -220,6 +224,7 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   slackEmojiCatalog: "slack_emoji_catalog",
   branding: "branding_configs",
   browseMaxSteps: "browse_max_steps_configs",
+  spendLimits: "spend_limit_configs",
   browseModels: "browse_model_configs",
 };
 
@@ -306,6 +311,7 @@ export function createConfigStore(
     ackEmoji: field("ackEmoji", "names"),
     branding: field("branding", "branding"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
+    spendLimits: field("spendLimits", "limit"),
     browseModels: field("browseModels", "modelId"),
   } satisfies Partial<Record<SettingKey, unknown>>;
   const allSettings = Object.values(settings);
@@ -732,6 +738,8 @@ export function createConfigStore(
     getBranding: (id) => settings.branding.get(id) ?? null,
     setBranding: (id, value) => settings.branding.set(id, value),
     getBrandingDurable: async (id) => (await settings.branding.durable(id)) ?? null,
+    getSpendLimitDurable: async (id) => (await settings.spendLimits.durable(id)) ?? null,
+    setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
     getBrowseModel: (id) => settings.browseModels.get(id) ?? null,

@@ -5,6 +5,7 @@ import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { DecryptedServiceCredential, ServiceCredentialReader } from "../src/credentials/keychain.ts";
 import { createPostgresCredentialUsageSink } from "../src/admin/postgres-credential-usage-sink.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const SECRET = "super-secret-bearer";
@@ -56,22 +57,23 @@ const base = (over: Partial<Parameters<typeof brokerCredentialCall>[0]> = {}) =>
   ...over,
 });
 
-test("happy path: injects the secret as Bearer, never exposes it in the result", async () => {
-  const cap = captureFetch();
-  const usage = createPostgresCredentialUsageSink(testDatabaseUrl());
-  const r = await brokerCredentialCall(base({ fetchImpl: cap.fetch, usage }));
-  assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { status: 200, contentType: "application/json", body: '{"ok":true}' });
-  assert.doesNotMatch(JSON.stringify(r.json), new RegExp(SECRET));
-  assert.equal(cap.calls.length, 1);
-  assert.equal(cap.calls[0]!.headers["Authorization"], `Bearer ${SECRET}`);
-  const used = await usage.list({ slug: "x-firehose" });
-  assert.equal(used.length, 1);
-  assert.equal(used[0]!.host, "api.x.com");
-  assert.equal(used[0]!.status, "ok");
-  assert.equal(used[0]!.principalId, "U1");
-  assert.doesNotMatch(JSON.stringify(used), /tweets\/search|ai|super-secret/);
-});
+test("happy path: injects the secret as Bearer, never exposes it in the result", () =>
+  inTestTenant(async () => {
+    const cap = captureFetch();
+    const usage = createPostgresCredentialUsageSink(testDatabaseUrl());
+    const r = await brokerCredentialCall(base({ fetchImpl: cap.fetch, usage }));
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json, { status: 200, contentType: "application/json", body: '{"ok":true}' });
+    assert.doesNotMatch(JSON.stringify(r.json), new RegExp(SECRET));
+    assert.equal(cap.calls.length, 1);
+    assert.equal(cap.calls[0]!.headers["Authorization"], `Bearer ${SECRET}`);
+    const used = await usage.list({ slug: "x-firehose" });
+    assert.equal(used.length, 1);
+    assert.equal(used[0]!.host, "api.x.com");
+    assert.equal(used[0]!.status, "ok");
+    assert.equal(used[0]!.principalId, "U1");
+    assert.doesNotMatch(JSON.stringify(used), /tweets\/search|ai|super-secret/);
+  }));
 
 test("an env-delivery record is refused exactly like a missing credential — the broker door does not serve sandbox-env material", async () => {
   const cap = captureFetch();
@@ -299,21 +301,22 @@ test("a custom injection header + scheme is honored", async () => {
   assert.equal(cap.calls[0]!.headers["Authorization"], undefined);
 });
 
-test("an upstream fetch error is reported generically (never leaks the URL/headers) + recorded", async () => {
-  const usage = createPostgresCredentialUsageSink(testDatabaseUrl());
-  const r = await brokerCredentialCall(
-    base({
-      usage,
-      fetchImpl: async () => {
-        throw new Error("ECONNREFUSED https://api.x.com with Bearer super-secret-bearer");
-      },
-    }),
-  );
-  assert.equal(r.status, 502);
-  assert.match(JSON.stringify(r.json), /upstream_unreachable/);
-  assert.doesNotMatch(JSON.stringify(r.json), new RegExp(SECRET));
-  assert.equal((await usage.list({ slug: "x-firehose" }))[0]!.status, "error");
-});
+test("an upstream fetch error is reported generically (never leaks the URL/headers) + recorded", () =>
+  inTestTenant(async () => {
+    const usage = createPostgresCredentialUsageSink(testDatabaseUrl());
+    const r = await brokerCredentialCall(
+      base({
+        usage,
+        fetchImpl: async () => {
+          throw new Error("ECONNREFUSED https://api.x.com with Bearer super-secret-bearer");
+        },
+      }),
+    );
+    assert.equal(r.status, 502);
+    assert.match(JSON.stringify(r.json), /upstream_unreachable/);
+    assert.doesNotMatch(JSON.stringify(r.json), new RegExp(SECRET));
+    assert.equal((await usage.list({ slug: "x-firehose" }))[0]!.status, "error");
+  }));
 
 test("a missing slug or url is a 400 bad_request", async () => {
   assert.equal(
@@ -480,31 +483,32 @@ test("generic credential broker cannot bypass Composio identity binding", async 
   assert.equal(cap.calls.length, 0);
 });
 
-test("a daily cap admits that many outbound calls per UTC day, then refuses with 429 without calling out", async (t) => {
-  const cap = captureFetch();
-  mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 9, 16, 23, 0) });
-  t.after(() => mock.timers.reset());
-  const usage = createPostgresCredentialUsageSink(testDatabaseUrl());
-  const capped = base({
-    fetchImpl: cap.fetch,
-    usage,
-    reader: reader({ slug: "x-firehose", allowedPathPrefixes: ["/2/"], maxRequestsPerDay: 2 }),
-  });
-  assert.equal((await brokerCredentialCall(capped)).status, 200);
-  assert.equal(
-    (await brokerCredentialCall({ ...capped, body: { ...capped.body, url: "https://evil.example/" } })).status,
-    403,
-  );
-  assert.equal((await brokerCredentialCall(capped)).status, 200);
-  const refused = await brokerCredentialCall(capped);
-  assert.equal(refused.status, 429);
-  assert.equal((refused.json as { error: string }).error, "daily_cap_reached");
-  assert.equal(cap.calls.length, 2);
+test("a daily cap admits that many outbound calls per UTC day, then refuses with 429 without calling out", (t) =>
+  inTestTenant(async () => {
+    const cap = captureFetch();
+    mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 9, 16, 23, 0) });
+    t.after(() => mock.timers.reset());
+    const usage = createPostgresCredentialUsageSink(testDatabaseUrl());
+    const capped = base({
+      fetchImpl: cap.fetch,
+      usage,
+      reader: reader({ slug: "x-firehose", allowedPathPrefixes: ["/2/"], maxRequestsPerDay: 2 }),
+    });
+    assert.equal((await brokerCredentialCall(capped)).status, 200);
+    assert.equal(
+      (await brokerCredentialCall({ ...capped, body: { ...capped.body, url: "https://evil.example/" } })).status,
+      403,
+    );
+    assert.equal((await brokerCredentialCall(capped)).status, 200);
+    const refused = await brokerCredentialCall(capped);
+    assert.equal(refused.status, 429);
+    assert.equal((refused.json as { error: string }).error, "daily_cap_reached");
+    assert.equal(cap.calls.length, 2);
 
-  mock.timers.setTime(Date.UTC(2026, 9, 17, 0, 1));
-  assert.equal((await brokerCredentialCall(capped)).status, 200);
-  assert.equal(cap.calls.length, 3);
-});
+    mock.timers.setTime(Date.UTC(2026, 9, 17, 0, 1));
+    assert.equal((await brokerCredentialCall(capped)).status, 200);
+    assert.equal(cap.calls.length, 3);
+  }));
 
 test("a capped credential refuses closed when no usage ledger can count its calls", async () => {
   const capped = { reader: reader({ slug: "x-firehose", allowedPathPrefixes: ["/2/"], maxRequestsPerDay: 3 }) };

@@ -7,7 +7,7 @@ import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { createPostgresMapFactory, type DurableMap } from "../src/persistence/durable-map.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { installSeedSkills } from "../src/skills/seed.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { migrateTestDatabase, testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -23,8 +23,9 @@ const shared = async (): Promise<{ backing: DurableMap<Skill>; lock: () => Advis
     return { backing: testMap<Skill>(), lock: () => lock };
   }
   const table = `xsrv_skills_${process.pid}_${++tableSequence}`;
-  await factory.pool.query(`DROP TABLE IF EXISTS ${table}`);
-  return { backing: factory.map<Skill>(table), lock: () => createPostgresAdvisoryLock(factory.pool) };
+  const backing = factory.map<Skill>(table);
+  await migrateTestDatabase(URL);
+  return { backing, lock: () => createPostgresAdvisoryLock(factory.pool) };
 };
 
 const slowReads = (map: DurableMap<Skill>): DurableMap<Skill> => ({

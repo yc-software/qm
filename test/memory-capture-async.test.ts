@@ -26,6 +26,7 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 const dm = (thread: string, text: string): OrchestratorInput => ({
@@ -130,7 +131,9 @@ test("skipMemory turns neither recall nor capture", async () => {
     },
   });
 
-  const result = await orch.handleTurn({ ...dm("dm:U1:canary", "deployment canary"), skipMemory: true });
+  const result = await inTestTenant(() =>
+    orch.handleTurn({ ...dm("dm:U1:canary", "deployment canary"), skipMemory: true }),
+  );
 
   assert.equal(result.status, "ok");
   assert.equal(recalls, 0);
@@ -145,7 +148,7 @@ test("capture does NOT block the turn: the reply returns while extraction is sti
   const g = gatedAgent();
   const orch = buildOrchestrator(g.agent);
 
-  const res = await orch.handleTurn(dm("dm:U1:tA", "remember my secret is ZULU77"));
+  const res = await inTestTenant(() => orch.handleTurn(dm("dm:U1:tA", "remember my secret is ZULU77")));
 
   assert.equal(res.status, "ok");
   assert.equal(g.started, 1, "capture extraction was kicked off");
@@ -157,10 +160,10 @@ test("recall does NOT block on an in-flight capture; continuity is eventually-co
   const g = gatedAgent();
   const orch = buildOrchestrator(g.agent);
 
-  await orch.handleTurn(dm("dm:U1:tA", "remember my secret is ZULU77"));
+  await inTestTenant(() => orch.handleTurn(dm("dm:U1:tA", "remember my secret is ZULU77")));
   assert.equal(g.finished, 0, "capture is still in flight after the first turn returns");
 
-  const recall = orch.handleTurn(dm("dm:U1:tB", "!sysprompt"));
+  const recall = inTestTenant(() => orch.handleTurn(dm("dm:U1:tB", "!sysprompt")));
   const completedBeforeCapture = await Promise.race([
     recall.then(() => true),
     new Promise<false>((resolve) => setTimeout(() => resolve(false), 1_000)),
@@ -177,7 +180,7 @@ test("recall does NOT block on an in-flight capture; continuity is eventually-co
   let reply = "";
   for (let i = 0; i < 200 && !/ZULU77/.test(reply); i++) {
     await new Promise((r) => setTimeout(r, 10));
-    reply = (await orch.handleTurn(dm(`dm:U1:tC${i}`, "!sysprompt"))).reply ?? "";
+    reply = (await inTestTenant(() => orch.handleTurn(dm(`dm:U1:tC${i}`, "!sysprompt")))).reply ?? "";
   }
   assert.match(reply, /ZULU77/, "the recalled fact appears once the detached capture has settled");
 });

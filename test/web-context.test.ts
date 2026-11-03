@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { answerWebContextRequest, webConversationWindow } from "../src/api/web-context.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { itemFromEntry, storedItem } from "../src/sessions/items.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const ROOT = "fb7eddc8";
@@ -86,24 +87,22 @@ test("match, count, and before shape the window like the Slack fulfiller", () =>
 
 test("answerWebContextRequest reads the log as the asking viewer, refuses gracefully, and answers searchAll/file with the right shapes", async () => {
   const seen: string[] = [];
+  const items = entries.map((entry) => storedItem(itemFromEntry(entry), entry));
   const sessions = {
     async sessionsByThreadRefs(refs: readonly string[]) {
       return refs[0] === TARGET
         ? [{ id: "sess-1", threadRef: TARGET, scopeId: "channel:C1" as const, type: "channel" as const }]
         : [];
     },
-    async visibleEntries(_id: string, viewer: string) {
+    async visibleItems(_id: string, viewer: string) {
       seen.push(viewer);
-      return entries;
+      return items;
     },
-    async getEntries() {
-      return entries;
+    async getItems() {
+      return items;
     },
-    async countEntriesBefore(_id: string, beforeSeq: number) {
-      return entries.filter((entry) => entry.seq < beforeSeq).length;
-    },
-    async latestEntrySeq() {
-      return entries.length - 1;
+    async countItemsBefore(_id: string, beforeSeq: number) {
+      return items.filter((item) => item.seq < beforeSeq).length;
     },
     async participantWindowsOf(sessionId: string) {
       return ["steve@acme.com", "carol@acme.com"].map((principalId) => ({

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
+import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
@@ -88,10 +88,10 @@ test("the agent re-runs a retry-safe interrupted call before the model sees the 
     scopeLabel: scope,
     orgScopeId: "org:test" as ScopeId,
     resumeToolCall: { callId: "c-budget", tool: "history", input: { query: "budget" } },
-    emit: async (entry: NewEntry) => {
-      const appended = { ...entry, sessionId: "s1", parentSeq: null, seq: seq++, createdAt: Date.now() };
-      entries.push({ seq: appended.seq, type: entry.type, payload: entry.payload });
-      return appended as SessionEntry;
+    emit: async (item) => {
+      const stored = storedItem(item, { sessionId: "s1", seq: seq++, createdAt: Date.now() });
+      entries.push(entryFromItem(stored, scope));
+      return stored;
     },
     recordModelCall: () => {},
   };

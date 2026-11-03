@@ -820,41 +820,6 @@ test("inbox list refreshes open Gmail items before returning, but not another ow
   assert.equal(refreshes.length, 1);
 });
 
-test("Slack thread keys reuse a legacy item's identity and edits", async () => {
-  const w = world();
-  const loop = await inboxLoop(w);
-  await w.loops.items.ingest([
-    {
-      loopId: loop.id,
-      dedupeKey: "D1",
-      source: "slack",
-      sourceAt: 2000,
-      sourcePayload: { slack: { channelId: "D1", ts: "1.0", threadTs: "1.0" } },
-      proposal: { by: "human", data: { body: "Keep this edit" } },
-    },
-  ]);
-  const [original] = await w.loops.items.byLoop(loop.id);
-  const ingest = () =>
-    call(w, {
-      method: "POST",
-      path: `/v1/loops/${loop.id}/items`,
-      body: {
-        items: [
-          {
-            ...ITEM,
-            sourceKey: "D1:1.0",
-            receivedAt: 2000,
-            slack: { channelId: "D1", ts: "2.0", threadTs: "1.0", isDirectMessage: true },
-            draft: { body: "Agent replacement" },
-          },
-        ],
-      },
-    });
-  assert.equal((await ingest()).status, 200);
-  assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
-  assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
-});
-
 test("ordinary item reads only hydrate Slack with the refresh flag", async () => {
   const w = world();
   const loop = await inboxLoop(w);

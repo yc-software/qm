@@ -23,6 +23,18 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const execFileP = promisify(execFile);
@@ -68,16 +80,25 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
   });
   server.listen(0);
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { app, deploy, acl, identity, base, close: () => new Promise<void>((r) => server.close(() => r())) };
+  return {
+    app: tenantBound(app),
+    deploy: tenantBound(deploy),
+    acl: tenantBound(acl),
+    identity,
+    base,
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
 }
 
 async function gitUrl(base: string, deploymentId: string, permission: "read" | "write"): Promise<string> {
-  const token = await mintDeployGitAccess(SECRET, {
-    deploymentId,
-    permission,
-    principalId: "U1",
-    exp: Date.now() + 60_000,
-  });
+  const token = await inTestTenant(() =>
+    mintDeployGitAccess(SECRET, {
+      deploymentId,
+      permission,
+      principalId: "U1",
+      exp: Date.now() + 60_000,
+    }),
+  );
   const url = new URL(`/v1/deployments/${encodeURIComponent(deploymentId)}/git`, base);
   url.username = "deployment";
   url.password = token;
@@ -102,15 +123,17 @@ async function pushStatus(url: string): Promise<number> {
 }
 
 const capFor = (actorId: string, scope?: string) =>
-  mintCapabilityToken(
-    {
-      actorId,
-      scopeId: scope ?? scopeId("personal", actorId),
-      aud: CONTROL_PLANE_AUD,
-      liveActor: true,
-      exp: Date.now() + CAPABILITY_TTL_MS,
-    },
-    SECRET,
+  inTestTenant(() =>
+    mintCapabilityToken(
+      {
+        actorId,
+        scopeId: scope ?? scopeId("personal", actorId),
+        aud: CONTROL_PLANE_AUD,
+        liveActor: true,
+        exp: Date.now() + CAPABILITY_TTL_MS,
+      },
+      SECRET,
+    ),
   );
 
 test("a read token can clone but cannot push (403 on receive-pack)", async () => {

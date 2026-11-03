@@ -26,10 +26,15 @@ import type { AclStore } from "../src/acl/acl-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { settle } from "./support/settle.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "svc-cred-route-secret".repeat(3);
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice",
+  ...testTenantHeaders(),
+};
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-route-")) }));
@@ -86,9 +91,11 @@ function startGitBroker(gitHttpFetch: GitHttpFetch): { base: string; built: Buil
 }
 
 const brokerToken = (credentials: string[], aud: string = CREDENTIAL_BROKER_AUD) =>
-  mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", aud, credentials, exp: Date.now() + CAPABILITY_TTL_MS },
-    SECRET,
+  inTestTenant(() =>
+    mintCapabilityToken(
+      { actorId: "U1", scopeId: "personal:U1", aud, credentials, exp: Date.now() + CAPABILITY_TTL_MS },
+      SECRET,
+    ),
   );
 
 const putCred = (base: string, b: object, headers = ADMIN) =>
@@ -249,7 +256,7 @@ test("a non-admin cannot vend a credential (authz unchanged)", async () => {
     const denied = await putCred(
       srv.base,
       { slug: "k", name: "K", secret: "s", host: "h.example" },
-      { "content-type": "application/json", "x-admin-actor": "nobody" },
+      { ...ADMIN, "x-admin-actor": "nobody" },
     );
     assert.equal(denied.status, 403);
   } finally {
@@ -262,7 +269,7 @@ test("service credentials are org-scoped — a non-org target is rejected", asyn
   try {
     const r = await fetch(`${srv.base}/v1/admin/scopes/personal:U1/service-credentials`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-admin-actor": "admin-alice" },
+      headers: ADMIN,
       body: JSON.stringify({ slug: "k", name: "K", secret: "s", host: "h.example" }),
     });
     assert.equal(r.status, 400);
@@ -440,15 +447,17 @@ test("a partial ACL failure rolls a credential edit and its grants back to the v
   }));
   try {
     await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example" });
-    await srv.built.acl.revoke(TEST_ROOT_SCOPE, "service-cred:k", TEST_ROOT_SCOPE, "seed");
-    await srv.built.acl.grant({
-      ownerScopeId: TEST_ROOT_SCOPE,
-      ref: "service-cred:k",
-      granteeScopeId: TEST_ROOT_SCOPE,
-      permission: "write",
-      grantedBy: "original-governor",
-    });
-    const grantsBefore = await srv.built.acl.grantsFor(TEST_ROOT_SCOPE, "service-cred:k");
+    await inTestTenant(() => srv.built.acl.revoke(TEST_ROOT_SCOPE, "service-cred:k", TEST_ROOT_SCOPE, "seed"));
+    await inTestTenant(() =>
+      srv.built.acl.grant({
+        ownerScopeId: TEST_ROOT_SCOPE,
+        ref: "service-cred:k",
+        granteeScopeId: TEST_ROOT_SCOPE,
+        permission: "write",
+        grantedBy: "original-governor",
+      }),
+    );
+    const grantsBefore = await inTestTenant(() => srv.built.acl.grantsFor(TEST_ROOT_SCOPE, "service-cred:k"));
     const before = (await getCfg(srv.base)).serviceCredentials[0]!;
     failGrant = true;
     const edit = await putCred(srv.base, {
@@ -463,8 +472,14 @@ test("a partial ACL failure rolls a credential edit and its grants back to the v
     const after = (await getCfg(srv.base)).serviceCredentials[0]!;
     assert.equal(after.name, "K");
     assert.deepEqual(after.grantees, [TEST_ROOT_SCOPE]);
-    assert.deepEqual(await srv.built.acl.grantsFor(TEST_ROOT_SCOPE, "service-cred:k"), grantsBefore);
-    assert.equal((await srv.built.serviceCreds.getServiceCredentialSecret(TEST_ROOT_SCOPE, "k"))?.secret, "s");
+    assert.deepEqual(
+      await inTestTenant(() => srv.built.acl.grantsFor(TEST_ROOT_SCOPE, "service-cred:k")),
+      grantsBefore,
+    );
+    assert.equal(
+      (await inTestTenant(() => srv.built.serviceCreds.getServiceCredentialSecret(TEST_ROOT_SCOPE, "k")))?.secret,
+      "s",
+    );
   } finally {
     await srv.close();
   }
@@ -488,18 +503,20 @@ test("credential rollback preserves a concurrent credential update", async () =>
     await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example" });
     const before = (await getCfg(srv.base)).serviceCredentials[0]!;
     concurrentWrite = async () => {
-      const current = (await srv.built.serviceCreds.listServiceCredentials(TEST_ROOT_SCOPE)).find(
+      const current = (await inTestTenant(() => srv.built.serviceCreds.listServiceCredentials(TEST_ROOT_SCOPE))).find(
         (credential) => credential.slug === "k",
       )!;
-      const updatedAt = await srv.built.serviceCreds.setServiceCredentialIfCurrent(
-        TEST_ROOT_SCOPE,
-        {
-          slug: "k",
-          name: "Concurrent",
-          host: "concurrent.example",
-          updatedBy: "concurrent-governor",
-        },
-        current.updatedAt,
+      const updatedAt = await inTestTenant(() =>
+        srv.built.serviceCreds.setServiceCredentialIfCurrent(
+          TEST_ROOT_SCOPE,
+          {
+            slug: "k",
+            name: "Concurrent",
+            host: "concurrent.example",
+            updatedBy: "concurrent-governor",
+          },
+          current.updatedAt,
+        ),
       );
       assert.notEqual(updatedAt, null);
     };
@@ -515,7 +532,10 @@ test("credential rollback preserves a concurrent credential update", async () =>
     const after = (await getCfg(srv.base)).serviceCredentials[0]!;
     assert.equal(after.name, "Concurrent");
     assert.equal(after.host, "concurrent.example");
-    assert.equal((await srv.built.serviceCreds.getServiceCredentialSecret(TEST_ROOT_SCOPE, "k"))?.secret, "s");
+    assert.equal(
+      (await inTestTenant(() => srv.built.serviceCreds.getServiceCredentialSecret(TEST_ROOT_SCOPE, "k")))?.secret,
+      "s",
+    );
   } finally {
     await srv.close();
   }
@@ -537,19 +557,21 @@ test("failed credential creation does not delete a concurrent update of the new 
   }));
   try {
     concurrentWrite = async () => {
-      const created = (await srv.built.serviceCreds.listServiceCredentials(TEST_ROOT_SCOPE)).find(
+      const created = (await inTestTenant(() => srv.built.serviceCreds.listServiceCredentials(TEST_ROOT_SCOPE))).find(
         (credential) => credential.slug === "new",
       )!;
       assert.notEqual(
-        await srv.built.serviceCreds.setServiceCredentialIfCurrent(
-          TEST_ROOT_SCOPE,
-          {
-            slug: "new",
-            name: "Concurrent",
-            host: "concurrent.example",
-            updatedBy: "concurrent-governor",
-          },
-          created.updatedAt,
+        await inTestTenant(() =>
+          srv.built.serviceCreds.setServiceCredentialIfCurrent(
+            TEST_ROOT_SCOPE,
+            {
+              slug: "new",
+              name: "Concurrent",
+              host: "concurrent.example",
+              updatedBy: "concurrent-governor",
+            },
+            created.updatedAt,
+          ),
         ),
         null,
       );
@@ -584,13 +606,15 @@ test("failed credential deletion does not overwrite a concurrent recreation", as
     const original = (await getCfg(srv.base)).serviceCredentials.find((credential) => credential.slug === "k")!;
     concurrentWrite = async () => {
       assert.notEqual(
-        await srv.built.serviceCreds.setServiceCredentialIfAbsent(TEST_ROOT_SCOPE, {
-          slug: "k",
-          name: "Concurrent",
-          secret: "new",
-          host: "concurrent.example",
-          updatedBy: "concurrent-governor",
-        }),
+        await inTestTenant(() =>
+          srv.built.serviceCreds.setServiceCredentialIfAbsent(TEST_ROOT_SCOPE, {
+            slug: "k",
+            name: "Concurrent",
+            secret: "new",
+            host: "concurrent.example",
+            updatedBy: "concurrent-governor",
+          }),
+        ),
         null,
       );
     };
@@ -600,7 +624,10 @@ test("failed credential deletion does not overwrite a concurrent recreation", as
     const saved = (await getCfg(srv.base)).serviceCredentials.find((credential) => credential.slug === "k")!;
     assert.equal(saved.name, "Concurrent");
     assert.equal(saved.host, "concurrent.example");
-    assert.equal((await srv.built.serviceCreds.getServiceCredentialSecret(TEST_ROOT_SCOPE, "k"))?.secret, "new");
+    assert.equal(
+      (await inTestTenant(() => srv.built.serviceCreds.getServiceCredentialSecret(TEST_ROOT_SCOPE, "k")))?.secret,
+      "new",
+    );
   } finally {
     await srv.close();
   }
@@ -638,7 +665,7 @@ test("credential rollback preserves a concurrent grant tuple instead of replacin
     assert.equal(edit.status, 500);
     assert.match(await edit.text(), /rollback could not be verified/);
     assert.deepEqual(
-      (await srv.built.acl.grantsFor(TEST_ROOT_SCOPE, "service-cred:k")).find(
+      (await inTestTenant(() => srv.built.acl.grantsFor(TEST_ROOT_SCOPE, "service-cred:k"))).find(
         (grant) => grant.granteeScopeId === "team:concurrent",
       ),
       {
@@ -676,7 +703,10 @@ test("an ACL failure after conditional delete recreates and verifies the credent
     const after = (await getCfg(srv.base)).serviceCredentials[0]!;
     assert.equal(after.name, "K");
     assert.deepEqual(after.grantees, [TEST_ROOT_SCOPE]);
-    assert.equal((await srv.built.serviceCreds.getServiceCredentialSecret(TEST_ROOT_SCOPE, "k"))?.secret, "s");
+    assert.equal(
+      (await inTestTenant(() => srv.built.serviceCreds.getServiceCredentialSecret(TEST_ROOT_SCOPE, "k")))?.secret,
+      "s",
+    );
   } finally {
     await srv.close();
   }
@@ -733,7 +763,7 @@ test("re-sharing reconciles the ACL allow-list (org-wide → specific people →
     const sharedVersion = (await getCfg(srv.base)).serviceCredentials[0]!.updatedAt;
     assert.equal((await putCred(srv.base, { slug: "k", delete: true, expectedUpdatedAt: sharedVersion })).status, 200);
     assert.equal((await getCfg(srv.base)).serviceCredentials.length, 0);
-    const grants = await srv.built.acl.grantsFor(TEST_ROOT_SCOPE, "service-cred:k");
+    const grants = await inTestTenant(() => srv.built.acl.grantsFor(TEST_ROOT_SCOPE, "service-cred:k"));
     assert.equal(grants.length, 0);
   } finally {
     await srv.close();
@@ -834,13 +864,15 @@ test("broker route: a credential-broker token uses the secret by proxy; usage is
     return { status: 200, contentType: "application/json", text: async () => '{"data":[]}' };
   });
   try {
-    await srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
-      slug: "x-firehose",
-      name: "X",
-      secret: "super-secret-bearer",
-      host: "api.x.com",
-      allowedPathPrefixes: ["/2/"],
-    });
+    await inTestTenant(() =>
+      srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
+        slug: "x-firehose",
+        name: "X",
+        secret: "super-secret-bearer",
+        host: "api.x.com",
+        allowedPathPrefixes: ["/2/"],
+      }),
+    );
     const res = await broker(srv.base, await brokerToken(["x-firehose"]), {
       credential: "x-firehose",
       method: "GET",
@@ -852,7 +884,7 @@ test("broker route: a credential-broker token uses the secret by proxy; usage is
     assert.equal(json.body, '{"data":[]}');
     assert.equal(calls[0]!.headers["Authorization"], "Bearer super-secret-bearer");
     assert.doesNotMatch(JSON.stringify(json), /super-secret-bearer/);
-    assert.equal((await srv.built.credentialUsage.list({ slug: "x-firehose" })).length, 1);
+    assert.equal((await inTestTenant(() => srv.built.credentialUsage.list({ slug: "x-firehose" }))).length, 1);
   } finally {
     await srv.close();
   }
@@ -863,12 +895,14 @@ test("broker route: a slug NOT in the token's set is refused (403)", async () =>
     throw new Error("must not fetch");
   });
   try {
-    await srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
-      slug: "x-firehose",
-      name: "X",
-      secret: "s",
-      host: "api.x.com",
-    });
+    await inTestTenant(() =>
+      srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
+        slug: "x-firehose",
+        name: "X",
+        secret: "s",
+        host: "api.x.com",
+      }),
+    );
     const res = await broker(srv.base, await brokerToken([]), { credential: "x-firehose", url: "https://api.x.com/x" });
     assert.equal(res.status, 403);
     assert.match(await res.text(), /not_entitled/);
@@ -882,12 +916,14 @@ test("broker route: a control-plane token is rejected (cross-onramp wall); no to
     throw new Error("must not fetch");
   });
   try {
-    await srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
-      slug: "x-firehose",
-      name: "X",
-      secret: "s",
-      host: "api.x.com",
-    });
+    await inTestTenant(() =>
+      srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
+        slug: "x-firehose",
+        name: "X",
+        secret: "s",
+        host: "api.x.com",
+      }),
+    );
     const r1 = await broker(srv.base, await brokerToken(["x-firehose"], CONTROL_PLANE_AUD), {
       credential: "x-firehose",
       url: "https://api.x.com/x",
@@ -921,15 +957,17 @@ test("git http broker streams smart-http GET and POST through an entitled servic
     };
   });
   try {
-    await srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
-      slug: "gitlab",
-      name: "GitLab git",
-      secret: "dXNlcjp0b2tlbg==",
-      host: "gitlab.example",
-      injection: { scheme: "Basic " },
-      allowedMethods: ["GET", "POST"],
-      allowedPathPrefixes: ["/acme/repo.git"],
-    });
+    await inTestTenant(() =>
+      srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
+        slug: "gitlab",
+        name: "GitLab git",
+        secret: "dXNlcjp0b2tlbg==",
+        host: "gitlab.example",
+        injection: { scheme: "Basic " },
+        allowedMethods: ["GET", "POST"],
+        allowedPathPrefixes: ["/acme/repo.git"],
+      }),
+    );
 
     const token = await brokerToken(["gitlab"]);
     const discovery = await fetch(
@@ -961,7 +999,11 @@ test("git http broker streams smart-http GET and POST through an entitled servic
     assert.equal(calls[1]!.headers.Authorization, "Basic dXNlcjp0b2tlbg==");
     assert.equal(calls[1]!.headers["content-type"], "application/x-git-receive-pack-request");
     assert.equal(calls[1]!.body, "PACKDATA");
-    assert.equal((await srv.built.credentialUsage.list({ slug: "gitlab" })).filter((r) => r.status === "ok").length, 2);
+    assert.equal(
+      (await inTestTenant(() => srv.built.credentialUsage.list({ slug: "gitlab" }))).filter((r) => r.status === "ok")
+        .length,
+      2,
+    );
   } finally {
     await srv.close();
   }
@@ -972,14 +1014,16 @@ test("git http broker enforces broker-token audience, entitlement, method, and p
     throw new Error("must not fetch");
   });
   try {
-    await srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
-      slug: "gitlab",
-      name: "GitLab git",
-      secret: "s",
-      host: "gitlab.example",
-      allowedMethods: ["GET"],
-      allowedPathPrefixes: ["/acme/repo.git"],
-    });
+    await inTestTenant(() =>
+      srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
+        slug: "gitlab",
+        name: "GitLab git",
+        secret: "s",
+        host: "gitlab.example",
+        allowedMethods: ["GET"],
+        allowedPathPrefixes: ["/acme/repo.git"],
+      }),
+    );
     const path = `${srv.base}/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack`;
 
     assert.equal((await fetch(path)).status, 401);
@@ -1046,38 +1090,46 @@ function buildWithCapture() {
 
 test("orchestrator vends a capability for only the requested org credential", async () => {
   const { built, env, executionEnv } = buildWithCapture();
-  await built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
-    slug: "x-firehose",
-    name: "X",
-    secret: "s",
-    host: "api.x.com",
-  });
-  await built.acl.grant({
-    ownerScopeId: TEST_ROOT_SCOPE,
-    ref: "service-cred:x-firehose",
-    granteeScopeId: TEST_ROOT_SCOPE,
-    permission: "read",
-    grantedBy: "admin",
-  });
+  await inTestTenant(() =>
+    built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
+      slug: "x-firehose",
+      name: "X",
+      secret: "s",
+      host: "api.x.com",
+    }),
+  );
+  await inTestTenant(() =>
+    built.acl.grant({
+      ownerScopeId: TEST_ROOT_SCOPE,
+      ref: "service-cred:x-firehose",
+      granteeScopeId: TEST_ROOT_SCOPE,
+      permission: "read",
+      grantedBy: "admin",
+    }),
+  );
 
-  await built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
-    slug: "unselected",
-    name: "Unselected",
-    secret: "synthetic-unused",
-    host: "other.example.com",
-  });
-  await built.acl.grant({
-    ownerScopeId: TEST_ROOT_SCOPE,
-    ref: "service-cred:unselected",
-    granteeScopeId: TEST_ROOT_SCOPE,
-    permission: "read",
-    grantedBy: "admin",
-  });
-  await selectDefaultSandbox(built, "U1", "personal:U1", "channel:C1");
-  await built.app.turn(dm("!run echo hi"));
+  await inTestTenant(() =>
+    built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
+      slug: "unselected",
+      name: "Unselected",
+      secret: "synthetic-unused",
+      host: "other.example.com",
+    }),
+  );
+  await inTestTenant(() =>
+    built.acl.grant({
+      ownerScopeId: TEST_ROOT_SCOPE,
+      ref: "service-cred:unselected",
+      granteeScopeId: TEST_ROOT_SCOPE,
+      permission: "read",
+      grantedBy: "admin",
+    }),
+  );
+  await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1", "channel:C1"));
+  await inTestTenant(() => built.app.turn(dm("!run echo hi")));
   assert.equal(executionEnv()?.AGENT_CREDENTIAL_TOKEN, undefined);
-  const res = await built.app.turn(
-    dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`),
+  const res = await inTestTenant(() =>
+    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
   );
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
@@ -1088,21 +1140,23 @@ test("orchestrator vends a capability for only the requested org credential", as
   assert.deepEqual(claims?.credentials, ["x-firehose"]);
 
   const actor = { externalId: "B-LEGACY", isBot: true };
-  await built.app.turn({
-    surface: "slack",
-    actor,
-    botActor: true,
-    liveActor: true,
-    conversation: {
-      kind: "channel",
-      threadRef: "ch:C1:bot",
-      channelRef: "C1",
-      isPrivate: true,
-      audience: [actor],
-      publishMembers: [actor],
-    },
-    text: `!execute ${JSON.stringify({ command: "echo bot", credentials: ["x-firehose"] })}`,
-  });
+  await inTestTenant(() =>
+    built.app.turn({
+      surface: "slack",
+      actor,
+      botActor: true,
+      liveActor: true,
+      conversation: {
+        kind: "channel",
+        threadRef: "ch:C1:bot",
+        channelRef: "C1",
+        isPrivate: true,
+        audience: [actor],
+        publishMembers: [actor],
+      },
+      text: `!execute ${JSON.stringify({ command: "echo bot", credentials: ["x-firehose"] })}`,
+    }),
+  );
   const botClaims = await verifyCapabilityToken(executionEnv()!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(botClaims?.botActor, true);
   assert.equal(botClaims?.liveActor, true);
@@ -1111,45 +1165,55 @@ test("orchestrator vends a capability for only the requested org credential", as
 
 test("orchestrator does NOT stamp a credential granted only to someone else", async () => {
   const { built, env } = buildWithCapture();
-  await built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
-    slug: "x-firehose",
-    name: "X",
-    secret: "s",
-    host: "api.x.com",
-  });
-  await built.acl.grant({
-    ownerScopeId: TEST_ROOT_SCOPE,
-    ref: "service-cred:x-firehose",
-    granteeScopeId: "personal:U2",
-    permission: "read",
-    grantedBy: "admin",
-  });
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await inTestTenant(() =>
+    built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
+      slug: "x-firehose",
+      name: "X",
+      secret: "s",
+      host: "api.x.com",
+    }),
+  );
+  await inTestTenant(() =>
+    built.acl.grant({
+      ownerScopeId: TEST_ROOT_SCOPE,
+      ref: "service-cred:x-firehose",
+      granteeScopeId: "personal:U2",
+      permission: "read",
+      grantedBy: "admin",
+    }),
+  );
+  await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
 
   await assert.rejects(
-    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
+    inTestTenant(() =>
+      built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
+    ),
     /not available/,
   );
-  const res = await built.app.turn(dm("!run echo hi"));
+  const res = await inTestTenant(() => built.app.turn(dm("!run echo hi")));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "an unentitled session must get no credential token");
 });
 
 test("a channel grantee stamps the credential in that channel's conversations and nowhere else", async () => {
   const { built, env, executionEnv } = buildWithCapture();
-  await built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
-    slug: "x-firehose",
-    name: "X",
-    secret: "s",
-    host: "api.x.com",
-  });
-  await built.acl.grant({
-    ownerScopeId: TEST_ROOT_SCOPE,
-    ref: "service-cred:x-firehose",
-    granteeScopeId: "channel:C1",
-    permission: "read",
-    grantedBy: "admin",
-  });
+  await inTestTenant(() =>
+    built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
+      slug: "x-firehose",
+      name: "X",
+      secret: "s",
+      host: "api.x.com",
+    }),
+  );
+  await inTestTenant(() =>
+    built.acl.grant({
+      ownerScopeId: TEST_ROOT_SCOPE,
+      ref: "service-cred:x-firehose",
+      granteeScopeId: "channel:C1",
+      permission: "read",
+      grantedBy: "admin",
+    }),
+  );
 
   const channelTurn = (channelRef: string): TurnRequest => ({
     surface: "slack",
@@ -1164,13 +1228,15 @@ test("a channel grantee stamps the credential in that channel's conversations an
     text: "!run echo hi",
   });
 
-  await selectDefaultSandbox(built, "U1", "channel:C1", "channel:C2", "personal:U1");
-  await built.app.turn(channelTurn("C1"));
+  await inTestTenant(() => selectDefaultSandbox(built, "U1", "channel:C1", "channel:C2", "personal:U1"));
+  await inTestTenant(() => built.app.turn(channelTurn("C1")));
   assert.equal(executionEnv()?.AGENT_CREDENTIAL_TOKEN, undefined);
-  let res = await built.app.turn({
-    ...channelTurn("C1"),
-    text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`,
-  });
+  let res = await inTestTenant(() =>
+    built.app.turn({
+      ...channelTurn("C1"),
+      text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`,
+    }),
+  );
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
   const token = executionEnv()?.AGENT_CREDENTIAL_TOKEN;
@@ -1179,29 +1245,33 @@ test("a channel grantee stamps the credential in that channel's conversations an
   assert.deepEqual(claims?.credentials, ["x-firehose"]);
 
   await assert.rejects(
-    built.app.turn({
-      ...channelTurn("C2"),
-      text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`,
-    }),
+    inTestTenant(() =>
+      built.app.turn({
+        ...channelTurn("C2"),
+        text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`,
+      }),
+    ),
     /not available/,
   );
-  res = await built.app.turn(channelTurn("C2"));
+  res = await inTestTenant(() => built.app.turn(channelTurn("C2")));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "another channel must not get the credential");
 
   await assert.rejects(
-    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
+    inTestTenant(() =>
+      built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
+    ),
     /not available/,
   );
-  res = await built.app.turn(dm("!run echo hi"));
+  res = await inTestTenant(() => built.app.turn(dm("!run echo hi")));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "a member's DM must not get a channel-granted credential");
 });
 
 test("orchestrator stamps nothing when the org has no service credentials (zero-cost common path)", async () => {
   const { built, env } = buildWithCapture();
-  await selectDefaultSandbox(built, "U1", "personal:U1");
-  const res = await built.app.turn(dm("!run echo hi"));
+  await inTestTenant(() => selectDefaultSandbox(built, "U1", "personal:U1"));
+  const res = await inTestTenant(() => built.app.turn(dm("!run echo hi")));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
   assert.ok(env()?.AGENT_API_TOKEN, "control-plane token should still be present");
@@ -1209,22 +1279,26 @@ test("orchestrator stamps nothing when the org has no service credentials (zero-
 
 test("the system prompt advertises an entitled credential (host/methods/paths) so the agent can use the broker", async () => {
   const { built } = buildWithCapture();
-  await built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
-    slug: "x-firehose",
-    name: "X firehose",
-    secret: "s",
-    host: "api.x.com",
-    allowedMethods: ["GET"],
-    allowedPathPrefixes: ["/2/tweets/search/"],
-  });
-  await built.acl.grant({
-    ownerScopeId: TEST_ROOT_SCOPE,
-    ref: "service-cred:x-firehose",
-    granteeScopeId: TEST_ROOT_SCOPE,
-    permission: "read",
-    grantedBy: "admin",
-  });
-  const res = await built.app.turn(dm("!sysprompt"));
+  await inTestTenant(() =>
+    built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
+      slug: "x-firehose",
+      name: "X firehose",
+      secret: "s",
+      host: "api.x.com",
+      allowedMethods: ["GET"],
+      allowedPathPrefixes: ["/2/tweets/search/"],
+    }),
+  );
+  await inTestTenant(() =>
+    built.acl.grant({
+      ownerScopeId: TEST_ROOT_SCOPE,
+      ref: "service-cred:x-firehose",
+      granteeScopeId: TEST_ROOT_SCOPE,
+      permission: "read",
+      grantedBy: "admin",
+    }),
+  );
+  const res = await inTestTenant(() => built.app.turn(dm("!sysprompt")));
   const reply = res.reply ?? "";
   assert.match(reply, /### Organization/);
   assert.match(reply, /`x-firehose` — X firehose; proxy api\.x\.com\n/);
@@ -1234,20 +1308,24 @@ test("the system prompt advertises an entitled credential (host/methods/paths) s
 
 test("the system prompt does NOT advertise a credential the session isn't entitled to", async () => {
   const { built } = buildWithCapture();
-  await built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
-    slug: "x-firehose",
-    name: "X firehose",
-    secret: "s",
-    host: "api.x.com",
-  });
-  await built.acl.grant({
-    ownerScopeId: TEST_ROOT_SCOPE,
-    ref: "service-cred:x-firehose",
-    granteeScopeId: "personal:U2",
-    permission: "read",
-    grantedBy: "admin",
-  });
-  const res = await built.app.turn(dm("!sysprompt"));
+  await inTestTenant(() =>
+    built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
+      slug: "x-firehose",
+      name: "X firehose",
+      secret: "s",
+      host: "api.x.com",
+    }),
+  );
+  await inTestTenant(() =>
+    built.acl.grant({
+      ownerScopeId: TEST_ROOT_SCOPE,
+      ref: "service-cred:x-firehose",
+      granteeScopeId: "personal:U2",
+      permission: "read",
+      grantedBy: "admin",
+    }),
+  );
+  const res = await inTestTenant(() => built.app.turn(dm("!sysprompt")));
   assert.doesNotMatch(res.reply ?? "", /### Organization/);
 });
 
@@ -1334,25 +1412,29 @@ test("usage summaries authorize before reads and include only the requested scop
   const srv = start();
   t.after(srv.close);
   await putCred(srv.base, { slug: "summary", name: "Summary", host: "api.example.com", secret: "private" });
-  srv.built.credentialUsage.record({
-    slug: "summary",
-    host: "api.example.com",
-    status: "ok",
-    scopeLabel: "personal:U1",
-    principalId: "U1",
-  });
-  srv.built.credentialUsage.record({
-    slug: "unlisted",
-    host: "api.example.com",
-    status: "ok",
-    scopeLabel: "personal:U2",
-    principalId: "U2",
-  });
-  await settle(async () => (await srv.built.credentialUsage.list()).length >= 2);
+  inTestTenant(() =>
+    srv.built.credentialUsage.record({
+      slug: "summary",
+      host: "api.example.com",
+      status: "ok",
+      scopeLabel: "personal:U1",
+      principalId: "U1",
+    }),
+  );
+  inTestTenant(() =>
+    srv.built.credentialUsage.record({
+      slug: "unlisted",
+      host: "api.example.com",
+      status: "ok",
+      scopeLabel: "personal:U2",
+      principalId: "U2",
+    }),
+  );
+  await settle(async () => (await inTestTenant(() => srv.built.credentialUsage.list())).length >= 2);
   const read = t.mock.method(srv.built.serviceCreds, "listServiceCredentials");
   const summarize = t.mock.method(srv.built.credentialUsage, "summary");
   const path = `${srv.base}/v1/admin/scopes/${TEST_ROOT_SCOPE}/credential-usage`;
-  assert.equal((await fetch(path, { headers: { "x-admin-actor": "nobody" } })).status, 403);
+  assert.equal((await fetch(path, { headers: { ...ADMIN, "x-admin-actor": "nobody" } })).status, 403);
   assert.equal(read.mock.callCount(), 0);
   assert.equal(summarize.mock.callCount(), 0);
   const response = await fetch(path, { headers: ADMIN });
@@ -1371,23 +1453,27 @@ test("usage summaries authorize before reads and include only the requested scop
 test("credential inventory and policy reordering leave the system prompt byte-identical", async () => {
   const { built } = buildWithCapture();
   for (const slug of ["z-service", "a-service"]) {
-    await built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
-      slug,
-      name: slug,
-      secret: "s",
-      host: "api.example.com",
-      allowedMethods: ["POST", "GET"],
-      allowedPathPrefixes: ["/z", "/a"],
-    });
-    await built.acl.grant({
-      ownerScopeId: TEST_ROOT_SCOPE,
-      ref: `service-cred:${slug}`,
-      granteeScopeId: TEST_ROOT_SCOPE,
-      permission: "read",
-      grantedBy: "admin",
-    });
+    await inTestTenant(() =>
+      built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, {
+        slug,
+        name: slug,
+        secret: "s",
+        host: "api.example.com",
+        allowedMethods: ["POST", "GET"],
+        allowedPathPrefixes: ["/z", "/a"],
+      }),
+    );
+    await inTestTenant(() =>
+      built.acl.grant({
+        ownerScopeId: TEST_ROOT_SCOPE,
+        ref: `service-cred:${slug}`,
+        granteeScopeId: TEST_ROOT_SCOPE,
+        permission: "read",
+        grantedBy: "admin",
+      }),
+    );
   }
-  const first = await built.app.turn(dm("!sysprompt"));
+  const first = await inTestTenant(() => built.app.turn(dm("!sysprompt")));
   assert.equal(first.status, "ok");
   assert.match(first.reply ?? "", /z-service/);
   assert.match(first.reply ?? "", /a-service/);
@@ -1399,7 +1485,7 @@ test("credential inventory and policy reordering leave the system prompt byte-id
       allowedMethods: record.allowedMethods?.toReversed(),
       allowedPathPrefixes: record.allowedPathPrefixes?.toReversed(),
     }));
-  const second = await built.app.turn(dm("!sysprompt"));
+  const second = await inTestTenant(() => built.app.turn(dm("!sysprompt")));
   assert.equal(second.status, "ok");
   const system = (reply?: string) => (reply ?? "").split("<environment>")[0];
   assert.equal(system(second.reply), system(first.reply));
@@ -1413,17 +1499,21 @@ test("broker accepts no-expiry sandbox tokens but still enforces credential disa
   });
   try {
     const credential = { slug: "probe", name: "Probe", secret: "synthetic", host: "api.example.com" };
-    await srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, credential);
+    await inTestTenant(() => srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, credential));
     const token = (exp: number) =>
-      mintCapabilityToken(
-        { actorId: "U1", scopeId: "personal:U1", aud: CREDENTIAL_BROKER_AUD, credentials: ["probe"], exp },
-        SECRET,
+      inTestTenant(() =>
+        mintCapabilityToken(
+          { actorId: "U1", scopeId: "personal:U1", aud: CREDENTIAL_BROKER_AUD, credentials: ["probe"], exp },
+          SECRET,
+        ),
       );
     const request = { credential: "probe", method: "GET", url: "https://api.example.com/probe" };
     assert.equal((await broker(srv.base, await token(Date.now() - 1), request)).status, 401);
     const unlimited = await token(0);
     assert.equal((await broker(srv.base, unlimited, request)).status, 200);
-    await srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, { ...credential, enabled: false });
+    await inTestTenant(() =>
+      srv.built.serviceCreds.setServiceCredential(TEST_ROOT_SCOPE, { ...credential, enabled: false }),
+    );
     assert.equal((await broker(srv.base, unlimited, request)).status, 404);
     assert.equal(calls, 1);
   } finally {

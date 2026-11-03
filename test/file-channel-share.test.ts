@@ -12,6 +12,7 @@ import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
@@ -69,45 +70,47 @@ function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore
   } as unknown as AppDeps);
 }
 
-test("a file delivered in a PUBLIC channel is auto-shared (read) with the org — visible to other members", async () => {
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
-    resolveFiles: (refs) => files.resolveByIds(refs),
-  });
-  await collectNamedOutbound(
-    memSandbox({ "flag.png": PNG }),
-    HANDLE,
-    ["flag.png"],
-    createMemoryBlobTransferStore(),
-    registration(files, acl, false, "channel"),
-  );
+test("a file delivered in a PUBLIC channel is auto-shared (read) with the org — visible to other members", () =>
+  inTestTenant(async () => {
+    const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+      resolveFiles: (refs) => files.resolveByIds(refs),
+    });
+    await collectNamedOutbound(
+      memSandbox({ "flag.png": PNG }),
+      HANDLE,
+      ["flag.png"],
+      createMemoryBlobTransferStore(),
+      registration(files, acl, false, "channel"),
+    );
 
-  const u1 = await makeApp(files, acl).listFilesForViewer(initiator);
-  assert.equal(u1.owned.length, 1);
-  assert.equal(u1.owned[0]!.name, "flag.png");
+    const u1 = await makeApp(files, acl).listFilesForViewer(initiator);
+    assert.equal(u1.owned.length, 1);
+    assert.equal(u1.owned[0]!.name, "flag.png");
 
-  const app = makeApp(files, acl);
-  const u2 = await app.listFilesForViewer("U2");
-  assert.equal(u2.owned.length, 0, "U2 doesn't own it");
-  assert.equal(u2.shared.length, 1, "the org read grant surfaces it to U2");
-  const opened = await app.openFileForViewer(u2.shared[0]!.id, "U2");
-  assert.ok(opened, "the org grant authorizes the bytes");
-});
+    const app = makeApp(files, acl);
+    const u2 = await app.listFilesForViewer("U2");
+    assert.equal(u2.owned.length, 0, "U2 doesn't own it");
+    assert.equal(u2.shared.length, 1, "the org read grant surfaces it to U2");
+    const opened = await app.openFileForViewer(u2.shared[0]!.id, "U2");
+    assert.ok(opened, "the org grant authorizes the bytes");
+  }));
 
-test("a file delivered in a DM stays owner-only — no auto-share", async () => {
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
-    resolveFiles: (refs) => files.resolveByIds(refs),
-  });
-  await collectNamedOutbound(
-    memSandbox({ "note.txt": Buffer.from("private") }),
-    HANDLE,
-    ["note.txt"],
-    createMemoryBlobTransferStore(),
-    registration(files, acl, undefined, "dm"),
-  );
+test("a file delivered in a DM stays owner-only — no auto-share", () =>
+  inTestTenant(async () => {
+    const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+      resolveFiles: (refs) => files.resolveByIds(refs),
+    });
+    await collectNamedOutbound(
+      memSandbox({ "note.txt": Buffer.from("private") }),
+      HANDLE,
+      ["note.txt"],
+      createMemoryBlobTransferStore(),
+      registration(files, acl, undefined, "dm"),
+    );
 
-  assert.equal((await makeApp(files, acl).listFilesForViewer(initiator)).owned.length, 1, "owner sees it");
-  const u2 = await makeApp(files, acl).listFilesForViewer("U2");
-  assert.equal(u2.owned.length + u2.shared.length, 0, "nobody else sees a DM file");
-});
+    assert.equal((await makeApp(files, acl).listFilesForViewer(initiator)).owned.length, 1, "owner sees it");
+    const u2 = await makeApp(files, acl).listFilesForViewer("U2");
+    assert.equal(u2.owned.length + u2.shared.length, 0, "nobody else sees a DM file");
+  }));

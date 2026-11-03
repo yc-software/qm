@@ -25,7 +25,7 @@ export interface CronFireLogEntry {
   threadRef: string;
   firedAt: number;
   scheduledAt?: number;
-  status?: TurnResult["status"] | "running" | "deferred";
+  status?: TurnResult["status"] | "running";
   endedAt?: number;
   note?: string;
   reply?: string;

@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { mintCapabilityToken } from "../../src/auth/capability-token.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
+import { boundTenant } from "../../src/tenants/context.ts";
 import { TEST_ROOT_SCOPE } from "../support/tenant-root.ts";
 
 const ADMIN_PRINCIPAL = process.env.LIVE_E2E_ADMIN_PRINCIPAL || "admin-alice";
@@ -33,7 +34,11 @@ export class CoreClient {
   private async request(method: string, pathWithQuery: string, body?: unknown): Promise<any> {
     const orgId = this.orgScope.split(":")[1] ?? "acme";
     const portalSecret = process.env.PORTAL_IDENTITY_SECRET || this.signingSecret;
-    const identity = await mintPortalIdentity({ p: ADMIN_PRINCIPAL, exp: Date.now() + 60_000 }, portalSecret);
+    const tenant = boundTenant();
+    const identity = await mintPortalIdentity(
+      { ...(tenant ? { t: tenant } : {}), p: ADMIN_PRINCIPAL, exp: Date.now() + 60_000 },
+      portalSecret,
+    );
     const raw = body === undefined ? "" : JSON.stringify(body);
     const salted = `${pathWithQuery}${pathWithQuery.includes("?") ? "&" : "?"}_nonce=${crypto.randomUUID()}`;
     const headers = signedRequestHeaders(this.signingSecret, method, salted, raw, {

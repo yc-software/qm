@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { randomUUID } from "node:crypto";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresResourceSearch } from "../src/search/resource-search.ts";
 
@@ -9,12 +8,8 @@ test(
   "resource GIN indexes match real queries, exclude heavy fields, and track writes",
   { skip: !database },
   async () => {
-    const admin = createPgPool(database!);
-    const schema = `search_${randomUUID().replaceAll("-", "")}`;
-    await admin.q(`CREATE SCHEMA ${schema}`);
-    const url = new URL(database!);
-    url.searchParams.set("options", `-c search_path=${schema}`);
-    const pg = createPgPool(url.toString());
+    const schema = "public";
+    const pg = createPgPool(database!);
     try {
       let searchSql = "";
       let searchParams: unknown[] = [];
@@ -94,8 +89,6 @@ test(
       }
     } finally {
       await pg.close();
-      await admin.q(`DROP SCHEMA ${schema} CASCADE`);
-      await admin.close();
     }
   },
 );

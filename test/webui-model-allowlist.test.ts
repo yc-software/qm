@@ -9,9 +9,14 @@ import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
+import { testTenantHeaders } from "./support/test-tenants.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
+const ADMIN = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice",
+  ...testTenantHeaders(),
+};
+import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 test("the org allowed-models list restricts the runtime-config picker and clearing restores the catalog", async () => {
   const modelCredentialFetch: typeof fetch = async () =>
@@ -39,7 +44,9 @@ test("the org allowed-models list restricts the runtime-config picker and cleari
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const runtimeModels = async (): Promise<string[]> => {
-    const response = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
+    const response = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`, {
+      headers: testTenantHeaders(),
+    });
     assert.equal(response.status, 200);
     return ((await response.json()) as { models: string[] }).models;
   };

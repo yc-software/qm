@@ -9,6 +9,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { testConfig } from "./support/test-config.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../src/model/model-catalog.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice" };
@@ -26,15 +27,21 @@ function start(overrides: Partial<ServerDeps> = {}) {
 const scopePath = `/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}`;
 
 async function warm(base: string) {
-  await (await fetch(base + scopePath + "?view=customize", { headers: ADMIN })).arrayBuffer();
+  await (
+    await fetch(base + scopePath + "?view=customize", { headers: { ...testTenantHeaders(), ...ADMIN } })
+  ).arrayBuffer();
 }
 
 test("settings projections preserve values while excluding unrelated payloads", async (t) => {
   const srv = start();
   t.after(srv.close);
-  await srv.built.config.setBranding(TEST_ROOT_SCOPE, { selfLabel: "Test assistant", accent: "#445566" });
-  await srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test" }]);
-  const full = (await (await fetch(srv.base + scopePath, { headers: ADMIN })).json()) as Record<string, unknown>;
+  await inTestTenant(() =>
+    srv.built.config.setBranding(TEST_ROOT_SCOPE, { selfLabel: "Test assistant", accent: "#445566" }),
+  );
+  await inTestTenant(() => srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test" }]));
+  const full = (await (
+    await fetch(srv.base + scopePath, { headers: { ...testTenantHeaders(), ...ADMIN } })
+  ).json()) as Record<string, unknown>;
   for (const view of [
     "customize",
     "governance",
@@ -44,7 +51,9 @@ test("settings projections preserve values while excluding unrelated payloads", 
     "slack-settings",
     "onboarding",
   ]) {
-    const response = await fetch(srv.base + scopePath + "?view=" + view, { headers: ADMIN });
+    const response = await fetch(srv.base + scopePath + "?view=" + view, {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.equal(response.status, 200, view);
     const projected = (await response.json()) as Record<string, unknown> & { branding: { selfLabel: string } };
     for (const [key, value] of Object.entries(projected)) assert.deepEqual(value, full[key], view + ":" + key);
@@ -81,7 +90,9 @@ test("Customize completes within 500 ms with unrelated model and connector servi
   t.mock.method(srv.built.config, "listConnectorClients", fail);
   t.mock.method(srv.built.config, "getSecurityPostureDurable", fail);
   const started = performance.now();
-  const response = await fetch(srv.base + scopePath + "?view=customize", { headers: ADMIN });
+  const response = await fetch(srv.base + scopePath + "?view=customize", {
+    headers: { ...testTenantHeaders(), ...ADMIN },
+  });
   assert.equal(response.status, 200);
   assert.equal(typeof ((await response.json()) as { soul: string }).soul, "string");
   assert.ok(performance.now() - started < 500);
@@ -109,7 +120,9 @@ test("independent governance reads overlap rather than accumulating network roun
       return original(scope);
     });
   }
-  const response = await fetch(srv.base + scopePath + "?view=governance", { headers: ADMIN });
+  const response = await fetch(srv.base + scopePath + "?view=governance", {
+    headers: { ...testTenantHeaders(), ...ADMIN },
+  });
   assert.equal(response.status, 200);
   await response.json();
   assert.equal(maxActive, reads.length);
@@ -136,12 +149,15 @@ test("each settings projection retains authorization before reading configuratio
     "onboarding",
   ]) {
     const response = await fetch(srv.base + scopePath + "?view=" + view, {
-      headers: { "x-admin-actor": "nobody" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "nobody" },
     });
     assert.equal(response.status, 403);
   }
   assert.equal(reads, 0);
-  assert.equal((await fetch(srv.base + scopePath + "?view=toString", { headers: ADMIN })).status, 400);
+  assert.equal(
+    (await fetch(srv.base + scopePath + "?view=toString", { headers: { ...testTenantHeaders(), ...ADMIN } })).status,
+    400,
+  );
 });
 
 test("Models settings do not wait for a cold external model catalog", async (t) => {
@@ -155,13 +171,15 @@ test("Models settings do not wait for a cold external model catalog", async (t) 
     openai: true,
     openrouter: true,
   }));
-  await srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, {
-    modelId: "settings/previously-saved-model",
-  });
+  await inTestTenant(() =>
+    srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, {
+      modelId: "settings/previously-saved-model",
+    }),
+  );
   await warm(srv.base);
   const started = performance.now();
   const response = await fetch(srv.base + scopePath + "?view=models", {
-    headers: ADMIN,
+    headers: { ...testTenantHeaders(), ...ADMIN },
     signal: AbortSignal.timeout(500),
   });
   assert.equal(response.status, 200);
@@ -188,8 +206,10 @@ test("a configured base model the cold catalog cannot resolve stays listed witho
     openrouter: true,
   }));
   for (const modelId of ["settings/saved-base-model", "saved-base-model-without-vendor"]) {
-    await srv.built.config.setBaseModel(TEST_ROOT_SCOPE, modelId);
-    const response = await fetch(srv.base + scopePath + "?view=models", { headers: ADMIN });
+    await inTestTenant(() => srv.built.config.setBaseModel(TEST_ROOT_SCOPE, modelId));
+    const response = await fetch(srv.base + scopePath + "?view=models", {
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.equal(response.status, 200);
     const body = (await response.json()) as { baseModelOptions: { id: string; name: string; provider: string }[] };
     assert.deepEqual(

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const oxAlphaCatalog: typeof fetch = async () =>
@@ -32,17 +33,21 @@ test("web turns hydrate persisted OpenRouter catalog models before runtime resol
     }),
     { modelCredentialFetch: oxAlphaCatalog },
   );
-  await built.config.setRuntimeSelection(TEST_ROOT_SCOPE, {
-    modelId: "stealth/ox-alpha",
-  });
+  await inTestTenant(() =>
+    built.config.setRuntimeSelection(TEST_ROOT_SCOPE, {
+      modelId: "stealth/ox-alpha",
+    }),
+  );
 
-  const turn = await built.app.turn({
-    surface: "web",
-    actor: { externalId: "alice" },
-    conversation: { kind: "dm", threadRef: "web:alice:dynamic-openrouter-model" },
-    text: "hello",
-    model: "stealth/ox-alpha",
-    async: true,
-  });
+  const turn = await inTestTenant(() =>
+    built.app.turn({
+      surface: "web",
+      actor: { externalId: "alice" },
+      conversation: { kind: "dm", threadRef: "web:alice:dynamic-openrouter-model" },
+      text: "hello",
+      model: "stealth/ox-alpha",
+      async: true,
+    }),
+  );
   assert.equal(turn.status, "queued");
 });

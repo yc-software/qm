@@ -13,6 +13,7 @@ import { createToolContext, type ToolContext, type ToolContextDeps } from "../sr
 import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const scopedHandle: SandboxHandle = { id: "scoped-box", rootDir: "/workspace" };
 const scratchHandle: SandboxHandle = { id: "scratch-box", rootDir: "/workspace", scratch: true };
@@ -157,62 +158,66 @@ const dm = (text: string): TurnRequest => ({
   text,
 });
 
-test("a scratch turn runs on a separate volumeless box with scoped capability tokens", async () => {
-  const { app } = await freshApp({ signingSecret: "s3cret", apiBaseUrl: "https://core.test" });
+test("a scratch turn runs on a separate volumeless box with scoped capability tokens", () =>
+  inTestTenant(async () => {
+    const { app } = await freshApp({ signingSecret: "s3cret", apiBaseUrl: "https://core.test" });
 
-  const scoped = await app.turn(dm("!run printenv AGENT_API_TOKEN"));
-  assert.equal(scoped.status, "ok");
-  assert.ok(
-    scoped.reply && scoped.reply.length > 0 && !scoped.reply.startsWith("(exit"),
-    "the scoped box sees the capability token",
-  );
+    const scoped = await app.turn(dm("!run printenv AGENT_API_TOKEN"));
+    assert.equal(scoped.status, "ok");
+    assert.ok(
+      scoped.reply && scoped.reply.length > 0 && !scoped.reply.startsWith("(exit"),
+      "the scoped box sees the capability token",
+    );
 
-  const scratch = await app.turn(dm("!scratch printenv AGENT_API_TOKEN"));
-  assert.equal(scratch.status, "ok");
-  assert.equal(scratch.reply, "<redacted:credential>", "scoped capability tokens are usable but masked in output");
+    const scratch = await app.turn(dm("!scratch printenv AGENT_API_TOKEN"));
+    assert.equal(scratch.status, "ok");
+    assert.equal(scratch.reply, "<redacted:credential>", "scoped capability tokens are usable but masked in output");
 
-  assert.ok(
-    fakeSprites.names().some((n) => n.startsWith("qm-sandbox-")),
-    "the scoped box is the scope's durable sprite",
-  );
-  assert.ok(
-    fakeSprites.calls.some((c) => /\/sprites\/qm-scratch-[^/]+\/exec$/.test(c.path)),
-    "the scratch run landed on a separate throwaway sprite",
-  );
-  assert.ok(
-    !fakeSprites.names().some((n) => n.startsWith("qm-scratch-")),
-    "the scratch sprite is destroyed at release",
-  );
-});
+    assert.ok(
+      fakeSprites.names().some((n) => n.startsWith("qm-sandbox-")),
+      "the scoped box is the scope's durable sprite",
+    );
+    assert.ok(
+      fakeSprites.calls.some((c) => /\/sprites\/qm-scratch-[^/]+\/exec$/.test(c.path)),
+      "the scratch run landed on a separate throwaway sprite",
+    );
+    assert.ok(
+      !fakeSprites.names().some((n) => n.startsWith("qm-scratch-")),
+      "the scratch sprite is destroyed at release",
+    );
+  }));
 
-test("nothing on the scratch box survives the turn", async () => {
-  const { app } = await freshApp();
-  const first = await app.turn(dm('!scratch sh -c "echo leak > leak.txt && cat leak.txt"'));
-  assert.equal(first.reply, "leak");
-  const second = await app.turn(dm('!scratch sh -c "cat leak.txt 2>/dev/null; echo clean"'));
-  assert.equal(second.reply, "clean", "the release reset blanked the box between turns");
-});
+test("nothing on the scratch box survives the turn", () =>
+  inTestTenant(async () => {
+    const { app } = await freshApp();
+    const first = await app.turn(dm('!scratch sh -c "echo leak > leak.txt && cat leak.txt"'));
+    assert.equal(first.reply, "leak");
+    const second = await app.turn(dm('!scratch sh -c "cat leak.txt 2>/dev/null; echo clean"'));
+    assert.equal(second.reply, "clean", "the release reset blanked the box between turns");
+  }));
 
-test("a deliverable has to live on the scoped computer — the scratch box can't be attached from", async () => {
-  const { app } = await freshApp();
-  const made = await app.turn(dm('!scratch sh -c "printf hello > from-scratch.txt && echo made"'));
-  assert.equal(made.reply, "made");
-  const res = await app.turn(dm("!attach from-scratch.txt"));
-  assert.equal(res.attachments, undefined, "the scratch box is wiped and invisible to attach");
-  assert.match(res.reply ?? "", /not attached.*from-scratch\.txt \(not found\)/);
-});
+test("a deliverable has to live on the scoped computer — the scratch box can't be attached from", () =>
+  inTestTenant(async () => {
+    const { app } = await freshApp();
+    const made = await app.turn(dm('!scratch sh -c "printf hello > from-scratch.txt && echo made"'));
+    assert.equal(made.reply, "made");
+    const res = await app.turn(dm("!attach from-scratch.txt"));
+    assert.equal(res.attachments, undefined, "the scratch box is wiped and invisible to attach");
+    assert.match(res.reply ?? "", /not attached.*from-scratch\.txt \(not found\)/);
+  }));
 
-test("a scratch-only turn still reclaims its box (reset + suspend) when the turn ends", async () => {
-  const { app, sandbox } = await freshApp();
-  let toreDown = 0;
-  const realTeardown = sandbox.teardown.bind(sandbox);
-  sandbox.teardown = async (handle, opts) => {
-    if (handle.scratch) toreDown++;
-    return realTeardown(handle, opts);
-  };
-  await app.turn(dm("!scratch echo hi"));
-  assert.equal(toreDown, 1, "the scratch box is released exactly once per turn");
-});
+test("a scratch-only turn still reclaims its box (reset + suspend) when the turn ends", () =>
+  inTestTenant(async () => {
+    const { app, sandbox } = await freshApp();
+    let toreDown = 0;
+    const realTeardown = sandbox.teardown.bind(sandbox);
+    sandbox.teardown = async (handle, opts) => {
+      if (handle.scratch) toreDown++;
+      return realTeardown(handle, opts);
+    };
+    await app.turn(dm("!scratch echo hi"));
+    assert.equal(toreDown, 1, "the scratch box is released exactly once per turn");
+  }));
 
 test("execute exposes only requested keychain environment values to one command", async () => {
   const seen: Array<Record<string, string> | undefined> = [];

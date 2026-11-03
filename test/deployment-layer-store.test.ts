@@ -15,6 +15,7 @@ import { computeBundleHash, createSkillBundleStore } from "../src/skills/skill-b
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { testDatabaseUrl, testMap, testAdvisoryLock } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant-root.ts";
 
 const tool = (advertise: string): DeploymentLayerBundle["tools"][number] => ({
@@ -923,7 +924,7 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
   await recovered.hydrate();
   await recovered.hydrate();
 
-  const events = await audit.events();
+  const events = await inTestTenant(() => audit.events());
   assert.equal(events.length, 1);
   assert.equal(events[0]?.resource, record.contentHash);
   assert.equal(events[0]?.principalId, "source-cli");

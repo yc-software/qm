@@ -13,6 +13,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const PUBLIC = "https://core.public.example";
@@ -108,22 +109,32 @@ test("create scopes the webhook to the user; list, disable, and re-enable are ow
 });
 
 test("removed Project members cannot list or disable their former Project webhook", async () => {
-  await built.app.upsertDirectory([
-    { principalId: "project-owner", displayName: "Project Owner", type: "internal" },
-    { principalId: "hook-owner", displayName: "Hook Owner", type: "internal" },
-    { principalId: "project-teammate", displayName: "Project Teammate", type: "internal" },
-  ]);
-  const project = await built.app.createProject("project-owner", "Webhook access");
+  await inTestTenant(() =>
+    built.app.upsertDirectory([
+      { principalId: "project-owner", displayName: "Project Owner", type: "internal" },
+      { principalId: "hook-owner", displayName: "Hook Owner", type: "internal" },
+      { principalId: "project-teammate", displayName: "Project Teammate", type: "internal" },
+    ]),
+  );
+  const project = await inTestTenant(() => built.app.createProject("project-owner", "Webhook access"));
   assert.ok(project);
-  assert.equal((await built.app.addProjectMember(project.id, "project-owner", "hook-owner")).status, "ok");
-  assert.equal((await built.app.addProjectMember(project.id, "project-owner", "project-teammate")).status, "ok");
-  const webhook = await built.app.createWebhook({
-    ownerScopeId: project.scopeId,
-    owner: "hook-owner",
-    createdBy: "hook-owner",
-    action: "project hook",
-    verification: { scheme: "github", secret: "project-secret" },
-  });
+  assert.equal(
+    (await inTestTenant(() => built.app.addProjectMember(project.id, "project-owner", "hook-owner"))).status,
+    "ok",
+  );
+  assert.equal(
+    (await inTestTenant(() => built.app.addProjectMember(project.id, "project-owner", "project-teammate"))).status,
+    "ok",
+  );
+  const webhook = await inTestTenant(() =>
+    built.app.createWebhook({
+      ownerScopeId: project.scopeId,
+      owner: "hook-owner",
+      createdBy: "hook-owner",
+      action: "project hook",
+      verification: { scheme: "github", secret: "project-secret" },
+    }),
+  );
 
   const before = (await (await fetch(`${webBase}/api/webhooks`, asUser("hook-owner"))).json()) as {
     webhooks: Array<{ id: string }>;
@@ -134,7 +145,10 @@ test("removed Project members cannot list or disable their former Project webhoo
   };
   assert.ok(teammateList.webhooks.some((candidate) => candidate.id === webhook.id));
 
-  assert.equal((await built.app.removeProjectMember(project.id, "project-owner", "hook-owner")).status, "ok");
+  assert.equal(
+    (await inTestTenant(() => built.app.removeProjectMember(project.id, "project-owner", "hook-owner"))).status,
+    "ok",
+  );
   const after = (await (await fetch(`${webBase}/api/webhooks`, asUser("hook-owner"))).json()) as {
     webhooks: Array<{ id: string }>;
   };
@@ -143,13 +157,19 @@ test("removed Project members cannot list or disable their former Project webhoo
     (await fetch(`${webBase}/api/webhooks/${webhook.id}/disable`, asUser("hook-owner", { method: "POST" }))).status,
     404,
   );
-  assert.equal((await built.app.listWebhooks()).find((candidate) => candidate.id === webhook.id)?.enabled, true);
+  assert.equal(
+    (await inTestTenant(() => built.app.listWebhooks())).find((candidate) => candidate.id === webhook.id)?.enabled,
+    true,
+  );
   assert.equal(
     (await fetch(`${webBase}/api/webhooks/${webhook.id}/disable`, asUser("project-teammate", { method: "POST" })))
       .status,
     200,
   );
-  assert.equal((await built.app.listWebhooks()).find((candidate) => candidate.id === webhook.id)?.enabled, false);
+  assert.equal(
+    (await inTestTenant(() => built.app.listWebhooks())).find((candidate) => candidate.id === webhook.id)?.enabled,
+    false,
+  );
 });
 
 test("a provided secret is passed through verbatim (no auto-generation)", async () => {
