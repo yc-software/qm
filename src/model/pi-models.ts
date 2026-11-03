@@ -26,7 +26,6 @@ import {
   isCustomModelId,
   resolveCustomModel,
 } from "./custom-providers.ts";
-import { SEAT_MODEL_ID } from "./seat-model.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -107,9 +106,7 @@ export function modelUnavailableReason(id: string): string | undefined {
 }
 
 export function catalogModelIdTaken(id: string): boolean {
-  return (
-    id === SEAT_MODEL_ID || REGISTRY_BY_ID.has(id) || Boolean(builtinModel(id)) || OPENROUTER_CATALOG_MODELS.has(id)
-  );
+  return REGISTRY_BY_ID.has(id) || Boolean(builtinModel(id)) || OPENROUTER_CATALOG_MODELS.has(id);
 }
 
 export function modelIdReserved(id: string): boolean {
