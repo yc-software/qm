@@ -72,6 +72,7 @@ export function createSecretDropStore(
           continue;
         }
         if (
+          !r.memoryBrain &&
           r.orgId === rec.orgId &&
           r.audienceScopeId === rec.audienceScopeId &&
           r.threadRef === rec.threadRef &&

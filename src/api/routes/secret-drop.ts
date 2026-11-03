@@ -8,19 +8,12 @@ import {
 import { KeychainError, type GrantMode } from "../../credentials/keychain.ts";
 import { SECRET_DROP_TTL_MS, type SecretDropField, type SecretDropRecord } from "../../credentials/secret-drop.ts";
 import { MemoryRegistryError, readRegistry, setBrainSecret } from "../../memory/registry.ts";
-import type { ServerDeps } from "../deps.ts";
 import { isSharedScope, parseScopeId } from "../../types.ts";
 import { samePerson } from "../../directory/person.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import {
-  activePrincipal,
-  audit,
-  orgScope,
-  resolveCapabilityDestination,
-  verifiedConversationSpeaker,
-} from "./shared.ts";
+import { adminStanding, audit, orgScope, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { reportFailureAs, swallow } from "../../util/errors.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
@@ -39,11 +32,6 @@ interface BrainDestination {
   label: string;
   origin: string;
   scopes: string[];
-}
-
-async function isActiveOrgAdmin(deps: ServerDeps, principalId: string): Promise<boolean> {
-  if (!deps.admin || !(await activePrincipal(deps, principalId))) return false;
-  return (await deps.admin.adminStatusOf({ id: principalId, type: "internal" })).isAdmin;
 }
 
 function dropPage(title: string, content: string): string {
@@ -210,9 +198,7 @@ async function brainTarget(ctx: ApiCtx, b: Record<string, unknown>): Promise<Sec
     sendJson(res, 404, { error: "not_found" });
     return null;
   }
-  const extra = ["service", "envKey", "host", "grantMode", "fields", "onBehalfOf"].filter(
-    (key) => b[key] !== undefined,
-  );
+  const extra = Object.keys(b).filter((key) => key !== "memoryBrain" && key !== "purpose");
   if (extra.length) {
     sendJson(res, 400, {
       error: "bad_request",
@@ -227,7 +213,7 @@ async function brainTarget(ctx: ApiCtx, b: Record<string, unknown>): Promise<Sec
     sendJson(res, 404, { error: "not_found", message: `no memory brain ${String(b.memoryBrain)}` });
     return null;
   }
-  if (!(await isActiveOrgAdmin(deps, capability!.actorId))) {
+  if ((await adminStanding(deps, capability!.actorId)) !== "admin") {
     sendJson(res, 403, { error: "forbidden", message: `only an org admin can set brain ${brain.id}'s secret` });
     return null;
   }
@@ -248,26 +234,28 @@ async function brainDestination(ctx: ApiCtx, rec: SecretDropRecord): Promise<Bra
   };
 }
 
-async function redeemBrainSecret(ctx: ApiCtx, dropId: string, secret: unknown): Promise<void> {
+async function saveBrainSecret(ctx: ApiCtx, drop: SecretDropRecord, secret: string): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.memoryRegistry) return sendJson(res, 404, { error: "not_found" });
-  if (typeof secret !== "string" || !secret.trim())
-    return sendJson(res, 400, { error: "bad_request", message: "expected { secret }" });
-  const redeemed = await deps.secretDrops!.redeem(dropId);
-  if (!redeemed.ok) return sendJson(res, 404, { error: "not_found", message: dropGone(redeemed.reason) });
-  const drop = redeemed.rec;
-  if (drop.orgId !== undefined && drop.orgId !== configOrgId())
-    return sendJson(res, 404, { error: "not_found", message: "this drop link is for a different org" });
-  if (!(await isActiveOrgAdmin(deps, drop.ownerId)))
+  const registry = deps.memoryRegistry;
+  if (!registry) return sendJson(res, 404, { error: "not_found" });
+  if ((await adminStanding(deps, drop.ownerId)) !== "admin")
     return sendJson(res, 403, { error: "forbidden", message: "you can no longer set this brain's secret" });
   const target = drop.memoryBrain!;
   try {
-    await deps.memoryRegistry.update((record) =>
-      setBrainSecret(record, target, secret.trim(), { actor: drop.ownerId, now: Date.now() }),
+    await registry.update((record) =>
+      setBrainSecret(record, target, secret, {
+        actor: drop.ownerId,
+        now: Date.now(),
+        overlayIds: registry.overlayIds,
+        key: registry.key,
+      }),
     );
   } catch (error) {
     if (!(error instanceof MemoryRegistryError)) throw error;
-    return sendJson(res, error.status, { error: "conflict", message: error.message });
+    return sendJson(res, error.status, {
+      error: error.status === 409 ? "conflict" : "bad_request",
+      message: error.message,
+    });
   }
   audit(deps, {
     principalId: drop.ownerId,
@@ -280,7 +268,7 @@ async function redeemBrainSecret(ctx: ApiCtx, dropId: string, secret: unknown): 
 
 async function mintDrop(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability, secret } = ctx;
-  if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
   if (!capability)
     return sendJson(res, 401, {
       error: "unauthorized",
@@ -302,6 +290,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
   };
   const brain = b.memoryBrain === undefined ? undefined : await brainTarget(ctx, b);
   if (brain === null) return;
+  if (!brain && !deps.keychain) return sendJson(res, 404, { error: "not_found" });
   const service = brain ? `memory brain ${brain.id}` : b.service;
   if (typeof service !== "string" || !service.trim() || typeof b.purpose !== "string" || !b.purpose.trim()) {
     return sendJson(res, 400, {
@@ -338,11 +327,14 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
     purpose: b.purpose.trim(),
     requestedBy: capability.actorId,
     audienceScopeId: capability.scopeId,
-    ...(wantsGrant && !brain ? { grantMode: (b.grantMode as GrantMode | undefined) ?? "standing" } : {}),
     ...(wantsGrant && capability.scopeVersion ? { scopeVersion: capability.scopeVersion } : {}),
-    ...(dest.ok && dest.destination ? { destination: dest.destination } : {}),
-    ...(capability.threadRef ? { threadRef: capability.threadRef } : {}),
-    ...(brain ? { memoryBrain: brain } : {}),
+    ...(brain
+      ? { memoryBrain: brain }
+      : {
+          ...(wantsGrant ? { grantMode: (b.grantMode as GrantMode | undefined) ?? "standing" } : {}),
+          ...(dest.ok && dest.destination ? { destination: dest.destination } : {}),
+          ...(capability.threadRef ? { threadRef: capability.threadRef } : {}),
+        }),
     requiresToken: true,
   });
   audit(deps, {
@@ -397,10 +389,11 @@ async function dropForm(ctx: ApiCtx): Promise<void> {
 
 async function redeemDrop(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, params, req } = ctx;
-  if (!deps.keychain || !deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
   const { secret, values } = body as { secret?: unknown; values?: unknown };
   const peeked = await deps.secretDrops.peek(params.id!);
   if (!peeked.ok) return sendJson(res, 404, { error: "not_found", message: dropGone(peeked.reason) });
+  if (!peeked.rec.memoryBrain && !deps.keychain) return sendJson(res, 404, { error: "not_found" });
   const linkClaims = await dropLinkClaims(ctx, params.id!, peeked.rec);
   if (!linkClaims) {
     return sendJson(res, 404, {
@@ -421,7 +414,6 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
       message: "couldn't confirm you're still in this conversation — try again, or ask the agent for a fresh link",
     });
   }
-  if (peeked.rec.memoryBrain) return redeemBrainSecret(ctx, params.id!, secret);
   const dropFieldDefs = peeked.rec.fields;
   let saveFields: Array<{ envKey: string; value: string; secret: boolean }> | undefined;
   if (dropFieldDefs?.length) {
@@ -441,8 +433,10 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
   const drop = redeemed.rec;
   if (drop.orgId !== undefined && drop.orgId !== configOrgId())
     return sendJson(res, 404, { error: "not_found", message: "this drop link is for a different org" });
+  if (drop.memoryBrain) return saveBrainSecret(ctx, drop, secret as string);
+  const keychain = deps.keychain!;
   try {
-    const meta = await deps.keychain.save({
+    const meta = await keychain.save({
       ownerId: drop.ownerId,
       service: drop.service,
       ...(saveFields ? { fields: saveFields } : { secret: secret as string }),
@@ -453,7 +447,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
     const mayShare = await dropScopeAuthorized(ctx, drop, attestation);
     let grantId: string | undefined;
     if (mayShare && drop.grantMode && drop.audienceScopeId) {
-      const grant = await deps.keychain.createGrant({
+      const grant = await keychain.createGrant({
         credentialId: meta.id,
         ownerId: drop.ownerId,
         audienceScopeId: drop.audienceScopeId,
