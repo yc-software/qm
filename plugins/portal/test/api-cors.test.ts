@@ -10,7 +10,7 @@ const upstream = createServer((req: IncomingMessage, res) => {
   req.on("end", () => {
     if (req.url?.startsWith("/v1/admin/whoami")) {
       res.writeHead(200, { "content-type": "application/json" });
-      return void res.end(JSON.stringify({ isAdmin: req.headers["x-admin-actor"] === "U-admin@acme" }));
+      return void res.end(JSON.stringify({ isAdmin: req.headers["x-admin-actor"] === "U-admin" }));
     }
     res.writeHead(200, { "content-type": "application/json", vary: "accept-encoding" });
     res.end(JSON.stringify({ url: req.url, method: req.method, cookie: req.headers.cookie ?? null }));

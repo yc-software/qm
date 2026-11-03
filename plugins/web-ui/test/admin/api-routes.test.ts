@@ -127,7 +127,7 @@ test("admin API calls reach core signed, attributed to the actor, and carrying t
     assert.equal(response.status, 200);
     assert.equal(hops.length, 1);
     assert.equal(pathOf(hops[0]!), "GET /v1/admin/scopes");
-    assert.equal(hops[0]!.actor, `${principal}@acme`);
+    assert.equal(hops[0]!.actor, principal);
     assert.equal(hops[0]!.principal, principal);
     assert.equal(hops[0]!.signed, true);
   }

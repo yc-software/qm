@@ -197,7 +197,7 @@ test("the admin probe asks core with source auth, the admin actor and the signed
   whoamiMode = "ok";
   const ok = await startImpersonation("U-admin-headers");
   assert.equal(ok.status, 200);
-  assert.equal(lastWhoamiHeaders["x-admin-actor"], "U-admin-headers@acme");
+  assert.equal(lastWhoamiHeaders["x-admin-actor"], "U-admin-headers");
   assert.match(String(lastWhoamiHeaders["x-signature"] ?? ""), /^v0=/);
   assert.equal(
     verifyPortalIdentity(

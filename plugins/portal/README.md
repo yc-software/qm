@@ -132,7 +132,7 @@ disposable test deployment: the test redeems real links for its configured admin
   under `/settings`, and every admin action is checked **per action** at the core — the live
   boundary. The portal itself needs admin status only for impersonation, operator admin login
   and the unconfigured-deployment redirect to `/settings/onboarding`. For those it calls core
-  `GET /v1/admin/whoami` with source-auth signed headers, `x-admin-actor: <sub>@<org>` and the
+  `GET /v1/admin/whoami` with source-auth signed headers, `x-admin-actor: <sub>` and the
   signed portal identity. It caches the answer ~60s, retries once, and **fails closed**: an
   outage or malformed answer counts as not-admin and is not cached. There is **no portal id
   list**; the only place an admin is named is the core's `ADMIN_GRANTS`.

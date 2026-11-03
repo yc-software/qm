@@ -68,8 +68,8 @@ const upstream = createServer((req: IncomingMessage, res) => {
     lastWhoamiActor = typeof req.headers["x-admin-actor"] === "string" ? req.headers["x-admin-actor"] : null;
     lastWhoamiSigned = typeof req.headers["x-signature"] === "string" && typeof req.headers["x-timestamp"] === "string";
     res.writeHead(200, { "content-type": "application/json" });
-    const canonicalActor = lastWhoamiActor === "U-admin-alias@acme" ? "U-admin@acme" : lastWhoamiActor;
-    return void res.end(JSON.stringify({ isAdmin: canonicalActor === "U-admin@acme" }));
+    const canonicalActor = lastWhoamiActor === "U-admin-alias" ? "U-admin" : lastWhoamiActor;
+    return void res.end(JSON.stringify({ isAdmin: canonicalActor === "U-admin" }));
   }
   if (typeof req.url === "string" && req.url.startsWith("/v1/admin/impersonate")) {
     lastImpersonateIdentity =
