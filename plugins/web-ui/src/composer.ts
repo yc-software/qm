@@ -1451,6 +1451,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const threadRef = ctx.chat.state.threadRef;
     if (!threadRef) return;
     composerState.error = "";
+    composerState.note = "";
     try {
       await withdrawRun(queued.runId);
     } catch (err) {
