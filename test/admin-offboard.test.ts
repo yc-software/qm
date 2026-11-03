@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
 
@@ -56,7 +57,11 @@ async function start() {
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const offboard = (principal: string, body: unknown, headers: Record<string, string> = ADMIN) =>
-    fetch(`${base}/v1/admin/users/${principal}/offboard`, { method: "POST", headers, body: JSON.stringify(body) });
+    fetch(`${base}/v1/admin/users/${principal}/offboard`, {
+      method: "POST",
+      headers: { ...testTenantHeaders(), ...headers },
+      body: JSON.stringify(body),
+    });
   return { base, built, archivedApps, offboard, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
@@ -64,52 +69,64 @@ test("offboarding previews, then disables, revokes, archives and retires what th
   const s = await start();
   try {
     const { app, keychain, sandboxResources, skills, identity } = s.built;
-    const personalCron = await app.createCron({
-      ownerScopeId: "personal:U1",
-      owner: "U1",
-      createdBy: "U1",
-      title: "daily digest",
-      schedule: { everyMs: 60_000 },
-      action: "digest",
-    });
-    const channelCron = await app.createCron({
-      ownerScopeId: "channel:C1",
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "team ping",
-    });
-    const othersCron = await app.createCron({
-      ownerScopeId: "personal:U9",
-      owner: "U9",
-      createdBy: "U9",
-      schedule: { everyMs: 60_000 },
-      action: "noise",
-    });
-    const loopCron = await app.createCron({
-      ownerScopeId: "personal:U1",
-      owner: "U1",
-      createdBy: "U1",
-      schedule: { everyMs: 60_000 },
-      action: "loop fire",
-      loopId: "pending",
-    });
-    const { loop } = await s.built.loops.store.create({
-      owner: "U1",
-      createdBy: "U1",
-      ownerScopeId: "personal:U1",
-      name: "inbox",
-      playbook: "triage",
-      successCondition: "done",
-      cronId: loopCron.id,
-    });
-    const webhook = await app.createWebhook({
-      ownerScopeId: "personal:U1",
-      owner: "U1",
-      createdBy: "U1",
-      action: "handle event",
-      verification: { scheme: "hmac-sha256", secret: "webhook-secret" },
-    });
+    const personalCron = await inTestTenant(() =>
+      app.createCron({
+        ownerScopeId: "personal:U1",
+        owner: "U1",
+        createdBy: "U1",
+        title: "daily digest",
+        schedule: { everyMs: 60_000 },
+        action: "digest",
+      }),
+    );
+    const channelCron = await inTestTenant(() =>
+      app.createCron({
+        ownerScopeId: "channel:C1",
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "team ping",
+      }),
+    );
+    const othersCron = await inTestTenant(() =>
+      app.createCron({
+        ownerScopeId: "personal:U9",
+        owner: "U9",
+        createdBy: "U9",
+        schedule: { everyMs: 60_000 },
+        action: "noise",
+      }),
+    );
+    const loopCron = await inTestTenant(() =>
+      app.createCron({
+        ownerScopeId: "personal:U1",
+        owner: "U1",
+        createdBy: "U1",
+        schedule: { everyMs: 60_000 },
+        action: "loop fire",
+        loopId: "pending",
+      }),
+    );
+    const { loop } = await inTestTenant(() =>
+      s.built.loops.store.create({
+        owner: "U1",
+        createdBy: "U1",
+        ownerScopeId: "personal:U1",
+        name: "inbox",
+        playbook: "triage",
+        successCondition: "done",
+        cronId: loopCron.id,
+      }),
+    );
+    const webhook = await inTestTenant(() =>
+      app.createWebhook({
+        ownerScopeId: "personal:U1",
+        owner: "U1",
+        createdBy: "U1",
+        action: "handle event",
+        verification: { scheme: "hmac-sha256", secret: "webhook-secret" },
+      }),
+    );
     const credential = await keychain!.save({ ownerId: "U1", service: "github", secret: "fixture-secret" });
     const grant = await keychain!.createGrant({
       credentialId: credential.id,
@@ -119,10 +136,14 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       purpose: "ci",
     });
     const manifest = (name: string) => ({ name, description: name, requiredCapabilities: [], body: "..." });
-    const personalSkill = await skills.create({ scopeId: "personal:U1", manifest: manifest("mine"), createdBy: "U1" });
-    const sharedSkill = await skills.create({ scopeId: "channel:C1", manifest: manifest("team"), createdBy: "U1" });
-    const computer = await sandboxResources.create("U1", "personal:U1", "sprites", "laptop");
-    await sandboxResources.setDefault("U1", "personal:U1", computer.id);
+    const personalSkill = await inTestTenant(() =>
+      skills.create({ scopeId: "personal:U1", manifest: manifest("mine"), createdBy: "U1" }),
+    );
+    const sharedSkill = await inTestTenant(() =>
+      skills.create({ scopeId: "channel:C1", manifest: manifest("team"), createdBy: "U1" }),
+    );
+    const computer = await inTestTenant(() => sandboxResources.create("U1", "personal:U1", "sprites", "laptop"));
+    await inTestTenant(() => sandboxResources.setDefault("U1", "personal:U1", computer.id));
 
     const preview = await s.offboard("U1", {});
     assert.equal(preview.status, 200);
@@ -144,7 +165,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       ].sort(),
     );
     assert.equal(identity.classify("U1").type, "internal", "preview changes nothing");
-    assert.equal((await app.getCron(personalCron.id))!.enabled, true);
+    assert.equal((await inTestTenant(() => app.getCron(personalCron.id)))!.enabled, true);
     assert.deepEqual(s.archivedApps, []);
 
     const applied: any = await (await s.offboard("U1", { apply: true })).json();
@@ -156,24 +177,32 @@ test("offboarding previews, then disables, revokes, archives and retires what th
     );
     assert.equal(identity.classify("U1").type, "guest", "sign-in is off");
     for (const id of [personalCron.id, channelCron.id]) {
-      const cron = (await app.getCron(id))!;
+      const cron = (await inTestTenant(() => app.getCron(id)))!;
       assert.equal(cron.enabled, false);
       assert.equal(cron.archived, true);
     }
-    assert.equal((await app.getCron(othersCron.id))!.enabled, true, "someone else's cron is untouched");
-    assert.equal((await app.getWebhook(webhook.id))!.enabled, false);
-    assert.equal((await s.built.loops.store.get(loop.id))!.state, "paused");
-    const pausedLoopCron = (await app.getCron(loopCron.id))!;
+    assert.equal(
+      (await inTestTenant(() => app.getCron(othersCron.id)))!.enabled,
+      true,
+      "someone else's cron is untouched",
+    );
+    assert.equal((await inTestTenant(() => app.getWebhook(webhook.id)))!.enabled, false);
+    assert.equal((await inTestTenant(() => s.built.loops.store.get(loop.id)))!.state, "paused");
+    const pausedLoopCron = (await inTestTenant(() => app.getCron(loopCron.id)))!;
     assert.equal(pausedLoopCron.enabled, false, "the paused loop's schedule stops too");
     assert.notEqual(pausedLoopCron.archived, true, "the loop keeps its schedule for a later resume");
     assert.equal((await keychain!.getGrant(grant.id))!.status, "revoked");
-    assert.equal((await skills.get(personalSkill.id))!.status, "archived");
-    assert.notEqual((await skills.get(sharedSkill.id))!.status, "archived");
+    assert.equal((await inTestTenant(() => skills.get(personalSkill.id)))!.status, "archived");
+    assert.notEqual((await inTestTenant(() => skills.get(sharedSkill.id)))!.status, "archived");
     assert.deepEqual(s.archivedApps, ["app-personal"]);
-    assert.equal((await sandboxResources.get(computer.id)).state, "retired");
-    assert.equal(await sandboxResources.resolve("personal:U1"), null, "the default was cleared first");
+    assert.equal((await inTestTenant(() => sandboxResources.get(computer.id))).state, "retired");
+    assert.equal(
+      await inTestTenant(() => sandboxResources.resolve("personal:U1")),
+      null,
+      "the default was cleared first",
+    );
 
-    const events = await s.built.auditLog.events();
+    const events = await inTestTenant(() => s.built.auditLog.events());
     for (const change of applied.changes)
       assert.ok(
         events.some(
@@ -186,7 +215,9 @@ test("offboarding previews, then disables, revokes, archives and retires what th
         ),
         `${change.kind} ${change.id} is audited as the admin with its outcome`,
       );
-    const detail: any = await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: ADMIN })).json();
+    const detail: any = await (
+      await fetch(`${s.base}/v1/admin/users/U1`, { headers: { ...testTenantHeaders(), ...ADMIN } })
+    ).json();
     assert.equal(detail.deactivated, true);
 
     const again: any = await (await s.offboard("U1", {})).json();
@@ -196,11 +227,20 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       "a second preview finds only what failed",
     );
 
-    const reactivated = await fetch(`${s.base}/v1/admin/users/U1/reactivate`, { method: "POST", headers: ADMIN });
+    const reactivated = await fetch(`${s.base}/v1/admin/users/U1/reactivate`, {
+      method: "POST",
+      headers: { ...testTenantHeaders(), ...ADMIN },
+    });
     assert.equal(reactivated.status, 200);
     assert.equal(identity.classify("U1").type, "internal");
-    assert.equal((await app.getCron(personalCron.id))!.archived, true, "reactivation restores only sign-in");
-    const after: any = await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: ADMIN })).json();
+    assert.equal(
+      (await inTestTenant(() => app.getCron(personalCron.id)))!.archived,
+      true,
+      "reactivation restores only sign-in",
+    );
+    const after: any = await (
+      await fetch(`${s.base}/v1/admin/users/U1`, { headers: { ...testTenantHeaders(), ...ADMIN } })
+    ).json();
     assert.equal(after.deactivated, false);
   } finally {
     await s.close();
@@ -218,12 +258,12 @@ test("offboarding refuses non-admins, the admin themselves, and unknown body fie
     assert.equal(s.built.identity.classify("admin-alice").type, "internal");
     assert.equal((await s.offboard("U1", { apply: "yes" })).status, 400);
     assert.equal((await s.offboard("U1", { dryRun: true })).status, 400);
-    await s.built.identity.deactivate("already-gone@example.com");
+    await inTestTenant(() => s.built.identity.deactivate("already-gone@example.com"));
     const gone: any = await (await s.offboard("already-gone@example.com", {})).json();
     assert.deepEqual(gone.changes, [], "someone already deactivated by hand gets an empty plan");
     const deniedReactivate = await fetch(`${s.base}/v1/admin/users/U1/reactivate`, {
       method: "POST",
-      headers: { "x-admin-actor": "user-uma@default-org" },
+      headers: { ...testTenantHeaders(), "x-admin-actor": "user-uma@default-org" },
     });
     assert.equal(deniedReactivate.status, 403);
   } finally {
