@@ -3,7 +3,7 @@ import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reac
 import type { Destination } from "../../types.ts";
 import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
 import { reportFailureAs } from "../../util/errors.ts";
-import { buildContextWindow } from "../../slack/conversation.ts";
+import { buildContextWindow } from "../context-window.ts";
 import { partnerChatPrincipal } from "./adapter.ts";
 import {
   findMessage,
