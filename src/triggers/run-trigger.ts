@@ -285,8 +285,12 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         actor: { externalId: actorId },
         conversation,
         text: typeof spec.input === "string" ? spec.input : spec.input(roster),
-        ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
-        triggered: true,
+        origin: {
+          kind: "automation",
+          ...(spec.securityScreenData !== undefined ? { screenData: spec.securityScreenData } : {}),
+          ...(spec.destination ? { destination: spec.destination } : {}),
+          ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { useOwnerKeychain: true } : {}),
+        },
         ...(spec.unattendedGrants && grantsHomedWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
         ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
         ...turnModelOptions({
@@ -299,9 +303,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
         ...(spec.readOnly ? { readOnly: true } : {}),
         ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
-        ...(spec.destination ? { triggerDestination: spec.destination } : {}),
         ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
-        ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { ownerKeychainUnion: true } : {}),
         idempotencyKey: spec.fireKey,
       });
       if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();

@@ -2,13 +2,13 @@ import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { requestedRuntimeError, userRuntimeConfigBody, validateWebTurnModelOptions } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
-import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
+import type { Conversation, Principal, TurnOrigin, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
 import { rosterAdmits } from "../resolution/scope-membership.ts";
 import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import { desktopClientForTurn, isPersonAuthored, isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
+import { desktopClientForTurn, isPersonAuthored, isSessionTurn } from "../core/turn-origin.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
@@ -157,7 +157,7 @@ export function createTurnMethods(
         }
       }
 
-      if (req.surface === "webhook" && req.triggered && !sessionParticipantIds) {
+      if (req.surface === "webhook" && req.origin?.kind === "automation" && !sessionParticipantIds) {
         sessionParticipantIds = [actor.id];
       }
 
@@ -200,7 +200,11 @@ export function createTurnMethods(
         approvedRequest.conversation.threadRef === req.conversation.threadRef;
       let privateRequest = req.privateSessionMessage ? req : undefined;
       if (approvedRequest?.privateSessionMessage) privateRequest = approvedRequest;
-      const origin = resolveTurnOrigin(privateRequest ?? req);
+      let origin: TurnOrigin = req.origin ?? { kind: "direct" };
+      if (privateRequest && privateRequest === approvedRequest) {
+        if (!privateRequest.origin) throw new Error("stored approval request has no origin");
+        origin = privateRequest.origin;
+      }
       const sessionTurn =
         (req.spawned && isSessionTurn(req)) ||
         (sameApprovedMessage && approvedRequest && isSessionTurn(approvedRequest));
@@ -213,8 +217,12 @@ export function createTurnMethods(
           ? await deps.config.getModelAccountDurable(actor.id)
           : "company";
       const individualAuth = modelAccount !== "company";
-      const runtimePurpose = turnRuntimePurpose(req, isSubagentThreadRef(req.conversation.threadRef));
-      if (req.triggered && req.model) {
+      const automated = req.origin?.kind === "automation";
+      const runtimePurpose = turnRuntimePurpose(
+        { surface: req.surface, triggered: automated },
+        isSubagentThreadRef(req.conversation.threadRef),
+      );
+      if (automated && req.model) {
         const error = await requestedRuntimeError(
           { deps },
           conversationScope(req.conversation, actor.id),
@@ -373,7 +381,7 @@ export function createTurnMethods(
         ...(req.attachments?.length ? { attachments: req.attachments } : {}),
         ...(req.inboundNotes?.length ? { inboundNotes: req.inboundNotes } : {}),
         ...((!individualAuth || req.surface === "web") && requestedModel ? { model: requestedModel } : {}),
-        ...turnModelOptions(req),
+        ...turnModelOptions({ ...req, triggered: automated }),
         ...(req.readOnly ? { readOnly: true } : {}),
         ...(privateRequest
           ? {
@@ -464,7 +472,7 @@ export function createTurnMethods(
         !req.idempotencyKey
       ) {
         const live = await deps.runs.activeForThread(conversation.threadRef);
-        const liveOriginKind = live ? resolveTurnOrigin(live.request).kind : undefined;
+        const liveOriginKind = live ? live.request.origin.kind : undefined;
         const personIntoAutomation =
           liveOriginKind === "automation" &&
           (origin.kind === "human" || (origin.kind === "ambient" && origin.live === true)) &&
@@ -507,7 +515,7 @@ export function createTurnMethods(
             halt: origin.kind === "human" && isHalt(req.text),
             ...(fileNames.length ? { fileNames } : {}),
           };
-          const route = routeWake(wake, true, resolveTurnOrigin(targetRun.request).kind === "ambient");
+          const route = routeWake(wake, true, targetRun.request.origin.kind === "ambient");
           if (route.kind === "steer" || route.kind === "drop") {
             const steerTs = origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs;
             let redelivered = false;
@@ -519,7 +527,7 @@ export function createTurnMethods(
                   kind: route.signal,
                   ...(route.text ? { text: route.text } : {}),
                   ...(steerTs ? { ts: steerTs } : {}),
-                  ...(route.signal === "steer" ? { request: req } : {}),
+                  ...(route.signal === "steer" ? { request: { ...req, origin } } : {}),
                   ...(redeliveryKey ? { dedupeKey: redeliveryKey } : {}),
                 }));
               return targetRun.id;
@@ -577,7 +585,7 @@ export function createTurnMethods(
                   kind: "steer",
                   text: req.text,
                   ts: origin.messageTs,
-                  request: req,
+                  request: { ...req, origin },
                   ...(redeliveryKey ? { dedupeKey: redeliveryKey } : {}),
                 });
               return liveAmbient.id;
@@ -711,7 +719,7 @@ export function createTurnMethods(
         !run.request.approval &&
         !run.request.envelopeWrapped &&
         !(run.request.proactiveOpener && !run.request.text.trim()) &&
-        isPersonAuthored(resolveTurnOrigin(run.request).kind)
+        isPersonAuthored(run.request.origin.kind)
           ? {
               input: {
                 runId: run.id,
@@ -783,7 +791,7 @@ export function createTurnMethods(
       if (!live) return null;
       const queued = visible
         .slice(1)
-        .filter((run) => isPersonAuthored(resolveTurnOrigin(run.request).kind))
+        .filter((run) => isPersonAuthored(run.request.origin.kind))
         .map((run) => ({
           runId: run.id,
           text: run.request.displayText ?? run.request.text ?? "",
@@ -796,11 +804,7 @@ export function createTurnMethods(
       const run = await deps.runs.get(runId);
       if (!run || (viewer && (!samePerson(run.request.actor.id, viewer) || !(await viewerMayUseRun(run, viewer)))))
         return { edited: false, reason: "not_found" };
-      if (
-        run.request.surface !== "web" ||
-        run.request.envelopeWrapped ||
-        !isPersonAuthored(resolveTurnOrigin(run.request).kind)
-      )
+      if (run.request.surface !== "web" || run.request.envelopeWrapped || !isPersonAuthored(run.request.origin.kind))
         return { edited: false, reason: "not_editable" };
       if (!text.trim() && !run.request.attachments?.length) return { edited: false, reason: "empty_text" };
       return (await deps.runs.editPendingText(runId, text, expectedText))

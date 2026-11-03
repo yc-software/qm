@@ -18,7 +18,7 @@ export const NON_INTERACTIVE_THINKING_LEVEL = "xhigh";
 export const NON_INTERACTIVE_FAST_MODE = false;
 
 export function turnModelOptions(input: {
-  triggered?: boolean;
+  triggered: boolean;
   surface?: string;
   thinkingLevel?: string;
   fastMode?: boolean;

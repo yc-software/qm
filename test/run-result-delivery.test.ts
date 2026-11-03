@@ -206,12 +206,6 @@ test("runResultDelivery keeps unprompted failures quiet, like the live path", ()
   assert.equal(runResultDelivery(ok)?.text, "the reply", "an unprompted reply the agent chose to send still recovers");
 });
 
-test("runResultDelivery recognizes legacy queued ambient turns", () => {
-  const failed = run({ status: "failed", result: { status: "failed", reason: "boom" } });
-  failed.request = { ...failed.request, origin: undefined, unprompted: true } as unknown as OrchestratorInput;
-  assert.equal(runResultDelivery(failed), null);
-});
-
 test("runResultDelivery skips terminal results that cannot be safely replayed", () => {
   assert.equal(runResultDelivery(run({ request: turn("hi") })), null);
   assert.equal(runResultDelivery(run({ result: { status: "refused", reason: "not allowed" } })), null);

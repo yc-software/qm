@@ -24,7 +24,7 @@ function mention(text: string, channel: string, root: string): TurnRequest {
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
     deliveryTarget: `slack:${channel}:${root}`,
     text,
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   };
 }
@@ -36,8 +36,7 @@ function overheard(text: string, channel: string, root: string): TurnRequest {
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
     deliveryTarget: `slack:${channel}:${root}`,
     text,
-    unprompted: true,
-    liveActor: true,
+    origin: { kind: "ambient", live: true },
     async: true,
   };
 }
@@ -49,7 +48,7 @@ function dm(text: string, channel: string): TurnRequest {
     conversation: { kind: "dm", threadRef: `dm:${channel}`, audience: [actor] },
     deliveryTarget: `slack:${channel}`,
     text,
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   };
 }
@@ -64,7 +63,7 @@ function web(text: string, threadRef: string): TurnRequest {
     actor,
     conversation: { kind: "dm", threadRef, audience: [actor] },
     text,
-    liveActor: true,
+    origin: { kind: "human" },
     async: true,
   };
 }
@@ -269,8 +268,11 @@ test("spine ON: the steer signal carries the message's real surface ts (so the a
   const first = await built.app.turn(mention("@bot start", channel, root));
   const liveRunId = first.runId!;
 
-  await built.app.turn({ ...mention("make it blue", channel, root), triggerTs: "800.010" });
-  await built.app.turn({ ...overheard("and rounded", channel, root), entryTs: "800.011" });
+  await built.app.turn({ ...mention("make it blue", channel, root), origin: { kind: "human", messageTs: "800.010" } });
+  await built.app.turn({
+    ...overheard("and rounded", channel, root),
+    origin: { kind: "ambient", live: true, entryTs: "800.011" },
+  });
 
   const signals = await built.signals.takePending(liveRunId);
   assert.equal(signals.length, 2);
@@ -346,7 +348,7 @@ function automationRun(channel: string, root: string): TurnRequest {
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [] },
     deliveryTarget: `slack:${channel}:${root}`,
     text: "check the deploy and report back",
-    triggered: true,
+    origin: { kind: "automation" },
     async: true,
   };
 }
@@ -409,7 +411,7 @@ test("a SYNTHETIC detection (no live author) still steers a live AUTOMATION run 
     conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
     deliveryTarget: `slack:${channel}:${root}`,
     text: "bot posted: build finished",
-    unprompted: true,
+    origin: { kind: "ambient" },
     async: true,
   };
   const follow = await built.app.turn(synthetic);
@@ -426,8 +428,7 @@ function spawnedWorker(channel: string, askTs: string): TurnRequest {
     conversation: { kind: "channel", threadRef: `slack:${channel}:ambient:${askTs}`, channelRef: channel },
     deliveryTarget: channel,
     text: "can you check the deploy?",
-    liveActor: true,
-    triggerTs: askTs,
+    origin: { kind: "human", messageTs: askTs },
     surfaceTools: true,
     async: true,
     spawned: true,
@@ -518,7 +519,10 @@ test("reverse race: an addressed mention steers into the live ambient run, not a
   await built.sessions.getOrCreateByThread(ambientRef, "channel", `channel:${channel}`);
   const ambient = await built.app.turn(spawnedWorker(channel, askTs));
 
-  const second = await built.app.turn({ ...mention("@bot are you on it?", channel, askTs), triggerTs: askTs });
+  const second = await built.app.turn({
+    ...mention("@bot are you on it?", channel, askTs),
+    origin: { kind: "human", messageTs: askTs },
+  });
   assert.equal(second.runId, ambient.runId, "the mention steered into the LIVE ambient run, not a second reply");
   // NOT flagged steered: the ambient owner is unprompted and stays silent on a refusal/failure,
   // so the addressed caller must keep waiting on the run — it's the only one that would report it.
@@ -538,7 +542,10 @@ for (const personalSide of ["ambient", "mention"] as const) {
     await built.config.setPersonalModelAuth(personalSide === "ambient" ? "jordan@acme.test" : "U1", true, "openai");
     await built.sessions.getOrCreateByThread(ambientRef, "channel", `channel:${channel}`);
     const ambient = await built.app.turn(spawnedWorker(channel, askTs));
-    const second = await built.app.turn({ ...mention("@bot continue", channel, askTs), triggerTs: askTs });
+    const second = await built.app.turn({
+      ...mention("@bot continue", channel, askTs),
+      origin: { kind: "human", messageTs: askTs },
+    });
     assert.equal(second.status, "queued");
     assert.notEqual(second.runId, ambient.runId);
     assert.notEqual(second.steered, true);
@@ -647,7 +654,7 @@ test("an automation wake queued behind a live turn stays out of the composer que
     actor,
     conversation: { kind: "dm", threadRef, audience: [actor] },
     text: '<wake reason="monitor" surface="monitor" process-id="p1" at="2026-09-02T00:00:00.000Z">…</wake>',
-    triggered: true,
+    origin: { kind: "automation" },
     async: true,
   });
   const typed = await built.app.turn(web("and who was paged", threadRef));
@@ -694,7 +701,10 @@ test("orphan replay: a steer unconsumed at run completion replays as a fresh tur
   const first = await built.app.turn(mention("@bot start the task", channel, root));
   const liveRunId = first.runId!;
 
-  await built.app.turn({ ...mention("@bot why did you do it wrong?", channel, root), triggerTs: "900.010" });
+  await built.app.turn({
+    ...mention("@bot why did you do it wrong?", channel, root),
+    origin: { kind: "human", messageTs: "900.010" },
+  });
   const claimed = await built.runs.claim("w1", 30_000);
   assert.equal(claimed?.id, liveRunId);
   await built.runs.complete(liveRunId, claimed!.leaseToken!, { status: "silent" });
@@ -799,7 +809,7 @@ for (const sanitize of [false, true])
 
     const second = await built.app.turn({
       ...mention("@bot and another thing\u0000\ud800", channel, root),
-      triggerTs: "1300.010",
+      origin: { kind: "human", messageTs: "1300.010" },
     });
     assert.equal(second.status, "queued");
     assert.notEqual(second.runId, liveRunId, "the caller follows the replayed run, not the dead one");
@@ -826,7 +836,10 @@ test("reverse race: a sanitized mention follows its fresh run after the ambient 
   const ambient = await built.app.turn(spawnedWorker(channel, askTs));
   completeOnSend(built, true);
   built.app.replayOrphanedRunSignals = async () => {};
-  const second = await built.app.turn({ ...mention("@bot more\u0000 work\ud800", channel, askTs), triggerTs: askTs });
+  const second = await built.app.turn({
+    ...mention("@bot more\u0000 work\ud800", channel, askTs),
+    origin: { kind: "human", messageTs: askTs },
+  });
   assert.equal(second.status, "queued");
   assert.notEqual(second.runId, ambient.runId);
   const replayed = await built.runs.get(second.runId!);

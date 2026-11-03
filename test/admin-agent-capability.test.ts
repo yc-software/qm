@@ -698,11 +698,11 @@ for (const liveAuthor of [false, true]) {
 }
 
 for (const [name, input, expected] of [
-  ["human thread reply", { unprompted: true, liveActor: true }, 200],
-  ["synthetic ambient wake", { unprompted: true }, 403],
-  ["bot thread reply", { unprompted: true, botActor: true }, 403],
-  ["cron", { triggered: true, surface: "cron", liveActor: true }, 403],
-  ["webhook", { triggered: true, surface: "webhook", liveActor: true }, 403],
+  ["human thread reply", { origin: { kind: "ambient", live: true } }, 200],
+  ["synthetic ambient wake", { origin: { kind: "ambient" } }, 403],
+  ["bot thread reply", { origin: { kind: "ambient" }, botActor: true }, 403],
+  ["cron", { origin: { kind: "automation" }, surface: "cron" }, 403],
+  ["webhook", { origin: { kind: "automation" }, surface: "webhook" }, 403],
 ] satisfies Array<[string, Partial<TurnRequest>, number]>) {
   test(`orchestrator-issued ${name} token reaches the HTTP admin gate with the right authority`, async () => {
     const s = await start();

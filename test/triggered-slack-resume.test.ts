@@ -75,7 +75,7 @@ test("approving an ask from a Slack group thread resumes it when external Slack 
   const direct = await b.app.turn({
     surface: "web",
     actor: { externalId: "U_BOB" },
-    triggered: true,
+    origin: { kind: "automation" },
     conversation: { kind: "group", channelRef: "G1", threadRef, audience: [{ externalId: "U_BOB" }] },
     text: "resume",
   } as TurnRequest);
