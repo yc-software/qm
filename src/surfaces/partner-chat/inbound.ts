@@ -2,7 +2,7 @@ import type { App } from "../../api/app-types.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
 import { reportFailureAs } from "../../util/errors.ts";
-import { isoFromTs } from "../../util/message-tag.ts";
+import { buildContextWindow } from "../../slack/conversation.ts";
 import { partnerChatPrincipal } from "./adapter.ts";
 import {
   partnerChatRef,
@@ -13,8 +13,8 @@ import {
 } from "./protocol.ts";
 
 const SURFACE = "partner-chat";
-const ENGAGED_THREAD_SCAN = 100;
-const CONTEXT_DEFAULT_COUNT = 50;
+const CONTEXT_SCAN = 500;
+const CONTEXT_DEFAULT_COUNT = 100;
 
 type InboundApp = Pick<App, "turn" | "ingestSurfaceEvents" | "onContextRequestCreated" | "fulfillContextRequest">;
 
@@ -29,13 +29,14 @@ export function createPartnerChatInbound(deps: {
   const cache = deps.surfaceCache;
 
   async function threadEngaged(container: string, thread: string): Promise<boolean> {
-    const replies = await cache.readMessages(container, {
+    const mine = await cache.readMessages(container, {
       surface: SURFACE,
       sub: thread,
-      limit: ENGAGED_THREAD_SCAN,
+      self: true,
+      limit: 1,
       noFallback: true,
     });
-    return replies.some((m) => m.self);
+    return mine.length > 0;
   }
 
   async function handle(timestamp: string | undefined, signature: string | undefined, rawBody: string) {
@@ -47,17 +48,30 @@ export function createPartnerChatInbound(deps: {
     } catch {
       parsed = null;
     }
-    const event = parsePartnerChatEvent(parsed);
-    if (!event) return { status: 400, body: { error: "bad_request" } };
+    const result = parsePartnerChatEvent(parsed);
+    if (!result.success)
+      return {
+        status: 400,
+        body: { error: "bad_request", issues: result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) },
+      };
+    const event = result.data;
     const { message, chat } = event;
+    const members = chat.members.filter((m) => !m.bot);
     const humans = await Promise.all(
-      chat.members
-        .filter((m) => !m.bot)
-        .map(async (m) => partnerChatPrincipal(m, await deps.isInternalEmail(m.email?.trim().toLowerCase() ?? ""))),
+      members.map(async (m) =>
+        partnerChatPrincipal(m, await deps.isInternalEmail(m.email?.trim().toLowerCase() ?? "")),
+      ),
     );
-    if (humans.some((p) => p.isExternalGuest)) return { status: 200, body: { ok: true } };
     const self = message.user.bot === true;
-    const author = partnerChatPrincipal(message.user, !self);
+    const authorAt = members.findIndex((m) => m.id === message.user.id);
+    const guests = humans.filter((p) => p.isExternalGuest).length;
+    if (guests || (!self && authorAt < 0)) {
+      console.log(
+        `[partner-chat] ignoring chat ${chat.id}: ${guests} member(s) not vouched for as internal, author listed: ${self || authorAt >= 0}`,
+      );
+      return { status: 200, body: { ok: true, ignored: "unvouched_participants" } };
+    }
+    const author = self ? partnerChatPrincipal(message.user, false) : humans[authorAt]!;
     const thread = event.thread_id ?? undefined;
     const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
     const ts = partnerChatTs(message.created_at, message.id);
@@ -127,25 +141,27 @@ export function createPartnerChatInbound(deps: {
     const ref = query.conversationTarget ? parsePartnerChatRef(query.conversationTarget) : null;
     if (!ref) return { messages: [], note: "this conversation can't be read" };
     const container = partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat });
-    const rows = await cache.readMessages(container, {
+    const scan = await cache.readMessages(container, {
       surface: SURFACE,
       ...(ref.thread ? { sub: ref.thread } : {}),
       ...(query.before ? { before: query.before } : {}),
-      limit: query.count ?? CONTEXT_DEFAULT_COUNT,
+      limit: CONTEXT_SCAN,
       noFallback: true,
     });
-    const match = query.match?.toLowerCase();
-    const shown = rows.filter((m) => !match || m.text.toLowerCase().includes(match));
-    return {
-      messages: shown.map((m) => ({
+    return buildContextWindow(
+      scan.map((m) => ({
         ts: m.ts,
-        ...(m.sub ? { threadTs: m.sub } : {}),
-        author: m.authorName ?? m.authorId ?? "",
-        time: isoFromTs(m.ts),
+        name: m.authorName ?? m.authorId ?? "",
         text: m.text,
+        ...(m.self ? { isSelf: true } : {}),
+        ...(m.sub ? { parentTs: m.sub } : {}),
       })),
-      selfTs: shown.filter((m) => m.self).map((m) => m.ts),
-    };
+      {
+        count: query.count ?? CONTEXT_DEFAULT_COUNT,
+        ...(query.match ? { match: query.match } : {}),
+        scanHasMore: scan.length === CONTEXT_SCAN,
+      },
+    );
   }
 
   deps.app.onContextRequestCreated((request) => {

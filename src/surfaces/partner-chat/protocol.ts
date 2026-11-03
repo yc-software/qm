@@ -53,9 +53,8 @@ export function verifyPartnerChat(
   return constantTimeEqual(signature ?? "", signPartnerChat(secret, timestamp, rawBody));
 }
 
-export function parsePartnerChatEvent(raw: unknown): PartnerChatEvent | null {
-  const parsed = eventSchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+export function parsePartnerChatEvent(raw: unknown) {
+  return eventSchema.safeParse(raw);
 }
 
 export function partnerChatRef(c: PartnerChatRef): string {

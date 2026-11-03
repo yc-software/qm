@@ -61,7 +61,7 @@ export function createPartnerChatDeliveries(deps: {
     const body = d.text.trim();
     const editId = d.destination.editRef ? partnerChatMessageId(d.destination.editRef) : undefined;
     if (!ref) throw new PartnerChatHttpError(400, `unroutable target ${d.destination.target}`);
-    if (d.destination.react || d.destination.delete || d.destination.pin || !body)
+    if (d.destination.react || d.destination.delete || d.destination.pin || d.attachments?.length || !body)
       throw new PartnerChatHttpError(400, "only non-empty text posts and edits are supported");
     if (editId !== undefined) {
       if (!MESSAGE_ID.test(editId)) throw new PartnerChatHttpError(400, `bad message id ${editId}`);
@@ -69,6 +69,8 @@ export function createPartnerChatDeliveries(deps: {
       return;
     }
     const thread = d.destination.threadTs ? partnerChatMessageId(d.destination.threadTs) : ref.thread;
+    if (thread !== undefined && !MESSAGE_ID.test(thread))
+      throw new PartnerChatHttpError(400, `bad thread id ${thread}`);
     const posted = await call("/qm_surface/messages", {
       client_message_id: d.idempotencyKey,
       chat_id: ref.chat,
@@ -76,6 +78,7 @@ export function createPartnerChatDeliveries(deps: {
       body,
     });
     const ackRun = d.idempotencyKey.startsWith("ack:") ? d.idempotencyKey.slice("ack:".length) : undefined;
+    if (!posted.message_id) console.log(`[partner-chat] delivery ${d.id} posted without a message id`);
     if (ackRun && posted.message_id)
       await deps.app
         .setRunDeliveryState(ackRun, { editRef: posted.message_id })

@@ -1767,6 +1767,15 @@ export function buildApp(
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
   const directory = createPostgresDirectoryStore(databaseUrl);
+  const vouchedInternalEmail = async (email: string): Promise<boolean> => {
+    await identity.refresh();
+    return (
+      identity.isInternal(identity.classify(email)) &&
+      (config.emailAuthPrincipals?.includes(email) === true ||
+        Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
+        (await directory.get(email))?.type === "internal")
+    );
+  };
   const projects = createProjectStore(artifactMap<Project>("projects"), {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
@@ -1805,16 +1814,9 @@ export function buildApp(
     canReadScope,
     canWriteScope,
     externalSharingAllowed: (ownerScopeId) => externalAppSharingAllowed(featureFlags, ownerScopeId),
-    canManageEmail: async (email) => {
-      await identity.refresh();
-      return (
-        identity.isInternal(identity.classify(email)) &&
-        ((await directory.get(email))?.type === "internal" ||
-          config.emailAuthPrincipals?.includes(email) ||
-          Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
-          identity.externalMember(email) !== undefined)
-      );
-    },
+    canManageEmail: async (email) =>
+      (await vouchedInternalEmail(email)) ||
+      (identity.isInternal(identity.classify(email)) && identity.externalMember(email) !== undefined),
     managesArtifactHome,
     ...(deployGitSecret && deployGitBase
       ? {
@@ -2452,11 +2454,7 @@ export function buildApp(
         secret: config.partnerChat.secret,
         app,
         surfaceCache,
-        isInternalEmail: async (email) =>
-          email.includes("@") &&
-          (config.emailAuthPrincipals?.includes(email) ||
-            Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
-            (await directory.get(email))?.type === "internal"),
+        isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
       })
     : null;
   const partnerChatOutbound = config.partnerChat

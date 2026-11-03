@@ -83,6 +83,7 @@ export interface ReadMessagesOpts extends SurfaceKey {
   before?: string;
   includeDeleted?: boolean;
   noFallback?: boolean;
+  self?: boolean;
 }
 
 interface RevisedSinceOpts extends SurfaceKey {
