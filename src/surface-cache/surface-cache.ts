@@ -210,7 +210,7 @@ export function createPostgresSurfaceCache(
           const res = await client.query(
             `INSERT INTO channel_messages(org_id, container, ts, sub, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, handled, created_at, deleted_at, broadcast, subtype, bot_id, raw, surface, account)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,COALESCE($18::boolean, FALSE),$19,$20,$21::jsonb,$22,$23)
-             ON CONFLICT (org_id, surface, account, container, ts) DO UPDATE SET
+             ON CONFLICT (tenant_id, org_id, surface, account, container, ts) DO UPDATE SET
                sub = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR NOT $17 THEN channel_messages.sub ELSE EXCLUDED.sub END,
                subtype = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) THEN channel_messages.subtype ELSE COALESCE(EXCLUDED.subtype, channel_messages.subtype) END,
                broadcast = CASE WHEN EXCLUDED.deleted OR channel_messages.deleted OR COALESCE(EXCLUDED.edited_at, 0) < COALESCE(channel_messages.edited_at, 0) OR $18::boolean IS NULL THEN channel_messages.broadcast ELSE EXCLUDED.broadcast END,
@@ -268,7 +268,7 @@ export function createPostgresSurfaceCache(
               await client.query(
                 `INSERT INTO channel_files(org_id, container, ts, file_id, name, mimetype, created_at, title, size, surface, account)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-               ON CONFLICT (org_id, surface, account, container, ts, file_id) DO UPDATE SET name = EXCLUDED.name, mimetype = EXCLUDED.mimetype, title = EXCLUDED.title, size = EXCLUDED.size`,
+               ON CONFLICT (tenant_id, org_id, surface, account, container, ts, file_id) DO UPDATE SET name = EXCLUDED.name, mimetype = EXCLUDED.mimetype, title = EXCLUDED.title, size = EXCLUDED.size`,
                 [
                   orgId,
                   e.container,
@@ -288,7 +288,7 @@ export function createPostgresSurfaceCache(
           await client.query(
             `INSERT INTO channel_state(org_id, container, last_ts, oldest_ts, name, kind, members, updated_at, surface, account)
              VALUES ($1,$2,$3,$3,$4,$5,$6::jsonb,$7,$8,$9)
-             ON CONFLICT (org_id, surface, account, container) DO UPDATE SET
+             ON CONFLICT (tenant_id, org_id, surface, account, container) DO UPDATE SET
                last_ts = GREATEST(channel_state.last_ts, EXCLUDED.last_ts),
                oldest_ts = CASE
                  WHEN channel_state.oldest_ts IS NULL OR EXCLUDED.oldest_ts::numeric < channel_state.oldest_ts::numeric
@@ -318,7 +318,7 @@ export function createPostgresSurfaceCache(
       await q(
         `INSERT INTO channel_messages(org_id, container, ts, created_at, handled, surface, account)
          VALUES ($1,$2,$3,$4,TRUE,$5,$6)
-         ON CONFLICT (org_id, surface, account, container, ts) DO UPDATE SET handled = TRUE`,
+         ON CONFLICT (tenant_id, org_id, surface, account, container, ts) DO UPDATE SET handled = TRUE`,
         [orgId, container, ts, Date.now(), ...keyOf(key)],
       );
     },

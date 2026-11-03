@@ -122,7 +122,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const inserted = await q(
         `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, created_at, shadow)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (idempotency_key) DO UPDATE
+         ON CONFLICT (tenant_id, idempotency_key) DO UPDATE
            SET destination = EXCLUDED.destination,
                text = EXCLUDED.text,
                attachments = EXCLUDED.attachments,
@@ -213,7 +213,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       await query(
         `INSERT INTO deliveries (id, idempotency_key, destination, text, created_at, delivered_at)
          VALUES ($1, $2, '{"type":"ack-tombstone","target":""}', '', $3, $3)
-         ON CONFLICT (idempotency_key)
+         ON CONFLICT (tenant_id, idempotency_key)
          DO UPDATE SET delivered_at = COALESCE(deliveries.delivered_at, EXCLUDED.delivered_at),
                        expired_at = CASE WHEN deliveries.delivered_at IS NULL THEN NULL ELSE deliveries.expired_at END`,
         [randomUUID(), idempotencyKey, at],

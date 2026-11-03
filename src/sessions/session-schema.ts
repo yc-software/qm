@@ -303,6 +303,22 @@ const DROP_ITEMS_SEARCH: PgMigrationDefinition = {
   statements: [`SET LOCAL lock_timeout = '5s'`, `DROP INDEX IF EXISTS items_search`],
 };
 
+const SEEDED_TENANT: PgMigrationDefinition = {
+  id: "sessions/store/0049-seeded-tenant",
+  statements: [
+    `DO $seeded_tenant$
+DECLARE
+  seeded uuid;
+BEGIN
+  IF (SELECT count(*) FROM tenants) <> 1 OR EXISTS (SELECT 1 FROM items) OR EXISTS (SELECT 1 FROM blobs) THEN
+    RETURN;
+  END IF;
+  SELECT id INTO seeded FROM tenants;
+  UPDATE qm_tenant SET id = seeded WHERE id IS DISTINCT FROM seeded;
+END $seeded_tenant$`,
+  ],
+};
+
 export const TENANT_BACKFILL: PgMigrationDefinition = {
   id: "sessions/store/0050-tenant-backfill",
   statements: [
@@ -477,6 +493,7 @@ export const SESSION_MIGRATIONS = [
   SESSION_SCHEMA,
   MESSAGE_SEARCH_INDEX,
   DROP_ITEMS_SEARCH,
+  SEEDED_TENANT,
   TENANT_BACKFILL,
   SPEND_RECOVERY_INDEX,
   SESSION_FACTS,

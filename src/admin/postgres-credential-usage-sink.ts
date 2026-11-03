@@ -52,7 +52,7 @@ export function createPostgresCredentialUsageSink(connectionString: string): Cre
     async admitDailyCall(slug, cap) {
       const rows = await sink.q(
         `INSERT INTO credential_daily_calls(slug, day, sent) VALUES ($1, $2, 1)
-         ON CONFLICT (slug, day) DO UPDATE SET sent = credential_daily_calls.sent + 1
+         ON CONFLICT (tenant_id, slug, day) DO UPDATE SET sent = credential_daily_calls.sent + 1
          WHERE credential_daily_calls.sent < $3
          RETURNING sent`,
         [slug, utcDayStart(Date.now()), cap],

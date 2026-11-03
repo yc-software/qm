@@ -84,7 +84,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       const { rows } = await q(
         `WITH ins AS (
            INSERT INTO run_signals(run_id, kind, text, payload, created_at, dedupe_key) VALUES ($1,$2,$3,$4,$5,$6)
-           ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+           ON CONFLICT (tenant_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
            RETURNING id
          )
          SELECT pg_notify('${CHANNEL}', $1) FROM ins`,
