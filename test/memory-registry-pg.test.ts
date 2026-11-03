@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createRegistryMemoryService } from "../src/memory/registry-memory.ts";
 import { withProviders } from "../src/memory/provider-outcome.ts";
@@ -26,7 +27,12 @@ import { startMcpTestServer, type McpTestServer } from "./support/mcp-test-serve
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
-const change = { actor: "admin-alice", now: 1_762_128_000_000, overlayIds: new Set<string>() };
+const change = {
+  actor: "admin-alice",
+  now: 1_762_128_000_000,
+  overlayIds: new Set<string>(),
+  key: deriveConnectorKey("test-memory-registry-key", "memory-registry"),
+};
 const BRAIN_FACT = "Alice's project codename is BLACKBEARD-42.";
 const plain = (rows: ReadonlyArray<{ text: string }>) =>
   rows.map(({ text }) => text.replace(/^- \(\d{4}-\d\d-\d\d\) /, ""));
@@ -55,6 +61,7 @@ function stores(url: string, overlay?: Parameters<typeof createMemoryRegistrySto
   const maps = createPostgresMapFactory(url);
   return createMemoryRegistryStore({
     map: maps.map<MemoryRegistry>(MEMORY_REGISTRY_TABLE),
+    key: change.key,
     ...(overlay ? { overlay } : {}),
   });
 }
@@ -156,7 +163,7 @@ test("an invalid registry version leaves the last valid one serving", async (t) 
   const url = testDatabaseUrl();
   const maps = createPostgresMapFactory(url);
   const map = maps.map<MemoryRegistry>(MEMORY_REGISTRY_TABLE);
-  const registry = createMemoryRegistryStore({ map });
+  const registry = createMemoryRegistryStore({ map, key: change.key });
   const memory = createRegistryMemoryService({ defaultMemory: createPostgresMemoryService(url), registry });
   await registry.update(personalBrain(brain.url));
   await registry.update((record) =>
@@ -250,6 +257,7 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
   assert.equal(put.status, 200);
   assert.doesNotMatch(put.text, /never-shown-secret/);
   assert.equal(JSON.parse(put.text).brains[0].auth.hasClientSecret, true);
+  assert.doesNotMatch(JSON.stringify((await built.memoryRegistry.current()).record), /never-shown-secret/);
   const read = await api.call("GET", "/v1/admin/memory-registry/brains/acme-personal", "admin-alice@default-org");
   assert.equal(read.status, 200);
   assert.doesNotMatch(read.text, /never-shown-secret/);

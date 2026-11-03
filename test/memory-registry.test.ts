@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import {
   EMPTY_MEMORY_REGISTRY,
   MemoryRegistryError,
@@ -11,7 +12,12 @@ import {
   type MemoryRegistry,
 } from "../src/memory/registry.ts";
 
-const change = { actor: "admin-alice", now: 1_762_128_000_000, overlayIds: new Set<string>() };
+const change = {
+  actor: "admin-alice",
+  now: 1_762_128_000_000,
+  overlayIds: new Set<string>(),
+  key: deriveConnectorKey("test-memory-registry-key", "memory-registry"),
+};
 
 function refused(fn: () => unknown, status: number, pattern: RegExp): void {
   assert.throws(fn, (error: unknown) => {
@@ -53,11 +59,16 @@ test("a brain binds the kind personal or one member's personal scope, and always
     { brain: "acme-personal", scope: "personal:U1", recall: false, capture: "explicit" },
     change,
   );
-  const { config, disabled } = resolveMemoryRegistry(bound, new Set());
+  const { config, disabled } = resolveMemoryRegistry(bound, change);
   assert.deepEqual(disabled, []);
+  assert.doesNotMatch(JSON.stringify(bound), /personal-secret/);
   assert.deepEqual(
-    config.providers.map((provider) => [provider.id, provider.type === "mcp" && provider.attestActor]),
-    [["acme-personal", true]],
+    config.providers.map((provider) => [
+      provider.id,
+      provider.type === "mcp" && provider.attestActor,
+      provider.type === "mcp" && provider.read.auth.clientSecret,
+    ]),
+    [["acme-personal", true, "personal-secret"]],
   );
   assert.deepEqual(config.routes, [
     {
@@ -103,7 +114,7 @@ test("env provider ids are read-only and a stored collision disables the route",
     /MEMORY_PROVIDER_CONFIG/,
   );
   const record = putBinding(personalBrain(), "p1", { brain: "acme-personal", scope: "personal:U1" }, change);
-  const { config, disabled } = resolveMemoryRegistry(record, new Set(["acme-personal"]));
+  const { config, disabled } = resolveMemoryRegistry(record, { ...change, overlayIds: new Set(["acme-personal"]) });
   assert.deepEqual(config.routes, []);
   assert.deepEqual(
     disabled.map(({ binding, code }) => [binding, code]),
@@ -133,37 +144,51 @@ test("each binding QM can't serve names its reason", () => {
   record = putBinding(record, "alice", { brain: "acme-personal", scope: "personal:U1" }, change);
   record = putBrain(record, "acme-personal", { url: "https://brain2.acme.example/mcp" }, change);
   const alice = record.bindings[0]!;
+  const rekeyed = putBrain(
+    EMPTY_MEMORY_REGISTRY,
+    "rekeyed",
+    { preset: "gbrain-v1", url: "https://brain3.acme.example/mcp", clientId: "c", clientSecret: "s", label: "x" },
+    { ...change, key: deriveConnectorKey("an-older-connector-key", "memory-registry") },
+  ).brains[0]!;
   const { config, disabled } = resolveMemoryRegistry(
     {
       ...record,
-      brains: [...record.brains, { ...record.brains[0]!, id: "future", preset: "gbrain-v9" }],
+      brains: [...record.brains, { ...record.brains[0]!, id: "future", preset: "gbrain-v9" }, rekeyed],
       bindings: [
         alice,
         { ...alice, id: "bob", brain: "future", scope: "personal:U2" },
         { ...alice, id: "gone", brain: "deleted-brain" },
         { ...alice, id: "room", scope: "group:web-project-1" },
+        { ...alice, id: "carol", brain: "rekeyed", scope: "personal:U3" },
       ],
     },
-    new Set(),
+    change,
   );
   assert.deepEqual(config.routes, []);
   assert.deepEqual(
-    disabled.map(({ binding, code, detail }) => [binding, code, detail]),
+    disabled.map(({ binding, code, detail }) => [binding, code, detail?.split(" (")[0]]),
     [
       ["alice", "secret_missing", undefined],
       ["bob", "preset_unknown", undefined],
       ["gone", "invalid_config", "brain deleted-brain isn't registered"],
       ["room", "invalid_config", "group:web-project-1 isn't a personal scope"],
+      [
+        "carol",
+        "invalid_config",
+        "brain rekeyed's client secret can't be decrypted with this instance's CONNECTOR_SECRET_KEY; set it again",
+      ],
     ],
   );
 });
 
 test("moving a brain drops its secret, and a brain with bindings can't be deleted", () => {
   let record = putBinding(personalBrain(), "alice", { brain: "acme-personal", scope: "personal:U1" }, change);
+  const sealed = record.brains[0]!.auth.clientSecretEnc;
   record = putBrain(record, "acme-personal", { label: "Renamed" }, change);
-  assert.equal(record.brains[0]!.auth.clientSecret, "personal-secret");
+  assert.ok(sealed);
+  assert.equal(record.brains[0]!.auth.clientSecretEnc, sealed);
   record = putBrain(record, "acme-personal", { url: "https://brain2.acme.example/mcp" }, change);
-  assert.equal(record.brains[0]!.auth.clientSecret, undefined);
+  assert.equal(record.brains[0]!.auth.clientSecretEnc, undefined);
   refused(() => deleteBrain(record, "acme-personal"), 409, /delete it first/);
   record = deleteBrain(deleteBinding(record, "alice"), "acme-personal");
   assert.deepEqual(record, EMPTY_MEMORY_REGISTRY);

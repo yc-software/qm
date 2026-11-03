@@ -1,3 +1,4 @@
+import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { parseScopeId, type ScopeId } from "../types.ts";
 import { errMessage } from "../util/errors.ts";
@@ -19,7 +20,7 @@ export interface RegistryBrain {
   id: string;
   preset: string;
   url: string;
-  auth: { clientId: string; clientSecret?: string };
+  auth: { clientId: string; clientSecretEnc?: string };
   timeoutMs?: number;
   label: string;
   updatedAt: number;
@@ -116,13 +117,18 @@ export function readRegistry(value: unknown): MemoryRegistry {
 function brainBlock(brain: RegistryBrain, overlayIds: ReadonlySet<string>): RegistryDisabledCode | undefined {
   if (!presetOf(brain)) return "preset_unknown";
   if (overlayIds.has(brain.id)) return "id_taken";
-  if (!brain.auth.clientSecret) return "secret_missing";
+  if (!brain.auth.clientSecretEnc) return "secret_missing";
   return undefined;
+}
+
+export interface RegistryContext {
+  overlayIds: ReadonlySet<string>;
+  key: SecretKey;
 }
 
 export function resolveMemoryRegistry(
   record: MemoryRegistry,
-  overlayIds: ReadonlySet<string>,
+  { overlayIds, key }: RegistryContext,
 ): { config: MemoryProviderConfig; disabled: DisabledRegistryRoute[] } {
   const config: MemoryProviderConfig = { providers: [], routes: [] };
   const disabled: DisabledRegistryRoute[] = [];
@@ -153,8 +159,18 @@ export function resolveMemoryRegistry(
       disable(code);
       continue;
     }
+    let clientSecret: string;
     try {
-      const resolved = brainConfig(brain, [binding], brain.auth.clientSecret!);
+      clientSecret = decryptSecret(brain.auth.clientSecretEnc!, key);
+    } catch (error) {
+      disable(
+        "invalid_config",
+        `brain ${brain.id}'s client secret can't be decrypted with this instance's CONNECTOR_SECRET_KEY; set it again (${errMessage(error)})`,
+      );
+      continue;
+    }
+    try {
+      const resolved = brainConfig(brain, [binding], clientSecret);
       if (!served.has(brain.id)) config.providers.push(...resolved.providers);
       served.add(brain.id);
       config.routes.push(...resolved.routes);
@@ -165,10 +181,9 @@ export function resolveMemoryRegistry(
   return { config, disabled };
 }
 
-interface Change {
+export interface RegistryChange extends RegistryContext {
   actor: string;
   now: number;
-  overlayIds: ReadonlySet<string>;
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -188,7 +203,7 @@ function flag(value: unknown, field: string, fallback: boolean): boolean {
   return value;
 }
 
-export function putBrain(record: MemoryRegistry, id: string, input: unknown, change: Change): MemoryRegistry {
+export function putBrain(record: MemoryRegistry, id: string, input: unknown, change: RegistryChange): MemoryRegistry {
   if (change.overlayIds.has(id)) throw conflict(`${id} comes from MEMORY_PROVIDER_CONFIG, which the API can't change`);
   const body = object(input);
   const existing = record.brains.find((brain) => brain.id === id);
@@ -196,8 +211,9 @@ export function putBrain(record: MemoryRegistry, id: string, input: unknown, cha
   if (typeof preset !== "string" || !presetOf({ preset }))
     throw invalid(`preset must be one of: ${Object.keys(BRAIN_PRESETS).join(", ")}`);
   const url = text(body.url ?? existing?.url, "url", 2048);
-  const kept = url === existing?.url ? existing.auth.clientSecret : undefined;
-  const clientSecret = body.clientSecret === undefined ? kept : text(body.clientSecret, "clientSecret", 4096);
+  const clientSecret = body.clientSecret === undefined ? undefined : text(body.clientSecret, "clientSecret", 4096);
+  const kept = url === existing?.url ? existing.auth.clientSecretEnc : undefined;
+  const clientSecretEnc = clientSecret === undefined ? kept : encryptSecret(clientSecret, change.key);
   const timeoutMs = body.timeoutMs ?? existing?.timeoutMs;
   const brain: RegistryBrain = {
     id,
@@ -205,7 +221,7 @@ export function putBrain(record: MemoryRegistry, id: string, input: unknown, cha
     url,
     auth: {
       clientId: text(body.clientId ?? existing?.auth.clientId, "clientId"),
-      ...(clientSecret ? { clientSecret } : {}),
+      ...(clientSecretEnc ? { clientSecretEnc } : {}),
     },
     ...(timeoutMs === undefined ? {} : { timeoutMs: timeoutMs as number }),
     label: text(body.label ?? existing?.label, "label", 80),
@@ -230,7 +246,7 @@ export function deleteBrain(record: MemoryRegistry, id: string): MemoryRegistry 
   return { ...record, brains: record.brains.filter((brain) => brain.id !== id) };
 }
 
-export function putBinding(record: MemoryRegistry, id: string, input: unknown, change: Change): MemoryRegistry {
+export function putBinding(record: MemoryRegistry, id: string, input: unknown, change: RegistryChange): MemoryRegistry {
   if (!BINDING_ID.test(id))
     throw invalid("binding id must be up to 63 lowercase letters, digits or hyphens, starting with a letter");
   const body = object(input);
@@ -275,25 +291,26 @@ export function deleteBinding(record: MemoryRegistry, id: string): MemoryRegistr
 
 export function redactBrain(brain: RegistryBrain) {
   const {
-    auth: { clientSecret, ...auth },
+    auth: { clientSecretEnc, ...auth },
     ...rest
   } = brain;
-  return { ...rest, auth: { ...auth, hasClientSecret: !!clientSecret } };
+  return { ...rest, auth: { ...auth, hasClientSecret: !!clientSecretEnc } };
 }
 
-export interface MemoryRegistryStore {
-  readonly overlayIds: ReadonlySet<string>;
+export interface MemoryRegistryStore extends RegistryContext {
   current(): Promise<{ version: string; record: unknown }>;
   update(change: (record: MemoryRegistry) => MemoryRegistry): Promise<MemoryRegistry>;
 }
 
 export function createMemoryRegistryStore(opts: {
   map: DurableMap<MemoryRegistry>;
+  key: SecretKey;
   overlay?: MemoryProviderConfig;
 }): MemoryRegistryStore {
   let cached: { version: string; record: unknown } | undefined;
   return {
     overlayIds: new Set(opts.overlay?.providers.map(({ id }) => id) ?? []),
+    key: opts.key,
     async current() {
       const version = await opts.map.version();
       if (cached?.version !== version) cached = { version, record: await opts.map.get(RECORD_ID) };
