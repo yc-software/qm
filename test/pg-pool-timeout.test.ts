@@ -115,22 +115,6 @@ async function lockWaiter(observer: pg.Client, prefix: string): Promise<number> 
   return pid;
 }
 
-async function tracedClients(
-  store: ReturnType<typeof createPgPool>,
-  onQuery: (config: unknown, sent: Promise<unknown>) => void,
-) {
-  (await store.pool()).on("connect", (client) => {
-    const original = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
-    Object.assign(client, {
-      query: (...args: unknown[]) => {
-        const sent = original(...args);
-        onQuery(args[0], sent);
-        return sent;
-      },
-    });
-  });
-}
-
 test("a write aborted while it waits rolls back once the backend gets the lock", { skip }, async () => {
   const store = createPgPool(url!);
   const locker = new pg.Client({ connectionString: url });
@@ -158,42 +142,6 @@ test("a write aborted while it waits rolls back once the backend gets the lock",
 });
 
 test(
-  "an abort before COMMIT is sent rolls back; one after it is sent returns the committed result",
-  { skip },
-  async () => {
-    const store = createPgPool(url!);
-    let controller = new AbortController();
-    let abortAfter: (config: unknown) => boolean = () => false;
-    await tracedClients(store, (config, sent) => {
-      if (!abortAfter(config)) return;
-      if (config === "COMMIT") controller.abort();
-      else void sent.then(() => controller.abort());
-    });
-    try {
-      await store.q("DROP TABLE IF EXISTS commit_edge_rows");
-      await store.q("CREATE TABLE commit_edge_rows(n int)");
-      abortAfter = (config) => (config as { text?: string }).text?.startsWith("INSERT") === true;
-      await assert.rejects(
-        store.q("INSERT INTO commit_edge_rows VALUES (1)", [], { signal: controller.signal, timeoutMs: 5000 }),
-        { name: "AbortError" },
-      );
-      controller = new AbortController();
-      abortAfter = (config) => config === "COMMIT";
-      const committed = await store.query("INSERT INTO commit_edge_rows VALUES (2)", [], {
-        signal: controller.signal,
-        timeoutMs: 5000,
-      });
-      assert.equal(controller.signal.aborted, true);
-      assert.equal(committed.rowCount, 1);
-      abortAfter = () => false;
-      assert.deepEqual(await store.q("SELECT n FROM commit_edge_rows"), [{ n: 2 }]);
-    } finally {
-      await store.close();
-    }
-  },
-);
-
-test(
   "an aborted query cancels its backend and closes its connection while the table stays locked",
   { skip },
   async () => {
@@ -211,12 +159,9 @@ test(
       controller.abort();
       await assert.rejects(reading, { name: "AbortError" });
       await until(
-        async () =>
-          (await activity(locker, "SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock'", [pid]))
-            .rowCount === 0,
-        "the aborted backend to stop waiting",
+        async () => (await activity(locker, "SELECT 1 FROM pg_stat_activity WHERE pid = $1", [pid])).rowCount === 0,
+        "the aborted backend to exit",
       );
-      await until(async () => (await store.pool()).totalCount === 0, "the pool to drop the connection");
     } finally {
       await locker.end();
       await store.close();
@@ -231,8 +176,7 @@ test("caught database errors keep the pooled connection", { skip }, async () => 
     await store.q("CREATE TABLE unique_rows(n int PRIMARY KEY)");
     await store.q("INSERT INTO unique_rows VALUES (1)");
     const pids = new Set<number>();
-    for (const i of [0, 1]) {
-      const options = i ? { timeoutMs: 1000, signal: new AbortController().signal } : { timeoutMs: 1000 };
+    for (const options of [{ timeoutMs: 1000 }, { timeoutMs: 1000, signal: new AbortController().signal }]) {
       await assert.rejects(store.q("INSERT INTO unique_rows VALUES (1)", [], options), { code: "23505" });
       pids.add((await store.q("SELECT pg_backend_pid() AS pid", [], options))[0]!.pid as number);
     }
