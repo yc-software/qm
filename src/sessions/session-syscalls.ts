@@ -460,9 +460,9 @@ async function sessionRunCancelled(
   const seen = new Set<string>();
   while (runId) {
     if (seen.has(runId)) return true;
-    seen.add(runId);
     const run = await runs.get(runId);
-    if (!run) return true;
+    if (!run) return seen.size === 0;
+    seen.add(runId);
     if (run.result?.stopped || (await signals.pending(runId)).some(({ signal }) => signal.kind === "abort"))
       return true;
     runId = run.request.delegatingRunId;

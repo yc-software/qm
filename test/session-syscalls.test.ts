@@ -918,6 +918,37 @@ test("wait is cancelled and disabled actors cannot open or send", async () => {
   assert.equal((await api.write({ target: "any", text: "forbidden" })).ok, false);
 });
 
+test("a delegation chain whose older runs were pruned still sends; a deleted current run is stopped", async () => {
+  const r = await rig();
+  const opened = await r.syscallsFor(r.room).open({ task: "long task", name: "long" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const { run: spawner } = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    request: { actor, conversation, origin: { kind: "direct" }, text: "spawn" },
+  });
+  const lease = await r.runs.claimById(spawner.id, "parent-worker", 30_000);
+  await r.runs.complete(spawner.id, lease!.leaseToken!, { status: "ok", reply: "spawned" });
+  const { run: childRun } = await r.runs.enqueue({
+    sessionId: child.threadRef,
+    request: { actor, conversation, origin: { kind: "direct" }, text: "continue", delegatingRunId: spawner.id },
+  });
+  await r.runs.pruneFinished(Date.now() + 1);
+  assert.equal(await r.runs.get(spawner.id), undefined);
+  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
+  const api = factory.forTurn({ session: child, scopeId: scope, request: { actor, conversation, runId: childRun.id } });
+  assert.equal((await api.write({ target: "parent", text: "still here", wake: false })).ok, true);
+  const gone = factory.forTurn({
+    session: child,
+    scopeId: scope,
+    request: { actor, conversation, runId: "missing-run" },
+  });
+  await assert.rejects(
+    gone.write({ target: "parent", text: "too late", wake: false }),
+    /this delegated task was stopped/,
+  );
+});
+
 test("an empty mailbox check skips sender validation and a delivered message still validates", async () => {
   const r = await rig();
   let checks = 0;
