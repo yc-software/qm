@@ -75,9 +75,10 @@ async function buildOrchestrator(
     scopeSoulFor?: { conversation: Conversation; soul: string };
     branding?: OrgBranding;
     brandingDefault?: OrgBranding;
+    config?: ReturnType<typeof testConfigStore>;
   } = {},
 ) {
-  const config = testConfigStore(ORG);
+  const config = opts.config ?? testConfigStore(ORG);
   if (opts.orgSoul !== undefined) await config.setSoul(scopeId("org", ORG), opts.orgSoul);
   if (opts.branding) await config.setBranding(scopeId("org", ORG), opts.branding);
 
@@ -484,4 +485,23 @@ test("web group conversations are not described as private 1:1s", async () => {
   });
   assert.match(prompt, /live group conversation with Alice/);
   assert.doesNotMatch(prompt, /private 1:1/);
+});
+
+test("a guidance change from another session is announced on this session's next turn, once", async () => {
+  const config = testConfigStore(ORG);
+  const orch = await buildOrchestrator({ config, scopeSoulFor: { conversation: dmConversation, soul: "Be brief." } });
+  assert.doesNotMatch(await sysprompt(orch, slackDm("")), /standing guidance/);
+  await config.setSoul(
+    scopeId("personal", "U1"),
+    "Be brief.\nNever cite a PR by bare number.",
+    "U1",
+    "1aedf13a-0000-4000-8000-000000000000",
+  );
+  const next = await sysprompt(orch, slackDm(""));
+  assert.match(next, /Never cite a PR by bare number\./, "the system prompt carries the new guidance");
+  assert.match(
+    next,
+    /<environment>[\s\S]*In a different session \(1aedf13\) the user updated their standing guidance: "Never cite a PR by bare number\."\. Follow it moving forward but no need to directly mention you're doing so\.[\s\S]*<\/environment>/,
+  );
+  assert.doesNotMatch(await sysprompt(orch, slackDm("")), /updated their standing guidance/);
 });

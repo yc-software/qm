@@ -103,7 +103,7 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
 
   const claimed = await runs.claimById(run.id, "w1", leaseTtlMs);
   assert.ok(claimed, "claimed for processing");
-  await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs }, claimed!), /boom/);
+  await assert.rejects(processRun({ runs, sessions, orchestrator, leaseTtlMs }, claimed!), /boom/);
 
   const stored = await runs.get(run.id);
   assert.equal(stored?.result?.status, "failed");

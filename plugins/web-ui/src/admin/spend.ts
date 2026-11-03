@@ -25,16 +25,52 @@ function windowOf(start: number, end: number, preset: string | null): SpendWindo
 export function spendWindow(
   state: { range?: string | null; from?: string | null; to?: string | null },
   now = Date.now(),
+  maxDays = MAX_CUSTOM_DAYS,
 ): SpendWindow {
   const tomorrow = Math.floor(now / DAY) * DAY + DAY;
   const from = dayMs(state.from);
   const to = dayMs(state.to);
   const end = to === null ? null : Math.min(to, tomorrow);
-  if (from !== null && end !== null && from < end)
-    return windowOf(Math.max(from, end - MAX_CUSTOM_DAYS * DAY), end, null);
+  if (from !== null && end !== null && from < end) return windowOf(Math.max(from, end - maxDays * DAY), end, null);
   const preset = state.range && PRESETS.has(state.range) ? state.range : "30d";
   return windowOf(tomorrow - PRESETS.get(preset)! * DAY, tomorrow, preset);
 }
+
+export function spendWindowTabs(page: AdminPage, w: SpendWindow) {
+  return [
+    ...[...PRESETS.keys()].map((range) => ({
+      label: range,
+      active: w.preset === range,
+      href: page.href(page.view, { range }),
+    })),
+    { label: "Custom", active: w.preset === null, href: page.href(page.view, { from: w.from, to: w.to }) },
+  ];
+}
+
+export function spendCustomRange(page: AdminPage, w: SpendWindow, maxDays = MAX_CUSTOM_DAYS) {
+  if (w.preset !== null) return null;
+  const apply = (event: Event) => {
+    event.preventDefault();
+    const [first, last] = [...(event.currentTarget as HTMLFormElement).querySelectorAll("input")]
+      .map((i) => i.value)
+      .sort();
+    const end = dayMs(last);
+    if (dayMs(first) !== null && end !== null) page.go(page.href(page.view, { from: first, to: isoDay(end + DAY) }));
+  };
+  const today = isoDay(Date.now());
+  return html`<form class="spend-custom" @submit=${apply}>
+    <input type="date" aria-label="First day" required max=${today} .value=${w.from} />
+    <span>to</span>
+    <input type="date" aria-label="Last day" required max=${today} .value=${isoDay(Date.parse(w.to) - DAY)} />
+    <button class="btn primary">Apply</button>
+    <span class="hint">UTC, up to ${maxDays} days</span>
+  </form>`;
+}
+
+export const spendAsOf = (asOf: number | null | undefined) =>
+  asOf == null
+    ? null
+    : html`<p class="subline">Totals as of ${new Date(asOf).toLocaleString()}. Updated every minute.</p>`;
 
 const COLUMNS = ["Total", "Live", "Background", "Tokens", "Cache hit"];
 const amounts = (row: any) => [
@@ -51,14 +87,7 @@ export async function mount(page: AdminPage) {
   const r = await page.api("GET", "/api/spend?" + query);
   if (!page.current()) return;
   const header = pageHeader({
-    tabs: [
-      ...[...PRESETS.keys()].map((range) => ({
-        label: range,
-        active: w.preset === range,
-        href: page.href("spend", { range }),
-      })),
-      { label: "Custom", active: w.preset === null, href: page.href("spend", { from: w.from, to: w.to }) },
-    ],
+    tabs: spendWindowTabs(page, w),
     actions: html`<a class="btn" href=${page.apiBase + "/spend?format=csv&breakdown=entity&" + query} download
       >Export CSV</a
     >`,
@@ -73,31 +102,8 @@ export async function mount(page: AdminPage) {
     );
   const d = r.data || {};
   const org = d.org || {};
-  const apply = (event: Event) => {
-    event.preventDefault();
-    const [first, last] = [...(event.currentTarget as HTMLFormElement).querySelectorAll("input")]
-      .map((i) => i.value)
-      .sort();
-    const end = dayMs(last);
-    if (dayMs(first) !== null && end !== null) page.go(page.href("spend", { from: first, to: isoDay(end + DAY) }));
-  };
-  const today = isoDay(Date.now());
   render(
-    html`${header}${
-      w.preset === null
-        ? html`<form class="spend-custom" @submit=${apply}>
-            <input type="date" aria-label="First day" required max=${today} .value=${w.from} />
-            <span>to</span>
-            <input type="date" aria-label="Last day" required max=${today} .value=${isoDay(Date.parse(w.to) - DAY)} />
-            <button class="btn primary">Apply</button>
-            <span class="hint">UTC, up to ${MAX_CUSTOM_DAYS} days</span>
-          </form>`
-        : null
-    }${
-      d.asOf == null
-        ? null
-        : html`<p class="subline">Totals as of ${new Date(d.asOf).toLocaleString()}. Updated every minute.</p>`
-    }${card(
+    html`${header}${spendCustomRange(page, w)}${spendAsOf(d.asOf)}${card(
       "Spend over time",
       d.series?.length
         ? `${w.from} to ${w.to} (UTC, ${w.bucket} buckets) · ${org.calls || 0} model calls`
