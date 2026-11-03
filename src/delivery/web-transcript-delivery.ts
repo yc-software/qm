@@ -1,3 +1,4 @@
+import { inTenantOf } from "../tenants/claim.ts";
 import type { Delivery, ScopeId } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
@@ -151,6 +152,13 @@ export function withWebTranscriptDeliveries(
     async pending(type) {
       const rows = await store.pending(type);
       return type === "web" ? drained(rows) : rows;
+    },
+    async pendingAcrossTenants(type) {
+      const rows = await store.pendingAcrossTenants(type);
+      if (type !== "web") return rows;
+      const out: Delivery[] = [];
+      for (const row of rows) out.push(...(await inTenantOf(row.tenantId, () => drained([row]))));
+      return out;
     },
     async claimPending(type, ttlMs) {
       const rows = await store.claimPending(type, ttlMs);

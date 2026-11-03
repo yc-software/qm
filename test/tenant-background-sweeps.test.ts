@@ -8,6 +8,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createMemoryVectorIndexer } from "../src/memory/vector-indexer.ts";
 import { createPostgresFileUploadStore } from "../src/files/file-upload-store.ts";
+import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { createPostgresMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
@@ -42,6 +43,7 @@ before(async () => {
     createPostgresSessionStore(url);
     createPostgresVectorStore(url);
     createPostgresFileUploadStore(url);
+    createPostgresDeliveryStore(url);
   });
 });
 
@@ -327,5 +329,38 @@ test(
     assert.deepEqual(destroyed.sort(), [A, B]);
     assert.equal((await withTenant(A, () => deployStore.get(a.id)))?.status, "stopped");
     assert.equal((await withTenant(B, () => deployStore.get(b.id)))?.status, "stopped");
-    },
+  },
+);
+
+test(
+  "under the restricted login, pending web deliveries are read across tenants and each is acked under its own tenant",
+  { skip },
+  async () => {
+    await grantTables();
+    const app = createPostgresDeliveryStore(db!.appUrl);
+    const enqueue = (tenant: string, key: string) =>
+      withTenant(tenant, () =>
+        app.enqueue({ destination: { type: "web", target: `web:${key}` }, text: key, idempotencyKey: key }),
+      );
+    const a = await enqueue(A, "web-a");
+    const b = await enqueue(B, "web-b");
+    await assert.rejects(
+      withTenant(A, () => app.pendingAcrossTenants("web")),
+      /cannot run while a tenant is bound/,
+    );
+    const pending = await withoutTenant(() => app.pendingAcrossTenants("web"));
+    assert.deepEqual(
+      pending.map((d) => [d.id, d.tenantId]).sort(),
+      [
+        [a.id, A],
+        [b.id, B],
+      ].sort(),
+    );
+    assert.deepEqual(
+      (await withTenant(A, () => app.pending("web"))).map((d) => d.id),
+      [a.id],
+    );
+    for (const d of pending) await withTenant(d.tenantId!, () => app.ack(d.id, Date.now()));
+    assert.deepEqual(await withoutTenant(() => app.pendingAcrossTenants("web")), []);
+  },
 );

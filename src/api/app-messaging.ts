@@ -82,6 +82,7 @@ export function createMessagingMethods(
   | "setWebhookEnabled"
   | "updateWebhook"
   | "pendingDeliveries"
+  | "pendingDeliveriesAcrossTenants"
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
   | "searchSurface"
@@ -307,6 +308,9 @@ export function createMessagingMethods(
     },
     updateWebhook(id, patch) {
       return deps.webhooks.update(id, patch);
+    },
+    pendingDeliveriesAcrossTenants(type) {
+      return deps.deliveries.pendingAcrossTenants(type);
     },
     pendingDeliveries(type, claimMs) {
       return claimMs && claimMs > 0 ? deps.deliveries.claimPending(type, claimMs) : deps.deliveries.pending(type);
