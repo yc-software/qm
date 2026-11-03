@@ -269,7 +269,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
   async function pollAll(t: number, observed: number): Promise<void> {
     if (!supportsProcessSessions(deps.sandbox)) return;
     const sandbox = deps.sandbox;
-    const enabled = (await deps.monitors.enabled()).sort((a, b) => a.createdAt - b.createdAt);
+    const enabled = (await deps.monitors.enabledAcrossTenants()).sort((a, b) => a.createdAt - b.createdAt);
     if (enabled.length === 0) return;
 
     const handles = new Map<string, { tenantId?: string; handle: SandboxHandle }>();
@@ -279,7 +279,8 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
         await reportLost(m);
         return true;
       }
-      let handle = handles.get(rec.sandboxId)?.handle;
+      const handleKey = `${m.tenantId ?? ""}:${rec.sandboxId}`;
+      let handle = handles.get(handleKey)?.handle;
       if (!handle) {
         try {
           handle = await sandbox.provision(rec.scopeId, {
@@ -289,7 +290,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
           await deps.monitors.recordError(m.id, errMessage(e));
           return false;
         }
-        handles.set(rec.sandboxId, { ...(m.tenantId === undefined ? {} : { tenantId: m.tenantId }), handle });
+        handles.set(handleKey, { ...(m.tenantId === undefined ? {} : { tenantId: m.tenantId }), handle });
       }
       try {
         return await poll(sandbox, handle, m, t);

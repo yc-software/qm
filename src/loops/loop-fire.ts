@@ -7,7 +7,7 @@ import { boundLoopCron } from "./authority.ts";
 import { samePerson } from "../directory/person.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import type { Loop, LoopItem, LoopOutput } from "./types.ts";
-import { inTenantOf, type Claimed } from "../tenants/claim.ts";
+import { inTenantOf } from "../tenants/claim.ts";
 import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
@@ -949,7 +949,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
-    const loops: Array<Claimed<Loop>> = await deps.loops.list();
+    const loops = await deps.loops.listAcrossTenants();
     for (const loop of loops) {
       if (
         loop.state === "enabled" &&

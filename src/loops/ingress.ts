@@ -1,4 +1,4 @@
-import { inTenantOf, type Claimed } from "../tenants/claim.ts";
+import { withTenant } from "../tenants/context.ts";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -465,18 +465,17 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     },
     async maintain() {
       if (Date.now() >= nextCleanupAt) {
-        for (const delivery of await deps.deliveries.select({ omit: ["entries"] }))
-          if (delivery.completedAt && delivery.completedAt < Date.now() - 30 * 86_400_000)
-            await deps.deliveries.delete(delivery.id);
+        const cutoff = Date.now() - 30 * 86_400_000;
+        for (const { tenantId, id, value } of await deps.deliveries.acrossTenants())
+          if (value.completedAt && value.completedAt < cutoff)
+            await withTenant(tenantId, () => deps.deliveries.delete(id));
         nextCleanupAt = Date.now() + 86_400_000;
       }
-      const sources: Array<Claimed<LoopIngress>> = await deps.sources.all();
-      for (const source of sources) await inTenantOf(source.tenantId, () => renew(source));
-      for (const source of sources) {
-        if (source.enabled)
-          await inTenantOf(source.tenantId, () => process(source.id)).catch((error) =>
-            swallow("Loop ingestion", error),
-          );
+      const sources = await deps.sources.acrossTenants();
+      for (const { tenantId, value } of sources) await withTenant(tenantId, () => renew(value));
+      for (const { tenantId, value } of sources) {
+        if (value.enabled)
+          await withTenant(tenantId, () => process(value.id)).catch((error) => swallow("Loop ingestion", error));
       }
     },
     process,
