@@ -80,6 +80,8 @@ const GRANTS = "admin grant changes (promote/revoke) are portal-only — the age
 const IMPERSONATE = "impersonating a user is portal-only — the agent cannot act as another person";
 const MCP_SERVERS =
   "registering or changing an MCP server is portal-only — the agent cannot change which tools it can call or which calls need approval";
+const SPEND_EXPORT =
+  "minting a spend export credential is portal-only — the agent cannot hand out standing access to the org's spend";
 const LINKS = "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
 
 const routes: Route<ApiCtx>[] = [
@@ -157,6 +159,7 @@ const routes: Route<ApiCtx>[] = [
       method: "POST",
       path: "/v1/admin/spend/export-token",
       auth: "either",
+      admin: { agent: { portalOnly: SPEND_EXPORT } },
       handle: mintSpendExportToken,
     },
     {

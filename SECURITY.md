@@ -190,7 +190,8 @@ these, not through them.
   and state. It reads no conversation content or cron task and changes nothing, and
   minting and each export are audited, but the token is not bound to a caller and
   cannot be revoked one at a time; it lapses at its expiry, when its admin is
-  deactivated, or when the capability signing secret rotates.
+  deactivated or loses admin, or when the capability signing secret rotates. The agent
+  cannot mint one.
 - **Everyone sees the spend of the spaces they can see.** The My spend tab in Settings shows each
   signed-in person their own model-call spend plus the spend of every channel, group DM
   and project their Projects page lists, which for internal users includes every public

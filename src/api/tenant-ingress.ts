@@ -5,7 +5,10 @@ import { CAPABILITY_HEADER } from "./contract.ts";
 import { sendJson, tenantHeader } from "./http.ts";
 import type { Route } from "./routes/route.ts";
 
-const verified = new WeakMap<IncomingMessage, { token: string; claims: Promise<VerifiedCapability | null> }>();
+const verified = new WeakMap<
+  IncomingMessage,
+  { token: string; secret: string | undefined; claims: Promise<VerifiedCapability | null> }
+>();
 
 export function capabilityToken(req: IncomingMessage, bearer: boolean): string | null {
   const header = req.headers[CAPABILITY_HEADER];
@@ -22,9 +25,9 @@ export function requestCapability(
   secret: string | undefined,
 ): Promise<VerifiedCapability | null> {
   const cached = verified.get(req);
-  if (cached?.token === token) return cached.claims;
+  if (cached?.token === token && cached.secret === secret) return cached.claims;
   const claims = secret ? verifyCapabilityToken(token, secret) : Promise.resolve(null);
-  verified.set(req, { token, claims });
+  verified.set(req, { token, secret, claims });
   return claims;
 }
 
@@ -33,9 +36,11 @@ async function claimedTenant(
   auth: Route["auth"] | undefined,
   capabilitySecret: string | undefined,
 ): Promise<string | null> {
+  const header = tenantHeader(req);
   const token = capabilityToken(req, typeof auth === "object" && auth.bearer === true);
-  if (token) return (await requestCapability(req, token, capabilitySecret))?.tenant ?? null;
-  return tenantHeader(req) || null;
+  if (!token) return header || null;
+  const tenant = (await requestCapability(req, token, capabilitySecret))?.tenant ?? "";
+  return header && header !== tenant ? "" : tenant || null;
 }
 
 export async function withRequestTenant(
@@ -47,8 +52,8 @@ export async function withRequestTenant(
 ): Promise<void> {
   if (route?.auth === "public") return next();
   const tenant = await claimedTenant(req, route?.auth, capabilitySecret);
-  if (tenant && !isTenantId(tenant)) {
-    sendJson(res, 400, { error: "bad_request", message: "malformed tenant" });
+  if (tenant !== null && !isTenantId(tenant)) {
+    sendJson(res, 400, { error: "bad_request", message: "conflicting or malformed tenant" });
     return void req.resume();
   }
   return tenant ? withTenant(tenant, next) : next();

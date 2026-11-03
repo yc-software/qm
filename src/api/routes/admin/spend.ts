@@ -551,7 +551,11 @@ export async function mintSpendExportToken(ctx: ApiCtx): Promise<void> {
 export async function spendExport(ctx: BaseCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
   const exporter = ctx.capability?.actorId;
-  if (!exporter) return sendJson(res, 401, { error: "unauthorized" });
+  if (!exporter || !(await deps.admin?.adminStatusOf({ id: exporter, type: "internal" }))?.isAdmin)
+    return sendJson(res, 401, {
+      error: "unauthorized",
+      message: "the admin who minted this token is no longer an admin",
+    });
   if (!deps.sessions) return sendJson(res, 503, { error: "spend_unavailable" });
   const days = spendDays(url);
   if (typeof days === "string") return sendJson(res, 400, { error: "bad_request", message: days });

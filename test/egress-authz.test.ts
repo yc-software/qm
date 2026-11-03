@@ -474,12 +474,16 @@ test("relay sink: one flush drains every tenant's records under its own signed t
   record("b1.com", b);
   record("a2.com", a);
   await sink.flush();
-  assert.deepEqual(calls, [{ tenant: a, hosts: ["a1.com", "a2.com"] }], "a throttled batch stays queued");
+  assert.deepEqual(
+    calls,
+    [
+      { tenant: a, hosts: ["a1.com", "a2.com"] },
+      { tenant: b, hosts: ["b1.com"] },
+    ],
+    "a throttled tenant is held while the others drain",
+  );
   await sink.flush();
-  assert.deepEqual(calls.slice(1), [
-    { tenant: a, hosts: ["a1.com", "a2.com"] },
-    { tenant: b, hosts: ["b1.com"] },
-  ]);
+  assert.deepEqual(calls.slice(2), [{ tenant: a, hosts: ["a1.com", "a2.com"] }], "only the held batch is retried");
   await sink.flush();
-  assert.equal(calls.length, 3, "a refused batch is dropped and an accepted one dequeued");
+  assert.equal(calls.length, 3, "nothing is left to send");
 });

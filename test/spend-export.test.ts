@@ -26,7 +26,7 @@ const DAY = 86_400_000;
 const sourceSecret = "source-only-secret".repeat(3);
 const capabilitySecret = "capability-only-secret".repeat(3);
 const TENANT = "3f1c7a52-9d4e-4b8a-a6f0-2c5e8d1b7a93";
-const exportClaims = { actorId: "spend-export", scopeId: "org:default-org", aud: SPEND_EXPORT_AUD };
+const exportClaims = { actorId: "admin-alice", scopeId: "org:default-org", aud: SPEND_EXPORT_AUD };
 const mintFor = (claims: Parameters<typeof mintCapabilityToken>[0]) =>
   withTenant(TENANT, () => mintCapabilityToken(claims, capabilitySecret));
 const exportToken = await mintFor({ ...exportClaims, exp: Date.now() + DAY });
@@ -67,10 +67,12 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
     const path = `/v1/spend/export?${window}`;
     const ts = Math.floor(Date.now() / 1000);
     const expired = await mintFor({ ...exportClaims, exp: Date.now() - 1 });
+    const demoted = await mintFor({ ...exportClaims, actorId: "rando", exp: Date.now() + DAY });
     const control = await mintFor({ ...exportClaims, aud: CONTROL_PLANE_AUD, exp: Date.now() + DAY });
     const refused: Record<string, string>[] = [
       {},
       { authorization: `Bearer ${expired}` },
+      { authorization: `Bearer ${demoted}` },
       { authorization: `Bearer ${exportToken}x` },
       { authorization: exportToken },
       { authorization: `Bearer ${sourceSecret}` },
@@ -145,7 +147,7 @@ test("spend export: rows keep the ledger grain with canonical people, sources an
     );
     const audited = (await s.built.auditLog.events()).filter((e) => e.action === "spend.export");
     assert.equal(audited.length, 1);
-    assert.equal(audited[0]!.principalId, "spend-export");
+    assert.equal(audited[0]!.principalId, "admin-alice");
     assert.equal(audited[0]!.detail, `${iso(today - DAY)}..${iso(today + DAY)} rows=5`);
   } finally {
     await s.close();

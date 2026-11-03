@@ -215,22 +215,27 @@ export function createRelayAuditSink(
   async function flush(): Promise<void> {
     if (flushing || buffer.length === 0) return;
     flushing = true;
+    const failed = new Set<string | undefined>();
     try {
-      while (buffer.length > 0) {
-        const tenant = buffer[0]!.tenant;
+      for (let next = buffer[0]; next; next = buffer.find((entry) => !failed.has(entry.tenant))) {
+        const tenant = next.tenant;
         const batch = buffer.filter((entry) => entry.tenant === tenant).slice(0, RELAY_MAX_BATCH);
-        await send(tenant, batch);
+        try {
+          await send(tenant, batch);
+        } catch (e) {
+          failed.add(tenant);
+          console.warn(`[egress-authz] audit relay to ${url} failed (${buffer.length} buffered): ${errMessage(e)}`);
+          continue;
+        }
         const sent = new Set(batch);
         buffer.splice(0, buffer.length, ...buffer.filter((entry) => !sent.has(entry)));
       }
-      if (dropped > 0) {
-        console.warn(`[egress-authz] audit relay recovered; ${dropped} records were dropped while the buffer was full`);
-        dropped = 0;
-      }
-    } catch (e) {
-      console.warn(`[egress-authz] audit relay to ${url} failed (${buffer.length} buffered): ${errMessage(e)}`);
     } finally {
       flushing = false;
+    }
+    if (dropped > 0 && failed.size === 0) {
+      console.warn(`[egress-authz] audit relay recovered; ${dropped} records were dropped while the buffer was full`);
+      dropped = 0;
     }
   }
   const sweeper = createSweeper(flush, RELAY_FLUSH_MS, { label: "egress-audit-relay" });

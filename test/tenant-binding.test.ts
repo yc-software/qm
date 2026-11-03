@@ -82,9 +82,11 @@ describe("tenant claims", () => {
 });
 
 describe("request ingress", () => {
-  it("binds the tenant of a verified capability token over any tenant header", async () => {
+  it("binds the tenant of a verified capability token and refuses a conflicting tenant header", async () => {
     const token = await withTenant(TENANT_B, () => mintCapabilityToken(claims, SECRET));
-    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token, [TENANT_HEADER]: TENANT_A }), TENANT_B);
+    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token }), TENANT_B);
+    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token, [TENANT_HEADER]: TENANT_B }), TENANT_B);
+    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token, [TENANT_HEADER]: TENANT_A }), 400);
   });
 
   it("binds the signed tenant header and refuses malformed ones", async () => {
