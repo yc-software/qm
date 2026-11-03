@@ -5,6 +5,7 @@ import { createProductAnalytics } from "../src/util/product-analytics.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { TEST_TENANT } from "./support/tenant-root.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 test("disabled analytics makes no requests", async () => {
   let requests = 0;
@@ -17,24 +18,25 @@ test("disabled analytics makes no requests", async () => {
   assert.equal(requests, 0);
 });
 
-test("publication has matching company identity, groups and deduplication without app content", async () => {
-  let body: Record<string, any> = {};
-  const analytics = createProductAnalytics({ apiKey: "public-token" }, async (url, init) => {
-    assert.equal(url, "https://us.i.posthog.com/i/v0/e/");
-    assert.equal(init?.redirect, "error");
-    body = JSON.parse(String(init?.body));
-    return new Response("ok");
-  });
-  await analytics.appPublished("person", "app", 2);
-  assert.equal(body.event, "app_published");
-  assert.equal(body.properties.distinct_id, JSON.stringify([TEST_TENANT, "person"]));
-  assert.deepEqual(body.properties.$groups, { company: TEST_TENANT });
-  assert.equal(body.properties.$insert_id, "app:2:app_published");
-  assert.deepEqual(
-    Object.keys(body.properties).sort(),
-    ["distinct_id", "company_id", "$groups", "$insert_id", "$geoip_disable", "surface"].sort(),
-  );
-});
+test("publication has matching company identity, groups and deduplication without app content", () =>
+  inTestTenant(async () => {
+    let body: Record<string, any> = {};
+    const analytics = createProductAnalytics({ apiKey: "public-token" }, async (url, init) => {
+      assert.equal(url, "https://us.i.posthog.com/i/v0/e/");
+      assert.equal(init?.redirect, "error");
+      body = JSON.parse(String(init?.body));
+      return new Response("ok");
+    });
+    await analytics.appPublished("person", "app", 2);
+    assert.equal(body.event, "app_published");
+    assert.equal(body.properties.distinct_id, JSON.stringify([TEST_TENANT, "person"]));
+    assert.deepEqual(body.properties.$groups, { company: TEST_TENANT });
+    assert.equal(body.properties.$insert_id, "app:2:app_published");
+    assert.deepEqual(
+      Object.keys(body.properties).sort(),
+      ["distinct_id", "company_id", "$groups", "$insert_id", "$geoip_disable", "surface"].sort(),
+    );
+  }));
 
 test("delivery failures cannot fail publication and concurrent requests are bounded", async () => {
   const failing = createProductAnalytics({ apiKey: "token" }, async () => {
