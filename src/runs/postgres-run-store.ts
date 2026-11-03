@@ -536,16 +536,21 @@ END $base_schema$`,
 
     async pruneFinished(cutoff, { deadline, stop }) {
       let pruned = 0;
+      let after: [number, string] = [0, ""];
       while (Date.now() < deadline && !stop()) {
-        const { rowCount } = await q(
+        const { rows } = await q(
           `DELETE FROM runs WHERE id IN (
-             SELECT id FROM runs WHERE status IN ('done','failed') AND finished_at < $1
+             SELECT id FROM runs WHERE status IN ('done','failed') AND finished_at < $1 AND (finished_at, id) > ($3, $4)
              ORDER BY finished_at, id LIMIT $2 FOR UPDATE SKIP LOCKED
-           )`,
-          [cutoff, PRUNE_BATCH],
+           ) RETURNING finished_at, id`,
+          [cutoff, PRUNE_BATCH, ...after],
         );
-        pruned += rowCount;
-        if (rowCount < PRUNE_BATCH) break;
+        pruned += rows.length;
+        if (rows.length < PRUNE_BATCH) break;
+        for (const row of rows) {
+          const key: [number, string] = [Number(row.finished_at), row.id as string];
+          if (key[0] > after[0] || (key[0] === after[0] && key[1] > after[1])) after = key;
+        }
       }
       return pruned;
     },

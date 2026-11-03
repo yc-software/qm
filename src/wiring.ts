@@ -2730,30 +2730,29 @@ export function buildApp(
         immediate: true,
       })
     : null;
-  const purgeWithinBudget = (
+  const retentionSweeper = (
     lease: string,
     retentionMs: number,
     purge: (cutoff: number, opts: { deadline: number; stop: () => boolean }) => Promise<number>,
   ) =>
-    leaderLease.hold(lease, async (lost) => {
-      let leaseLost = false;
-      void lost.then(() => (leaseLost = true));
-      const purged = await purge(Date.now() - retentionMs, {
-        deadline: Date.now() + RETENTION_SWEEP_BUDGET_MS,
-        stop: () => leaseLost,
-      });
-      if (purged) console.log(`[${lease}] purged ${purged} row(s) past retention`);
-    });
-  const retentionSweeper = createSweeper(
-    () =>
-      Promise.all([
-        sessions.purgeLlmCaptures &&
-          purgeWithinBudget("llm-capture:retention", LLM_CAPTURE_RETENTION_MS, sessions.purgeLlmCaptures),
-        purgeWithinBudget("runs:retention", RUN_RETENTION_MS, runs.pruneFinished),
-      ]),
-    RETENTION_SWEEP_MS,
-    { label: "retention" },
-  );
+    createSweeper(
+      () =>
+        leaderLease.hold(lease, async (lost) => {
+          let leaseLost = false;
+          void lost.then(() => (leaseLost = true));
+          const purged = await purge(Date.now() - retentionMs, {
+            deadline: Date.now() + RETENTION_SWEEP_BUDGET_MS,
+            stop: () => leaseLost,
+          });
+          if (purged) console.log(`[${lease}] purged ${purged} row(s) past retention`);
+        }),
+      RETENTION_SWEEP_MS,
+      { label: lease },
+    );
+  const llmCaptureSweeper = sessions.purgeLlmCaptures
+    ? retentionSweeper("llm-capture:retention", LLM_CAPTURE_RETENTION_MS, sessions.purgeLlmCaptures)
+    : null;
+  const runRetentionSweeper = retentionSweeper("runs:retention", RUN_RETENTION_MS, runs.pruneFinished);
   const monitorRetentionSweeper = createSweeper(
     () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
     MONITOR_RETENTION_SWEEP_MS,
@@ -2829,7 +2828,8 @@ export function buildApp(
         .catch(swallowAs("wiring: monitor resume failed", undefined));
       monitorRetentionSweeper.start();
       spendSweeper?.start();
-      retentionSweeper.start();
+      llmCaptureSweeper?.start();
+      runRetentionSweeper.start();
       semanticMemory.start();
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
@@ -2861,7 +2861,8 @@ export function buildApp(
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
       spendSweeper?.stop(),
-      retentionSweeper.stop(),
+      llmCaptureSweeper?.stop(),
+      runRetentionSweeper.stop(),
       semanticMemory.stop(),
       skillSyncEngine.stop(),
       idleSweeper?.stop(),

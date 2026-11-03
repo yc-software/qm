@@ -1877,6 +1877,10 @@ test(
       const { run: recent } = await runs.enqueue({ sessionId: `${prefix}:recent`, request: turn("x") });
       const lease = (await runs.claimById(recent.id, "w", 60_000))!.leaseToken!;
       await runs.complete(recent.id, lease, { status: "ok", sessionId: `${prefix}:recent`, text: "y" });
+      const { run: boundary } = await runs.enqueue({ sessionId: `${prefix}:boundary`, request: turn("x") });
+      const boundaryLease = (await runs.claimById(boundary.id, "w", 60_000))!.leaseToken!;
+      await runs.complete(boundary.id, boundaryLease, { status: "ok", sessionId: `${prefix}:boundary`, text: "y" });
+      await raw.query("UPDATE runs SET finished_at = 2000 WHERE id = $1", [boundary.id]);
       const { run: running } = await runs.enqueue({ sessionId: `${prefix}:live`, request: turn("x") });
       await runs.claimById(running.id, "w", 60_000);
       const { run: pending } = await runs.enqueue({ sessionId: `${prefix}:live`, request: turn("x") });
@@ -1884,7 +1888,7 @@ test(
       assert.equal(await runs.pruneFinished(2000, { deadline: Date.now() + 60_000, stop: () => true }), 0);
       assert.equal(await runs.pruneFinished(2000, { deadline: Date.now() + 60_000, stop: () => false }), 1201);
       const { rows } = await raw.query("SELECT id FROM runs WHERE starts_with(session_id, $1)", [prefix]);
-      assert.deepEqual(rows.map((r) => r.id as string).sort(), [recent.id, running.id, pending.id].sort());
+      assert.deepEqual(rows.map((r) => r.id as string).sort(), [recent.id, boundary.id, running.id, pending.id].sort());
     } finally {
       await raw.query("DELETE FROM runs WHERE starts_with(session_id, $1)", [prefix]);
       await raw.end();
