@@ -54,7 +54,7 @@ for (const mode of ["retry", "handoff"] as const) {
         await turn.emit({ kind: "UserMessage", text: turn.input });
       }
       await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
-      await turn.emit({ kind: "SteeringMessage", text: "private steer", hidden: true });
+      await turn.emit({ kind: "SteeringMessage", text: "private steer", body: { hidden: true } });
     };
     try {
       const result = await built.app.turn(request);
