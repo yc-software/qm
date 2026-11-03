@@ -1,4 +1,4 @@
-import { test, before, after } from "node:test";
+import { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +9,7 @@ import { scopeId } from "../src/types.ts";
 import { nonInteractiveShellPrefix, NONINTERACTIVE_ENV } from "../src/sandbox/sandbox-env.ts";
 import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
 let ff: FakeSprites;
 before(() => {

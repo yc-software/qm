@@ -1,4 +1,4 @@
-import { test, afterEach, beforeEach } from "node:test";
+import { afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,7 +20,7 @@ import { installFakeSuperserve, type FakeSuperserve } from "./support/fake-super
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
-import { tenantBoundUrl } from "./support/test-tenants.ts";
+import { tenantBoundUrl, tenantTest as test } from "./support/test-tenants.ts";
 
 let fake: FakeSuperserve;
 let sandbox: Sandbox;

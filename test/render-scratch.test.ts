@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
+import type { TestContext } from "node:test";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { pgRows } from "../src/persistence/keyed-rows.ts";
 import { withTenant } from "../src/tenants/context.ts";
@@ -17,6 +17,7 @@ import { SandboxProvisionCleanupError, type SandboxHandle } from "../src/sandbox
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createFakeRender } from "./support/fake-render.ts";
 import { testAdvisoryLock, testRows } from "./support/test-database.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
 function setup(t: TestContext) {
   const dir = mkdtempSync(join(tmpdir(), "render-scratch-"));

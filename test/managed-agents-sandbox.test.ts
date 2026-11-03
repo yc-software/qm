@@ -1,5 +1,5 @@
 import type { KeyedRows } from "../src/persistence/keyed-rows.ts";
-import { test, after, beforeEach } from "node:test";
+import { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,6 +26,7 @@ import { installFakeManagedAgents, type FakeManagedAgents } from "./support/fake
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { testMap, testRows } from "./support/test-database.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
 let fake: FakeManagedAgents;
 let sandbox: Sandbox;

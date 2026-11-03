@@ -1,7 +1,7 @@
 import type { KeyedRows } from "../src/persistence/keyed-rows.ts";
 import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
-import { test, afterEach, beforeEach } from "node:test";
+import { afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +20,7 @@ import { E2bSandboxGoneError } from "../src/sandbox/e2b-client.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { testAdvisoryLock, testMap, testRows } from "./support/test-database.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
 let fake: FakeE2b;
 let sandbox: Sandbox;
