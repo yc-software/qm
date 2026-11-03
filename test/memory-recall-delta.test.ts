@@ -15,7 +15,7 @@ import { reportEnvelope } from "../src/memory/provider-outcome.ts";
 import { MemoryRecallWithheld } from "../src/memory/disclosure.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
-function test(name: string, fn: () => unknown): void {
+function test(name: string, fn: () => void | Promise<void>): void {
   nodeTest(name, () => inTestTenant(fn));
 }
 

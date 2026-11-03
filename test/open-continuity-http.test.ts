@@ -243,9 +243,10 @@ test("HTTP Open continuity: only the owner or a write grantee edits; grantee edi
 
 test("HTTP Open shared cron isolates synthetic owner credential and revokes resource access", async (t) => {
   const b = await fixture(t);
-  assert.ok(b.keychain);
+  const keychain = b.keychain;
+  assert.ok(keychain);
   const credential = await inTestTenant(() =>
-    b.keychain.save({
+    keychain.save({
       ownerId: "alice",
       service: "continuity-synthetic",
       envKey: "CONTINUITY_PROOF_TOKEN",
@@ -286,7 +287,8 @@ for (const isPrivate of [false, true]) {
   for (const veto of ["org:default-org", "personal:alice", "channel:public-room"]) {
     test(`HTTP Open cron opt-out stops owner credentials before materialization (${isPrivate ? "private" : "public"}, ${veto})`, async (t) => {
       const b = await fixture(t);
-      assert.ok(b.keychain);
+      const keychain = b.keychain;
+      assert.ok(keychain);
       await inTestTenant(() =>
         b.directory.replaceChannels(
           [{ channelId: "public-room", name: "public-room", isPrivate }],
@@ -294,7 +296,7 @@ for (const isPrivate of [false, true]) {
         ),
       );
       const credential = await inTestTenant(() =>
-        b.keychain.save({
+        keychain.save({
           ownerId: "alice",
           service: "continuity-veto",
           envKey: "CONTINUITY_VETO_TOKEN",
@@ -316,9 +318,9 @@ for (const isPrivate of [false, true]) {
           d.text.includes("veto-credential-present"),
         ),
       );
-      const original = b.keychain.materializeOwnById.bind(b.keychain);
+      const original = keychain.materializeOwnById.bind(keychain);
       let materializations = 0;
-      b.keychain.materializeOwnById = async (...args: Parameters<typeof original>) => {
+      keychain.materializeOwnById = async (...args: Parameters<typeof original>) => {
         materializations++;
         return original(...args);
       };
@@ -339,7 +341,8 @@ for (const isPrivate of [false, true]) {
 
 test("HTTP private channel cron runs without its owner's keychain once the conversation isn't Open", async (t) => {
   const b = await fixture(t);
-  assert.ok(b.keychain);
+  const keychain = b.keychain;
+  assert.ok(keychain);
   await inTestTenant(() =>
     b.directory.replaceChannels(
       [{ channelId: "public-room", name: "private-room", isPrivate: true }],
@@ -348,7 +351,7 @@ test("HTTP private channel cron runs without its owner's keychain once the conve
   );
   await inTestTenant(() => b.config.setSharingPosture("org:default-org", "isolated"));
   const credential = await inTestTenant(() =>
-    b.keychain.save({
+    keychain.save({
       ownerId: "alice",
       service: "continuity-isolated",
       envKey: "CONTINUITY_ISOLATED_TOKEN",

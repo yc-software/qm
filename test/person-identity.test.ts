@@ -14,7 +14,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
-function it(name: string, fn: () => unknown): void {
+function it(name: string, fn: () => void | Promise<void>): void {
   nodeIt(name, () => inTestTenant(fn));
 }
 
