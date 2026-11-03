@@ -277,9 +277,11 @@ test("an agent capability token can read the connector catalog; an unauthenticat
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const token = await mintCapabilityToken(
-      { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
-      secret,
+    const token = await inTestTenant(() =>
+      mintCapabilityToken(
+        { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
+        secret,
+      ),
     );
     const res = await fetch(`${base}/v1/connectors/catalog`, {
       headers: { "x-agent-capability": token, ...testTenantHeaders() },

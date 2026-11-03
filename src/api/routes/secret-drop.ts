@@ -392,6 +392,13 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
 
 export const secretDropRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/drops", actor: "system", auth: "either", handle: mintDrop },
-  { method: "GET", path: "/v1/keychain/drops/:id/form", auth: "source", handle: dropForm },
-  { method: "POST", path: "/v1/keychain/drops/:id", actor: "system", auth: "source", handle: redeemDrop },
+  { method: "GET", path: "/v1/keychain/drops/:id/form", auth: "source", tenant: "row", handle: dropForm },
+  {
+    method: "POST",
+    path: "/v1/keychain/drops/:id",
+    actor: "system",
+    auth: "source",
+    tenant: "row",
+    handle: redeemDrop,
+  },
 ];
