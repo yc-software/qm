@@ -261,7 +261,7 @@ test("an autonomous turn's token cannot act as an admin, even when its actor hol
   }
 });
 
-test("an unattended admin-read grant opens only the five read-only routes and keeps the DM gate", async () => {
+test("an unattended admin-read grant opens only its read-only routes and keeps the DM gate", async () => {
   const s = await start();
   try {
     const granted = await capFor("admin-alice", { live: false, grants: ["admin.sessions.read"] });
