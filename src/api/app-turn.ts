@@ -118,12 +118,9 @@ export function createTurnMethods(
       }
       const access = await conversationWriteAccess(deps, h, req, actor);
       if (!access.ok) return { status: "refused", reason: access.reason };
-      const projectId = access.project?.id ?? null;
-      const projectAudience = access.project?.audience;
-      const projectName = access.project?.name;
-      const projectVersion = access.project?.version;
+      const project = access.project;
       const conversationRef = req.conversation.channelRef;
-      let sessionParticipantIds = access.project ? [...access.project.memberIds] : undefined;
+      let sessionParticipantIds = project ? [...project.memberIds] : undefined;
 
       if (req.surface === "webhook" && req.triggered && !sessionParticipantIds) {
         sessionParticipantIds = [actor.id];
@@ -146,9 +143,9 @@ export function createTurnMethods(
       }
 
       async function withCurrentProjectRoster<T>(fn: () => Promise<T>): Promise<T | null> {
-        if (!projectId || !deps.projects) return fn();
-        if (!conversationRef || !projectVersion) return null;
-        return (await deps.projects.withVersion(conversationRef, projectVersion, fn)) ?? null;
+        if (!project || !deps.projects) return fn();
+        if (!conversationRef) return null;
+        return (await deps.projects.withVersion(conversationRef, project.version, fn)) ?? null;
       }
 
       const approvedRequest = req.approval ? (await deps.approvals?.get(req.approval.requestId))?.request : undefined;
@@ -260,7 +257,7 @@ export function createTurnMethods(
 
       const rawAudience = req.conversation.audience ?? [req.actor];
       const audience: Principal[] =
-        projectAudience ??
+        project?.audience ??
         rawAudience.map((a) => {
           const p = deps.identity.classify(a.externalId, a.isExternalGuest);
           if (p.id === actor.id) return actor;
@@ -269,15 +266,15 @@ export function createTurnMethods(
       if (!audience.some((p) => p.id === actor.id)) audience.push(actor);
 
       const publishMembers =
-        projectAudience ??
+        project?.audience ??
         req.conversation.publishMembers?.map((a) => deps.identity.classify(a.externalId, a.isExternalGuest));
 
       const conversation: Conversation = {
         kind: req.conversation.kind,
         threadRef: req.conversation.threadRef,
         ...(req.conversation.channelRef ? { channelRef: req.conversation.channelRef } : {}),
-        ...(projectName || req.conversation.channelName
-          ? { channelName: projectName ?? req.conversation.channelName }
+        ...(project?.name || req.conversation.channelName
+          ? { channelName: project?.name ?? req.conversation.channelName }
           : {}),
         audience,
         ...(req.conversation.isPrivate !== undefined ? { isPrivate: req.conversation.isPrivate } : {}),
@@ -339,10 +336,10 @@ export function createTurnMethods(
         ...(typeof req.timezone === "string" && req.timezone ? { timezone: req.timezone } : {}),
         ...(req.approval ? { approval: req.approval } : {}),
         ...(sessionParticipantIds ? { sessionParticipantIds } : {}),
-        ...(projectVersion ? { scopeVersion: projectVersion } : {}),
+        ...(project ? { scopeVersion: project.version } : {}),
       };
 
-      if (access.project && req.approval) {
+      if (project && req.approval) {
         const [approval, approvalSession] = await Promise.all([
           deps.approvals?.get(req.approval.requestId),
           deps.sessions.getByThread(conversation.threadRef),
@@ -391,7 +388,7 @@ export function createTurnMethods(
       let dedupKey: string | undefined = redeliveryKey;
       if (req.idempotencyKey) {
         dedupKey =
-          projectVersion === undefined ? req.idempotencyKey : `${req.idempotencyKey}:project-${projectVersion}`;
+          project ? `${req.idempotencyKey}:project-${project.version}` : req.idempotencyKey;
         if (req.approval) dedupKey = `${dedupKey}:approval:${req.approval.requestId}:${req.approval.approved}`;
       }
 

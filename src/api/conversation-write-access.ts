@@ -9,7 +9,6 @@ import type { AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
 interface ProjectAccess {
-  id: string;
   audience: Principal[];
   name: string;
   version: string;
@@ -37,31 +36,7 @@ async function projectAccess(deps: AppDeps, ref: string, actor: Principal): Prom
       return member?.displayName ? { ...principal, displayName: member.displayName } : principal;
     }),
   );
-  return { ok: true, project: { id, audience, name: project.name, version: String(project.updatedAt), memberIds } };
-}
-
-async function subagentAccess(deps: AppDeps, h: AppHelpers, req: TurnRequest, actor: Principal): Promise<boolean> {
-  const target = await deps.sessions.getByThread(req.conversation.threadRef);
-  return (
-    !!target?.spawnMeta &&
-    target.scopeId === conversationScope(req.conversation, actor.id) &&
-    !!(await deps.sessions.getForParticipant(target.id, actor.id)) &&
-    (await h.principalCanWriteScope(actor.id, target.scopeId))
-  );
-}
-
-async function webThreadAccess(deps: AppDeps, h: AppHelpers, req: TurnRequest, actor: Principal): Promise<WriteAccess> {
-  const threadRef = req.conversation.threadRef;
-  const existing = await deps.sessions.getByThread(threadRef);
-  if (existing) {
-    if (existing.scopeId !== conversationScope(req.conversation, actor.id))
-      return { ok: false, reason: "that conversation lives in a different context" };
-    if (!(await h.mayWriteSession(actor.id, existing)))
-      return { ok: false, reason: "you can't continue that conversation from the web" };
-  } else if (threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`)) {
-    return { ok: false, reason: "you can only start a new conversation on your own thread" };
-  }
-  return { ok: true };
+  return { ok: true, project: { audience, name: project.name, version: String(project.updatedAt), memberIds } };
 }
 
 export async function conversationWriteAccess(
@@ -78,11 +53,25 @@ export async function conversationWriteAccess(
     if (!ref || !(await h.mayUseSharedScope(req.conversation.kind, ref, actor))) return NOT_A_MEMBER;
   }
   if (!access.ok) return access;
-  if (isSubagentThreadRef(req.conversation.threadRef) && !(await subagentAccess(deps, h, req, actor)))
-    return { ok: false, reason: "you cannot continue that subagent session" };
-  if (req.surface === "web") {
-    const web = await webThreadAccess(deps, h, req, actor);
-    if (!web.ok) return web;
+  const claimed = conversationScope(req.conversation, actor.id);
+  if (isSubagentThreadRef(req.conversation.threadRef)) {
+    const target = await deps.sessions.getByThread(req.conversation.threadRef);
+    if (
+      !target?.spawnMeta ||
+      target.scopeId !== claimed ||
+      !(await deps.sessions.getForParticipant(target.id, actor.id)) ||
+      !(await h.principalCanWriteScope(actor.id, target.scopeId))
+    )
+      return { ok: false, reason: "you cannot continue that subagent session" };
   }
+  if (req.surface !== "web") return access;
+  const threadRef = req.conversation.threadRef;
+  const existing = await deps.sessions.getByThread(threadRef);
+  if (existing?.scopeId !== undefined && existing.scopeId !== claimed)
+    return { ok: false, reason: "that conversation lives in a different context" };
+  if (existing && !(await h.mayWriteSession(actor.id, existing)))
+    return { ok: false, reason: "you can't continue that conversation from the web" };
+  if (!existing && threadRef.startsWith("web:") && !threadRef.startsWith(`web:${actor.id}:`))
+    return { ok: false, reason: "you can only start a new conversation on your own thread" };
   return access;
 }
