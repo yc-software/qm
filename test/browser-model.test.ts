@@ -64,7 +64,7 @@ tenantTest("browser inference uses the company gateway with scoped model authori
     origin: "conversation" as const,
     exp: Date.now() + 60_000,
   };
-  const token = await mintCapabilityToken(claims, TEST_CAPABILITY_SECRET);
+  const token = await inTestTenant(() => mintCapabilityToken(claims, TEST_CAPABILITY_SECRET));
   const post = (body: unknown, credential = token) =>
     fetch(endpoint, {
       method: "POST",
@@ -95,11 +95,17 @@ tenantTest("browser inference uses the company gateway with scoped model authori
   ])
     assert.equal((await post(invalid)).status, 400);
   assert.equal(
-    (await post(body, await mintCapabilityToken({ ...claims, aud: CONTROL_PLANE_AUD }, TEST_CAPABILITY_SECRET))).status,
+    (
+      await post(
+        body,
+        await inTestTenant(() => mintCapabilityToken({ ...claims, aud: CONTROL_PLANE_AUD }, TEST_CAPABILITY_SECRET)),
+      )
+    ).status,
     403,
   );
   assert.equal(
-    (await post(body, await mintCapabilityToken({ ...claims, exp: 1 }, TEST_CAPABILITY_SECRET))).status,
+    (await post(body, await inTestTenant(() => mintCapabilityToken({ ...claims, exp: 1 }, TEST_CAPABILITY_SECRET))))
+      .status,
     401,
   );
   assert.equal(calls.length, 1);
@@ -131,7 +137,9 @@ tenantTest("browser inference uses the company gateway with scoped model authori
     expiresAt: Date.now() + 3600_000,
   });
   await built.config.setPersonalModelAuth("U1", true, "anthropic");
-  const claudeToken = await mintCapabilityToken({ ...claims, browserAccount: "anthropic" }, TEST_CAPABILITY_SECRET);
+  const claudeToken = await inTestTenant(() =>
+    mintCapabilityToken({ ...claims, browserAccount: "anthropic" }, TEST_CAPABILITY_SECRET),
+  );
   const unsupported = await post(body, claudeToken);
   assert.equal(unsupported.status, 422);
   assert.match(await unsupported.text(), /Claude subscription/);

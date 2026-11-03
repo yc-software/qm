@@ -71,7 +71,7 @@ tenantTest("sandbox SDK calls reach the company gateway with the sandbox token a
   const base = `${await listen(server as unknown as ReturnType<typeof httpServer>)}/v1/sandbox-model`;
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const claims = { actorId: "U1", scopeId: "personal:U1" as const, aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 };
-  const token = await mintCapabilityToken(claims, TEST_CAPABILITY_SECRET);
+  const token = await inTestTenant(() => mintCapabilityToken(claims, TEST_CAPABILITY_SECRET));
   const openai = (body: unknown, credential = token) =>
     fetch(`${base}/v1/chat/completions`, {
       method: "POST",
@@ -139,12 +139,17 @@ tenantTest("sandbox SDK calls reach the company gateway with the sandbox token a
   assert.equal((await openai({ ...chat, model: "constructor" })).status, 400);
   assert.equal((await openai({ model: 7, messages: [] })).status, 400);
   assert.equal(
-    (await openai(chat, await mintCapabilityToken({ ...claims, aud: CONTROL_PLANE_AUD }, TEST_CAPABILITY_SECRET)))
-      .status,
+    (
+      await openai(
+        chat,
+        await inTestTenant(() => mintCapabilityToken({ ...claims, aud: CONTROL_PLANE_AUD }, TEST_CAPABILITY_SECRET)),
+      )
+    ).status,
     403,
   );
   assert.equal(
-    (await openai(chat, await mintCapabilityToken({ ...claims, exp: 1 }, TEST_CAPABILITY_SECRET))).status,
+    (await openai(chat, await inTestTenant(() => mintCapabilityToken({ ...claims, exp: 1 }, TEST_CAPABILITY_SECRET))))
+      .status,
     401,
   );
   assert.equal((await openai(chat, "not-a-token")).status, 401);
@@ -176,13 +181,17 @@ tenantTest("a sandbox-model token is refused on every other route", async (t) =>
   const server = createServer(built.app, serverDeps(config, built));
   const base = await listen(server as unknown as ReturnType<typeof httpServer>);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  const token = await mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 },
-    TEST_CAPABILITY_SECRET,
+  const token = await inTestTenant(() =>
+    mintCapabilityToken(
+      { actorId: "U1", scopeId: "personal:U1", aud: SANDBOX_MODEL_AUD, exp: Date.now() + 60_000 },
+      TEST_CAPABILITY_SECRET,
+    ),
   );
-  const control = await mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 },
-    TEST_CAPABILITY_SECRET,
+  const control = await inTestTenant(() =>
+    mintCapabilityToken(
+      { actorId: "U1", scopeId: "personal:U1", aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 },
+      TEST_CAPABILITY_SECRET,
+    ),
   );
   const browser = (headers: Record<string, string>) =>
     fetch(`${base}/v1/browser-model/chat/completions`, {

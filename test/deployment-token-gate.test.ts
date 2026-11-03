@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import {
   CONTROL_PLANE_AUD,
   CREDENTIAL_BROKER_AUD,
@@ -38,16 +39,18 @@ describe("a published app's broker token follows the app it was minted for, on e
   });
 
   const tokenFor = (deployment: string, actorId = "publisher", aud = CREDENTIAL_BROKER_AUD) =>
-    mintCapabilityToken(
-      {
-        actorId,
-        scopeId: personalScope(actorId),
-        aud,
-        credentials: ["sample-api"],
-        deployment,
-        exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
-      },
-      SECRET,
+    inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId,
+          scopeId: personalScope(actorId),
+          aud,
+          credentials: ["sample-api"],
+          deployment,
+          exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+        },
+        SECRET,
+      ),
     );
 
   const routes = {
@@ -160,18 +163,20 @@ describe("a published app's broker token follows the app it was minted for, on e
 
   it("checks scope membership with the token's bot and member claims on both routes", async () => {
     const token = () =>
-      mintCapabilityToken(
-        {
-          actorId: "B1",
-          scopeId: "channel:C1",
-          aud: CREDENTIAL_BROKER_AUD,
-          credentials: ["sample-api"],
-          botActor: true,
-          liveActor: true,
-          members: [{ id: "B1", type: "internal" }],
-          exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
-        },
-        SECRET,
+      inTestTenant(() =>
+        mintCapabilityToken(
+          {
+            actorId: "B1",
+            scopeId: "channel:C1",
+            aud: CREDENTIAL_BROKER_AUD,
+            credentials: ["sample-api"],
+            botActor: true,
+            liveActor: true,
+            members: [{ id: "B1", type: "internal" }],
+            exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
+          },
+          SECRET,
+        ),
       );
     authorized.length = 0;
     assert.deepEqual(await statuses(token), { broker: 200, git: 200 });

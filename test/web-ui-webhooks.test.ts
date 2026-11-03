@@ -32,7 +32,7 @@ process.env.CORE_API_URL = `http://localhost:${corePort}`;
 process.env.CORE_SIGNING_SECRET = SECRET;
 process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
-const web = createHttpServer(handler);
+const web = createHttpServer((req, res) => inTestTenant(() => handler(req, res)));
 web.listen(0);
 const webBase = `http://localhost:${(web.address() as AddressInfo).port}`;
 

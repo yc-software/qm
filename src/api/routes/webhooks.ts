@@ -189,7 +189,7 @@ const disableWebhook = (ctx: ApiCtx): Promise<void> => setWebhookEnabled(ctx, fa
 const enableWebhook = (ctx: ApiCtx): Promise<void> => setWebhookEnabled(ctx, true);
 
 export const webhookRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "POST", path: "/v1/webhooks/incoming/:id", auth: "public", handle: incomingWebhook },
+  { method: "POST", path: "/v1/webhooks/incoming/:id", auth: "public", tenant: "row", handle: incomingWebhook },
 ];
 
 export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [

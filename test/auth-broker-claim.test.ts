@@ -66,8 +66,9 @@ async function claim(
   const ts = Math.floor(Date.now() / 1000);
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (sign) {
+    Object.assign(headers, testTenantHeaders());
     headers["x-timestamp"] = String(ts);
-    headers["x-signature"] = signRequest(SECRET, ts, `POST\n${path}\n${raw}`);
+    headers["x-signature"] = signRequest(SECRET, ts, `POST\n${path}\n${testTenants()[0]}\n${raw}`);
   }
   const res = await fetch(`${base}${path}`, { method: "POST", headers, body: raw });
   return { status: res.status, json: (await res.json()) as { claimed?: unknown; error?: unknown } };
@@ -162,16 +163,19 @@ tenantTest("broker sessions cross the production identity gate, but revocation r
       body,
       headers: {
         "content-type": "application/json",
-        ...testTenantHeaders(),
         ...(signed
           ? {
+              ...testTenantHeaders(),
               "x-timestamp": String(ts),
               "x-signature": signRequest(SECRET, ts, `POST\n${path}\n${testTenants()[0]}\n${body}`),
             }
           : {}),
         ...(actor
           ? {
-              "x-portal-identity": await mintPortalIdentity({ p: actor, exp: Date.now() + 60000 }, SECRET + "identity"),
+              "x-portal-identity": await mintPortalIdentity(
+                { t: testTenants()[0], p: actor, exp: Date.now() + 60000 },
+                SECRET + "identity",
+              ),
             }
           : {}),
       },

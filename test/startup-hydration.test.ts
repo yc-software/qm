@@ -41,7 +41,7 @@ mock.module("../src/resolution/config-store.ts", {
   },
 });
 
-const { buildApp } = await import("./support/build-app.ts");
+const { buildApp } = await import("../src/wiring.ts");
 
 test("a failed first-bind load fails closed and runs again on the next use", async () => {
   const built = buildApp(testConfig());

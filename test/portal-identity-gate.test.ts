@@ -124,7 +124,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     await new Promise<void>((resolve) => prodServer.listen(0, resolve));
     try {
       const prodBase = `http://localhost:${(prodServer.address() as AddressInfo).port}`;
-      assert.equal((await fetch(`${prodBase}/d/missing/`)).status, 403);
+      assert.equal((await fetch(`${prodBase}/d/missing/`, { headers: testTenantHeaders() })).status, 403);
     } finally {
       await new Promise<void>((resolve) => prodServer.close(() => resolve()));
     }

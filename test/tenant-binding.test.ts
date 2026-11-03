@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { IncomingMessage } from "node:http";
+import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { withRequestTenant } from "../src/api/tenant-ingress.ts";
 import { CAPABILITY_HEADER } from "../src/api/contract.ts";
@@ -23,12 +23,17 @@ function requestWith(headers: Record<string, string>): IncomingMessage {
   return req;
 }
 
-async function tenantSeenBy(headers: Record<string, string>, auth: "source" | "public" = "source") {
-  let seen: string | undefined = "unset";
-  await withRequestTenant(requestWith(headers), { auth }, SECRET, () => {
+async function tenantSeenBy(
+  headers: Record<string, string>,
+  route: { auth: "source" | "public"; tenant?: "none" | "row" } = { auth: "source" },
+) {
+  let seen: string | undefined = "rejected";
+  const req = requestWith(headers);
+  const res = new ServerResponse(req);
+  await withRequestTenant(req, res, route, SECRET, () => {
     seen = boundTenant();
   });
-  return seen;
+  return { seen, status: res.statusCode };
 }
 
 describe("tenant claims", () => {
@@ -64,16 +69,35 @@ describe("tenant claims", () => {
 describe("request ingress", () => {
   it("binds the tenant of a verified capability token over any tenant header", async () => {
     const token = await withTenant(TENANT_B, () => mintCapabilityToken(claims, SECRET));
-    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token, [TENANT_HEADER]: TENANT_A }), TENANT_B);
+    assert.deepEqual(await tenantSeenBy({ [CAPABILITY_HEADER]: token, [TENANT_HEADER]: TENANT_A }), {
+      seen: TENANT_B,
+      status: 200,
+    });
   });
 
-  it("binds the signed tenant header and ignores malformed ones", async () => {
-    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }), TENANT_A);
-    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: "nope" }), undefined);
+  it("binds the signed tenant header and rejects malformed ones", async () => {
+    assert.deepEqual(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }), { seen: TENANT_A, status: 200 });
+    assert.deepEqual(await tenantSeenBy({ [TENANT_HEADER]: "nope" }), { seen: "rejected", status: 401 });
   });
 
-  it("leaves public routes and unverifiable tokens unbound", async () => {
-    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, "public"), undefined);
-    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: "garbage" }), undefined);
+  it("rejects public routes that name a tenant only in an unsigned header, and unverifiable tokens", async () => {
+    assert.deepEqual(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, { auth: "public" }), {
+      seen: "rejected",
+      status: 401,
+    });
+    assert.deepEqual(await tenantSeenBy({ [CAPABILITY_HEADER]: "garbage" }), { seen: "rejected", status: 401 });
+  });
+
+  it("lets listed routes in unbound so they can resolve their own tenant, binding any verified one", async () => {
+    assert.deepEqual(await tenantSeenBy({}, { auth: "public", tenant: "none" }), { seen: undefined, status: 200 });
+    assert.deepEqual(await tenantSeenBy({}, { auth: "source", tenant: "row" }), { seen: undefined, status: 200 });
+    assert.deepEqual(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, { auth: "source", tenant: "row" }), {
+      seen: TENANT_A,
+      status: 200,
+    });
+    assert.deepEqual(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, { auth: "public", tenant: "row" }), {
+      seen: undefined,
+      status: 200,
+    });
   });
 });
