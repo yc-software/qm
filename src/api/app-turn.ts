@@ -39,7 +39,6 @@ import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
 
 const USER_STOP = "by user";
-/** Stands in for a mid-turn message the security screen blocked, so the run and transcript show it arrived. */
 const STEER_WITHHELD_NOTICE =
   "[A mid-turn message from someone in this thread was withheld: the security screen flagged it.]";
 
@@ -484,6 +483,7 @@ export function createTurnMethods(
             req.text,
           );
           let injectedText = steerText;
+          let withheld = false;
           if (origin.kind === "ambient") {
             const session = await deps.sessions.getByThread(conversation.threadRef);
             const decision = await deps.orchestrator.screenSecuritySteer({
@@ -492,7 +492,8 @@ export function createTurnMethods(
               conversation,
               ...(session ? { sessionId: session.id } : {}),
             });
-            if (decision === "block") injectedText = STEER_WITHHELD_NOTICE;
+            withheld = decision === "block";
+            if (withheld) injectedText = STEER_WITHHELD_NOTICE;
             else if (decision === "unscreened") injectedText = `${unscreenedNotice("mid-turn message")}\n${steerText}`;
           }
           const fileNames = (req.attachments ?? []).map((a) =>
@@ -518,7 +519,7 @@ export function createTurnMethods(
                   kind: route.signal,
                   ...(route.text ? { text: route.text } : {}),
                   ...(steerTs ? { ts: steerTs } : {}),
-                  ...(route.signal === "steer" ? { request: req } : {}),
+                  ...(route.signal === "steer" && !withheld ? { request: req } : {}),
                   ...(redeliveryKey ? { dedupeKey: redeliveryKey } : {}),
                 }));
               return targetRun.id;

@@ -207,6 +207,7 @@ test("Auto blocks a prompt-injection attempt from an unprompted mid-turn coworke
   assert.equal(pending.length, 1, "the run is told a message was withheld");
   assert.match(pending[0]!.text ?? "", /withheld: the security screen flagged it/);
   assert.doesNotMatch(pending[0]!.text ?? "", /ignore previous/, "flagged steer data never reaches the live agent");
+  assert.equal(pending[0]!.request, undefined, "a replay cannot rebuild a turn from the flagged request");
   assert.ok((await built.auditLog.events()).some((event) => event.action === "security_posture.steer_block"));
 });
 

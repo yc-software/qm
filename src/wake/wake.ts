@@ -14,7 +14,6 @@ export interface Wake {
 
 export type WakeRoute = { kind: "engage" } | { kind: "steer"; signal: RunSignalKind; text?: string };
 
-/** Routes a message that arrived while a run is live in its thread. */
 export function routeWake(wake: Wake, liveRunGated = false): WakeRoute {
   if (wake.halt) return { kind: "steer", signal: "abort" };
   if (liveRunGated && wake.situation === "addressed") return { kind: "engage" };
