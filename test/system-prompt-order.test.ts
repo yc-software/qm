@@ -46,7 +46,7 @@ import {
 } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { entryFromItem, USER_ITEM_KINDS } from "../src/sessions/items.ts";
+import { USER_ITEM_KINDS } from "../src/sessions/items.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -1423,10 +1423,7 @@ test("scheduled-work changes update the next turn's system block without rewriti
   assert.equal(seen[2]!.systemPrompt, seen[0]!.systemPrompt);
   assert.match(seen[3]!.systemPrompt, /Scheduled-work status is unavailable/);
   assert.doesNotMatch(seen[1]!.systemPrompt, /Other Linux|8 vCPU|\/new\/workspace/);
-  assert.deepEqual(
-    seen[1]!.history,
-    originalItems.map((item) => entryFromItem(item, seen[1]!.session.scopeId)),
-  );
+  assert.deepEqual(seen[1]!.history, originalItems);
   assert.deepEqual((await sessions.getItems(first.sessionId!)).slice(0, originalItems.length), originalItems);
 });
 

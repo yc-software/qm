@@ -1,7 +1,8 @@
 import type { Readable } from "node:stream";
 import { basename } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AttachmentMeta, IncomingAttachment, OutgoingAttachment, ScopeId, SessionEntry } from "../types.ts";
+import type { AttachmentMeta, IncomingAttachment, OutgoingAttachment, ScopeId } from "../types.ts";
+import { isUserItem, type Item } from "../sessions/items.ts";
 import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import {
   MAX_BLOB_BYTES,
@@ -142,12 +143,12 @@ function uniqueName(name: string, used: Set<string>): string {
 
 export function withoutAlreadyIngested(
   attachments: IncomingAttachment[],
-  contextEntries: readonly SessionEntry[],
+  contextItems: readonly Item[],
 ): IncomingAttachment[] {
   const seen = new Set<string>();
-  for (const entry of contextEntries) {
-    if (entry.type !== "user") continue;
-    const metas = (entry.payload as { attachments?: unknown } | null)?.attachments;
+  for (const item of contextItems) {
+    if (!isUserItem(item)) continue;
+    const metas = item.body.attachments;
     if (!Array.isArray(metas)) continue;
     for (const meta of metas as AttachmentMeta[]) {
       if (meta.direction === "in" && typeof meta.sourceId === "string" && shownToModel(meta)) seen.add(meta.sourceId);

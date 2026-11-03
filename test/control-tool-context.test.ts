@@ -201,8 +201,9 @@ for (const scope of ["conversation", "channel"] as const) {
       {
         current: ctx,
         scopeLabel: scopeId("personal", "U1"),
-        emit: (entry) => {
-          entries.push(entry.type);
+        emit: async (item) => {
+          entries.push(item.kind);
+          return undefined;
         },
       },
       { controlTools: true },
@@ -213,7 +214,7 @@ for (const scope of ["conversation", "channel"] as const) {
         .then((result) => JSON.stringify(result));
     const results = await Promise.all([edit("First rule.", "First updated."), edit("Second rule.", "Second updated.")]);
     assert.equal(results.filter((result) => !result.includes("[error]")).length, 1);
-    assert.equal(entries.filter((type) => type === "tool_result").length, 2);
+    assert.equal(entries.filter((kind) => kind === "ToolResult").length, 2);
     assert.match(
       results.find((result) => result.includes("[error]"))!,
       /changed/,

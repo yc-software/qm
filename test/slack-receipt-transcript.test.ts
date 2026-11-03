@@ -12,13 +12,11 @@ import { sleep } from "../src/util/async.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { holdThread, testRuns } from "./support/live-run.ts";
-import { entryFromItem } from "../src/sessions/items.ts";
 
 const scope = scopeId("personal", "alice");
 const databaseUrl = process.env.DATABASE_URL;
 
-const history = async (sessions: SessionStore, sessionId: string) =>
-  (await sessions.getItems(sessionId)).map((item) => entryFromItem(item, scope));
+const history = async (sessions: SessionStore, sessionId: string) => sessions.getItems(sessionId);
 
 for (const backend of ["memory", "postgres"] as const) {
   test(

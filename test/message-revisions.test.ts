@@ -14,12 +14,12 @@ import { sleep } from "../src/util/async.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { IngestEvent } from "../src/surface-cache/types.ts";
-import type { ScopeId, SessionEntry } from "../src/types.ts";
+import type { ScopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { holdThread, testRuns } from "./support/live-run.ts";
-import { entryFromItem, itemFromEntry } from "../src/sessions/items.ts";
+import { type Item, type NewItem, storedItem } from "../src/sessions/items.ts";
 
 const SCOPE = "personal:alex@example.com" as ScopeId;
 const runs = testRuns();
@@ -30,11 +30,14 @@ async function seedSession(
   sessions: SessionStore,
   threadRef: string,
   type: "dm" | "channel",
-  userPayloads: Array<Record<string, unknown>>,
+  userPayloads: Array<{ text: string; ts: string; hidden?: boolean } & Record<string, unknown>>,
 ) {
   const session = await sessions.getOrCreateByThread(threadRef, type, SCOPE, undefined, "slack");
   const writer = { sessionId: session.id };
-  for (const payload of userPayloads) await sessions.append(writer, itemFromEntry({ type: "user", payload }));
+  for (const { text, ts, hidden, ...body } of userPayloads) {
+    const item: NewItem = { kind: "UserMessage", text, externalId: ts, body };
+    await sessions.append(writer, hidden === undefined ? item : { ...item, hidden });
+  }
   return session;
 }
 
@@ -46,11 +49,11 @@ function del(over: Partial<IngestEvent> = {}): IngestEvent {
   return { container: DM, ts: "100.1", deleted: true, ...over };
 }
 
-async function history(sessions: SessionStore, sessionId: string): Promise<SessionEntry[]> {
-  return (await sessions.getItems(sessionId)).map((item) => entryFromItem(item, SCOPE));
+async function history(sessions: SessionStore, sessionId: string): Promise<Item[]> {
+  return sessions.getItems(sessionId);
 }
 
-function revisions(entries: readonly SessionEntry[]): MessageRevisionPayload[] {
+function revisions(entries: readonly Item[]): MessageRevisionPayload[] {
   return entries.flatMap((e) => {
     const r = messageRevision(e);
     return r ? [r] : [];
@@ -69,7 +72,6 @@ test("an edit of a recorded DM message appends one marker entry the model sees",
   const marks = revisions(entries);
   assert.equal(marks.length, 1);
   assert.deepEqual(marks[0], {
-    kind: "message_revision",
     action: "edited",
     ts: "100.1",
     text: "fixed text",
@@ -172,23 +174,15 @@ test("a channel thread reply's edit reaches the thread session via the sub root"
 });
 
 test("the marker renders into model context on the entries-replay path", () => {
-  const history = [
-    { type: "user", payload: { text: "original text", ts: "100.1" }, createdAt: 1, seq: 1, parentSeq: null },
-    {
-      type: "system",
-      payload: { kind: "message_revision", action: "edited", ts: "100.1", text: "fixed <text>", name: "Alex Morgan" },
-      createdAt: 2,
-      seq: 2,
-      parentSeq: null,
-    },
-    {
-      type: "system",
-      payload: { kind: "message_revision", action: "deleted", ts: "100.1", name: "Alex Morgan" },
-      createdAt: 3,
-      seq: 3,
-      parentSeq: null,
-    },
-  ] as unknown as SessionEntry[];
+  const at = (seq: number) => ({ sessionId: "s", seq, createdAt: seq });
+  const history: Item[] = [
+    storedItem({ kind: "UserMessage", text: "original text", externalId: "100.1" }, at(1)),
+    storedItem(
+      { kind: "Retraction", body: { action: "edited", ts: "100.1", text: "fixed <text>", name: "Alex Morgan" } },
+      at(2),
+    ),
+    storedItem({ kind: "Retraction", body: { action: "deleted", ts: "100.1", name: "Alex Morgan" } }, at(3)),
+  ];
   const messages = reconstructMessagesFromHistory(history);
   const texts = messages.map((m) => (m.content[0] as { text: string }).text);
   assert.equal(texts[0], "── Wednesday, December 31, 1969 ──\noriginal text");
@@ -215,7 +209,6 @@ test("revision thread-ref candidates cover DM, DM thread, channel, and group roo
 
 test("renderMessageRevision escapes attribute and body text", () => {
   const rendered = renderMessageRevision({
-    kind: "message_revision",
     action: "edited",
     ts: '10.0" evil',
     text: "<b>&",
@@ -256,7 +249,7 @@ test("while a turn is live the ingest-time marker is skipped, and the turn-end c
     sessions,
     surfaceCache: cache,
     writer,
-    session: { id: session.id, scopeId: SCOPE, threadRef: session.threadRef },
+    session: { id: session.id, threadRef: session.threadRef },
     anchorAt,
     fallbackSince: 0,
   });
@@ -274,7 +267,7 @@ test("while a turn is live the ingest-time marker is skipped, and the turn-end c
     sessions,
     surfaceCache: cache,
     writer,
-    session: { id: session.id, scopeId: SCOPE, threadRef: session.threadRef },
+    session: { id: session.id, threadRef: session.threadRef },
     anchorAt,
     fallbackSince: 0,
   });
@@ -288,7 +281,7 @@ test("the catch-up ignores the bot's own edits and non-Slack sessions", async ()
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [{ text: "original text", ts: "100.1" }]);
   await cache.ingest([{ container: DM, ts: "100.1", text: "self edit", editedAt: Date.now(), self: true }]);
   const writer = { sessionId: session.id };
-  const target = { id: session.id, scopeId: SCOPE, threadRef: session.threadRef };
+  const target = { id: session.id, threadRef: session.threadRef };
   assert.equal(
     await reconcileMessageRevisions({
       sessions,
@@ -351,7 +344,7 @@ test("an edit made before the message's own turn is still caught through the tri
   const writer = { sessionId: session.id };
   await sessions.append(writer, { kind: "UserMessage", text: "secnd", externalId: "51.0" });
   const anchorAt = Date.now();
-  const target = { id: session.id, scopeId: SCOPE, threadRef: session.threadRef };
+  const target = { id: session.id, threadRef: session.threadRef };
   assert.equal(
     await reconcileMessageRevisions({
       sessions,

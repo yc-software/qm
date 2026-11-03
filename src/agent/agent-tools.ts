@@ -2,7 +2,8 @@ import type { DocumentInput } from "../core/documents.ts";
 import type { TurnHandoff } from "./runtime-types.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Config } from "../config.ts";
-import type { ClientToolDeclaration, EntryType, ScopeId } from "../types.ts";
+import type { ClientToolDeclaration, ScopeId } from "../types.ts";
+import type { Item, NewItem } from "../sessions/items.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import { type Phase } from "../../plugins/chassis/src/error-reporting.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
@@ -27,7 +28,6 @@ export interface ToolContextRef {
   documents?: DocumentInput[];
   documentsStubbed?: boolean;
   runtimeHandoff?: TurnHandoff;
-  runtimeRunId?: string;
   runtimeActorId?: string;
   runtimeMutationPending?: boolean;
   runtimeInFlight?: Set<Promise<unknown>>;
@@ -43,7 +43,7 @@ export interface ToolContextRef {
     grantModes?: { session: boolean; always: boolean };
   }>;
   pausedOnApproval?: boolean;
-  emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
+  emit?: (item: NewItem) => Promise<Item | undefined>;
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
   llmCapture?: Array<{

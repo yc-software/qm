@@ -17,29 +17,10 @@ export function promptEnvelopeBody(envelope: unknown): { hash: string; body: str
   return { hash: createHash("sha256").update(body).digest("hex"), body };
 }
 
-const CONTEXT_SUMMARY_KIND = "context_summary";
-
-export interface ContextSummaryPayload {
-  kind: typeof CONTEXT_SUMMARY_KIND;
-  throughSeq: number;
-  text: string;
-}
-
-export function contextSummaryPayload(entry: SessionEntry): ContextSummaryPayload | null {
-  const payload = entry.payload as Partial<ContextSummaryPayload> | null;
-  if (
-    entry.type === "system" &&
-    payload?.kind === CONTEXT_SUMMARY_KIND &&
-    typeof payload.throughSeq === "number" &&
-    typeof payload.text === "string"
-  ) {
-    return { kind: CONTEXT_SUMMARY_KIND, throughSeq: payload.throughSeq, text: payload.text };
-  }
-  return null;
-}
-
-export function createContextSummaryPayload(throughSeq: number, text: string): ContextSummaryPayload {
-  return { kind: CONTEXT_SUMMARY_KIND, throughSeq, text };
+export function contextSummary(item: Item): { throughSeq: number; text: string } | null {
+  return item.kind === "ContextCompaction" && item.throughSeq !== null
+    ? { throughSeq: item.throughSeq, text: item.text ?? "" }
+    : null;
 }
 
 interface ContextWindow {
@@ -409,10 +390,6 @@ export function windowedTranscript(
     }
   }
   return { entries: (cut > 0 ? entries.slice(cut) : entries).map(projectEntry), earlier: cut };
-}
-
-export function isOverheardEntry(e: Pick<SessionEntry, "type" | "payload">): boolean {
-  return e.type === "user" && (e.payload as { overheard?: unknown } | null)?.overheard === true;
 }
 
 export class DuplicateCallError extends Error {

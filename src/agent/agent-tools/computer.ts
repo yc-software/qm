@@ -19,7 +19,7 @@ function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }):
 const PRESSURE_WARN_FULL60 = 50;
 
 export function computerTools(kit: ToolKit) {
-  const { ref, opts, log, recordCall, recordResult, blockOnApproval } = kit;
+  const { ref, opts, logResult, recordCall, recordResult, blockOnApproval } = kit;
   const execTimeoutSec = Math.round((opts?.execTimeoutMs ?? CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000) / 1000);
   const execCeilingSec = Math.round((opts?.execTimeoutCeilingMs ?? CONFIG_DEFAULTS.execTimeoutMaxSec * 1000) / 1000);
   const bgTtlSec = Math.round((opts?.backgroundJobTtlMs ?? CONFIG_DEFAULTS.backgroundJobTtlSec * 1000) / 1000);
@@ -138,7 +138,7 @@ export function computerTools(kit: ToolKit) {
           true,
         );
       }
-      await log("tool_result", {
+      await logResult({
         tool: "execute",
         ...scopeNote,
         callId,

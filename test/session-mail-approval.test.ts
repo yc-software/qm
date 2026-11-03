@@ -1,9 +1,9 @@
+import type { NewItem } from "../src/sessions/items.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { emitEntry } from "../src/agent/turn-support.ts";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -82,7 +82,7 @@ async function scenario() {
       const ref = {
         current: turn.tools,
         scopeLabel: turn.scopeLabel,
-        emit: (entry: Parameters<typeof emitEntry>[1]) => emitEntry(turn, entry),
+        emit: (item: NewItem) => turn.emit(item),
         screenToolResult: turn.screenToolResult,
         pendingApprovals: [],
       };

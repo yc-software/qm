@@ -274,7 +274,10 @@ test("the model and transcript see when a command moved to the scratch computer"
   });
   const execute = createAgentTools({
     current: ctx,
-    emit: (entry) => void entries.push(entry.payload as Record<string, unknown>),
+    emit: async (item) => {
+      entries.push({ ...item.body, isError: item.isError });
+      return undefined;
+    },
     scopeLabel: scopeId("channel", "room"),
   })[0]!;
   const run = (params: Record<string, unknown>) =>

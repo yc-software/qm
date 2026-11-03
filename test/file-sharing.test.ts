@@ -30,6 +30,7 @@ import {
 } from "../src/core/attachments.ts";
 import { environmentNote, senderNote, sharedFilesSystemSection } from "../src/core/orchestrator/prompt-blocks.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
+import { storedItem } from "../src/sessions/items.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {
@@ -205,27 +206,28 @@ test("materializeInbound records the surface file id so a later turn can tell th
 });
 
 test("withoutAlreadyIngested drops images this context already holds and keeps everything else", () => {
-  const entry = (type: string, payload: unknown) => ({
-    sessionId: "s",
-    seq: 1,
-    parentSeq: null,
-    type: type as never,
-    payload,
-    scopeLabel: "org:test" as never,
-    createdAt: 0,
-  });
-  const entries = [
-    entry("user", {
-      text: "here",
-      attachments: [
-        { name: "shot.png", mimetype: "image/png", sizeBytes: 3, direction: "in", sourceId: "Fseen" },
-        { name: "plan.pdf", mimetype: "application/pdf", sizeBytes: 3, direction: "in", sourceId: "Fpdf" },
-        { name: "huge.png", mimetype: "image/png", sizeBytes: 6_000_000, direction: "in", sourceId: "Fhuge" },
-        { name: "old.png", mimetype: "image/png", sizeBytes: 3, direction: "in" },
-      ],
-    }),
-    entry("assistant", { attachments: [{ name: "out.png", direction: "out", sourceId: "Fout" }] }),
-    entry("user", { text: "no files" }),
+  const at = { sessionId: "s", seq: 1, createdAt: 0 };
+  const items = [
+    storedItem(
+      {
+        kind: "UserMessage",
+        text: "here",
+        body: {
+          attachments: [
+            { name: "shot.png", mimetype: "image/png", sizeBytes: 3, direction: "in", sourceId: "Fseen" },
+            { name: "plan.pdf", mimetype: "application/pdf", sizeBytes: 3, direction: "in", sourceId: "Fpdf" },
+            { name: "huge.png", mimetype: "image/png", sizeBytes: 6_000_000, direction: "in", sourceId: "Fhuge" },
+            { name: "old.png", mimetype: "image/png", sizeBytes: 3, direction: "in" },
+          ],
+        },
+      },
+      at,
+    ),
+    storedItem(
+      { kind: "AgentMessage", body: { attachments: [{ name: "out.png", direction: "out", sourceId: "Fout" }] } },
+      at,
+    ),
+    storedItem({ kind: "UserMessage", text: "no files" }, at),
   ];
   const seen = { name: "shot.png", mimetype: "image/png", sizeBytes: 3, blobId: "b1", sourceId: "Fseen" };
   const fresh = { name: "new.png", mimetype: "image/png", sizeBytes: 3, blobId: "b2", sourceId: "Fnew" };
@@ -233,7 +235,7 @@ test("withoutAlreadyIngested drops images this context already holds and keeps e
   const outbound = { name: "out.png", mimetype: "image/png", sizeBytes: 3, blobId: "b4", sourceId: "Fout" };
   const pdf = { name: "plan.pdf", mimetype: "application/pdf", sizeBytes: 3, blobId: "b5", sourceId: "Fpdf" };
   const huge = { name: "huge.png", mimetype: "image/png", sizeBytes: 6_000_000, blobId: "b6", sourceId: "Fhuge" };
-  assert.deepEqual(withoutAlreadyIngested([seen, fresh, anonymous, outbound, pdf, huge], entries), [
+  assert.deepEqual(withoutAlreadyIngested([seen, fresh, anonymous, outbound, pdf, huge], items), [
     fresh,
     anonymous,
     outbound,
