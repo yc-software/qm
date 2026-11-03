@@ -1202,32 +1202,27 @@ test("the surface tool's react/edit/delete actions delegate to the tool context"
   await call(slack, { action: "delete", ref: "173.4" });
 
   const result = (action: string) => emitted.find((e) => e.kind === "ToolResult" && e.body.action === action)!;
-  assert.deepEqual(result("react"), {
+  const columns = ({ tool, callId, isError, text, body }: Item) => ({ tool, callId, isError, text, body });
+  assert.deepEqual(columns(result("react")), {
     tool: "slack",
-    action: "react",
-    ok: true,
-    deliveryId: "r1",
     callId: "t",
     isError: false,
-    result: "[reacted]",
+    text: "[reacted]",
+    body: { action: "react", ok: true, deliveryId: "r1" },
   });
-  assert.deepEqual(result("edit"), {
+  assert.deepEqual(columns(result("edit")), {
     tool: "slack",
-    action: "edit",
-    ok: true,
-    deliveryId: "e1",
     callId: "t",
     isError: false,
-    result: "[edited]",
+    text: "[edited]",
+    body: { action: "edit", ok: true, deliveryId: "e1" },
   });
-  assert.deepEqual(result("delete"), {
+  assert.deepEqual(columns(result("delete")), {
     tool: "slack",
-    action: "delete",
-    ok: true,
-    deliveryId: "x1",
     callId: "t",
     isError: false,
-    result: "[deleted]",
+    text: "[deleted]",
+    body: { action: "delete", ok: true, deliveryId: "x1" },
   });
 
   assert.equal(emitted.find((e) => e.kind === "ToolCall" && e.body.action === "react")!.body.ts, "173.4");
@@ -3643,7 +3638,10 @@ test("a client tool records the call, waits for the page, and returns its answer
   assert.equal(ret.content[0]?.text, "rows 3-5 selected");
   assert.deepEqual(ret.details, { structured: { rows: [3, 4, 5] } });
   const toolCall = emitted.find((e) => e.kind === "ToolCall")!;
-  assert.deepEqual(toolCall, { tool: "ui__get_selection", client: true, args: { note: "hi" }, callId: "t" });
+  assert.deepEqual(
+    { tool: toolCall.tool, callId: toolCall.callId, body: toolCall.body },
+    { tool: "ui__get_selection", callId: "t", body: { client: true, args: { note: "hi" } } },
+  );
   const toolResult = emitted.find((e) => e.kind === "ToolResult")!;
   assert.equal(toolResult.isError, false);
   assert.equal(toolResult.text, "rows 3-5 selected");
