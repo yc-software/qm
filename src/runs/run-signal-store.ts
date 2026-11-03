@@ -113,7 +113,12 @@ export function startSignalPoll(
     draining = true;
     inFlight = (async () => {
       let abortDelivered = false;
-      for (const { id, signal: s } of await signals.pending(runId)) {
+      const pending = await signals.pending(runId);
+      const ordered = [
+        ...pending.filter(({ signal }) => signal.kind === "abort"),
+        ...pending.filter(({ signal }) => signal.kind !== "abort"),
+      ];
+      for (const { id, signal: s } of ordered) {
         if (s.kind === "client_result") continue;
         try {
           if (s.kind === "abort") {
@@ -122,6 +127,13 @@ export function startSignalPoll(
               abortDelivered = true;
             }
           } else if (!declined.has(id)) {
+            const lateStop = abortDelivered
+              ? undefined
+              : (await signals.pending(runId)).find(({ signal }) => signal.kind === "abort");
+            if (lateStop?.signal.kind === "abort") {
+              await handlers.onAbort(lateStop.signal.reason);
+              abortDelivered = true;
+            }
             if (s.text || s.request?.attachments?.length) {
               const delivered = await handlers.onSteer(s.text ?? "", s.ts, s.request, () =>
                 signals.acknowledge(runId, id),

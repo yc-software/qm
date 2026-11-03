@@ -1268,11 +1268,12 @@ export function createAgent(opts?: AgentOptions): Agent {
                 {
                   onSteer: async (text, ts, request, acknowledge) => {
                     if (ts && steeredSeen.has(ts)) return;
+                    if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
                     const prepared = await turn.prepareSteer?.(text, request);
                     const prompt = prepared?.text ?? text;
                     if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
                     const steer = {
-                      text,
+                      text: prepared?.withheld ? prompt : text,
                       prompt,
                       ts,
                       attachments: prepared?.attachments,

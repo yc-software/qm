@@ -69,6 +69,59 @@ test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by
   assert.deepEqual(await store.pendingRunIds(), [], "the stop does not outlive the run's terminal completion");
 });
 
+test("startSignalPoll: a stop waiting behind a slow steer is delivered first", async () => {
+  const store = signalStore();
+  const order: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  await store.send("r-order", { kind: "steer", text: "screen me slowly" });
+  await store.send("r-order", { kind: "abort" });
+  const stop = startSignalPoll(
+    store,
+    "r-order",
+    {
+      onSteer: async () => {
+        order.push("steer");
+        await gate;
+      },
+      onAbort: async () => void order.push("abort"),
+    },
+    { intervalMs: 60_000 },
+  );
+  try {
+    await until(() => order.length === 2, 500);
+    assert.deepEqual(order, ["abort", "steer"]);
+  } finally {
+    release();
+    await stop();
+  }
+});
+
+test("startSignalPoll: a stop that arrives during a steer's intake goes ahead of the next steer", async () => {
+  const store = signalStore();
+  const order: string[] = [];
+  await store.send("r-late", { kind: "steer", text: "first" });
+  await store.send("r-late", { kind: "steer", text: "second" });
+  const stop = startSignalPoll(
+    store,
+    "r-late",
+    {
+      onSteer: async (text) => {
+        order.push(text);
+        if (text === "first") await store.send("r-late", { kind: "abort" });
+      },
+      onAbort: async () => void order.push("abort"),
+    },
+    { intervalMs: 60_000 },
+  );
+  try {
+    await until(() => order.includes("second"), 500);
+    assert.deepEqual(order.slice(0, 3), ["first", "abort", "second"]);
+  } finally {
+    await stop();
+  }
+});
+
 test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the still-pending stop re-delivers on the next drain", async () => {
   const store = signalStore();
   const steered: string[] = [];

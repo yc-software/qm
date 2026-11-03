@@ -77,6 +77,7 @@ export interface AgentTurnInput {
     images?: TurnImage[];
     documents?: DocumentInput[];
     author?: string;
+    withheld?: boolean;
   }>;
   documents?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;
