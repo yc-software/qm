@@ -2832,6 +2832,11 @@ qm-markdown .tok-in {
   color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
   font-variant-numeric: tabular-nums;
 }
+.work-head .work-elapsed-seconds {
+  display: inline-block;
+  min-width: 2ch;
+  text-align: right;
+}
 .work-prestep > .work-head {
   cursor: default;
 }
