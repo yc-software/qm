@@ -11,8 +11,8 @@ import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createPgPool, migrateRegisteredPgSchemas, type PgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresBudgetTracker } from "../src/ratelimit/postgres-budget.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
-import { withTenant } from "../src/tenants/context.ts";
-import { workTenant } from "../src/tenants/work-tenant.ts";
+import { installTenantNow, soleTenantNow, withTenant } from "../src/tenants/context.ts";
+import { refreshTenants, workTenant } from "../src/tenants/work-tenant.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 const UNTENANTED: Record<string, string> = {
@@ -126,6 +126,7 @@ describe("tenant tables", () => {
     assert.deepEqual(await appMap.get("solo"), { n: 1 });
     assert.deepEqual(await appMap.all(), [{ n: 1 }]);
     assert.equal(await workTenant(app), install);
+    assert.equal(soleTenantNow(), install);
     const stored = await owner.q("SELECT tenant_id::text AS tenant FROM tenant_probe WHERE id = 'solo'");
     assert.equal(stored[0]?.tenant, install);
 
@@ -133,6 +134,10 @@ describe("tenant tables", () => {
     await assert.rejects(appMap.get("solo"), /No tenant is bound to this query/);
     await assert.rejects(appMap.all(), /No tenant is bound to this query/);
     await assert.rejects(owned.put("late", { n: 2 }), /No tenant is bound to this query/);
+    await refreshTenants(app);
+    assert.equal(soleTenantNow(), undefined);
+    assert.equal(installTenantNow(), install);
+    await assert.rejects(workTenant(app), /No tenant is bound to this work/);
     assert.deepEqual(await withTenant(install, () => appMap.get("solo")), { n: 1 });
     assert.equal(await withTenant(tenantA, () => appMap.get("solo")), null);
   });
