@@ -1,4 +1,4 @@
-import { currentTenant } from "../../tenants/context.ts";
+import { boundTenant, currentTenant } from "../../tenants/context.ts";
 import { PLUGIN_SETTING_KEYS } from "../../tenants/settings.ts";
 import { TenantSettingsInvalidError } from "../../tenants/settings-parse.ts";
 import { sendJson } from "../http.ts";
@@ -12,7 +12,14 @@ export async function operatorTenantKnown(ctx: ApiCtx): Promise<boolean> {
     sendJson(res, 404, { error: "not_found" });
     return false;
   }
-  const tenant = currentTenant();
+  const tenant = boundTenant();
+  if (!tenant) {
+    sendJson(res, 401, {
+      error: "unauthorized",
+      message: "operator requests must name their tenant in a signed header",
+    });
+    return false;
+  }
   if (await deps.tenantSettings.hasTenant(tenant)) return true;
   sendJson(res, 404, { error: "unknown_tenant", message: `No tenant has the id ${tenant}`, tenant });
   return false;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { FIFTH_TENANT, FOURTH_TENANT, testSettingsStore, THIRD_TENANT } from "./support/tenant-settings.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { testTenants, inTestTenant } from "./support/test-tenants.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,128 +78,133 @@ function recordingClient(store: ReturnType<typeof createTenantSettingsStore>) {
   return { client, made, used };
 }
 
-test("each tenant's provider calls use only that tenant's key, with one client per key", async () => {
-  const { store, a, b } = await twoTenants();
-  const { client, made, used } = recordingClient(store);
-  assert.equal(client.nativePause, true);
-  await Promise.all([
-    withTenant(a, () => client.create("one")),
-    withTenant(b, () => client.create("two")),
-    withTenant(a, () => client.create("three")),
-    withTenant(b, () => client.create("four")),
-  ]);
-  assert.deepEqual(used.toSorted(), [
-    ["key-a", "one"],
-    ["key-a", "three"],
-    ["key-b", "four"],
-    ["key-b", "two"],
-  ]);
-  assert.deepEqual(made.toSorted(), ["key-a", "key-b"]);
-  const listed = await withTenant(b, async () => {
-    const seen: string[] = [];
-    for await (const key of client.list()) seen.push(key);
-    return seen;
-  });
-  assert.deepEqual(listed, ["key-b"]);
-});
-
-test("a tenant without the provider key fails closed and no client is built", async () => {
-  const { store, none } = await twoTenants();
-  const { client, made, used } = recordingClient(store);
-  await assert.rejects(
-    withTenant(none, () => client.create("x")),
-    (error: unknown) =>
-      error instanceof TenantSettingMissingError &&
-      error.message === "E2B_API_KEY is not set in this tenant's settings",
-  );
-  await withoutTenant(() => assert.rejects(client.create("unbound"), /No tenant is bound/));
-  assert.deepEqual(made, []);
-  assert.deepEqual(used, []);
-});
-
-test("a fetch-based provider sends the bound tenant's token and fails closed without one", async () => {
-  const { store, a, b, none } = await twoTenants();
-  await withTenant(a, () => store.update({ SMOLMACHINES_TOKEN: "smol-a" }));
-  await withTenant(b, () => store.update({ SMOLMACHINES_TOKEN: "smol-b" }));
-  const seen: string[] = [];
-  const sandbox = createSmolmachinesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "smol-ws-"))), {
-    store: testMap(),
-    advisoryLock: testAdvisoryLock(),
-    token: tenantCredential(() => store.get(), "smolmachines"),
-    fetchImpl: async (_input, init) => {
-      seen.push(new Headers(init?.headers).get("authorization") ?? "");
-      return Response.json([]);
-    },
-  });
-  await withTenant(a, () => sandbox.destroyScope!("scope-a"));
-  await withTenant(b, () => sandbox.destroyScope!("scope-b"));
-  assert.ok(seen.length >= 2);
-  assert.deepEqual([...new Set(seen)].toSorted(), ["Bearer smol-a", "Bearer smol-b"]);
-  const before = seen.length;
-  await assert.rejects(
-    withTenant(none, () => sandbox.destroyScope!("scope-none")),
-    TenantSettingMissingError,
-  );
-  assert.equal(seen.length, before);
-});
-
-test("the default backend and usable backends come from the bound tenant's settings", async () => {
-  const { store, a, b, none } = await twoTenants();
-  const constructed = ["local", "aws", "porter", "sprites", "e2b", "modal"] as const;
-  const resolve = (tenant: string) =>
-    withTenant(tenant, async () => {
-      const settings = await store.get();
-      return {
-        usable: tenantSandboxBackends(settings, constructed),
-        default: tenantDefaultSandboxBackend(settings, constructed),
-      };
+test("each tenant's provider calls use only that tenant's key, with one client per key", () =>
+  inTestTenant(async () => {
+    const { store, a, b } = await twoTenants();
+    const { client, made, used } = recordingClient(store);
+    assert.equal(client.nativePause, true);
+    await Promise.all([
+      withTenant(a, () => client.create("one")),
+      withTenant(b, () => client.create("two")),
+      withTenant(a, () => client.create("three")),
+      withTenant(b, () => client.create("four")),
+    ]);
+    assert.deepEqual(used.toSorted(), [
+      ["key-a", "one"],
+      ["key-a", "three"],
+      ["key-b", "four"],
+      ["key-b", "two"],
+    ]);
+    assert.deepEqual(made.toSorted(), ["key-a", "key-b"]);
+    const listed = await withTenant(b, async () => {
+      const seen: string[] = [];
+      for await (const key of client.list()) seen.push(key);
+      return seen;
     });
-  assert.deepEqual(await resolve(a), { usable: ["e2b"], default: "e2b" });
-  assert.deepEqual(await resolve(b), { usable: ["sprites", "e2b"], default: "sprites" });
-  await assert.rejects(resolve(none), /E2B_API_KEY is not set in this tenant's settings/);
-  const unset = FOURTH_TENANT;
-  await assert.rejects(
-    withTenant(unset, async () => tenantDefaultSandboxBackend(await store.get(), constructed)),
-    (error: unknown) =>
-      error instanceof TenantSettingMissingError &&
-      error.message === "SANDBOX_BACKEND is not set in this tenant's settings",
-  );
-  await withTenant(unset, async () => assert.deepEqual(tenantSandboxBackends(await store.get(), constructed), []));
-  for (const backend of ["local", "aws", "porter"] as const) {
-    await withTenant(unset, () => store.update({ SANDBOX_BACKEND: backend }));
-    await withTenant(unset, async () =>
-      assert.deepEqual(tenantSandboxBackends(await store.get(), constructed), [backend]),
-    );
-  }
-  const render = FIFTH_TENANT;
-  await withTenant(render, () =>
-    store.update({ SANDBOX_BACKEND: "render", RENDER_SANDBOX_API_KEY: "k", RENDER_SANDBOX_WORKSPACE_ID: "w" }),
-  );
-  await assert.rejects(
-    withTenant(render, async () => tenantDefaultSandboxBackend(await store.get(), constructed)),
-    /sandbox backend unavailable: render/,
-  );
-});
+    assert.deepEqual(listed, ["key-b"]);
+  }));
 
-test("a misconfigured backend stays listed but fails loudly when a tenant selects it", async () => {
-  const store = await testSettingsStore();
-  const tenant = THIRD_TENANT;
-  await withTenant(tenant, () =>
-    store.update({ SANDBOX_BACKEND: "render", RENDER_SANDBOX_API_KEY: "k", RENDER_SANDBOX_WORKSPACE_ID: "w" }),
-  );
-  const routing = tenantSandboxRouting(
-    () => store.get(),
-    { sprites: { profile: { egressEnforcement: "domain" } } },
-    { render: "render requires WORKSPACE_STORE=postgres" },
-  );
-  await withTenant(tenant, async () => {
-    assert.deepEqual(await routing.usable(), ["render"]);
+test("a tenant without the provider key fails closed and no client is built", () =>
+  inTestTenant(async () => {
+    const { store, none } = await twoTenants();
+    const { client, made, used } = recordingClient(store);
     await assert.rejects(
-      routing.defaultBackend(),
-      /^Error: sandbox backend render cannot run on this install: render requires WORKSPACE_STORE=postgres$/,
+      withTenant(none, () => client.create("x")),
+      (error: unknown) =>
+        error instanceof TenantSettingMissingError &&
+        error.message === "E2B_API_KEY is not set in this tenant's settings",
     );
-  });
-});
+    await withoutTenant(() => assert.rejects(client.create("unbound"), /No tenant is bound/));
+    assert.deepEqual(made, []);
+    assert.deepEqual(used, []);
+  }));
+
+test("a fetch-based provider sends the bound tenant's token and fails closed without one", () =>
+  inTestTenant(async () => {
+    const { store, a, b, none } = await twoTenants();
+    await withTenant(a, () => store.update({ SMOLMACHINES_TOKEN: "smol-a" }));
+    await withTenant(b, () => store.update({ SMOLMACHINES_TOKEN: "smol-b" }));
+    const seen: string[] = [];
+    const sandbox = createSmolmachinesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "smol-ws-"))), {
+      store: testMap(),
+      advisoryLock: testAdvisoryLock(),
+      token: tenantCredential(() => store.get(), "smolmachines"),
+      fetchImpl: async (_input, init) => {
+        seen.push(new Headers(init?.headers).get("authorization") ?? "");
+        return Response.json([]);
+      },
+    });
+    await withTenant(a, () => sandbox.destroyScope!("scope-a"));
+    await withTenant(b, () => sandbox.destroyScope!("scope-b"));
+    assert.ok(seen.length >= 2);
+    assert.deepEqual([...new Set(seen)].toSorted(), ["Bearer smol-a", "Bearer smol-b"]);
+    const before = seen.length;
+    await assert.rejects(
+      withTenant(none, () => sandbox.destroyScope!("scope-none")),
+      TenantSettingMissingError,
+    );
+    assert.equal(seen.length, before);
+  }));
+
+test("the default backend and usable backends come from the bound tenant's settings", () =>
+  inTestTenant(async () => {
+    const { store, a, b, none } = await twoTenants();
+    const constructed = ["local", "aws", "porter", "sprites", "e2b", "modal"] as const;
+    const resolve = (tenant: string) =>
+      withTenant(tenant, async () => {
+        const settings = await store.get();
+        return {
+          usable: tenantSandboxBackends(settings, constructed),
+          default: tenantDefaultSandboxBackend(settings, constructed),
+        };
+      });
+    assert.deepEqual(await resolve(a), { usable: ["e2b"], default: "e2b" });
+    assert.deepEqual(await resolve(b), { usable: ["sprites", "e2b"], default: "sprites" });
+    await assert.rejects(resolve(none), /E2B_API_KEY is not set in this tenant's settings/);
+    const unset = FOURTH_TENANT;
+    await assert.rejects(
+      withTenant(unset, async () => tenantDefaultSandboxBackend(await store.get(), constructed)),
+      (error: unknown) =>
+        error instanceof TenantSettingMissingError &&
+        error.message === "SANDBOX_BACKEND is not set in this tenant's settings",
+    );
+    await withTenant(unset, async () => assert.deepEqual(tenantSandboxBackends(await store.get(), constructed), []));
+    for (const backend of ["local", "aws", "porter"] as const) {
+      await withTenant(unset, () => store.update({ SANDBOX_BACKEND: backend }));
+      await withTenant(unset, async () =>
+        assert.deepEqual(tenantSandboxBackends(await store.get(), constructed), [backend]),
+      );
+    }
+    const render = FIFTH_TENANT;
+    await withTenant(render, () =>
+      store.update({ SANDBOX_BACKEND: "render", RENDER_SANDBOX_API_KEY: "k", RENDER_SANDBOX_WORKSPACE_ID: "w" }),
+    );
+    await assert.rejects(
+      withTenant(render, async () => tenantDefaultSandboxBackend(await store.get(), constructed)),
+      /sandbox backend unavailable: render/,
+    );
+  }));
+
+test("a misconfigured backend stays listed but fails loudly when a tenant selects it", () =>
+  inTestTenant(async () => {
+    const store = await testSettingsStore();
+    const tenant = THIRD_TENANT;
+    await withTenant(tenant, () =>
+      store.update({ SANDBOX_BACKEND: "render", RENDER_SANDBOX_API_KEY: "k", RENDER_SANDBOX_WORKSPACE_ID: "w" }),
+    );
+    const routing = tenantSandboxRouting(
+      () => store.get(),
+      { sprites: { profile: { egressEnforcement: "domain" } } },
+      { render: "render requires WORKSPACE_STORE=postgres" },
+    );
+    await withTenant(tenant, async () => {
+      assert.deepEqual(await routing.usable(), ["render"]);
+      await assert.rejects(
+        routing.defaultBackend(),
+        /^Error: sandbox backend render cannot run on this install: render requires WORKSPACE_STORE=postgres$/,
+      );
+    });
+  }));
 
 test("selecting a backend without egress enforcement warns once per tenant", async (t) => {
   const store = await testSettingsStore();
@@ -279,7 +284,7 @@ const matrix: Array<[string, () => { sandbox: Sandbox; has: Array<(name: string)
 
 for (const [backend, build] of matrix) {
   test(`${backend}: the same scope in two tenants gets a machine in each tenant's account`, async () => {
-    const { sandbox, has } = build();
+    const { sandbox, has } = inTestTenant(() => build());
     const layers = [{ scopeId: "personal:ada@example.com", mountPath: "", mode: "rw" as const }];
     await withTenant(TEST_TENANT, () => sandbox.provision(layers));
     await withTenant(OTHER_TENANT, () => sandbox.provision(layers));

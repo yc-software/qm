@@ -63,150 +63,156 @@ function turn(extra: Partial<AgentTurnInput> = {}): AgentTurnInput {
   };
 }
 
-test("a gateway turn carries the session, actor, scope, purpose and origin it works for", async (t) => {
-  const requests = recordRequests(t);
-  const harness = createAgent({ defaultModelId: "claude-haiku-4-5", resolveModelGateway: async () => gateway });
+test("a gateway turn carries the session, actor, scope, purpose and origin it works for", (t) =>
+  inTestTenant(async () => {
+    const requests = recordRequests(t);
+    const harness = createAgent({ defaultModelId: "claude-haiku-4-5", resolveModelGateway: async () => gateway });
 
-  assert.equal((await withModelRequestContext(cronContext, () => harness.runTurn(turn()))).reply, "ok");
-  assert.equal(requests.at(-1)!.url, "https://gateway.test/v1/messages");
-  assert.equal(requests.at(-1)!.headers.get("api-key"), "gateway-key");
-  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { ...cronHeaders, "x-qm-purpose": "turn" });
+    assert.equal((await withModelRequestContext(cronContext, () => harness.runTurn(turn()))).reply, "ok");
+    assert.equal(requests.at(-1)!.url, "https://gateway.test/v1/messages");
+    assert.equal(requests.at(-1)!.headers.get("api-key"), "gateway-key");
+    assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { ...cronHeaders, "x-qm-purpose": "turn" });
 
-  await withModelRequestContext({ sessionId: "session-bare" }, () => harness.runTurn(turn()));
-  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), {
-    "x-qm-session-id": "session-bare",
-    "x-qm-purpose": "turn",
-  });
-});
+    await withModelRequestContext({ sessionId: "session-bare" }, () => harness.runTurn(turn()));
+    assert.deepEqual(contextHeaders(requests.at(-1)!.headers), {
+      "x-qm-session-id": "session-bare",
+      "x-qm-purpose": "turn",
+    });
+  }));
 
-test("the gateway gets keyed pseudonyms for people, and none without a key", async (t) => {
-  const requests = recordRequests(t);
-  const personal = { ...cronContext, scopeId: "personal:owner@example.com" };
-  await withModelRequestContext(personal, () =>
-    createAgent({ defaultModelId: "claude-haiku-4-5", resolveModelGateway: async () => gateway }).runTurn(turn()),
-  );
-  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), {
-    ...cronHeaders,
-    "x-qm-scope": `personal:${pseudonym("owner@example.com")}`,
-    "x-qm-purpose": "turn",
-  });
-  assert.ok(!JSON.stringify([...requests.at(-1)!.headers]).includes("owner@example.com"));
+test("the gateway gets keyed pseudonyms for people, and none without a key", (t) =>
+  inTestTenant(async () => {
+    const requests = recordRequests(t);
+    const personal = { ...cronContext, scopeId: "personal:owner@example.com" };
+    await withModelRequestContext(personal, () =>
+      createAgent({ defaultModelId: "claude-haiku-4-5", resolveModelGateway: async () => gateway }).runTurn(turn()),
+    );
+    assert.deepEqual(contextHeaders(requests.at(-1)!.headers), {
+      ...cronHeaders,
+      "x-qm-scope": `personal:${pseudonym("owner@example.com")}`,
+      "x-qm-purpose": "turn",
+    });
+    assert.ok(!JSON.stringify([...requests.at(-1)!.headers]).includes("owner@example.com"));
 
-  const { actorKey: _actorKey, ...unkeyed } = gateway;
-  await withModelRequestContext(personal, () =>
-    createAgent({ defaultModelId: "claude-haiku-4-5", resolveModelGateway: async () => unkeyed }).runTurn(turn()),
-  );
-  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), {
-    "x-qm-session-id": "session-cron",
-    "x-qm-origin": "cron",
-    "x-qm-purpose": "turn",
-  });
-});
-
-test("context values the credential broker could not attest are left off", async (t) => {
-  const requests = recordRequests(t);
-  const harness = createAgent({ defaultModelId: "claude-haiku-4-5", resolveModelGateway: async () => gateway });
-
-  for (const actorId of ["Owner Example", "a".repeat(257), "owner@example.com\r\nx-qm-scope: org:other"]) {
-    await withModelRequestContext({ ...cronContext, actorId }, () => harness.runTurn(turn()));
+    const { actorKey: _actorKey, ...unkeyed } = gateway;
+    await withModelRequestContext(personal, () =>
+      createAgent({ defaultModelId: "claude-haiku-4-5", resolveModelGateway: async () => unkeyed }).runTurn(turn()),
+    );
     assert.deepEqual(contextHeaders(requests.at(-1)!.headers), {
       "x-qm-session-id": "session-cron",
-      "x-qm-scope": "channel:C123",
       "x-qm-origin": "cron",
       "x-qm-purpose": "turn",
     });
-  }
-  await withModelRequestContext({ sessionId: "", scopeId: "channel:café", origin: "cron" }, () =>
-    harness.runTurn(turn()),
-  );
-  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { "x-qm-origin": "cron", "x-qm-purpose": "turn" });
-});
+  }));
 
-test("turns on a user's or the org's own provider key send no request context", async (t) => {
-  const requests = recordRequests(t);
-  const harness = createAgent({
-    defaultModelId: "claude-haiku-4-5",
-    resolveProviderKeys: async () => ({ anthropic: "org-key" }),
-    resolveModelGateway: async () => gateway,
-  });
+test("context values the credential broker could not attest are left off", (t) =>
+  inTestTenant(async () => {
+    const requests = recordRequests(t);
+    const harness = createAgent({ defaultModelId: "claude-haiku-4-5", resolveModelGateway: async () => gateway });
 
-  await withModelRequestContext(cronContext, async () => {
-    await harness.runTurn(turn({ runtime: { modelId: "claude-opus-4-8" } }));
-    await harness.runTurn(turn({ providerKeys: { anthropic: "user-key" } }));
-  });
-  assert.deepEqual(
-    requests.map((request) => [request.url, request.headers.get("x-api-key"), contextHeaders(request.headers)]),
-    [
-      ["https://api.anthropic.com/v1/messages", "org-key", {}],
-      ["https://api.anthropic.com/v1/messages", "user-key", {}],
-    ],
-  );
-});
+    for (const actorId of ["Owner Example", "a".repeat(257), "owner@example.com\r\nx-qm-scope: org:other"]) {
+      await withModelRequestContext({ ...cronContext, actorId }, () => harness.runTurn(turn()));
+      assert.deepEqual(contextHeaders(requests.at(-1)!.headers), {
+        "x-qm-session-id": "session-cron",
+        "x-qm-scope": "channel:C123",
+        "x-qm-origin": "cron",
+        "x-qm-purpose": "turn",
+      });
+    }
+    await withModelRequestContext({ sessionId: "", scopeId: "channel:café", origin: "cron" }, () =>
+      harness.runTurn(turn()),
+    );
+    assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { "x-qm-origin": "cron", "x-qm-purpose": "turn" });
+  }));
 
-test("every helper call keeps its work's context and names its own purpose", async (t) => {
-  const requests = recordRequests(t);
-  const harness = createAgent({
-    defaultModelId: "claude-haiku-4-5",
-    detectModelId: "claude-haiku-4-5",
-    titleModelId: "claude-haiku-4-5",
-    judgeModelId: "claude-haiku-4-5",
-    resolveModelGateway: async () => gateway,
-  });
-  const session = { id: "session-cron" } as Session;
-  const entry = { sessionId: "session-cron", seq: 1, parentSeq: null, type: "user", payload: { text: "report" } };
-  const helpers: Record<string, () => Promise<unknown>> = {
-    detect: () =>
-      harness.shouldRespond!({
-        session,
-        message: "anyone around?",
-        recentContext: "",
-        systemPrompt: "",
-        history: [],
-        recordModelCall: () => {},
-      }),
-    compaction: () =>
-      harness.compactHistory!({
-        session,
-        history: [{ ...entry, scopeLabel: "channel:C123", createdAt: 0 } as SessionEntry],
-        recordModelCall: () => {},
-      }),
-    title: () => harness.generateTitle!("User:\nSummarize the nightly report"),
-    approval_summary: () => harness.summarizeApproval!("rm -rf build", "deletes files"),
-    security_screen: () =>
-      harness.screenSecurity!({ payload: "[]", signal: AbortSignal.timeout(10_000), recordModelCall: () => {} }),
-    judge: () => harness.judge!("Judge the answer.", "answer"),
-    memory_capture: () => harness.oneShot!("Extract facts.", "User said: hi", "memory_capture"),
-    ack_emoji: () => harness.pickAckEmoji!("can you check the deploy?", ["eyes"]),
-    probe: () => probeModel(getRequiredModel("claude-haiku-4-5"), {}, AbortSignal.timeout(10_000), false, gateway),
-  };
+test("turns on a user's or the org's own provider key send no request context", (t) =>
+  inTestTenant(async () => {
+    const requests = recordRequests(t);
+    const harness = createAgent({
+      defaultModelId: "claude-haiku-4-5",
+      resolveProviderKeys: async () => ({ anthropic: "org-key" }),
+      resolveModelGateway: async () => gateway,
+    });
 
-  for (const [purpose, call] of Object.entries(helpers)) {
-    await withModelRequestContext(cronContext, call).catch(() => undefined);
-    assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { ...cronHeaders, "x-qm-purpose": purpose }, purpose);
-  }
-});
+    await withModelRequestContext(cronContext, async () => {
+      await harness.runTurn(turn({ runtime: { modelId: "claude-opus-4-8" } }));
+      await harness.runTurn(turn({ providerKeys: { anthropic: "user-key" } }));
+    });
+    assert.deepEqual(
+      requests.map((request) => [request.url, request.headers.get("x-api-key"), contextHeaders(request.headers)]),
+      [
+        ["https://api.anthropic.com/v1/messages", "org-key", {}],
+        ["https://api.anthropic.com/v1/messages", "user-key", {}],
+      ],
+    );
+  }));
 
-test("the goal governor judges with its turn's context", async (t) => {
-  const requests = recordRequests(t);
-  const pi = createAgent({
-    defaultModelId: "claude-haiku-4-5",
-    judgeModelId: "claude-haiku-4-5",
-    resolveModelGateway: async () => gateway,
-  });
-  const adapter = {
-    ...pi,
-    runTurn: async (input: AgentTurnInput) => {
-      await input.governGoal!({ objective: "ship the release", trigger: "checkpoint", recentWork: "" }).catch(
-        () => undefined,
-      );
-      return { reply: "" };
-    },
-  };
-  const router = withResolvedRuntime(adapter, () => ({ modelId: "claude-haiku-4-5" }));
+test("every helper call keeps its work's context and names its own purpose", (t) =>
+  inTestTenant(async () => {
+    const requests = recordRequests(t);
+    const harness = createAgent({
+      defaultModelId: "claude-haiku-4-5",
+      detectModelId: "claude-haiku-4-5",
+      titleModelId: "claude-haiku-4-5",
+      judgeModelId: "claude-haiku-4-5",
+      resolveModelGateway: async () => gateway,
+    });
+    const session = { id: "session-cron" } as Session;
+    const entry = { sessionId: "session-cron", seq: 1, parentSeq: null, type: "user", payload: { text: "report" } };
+    const helpers: Record<string, () => Promise<unknown>> = {
+      detect: () =>
+        harness.shouldRespond!({
+          session,
+          message: "anyone around?",
+          recentContext: "",
+          systemPrompt: "",
+          history: [],
+          recordModelCall: () => {},
+        }),
+      compaction: () =>
+        harness.compactHistory!({
+          session,
+          history: [{ ...entry, scopeLabel: "channel:C123", createdAt: 0 } as SessionEntry],
+          recordModelCall: () => {},
+        }),
+      title: () => harness.generateTitle!("User:\nSummarize the nightly report"),
+      approval_summary: () => harness.summarizeApproval!("rm -rf build", "deletes files"),
+      security_screen: () =>
+        harness.screenSecurity!({ payload: "[]", signal: AbortSignal.timeout(10_000), recordModelCall: () => {} }),
+      judge: () => harness.judge!("Judge the answer.", "answer"),
+      memory_capture: () => harness.oneShot!("Extract facts.", "User said: hi", "memory_capture"),
+      ack_emoji: () => harness.pickAckEmoji!("can you check the deploy?", ["eyes"]),
+      probe: () => probeModel(getRequiredModel("claude-haiku-4-5"), {}, AbortSignal.timeout(10_000), false, gateway),
+    };
 
-  await withModelRequestContext(cronContext, () => router.runTurn(turn()));
-  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { ...cronHeaders, "x-qm-purpose": "judge" });
-});
+    for (const [purpose, call] of Object.entries(helpers)) {
+      await withModelRequestContext(cronContext, call).catch(() => undefined);
+      assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { ...cronHeaders, "x-qm-purpose": purpose }, purpose);
+    }
+  }));
+
+test("the goal governor judges with its turn's context", (t) =>
+  inTestTenant(async () => {
+    const requests = recordRequests(t);
+    const pi = createAgent({
+      defaultModelId: "claude-haiku-4-5",
+      judgeModelId: "claude-haiku-4-5",
+      resolveModelGateway: async () => gateway,
+    });
+    const adapter = {
+      ...pi,
+      runTurn: async (input: AgentTurnInput) => {
+        await input.governGoal!({ objective: "ship the release", trigger: "checkpoint", recentWork: "" }).catch(
+          () => undefined,
+        );
+        return { reply: "" };
+      },
+    };
+    const router = withResolvedRuntime(adapter, () => ({ modelId: "claude-haiku-4-5" }));
+
+    await withModelRequestContext(cronContext, () => router.runTurn(turn()));
+    assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { ...cronHeaders, "x-qm-purpose": "judge" });
+  }));
 
 async function listen(t: TestContext, handler: RequestListener): Promise<string> {
   const server = httpServer(handler);
@@ -258,173 +264,185 @@ async function gatewayApp(
   return { config, built, seen, sent };
 }
 
-test("app turns and their helper calls tell the gateway which session they serve", async (t) => {
-  const { built, seen, sent } = await gatewayApp(t);
-  await inTestTenant(async () => {
-    const dm = await built.app.turn({
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:context" },
-      conversationHeader: "You are in a direct message.",
-      text: "Summarize the nightly report",
-    });
-    await settle(async () => !!sent("title") && !!sent("memory_capture"));
-    const session = (await built.sessions.get(dm.sessionId!))!;
-    const parent = {
-      "x-qm-session-id": session.id,
-      "x-qm-actor": pseudonym("U1"),
-      "x-qm-scope": `personal:${pseudonym("U1")}`,
-    };
-    assert.deepEqual(sent("security_screen"), {
-      "x-qm-actor": pseudonym("U1"),
-      "x-qm-scope": `personal:${pseudonym("U1")}`,
-      "x-qm-purpose": "security_screen",
-    });
-    assert.deepEqual(sent("turn"), { ...parent, "x-qm-origin": "conversation", "x-qm-purpose": "turn" });
-    assert.deepEqual(sent("title"), { ...parent, "x-qm-origin": "conversation", "x-qm-purpose": "title" });
-    assert.deepEqual(sent("memory_capture"), {
-      ...parent,
-      "x-qm-origin": "conversation",
-      "x-qm-purpose": "memory_capture",
-    });
-    const titles = () => seen.filter((headers) => headers["x-qm-purpose"] === "title");
-    const before = titles().length;
-    await built.app.regenerateTitle(session.id, "U1");
-    assert.deepEqual(titles().slice(before), [{ ...parent, "x-qm-origin": "conversation", "x-qm-purpose": "title" }]);
+test("app turns and their helper calls tell the gateway which session they serve", (t) =>
+  inTestTenant(async () => {
+    const { built, seen, sent } = await gatewayApp(t);
+    await inTestTenant(async () => {
+      const dm = await built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: "dm:U1:context" },
+        conversationHeader: "You are in a direct message.",
+        text: "Summarize the nightly report",
+      });
+      await settle(async () => !!sent("title") && !!sent("memory_capture"));
+      const session = (await built.sessions.get(dm.sessionId!))!;
+      const parent = {
+        "x-qm-session-id": session.id,
+        "x-qm-actor": pseudonym("U1"),
+        "x-qm-scope": `personal:${pseudonym("U1")}`,
+      };
+      assert.deepEqual(sent("security_screen"), {
+        "x-qm-actor": pseudonym("U1"),
+        "x-qm-scope": `personal:${pseudonym("U1")}`,
+        "x-qm-purpose": "security_screen",
+      });
+      assert.deepEqual(sent("turn"), { ...parent, "x-qm-origin": "conversation", "x-qm-purpose": "turn" });
+      assert.deepEqual(sent("title"), { ...parent, "x-qm-origin": "conversation", "x-qm-purpose": "title" });
+      assert.deepEqual(sent("memory_capture"), {
+        ...parent,
+        "x-qm-origin": "conversation",
+        "x-qm-purpose": "memory_capture",
+      });
+      const titles = () => seen.filter((headers) => headers["x-qm-purpose"] === "title");
+      const before = titles().length;
+      await built.app.regenerateTitle(session.id, "U1");
+      assert.deepEqual(titles().slice(before), [{ ...parent, "x-qm-origin": "conversation", "x-qm-purpose": "title" }]);
 
-    const ambient = await built.app.turn({
-      surface: "slack",
-      actor: { externalId: "U1" },
-      conversation: { kind: "channel", threadRef: "ch:C1:context", channelRef: "C1", audience: [{ externalId: "U1" }] },
-      text: "anyone around?",
-      unprompted: true,
+      const ambient = await built.app.turn({
+        surface: "slack",
+        actor: { externalId: "U1" },
+        conversation: {
+          kind: "channel",
+          threadRef: "ch:C1:context",
+          channelRef: "C1",
+          audience: [{ externalId: "U1" }],
+        },
+        text: "anyone around?",
+        unprompted: true,
+      });
+      const channel = (await built.sessions.get(ambient.sessionId!))!;
+      assert.deepEqual(sent("detect"), {
+        "x-qm-session-id": channel.id,
+        "x-qm-actor": pseudonym("U1"),
+        "x-qm-scope": channel.scopeId,
+        "x-qm-origin": "conversation",
+        "x-qm-purpose": "detect",
+      });
+
+      await built.app.setChannelPolicy("C2", "", "U-admin", undefined, undefined, true);
+      await built.app.ingestSurfaceEvents([
+        { container: "C2", ts: "1.0", authorId: "U1", text: "did the launch slip?", createdAt: 1 },
+      ]);
+      await built.app.judgeAmbientContainer("slack", "C2");
+      assert.deepEqual(sent("ambient_judge"), { "x-qm-scope": "channel:C2", "x-qm-purpose": "ambient_judge" });
+
+      const cron = await built.sessions.getOrCreateByThread("agent:main:cron:nightly", "dm", session.scopeId);
+      const child = await built.sessions.getOrCreateByThread("agent:main:subagent:context", "dm", session.scopeId);
+      const conversation = { kind: "dm" as const, threadRef: child.threadRef };
+      const actor = { id: "U1", type: "internal" as const };
+      await built.sessions.setParentSession(child.id, cron.id);
+      await built.sessions.addParticipant(child.id, "U1");
+      await built.sessions.setSpawnMeta(child.id, {
+        surface: "test",
+        actor,
+        conversation: { ...conversation, audience: [actor] },
+      });
+      assert.equal(
+        (await built.app.turn({ surface: "test", actor: { externalId: "U1" }, conversation, text: "check the report" }))
+          .status,
+        "ok",
+      );
+      assert.deepEqual(sent("turn", child.id), {
+        ...parent,
+        "x-qm-session-id": child.id,
+        "x-qm-origin": "cron",
+        "x-qm-purpose": "turn",
+      });
     });
-    const channel = (await built.sessions.get(ambient.sessionId!))!;
-    assert.deepEqual(sent("detect"), {
-      "x-qm-session-id": channel.id,
-      "x-qm-actor": pseudonym("U1"),
-      "x-qm-scope": channel.scopeId,
-      "x-qm-origin": "conversation",
-      "x-qm-purpose": "detect",
+  }));
+
+test("API work carries its token's turn, the admin replaying screens, or the memory writer", (t) =>
+  inTestTenant(async () => {
+    const { config, built, sent } = await gatewayApp(t);
+    const server = createInsecureTestServer(built.app, serverDeps(config, built));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    await inTestTenant(() => built.memory.capture("personal:U2", ["Prefers tea"], Date.now(), "U2"));
+    assert.deepEqual(sent("memory_classification"), {
+      "x-qm-actor": pseudonym("U2"),
+      "x-qm-scope": `personal:${pseudonym("U2")}`,
+      "x-qm-purpose": "memory_classification",
     });
 
-    await built.app.setChannelPolicy("C2", "", "U-admin", undefined, undefined, true);
-    await built.app.ingestSurfaceEvents([
-      { container: "C2", ts: "1.0", authorId: "U1", text: "did the launch slip?", createdAt: 1 },
-    ]);
-    await built.app.judgeAmbientContainer("slack", "C2");
-    assert.deepEqual(sent("ambient_judge"), { "x-qm-scope": "channel:C2", "x-qm-purpose": "ambient_judge" });
-
-    const cron = await built.sessions.getOrCreateByThread("agent:main:cron:nightly", "dm", session.scopeId);
-    const child = await built.sessions.getOrCreateByThread("agent:main:subagent:context", "dm", session.scopeId);
-    const conversation = { kind: "dm" as const, threadRef: child.threadRef };
-    const actor = { id: "U1", type: "internal" as const };
-    await built.sessions.setParentSession(child.id, cron.id);
-    await built.sessions.addParticipant(child.id, "U1");
-    await built.sessions.setSpawnMeta(child.id, {
-      surface: "test",
-      actor,
-      conversation: { ...conversation, audience: [actor] },
-    });
-    assert.equal(
-      (await built.app.turn({ surface: "test", actor: { externalId: "U1" }, conversation, text: "check the report" }))
-        .status,
-      "ok",
+    const capability = await inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId: "U1",
+          scopeId: "personal:U1",
+          sessionId: "session-agent",
+          origin: "webhook",
+          memory: { write: "personal:U1", read: ["personal:U1"] },
+          exp: Date.now() + 60_000,
+        },
+        TEST_CAPABILITY_SECRET,
+      ),
     );
-    assert.deepEqual(sent("turn", child.id), {
-      ...parent,
-      "x-qm-session-id": child.id,
-      "x-qm-origin": "cron",
-      "x-qm-purpose": "turn",
+    const captured = await fetch(`${base}/v1/memory/facts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-agent-capability": capability },
+      body: JSON.stringify({ facts: ["Prefers metric units"] }),
     });
-  });
-});
+    assert.equal(captured.status, 200, await captured.text());
+    assert.deepEqual(sent("memory_classification", "session-agent"), {
+      "x-qm-session-id": "session-agent",
+      "x-qm-actor": pseudonym("U1"),
+      "x-qm-scope": `personal:${pseudonym("U1")}`,
+      "x-qm-origin": "webhook",
+      "x-qm-purpose": "memory_classification",
+    });
 
-test("API work carries its token's turn, the admin replaying screens, or the memory writer", async (t) => {
-  const { config, built, sent } = await gatewayApp(t);
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-
-  await inTestTenant(() => built.memory.capture("personal:U2", ["Prefers tea"], Date.now(), "U2"));
-  assert.deepEqual(sent("memory_classification"), {
-    "x-qm-actor": pseudonym("U2"),
-    "x-qm-scope": `personal:${pseudonym("U2")}`,
-    "x-qm-purpose": "memory_classification",
-  });
-
-  const capability = await inTestTenant(() =>
-    mintCapabilityToken(
-      {
-        actorId: "U1",
-        scopeId: "personal:U1",
-        sessionId: "session-agent",
-        origin: "webhook",
-        memory: { write: "personal:U1", read: ["personal:U1"] },
-        exp: Date.now() + 60_000,
+    const enabled = await fetch(`${base}/v1/admin/model-registry/claude-haiku-4-5/enable`, {
+      method: "POST",
+      headers: {
+        "x-admin-actor": "admin-alice@default-org",
+        "content-type": "application/json",
+        ...testTenantHeaders(),
       },
-      TEST_CAPABILITY_SECRET,
-    ),
-  );
-  const captured = await fetch(`${base}/v1/memory/facts`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-agent-capability": capability },
-    body: JSON.stringify({ facts: ["Prefers metric units"] }),
-  });
-  assert.equal(captured.status, 200, await captured.text());
-  assert.deepEqual(sent("memory_classification", "session-agent"), {
-    "x-qm-session-id": "session-agent",
-    "x-qm-actor": pseudonym("U1"),
-    "x-qm-scope": `personal:${pseudonym("U1")}`,
-    "x-qm-origin": "webhook",
-    "x-qm-purpose": "memory_classification",
-  });
-
-  const enabled = await fetch(`${base}/v1/admin/model-registry/claude-haiku-4-5/enable`, {
-    method: "POST",
-    headers: { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json", ...testTenantHeaders() },
-    body: JSON.stringify({ provider: "anthropic", verify: true }),
-  });
-  assert.equal(enabled.status, 200, await enabled.text());
-  assert.deepEqual(sent("probe"), {
-    "x-qm-actor": pseudonym("admin-alice"),
-    "x-qm-scope": "org:default-org",
-    "x-qm-purpose": "probe",
-  });
-});
-
-test("debounced memory capture keeps the context of the turn it came from, even while turns overlap", async (t) => {
-  let release!: () => void;
-  const bothTurnsInFlight = new Promise<void>((resolve) => (release = resolve));
-  let turnsInFlight = 0;
-  const { built, sent } = await gatewayApp(t, { memoryCaptureQuietMs: 200 }, async (headers) => {
-    if (headers["x-qm-purpose"] !== "turn") return;
-    if (++turnsInFlight === 2) release();
-    await bothTurnsInFlight;
-  });
-  const sessions = Object.fromEntries(
-    await Promise.all(
-      ["U1", "U2"].map(async (id) => {
-        const result = await inTestTenant(() =>
-          built.app.turn({
-            surface: "test",
-            actor: { externalId: id },
-            conversation: { kind: "dm", threadRef: `dm:${id}:debounce` },
-            text: "Remember that I prefer short replies",
-          }),
-        );
-        return [id, result.sessionId] as const;
-      }),
-    ),
-  );
-  await settle(async () => Object.values(sessions).every((id) => !!sent("memory_capture", id)));
-  for (const [id, sessionId] of Object.entries(sessions))
-    assert.deepEqual(sent("memory_capture", sessionId), {
-      "x-qm-session-id": sessionId,
-      "x-qm-actor": pseudonym(id),
-      "x-qm-scope": `personal:${pseudonym(id)}`,
-      "x-qm-origin": "conversation",
-      "x-qm-purpose": "memory_capture",
+      body: JSON.stringify({ provider: "anthropic", verify: true }),
     });
-});
+    assert.equal(enabled.status, 200, await enabled.text());
+    assert.deepEqual(sent("probe"), {
+      "x-qm-actor": pseudonym("admin-alice"),
+      "x-qm-scope": "org:default-org",
+      "x-qm-purpose": "probe",
+    });
+  }));
+
+test("debounced memory capture keeps the context of the turn it came from, even while turns overlap", (t) =>
+  inTestTenant(async () => {
+    let release!: () => void;
+    const bothTurnsInFlight = new Promise<void>((resolve) => (release = resolve));
+    let turnsInFlight = 0;
+    const { built, sent } = await gatewayApp(t, { memoryCaptureQuietMs: 200 }, async (headers) => {
+      if (headers["x-qm-purpose"] !== "turn") return;
+      if (++turnsInFlight === 2) release();
+      await bothTurnsInFlight;
+    });
+    const sessions = Object.fromEntries(
+      await Promise.all(
+        ["U1", "U2"].map(async (id) => {
+          const result = await inTestTenant(() =>
+            built.app.turn({
+              surface: "test",
+              actor: { externalId: id },
+              conversation: { kind: "dm", threadRef: `dm:${id}:debounce` },
+              text: "Remember that I prefer short replies",
+            }),
+          );
+          return [id, result.sessionId] as const;
+        }),
+      ),
+    );
+    await settle(async () => Object.values(sessions).every((id) => !!sent("memory_capture", id)));
+    for (const [id, sessionId] of Object.entries(sessions))
+      assert.deepEqual(sent("memory_capture", sessionId), {
+        "x-qm-session-id": sessionId,
+        "x-qm-actor": pseudonym(id),
+        "x-qm-scope": `personal:${pseudonym(id)}`,
+        "x-qm-origin": "conversation",
+        "x-qm-purpose": "memory_capture",
+      });
+  }));
