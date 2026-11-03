@@ -4066,15 +4066,12 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
   const interrupted = await record("shutdown");
   assert.equal(interrupted.find((e) => e.type === "tool_result")?.payload.interrupted, true);
   assert.deepEqual(interrupted.find((e) => e.type === "tool_result")?.payload.stop, { kind: "shutdown" });
-  assert.deepEqual(strategy(interrupted), {
-    kind: "retry",
-    call: { callId: "call-shutdown", tool: "history", input: { query: "budget" } },
-  });
   assert.deepEqual(
-    strategy(await record("shutdown", false)),
+    strategy(interrupted),
     { kind: "continue" },
-    "a killed call the model marked unsafe is not re-run; its replayed result says what happened",
+    "a killed call is not re-run; its replayed result says what happened",
   );
+  assert.deepEqual(strategy(await record("shutdown", false)), { kind: "continue" });
 
   for (const abort of ["stop", "none"] as const) {
     const emitted = await record(abort);
