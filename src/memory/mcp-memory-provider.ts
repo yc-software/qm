@@ -6,7 +6,6 @@ import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import { DENIED_CODES, reportEnvelope } from "./provider-outcome.ts";
 import type { McpMemoryOperationConfig } from "./provider-config.ts";
 
-// A factsArg write's provenance is the conversation's scope ID; gbrain's v1 contract caps it at 200 characters.
 const MAX_PROVENANCE_CHARS = 200;
 
 export type McpMemoryOperation = Omit<McpMemoryOperationConfig, "auth"> & { client: McpClient; timeoutMs: number };
