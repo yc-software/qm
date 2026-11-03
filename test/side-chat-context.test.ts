@@ -14,13 +14,18 @@ import { testConfig } from "./support/test-config.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { inTestTenant } from "./support/test-tenants.ts";
 
+function tenantTest(name: string, fn: () => Promise<void>): void {
+  test(name, () => inTestTenant(fn));
+}
+
 function discussions(text: string) {
   const json = text.split("```untrusted-data\n")[1]?.split("\n```")[0];
   return json ? JSON.parse(json) : [];
 }
 
-test("side-chat context excludes copied history, tools, footers, private messages, and promoted sessions", () =>
-  inTestTenant(async () => {
+tenantTest(
+  "side-chat context excludes copied history, tools, footers, private messages, and promoted sessions",
+  async () => {
     const store = createPostgresSessionStore(testDatabaseUrl());
     const parent = await store.getOrCreateByThread("parent", "dm", "personal:alice");
     await store.addParticipant(parent.id, "alice");
@@ -86,7 +91,8 @@ test("side-chat context excludes copied history, tools, footers, private message
     assert.equal(await sideChatContext(store, parent, ["alice", "bob"], 10000), "");
     await store.expandSideChat(child.id);
     assert.equal(await sideChatContext(store, parent, ["alice"], 10000), "");
-  }));
+  },
+);
 
 test("parent reads persisted side-chat exchanges on its next turn without a synthetic parent turn", async () => {
   const inputs: AgentTurnInput[] = [];
@@ -136,59 +142,58 @@ test("parent reads persisted side-chat exchanges on its next turn without a synt
   assert.deepEqual(discussions(inputs.at(-1)!.systemPrompt), []);
 });
 
-test("side-chat context pages messages and reports exchanges omitted by the model budget", () =>
-  inTestTenant(async () => {
-    const store = createPostgresSessionStore(testDatabaseUrl());
-    const parent = await store.getOrCreateByThread("budget-parent", "dm", "personal:alice");
-    await store.addParticipant(parent.id, "alice");
-    const { lease: parentLease } = await store.acquireLease(parent.id);
-    assert.ok(parentLease);
-    await store.append(parentLease, { type: "user", scopeLabel: parent.scopeId, payload: { text: "queue" } });
-    await store.releaseLease(parentLease);
-    for (let childIndex = 0; childIndex < 2; childIndex++) {
-      const child = await store.getOrCreateByThread(`budget-child-${childIndex}`, "dm", parent.scopeId);
-      await store.addParticipant(child.id, "alice");
-      await store.updateForkProvenance(child.id, {
-        forkedFrom: { sessionId: parent.id },
-        forkBoundarySeq: 0,
-        sideChat: { entrySeq: 0, quote: "queue", occurrence: 0, expanded: false },
-      });
-      const { lease } = await store.acquireLease(child.id);
-      assert.ok(lease);
-      await store.append(lease, { type: "user", scopeLabel: parent.scopeId, payload: { text: "copied" } });
-      for (let index = 0; index < 130; index++) {
-        await store.append(lease, {
-          type: "user",
-          scopeLabel: parent.scopeId,
-          payload: { text: `message ${childIndex}/${index}` },
-        });
-      }
-      await store.append(lease, {
-        type: "tool_result",
-        scopeLabel: parent.scopeId,
-        payload: { callId: "big-tool", tool: "read", result: "tool data ".repeat(10000) },
-      });
-      await store.releaseLease(lease);
-    }
-    const full = await sideChatContext(store, parent, ["alice"], 20000);
-    assert.equal(discussions(full).flatMap((d: { messages: unknown[] }) => d.messages).length, 260);
-    const bounded = await sideChatContext(store, parent, ["alice"], 600);
-    assert.ok(countTokens(bounded) <= 600);
-    assert.match(bounded, /omitted/);
-    assert.ok(discussions(bounded).flatMap((d: { messages: unknown[] }) => d.messages).length < 260);
-    const latest = (await store.sideChatsOf(parent.id)).sort(
-      (a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id),
-    )[0]!;
-    const { lease } = await store.acquireLease(latest.id);
+tenantTest("side-chat context pages messages and reports exchanges omitted by the model budget", async () => {
+  const store = createPostgresSessionStore(testDatabaseUrl());
+  const parent = await store.getOrCreateByThread("budget-parent", "dm", "personal:alice");
+  await store.addParticipant(parent.id, "alice");
+  const { lease: parentLease } = await store.acquireLease(parent.id);
+  assert.ok(parentLease);
+  await store.append(parentLease, { type: "user", scopeLabel: parent.scopeId, payload: { text: "queue" } });
+  await store.releaseLease(parentLease);
+  for (let childIndex = 0; childIndex < 2; childIndex++) {
+    const child = await store.getOrCreateByThread(`budget-child-${childIndex}`, "dm", parent.scopeId);
+    await store.addParticipant(child.id, "alice");
+    await store.updateForkProvenance(child.id, {
+      forkedFrom: { sessionId: parent.id },
+      forkBoundarySeq: 0,
+      sideChat: { entrySeq: 0, quote: "queue", occurrence: 0, expanded: false },
+    });
+    const { lease } = await store.acquireLease(child.id);
     assert.ok(lease);
+    await store.append(lease, { type: "user", scopeLabel: parent.scopeId, payload: { text: "copied" } });
+    for (let index = 0; index < 130; index++) {
+      await store.append(lease, {
+        type: "user",
+        scopeLabel: parent.scopeId,
+        payload: { text: `message ${childIndex}/${index}` },
+      });
+    }
     await store.append(lease, {
-      type: "assistant",
+      type: "tool_result",
       scopeLabel: parent.scopeId,
-      payload: { text: "oversized answer ".repeat(10000) },
+      payload: { callId: "big-tool", tool: "read", result: "tool data ".repeat(10000) },
     });
     await store.releaseLease(lease);
-    const oversized = await sideChatContext(store, parent, ["alice"], 600);
-    assert.ok(countTokens(oversized) <= 600);
-    assert.match(oversized, /omitted/);
-    assert.deepEqual(discussions(oversized), []);
-  }));
+  }
+  const full = await sideChatContext(store, parent, ["alice"], 20000);
+  assert.equal(discussions(full).flatMap((d: { messages: unknown[] }) => d.messages).length, 260);
+  const bounded = await sideChatContext(store, parent, ["alice"], 600);
+  assert.ok(countTokens(bounded) <= 600);
+  assert.match(bounded, /omitted/);
+  assert.ok(discussions(bounded).flatMap((d: { messages: unknown[] }) => d.messages).length < 260);
+  const latest = (await store.sideChatsOf(parent.id)).sort(
+    (a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id),
+  )[0]!;
+  const { lease } = await store.acquireLease(latest.id);
+  assert.ok(lease);
+  await store.append(lease, {
+    type: "assistant",
+    scopeLabel: parent.scopeId,
+    payload: { text: "oversized answer ".repeat(10000) },
+  });
+  await store.releaseLease(lease);
+  const oversized = await sideChatContext(store, parent, ["alice"], 600);
+  assert.ok(countTokens(oversized) <= 600);
+  assert.match(oversized, /omitted/);
+  assert.deepEqual(discussions(oversized), []);
+});
