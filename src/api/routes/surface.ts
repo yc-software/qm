@@ -242,7 +242,9 @@ async function getAgentConversation(ctx: ApiCtx): Promise<void> {
   if (!found) return sendJson(res, 404, { error: "not_found", message: "not a conversation you can see" });
   return sendJson(res, 200, {
     session: agentConversation(found.session),
-    items: found.items.filter((item) => AGENT_TRANSCRIPT_KINDS.has(item.kind)),
+    items: found.items
+      .filter((item) => AGENT_TRANSCRIPT_KINDS.has(item.kind))
+      .map((item) => Object.fromEntries(Object.entries(item).filter(([, value]) => value !== null))),
     ...(found.earlierItems ? { earlierItems: found.earlierItems } : {}),
   });
 }

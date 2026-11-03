@@ -245,6 +245,7 @@ describe("agent conversations self-API", async () => {
     const tailBody = (await tail.json()) as { items: Item[]; earlierItems?: number };
     assert.ok(tailBody.items.some((item) => item.text === "launch question 21"));
     assert.ok(!tailBody.items.some((item) => item.text === "launch question 20"));
+    assert.ok(tailBody.items.every((item) => Object.values(item).every((value) => value !== null)));
     assert.ok((tailBody.earlierItems ?? 0) > 0);
     assert.equal((await get(`/v1/conversations/${mineId}?sinceSeq=0`, token)).status, 400);
   });
