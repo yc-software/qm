@@ -26,9 +26,8 @@ function tenantPolicies(table: string): string[] {
     `ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()`,
     `ALTER TABLE ${table} ADD CONSTRAINT ${table}_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)`,
     `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
-    `CREATE POLICY tenant_app ON ${table} FOR ALL TO qm_app
+    `CREATE POLICY tenant_isolation ON ${table}
        USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant())`,
-    `CREATE POLICY tenant_reader ON ${table} FOR SELECT TO qm_reader USING (tenant_id = qm_bound_tenant())`,
   ];
 }
 
