@@ -1,13 +1,5 @@
 import { commonEntrySeqs } from "../sessions/transcript-source.ts";
-import {
-  entryFromItem,
-  isAgentReply,
-  isOverheard,
-  isUserItem,
-  type Item,
-  type NewItem,
-  stepMessage,
-} from "../sessions/items.ts";
+import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
 import { SIDE_CHAT_GUIDANCE, sideChatContext } from "./side-chat-context.ts";
@@ -580,31 +572,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let mirrored = Promise.resolve();
       const mirrorRunActivity = async (item: Item): Promise<void> => {
         if (!input.runId || !deps.runActivity) return;
-        if (ACTIVITY_KINDS.has(item.kind) || (item.kind === "AgentMessage" && item.variant === "narration")) {
-          const appended = entryFromItem(item, scopeId);
-          await deps.runActivity
-            .append(input.runId, {
-              seq: appended.seq,
-              parentSeq: appended.parentSeq,
-              type: appended.type,
-              payload: appended.payload,
-              createdAt: appended.createdAt,
-            })
+        const append = (activity: Item) =>
+          deps
+            .runActivity!.append(input.runId!, { item: activity })
             .catch(swallowAs("orchestrator: run-activity append", undefined));
+        if (ACTIVITY_KINDS.has(item.kind) || (item.kind === "AgentMessage" && item.variant === "narration")) {
+          await append(item);
         } else if (item.kind === "Reasoning") {
           const id = stepMessage(item)?.id;
           const step = typeof id === "string" && item.step !== null ? { id, index: item.step } : undefined;
-          if (item.body.redacted !== true && item.text?.trim()) {
-            await deps.runActivity
-              .append(input.runId, {
-                seq: item.seq,
-                parentSeq: item.seq === 0 ? null : item.seq - 1,
-                type: "thinking",
-                payload: { thinking: item.text, ...(step ? { step } : {}) },
-                createdAt: item.createdAt,
-              })
-              .catch(swallowAs("orchestrator: run-activity append", undefined));
-          }
+          if (item.body.redacted !== true && item.text?.trim())
+            await append({ ...item, body: step ? { wire: { message: { id: step.id } } } : {} });
           if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
         }
       };
@@ -3461,11 +3439,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 const runActivity = deps.runActivity;
                 if (runId && runActivity) {
                   const entry = {
+                    marker: "text_start" as const,
                     seq: emittedEntries.at(-1)?.seq ?? 0,
-                    parentSeq: null,
-                    type: "text_start",
-                    payload: { ...(phase ? { phase } : {}), ...(streamOffset !== undefined ? { streamOffset } : {}) },
                     createdAt: Date.now(),
+                    ...(phase ? { phase } : {}),
+                    ...(streamOffset !== undefined ? { streamOffset } : {}),
                   };
                   const started = mirrored.then(() => runActivity.append(runId, entry));
                   mirrored = started.catch(swallowAs("orchestrator: text-start activity", undefined));

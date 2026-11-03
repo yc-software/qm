@@ -2,7 +2,7 @@ import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { requestedRuntimeError, userRuntimeConfigBody, validateWebTurnModelOptions } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
-import { entryFromItem } from "../sessions/items.ts";
+import { isUserItem } from "../sessions/items.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
@@ -62,7 +62,7 @@ export function createTurnMethods(
   | "listSessionApprovals"
   | "pendingApprovalForThread"
   | "getRun"
-  | "getRunToolEntries"
+  | "getRunToolItems"
   | "subscribeRun"
   | "syncRunStream"
   | "activeRunForThread"
@@ -685,22 +685,19 @@ export function createTurnMethods(
       };
     },
 
-    async getRunToolEntries(runId, viewer, afterSeq) {
+    async getRunToolItems(runId, viewer, afterSeq) {
       const run = await deps.runs.get(runId);
       if (!run || run.turnUserSeq === null) return [];
       if (viewer && !(await viewerMayUseRun(run, viewer))) return [];
       const session = await deps.sessions.getByThread(run.sessionId);
       if (!session) return [];
-      const entries = (
-        await deps.sessions.getItems(session.id, { sinceSeq: Math.max(run.turnUserSeq, (afterSeq ?? -1) + 1) })
-      ).map((item) => entryFromItem(item, session.scopeId));
-      const nextRun = entries.findIndex((e) => {
-        const owner = (e.payload as { runId?: unknown } | null)?.runId;
-        return e.type === "user" && typeof owner === "string" && owner !== runId;
+      const items = await deps.sessions.getItems(session.id, {
+        sinceSeq: Math.max(run.turnUserSeq, (afterSeq ?? -1) + 1),
       });
-      return entries
+      const nextRun = items.findIndex((item) => isUserItem(item) && item.turnId !== null && item.turnId !== runId);
+      return items
         .slice(0, nextRun < 0 ? undefined : nextRun)
-        .filter((e) => e.type === "tool_call" || e.type === "tool_result");
+        .filter((item) => item.kind === "ToolCall" || item.kind === "ToolResult");
     },
 
     async stopConversation(threadRef, viewer) {

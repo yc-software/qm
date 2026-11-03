@@ -2,34 +2,28 @@ import { sendJson } from "../http.ts";
 import { LRUCache } from "lru-cache";
 import { reasoningKey } from "../../runs/run-stream-events.ts";
 import { REASONING_MAX_BLOCKS } from "../../runs/turn-stream.ts";
-import type { SessionEntry } from "../../types.ts";
+import type { Item } from "../../sessions/items.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const HEARTBEAT_MS = 15_000;
 const MAX_BUFFER_BYTES = 1_048_576;
 
-function toolEvent(entry: SessionEntry): { id: string; data: Record<string, unknown> } | null {
-  const payload = (entry.payload ?? {}) as Record<string, unknown>;
-  const { tool, callId, ...rest } = payload;
-  if (typeof callId !== "string" || !callId) return null;
-  if (entry.type === "tool_call") {
+function toolEvent(item: Item): { id: string; data: Record<string, unknown> } | null {
+  if (!item.callId) return null;
+  if (item.kind === "ToolCall") {
+    const { wire: _wire, ...args } = item.body;
     return {
-      id: `tool:${callId}:start`,
-      data: {
-        type: "TOOL_CALL_START",
-        toolCallId: callId,
-        toolCallName: typeof tool === "string" ? tool : "tool",
-        args: rest,
-      },
+      id: `tool:${item.callId}:start`,
+      data: { type: "TOOL_CALL_START", toolCallId: item.callId, toolCallName: item.tool ?? "tool", args },
     };
   }
   return {
-    id: `tool:${callId}:result`,
+    id: `tool:${item.callId}:result`,
     data: {
       type: "TOOL_CALL_RESULT",
-      toolCallId: callId,
-      content: String(payload.result ?? ""),
-      isError: payload.isError === true,
+      toolCallId: item.callId,
+      content: item.text ?? "",
+      isError: item.isError === true,
     },
   };
 }
@@ -83,21 +77,21 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     send(data, id);
   };
   const snapshot = async (run: NonNullable<typeof initial>): Promise<void> => {
-    const toolEntries = await app.getRunToolEntries(runId, actor?.p, toolCursor);
+    const toolItems = await app.getRunToolItems(runId, actor?.p, toolCursor);
     if (closed) return;
     offset = Math.max(offset, (run.partialStartOffset ?? 0) + (run.partial?.length ?? 0));
     for (const block of run.reasoning ?? []) {
       const key = reasoningKey(block);
       sentReasoning.set(key, Math.max(sentReasoning.get(key) ?? 0, block.text.length));
     }
-    for (const entry of toolEntries) {
-      const event = toolEvent(entry);
+    for (const item of toolItems) {
+      const event = toolEvent(item);
       if (event && !sentToolEvents.has(event.id)) {
         await sendDrained(event.data, event.id);
         if (closed) return;
         sentToolEvents.add(event.id);
       }
-      toolCursor = entry.seq;
+      toolCursor = item.seq;
     }
     await sendDrained({ type: "CUSTOM", name: "run", value: run });
     if (closed) return;

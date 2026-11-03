@@ -1,4 +1,4 @@
-import type { SessionEntry } from "../types.ts";
+import { isAgentReply, isHidden, isUserItem, type Item } from "./items.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 
 export interface SharedAttachment {
@@ -41,7 +41,7 @@ function attachmentIds(value: unknown): string[] {
 }
 
 export function sharedMessages(
-  entries: SessionEntry[],
+  items: Item[],
   deliveredAttachments: ReadonlyMap<number, string[]> = new Map(),
 ): ProjectedMessage[] {
   const messages: ProjectedMessage[] = [];
@@ -51,38 +51,31 @@ export function sharedMessages(
     if (!text.trim() && !files.length) return;
     messages.push({ role, text, ...(files.length ? { attachmentIds: [...new Set(files)] } : {}) });
   };
-  for (const entry of entries) {
-    const p = entry.payload;
-    if (!p || typeof p !== "object" || Array.isArray(p)) continue;
-    const payload = p as Record<string, unknown>;
-    if (entry.type === "user") {
+  for (const item of items) {
+    const body = item.body;
+    if (isUserItem(item)) {
       posted = false;
       posts.clear();
-      if (payload.hidden || payload.overheard) continue;
-      const text = typeof payload.display === "string" && payload.display.trim() ? payload.display : payload.text;
-      emit("user", typeof text === "string" ? text : "", attachmentIds(payload.attachments));
-    } else if (entry.type === "tool_call" && payload.action === "post") {
-      if (typeof payload.callId === "string")
-        posts.set(payload.callId, typeof payload.text === "string" ? payload.text : "");
-    } else if (entry.type === "tool_result") {
-      const callId = typeof payload.callId === "string" ? payload.callId : "";
+      if (isHidden(item) || body.overheard) continue;
+      const text = typeof body.display === "string" && body.display.trim() ? body.display : (item.text ?? "");
+      emit("user", text, attachmentIds(body.attachments));
+    } else if (item.kind === "ToolCall" && body.action === "post") {
+      if (item.callId) posts.set(item.callId, typeof body.text === "string" ? body.text : "");
+    } else if (item.kind === "ToolResult") {
+      const callId = item.callId ?? "";
       const text = posts.get(callId);
       posts.delete(callId);
-      if (payload.isError === true || payload.ok === false) continue;
+      if (item.isError === true || body.ok === false) continue;
       if (text !== undefined) {
-        emit("assistant", text, attachmentIds(payload.files));
+        emit("assistant", text, attachmentIds(body.files));
         posted = true;
       }
-    } else if (entry.type === "assistant") {
-      emit(
-        "assistant",
-        !posted && typeof payload.text === "string" ? payload.text : "",
-        deliveredAttachments.get(entry.seq) ?? [],
-      );
+    } else if (isAgentReply(item)) {
+      emit("assistant", posted ? "" : (item.text ?? ""), deliveredAttachments.get(item.seq) ?? []);
       posted = false;
       posts.clear();
-    } else if (entry.type === "delivery") {
-      const ids = attachmentIds(payload.files);
+    } else if (item.kind === "AgentMessage" && item.variant === "files_delivered") {
+      const ids = attachmentIds(body.files);
       const last = messages.at(-1);
       if (ids.length && last?.role === "assistant")
         last.attachmentIds = [...new Set([...(last.attachmentIds ?? []), ...ids])];
