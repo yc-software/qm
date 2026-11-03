@@ -23,3 +23,8 @@ export function inTenantOf<T>(tenantId: string | undefined, fn: () => T): T {
 export function rowTenant(row: Record<string, unknown>): { tenantId?: string } {
   return row.tenant_id == null ? {} : { tenantId: String(row.tenant_id) };
 }
+
+export async function forEachTenant(store: PgPool, fn: () => Promise<unknown>): Promise<void> {
+  const { rows } = await claimAcrossTenants(store, "SELECT id::text AS id FROM tenants ORDER BY id");
+  for (const row of rows) await withTenant(String(row.id), fn);
+}
