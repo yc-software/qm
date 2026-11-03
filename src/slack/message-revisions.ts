@@ -67,7 +67,7 @@ function findOriginal(items: readonly Item[], ts: string): OriginalMessage | nul
   let found: OriginalMessage | null = null;
   for (const e of items) {
     if (!isUserItem(e) || messageTs(e) !== ts) continue;
-    if (e.hidden === true) return null;
+    if (e.hidden === true || e.body.hidden === true) return null;
     const { name, sourceRole } = e.body;
     found = {
       text: e.text ?? "",

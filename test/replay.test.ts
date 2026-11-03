@@ -44,7 +44,16 @@ function assertValidWire(msgs: ReturnType<typeof reconstructMessagesFromHistory>
 test("reconstructMessagesFromHistory rebuilds a faithful tool round — a fact in a tool result survives", () => {
   const history = [
     at({ kind: "UserMessage", text: "sign me up for HN" }, 1),
-    at({ kind: "ToolCall", callId: "c1", tool: "execute", body: { command: "browse signup" } }, 2),
+    at(
+      {
+        kind: "ToolCall",
+        callId: "c1",
+        tool: "execute",
+        turnId: "0b9d8f6e-5c4a-4e2b-9f1d-7a3c2e1b0a99",
+        body: { command: "browse signup" },
+      },
+      2,
+    ),
     at(
       {
         kind: "ToolResult",
