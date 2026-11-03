@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
@@ -29,10 +30,15 @@ test("Slack conversations show directory Slack photos on messages and in the hea
         matches: photos[id] ? [{ principalId: id, displayName: id, type: "internal", avatarUrl: photos[id] }] : [],
       });
     },
-    entries: [
-      { seq: 1, type: "user", createdAt: 1, payload: { text: "hi", name: "Eve", speakerId: "eve@example.com" } },
-      { seq: 2, type: "user", createdAt: 2, payload: { text: "yo", name: "Regan", speakerId: "regan@example.com" } },
-      { seq: 3, type: "user", createdAt: 3, payload: { text: "again", name: "Eve", speakerId: "eve@example.com" } },
+    items: [
+      item("UserMessage", { seq: 1, createdAt: 1, text: "hi", body: { name: "Eve", speakerId: "eve@example.com" } }),
+      item("UserMessage", {
+        seq: 2,
+        createdAt: 2,
+        text: "yo",
+        body: { name: "Regan", speakerId: "regan@example.com" },
+      }),
+      item("UserMessage", { seq: 3, createdAt: 3, text: "again", body: { name: "Eve", speakerId: "eve@example.com" } }),
     ],
   });
   try {

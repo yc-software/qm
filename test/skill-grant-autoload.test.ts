@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { encodeRef, skillRef, parseRef } from "../src/acl/resource-ref.ts";
-import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
+import { entitledScopes } from "../src/resolution/context-filter.ts";
 import { type DurableMap } from "../src/persistence/durable-map.ts";
 import { createSkillStore, type Skill, type SkillManifest, type SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Principal, type ScopeId } from "../src/types.ts";
@@ -37,7 +37,7 @@ test("person-to-person skill grant reaches the grantee's audience", async () => 
     grantedBy: "josh",
   });
 
-  const inEricsDm = await acl.sharedOfKindForAudience("skill", [P("eric")], ERIC, ORG, principalEntitledToScope);
+  const inEricsDm = await acl.sharedOfKindForAudience("skill", [P("eric")], ERIC, ORG, entitledScopes);
   assert.deepEqual(
     inEricsDm.map((g) => parseRef(g.ref).id),
     ["s1"],
@@ -48,7 +48,7 @@ test("person-to-person skill grant reaches the grantee's audience", async () => 
     [P("eric"), P("josh")],
     scopeId("channel", "C"),
     ORG,
-    principalEntitledToScope,
+    entitledScopes,
   );
   assert.equal(together.length, 1);
 
@@ -57,7 +57,7 @@ test("person-to-person skill grant reaches the grantee's audience", async () => 
     [P("eric"), P("mallory")],
     scopeId("channel", "C"),
     ORG,
-    principalEntitledToScope,
+    entitledScopes,
   );
   assert.deepEqual(mixed, []);
 
@@ -66,7 +66,7 @@ test("person-to-person skill grant reaches the grantee's audience", async () => 
     [P("alice")],
     scopeId("personal", "alice"),
     ORG,
-    principalEntitledToScope,
+    entitledScopes,
   );
   assert.deepEqual(other, []);
 });

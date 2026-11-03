@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   itemSearchAuthor,
-  entrySearchText,
   matchesSearchTerms,
   searchSnippet,
   searchTerms,
@@ -32,13 +31,6 @@ test("matchesSearchTerms mirrors prefix semantics", () => {
   assert.ok(!matchesSearchTerms("anything", []));
   assert.ok(matchesSearchTerms("the qm deployment", ["qm"]), "short terms match whole words");
   assert.ok(!matchesSearchTerms("the deployment", ["de"]), "short terms do not prefix-match");
-});
-
-test("entrySearchText reads string payloads and payload.text", () => {
-  assert.equal(entrySearchText("plain"), "plain");
-  assert.equal(entrySearchText({ text: "hello" }), "hello");
-  assert.equal(entrySearchText({ other: 1 }), null);
-  assert.equal(entrySearchText(null), null);
 });
 
 test("itemSearchAuthor only reads user items", () => {

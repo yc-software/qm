@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { findTrailingPartialTurn, resumeStrategy, runtimeSwitchNote, turnAtSeq } from "../src/core/turn-resume.ts";
+import {
+  findTrailingPartialTurn,
+  overtaken,
+  reconcile,
+  runtimeSwitchNote,
+  turnAtSeq,
+} from "../src/core/turn-resume.ts";
 import { unrecordedToolResult } from "../src/agent/context-compaction.ts";
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 
@@ -119,7 +125,11 @@ test("an empty-reply completed turn still counts as completed (assistant entry w
 test("a resume note in the ledger is skipped by its flag, not its text", () => {
   const entries = [user("build and deploy the release", 1), toolCall(2), resumeEntry(3)];
   assert.deepEqual(findTrailingPartialTurn(entries, RUN_1), { userSeq: 1, workEntries: 1 });
-  const typed = [user("build and deploy the release", 1), toolCall(2), user(LEGACY_NOTE, 3, RUN_2)];
+  const typed = [
+    user("build and deploy the release", 1),
+    toolCall(2),
+    item({ kind: "UserMessage", text: LEGACY_NOTE }, 3),
+  ];
   assert.equal(findTrailingPartialTurn(typed, RUN_1), null, "typed text is a new request");
 });
 
@@ -210,41 +220,6 @@ const safeCall = (seq: number, retrySafe: boolean) =>
     seq,
   );
 
-test("resumeStrategy re-runs a lone dangling call the model marked retry-safe, with its stripped input", () => {
-  const entries = [user("build and deploy the release", 1), toolCall(2), toolResult(3), safeCall(4, true)];
-  assert.deepEqual(resumeStrategy(entries, { userSeq: 1, workEntries: 3 }), {
-    kind: "retry",
-    call: { callId: "c4", tool: "history", input: { query: "deploy", limit: 5 } },
-  });
-});
-
-test("resumeStrategy records what happened to calls it cannot safely re-run: unsafe, unmarked, or ambiguous", () => {
-  const unsafe = [user("build and deploy the release", 1), safeCall(2, false)];
-  assert.deepEqual(resumeStrategy(unsafe, { userSeq: 1, workEntries: 1 }), {
-    kind: "settle",
-    calls: [{ callId: "c2", tool: "history" }],
-  });
-  const unmarked = [user("build and deploy the release", 1), toolCall(2)];
-  assert.deepEqual(resumeStrategy(unmarked, { userSeq: 1, workEntries: 1 }), {
-    kind: "settle",
-    calls: [{ callId: "c2", tool: "execute" }],
-  });
-  const twoDangling = [user("build and deploy the release", 1), safeCall(2, true), safeCall(3, true)];
-  assert.deepEqual(resumeStrategy(twoDangling, { userSeq: 1, workEntries: 2 }), {
-    kind: "settle",
-    calls: [
-      { callId: "c2", tool: "history" },
-      { callId: "c3", tool: "history" },
-    ],
-  });
-  const priorTurnCall = [safeCall(0, true), user("build and deploy the release", 1), toolCall(2), toolResult(3)];
-  assert.deepEqual(resumeStrategy(priorTurnCall, { userSeq: 1, workEntries: 2 }), { kind: "continue" });
-});
-
-test("resumeStrategy restarts when the dead attempt recorded no work", () => {
-  assert.deepEqual(resumeStrategy([user("x", 1)], { userSeq: 1, workEntries: 0 }), { kind: "restart" });
-});
-
 test("a tool call whose outcome was lost records the cause as its own result", () => {
   assert.match(
     unrecordedToolResult({ kind: "shutdown" }),
@@ -267,55 +242,158 @@ test("the runtime switch note names the new runtime", () => {
   assert.match(runtimeSwitchNote(undefined), /^\[system\] Context was trimmed without a new summary\./);
 });
 
-test("a call whose interruption is already recorded is not re-run, since a call holds one result", () => {
-  const killed = killedResult("c4", 5);
-  const entries = [user("build and deploy the release", 1), safeCall(4, true), killed];
-  assert.deepEqual(resumeStrategy(entries, { userSeq: 1, workEntries: 2 }), { kind: "continue" });
-  const unsafe = [user("build and deploy the release", 1), safeCall(4, false), killed];
-  assert.deepEqual(
-    resumeStrategy(unsafe, { userSeq: 1, workEntries: 2 }),
-    { kind: "continue" },
-    "it already has a result",
-  );
-});
-
-test("resumeStrategy continues silently whenever every call is answered", () => {
-  const thinking = (seq: number) => item({ kind: "Reasoning", text: "hm" }, seq);
-  const killed = (seq: number) => killedResult(`c${seq - 1}`, seq);
-  const partial = { userSeq: 1, workEntries: 2 };
-  assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), toolResult(3)], partial), { kind: "continue" });
-  assert.deepEqual(resumeStrategy([user("go", 1), safeCall(2, true), toolResult(3)], partial), { kind: "continue" });
-  assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), toolResult(3), thinking(4)], partial), {
-    kind: "continue",
-  });
-  assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), toolResult(3), steer("also", 4)], partial), {
-    kind: "continue",
-  });
-  assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), toolResult(3), resumeEntry(4)], partial), {
-    kind: "continue",
-  });
-  assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), killed(3)], partial), { kind: "continue" });
-  assert.deepEqual(resumeStrategy([safeCall(0, true), user("go", 1), toolCall(2)], { userSeq: 1, workEntries: 1 }), {
-    kind: "settle",
-    calls: [{ callId: "c2", tool: "execute" }],
-  });
-  assert.deepEqual(
-    resumeStrategy([user("go", 1), toolCall(2), toolResult(3), safeCall(4, true), killed(5)], {
-      userSeq: 1,
-      workEntries: 4,
-    }).kind,
-    "continue",
-  );
-});
-
 test("an unrelated message does not close an interrupted turn or supply its answer", () => {
   const entries = [user("mine", 10), toolCall(11), delivered("Nightly report", 12)];
   assert.deepEqual(findTrailingPartialTurn(entries, RUN_1), { userSeq: 10, workEntries: 1 });
   assert.deepEqual(turnAtSeq(entries, 10), { userSeq: 10, workEntries: 1 });
 });
 
-test("a recorded interruption does not stop a later lone unrecorded call from being re-run", () => {
+const settled = (calls: Array<[string, string]>, stop?: Parameters<typeof unrecordedToolResult>[0]) =>
+  calls.map(([callId, tool]) => ({
+    kind: "ToolResult",
+    tool,
+    callId,
+    isError: true,
+    text: unrecordedToolResult(stop),
+    body: { interrupted: true },
+  }));
+
+test("reconcile writes nothing when every call in the turn has a result", () => {
+  const thinking = (seq: number) => item({ kind: "Reasoning", text: "hm" }, seq);
+  const turn = { userSeq: 1, workEntries: 2 };
+  const done = { settleItems: [], resumed: true };
+  assert.deepEqual(reconcile([user("go", 1), toolCall(2), toolResult(3)], turn), done);
+  assert.deepEqual(reconcile([user("go", 1), safeCall(2, true), toolResult(3)], turn), done);
+  assert.deepEqual(reconcile([user("go", 1), toolCall(2), toolResult(3), thinking(4)], turn), done);
+  assert.deepEqual(reconcile([user("go", 1), toolCall(2), toolResult(3), steer("also", 4)], turn), done);
+  assert.deepEqual(reconcile([user("go", 1), toolCall(2), toolResult(3), resumeEntry(4)], turn), done);
+  assert.deepEqual(reconcile([safeCall(0, true), user("go", 1), toolCall(2), toolResult(3)], turn), done);
+});
+
+test("reconcile closes a dangling call it cannot safely re-run with its interruption cause", () => {
+  const stop = { kind: "shutdown" } as const;
+  assert.deepEqual(reconcile([user("go", 1), safeCall(2, false)], { userSeq: 1, workEntries: 1 }, stop), {
+    settleItems: settled([["c2", "history"]], stop),
+    resumed: true,
+  });
+  assert.deepEqual(reconcile([user("go", 1), toolCall(2)], { userSeq: 1, workEntries: 1 }), {
+    settleItems: settled([["c2", "execute"]]),
+    resumed: true,
+  });
+  assert.deepEqual(reconcile([safeCall(0, true), user("go", 1), toolCall(2)], { userSeq: 1, workEntries: 1 }), {
+    settleItems: settled([["c2", "execute"]]),
+    resumed: true,
+  });
+});
+
+test("reconcile re-runs a lone dangling retry-safe call with its stripped input and settles nothing", () => {
+  const entries = [user("build and deploy the release", 1), toolCall(2), toolResult(3), safeCall(4, true)];
+  assert.deepEqual(reconcile(entries, { userSeq: 1, workEntries: 3 }), {
+    settleItems: [],
+    resumed: true,
+    rerun: { callId: "c4", tool: "history", input: { query: "deploy", limit: 5 } },
+  });
   const killed = killedResult("c2", 3);
-  const entries = [user("build and deploy the release", 1), safeCall(2, true), killed, safeCall(4, true)];
-  assert.equal(resumeStrategy(entries, { userSeq: 1, workEntries: 3 }).kind, "retry");
+  const later = [user("build and deploy the release", 1), safeCall(2, true), killed, safeCall(4, true)];
+  assert.equal(reconcile(later, { userSeq: 1, workEntries: 3 }).rerun?.callId, "c4");
+});
+
+test("reconcile re-runs nothing when more than one call is dangling, even if one is retry-safe", () => {
+  const entries = [user("go", 1), safeCall(2, true), toolCall(3)];
+  assert.deepEqual(reconcile(entries, { userSeq: 1, workEntries: 2 }), {
+    settleItems: settled([
+      ["c2", "history"],
+      ["c3", "execute"],
+    ]),
+    resumed: true,
+  });
+  const bothSafe = [user("go", 1), safeCall(2, true), safeCall(3, true)];
+  assert.equal(reconcile(bothSafe, { userSeq: 1, workEntries: 2 }).rerun, undefined);
+});
+
+test("reconcile resumes only when the interrupted attempt recorded work", () => {
+  assert.deepEqual(reconcile([user("x", 1)], { userSeq: 1, workEntries: 0 }), { settleItems: [], resumed: false });
+  assert.equal(reconcile([user("x", 1), toolCall(2), toolResult(3)], { userSeq: 1, workEntries: 2 }).resumed, true);
+});
+
+test("reconcile never answers a call that already holds a result, wherever that result sits", () => {
+  const killed = killedResult("c4", 5);
+  for (const retrySafe of [true, false])
+    assert.deepEqual(reconcile([user("go", 1), safeCall(4, retrySafe), killed], { userSeq: 1, workEntries: 2 }), {
+      settleItems: [],
+      resumed: true,
+    });
+  const elsewhere = item({ kind: "ToolResult", callId: "c4", text: "ok", turnId: OTHER_TURN }, 5);
+  const call = item(
+    {
+      kind: "ToolCall",
+      tool: "history",
+      callId: "c4",
+      turnId: RUN_1,
+      body: { retrySafe: true, rerun: { tool: "history", input: { query: "deploy" } } },
+    },
+    4,
+  );
+  assert.deepEqual(reconcile([user("go", 1), call, elsewhere], { userSeq: 1, workEntries: 2 }), {
+    settleItems: [],
+    resumed: true,
+  });
+});
+
+test("reconcile leaves another turn's calls alone and re-runs only calls marked retry-safe", () => {
+  const foreign = item({ kind: "ToolCall", tool: "execute", callId: "c2", turnId: OTHER_TURN, body: {} }, 2);
+  assert.deepEqual(reconcile([user("go", 1), foreign], { userSeq: 1, workEntries: 1 }), {
+    settleItems: [],
+    resumed: true,
+  });
+  const marked = (retrySafe: boolean) =>
+    item(
+      {
+        kind: "ToolCall",
+        tool: "history",
+        callId: "c2",
+        body: { retrySafe, rerun: { tool: "history", input: { query: "deploy" } } },
+      },
+      2,
+    );
+  assert.deepEqual(reconcile([user("go", 1), marked(false)], { userSeq: 1, workEntries: 1 }), {
+    settleItems: settled([["c2", "history"]]),
+    resumed: true,
+  });
+});
+
+const exchange = (seq: number) => [
+  user("quick question", seq, RUN_2),
+  item({ kind: "AgentMessage", text: "PONG", turnId: RUN_2 }, seq + 1),
+];
+
+test("a paused turn is found past another run's exchange, and knows it was overtaken", () => {
+  const entries = [user("nightly report", 10), toolCall(11), toolResult(12), ...exchange(13)];
+  const partial = { userSeq: 10, workEntries: 2 };
+  assert.deepEqual(findTrailingPartialTurn(entries, RUN_1), partial);
+  assert.equal(overtaken(entries, partial, RUN_1), true);
+  assert.equal(overtaken(entries.slice(0, 3), partial, RUN_1), false);
+  assert.equal(overtaken([...entries.slice(0, 3), overheard("chatter", 13)], partial, RUN_1), false);
+});
+
+test("turnAtSeq reads past another run's exchange that overtook the turn, to the turn's own answer", () => {
+  const entries = [
+    user("nightly report", 10),
+    toolCall(11),
+    ...exchange(12),
+    item({ kind: "UserMessage", text: "[system] paused", hidden: true, turnId: RUN_1, body: { resumeNote: true } }, 14),
+    item({ kind: "AgentMessage", text: "report done", turnId: RUN_1 }, 15),
+  ];
+  assert.deepEqual(turnAtSeq(entries, 10), { userSeq: 10, workEntries: 1, answer: { seq: 15, text: "report done" } });
+});
+
+test("a paused turn that answered after another run's exchange is finished", () => {
+  const entries = [
+    user("nightly report", 10),
+    toolCall(11),
+    ...exchange(12),
+    item({ kind: "UserMessage", text: "[system] paused", hidden: true, turnId: RUN_1, body: { resumeNote: true } }, 14),
+    item({ kind: "AgentMessage", text: "report done", turnId: RUN_1 }, 15),
+  ];
+  assert.equal(findTrailingPartialTurn(entries, RUN_1), null);
 });

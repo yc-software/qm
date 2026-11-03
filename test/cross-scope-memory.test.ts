@@ -4,7 +4,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { recallAcrossScopes, renderRecall, searchAcrossScopes } from "../src/memory/cross-scope.ts";
@@ -16,7 +15,6 @@ const AT = Date.parse("2026-10-01T12:00:00Z");
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const dir = await mkdtemp(join(tmpdir(), "cross-memory-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  const workspace = createLocalWorkspaceStore(dir);
   const base = createPostgresMemoryService(testDatabaseUrl());
   const calls: string[][] = [];
   const memory = createSemanticMemoryService(
@@ -33,7 +31,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
     }),
     scoredMemoryIndex(base, (text) => Number(text.split(" ")[0])),
   );
-  return { base, memory, calls, workspace };
+  return { base, memory, calls };
 }
 
 test("one ranking picks across notebooks and groups each under one heading", async (t) => {

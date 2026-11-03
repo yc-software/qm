@@ -4,16 +4,12 @@ import { createGoalRecord, type GoalRecord } from "../src/agent/goal.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import { entryFromItem, storedItem } from "../src/sessions/items.ts";
+import { storedItem, type Item } from "../src/sessions/items.ts";
 
 const sessionGoals = new Map<string, GoalRecord>();
 const savedGoal = (sessionId: string) => sessionGoals.get(sessionId) ?? null;
 
-function goalTurn(
-  sessionId: string,
-  cancel: AbortSignal,
-  entries: Array<{ type: string; payload: unknown }>,
-): AgentTurnInput {
+function goalTurn(sessionId: string, cancel: AbortSignal, items: Item[]): AgentTurnInput {
   let seq = 0;
   const goal = createGoalRecord({ objective: "keep researching until done" });
   return {
@@ -31,7 +27,7 @@ function goalTurn(
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
     emit: async (item) => {
       const stored = storedItem(item, { sessionId, seq: ++seq, createdAt: Date.now() });
-      entries.push(entryFromItem(stored, "personal:tester"));
+      items.push(stored);
       return stored;
     },
     recordModelCall: () => {},
@@ -41,7 +37,7 @@ function goalTurn(
 test("an active goal stops continuing once a model round fails at the provider", async () => {
   const agent = createAgent({ apiKey: "sk-test" });
   const controller = new AbortController();
-  const entries: Array<{ type: string; payload: unknown }> = [];
+  const items: Item[] = [];
   const realFetch = globalThis.fetch;
   let requests = 0;
   globalThis.fetch = (async () => {
@@ -56,7 +52,7 @@ test("an active goal stops continuing once a model round fails at the provider",
     );
   }) as typeof globalThis.fetch;
   try {
-    const outcome = await agent.runTurn(goalTurn("goal-provider-failure", controller.signal, entries)).then(
+    const outcome = await agent.runTurn(goalTurn("goal-provider-failure", controller.signal, items)).then(
       (result) => ({ result }),
       (error: unknown) => ({ error }),
     );
@@ -107,7 +103,7 @@ function textStream(text: string, stopReason = "end_turn"): Response {
 test("a refused goal round falls back to another model and the goal keeps going", async () => {
   const agent = createAgent({ apiKey: "sk-test" });
   const controller = new AbortController();
-  const entries: Array<{ type: string; payload: unknown }> = [];
+  const items: Item[] = [];
   const realFetch = globalThis.fetch;
   const models: string[] = [];
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -118,7 +114,7 @@ test("a refused goal round falls back to another model and the goal keeps going"
     return textStream(`reply ${models.length}`);
   }) as typeof globalThis.fetch;
   try {
-    await agent.runTurn(goalTurn("goal-refusal-fallback", controller.signal, entries)).catch(() => undefined);
+    await agent.runTurn(goalTurn("goal-refusal-fallback", controller.signal, items)).catch(() => undefined);
     const [primary, refused, fallback, continued] = models;
     assert.equal(refused, primary, "the second round goes to the primary model and is refused");
     assert.notEqual(fallback, primary, "the refused round is answered by a fallback model");
@@ -132,7 +128,7 @@ test("a refused goal round falls back to another model and the goal keeps going"
 test("a goal never falls back to a model that already refused in the same turn", async () => {
   const agent = createAgent({ apiKey: "sk-test" });
   const controller = new AbortController();
-  const entries: Array<{ type: string; payload: unknown }> = [];
+  const items: Item[] = [];
   const realFetch = globalThis.fetch;
   const models: string[] = [];
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -145,7 +141,7 @@ test("a goal never falls back to a model that already refused in the same turn",
     return textStream("", "refusal");
   }) as typeof globalThis.fetch;
   try {
-    const outcome = await agent.runTurn(goalTurn("goal-refusal-alternation", controller.signal, entries)).then(
+    const outcome = await agent.runTurn(goalTurn("goal-refusal-alternation", controller.signal, items)).then(
       (result) => ({ result }),
       (error: unknown) => ({ error }),
     );

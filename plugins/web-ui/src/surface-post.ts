@@ -1,17 +1,13 @@
-export function postCallText(payload: unknown): string | null {
-  const p = (payload ?? {}) as { action?: unknown; text?: unknown; files?: unknown };
-  if (p.action !== "post" || typeof p.text !== "string") return null;
-  if (!p.text.trim() && !(Array.isArray(p.files) && p.files.length)) return null;
-  return p.text;
+import type { Item } from "./items.ts";
+
+export function postCallText(call: Pick<Item, "body">): string | null {
+  const { action, text, files } = call.body;
+  if (action !== "post" || typeof text !== "string") return null;
+  if (!text.trim() && !(Array.isArray(files) && files.length)) return null;
+  return text;
 }
 
-export function postResultOk(payload: unknown): boolean {
-  const p = (payload ?? {}) as {
-    ok?: unknown;
-    isError?: unknown;
-    error?: unknown;
-    denied?: unknown;
-    blocked?: unknown;
-  };
-  return payload != null && p.isError !== true && p.ok !== false && !p.error && p.denied !== true && !p.blocked;
+export function postResultOk(result: Pick<Item, "isError" | "body">): boolean {
+  const { ok, error, denied, blocked } = result.body;
+  return result.isError !== true && ok !== false && !error && denied !== true && !blocked;
 }

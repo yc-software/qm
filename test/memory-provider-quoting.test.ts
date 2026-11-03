@@ -92,10 +92,13 @@ test("provider and notebook recall reach the prompt as quoted data, with outcome
   const items = await built.sessions.getItems(result.sessionId!);
   assert.deepEqual(outcomes(items.find((item) => item.kind === "UserMessage")), recalledBoth);
 
-  await assert.rejects(
-    built.app.turn({ ...dm("use the fancy model", "dm:U1:tB"), model: "not-a-real-model", liveActor: true }),
-    /not approved/,
-  );
+  const refused = await built.app.turn({
+    ...dm("use the fancy model", "dm:U1:tB"),
+    model: "not-a-real-model",
+    origin: { kind: "human" },
+  });
+  assert.equal(refused.status, "failed");
+  assert.match(refused.reason ?? "", /not approved/);
   const failed = (await built.sessions.getItems(result.sessionId!)).findLast((item) => item.kind === "UserMessage");
   assert.equal(failed?.text, "use the fancy model");
   assert.deepEqual(outcomes(failed), recalledBoth);

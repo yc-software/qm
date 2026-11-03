@@ -66,7 +66,12 @@ test("file grants move from owner paths to enabled Files record IDs", { skip }, 
     await migrateRegisteredPgSchemas(db);
 
     assert.deepEqual(
-      (await grants.all()).map((g) => [g.ref, g.granteeScopeId, g.permission, g.grantedBy]),
+      (await grants.find({ ownerScopeId: "personal:U1" })).map((g) => [
+        g.ref,
+        g.granteeScopeId,
+        g.permission,
+        g.grantedBy,
+      ]),
       [
         ["cron:c1", "personal:U2", "manage", "U1"],
         ["deployment:d1", "personal:U2", "read", "U1"],

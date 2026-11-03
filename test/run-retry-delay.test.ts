@@ -50,20 +50,19 @@ for (const backend of ["memory", "postgres"] as const) {
         const other = (await runs.enqueue({ sessionId: randomUUID(), request })).run;
         assert.equal(await runs.claimById(first.id, "worker-2", 60_000), null);
         assert.equal(await runs.claimById(later.id, "worker-2", 60_000), null);
-        assert.equal(await runs.claimForSession(sessionId, "inline-worker", 60_000), null);
-        const unrelated = await runs.claim("worker-2", 60_000);
+        const unrelated = (await runs.claim("worker-2", 60_000))[0] ?? null;
         assert.equal(unrelated?.id, other.id);
         await runs.complete(other.id, unrelated!.leaseToken!, { status: "ok", sessionId: other.sessionId });
         t.mock.timers.tick(29_999);
-        assert.equal(await runs.claim("worker-3", 60_000), null);
+        assert.equal((await runs.claim("worker-3", 60_000))[0] ?? null, null);
         t.mock.timers.tick(1);
-        assert.equal(await runs.claimById(later.id, "inline-worker", 60_000), null);
-        const retried = await runs.claimForSession(sessionId, "worker-3", 60_000);
+        assert.equal(await runs.claimById(later.id, "worker-3", 60_000), null);
+        const retried = (await runs.claim("worker-3", 60_000))[0] ?? null;
         assert.equal(retried?.id, first.id);
         assert.equal(retried?.attempts, 2);
         assert.equal(retried?.errorAttempts, 1);
         await runs.complete(first.id, retried!.leaseToken!, { status: "ok", sessionId });
-        const next = await runs.claim("worker-3", 60_000);
+        const next = (await runs.claim("worker-3", 60_000))[0] ?? null;
         assert.equal(next?.id, later.id);
         await runs.complete(later.id, next!.leaseToken!, { status: "ok", sessionId });
       } finally {
@@ -152,7 +151,7 @@ for (const backend of ["memory", "postgres"] as const) {
 }
 
 test(
-  "postgres: latest session history uses its ordered index and excludes private messages",
+  "postgres: the recent runs read uses its ordered index",
   {
     skip: !process.env.DATABASE_URL,
   },
@@ -166,26 +165,12 @@ test(
     const runtime = createPostgresRunStore(url.toString());
     const pool = new pg.Pool({ connectionString: url.toString() });
     try {
-      const sessionId = randomUUID();
-      const publicRun = (await runtime.runs.enqueue({ sessionId, request })).run;
-      const privateRun = (
-        await runtime.runs.enqueue({ sessionId, request: { ...request, privateSessionMessage: true } })
-      ).run;
-      await pool.query("UPDATE runs SET created_at = 1 WHERE session_id = $1", [sessionId]);
-      assert.equal((await runtime.runs.latestForThread(sessionId))?.id, privateRun.id);
-      assert.equal((await runtime.runs.latestForThread(sessionId, { excludePrivateMessages: true }))?.id, publicRun.id);
+      await runtime.runs.list({ limit: 1 });
       const client = await pool.connect();
       try {
         await client.query("SET enable_seqscan = off");
-        const { rows } = await client.query(
-          "EXPLAIN (FORMAT JSON) SELECT * FROM runs WHERE session_id = $1 AND COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true' ORDER BY created_at DESC, seq DESC LIMIT 1",
-          [sessionId],
-        );
-        const plan = JSON.stringify(rows);
-        assert.match(plan, /idx_runs_session_created_seq/);
-        assert.doesNotMatch(plan, /"Node Type":"Sort"/);
         const recent = await client.query(
-          "EXPLAIN (FORMAT JSON) SELECT * FROM runs ORDER BY created_at DESC LIMIT 500",
+          "EXPLAIN (FORMAT JSON) SELECT * FROM runs ORDER BY created_at DESC, seq DESC LIMIT 500",
         );
         assert.match(JSON.stringify(recent.rows), /idx_runs_created/);
         assert.doesNotMatch(JSON.stringify(recent.rows), /"Node Type":"Sort"/);
@@ -207,13 +192,13 @@ test(
 test("memory: one claim uses one clock snapshot across the retry boundary", async (t) => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const first = (await runs.enqueue({ sessionId: "same", request })).run;
-  const claimed = await runs.claim("w1", 60_000);
+  const claimed = (await runs.claim("w1", 60_000))[0] ?? null;
   const now = Date.now();
   t.mock.method(Date, "now", () => now);
   await runs.fail(first.id, claimed!.leaseToken!, "temporary", { retryAfterMs: 1_000 });
   await runs.enqueue({ sessionId: "same", request });
   let reads = 0;
   t.mock.method(Date, "now", () => now + (++reads === 1 ? 999 : 1_000));
-  assert.equal(await runs.claim("w2", 60_000), null);
-  assert.equal((await runs.claim("w2", 60_000))?.id, first.id);
+  assert.equal((await runs.claim("w2", 60_000))[0] ?? null, null);
+  assert.equal(((await runs.claim("w2", 60_000))[0] ?? null)?.id, first.id);
 });

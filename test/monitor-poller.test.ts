@@ -1,3 +1,4 @@
+import type { TurnOrigin } from "../src/types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
@@ -12,6 +13,9 @@ import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts"
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+
+const automationOrigin = (request?: { origin?: TurnOrigin }) =>
+  request?.origin?.kind === "automation" ? request.origin : undefined;
 
 const SCOPE = "personal:U1";
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
@@ -165,11 +169,11 @@ test("new output wakes the agent as a first-class live turn in the arming conver
   assert.equal(h.calls[0]?.conversation.threadRef, "thread-1");
   assert.match(h.calls[0]?.text ?? "", /compiling\.\.\./);
   assert.match(h.calls[0]?.text ?? "", /watching background job p-1/);
-  assert.equal(h.calls[0]?.securityScreenData, "compiling...\n");
-  assert.doesNotMatch(h.calls[0]?.securityScreenData ?? "", /Act on this|watching background job/);
+  assert.equal(automationOrigin(h.calls[0])?.screenData, "compiling...\n");
+  assert.doesNotMatch(automationOrigin(h.calls[0])?.screenData ?? "", /Act on this|watching background job/);
   assert.equal(h.calls[0]?.surfaceTools, true);
   assert.equal(h.calls[0]?.addressed, true);
-  assert.deepEqual(h.calls[0]?.triggerDestination, {
+  assert.deepEqual(automationOrigin(h.calls[0])?.destination, {
     type: "slack",
     target: "D1",
     audienceScopeId: scopeId("personal", "U1"),

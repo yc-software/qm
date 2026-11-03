@@ -1,3 +1,4 @@
+import type { TurnOrigin } from "../src/types.ts";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
@@ -6,6 +7,9 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+
+const automationOrigin = (request?: { origin?: TurnOrigin }) =>
+  request?.origin?.kind === "automation" ? request.origin : undefined;
 
 const toChannel: Destination = { type: "slack", target: "C1:169.7", audienceScopeId: scopeId("channel", "C1") };
 
@@ -57,7 +61,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     assert.equal(out.ran, true);
     assert.equal(req?.surfaceTools, true, "a monitor fire wires the surface tools");
     assert.equal(req?.addressed, true, "and is addressed so it must reply-or-decline (shed fallback delivers)");
-    assert.deepEqual(req?.triggerDestination, toChannel, "the post tool aims at the arming thread");
+    assert.deepEqual(automationOrigin(req)?.destination, toChannel, "the post tool aims at the arming thread");
     assert.equal(req?.idempotencyKey, "monitor:m1:exit");
     assert.equal((await d.deliveries.pending("slack")).length, 0);
   });
@@ -272,5 +276,28 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
     });
     assert.equal(req?.surfaceTools, undefined, "a cron never gets addressed/shed semantics — it may stay silent");
     assert.equal((await d.deliveries.pending("slack")).length, 1, "core delivers the cron reply via the enqueue path");
+  });
+});
+
+describe("runTrigger: a turn abandoned while still queued leaves the fire retryable", () => {
+  it("sends the error notice and throws without spending the fire key", async () => {
+    const d = deps(async () => ({ status: "queued", sessionId: "s1", runId: "r1" }));
+    await assert.rejects(
+      runTrigger(d, {
+        owner: "U1",
+        ownerScopeId: scopeId("channel", "C1"),
+        input: "report back",
+        fireKey: "cron:c7:2000",
+        surface: "cron",
+        threadRef: "cron:c7:2000",
+        destination: toChannel,
+        errorNotice: (s: string) => `⚠️ could not run: ${s}`,
+      }),
+      /still waiting to finish when this process shut down/,
+    );
+    assert.equal(await d.idempotency.committed("cron:c7:2000"), false);
+    const pending = await d.deliveries.pending("slack");
+    assert.equal(pending.length, 1);
+    assert.match(pending[0]!.text, /^⚠️ could not run:/);
   });
 });

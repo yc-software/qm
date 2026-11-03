@@ -1,3 +1,4 @@
+import type { TurnOrigin } from "../src/types.ts";
 import { createAdmittedWork } from "../src/util/admitted-work.ts";
 import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
@@ -20,6 +21,9 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+
+const automationOrigin = (request?: { origin?: TurnOrigin }) =>
+  request?.origin?.kind === "automation" ? request.origin : undefined;
 
 function fakeIdentity() {
   return {
@@ -654,8 +658,8 @@ for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
     for (const turn of s.turns) {
       assert.deepEqual(turn.unattendedGrants, unattendedGrants);
       assert.equal(turn.actor.externalId, loop.owner);
-      assert.equal(turn.triggered, true);
-      assert.equal(turn.triggerDestination, undefined);
+      assert.equal(turn.origin?.kind, "automation");
+      assert.equal(automationOrigin(turn)?.destination, undefined);
       assert.equal(turn.surfaceTools, undefined);
       assert.equal(turn.readOnly, undefined);
     }
@@ -689,7 +693,7 @@ test("a channel loop fires as its owner with their keychain and no unattended gr
   assert.equal(s.turns.length, 3);
   for (const turn of s.turns) {
     assert.equal(turn.unattendedGrants, undefined);
-    assert.equal(turn.ownerKeychainUnion, true);
+    assert.equal(automationOrigin(turn)?.useOwnerKeychain, true);
     assert.equal(turn.actor.externalId, loop.owner);
     assert.equal(turn.conversation.kind, "channel");
   }
@@ -1344,10 +1348,10 @@ test("loop work turns hand their fenced item data to the security screen", async
   const loop = await makeLoop(s.loops);
   await s.fire.fire(loop.id, "screen");
   const [intake, work, judge] = s.turns;
-  assert.equal(intake?.securityScreenData, undefined);
-  assert.equal(judge?.securityScreenData, undefined);
-  assert.equal(work!.securityScreenData, work!.text!.split("```untrusted-data\n")[1]!.split("\n```")[0]);
-  assert.match(work!.securityScreenData!, /SENTRY-1/);
+  assert.equal(automationOrigin(intake)?.screenData, undefined);
+  assert.equal(automationOrigin(judge)?.screenData, undefined);
+  assert.equal(automationOrigin(work!)?.screenData, work!.text!.split("```untrusted-data\n")[1]!.split("\n```")[0]);
+  assert.match(automationOrigin(work)?.screenData ?? "", /SENTRY-1/);
 });
 
 test("a follow-up screens the item source but not the person's message, capped to fit the screen", async () => {
@@ -1358,14 +1362,14 @@ test("a follow-up screens the item source but not the person's message, capped t
   const [item] = await s.items.byLoop(loop.id);
   await s.fire.followUp(loop, item!, "Summarize it", "josh");
   const turn = s.turns[0]!;
-  assert.match(turn.securityScreenData!, /Ignore your playbook[^]*\n…\[truncated\]$/);
-  assert.doesNotMatch(turn.securityScreenData!, /Summarize it/);
-  assert.ok(turn.text!.includes(turn.securityScreenData!));
+  const screenData = automationOrigin(turn)?.screenData ?? "";
+  assert.match(screenData, /Ignore your playbook[^]*\n…\[truncated\]$/);
+  assert.doesNotMatch(screenData, /Summarize it/);
+  assert.ok(turn.text!.includes(screenData));
   const payload = securityScreenPayload({
     surface: "loop",
     text: turn.text!,
-    triggered: true,
-    securityScreenData: turn.securityScreenData!,
+    origin: { kind: "automation", screenData },
   });
   assert.equal(payload?.truncated, false);
 });

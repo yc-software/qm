@@ -290,7 +290,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
         let handle = handles.get(targetKey);
         if (!handle) {
           try {
-            handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }], {
+            handle = await sandbox.provision(rec.scopeId, {
               sandboxId: rec.sandboxId,
             });
           } catch (e) {

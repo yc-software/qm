@@ -63,7 +63,7 @@ test("an entry-less session with an in-flight turn stays visible", async () => {
   const row = (await app.listSessions("U1")).find((s) => s.id === id);
   assert.equal(row?.working, true, "a brand-new chat is visible (and working) while its first turn runs");
 
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.complete(claimed!.id, claimed!.leaseToken ?? "", { status: "failed", reason: "boom" });
 
   assert.ok(
