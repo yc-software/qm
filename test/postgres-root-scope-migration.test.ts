@@ -46,7 +46,7 @@ test(
         raw,
         migrations.filter((migration) => migration.id < "sessions/store/0052"),
       );
-      await raw.query("INSERT INTO tenants(id, slug, name) VALUES (gen_random_uuid(), 'main', 'Main')");
+      await raw.query("UPDATE tenants SET name = 'Main'");
       for (const table of KV_TABLES) await raw.query(`CREATE TABLE ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
       await raw.query(`CREATE TABLE org_rows(scope_label TEXT, scopes TEXT[], note TEXT)`);
       const oldBroker = hashId(["org:acme", "openai", "broker"]);
@@ -152,7 +152,6 @@ async function upgradeFromOrg(
       raw,
       migrations.filter((migration) => migration.id < "sessions/store/0052"),
     );
-    await raw.query("DELETE FROM tenants");
     await raw.query(`CREATE TABLE deployment_identity(id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
     await raw.query(`CREATE TABLE soul_configs(id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
     await raw.query(`INSERT INTO deployment_identity VALUES ('singleton', '{"orgId":"acme"}')`);
@@ -165,28 +164,10 @@ async function upgradeFromOrg(
   }
 }
 
-test("pg upgrade with no tenant row moves the org onto the instance tenant", { skip }, async () => {
-  await upgradeFromOrg(
-    async () => {},
-    async (raw, upgrade) => {
-      await upgrade;
-      const instance = String((await raw.query("SELECT id FROM qm_tenant")).rows[0].id);
-      assert.deepEqual((await raw.query("SELECT id::text AS id, composio_namespace FROM tenants")).rows, [
-        { id: instance, composio_namespace: "acme" },
-      ]);
-      assert.equal((await raw.query("SELECT id FROM soul_configs")).rows[0].id, `org:${instance}`);
-      assert.equal((await raw.query("SELECT to_regclass('deployment_identity') AS t")).rows[0].t, null);
-    },
-  );
-});
-
 test("pg upgrade refuses to pick one of several tenants for the org", { skip }, async () => {
   await upgradeFromOrg(
     async (raw) => {
-      await raw.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'one', 'One'), ($2, 'two', 'Two')`, [
-        randomUUID(),
-        randomUUID(),
-      ]);
+      await raw.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'two', 'Two')`, [randomUUID()]);
     },
     async (raw, upgrade) => {
       await assert.rejects(upgrade, /Org acme needs one tenant to move onto, but this database has 2 tenants/);
@@ -195,7 +176,7 @@ test("pg upgrade refuses to pick one of several tenants for the org", { skip }, 
   );
 });
 
-test("pg fresh install creates no tenant and later tenants start without a Composio namespace", { skip }, async () => {
+test("pg fresh install leaves the instance tenant without a Composio namespace", { skip }, async () => {
   const schema = `root_scope_${randomUUID().replaceAll("-", "")}`;
   const schemaUrl = new globalThis.URL(URL!);
   schemaUrl.searchParams.set("options", `-c search_path=${schema}`);
@@ -205,9 +186,7 @@ test("pg fresh install creates no tenant and later tenants start without a Compo
     await raw.query(`CREATE SCHEMA ${schema}`);
     createPostgresSessionStore(url);
     await applyPgMigrations(raw, registeredPgMigrations(url));
-    assert.equal((await raw.query("SELECT count(*)::int AS n FROM tenants")).rows[0].n, 0);
-    await raw.query("INSERT INTO tenants(id, slug, name) VALUES (gen_random_uuid(), 'main', 'Main')");
-    assert.equal((await raw.query("SELECT composio_namespace FROM tenants")).rows[0].composio_namespace, null);
+    assert.deepEqual((await raw.query("SELECT composio_namespace FROM tenants")).rows, [{ composio_namespace: null }]);
   } finally {
     await raw.query(`DROP SCHEMA ${schema} CASCADE`).catch(() => undefined);
     await raw.end();

@@ -37,10 +37,7 @@ export const TENANT_ROOT_SCOPE: PgMigrationDefinition = {
        END IF;
        IF old_org IS NULL THEN RETURN; END IF;
        SELECT count(*), min(id::text)::uuid INTO tenant_count, tenant FROM tenants;
-       IF tenant_count = 0 AND to_regclass('qm_tenant') IS NOT NULL THEN
-         EXECUTE 'SELECT id FROM qm_tenant' INTO tenant;
-         INSERT INTO tenants(id, slug, name) VALUES (tenant, tenant::text, tenant::text);
-       ELSIF tenant_count <> 1 THEN
+       IF tenant_count <> 1 THEN
          RAISE EXCEPTION 'Org % needs one tenant to move onto, but this database has % tenants', old_org, tenant_count;
        END IF;
        UPDATE tenants SET composio_namespace = old_org WHERE id = tenant;
