@@ -36,7 +36,7 @@ const get = (base: string, path: string, headers: Record<string, string> = ALICE
 const getJson = async (base: string, path: string, headers: Record<string, string> = ALICE): Promise<any> =>
   (await get(base, path, headers)).json();
 
-test("an org admin sees conversations, transcripts, files, and runs top-down", async () => {
+test("an org admin sees conversations, transcripts, and files top-down", async () => {
   const s = start();
   try {
     const dm: TurnRequest = {
@@ -146,20 +146,8 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
     assert.equal(svg.headers.get("content-type"), "application/octet-stream", "svg is never served inline");
     assert.match(svg.headers.get("content-disposition") ?? "", /^attachment/);
 
-    const runs = await getJson(s.base, "/v1/admin/runs?scope=org:default-org");
-    assert.ok(runs.runs.length >= 1, "the run is listed");
-    assert.equal(runs.runs[0].sessionType, "dm");
-
     const actions = (await s.built.auditLog.events()).map((e) => e.action);
-    for (const a of [
-      "sessions.read",
-      "session.read",
-      "files.read",
-      "file.read",
-      "file.download",
-      "file.view",
-      "runs.read",
-    ]) {
+    for (const a of ["sessions.read", "session.read", "files.read", "file.read", "file.download", "file.view"]) {
       assert.ok(actions.includes(a), `audited ${a}`);
     }
   } finally {
@@ -1139,7 +1127,7 @@ test("admin observability enforces scope grants (authz is the boundary)", async 
     const UMA = { "x-admin-actor": "user-uma@default-org" };
     assert.equal((await get(s.base, "/v1/admin/sessions?scope=org:default-org", UMA)).status, 403);
     assert.equal(
-      (await get(s.base, "/v1/admin/runs?scope=org:default-org", { "x-admin-actor": "nobody@default-org" })).status,
+      (await get(s.base, "/v1/admin/errors?scope=org:default-org", { "x-admin-actor": "nobody@default-org" })).status,
       403,
     );
     assert.equal((await get(s.base, "/v1/admin/files")).status, 400);

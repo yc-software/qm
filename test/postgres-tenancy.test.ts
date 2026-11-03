@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { DIRECTORY_MIGRATIONS } from "../src/directory/postgres-directory-store.ts";
 import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction } from "../src/persistence/pg-pool.ts";
-import { SESSION_MIGRATIONS, SESSION_SCHEMA } from "../src/sessions/session-schema.ts";
+import { SESSION_MIGRATIONS } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
@@ -147,7 +147,9 @@ test("the tenancy migration fails when the host refuses a grant", { skip }, asyn
 });
 
 test("upgrading keeps the previous release's tenant objects and its migrations still apply", { skip }, async () => {
-  const previous = [...DIRECTORY_MIGRATIONS, SESSION_SCHEMA].map(definePgMigration);
+  const previous = [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS.filter((m) => m !== TENANCY_BASE)].map(
+    definePgMigration,
+  );
   const pool = new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
   try {
     await applyPgMigrations(pool, previous);

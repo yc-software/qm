@@ -290,4 +290,17 @@ END $base_schema$`,
   ],
 };
 
-export const SESSION_MIGRATIONS = [TENANCY_BASE, SESSION_SCHEMA];
+const MESSAGE_SEARCH_INDEX: PgMigrationDefinition = {
+  id: "sessions/store/0048-message-search-index",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_message_search ON items USING gin (tenant_id, search)
+      WHERE kind IN ('UserMessage','SteeringMessage','AgentMessage') AND variant IS DISTINCT FROM 'files_delivered' AND text IS NOT NULL`,
+  ],
+};
+
+const DROP_ITEMS_SEARCH: PgMigrationDefinition = {
+  id: "sessions/store/0049-drop-items-search",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `DROP INDEX IF EXISTS items_search`],
+};
+
+export const SESSION_MIGRATIONS = [TENANCY_BASE, SESSION_SCHEMA, MESSAGE_SEARCH_INDEX, DROP_ITEMS_SEARCH];

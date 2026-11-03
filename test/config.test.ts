@@ -12,6 +12,8 @@ import {
 import { boolEnv, numEnv } from "../src/util/env.ts";
 import { enabledSandboxBackends } from "../src/sandbox/sandbox-settings.ts";
 
+const RENDER_IMAGE = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
+
 const productionEnv = {
   NODE_ENV: "production",
   CORE_SIGNING_SECRET: "core-signing-secret-0123456789abcdef",
@@ -239,6 +241,7 @@ for (const primary of ["render", "local"] as const) {
       WORKSPACE_STORE: "postgres",
       RENDER_API_KEY: "test-key",
       RENDER_WORKSPACE_ID: "tea-test",
+      RENDER_SANDBOX_IMAGE: RENDER_IMAGE,
     };
     for (const database of [undefined, "", "  "])
       assert.throws(() => loadConfig({ ...env, DATABASE_URL: database }), /required core secrets: DATABASE_URL/);
@@ -254,6 +257,7 @@ for (const primary of ["render", "local"] as const) {
       WORKSPACE_STORE: "postgres",
       RENDER_API_KEY: "test-key",
       RENDER_WORKSPACE_ID: "tea-test",
+      RENDER_SANDBOX_IMAGE: RENDER_IMAGE,
     };
     for (const timeout of ["86340", "86400"])
       assert.throws(() => loadConfig({ ...env, SANDBOX_TIMEOUT_SEC: timeout }), /SANDBOX_TIMEOUT_SEC must stay/);
@@ -924,7 +928,32 @@ test("Render app publishing needs a complete source, project, and environment", 
 });
 
 test("The Render sandbox backend needs the Postgres workspace store", () => {
-  const env = { SANDBOX_BACKEND: "render", RENDER_API_KEY: "rnd_key", RENDER_WORKSPACE_ID: "tea-test" };
+  const env = {
+    SANDBOX_BACKEND: "render",
+    RENDER_API_KEY: "rnd_key",
+    RENDER_WORKSPACE_ID: "tea-test",
+    RENDER_SANDBOX_IMAGE: RENDER_IMAGE,
+  };
   assert.throws(() => loadConfig(env), /SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres/);
   assert.equal(loadConfig({ ...env, WORKSPACE_STORE: "postgres" }).sandboxBackend, "render");
+});
+
+test("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IMAGE", () => {
+  const env = {
+    SANDBOX_BACKEND: "render",
+    WORKSPACE_STORE: "postgres",
+    RENDER_API_KEY: "rnd_key",
+    RENDER_WORKSPACE_ID: "tea-test",
+  };
+  assert.throws(() => loadConfig(env), /SANDBOX_BACKEND=render requires RENDER_SANDBOX_IMAGE/);
+  assert.equal(loadConfig({ ...env, RENDER_SANDBOX_IMAGE: RENDER_IMAGE }).renderSandbox.image, RENDER_IMAGE);
+  assert.throws(
+    () => loadConfig({ ...env, RENDER_SANDBOX_IMAGE: RENDER_IMAGE.replace(/:[0-9a-f]{40}@/, "@") }),
+    /must be <repository>:<tag>@sha256:<digest>/,
+  );
+  const secondary = { RENDER_API_KEY: "rnd_key", RENDER_WORKSPACE_ID: "tea-test" };
+  assert.ok(!enabledSandboxBackends(loadConfig(secondary)).includes("render"));
+  assert.ok(
+    enabledSandboxBackends(loadConfig({ ...secondary, RENDER_SANDBOX_IMAGE: RENDER_IMAGE })).includes("render"),
+  );
 });

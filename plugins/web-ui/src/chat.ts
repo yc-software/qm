@@ -2619,7 +2619,7 @@ export function createChatSurface(
     const mins = Math.round((expiresAt - Date.now()) / 60_000);
     if (mins <= 0) return "expiring";
     if (mins < 60) return `${mins}m left`;
-    return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m left`;
+    return `${Math.floor(mins / 60)}h ${mins % 60}m left`;
   }
 
   function backgroundActivityStrip(): TemplateResult | typeof nothing {
