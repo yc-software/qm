@@ -1,7 +1,6 @@
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { claimFlyPeer, createEcsTaskStopped, recordStoppedFlyPeers, type FlyPeerClaim } from "./fly-peer-claims.ts";
+import { claimFlyPeer, createEcsTaskStopped, recordStoppedFlyPeers, type FlyPeerClaims } from "./fly-peer-claims.ts";
 import { startFlyPrivateTunnel, type FlyPrivateTunnel } from "./fly-private-tunnel.ts";
 
 export interface FlyWireguardPeer {
@@ -52,7 +51,7 @@ export function parseFlyWireguardPeers(raw: string): FlyWireguardPeer[] {
 
 export function createFlyTunnelManager(opts: {
   peers: FlyWireguardPeer[];
-  claims: DurableMap<FlyPeerClaim>;
+  claims: FlyPeerClaims;
   metadataUri: string;
   executable: string;
   port: number;

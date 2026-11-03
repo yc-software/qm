@@ -1,6 +1,8 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { createHash } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { pgRows, type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { ScopeId } from "../types.ts";
 import {
   safeSkillFilePath,
@@ -246,8 +248,49 @@ function validateBundle(
   return { bundle, manifests, runtime: resolvedDeploymentLayer(dir, tools, installFiles) };
 }
 
+export type DeploymentLayerRows = Pick<KeyedRows<StoredDeploymentLayer>, "get" | "putIfAbsent" | "update">;
+
+const DEPLOYMENT_LAYER_COLUMNS: RowColumns<StoredDeploymentLayer, "id"> = {
+  id: "text",
+  contentHash: "text",
+  version: "bigint",
+  updatedAt: "bigint",
+  updatedBy: "text",
+  bundle: "jsonb",
+  resolved: "jsonb",
+  pendingAudits: "jsonb",
+};
+
+export const DEPLOYMENT_LAYER: RowTable<StoredDeploymentLayer, "id"> = {
+  table: "deployment_layer",
+  key: "id",
+  columns: DEPLOYMENT_LAYER_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "deployment_layer",
+      columns: [
+        "id TEXT NOT NULL",
+        "content_hash TEXT NOT NULL",
+        "version BIGINT NOT NULL",
+        "updated_at BIGINT NOT NULL",
+        "updated_by TEXT NOT NULL",
+        "bundle JSONB NOT NULL",
+        "resolved JSONB NOT NULL",
+        "pending_audits JSONB",
+      ],
+      primaryKey: ["id"],
+      backfill: { ...jsonBackfill("deployment_layer", DEPLOYMENT_LAYER_COLUMNS) },
+    }),
+  ],
+};
+
+export function createPostgresDeploymentLayerRows(databaseUrl: string): DeploymentLayerRows {
+  const { get, putIfAbsent, update } = pgRows(databaseUrl, DEPLOYMENT_LAYER);
+  return { get, putIfAbsent, update };
+}
+
 export function createDeploymentLayerStore(opts: {
-  backing: DurableMap<StoredDeploymentLayer>;
+  backing: DeploymentLayerRows;
   runtime: DeploymentLayerRuntime;
   skills: SkillStore;
   skillBundles?: SkillBundleStore;

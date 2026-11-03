@@ -12,6 +12,7 @@ const CHARS_PER_TOKEN = 4;
 const TOOL_OUTPUT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const SETTING_CACHE_MS = 30_000;
 const TOOL_OUTPUT_PATH = "tool-output/";
+export const TOOL_OUTPUT_AREA = "tool-output";
 const DIGEST_DIR = "md5/";
 
 export interface ToolOutputRef {
@@ -86,18 +87,11 @@ async function readText(bytes: DurableByteStore, blobKey: string): Promise<strin
 
 export function createPostgresToolOutputStore(opts: {
   pool: Pick<PgPool, "q">;
-  bytesFor: (prefix: string) => DurableByteStore;
+  bytes: DurableByteStore;
   now?: () => number;
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
   let setting: { value: number; at: number } | null = null;
-  const stores = new Map<string, DurableByteStore>();
-  const tenantBytes = (): { id: string; bytes: DurableByteStore } => {
-    const id = currentTenant();
-    let bytes = stores.get(id);
-    if (!bytes) stores.set(id, (bytes = opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`)));
-    return { id, bytes };
-  };
   return {
     async inlineTokens() {
       if (setting && now() - setting.at < SETTING_CACHE_MS) return setting.value;
@@ -106,8 +100,8 @@ export function createPostgresToolOutputStore(opts: {
       return setting.value;
     },
     async save(text) {
-      const { id, bytes } = tenantBytes();
-      const put = await bytes.put(Buffer.from(text, "utf8"));
+      const id = currentTenant();
+      const put = await opts.bytes.put(Buffer.from(text, "utf8"));
       await opts.pool.q(
         `INSERT INTO blobs(tenant_id, sha256, size, mime, storage_key, created_at, expires_at)
          VALUES ($1::uuid, decode($2, 'hex'), $3, 'text/plain; charset=utf-8', $4,
@@ -139,9 +133,11 @@ export function createPostgresToolOutputStore(opts: {
       if (row.expired === true) return { expired: true };
       if (typeof row.storage_key !== "string")
         throw new Error(`tool output ${ref.digest}: the result names a parked blob with no blobs row`);
-      const { bytes, id } = tenantBytes();
-      const key = String(row.storage_key).slice(`${TOOL_OUTPUT_PATH}${id}/`.length);
-      const text = await readText(bytes, key);
+      const stored = String(row.storage_key);
+      const tenantPath = `${TOOL_OUTPUT_PATH}${currentTenant()}/`;
+      if (!stored.startsWith(tenantPath))
+        throw new Error(`tool output ${ref.digest}: parked blob ${stored} is outside this tenant's storage`);
+      const text = await readText(opts.bytes, stored.slice(tenantPath.length));
       if (text === null)
         throw new Error(`tool output ${ref.digest}: parked bytes ${row.storage_key} are missing from storage`);
       return { text };

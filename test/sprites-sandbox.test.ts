@@ -1,6 +1,6 @@
 import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
-import { test, after, beforeEach } from "node:test";
+import { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +24,9 @@ import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./supp
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { APIError, SpriteCommand } from "@fly/sprites";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testTenants, tenantTest as test } from "./support/test-tenants.ts";
+
+const TENANT8 = testTenants()[0].slice(0, 8);
 
 let fake: FakeSprites;
 let sandbox: Sandbox;
@@ -169,7 +172,7 @@ test("background processes inherit the force-through proxy env", async () => {
 test("scope name is stable and slugged", () => {
   const a = sandboxScopeName("qmt", "person:tester");
   assert.equal(a, sandboxScopeName("qmt", "person:tester"));
-  assert.match(a, /^qmt-person-tester-[0-9a-f]{6}$/);
+  assert.match(a, new RegExp(`^qmt-${TENANT8}-person-tester-[0-9a-f]{12}$`));
 });
 
 test("scope names fit the 63-char provider limit for long prefixes, scratch included", () => {
@@ -186,11 +189,9 @@ test("scope names fit the 63-char provider limit for long prefixes, scratch incl
     }
     assert.notEqual(sandboxScopeName(prefix, scope), sandboxScopeName(`${prefix}-scratch`, scope));
   }
-  // Names that already fit are unchanged, so existing resident computers keep their identity.
-  assert.equal(sandboxScopeName("qmt", "person:tester"), "qmt-person-tester-7b537e");
   assert.match(
     sandboxScopeName("qm-long-generic-fleet-tenant-prefix", "person:tester"),
-    /^qm-long-generic-fleet-tenant-prefix-person-tester-[0-9a-f]{6}$/,
+    new RegExp(`^qm-long-generic-fleet-tenant-prefix-${TENANT8}-[a-z0-9-]*[0-9a-f]{12}$`),
   );
 });
 
@@ -339,6 +340,16 @@ test("teardown checkpoints a changed home, throttles repeats, and destroy delete
   assert.ok(fake.names().includes(h.id), "parking keeps the sprite");
   await sandbox.teardown(h, { destroy: true });
   assert.ok(!fake.names().includes(h.id));
+});
+
+test("a stored provider name addresses the existing sprite for provisioning, status and retirement", async () => {
+  sandbox.useStoredNames!(async (id) => (id === scope ? "qmt-legacy-name" : null));
+  const h = await sandbox.provision(layers);
+  assert.equal(h.id, "qmt-legacy-name");
+  assert.equal(sandbox.scopeName!(scope), sandboxScopeName("qmt", scope));
+  assert.equal((await sandbox.computerStatus!(scope)).provisioned, true);
+  await sandbox.destroyScope!(scope);
+  assert.ok(!fake.names().includes("qmt-legacy-name"));
 });
 
 test("an unchanged home is not checkpointed once its state is known", async () => {

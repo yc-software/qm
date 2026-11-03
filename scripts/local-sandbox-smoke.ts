@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLocalSandbox, localContainerName, localVolumeName } from "../src/sandbox/local-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 const log = (...a: unknown[]) => console.log("[local-smoke]", ...a);
 
@@ -71,7 +73,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e) => {
+withTenant(randomUUID(), main).catch((e) => {
   console.error("[local-smoke] FAILED:", e instanceof Error ? (e.stack ?? e.message) : e);
   process.exit(1);
 });

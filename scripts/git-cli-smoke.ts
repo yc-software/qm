@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { shq } from "../src/util/shell.ts";
+import { randomUUID } from "node:crypto";
+import { withTenant } from "../src/tenants/context.ts";
 
 export interface GitCliSmokeCommandOptions {
   requireGlab?: boolean;
@@ -138,5 +140,5 @@ export async function main(): Promise<void> {
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
+  await withTenant(randomUUID(), main);
 }

@@ -5,7 +5,6 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
@@ -15,6 +14,7 @@ import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
 const execFileP = promisify(execFile);
 const SECRET = "deploy-git-remote-secret".repeat(3);

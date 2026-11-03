@@ -1,4 +1,4 @@
-import { test, before, after } from "node:test";
+import { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync } from "node:fs";
@@ -16,6 +16,9 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
+import { randomUUID } from "node:crypto";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");
@@ -64,6 +67,25 @@ function makeSandbox(fake: FakeDocker, opts: Record<string, unknown> = {}) {
   });
 }
 const rw = (scope: string) => [{ scopeId: scope, mountPath: "", mode: "rw" as const }];
+
+test("two tenants with the same scope get separate containers and home volumes", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake);
+  const scope = scopeId("personal", "U1");
+  const [a, b] = [randomUUID(), randomUUID()];
+  const first = await withTenant(a, () => sb.provision(rw(scope)));
+  const second = await withTenant(b, () => sb.provision(rw(scope)));
+  assert.notEqual(first.id, second.id);
+  assert.equal(
+    first.id,
+    withTenant(a, () => localContainerName(scope)),
+  );
+  assert.notEqual(
+    withTenant(a, () => localVolumeName(scope)),
+    withTenant(b, () => localVolumeName(scope)),
+  );
+  assert.throws(() => withoutTenant(() => localContainerName(scope)), /No tenant is bound/);
+});
 
 test("profile declares the local Docker substrate honestly", () => {
   const sb = makeSandbox(installFakeDocker(daemonPort));

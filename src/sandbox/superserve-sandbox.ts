@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { StoredSuperserveSandbox, SuperserveBodies } from "./superserve-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
@@ -70,40 +70,6 @@ export const SUPERSERVE_METADATA = {
   epoch: "qm_config_epoch",
 } as const;
 
-export interface StoredSuperserveSandbox {
-  sandboxId: string;
-  createdAtMs: number;
-}
-
-export interface StoredConfigEpoch {
-  generation: number;
-}
-
-const CONFIG_EPOCH_LOCK = "superserve-config-epoch";
-
-export function createConfigEpochResolver(
-  store: DurableMap<StoredConfigEpoch>,
-  generationKey: string,
-  lock: AdvisoryLock,
-): () => Promise<number> {
-  let pending: Promise<number> | undefined;
-  const claim = (): Promise<number> =>
-    lock.withLock(CONFIG_EPOCH_LOCK, async () => {
-      const stored = await store.get(generationKey);
-      if (stored) return stored.generation;
-      const generation = (await store.entries()).reduce((high, [, seen]) => Math.max(high, seen.generation), 0) + 1;
-      await store.put(generationKey, { generation });
-      return (await store.get(generationKey))?.generation ?? generation;
-    });
-  return () => {
-    pending ??= claim().catch((err: unknown) => {
-      pending = undefined;
-      throw err;
-    });
-    return pending;
-  };
-}
-
 export interface SuperserveSandboxOptions extends BlobStagingOptions {
   client: SuperserveClient;
   namePrefix?: string;
@@ -119,7 +85,7 @@ export interface SuperserveSandboxOptions extends BlobStagingOptions {
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
-  store: DurableMap<StoredSuperserveSandbox>;
+  store: SuperserveBodies;
   advisoryLock: AdvisoryLock;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
@@ -245,7 +211,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
   }
 
   async function forget(scope: string, sandboxId: string): Promise<void> {
-    await store.deleteIf(scope, (record) => record.sandboxId === sandboxId);
+    await store.forget(scope, sandboxId);
   }
 
   async function reconnect(

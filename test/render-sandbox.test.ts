@@ -1,25 +1,27 @@
-import { test, type TestContext } from "node:test";
+import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRenderSandbox, type StoredRenderSandbox } from "../src/sandbox/render-sandbox.ts";
 import {
-  createRenderSandbox,
-  type StoredRenderSandbox,
-  type StoredRenderCleanup,
-  type StoredRenderScratch,
-} from "../src/sandbox/render-sandbox.ts";
+  RENDER_SANDBOX_BODIES,
+  RENDER_SANDBOX_CLEANUP,
+  RENDER_SCRATCH_BODIES,
+} from "../src/sandbox/render-sandbox-tables.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createLocalBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
 import { supportsAgentComputerExport, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { createSdkRenderClient } from "../src/sandbox/render-client.ts";
-import { createRenderBase, type RenderBase, type StoredRenderBase } from "../src/sandbox/render-base.ts";
+import { createRenderBase, RENDER_SANDBOX_BASES, type RenderBase } from "../src/sandbox/render-base.ts";
 import { createSandboxResources } from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
-import { testMap, testAdvisoryLock } from "./support/test-database.ts";
+import { testAdvisoryLock, testRows, testSandboxResourceStores } from "./support/test-database.ts";
+import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
 const BASE_REF = `ghcr.io/acme/sandbox-base:0123456789abcdef0123456789abcdef01234567@sha256:${"a".repeat(64)}`;
 
@@ -33,9 +35,9 @@ function setup(
   const dir = mkdtempSync(join(tmpdir(), "render-ws-"));
   const workspace = createLocalWorkspaceStore(dir);
   const blobTransfer = createLocalBlobTransferStore(join(dir, "blobs"));
-  const store = testMap<StoredRenderSandbox>();
-  const scratchStore = testMap<StoredRenderScratch>();
-  const cleanupStore = testMap<StoredRenderCleanup>();
+  const store = testRows(RENDER_SANDBOX_BODIES);
+  const scratchStore = testRows(RENDER_SCRATCH_BODIES);
+  const cleanupStore = testRows(RENDER_SANDBOX_CLEANUP);
   const advisoryLock = testAdvisoryLock();
   const errors: Array<{ code: string; message: string }> = [];
   let golden = { ref: BASE_REF, snapshotId: fake.seedGolden(BASE_REF) };
@@ -208,7 +210,7 @@ test("Render waits for the deployment's first golden snapshot before starting a 
   fake.publishImage(source, `sha256:${"a".repeat(64)}`);
   const goldens = createRenderBase({
     client: createSdkRenderClient({ apiKey: "render-test-key", workspaceId: "tea-test" }),
-    store: testMap<StoredRenderBase>(),
+    store: testRows(RENDER_SANDBOX_BASES),
     image: BASE_REF,
     pollMs: 5,
   });
@@ -263,7 +265,7 @@ test("Render restores files from its checkpoint after sandbox expiry and a core 
   const restored = await second.provision(layers);
   assert.equal(restored.coldStart, false);
   assert.equal(fake.createdFrom[1], checkpointId);
-  assert.equal(fake.snapshotSource(checkpointId)?.name, "qm-personal-tester-e41213");
+  assert.equal(fake.snapshotSource(checkpointId)?.name, sandboxScopeName("qm", scope));
   assert.equal(await second.readFile(restored, "nested/work.txt"), "retained");
   assert.equal(await second.readFile(restored, "missing"), null);
   const binary = Buffer.from([0, 255, 4, 0, 128]);
@@ -377,8 +379,7 @@ test("Render turns share one computer through the sandbox router", { timeout: 60
   const { make, fake, layers, scope, advisoryLock } = setup(t);
   const render = make();
   const resources = createSandboxResources({
-    records: testMap(),
-    defaults: testMap(),
+    ...testSandboxResourceStores(),
     backends: { render },
     defaultBackend: "render",
     lock: advisoryLock,

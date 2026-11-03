@@ -1,3 +1,4 @@
+import { createFlyPortClaims, FLY_DEPLOY_CONFIGS } from "../src/deploy/fly-deploy-stores.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
@@ -14,7 +15,7 @@ import {
 import { parseTar } from "../src/sandbox/tar.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testMap } from "./support/test-database.ts";
+import { testDatabaseUrl, testRows } from "./support/test-database.ts";
 
 const TOKEN = "FlyV1-test-token";
 const PREFIX = "qm-d";
@@ -189,7 +190,7 @@ function provider(fetchImpl: typeof fetch, extra: Partial<FlyDeployProviderOptio
     appPrefix: PREFIX,
     baseImage: IMAGE,
     org: ORG,
-    configStore: testMap<FlyMachineConfig>(),
+    configStore: testRows(FLY_DEPLOY_CONFIGS),
     fetchImpl,
     pollIntervalMs: 1,
     machineStartTimeoutMs: 200,
@@ -612,7 +613,7 @@ test("missing volume configuration cannot downgrade or destroy durable storage",
 
 test("durable rollback uses the accepted configuration after a provider restart", async () => {
   const fake = fakeFly();
-  const configStore = testMap<FlyMachineConfig>();
+  const configStore = testRows(FLY_DEPLOY_CONFIGS);
   const opts = { dataVolumeSizeGb: 1, configStore, appReadyTimeoutMs: 10 };
   const d = deployment(ID),
     good = version(snapshot({ "server.js": "good" }));
@@ -667,7 +668,7 @@ test("an update that leaves the machine stopped explicitly starts it", async () 
 
 test("configuration-store failure rolls back an updated machine", async () => {
   const fake = fakeFly();
-  const configStore = testMap<FlyMachineConfig>();
+  const configStore = testRows(FLY_DEPLOY_CONFIGS);
   const put = configStore.put.bind(configStore);
   let writes = 0;
   configStore.put = async (id, value) => {
@@ -700,8 +701,8 @@ test("shared app updates and archives only the owning deployment", async () => {
     existingApp: { name: "company-app", network: "company-app", organization: { slug: ORG } },
     ips: ["fdaa:1:2:3::1"],
   });
-  const portStore = testMap<string>();
-  const configStore = testMap<FlyMachineConfig>();
+  const portStore = createFlyPortClaims(testDatabaseUrl());
+  const configStore = testRows(FLY_DEPLOY_CONFIGS);
   const options = { sharedAppName: "company-app", portStore, configStore, dataVolumeSizeGb: 1 };
   const deploy = provider(fake.fetchImpl, options);
   const a = deployment(ID),
@@ -744,20 +745,20 @@ test("shared ports preserve an existing owner's claim and survive provider recre
     existingApp: { name: "company-app", network: "company-app", organization: { slug: ORG } },
     ips: ["fdaa:1:2:3::1"],
   });
-  const portStore = testMap<string>();
+  const portStore = createFlyPortClaims(testDatabaseUrl());
   const first = 20000 + (createHash("sha256").update(ID).digest().readUInt32BE(0) % 45536);
-  await portStore.put(`company-app:${first}`, "existing-owner");
+  assert.equal(await portStore.claim("company-app", first, "existing-owner"), "existing-owner");
   const options = {
     sharedAppName: "company-app",
     portStore,
-    configStore: testMap<FlyMachineConfig>(),
+    configStore: testRows(FLY_DEPLOY_CONFIGS),
     dataVolumeSizeGb: 1,
   };
   const d = deployment(ID),
     v = version(snapshot({ "server.js": "good" }));
   const endpoint = await provider(fake.fetchImpl, options).apply(d, v);
   assert.notEqual(endpoint.port, first);
-  assert.equal(await portStore.get(`company-app:${first}`), "existing-owner");
+  assert.equal(await portStore.claim("company-app", first, ID), "existing-owner");
   assert.deepEqual(await provider(fake.fetchImpl, options).apply(d, v), endpoint);
 });
 
@@ -769,7 +770,7 @@ test("shared publishing requires pre-provisioned app and ingress without creatin
     const deploy = provider(fake.fetchImpl, {
       appPrefix: "",
       sharedAppName: "company-app",
-      portStore: testMap<string>(),
+      portStore: createFlyPortClaims(testDatabaseUrl()),
       dataVolumeSizeGb: 1,
     });
     await assert.rejects(deploy.apply(deployment(ID), version(snapshot({}))), /provisioned before publishing/);
@@ -836,7 +837,7 @@ test("shared publishing rejects missing or permissive ingress isolation before c
     });
     const deploy = provider(fake.fetchImpl, {
       sharedAppName: "company-app",
-      portStore: testMap<string>(),
+      portStore: createFlyPortClaims(testDatabaseUrl()),
       dataVolumeSizeGb: 1,
     });
     await assert.rejects(

@@ -1,18 +1,51 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { randomBytes } from "node:crypto";
 import { renderJobCommand } from "../../cli/src/render-job-command.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import { sleep } from "../util/async.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { shq } from "../util/shell.ts";
 import { createRenderApi, type RenderApi } from "./render-api.ts";
+import { tenantObjectKey } from "../tenants/storage.ts";
 
 export interface StoredRenderAppStorage {
   deploymentId: string;
   accessKey: string;
   secretKeyEnc: string;
   enabled: boolean;
+  prefix?: string;
 }
+
+const RENDER_APP_STORAGE_COLUMNS: RowColumns<StoredRenderAppStorage, "deploymentId"> = {
+  deploymentId: "text",
+  accessKey: "text",
+  secretKeyEnc: "text",
+  enabled: "boolean",
+  prefix: "text",
+};
+
+export const RENDER_APP_STORAGE: RowTable<StoredRenderAppStorage, "deploymentId"> = {
+  table: "render_app_storage",
+  key: "deploymentId",
+  recordKey: true,
+  columns: RENDER_APP_STORAGE_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "render_app_storage",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "access_key TEXT NOT NULL",
+        "secret_key_enc TEXT NOT NULL",
+        "enabled BOOLEAN NOT NULL",
+        "prefix TEXT",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("render_app_storage", RENDER_APP_STORAGE_COLUMNS), deployment_id: "id" },
+    }),
+  ],
+};
 
 interface Job {
   id: string;
@@ -56,7 +89,7 @@ export function createRenderAppStorage(opts: {
   bucket: string;
   prefix?: string;
   region?: string;
-  store: DurableMap<StoredRenderAppStorage>;
+  store: Pick<KeyedRows<StoredRenderAppStorage>, "get" | "put" | "putIfAbsent">;
   keyMaterial: string | Buffer;
   api?: RenderApi;
   pollIntervalMs?: number;
@@ -76,7 +109,7 @@ export function createRenderAppStorage(opts: {
     throw new Error("Render app storage requires a MinIO service and a valid endpoint");
   const key = deriveConnectorKey(opts.keyMaterial, "render-app-storage");
   const api = opts.api ?? createRenderApi(opts);
-  const prefixFor = (id: string) => `${opts.prefix ?? ""}app-data/${id}/`;
+  const prefixFor = (id: string) => `${opts.prefix ?? ""}${tenantObjectKey("app-data", id)}/`;
   const path = `/services/${encodeURIComponent(opts.minioServiceId)}`;
   const poll = opts.pollIntervalMs ?? 2_000;
 
@@ -116,7 +149,9 @@ printf 'QM app storage enable applied\\n'
     if (!job?.id) throw new Error("Render did not return an app storage job ID");
     const status = await wait(job.id);
     if (status !== "succeeded") throw new Error(`Render app storage job ${job.id} ${status}`);
-    if (!record.enabled) await opts.store.put(record.deploymentId, { ...record, enabled: true });
+    const prefix = prefixFor(record.deploymentId);
+    if (!record.enabled || record.prefix !== prefix)
+      await opts.store.put(record.deploymentId, { ...record, enabled: true, prefix });
   }
 
   async function wait(jobId: string): Promise<string> {
@@ -142,7 +177,7 @@ printf 'QM app storage enable applied\\n'
           enabled: false,
         });
       if (record.deploymentId !== deploymentId) throw new Error("Render app storage identity does not match");
-      if (repair || !record.enabled) await provision(record);
+      if (repair || !record.enabled || record.prefix !== prefixFor(deploymentId)) await provision(record);
       return {
         AWS_ACCESS_KEY_ID: record.accessKey,
         AWS_SECRET_ACCESS_KEY: decryptSecret(record.secretKeyEnc, key),

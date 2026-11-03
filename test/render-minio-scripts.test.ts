@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { testMap } from "./support/test-database.ts";
+import { testRows } from "./support/test-database.ts";
 import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { renderMinioCommand, renderMinioInitCommand } from "../cli/src/render-minio.ts";
-import { createRenderAppStorage, type StoredRenderAppStorage } from "../src/deploy/render-app-storage.ts";
+import { createRenderAppStorage, RENDER_APP_STORAGE } from "../src/deploy/render-app-storage.ts";
 import { createFakeRenderApi } from "./support/fake-render.ts";
 
 const execute = promisify(execFile);
@@ -130,7 +130,7 @@ test(
           .then((result) => ({ id: job[1], status: result.status === 0 ? "succeeded" : "failed" }));
       throw new Error(`Unexpected ${method} ${path}`);
     });
-    const store = testMap<StoredRenderAppStorage>();
+    const store = testRows(RENDER_APP_STORAGE);
     const storage = createRenderAppStorage({
       apiKey: "key",
       workspaceId: "tea-test",
@@ -211,8 +211,7 @@ const open = () => {
 const waitForBackup = async (expected) => {
   await writeFile("/tmp/restore.json", JSON.stringify({ dbs: [{ path: "/data/app.db", replicas: [{
     type: "s3", bucket: process.env.S3_BUCKET, path: process.env.S3_PREFIX + "litestream",
-    region: process.env.AWS_REGION, endpoint: process.env.AWS_ENDPOINT_URL_S3, "force-path-style": true,
-  }] }] }));
+    region: process.env.AWS_REGION, endpoint: process.env.AWS_ENDPOINT_URL_S3, "force-path-style": true }] }] }));
   const deadline = Date.now() + 20_000;
   for (;;) {
     await rm("/tmp/proof.db", { force: true });

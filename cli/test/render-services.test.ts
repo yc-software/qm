@@ -128,9 +128,9 @@ test("Render core starts sandboxes from the configured base image and refuses th
     );
   }
   const { config: stray } = deployment(t, (raw) =>
-    Object.assign(raw, { sandbox: { backend: "render", baseImage: image, env: { FOO: "bar" } } }),
+    Object.assign(raw, { sandbox: { backend: "render", baseImage: image, app: "qm-sandbox" } }),
   );
-  assert.ok(renderConfigErrors(stray, []).some((error) => /Render sandboxes ignore sandbox.env/.test(error.message)));
+  assert.ok(renderConfigErrors(stray, []).some((error) => /Render sandboxes ignore sandbox.app/.test(error.message)));
 });
 
 test("Render init selects managed MinIO without generated infrastructure files or storage inputs", (t) => {

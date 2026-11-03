@@ -1,11 +1,14 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { orgId as configOrgId } from "../config.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
+import { currentTenant } from "../tenants/context.ts";
+import { tenantObjectKey } from "../tenants/storage.ts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -65,8 +68,42 @@ export interface StoredDeployBody {
   dataCredsAtMs?: number;
   rotateNotBeforeMs?: number;
   replacementMicrovmId?: string;
-  orgId?: string;
 }
+
+const AWS_DEPLOY_BODIES_COLUMNS: RowColumns<StoredDeployBody, "deploymentId"> = {
+  deploymentId: "text",
+  microvmId: "text",
+  endpoint: "text",
+  createdAtMs: "bigint",
+  lastSnapshotMs: "bigint",
+  dataCredsAtMs: "bigint",
+  rotateNotBeforeMs: "bigint",
+  replacementMicrovmId: "text",
+};
+
+export const AWS_DEPLOY_BODIES: RowTable<StoredDeployBody, "deploymentId"> = {
+  table: "aws_deploy_bodies",
+  key: "deploymentId",
+  recordKey: true,
+  columns: AWS_DEPLOY_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "aws_deploy_bodies",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "microvm_id TEXT NOT NULL",
+        "endpoint TEXT NOT NULL",
+        "created_at_ms BIGINT NOT NULL",
+        "last_snapshot_ms BIGINT",
+        "data_creds_at_ms BIGINT",
+        "rotate_not_before_ms BIGINT",
+        "replacement_microvm_id TEXT",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("aws_deploy_bodies", AWS_DEPLOY_BODIES_COLUMNS), deployment_id: "id" },
+    }),
+  ],
+};
 
 export interface AwsDeployProviderOptions {
   region: string;
@@ -88,7 +125,7 @@ export interface AwsDeployProviderOptions {
   dataPrefix?: string;
   snapshotIntervalMs?: number;
   dataRoleArn?: string;
-  store: DurableMap<StoredDeployBody>;
+  store: Pick<KeyedRows<StoredDeployBody>, "get" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   api?: AwsMicrovmApi;
   fetchImpl?: typeof fetch;
@@ -96,6 +133,8 @@ export interface AwsDeployProviderOptions {
   sts?: Pick<STSClient, "send">;
   onError?: AppErrorSink;
 }
+
+export const deployDataArea = (prefix: string | undefined): string => (prefix ?? "deploy-data").replace(/\/+$/, "");
 
 export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployProvider {
   const region = opts.region;
@@ -137,7 +176,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const appsDomain = opts.appsDomain;
   const tokenTtlMinutes = opts.tokenTtlMinutes ?? 30;
   const dataBucket = opts.dataBucket;
-  const dataPrefix = (opts.dataPrefix ?? "deploy-data").replace(/\/+$/, "");
+  const dataPrefix = deployDataArea(opts.dataPrefix);
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? 5 * 60_000;
   const s3: Pick<S3Client, "send"> | undefined = dataBucket
     ? (opts.s3 ?? new S3Client({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
@@ -147,8 +186,9 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const sts: Pick<STSClient, "send"> | undefined = litestream
     ? (opts.sts ?? new STSClient({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
     : undefined;
-  const dataKeyFor = (deploymentId: string): string => `${dataPrefix}/${deploymentId}.tar`;
-  const litestreamKeyPrefix = (deploymentId: string): string => `${dataPrefix}/${deploymentId}/litestream`;
+  const dataKeyFor = (deploymentId: string): string => tenantObjectKey(dataPrefix, `${deploymentId}.tar`);
+  const litestreamKeyPrefix = (deploymentId: string): string =>
+    tenantObjectKey(dataPrefix, `${deploymentId}/litestream`);
 
   function ensureConfigured(): void {
     if (!region) throw new Error("AWS_DEPLOY_REGION/AWS_REGION not set (DEPLOY_PROVIDER=aws)");
@@ -207,7 +247,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     const r = await sts!.send(
       new AssumeRoleCommand({
         RoleArn: dataRoleArn!,
-        RoleSessionName: `deploy-${deploymentId.slice(0, 8)}`,
+        RoleSessionName: `deploy-${currentTenant().slice(0, 8)}-${deploymentId.slice(0, 8)}`,
         Policy: policy,
         DurationSeconds: DATA_CREDS_TTL_SEC,
       }),
@@ -420,7 +460,6 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         endpoint: body.endpoint,
         createdAtMs: Date.now(),
         lastSnapshotMs: Date.now(),
-        orgId: configOrgId(),
       });
       return { id: body.id, endpoint: body.endpoint, fresh: true };
     });

@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -9,7 +8,6 @@ import {
   deployCurrentGitRef,
   deployTouchDebounceMs,
   publicUrlOf,
-  type Deployment,
 } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -19,7 +17,7 @@ import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest as test } from "./support/test-tenants.ts";
 
 function tenantBound<T extends object>(store: T): T {
   return new Proxy(store, {
@@ -226,23 +224,21 @@ test("touch is debounced per id within the window", async () => {
   assert.equal((await s.get(d.id))!.lastAccessAt, 11_001, "a touch past the window writes");
 });
 
-test("touch does not rewrite the deployment blob and falls back to the blob's legacy value", async () => {
+test("touch only moves the last access time forward and survives a full rewrite", async () => {
   const backing = testDeployBackings();
   const { deployments } = backing;
-  const s1 = tenantBound(createDeployStore(backing));
-  const d = await s1.create({
+  const s = tenantBound(createDeployStore({ ...backing, touchDebounceMs: 0 }));
+  const d = await s.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
     entrypoint: "node s.js",
     snapshotDir: "/snap",
   });
-  await deployments.merge(d.id, { lastAccessAt: 777 } as Partial<Deployment>);
-
-  const s2 = tenantBound(createDeployStore({ ...backing, touchDebounceMs: 0 }));
-  assert.equal((await s2.get(d.id))!.lastAccessAt, 777, "a never-touched row reads the blob's value");
-  await inTestTenant(() => s2.touch(d.id, 9_999));
-  assert.equal((await s2.get(d.id))!.lastAccessAt, 9_999);
-  assert.equal((await deployments.get(d.id))!.lastAccessAt, 777, "the blob is not rewritten by touch");
+  await s.touch(d.id, 9_999);
+  await s.touch(d.id, 5_000);
+  await s.setStatus(d.id, "running");
+  assert.equal((await s.get(d.id))!.lastAccessAt, 9_999);
+  assert.equal(await inTestTenant(() => deployments.touch("missing", 1)), false);
 });
 
 test("deploy versions carry git commits for app files and rollback moves the current ref", async () => {

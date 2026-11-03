@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
@@ -24,6 +23,7 @@ import {
   type HomeSnapshotStore,
   type SnapshotUpload,
 } from "../src/sandbox/home-snapshot.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
 interface Box {
   root: string;

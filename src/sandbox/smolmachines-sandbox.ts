@@ -1,7 +1,9 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import { fetchWithRetry, sleep } from "../util/async.ts";
 import { httpFailure, errMessage, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -65,6 +67,34 @@ export interface StoredSmolmachinesSandbox {
   snapshotError?: string;
 }
 
+const SMOLMACHINES_SANDBOX_BODIES_COLUMNS: RowColumns<StoredSmolmachinesSandbox, "scopeId"> = {
+  scopeId: "text",
+  initializationPending: "boolean",
+  lastSnapshotMs: "bigint",
+  homeDirty: "boolean",
+  snapshotError: "text",
+};
+
+export const SMOLMACHINES_SANDBOX_BODIES: RowTable<StoredSmolmachinesSandbox, "scopeId"> = {
+  table: "smolmachines_sandbox_bodies",
+  key: "scopeId",
+  columns: SMOLMACHINES_SANDBOX_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "smolmachines_sandbox_bodies",
+      columns: [
+        "scope_id TEXT NOT NULL",
+        "initialization_pending BOOLEAN",
+        "last_snapshot_ms BIGINT",
+        "home_dirty BOOLEAN",
+        "snapshot_error TEXT",
+      ],
+      primaryKey: ["scope_id"],
+      backfill: { ...jsonBackfill("smolmachines_sandbox_bodies", SMOLMACHINES_SANDBOX_BODIES_COLUMNS), scope_id: "id" },
+    }),
+  ],
+};
+
 export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   token?: string;
   baseUrl?: string;
@@ -77,7 +107,7 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
   snapshotIntervalMs?: number;
-  store: DurableMap<StoredSmolmachinesSandbox>;
+  store: Pick<KeyedRows<StoredSmolmachinesSandbox>, "get" | "putIfAbsent" | "merge" | "delete">;
   advisoryLock: AdvisoryLock;
   snapshots?: HomeSnapshotStore;
   extraTools?: string[];
@@ -92,6 +122,9 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   const fetchImpl = opts.fetchImpl ?? fetch;
   const baseUrl = (opts.baseUrl ?? DEFAULT_SMOLMACHINES_BASE_URL).replace(/\/+$/, "");
   const prefix = opts.namePrefix ?? "qm";
+  let storedName: ((scopeId: string) => Promise<string | null>) | undefined;
+  const nameFor = async (scopeId: string): Promise<string> =>
+    (await storedName?.(scopeId)) ?? sandboxScopeName(prefix, scopeId);
   const image = opts.image ?? DEFAULT_IMAGE;
   const resources = {
     ...(opts.cpus ? { cpus: opts.cpus } : {}),
@@ -432,6 +465,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     workspace,
     label: "smolmachines",
     prefix,
+    nameFor,
     homeDir: HOME_DIR,
     defaultTimeoutSec,
     credentialPaths: opts.credentialPaths ?? [],
@@ -533,7 +567,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     ...(homeSnapshots
       ? {
           async persistHomeSnapshot(scopeId: string): Promise<void> {
-            const name = sandboxScopeName(prefix, scopeId);
+            const name = await nameFor(scopeId);
             await base.provisionQueue(scopeId, () =>
               advisoryLock.withLock(lifecycleKey(scopeId), async () => {
                 await initializeMachine(name, scopeId);
@@ -544,8 +578,13 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
         }
       : {}),
 
+    scopeName: (scopeId: string) => sandboxScopeName(prefix, scopeId),
+    useStoredNames(lookup: (scopeId: string) => Promise<string | null>) {
+      storedName = lookup;
+    },
+
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
-      const name = sandboxScopeName(prefix, scopeId);
+      const name = await nameFor(scopeId);
       const recovery = await recoveryFor(scopeId);
       let info: MachineInfo | null;
       try {
@@ -588,7 +627,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
     async destroyScope(scopeId: string): Promise<void> {
       return base.provisionQueue(scopeId, () =>
         advisoryLock.withLock(lifecycleKey(scopeId), async () => {
-          await deleteMachine(sandboxScopeName(prefix, scopeId));
+          await deleteMachine(await nameFor(scopeId));
           await store.delete(scopeId);
         }),
       );

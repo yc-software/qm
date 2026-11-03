@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
+import {
+  createBackgroundOwnershipStore,
+  type BackgroundOwnership,
+  createBackgroundOwnershipRows,
+} from "../src/runs/background-ownership.ts";
 import { createBackgroundController } from "../src/runs/background-controller.ts";
-import { testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 function setup() {
-  const store = createBackgroundOwnershipStore(testMap<BackgroundOwnership>());
+  const store = createBackgroundOwnershipStore(createBackgroundOwnershipRows(testDatabaseUrl()));
   const errors: unknown[] = [];
   function replica(deploymentId: string) {
     let starts = 0;

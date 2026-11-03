@@ -1,10 +1,11 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
-import { orgId as configOrgId } from "../config.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -29,6 +30,7 @@ import {
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { ModalNameConflictError, ModalSandboxGoneError, type ModalClient, type ModalSession } from "./modal-client.ts";
 import {
   createHomeSnapshotOps,
@@ -73,8 +75,51 @@ export interface StoredModalSandbox {
   lastSnapshotAttemptMs?: number;
   lastActivityMs?: number;
   homeDirty?: boolean;
-  orgId?: string;
 }
+
+const MODAL_SANDBOX_BODIES_COLUMNS: RowColumns<StoredModalSandbox, "scopeId"> = {
+  scopeId: "text",
+  sandboxId: "text",
+  hydrationPending: "boolean",
+  nativeSnapshotId: "text",
+  nativeSnapshotExpiresAtMs: "bigint",
+  expiresAtMs: "bigint",
+  recoveryError: "text",
+  snapshotGeneration: "bigint",
+  createdAtMs: "bigint",
+  lastSnapshotMs: "bigint",
+  lastSnapshotAttemptMs: "bigint",
+  lastActivityMs: "bigint",
+  homeDirty: "boolean",
+};
+
+export const MODAL_SANDBOX_BODIES: RowTable<StoredModalSandbox, "scopeId"> = {
+  table: "modal_sandbox_bodies",
+  key: "scopeId",
+  columns: MODAL_SANDBOX_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "modal_sandbox_bodies",
+      columns: [
+        "scope_id TEXT NOT NULL",
+        "sandbox_id TEXT NOT NULL",
+        "hydration_pending BOOLEAN",
+        "native_snapshot_id TEXT",
+        "native_snapshot_expires_at_ms BIGINT",
+        "expires_at_ms BIGINT",
+        "recovery_error TEXT",
+        "snapshot_generation BIGINT",
+        "created_at_ms BIGINT NOT NULL",
+        "last_snapshot_ms BIGINT",
+        "last_snapshot_attempt_ms BIGINT",
+        "last_activity_ms BIGINT",
+        "home_dirty BOOLEAN",
+      ],
+      primaryKey: ["scope_id"],
+      backfill: { ...jsonBackfill("modal_sandbox_bodies", MODAL_SANDBOX_BODIES_COLUMNS), scope_id: "id" },
+    }),
+  ],
+};
 
 export interface ModalSandboxOptions extends BlobStagingOptions {
   client: ModalClient;
@@ -94,7 +139,7 @@ export interface ModalSandboxOptions extends BlobStagingOptions {
   lifetimeMarginMs?: number;
   checkpointRenewMarginMs?: number;
   orphanGraceMs?: number;
-  store: DurableMap<StoredModalSandbox>;
+  store: Pick<KeyedRows<StoredModalSandbox>, "get" | "entries" | "put" | "merge" | "update" | "delete">;
   snapshots?: HomeSnapshotStore;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
@@ -115,11 +160,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   const orphanGraceMs = opts.orphanGraceMs ?? 10 * 60_000;
   const rotationHoldUntil = new Map<string, number>();
   const orphanFirstSeenMs = new Map<string, number>();
-  const tags = (kind: "scope" | "scratch"): Record<string, string> => ({
-    "qm-org": configOrgId(),
-    "qm-prefix": prefix,
-    "qm-kind": kind,
-  });
+  const tags = (kind: "scope" | "scratch") => ({ "qm-tenant": currentTenant(), "qm-prefix": prefix, "qm-kind": kind });
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const store = opts.store;
   const localQueue = createKeyedQueue<string>();
@@ -228,7 +269,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           sandboxId: adopted.sandboxId,
           createdAtMs: Date.now(),
           lastActivityMs: Date.now(),
-          orgId: configOrgId(),
         });
       }
       return { session: adopted, coldStart: false };
@@ -241,7 +281,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       sandboxId: session.sandboxId,
       createdAtMs: Date.now(),
       lastActivityMs: Date.now(),
-      orgId: configOrgId(),
     });
     const terminateOrphan = (): Promise<unknown> =>
       session.terminate().then(
@@ -299,7 +338,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         allowRotation &&
         !!stored &&
         Date.now() - stored.createdAtMs > rotateAfterMs &&
-        Date.now() >= (rotationHoldUntil.get(scope) ?? 0);
+        Date.now() >= (rotationHoldUntil.get(name) ?? 0);
 
       const cached = sessionByName.get(name);
       if (cached && !stale) return { session: cached, coldStart: false };
@@ -331,7 +370,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           } catch (e) {
             if (!(e instanceof ModalSandboxGoneError)) {
               reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope);
-              rotationHoldUntil.set(scope, Date.now() + rotationHoldMs);
+              rotationHoldUntil.set(name, Date.now() + rotationHoldMs);
               sessionByName.set(name, session);
               await store.merge(scope, { lastActivityMs: Date.now() });
               return { session, coldStart: false };
@@ -342,7 +381,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           } catch (e) {
             if (!(e instanceof ModalSandboxGoneError)) {
               reportError("sandbox_teardown", "rotate_terminate_failed", errMessage(e), scope);
-              rotationHoldUntil.set(scope, Date.now() + rotationHoldMs);
+              rotationHoldUntil.set(name, Date.now() + rotationHoldMs);
               sessionByName.set(name, session);
               await store.merge(scope, { lastActivityMs: Date.now() });
               return { session, coldStart: false };
@@ -362,7 +401,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
             sandboxId: found.sandboxId,
             createdAtMs: Date.now(),
             lastActivityMs: Date.now(),
-            orgId: configOrgId(),
           });
           sessionByName.set(name, found);
           return { session: found, coldStart: false };
@@ -428,8 +466,8 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     const scope = scopeByName.get(name);
     if (!scope || scratchKeyByName.has(name)) return;
     const now = Date.now();
-    if (now - (lastTouchMs.get(scope) ?? 0) < ACTIVITY_TOUCH_INTERVAL_MS) return;
-    lastTouchMs.set(scope, now);
+    if (now - (lastTouchMs.get(name) ?? 0) < ACTIVITY_TOUCH_INTERVAL_MS) return;
+    lastTouchMs.set(name, now);
     await store.merge(scope, { lastActivityMs: now }).catch(swallowAs("modal-sandbox: record activity", undefined));
   }
 
@@ -532,8 +570,8 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     await store.delete(scope);
     sessionByName.delete(name);
     scopeByName.delete(name);
-    rotationHoldUntil.delete(scope);
-    lastTouchMs.delete(scope);
+    rotationHoldUntil.delete(name);
+    lastTouchMs.delete(name);
   }
 
   function checkpointRenewalDue(rec: StoredModalSandbox, now: number): boolean {
@@ -902,7 +940,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       const cutoff = now - Math.min(idleMs, reapIdleMs);
       let reaped = 0;
       for (const [scope, rec] of await store.entries()) {
-        if (rec.orgId && rec.orgId !== configOrgId()) continue;
         if (rec.hydrationPending) continue;
         const name = sandboxScopeName(prefix, scope);
         scopeByName.set(name, scope);

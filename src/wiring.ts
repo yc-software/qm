@@ -9,19 +9,19 @@ import { createPostgresDecisionStore, type DecisionStore } from "./decisions/sto
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError, requestedRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./slack/approval-store.ts";
-import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
-import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
-import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
+import { createRenderDeployProvider, RENDER_DEPLOY_BODIES } from "./deploy/render-deploy-provider.ts";
+import { createRenderDeployArtifacts, RENDER_DEPLOY_CREDENTIALS } from "./deploy/render-deploy-artifacts.ts";
+import { createRenderAppStorage, RENDER_APP_STORAGE } from "./deploy/render-app-storage.ts";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createRenderWorkspaceStore, RENDER_WORKSPACE_MIGRATIONS } from "./workspace/render-workspace-store.ts";
+import { createRenderSandbox } from "./sandbox/render-sandbox.ts";
 import {
-  createRenderSandbox,
-  type StoredRenderCleanup,
-  type StoredRenderSandbox,
-  type StoredRenderScratch,
-} from "./sandbox/render-sandbox.ts";
+  RENDER_SANDBOX_BODIES,
+  RENDER_SANDBOX_CLEANUP,
+  RENDER_SCRATCH_BODIES,
+} from "./sandbox/render-sandbox-tables.ts";
 import { createSdkRenderClient } from "./sandbox/render-client.ts";
-import { createRenderBase, type StoredRenderBase } from "./sandbox/render-base.ts";
+import { createRenderBase, RENDER_SANDBOX_BASES } from "./sandbox/render-base.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -30,11 +30,12 @@ import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import {
   createBackgroundOwnershipStore,
   type BackgroundOwnershipControl,
-  type BackgroundOwnership,
+  createBackgroundOwnershipRows,
+  BACKGROUND_OWNERSHIP_MIGRATION,
 } from "./runs/background-ownership.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
-import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
+import { FLY_PEER_CLAIMS } from "./deploy/fly-peer-claims.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
@@ -61,12 +62,7 @@ import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore, FILE_UPLOAD_MIGRATIONS } from "./files/file-upload-store.ts";
-import {
-  createSandboxResources,
-  type SandboxResource,
-  type SandboxDefault,
-  type SandboxResources,
-} from "./sandbox/sandbox-resources.ts";
+import { createSandboxResources, type SandboxResources } from "./sandbox/sandbox-resources.ts";
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
@@ -113,6 +109,7 @@ import { createPostgresMapFactory, type DurableMap } from "./persistence/durable
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
+import { TENANCY_BASE } from "./tenants/migrations.ts";
 import { configurePgCaTrust, configurePgPooling, registerPgMigrations } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
@@ -160,17 +157,23 @@ import { crossTenantLoop, inTenantOf } from "./tenants/claim.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
+import {
+  createDeployStore,
+  createPostgresDeploymentRows,
+  deployTouchDebounceMs,
+  type Deployment,
+} from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
 import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
-import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
-import { createFlyDeployProvider, type FlyMachineConfig } from "./deploy/fly-deploy-provider.ts";
-import { createPorterDeployProvider, type StoredPorterDeployBody } from "./deploy/porter-deploy-provider.ts";
+import { AWS_DEPLOY_BODIES, createAwsDeployProvider } from "./deploy/aws-deploy-provider.ts";
+import { createFlyDeployProvider } from "./deploy/fly-deploy-provider.ts";
+import { createFlyPortClaims, FLY_DEPLOY_CONFIGS, FLY_DEPLOY_PORTS } from "./deploy/fly-deploy-stores.ts";
+import { createPorterDeployProvider, PORTER_DEPLOY_BODIES } from "./deploy/porter-deploy-provider.ts";
 import {
   createE2bDeployProvider,
   E2B_DEPLOY_IDLE_TIMEOUT_SEC,
-  type StoredE2bDeployBody,
+  E2B_DEPLOY_BODIES,
 } from "./deploy/e2b-deploy-provider.ts";
 import type { DeployProvider } from "./deploy/deploy-provider.ts";
 import { createDeployService } from "./deploy/deploy-service.ts";
@@ -186,7 +189,7 @@ import {
   type CanManageScope,
   type ManagesArtifactHome,
 } from "./resolution/scope-membership.ts";
-import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
+import { createPostgresDeployGitArchives } from "./deploy/deploy-git-store.ts";
 import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
@@ -201,41 +204,38 @@ import {
 import {
   createLocalDurableByteStore,
   createS3DurableByteStore,
+  FILES_AREA,
   type DurableByteStore,
 } from "./files/durable-byte-store.ts";
 import type { FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
-import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
-import { createSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
-import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
-import { createAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
-import {
-  createConfigEpochResolver,
-  createSuperserveSandbox,
-  type StoredConfigEpoch,
-  type StoredSuperserveSandbox,
-} from "./sandbox/superserve-sandbox.ts";
-import { createSdkSuperserveClient } from "./sandbox/superserve-client.ts";
-import { createE2bSandbox, E2B_TEMPLATE_TOOLS, type StoredE2bSandbox } from "./sandbox/e2b-sandbox.ts";
+import { createSpritesSandbox, SPRITES_INITIALIZATION } from "./sandbox/sprites-sandbox.ts";
+import { createSmolmachinesSandbox, SMOLMACHINES_SANDBOX_BODIES } from "./sandbox/smolmachines-sandbox.ts";
+import { createE2bSandbox, E2B_SANDBOX_BODIES, E2B_TEMPLATE_TOOLS } from "./sandbox/e2b-sandbox.ts";
 import { createSdkE2bClient, type E2bClient } from "./sandbox/e2b-client.ts";
 import {
   createManagedAgentsSandbox,
   QM_TEMPLATE_TOOLS,
-  type StoredManagedAgentsSandbox,
+  MANAGED_AGENTS_SANDBOX_BODIES,
 } from "./sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "./sandbox/managed-agents-client.ts";
 import { s3Client } from "./persistence/s3.ts";
-import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
-import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
-import { createSdkModalClient } from "./sandbox/modal-client.ts";
-import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
-import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
+import { createS3SnapshotStore, HOME_SNAPSHOT_AREAS } from "./sandbox/home-snapshot.ts";
+import { createModalSandbox, MODAL_SANDBOX_BODIES } from "./sandbox/modal-sandbox.ts";
+import { AWS_SANDBOX_BODIES, createAwsSandbox } from "./sandbox/aws-sandbox.ts";
+import { createAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
+import { createSuperserveSandbox } from "./sandbox/superserve-sandbox.ts";
 import {
-  upgradeLegacySandboxes,
-  legacySandboxBackendForScope,
-  type LegacyRoute,
-} from "./sandbox/sandbox-resource-upgrade.ts";
+  createConfigEpochResolver,
+  createSuperserveBodies,
+  createSuperserveConfigEpochs,
+} from "./sandbox/superserve-store.ts";
+import { createSdkSuperserveClient } from "./sandbox/superserve-client.ts";
+import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
+import { createSdkModalClient } from "./sandbox/modal-client.ts";
+import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
+import { createSandboxResourceStores } from "./sandbox/sandbox-resource-store.ts";
 import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
 import { withOperatorTokenFallback } from "./credentials/connector-token.ts";
 import {
@@ -295,7 +295,7 @@ import { createUserModelCredentialStore, type UserModelCredentialStore } from ".
 import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
-import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
+import { createPostgresToolOutputStore, TOOL_OUTPUT_AREA } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
 import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts";
@@ -381,11 +381,12 @@ import {
 } from "./deployment/load-layer.ts";
 import {
   createDeploymentLayerStore,
+  createPostgresDeploymentLayerRows,
   LAYER_CREATED_BY,
   LAYER_REVIEWER,
   type DeploymentLayerStore,
-  type StoredDeploymentLayer,
 } from "./deployment/deployment-layer-store.ts";
+import { pgRows } from "./persistence/keyed-rows.ts";
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
@@ -554,6 +555,23 @@ export function buildApp(
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   const databaseUrl = config.databaseUrl;
   if (!databaseUrl) throw new Error("DATABASE_URL is required: QM keeps all state in Postgres");
+  registerPgMigrations(databaseUrl, [
+    TENANCY_BASE,
+    ...FILE_UPLOAD_MIGRATIONS,
+    FLY_DEPLOY_PORTS,
+    BACKGROUND_OWNERSHIP_MIGRATION,
+    ...[
+      SPRITES_INITIALIZATION,
+      RENDER_SANDBOX_BASES,
+      RENDER_DEPLOY_CREDENTIALS,
+      RENDER_APP_STORAGE,
+      AWS_DEPLOY_BODIES,
+      FLY_PEER_CLAIMS,
+      FLY_DEPLOY_CONFIGS,
+      PORTER_DEPLOY_BODIES,
+      E2B_DEPLOY_BODIES,
+    ].flatMap((table) => table.migrations),
+  ]);
   if (!config.connectorSecretKey) throw new Error("CONNECTOR_SECRET_KEY is required");
   configurePgPooling({
     databaseUrl,
@@ -661,7 +679,7 @@ export function buildApp(
   const orgScope = scopeId("org", config.orgId);
   const auditLog = createPostgresAuditLog(databaseUrl);
   const deploymentLayerStore = createDeploymentLayerStore({
-    backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
+    backing: createPostgresDeploymentLayerRows(databaseUrl),
     runtime: deploymentLayer,
     skills,
     skillBundles,
@@ -722,15 +740,18 @@ export function buildApp(
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
         })
       : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
-  const fileBytes: DurableByteStore =
-    config.snapshotStore === "s3" && config.s3Bucket
+  const s3Bytes = config.snapshotStore === "s3" && config.s3Bucket ? config.s3Bucket : undefined;
+  const durableBytes = (area: string): DurableByteStore =>
+    s3Bytes
       ? createS3DurableByteStore({
           ...s3Override,
-          bucket: config.s3Bucket,
+          bucket: s3Bytes,
+          area,
           ...(config.s3Region ? { region: config.s3Region } : {}),
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
         })
-      : createLocalDurableByteStore(join(config.dataDir, "docstore"));
+      : createLocalDurableByteStore(join(config.dataDir, area));
+  const fileBytes = durableBytes(FILES_AREA);
   const files: FileArtifactStore = createPostgresFileArtifactStore(databaseUrl, fileBytes);
   const fileUploads =
     config.snapshotStore === "s3" && config.s3Bucket
@@ -788,10 +809,10 @@ export function buildApp(
     const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
     return createSpritesSandbox(workspace, {
       ...sprites,
-      initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
+      initializationStore: pgRows(databaseUrl, SPRITES_INITIALIZATION),
       advisoryLock,
       ...(snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
+        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: HOME_SNAPSHOT_AREAS.sprites }) }
         : {}),
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
@@ -804,7 +825,7 @@ export function buildApp(
       onError: sandboxOnError,
     });
   };
-  const smolmachinesBodies = artifactMap<StoredSmolmachinesSandbox>("smolmachines_sandbox_bodies");
+  const smolmachinesBodies = pgRows(databaseUrl, SMOLMACHINES_SANDBOX_BODIES);
   const buildSmolmachines = (): Sandbox => {
     const { snapshotS3Bucket, snapshotIntervalSec, ...smol } = config.smolmachinesSandbox;
     return createSmolmachinesSandbox(workspace, {
@@ -820,17 +841,17 @@ export function buildApp(
       store: smolmachinesBodies,
       advisoryLock,
       ...(snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "smolmachines-home" }) }
+        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: HOME_SNAPSHOT_AREAS.smolmachines }) }
         : {}),
       onError: sandboxOnError,
     });
   };
-  const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
-  const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
-  const awsBodies = artifactMap<StoredMicrovm>("aws_sandbox_bodies");
-  const renderBodies = artifactMap<StoredRenderSandbox>("render_sandbox_bodies");
-  const renderScratch = artifactMap<StoredRenderScratch>("render_scratch_bodies");
-  const renderCleanup = artifactMap<StoredRenderCleanup>("render_sandbox_cleanup");
+  const e2bBodies = pgRows(databaseUrl, E2B_SANDBOX_BODIES);
+  const modalBodies = pgRows(databaseUrl, MODAL_SANDBOX_BODIES);
+  const awsBodies = pgRows(databaseUrl, AWS_SANDBOX_BODIES);
+  const renderBodies = pgRows(databaseUrl, RENDER_SANDBOX_BODIES);
+  const renderScratch = pgRows(databaseUrl, RENDER_SCRATCH_BODIES);
+  const renderCleanup = pgRows(databaseUrl, RENDER_SANDBOX_CLEANUP);
   const renderClient =
     config.renderSandbox.apiKey && config.renderSandbox.workspaceId && config.renderSandbox.image
       ? createSdkRenderClient({ apiKey: config.renderSandbox.apiKey, workspaceId: config.renderSandbox.workspaceId })
@@ -839,7 +860,7 @@ export function buildApp(
     renderClient && config.renderSandbox.image
       ? createRenderBase({
           client: renderClient,
-          store: artifactMap<StoredRenderBase>("render_sandbox_bases"),
+          store: pgRows(databaseUrl, RENDER_SANDBOX_BASES),
           image: config.renderSandbox.image,
           hold: (work) => leaderLease.hold(`render:sandbox-base:${config.renderSandbox.image}`, work),
           onError: sandboxOnError,
@@ -882,12 +903,12 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: e2bBodies,
       ...(e2b.snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: "e2b-home" }) }
+        ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: HOME_SNAPSHOT_AREAS.e2b }) }
         : {}),
       onError: sandboxOnError,
     });
   };
-  const managedAgentsBodies = artifactMap<StoredManagedAgentsSandbox>("do_managed_agents_sandbox_bodies");
+  const managedAgentsBodies = pgRows(databaseUrl, MANAGED_AGENTS_SANDBOX_BODIES);
   const buildManagedAgents = (): Sandbox => {
     const managedAgents = config.managedAgentsSandbox;
     if (!managedAgents.apiToken) throw new Error("SANDBOX_BACKEND=do-managed-agents requires DO_AGENTS_API_TOKEN");
@@ -916,7 +937,10 @@ export function buildApp(
       store: managedAgentsBodies,
       ...(managedAgents.snapshotS3Bucket
         ? {
-            snapshots: createS3SnapshotStore({ bucket: managedAgents.snapshotS3Bucket, prefix: "managed-agents-home" }),
+            snapshots: createS3SnapshotStore({
+              bucket: managedAgents.snapshotS3Bucket,
+              prefix: HOME_SNAPSHOT_AREAS.managedAgents,
+            }),
           }
         : {}),
       onError: sandboxOnError,
@@ -960,7 +984,7 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: modalBodies,
       ...(modal.snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: modal.snapshotS3Bucket, prefix: "modal-home" }) }
+        ? { snapshots: createS3SnapshotStore({ bucket: modal.snapshotS3Bucket, prefix: HOME_SNAPSHOT_AREAS.modal }) }
         : {}),
       onError: sandboxOnError,
     });
@@ -977,8 +1001,8 @@ export function buildApp(
       ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       onError: sandboxOnError,
     });
-  const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
-  const superserveEpochs = artifactMap<StoredConfigEpoch>("superserve_config_epochs");
+  const superserveBodies = createSuperserveBodies(databaseUrl);
+  const superserveEpochs = createSuperserveConfigEpochs(databaseUrl);
   const buildSuperserve = (): Sandbox => {
     const ss = config.superserveSandbox;
     if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
@@ -1100,47 +1124,8 @@ export function buildApp(
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
     if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
   }
-  const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
-  const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
-  const sandboxRollout = artifactMap<{ activatedAt: string }>("sandbox_resource_rollout");
-  const legacySandboxRoutes = artifactMap<LegacyRoute>("sandbox_routing");
   const sandboxResources = createSandboxResources({
-    records: sandboxRecords,
-    defaults: sandboxDefaults,
-    upgrade: () =>
-      upgradeLegacySandboxes({
-        availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
-        records: sandboxRecords,
-        defaults: sandboxDefaults,
-        marker: sandboxRollout,
-        routes: () => legacySandboxRoutes.entries(),
-        lock: advisoryLock,
-        legacyBackend: (scope) =>
-          legacySandboxBackendForScope(scope, config.sandboxBackend, config.legacySandboxScopeDefaults),
-        specFor: (backend) => sandboxBackends[backend]?.profile.spec,
-        legacyScopes: async () => [
-          ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
-          ...(await environments.list()).map((environment) => environment.id),
-        ],
-        legacySandboxes: async () => {
-          const [e2b, modal, aws, superserve] = await Promise.all([
-            e2bBodies.entries(),
-            modalBodies.entries(),
-            awsBodies.entries(),
-            superserveBodies.entries(),
-          ]);
-          return [
-            ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
-            ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
-            ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
-            ...superserve.map(([scopeId, body]) => ({
-              scopeId,
-              backend: "superserve" as const,
-              machineId: body.sandboxId,
-            })),
-          ];
-        },
-      }),
+    ...createSandboxResourceStores(databaseUrl),
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
     lock: advisoryLock,
@@ -1269,15 +1254,7 @@ export function buildApp(
   memorySessions.store = sessions;
   const toolOutput = createPostgresToolOutputStore({
     pool: pgArtifactMap.pool,
-    bytesFor: (prefix) =>
-      config.snapshotStore === "s3" && config.s3Bucket
-        ? createS3DurableByteStore({
-            ...s3Override,
-            bucket: config.s3Bucket,
-            ...(config.s3Region ? { region: config.s3Region } : {}),
-            prefix: `${config.s3Prefix ?? ""}${prefix}`,
-          })
-        : createLocalDurableByteStore(join(config.dataDir, prefix)),
+    bytes: durableBytes(TOOL_OUTPUT_AREA),
   });
   const runSignals: RunSignalStore = createPostgresRunSignalStore(databaseUrl);
   const writeModelRegistry = <T>(fn: () => Promise<T>): Promise<T> =>
@@ -1628,31 +1605,21 @@ export function buildApp(
     },
   };
   const deployStore = createDeployStore({
-    deployments: artifactMap<Deployment>("deployments"),
-    pg: pgArtifactMap.pool,
+    deployments: createPostgresDeploymentRows(databaseUrl),
     touchDebounceMs: deployTouchDebounceMs(config.deployIdleTtlMs),
     git: {
       repoRoot: config.deployGitDir,
-      archiveStore: artifactMap<DeployGitArchive>("deploy_git_repos"),
-      ...(config.snapshotStore === "s3" && config.s3Bucket
-        ? {
-            archiveBytes: createS3DurableByteStore({
-              ...s3Override,
-              bucket: config.s3Bucket,
-              ...(config.s3Region ? { region: config.s3Region } : {}),
-              prefix: `${config.s3Prefix ?? ""}deploy-git/`,
-            }),
-          }
-        : {}),
+      archiveStore: createPostgresDeployGitArchives(databaseUrl),
+      ...(s3Bytes ? { archiveBytes: durableBytes("deploy-git") } : {}),
     },
   });
-  const renderDeployBodies = artifactMap<StoredRenderDeploy>("render_deploy_bodies");
+  const renderDeployBodies = pgRows(databaseUrl, RENDER_DEPLOY_BODIES);
   const renderArtifacts =
     config.deployProvider === "render"
       ? createRenderDeployArtifacts({
           baseUrl: config.apiBaseUrl ?? "",
           signingSecret: config.signingSecret ?? "",
-          store: artifactMap<StoredRenderDeployCredential>("render_deploy_credentials"),
+          store: pgRows(databaseUrl, RENDER_DEPLOY_CREDENTIALS),
           deployStore,
         })
       : undefined;
@@ -1678,7 +1645,7 @@ export function buildApp(
       bucket: config.s3Bucket,
       prefix: config.s3Prefix,
       region: config.s3Region,
-      store: artifactMap<StoredRenderAppStorage>("render_app_storage"),
+      store: pgRows(databaseUrl, RENDER_APP_STORAGE),
       keyMaterial: config.connectorSecretKey,
     });
     return createRenderDeployProvider({
@@ -1696,7 +1663,7 @@ export function buildApp(
       ...config.awsDeploy,
       ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket ? { dataBucket: config.awsSandbox.s3Bucket } : {}),
       advisoryLock,
-      store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
+      store: pgRows(databaseUrl, AWS_DEPLOY_BODIES),
       onError: sandboxOnError,
     });
   if (config.deployProvider === "fly" && config.flyDeploy.sharedAppName && !config.flyDeploy.wireguardPeers)
@@ -1705,7 +1672,7 @@ export function buildApp(
     config.deployProvider === "fly" && config.flyDeploy.wireguardPeers
       ? createFlyTunnelManager({
           peers: parseFlyWireguardPeers(config.flyDeploy.wireguardPeers),
-          claims: artifactMap<FlyPeerClaim>("fly_peer_claims"),
+          claims: pgRows(databaseUrl, FLY_PEER_CLAIMS),
           metadataUri: config.flyDeploy.metadataUri ?? "",
           executable: "wireproxy",
           port: 18096,
@@ -1719,15 +1686,15 @@ export function buildApp(
       createFlyDeployProvider({
         ...config.flyDeploy,
         ...(flyTunnel ? { privateTransport: flyTunnel } : {}),
-        configStore: artifactMap<FlyMachineConfig>("fly_deploy_configs"),
-        portStore: artifactMap<string>("fly_deploy_ports"),
+        configStore: pgRows(databaseUrl, FLY_DEPLOY_CONFIGS),
+        portStore: createFlyPortClaims(databaseUrl),
         onError: sandboxOnError,
       }),
     porter: () =>
       createPorterDeployProvider({
         ...config.porterDeploy,
         advisoryLock,
-        store: artifactMap<StoredPorterDeployBody>("porter_deploy_bodies"),
+        store: pgRows(databaseUrl, PORTER_DEPLOY_BODIES),
         onError: sandboxOnError,
       }),
     e2b: () => {
@@ -1736,7 +1703,7 @@ export function buildApp(
         client: e2bClient("apps"),
         ...(e2b.namePrefix ? { namePrefix: e2b.namePrefix } : {}),
         advisoryLock,
-        store: artifactMap<StoredE2bDeployBody>("e2b_deploy_bodies"),
+        store: pgRows(databaseUrl, E2B_DEPLOY_BODIES),
         onError: sandboxOnError,
       });
     },
@@ -2664,7 +2631,7 @@ export function buildApp(
   });
   const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
     ? {
-        store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
+        store: createBackgroundOwnershipStore(createBackgroundOwnershipRows(databaseUrl)),
         instanceId: randomUUID(),
         deploymentId: config.backgroundDeploymentId,
         active: () => backgroundActive(),
@@ -3034,15 +3001,7 @@ export function buildApp(
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
     uiState,
     sessionShares: artifactMap<SessionShare>("session_shares"),
-    sessionShareBytes:
-      config.snapshotStore === "s3" && config.s3Bucket
-        ? createS3DurableByteStore({
-            ...s3Override,
-            bucket: config.s3Bucket,
-            ...(config.s3Region ? { region: config.s3Region } : {}),
-            prefix: `${config.s3Prefix ?? ""}session-shares/`,
-          })
-        : createLocalDurableByteStore(join(config.dataDir, "session-shares")),
+    sessionShareBytes: durableBytes("session-shares"),
     skillSyncEngine,
     slackCore,
   };

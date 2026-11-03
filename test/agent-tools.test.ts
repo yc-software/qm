@@ -707,7 +707,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
     const session = await store.getOrCreateByThread("web:park", "dm", "personal:U1" as SessionEntry["scopeLabel"]);
     const writer = { sessionId: session.id };
     const bytes = createMemoryDurableByteStore();
-    const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes });
+    const outputs = createPostgresToolOutputStore({ pool, bytes });
     const appends: Promise<unknown>[] = [];
     const full = Array.from({ length: 20_000 }, (_, i) => `line ${i}`).join("\n");
     const tc = {

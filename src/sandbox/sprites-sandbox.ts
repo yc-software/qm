@@ -1,7 +1,9 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { retryAfterMs, retryOperation, withTimeout } from "../util/async.ts";
@@ -111,6 +113,29 @@ export function processKeepaliveScript(processId: string): string {
   return `LOOP=${shq(loop)}; if command -v setsid >/dev/null 2>&1; then setsid sh -c "$LOOP" >/dev/null 2>&1 & else sh -c "$LOOP" >/dev/null 2>&1 & fi; echo OK`;
 }
 
+export interface SpritesInitialization {
+  pending: boolean;
+}
+
+const SPRITES_INITIALIZATION_COLUMNS: RowColumns<SpritesInitialization, "name"> = {
+  name: "text",
+  pending: "boolean",
+};
+
+export const SPRITES_INITIALIZATION: RowTable<SpritesInitialization, "name"> = {
+  table: "sprites_initialization",
+  key: "name",
+  columns: SPRITES_INITIALIZATION_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "sprites_initialization",
+      columns: ["name TEXT NOT NULL", "pending BOOLEAN NOT NULL"],
+      primaryKey: ["name"],
+      backfill: { ...jsonBackfill("sprites_initialization", SPRITES_INITIALIZATION_COLUMNS), name: "id" },
+    }),
+  ],
+};
+
 export interface SpritesSandboxOptions extends BlobStagingOptions {
   token?: string;
   baseUrl?: string;
@@ -121,7 +146,7 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   memoryMb?: number;
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
-  initializationStore: DurableMap<{ pending: boolean }>;
+  initializationStore: Pick<KeyedRows<SpritesInitialization>, "get" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
@@ -141,6 +166,9 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
   const sprite = (name: string) => client.sprite(name);
   const prefix = opts.namePrefix ?? "qm";
+  let storedName: ((scopeId: string) => Promise<string | null>) | undefined;
+  const nameFor = async (scopeId: string): Promise<string> =>
+    (await storedName?.(scopeId)) ?? sandboxScopeName(prefix, scopeId);
   const initializationStore = opts.initializationStore;
   const advisoryLock = opts.advisoryLock;
   const withLifecycle = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
@@ -431,6 +459,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     workspace,
     label: "sprites",
     prefix,
+    nameFor,
     homeDir: HOME_DIR,
     defaultTimeoutSec,
     credentialPaths: opts.credentialPaths ?? [],
@@ -573,7 +602,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     exportFiles: execExport.exportFiles,
 
     async destroyScope(scopeId: string): Promise<void> {
-      const name = sandboxScopeName(prefix, scopeId);
+      const name = await nameFor(scopeId);
       return base.provisionQueue(scopeId, () =>
         withLifecycle(name, async () => {
           if (!(await initializationStore.get(name))?.pending) await exportHome(name, scopeId);
@@ -586,7 +615,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     ...(homeSnapshots
       ? {
           async persistHomeSnapshot(scopeId: string): Promise<void> {
-            const name = sandboxScopeName(prefix, scopeId);
+            const name = await nameFor(scopeId);
             return base.provisionQueue(scopeId, () =>
               withLifecycle(name, async () => {
                 await requireInitialized(name);
@@ -599,8 +628,13 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         }
       : {}),
 
+    scopeName: (scopeId: string) => sandboxScopeName(prefix, scopeId),
+    useStoredNames(lookup: (scopeId: string) => Promise<string | null>) {
+      storedName = lookup;
+    },
+
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
-      const name = sandboxScopeName(prefix, scopeId);
+      const name = await nameFor(scopeId);
       const [checked, latest] = await Promise.allSettled([
         retrySpritesControl(() => sprite(name).check()),
         latestCheckpoint(name),
@@ -640,8 +674,8 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       };
     },
 
-    restartComputer(scopeId: string): Promise<void> {
-      const name = sandboxScopeName(prefix, scopeId);
+    async restartComputer(scopeId: string): Promise<void> {
+      const name = await nameFor(scopeId);
       return base.provisionQueue(`restart:${name}`, () =>
         withLifecycle(name, async () => {
           await requireInitialized(name);

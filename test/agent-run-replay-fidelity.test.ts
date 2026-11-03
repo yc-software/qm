@@ -557,7 +557,7 @@ async function withPgSession(
     await fn({
       toolOutput: createPostgresToolOutputStore({
         pool,
-        bytesFor: () => createMemoryDurableByteStore(),
+        bytes: createMemoryDurableByteStore(),
       }),
       emit: (entry) => store.append({ ...writer, turnId: "run-pg" }, entry),
       history: async () =>

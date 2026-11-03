@@ -125,7 +125,7 @@ describe("POST /v1/reach with files", () => {
     assert.ok(d?.attachments?.length);
     const out: string[] = [];
     for (const a of d!.attachments!) {
-      const opened = await built.blobTransfer.open(a.blobId);
+      const opened = await inTestTenant(() => built.blobTransfer.open(a.blobId));
       const chunks: Buffer[] = [];
       for await (const c of opened!.stream) chunks.push(c as Buffer);
       out.push(`${a.name}:${Buffer.concat(chunks).toString()}`);
@@ -284,7 +284,7 @@ describe("POST /v1/reach with files", () => {
     assert.ok(a.blobId, "attachment is blob-backed");
     assert.equal(a.sizeBytes, "# hello Alice\n".length);
     assert.ok(a.artifactId, "attachment is registered as a durable file artifact (blobs are TTL-swept)");
-    const opened = await built.blobTransfer.open(a.blobId);
+    const opened = await inTestTenant(() => built.blobTransfer.open(a.blobId));
     assert.ok(opened);
     const chunks: Buffer[] = [];
     for await (const c of opened!.stream) chunks.push(c as Buffer);

@@ -13,7 +13,9 @@ import { createToolContext, type ToolContext, type ToolContextDeps } from "../sr
 import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
+
+const TENANT8 = testTenants()[0].slice(0, 8);
 
 const scopedHandle: SandboxHandle = { id: "scoped-box", rootDir: "/workspace" };
 const scratchHandle: SandboxHandle = { id: "scratch-box", rootDir: "/workspace", scratch: true };
@@ -174,7 +176,7 @@ test("a scratch turn runs on a separate volumeless box with scoped capability to
     assert.equal(scratch.reply, "<redacted:credential>", "scoped capability tokens are usable but masked in output");
 
     assert.ok(
-      fakeSprites.names().some((n) => n.startsWith("qm-sandbox-")),
+      fakeSprites.names().some((n) => n.startsWith(`qm-${TENANT8}-sandbox-`)),
       "the scoped box is the scope's durable sprite",
     );
     assert.ok(

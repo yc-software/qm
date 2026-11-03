@@ -1,6 +1,5 @@
 import { Readable } from "node:stream";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   collectNamedOutbound,
@@ -17,7 +16,7 @@ import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest as test } from "./support/test-tenants.ts";
 
 function fakeSandbox(files: Record<string, Uint8Array>): Sandbox {
   return {

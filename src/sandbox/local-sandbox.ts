@@ -17,6 +17,7 @@ import { dockerContainerNetworks, ensureDockerNetwork, spawnDockerExec, type Doc
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { shortHash } from "../util/crypto.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
 import type {
@@ -85,11 +86,12 @@ export const localNetworkName = (containerName: string): string =>
 const localScratchName = (key: string): string => `qm-scratch-${localSlug(key)}`;
 
 function localSlug(id: string): string {
+  const tenant = currentTenant();
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return `${cleaned.slice(0, 40).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
+  return `${tenant.slice(0, 8)}-${cleaned.slice(0, 40).replace(/-+$/, "") || "scope"}-${shortHash(`${tenant}:${id}`)}`;
 }
 
 export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandboxOptions = {}): Sandbox {
@@ -263,6 +265,8 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       "--label",
       "qm.sandbox=1",
       ...(scope ? ["--label", `qm.scope=${scope}`] : []),
+      "--label",
+      `qm.tenant=${currentTenant()}`,
       "--label",
       `qm.org=${configOrgId()}`,
       "--label",

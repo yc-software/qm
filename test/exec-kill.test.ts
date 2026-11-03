@@ -1,4 +1,4 @@
-import { test, before, after } from "node:test";
+import { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +10,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
 test("killableScript: records its PGID to the per-exec marker first, runs under setsid, preserves rc", () => {
   const s = killableScript("do_work", "abc");

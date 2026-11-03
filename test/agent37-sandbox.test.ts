@@ -1,5 +1,5 @@
 import { pollProcess } from "../src/sandbox/process-poll.ts";
-import { test, after, beforeEach } from "node:test";
+import { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +15,7 @@ import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
 let fake: FakeAgent37;
 let sandbox: Sandbox;

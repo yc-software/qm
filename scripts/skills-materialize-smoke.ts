@@ -10,6 +10,8 @@ import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { randomUUID } from "node:crypto";
+import { withTenant } from "../src/tenants/context.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
@@ -40,35 +42,37 @@ const sb = createSpritesSandbox(ws, {
 });
 
 let h: Awaited<ReturnType<typeof sb.provision>> | undefined;
-try {
-  console.log("provisioning sprite for", scope, "…");
-  h = await sb.provision([{ scopeId: scope, mountPath: "", mode: "rw" }]);
-  console.log("  sprite:", h.id, "coldStart:", h.coldStart);
+await withTenant(randomUUID(), async () => {
+  try {
+    console.log("provisioning sprite for", scope, "…");
+    h = await sb.provision([{ scopeId: scope, mountPath: "", mode: "rw" }]);
+    console.log("  sprite:", h.id, "coldStart:", h.coldStart);
 
-  const heavy = res("popular-web-designs", "# Popular web designs\nthe entry point", [
-    { path: "scripts/render.py", content: "print('render')\n" },
-    { path: "references/catalog.md", content: "# big catalog\n" },
-  ]);
+    const heavy = res("popular-web-designs", "# Popular web designs\nthe entry point", [
+      { path: "scripts/render.py", content: "print('render')\n" },
+      { path: "references/catalog.md", content: "# big catalog\n" },
+    ]);
 
-  console.log("materializeSkillTree (lazy, assets + bundle, one tar) …");
-  const b = bundle("pack1", [{ path: "lib/cite.mjs", content: "export const cite = 1\n" }]);
-  await materializeSkillTree(sb, h, "skills", heavy, [b]);
-  assert(
-    (await sb.readFile(h, "skills/popular-web-designs/scripts/render.py"))?.includes("render"),
-    "asset laid lazily",
-  );
-  assert(
-    (await sb.readFile(h, "skills/popular-web-designs/references/catalog.md"))?.includes("catalog"),
-    "ref laid lazily",
-  );
-  assert(
-    (await sb.readFile(h, "skills/.packs/pack1/lib/cite.mjs"))?.includes("cite"),
-    "pack bundle overlaid at repo-relative path",
-  );
-  console.log("  ok: assets + bundle landed via tar");
+    console.log("materializeSkillTree (lazy, assets + bundle, one tar) …");
+    const b = bundle("pack1", [{ path: "lib/cite.mjs", content: "export const cite = 1\n" }]);
+    await materializeSkillTree(sb, h, "skills", heavy, [b]);
+    assert(
+      (await sb.readFile(h, "skills/popular-web-designs/scripts/render.py"))?.includes("render"),
+      "asset laid lazily",
+    );
+    assert(
+      (await sb.readFile(h, "skills/popular-web-designs/references/catalog.md"))?.includes("catalog"),
+      "ref laid lazily",
+    );
+    assert(
+      (await sb.readFile(h, "skills/.packs/pack1/lib/cite.mjs"))?.includes("cite"),
+      "pack bundle overlaid at repo-relative path",
+    );
+    console.log("  ok: assets + bundle landed via tar");
 
-  console.log("\nALL SKILLS MATERIALIZE SMOKE CHECKS PASSED");
-} finally {
-  console.log("destroying smoke sprite …");
-  if (h) await sb.teardown(h, { destroy: true });
-}
+    console.log("\nALL SKILLS MATERIALIZE SMOKE CHECKS PASSED");
+  } finally {
+    console.log("destroying smoke sprite …");
+    if (h) await sb.teardown(h, { destroy: true });
+  }
+});

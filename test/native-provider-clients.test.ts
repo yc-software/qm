@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { createE2bSandbox } from "../src/sandbox/e2b-sandbox.ts";
 import { createModalSandbox } from "../src/sandbox/modal-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { test, mock } from "node:test";
+import { mock } from "node:test";
 import assert from "node:assert/strict";
 import {
   createSdkModalClient,
@@ -25,6 +25,7 @@ import {
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { testMap } from "./support/test-database.ts";
+import { tenantTest as test } from "./support/test-tenants.ts";
 
 const modalCalls: unknown[][] = [];
 const modalCreateParams: Record<string, unknown>[] = [];

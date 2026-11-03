@@ -13,6 +13,8 @@ import { loadConfig } from "../src/config.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { tenantObjectKey } from "../src/tenants/storage.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
@@ -106,7 +108,7 @@ async function main(): Promise<void> {
   log("destroy + verify durable data SURVIVES (archive → restore must round-trip)...");
   await provider.destroy(d);
   const left = await s3.send(
-    new ListObjectsV2Command({ Bucket: awsDeploy.dataBucket!, Prefix: `deploy-data/${d.id}` }),
+    new ListObjectsV2Command({ Bucket: awsDeploy.dataBucket!, Prefix: tenantObjectKey("deploy-data", d.id) }),
   );
   assert.ok((left.KeyCount ?? 0) > 0, "replica survives destroy");
   const keys = (left.Contents ?? []).map((o) => ({ Key: o.Key! }));
@@ -114,7 +116,7 @@ async function main(): Promise<void> {
   log("PASS: litestream data survived a hard body kill; destroy preserved the replica (smoke cleaned it up)");
 }
 
-main().catch(async (e) => {
+withTenant(randomUUID(), main).catch(async (e) => {
   console.error(e);
   const stored = await store.get(d.id);
   if (stored) await api.terminate(stored.microvmId).catch(() => {});

@@ -3,11 +3,11 @@ import { test } from "node:test";
 import {
   createRenderDeployProvider,
   type RenderDeployProviderOptions,
-  type StoredRenderDeploy,
+  RENDER_DEPLOY_BODIES,
 } from "../src/deploy/render-deploy-provider.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { fakeDeployment } from "./support/fake-render.ts";
-import { testMap } from "./support/test-database.ts";
+import { testRows } from "./support/test-database.ts";
 
 const sha = "a".repeat(40);
 const readyProbes = 40;
@@ -19,7 +19,7 @@ const writePaths = {
 };
 
 function fixture(appRegion?: string) {
-  const store = testMap<StoredRenderDeploy>();
+  const store = testRows(RENDER_DEPLOY_BODIES);
   const calls: Array<{ method: string; path: string; body: any }> = [];
   let service: any = null;
   let environment: any = null;
@@ -702,11 +702,20 @@ test("Render keeps waiting endpoint requests while an apply or an archive starts
   const live = await f.provider.apply(d, v1);
   d.status = "running";
   d.appliedVersion = 1;
+  const read = f.store.get;
   for (const operation of ["apply", "destroy"] as const) {
     const provider = f.restart(sha);
     const held = f.holdServiceRead();
+    let reads = 0;
+    const { promise: bothRead, resolve } = Promise.withResolvers<void>();
+    f.store.get = async (id) => {
+      const record = await read(id);
+      if (++reads === 2) resolve();
+      return record;
+    };
     const waiting = [provider.resolveEndpoint!(d, v1), provider.resolveEndpoint!(d, v1)];
-    await held.reached;
+    await Promise.all([held.reached, bothRead]);
+    f.store.get = read;
     const running = operation === "apply" ? provider.apply(d, { ...v1, version: 2 }) : provider.destroy(d);
     held.release();
     for (const endpoint of await Promise.all(waiting)) assert.deepEqual(endpoint, live);
