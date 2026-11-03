@@ -29,7 +29,27 @@ export const SOLE_TENANT: PgMigrationDefinition = {
   ],
 };
 
-export const TENANCY: readonly PgMigrationDefinition[] = [TENANCY_BASE, SOLE_TENANT];
+export const UNBOUND_SOLE_TENANT: PgMigrationDefinition = {
+  id: "0000-tenancy/unbound-sole-tenant",
+  statements: [
+    `CREATE OR REPLACE FUNCTION qm_bound_tenant() RETURNS uuid LANGUAGE plpgsql STABLE PARALLEL SAFE AS $qm_bound_tenant$
+DECLARE
+  bound text := current_setting('qm.tenant_id', true);
+  sole uuid;
+BEGIN
+  IF bound IS NULL OR bound = '' THEN
+    SELECT tenant.sole INTO sole FROM qm_sole_tenant() tenant;
+    IF sole IS NULL THEN
+      RAISE insufficient_privilege USING MESSAGE = 'No tenant is bound to this query';
+    END IF;
+    RETURN sole;
+  END IF;
+  RETURN bound::uuid;
+END $qm_bound_tenant$`,
+  ],
+};
+
+export const TENANCY: readonly PgMigrationDefinition[] = [TENANCY_BASE, SOLE_TENANT, UNBOUND_SOLE_TENANT];
 
 export function tenantPolicies(table: string): string[] {
   return [
@@ -107,6 +127,27 @@ export function tenantTables(
           `ALTER TABLE ${table} ADD CONSTRAINT ${name} FOREIGN KEY (tenant_id, ${columns}) REFERENCES ${references}${onDelete ? ` ON DELETE ${onDelete}` : ""}`,
       ),
       ...after,
+    ],
+  };
+}
+
+export function createIfParentTenantKeyed(
+  id: string,
+  parent: string,
+  table: string,
+  create: string,
+): PgMigrationDefinition {
+  return {
+    id,
+    statements: [
+      `DO $create_child$
+BEGIN
+  IF to_regclass('${table}') IS NULL AND EXISTS (
+    SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('${parent}') AND attname = 'tenant_id'
+  ) THEN
+    ${create};
+  END IF;
+END $create_child$`,
     ],
   };
 }
