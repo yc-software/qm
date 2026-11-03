@@ -68,7 +68,6 @@ export function createPostgresMap<T>(
     statements: [
       `SET LOCAL lock_timeout = '3s'`,
       `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS rv BIGINT NOT NULL DEFAULT 0`,
-      `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 0) ON CONFLICT (tbl) DO NOTHING`,
       `DROP TRIGGER IF EXISTS ${table}_version ON ${table}`,
       `CREATE TRIGGER ${table}_version BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON ${table}
       FOR EACH STATEMENT EXECUTE FUNCTION durable_map_version()`,
@@ -128,7 +127,8 @@ export function createPostgresMap<T>(
     }
     return readyP;
   }
-  const versionLockSql = `SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}' FOR UPDATE`;
+  const versionLockSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 0)
+     ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v`;
   async function withVersionLock<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
     await ready();
     return withPgTransaction(await pg.pool(), async (client) => {
