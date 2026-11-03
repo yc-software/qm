@@ -264,8 +264,7 @@ export function oneShotRunner(runPrompt: (turn: AgentTurnInput) => Promise<Agent
       recordModelCall: observe?.recordModelCall ?? (() => {}),
       ...(observe?.recordLlmRequest
         ? {
-            recordLlmRequest: (rec: TurnLlmRequestRecord, requestSignal?: AbortSignal) =>
-              observe.recordLlmRequest!({ ...rec, turnSeq: null }, requestSignal),
+            recordLlmRequest: (rec: TurnLlmRequestRecord) => observe.recordLlmRequest!({ ...rec, turnSeq: null }),
           }
         : {}),
     });
@@ -286,8 +285,7 @@ export function oneShotModelUtilities(
           recordModelCall,
           ...(recordLlmRequest
             ? {
-                recordLlmRequest: (rec, requestSignal) =>
-                  recordLlmRequest({ ...rec, step: SECURITY_SCREEN_STEP }, requestSignal),
+                recordLlmRequest: (rec) => recordLlmRequest({ ...rec, step: SECURITY_SCREEN_STEP }),
               }
             : {}),
         }),

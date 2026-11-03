@@ -247,24 +247,22 @@ test("recipient delivery rows expose origin provenance and gated origin context"
   try {
     const sourceScope = "channel:C-origin";
     const source = await s.built.sessions.getOrCreateByThread("cron:c1:42", "channel", sourceScope, "ops");
-    const { lease } = await s.built.sessions.acquireLease(source.id);
-    assert.ok(lease);
-    const sourceUser = await s.built.sessions.append(lease, {
+    const writer = { sessionId: source.id };
+    const sourceUser = await s.built.sessions.append(writer, {
       type: "user",
       payload: { text: "post the digest" },
       scopeLabel: sourceScope,
     });
-    const sourceResume = await s.built.sessions.append(lease, {
+    const sourceResume = await s.built.sessions.append(writer, {
       type: "user",
       payload: { text: "(system note: resume)" },
       scopeLabel: sourceScope,
     });
-    const sourceAssistant = await s.built.sessions.append(lease, {
+    const sourceAssistant = await s.built.sessions.append(writer, {
       type: "assistant",
       payload: { text: "Digest posted." },
       scopeLabel: sourceScope,
     });
-    await s.built.sessions.releaseLease(lease);
     await s.built.sessions.recordLlmRequest(source.id, {
       turnSeq: sourceUser.seq,
       step: 0,
@@ -375,19 +373,17 @@ test("recipient delivery rows expose non-cron wake provenance without cron idemp
     const sourceScope = "channel:C-webhook";
     const fireKey = "webhook:wh_123:delivery_456";
     const source = await s.built.sessions.getOrCreateByThread(fireKey, "channel", sourceScope, "alerts");
-    const { lease } = await s.built.sessions.acquireLease(source.id);
-    assert.ok(lease);
-    const sourceUser = await s.built.sessions.append(lease, {
+    const writer = { sessionId: source.id };
+    const sourceUser = await s.built.sessions.append(writer, {
       type: "user",
       payload: { text: "triage the webhook" },
       scopeLabel: sourceScope,
     });
-    const sourceAssistant = await s.built.sessions.append(lease, {
+    const sourceAssistant = await s.built.sessions.append(writer, {
       type: "assistant",
       payload: { text: "Webhook triaged." },
       scopeLabel: sourceScope,
     });
-    await s.built.sessions.releaseLease(lease);
     await s.built.sessions.recordLlmRequest(source.id, {
       turnSeq: sourceUser.seq,
       step: 0,
@@ -536,10 +532,8 @@ test("a cron-fired transcript carries its originating cron", async () => {
       action: "audit the new security advisories",
     });
     const session = await s.built.sessions.getOrCreateByThread(`cron:${cron.id}:42`, "channel", scope, "security");
-    const { lease } = await s.built.sessions.acquireLease(session.id);
-    assert.ok(lease);
-    await s.built.sessions.append(lease, { type: "user", payload: { text: cron.action }, scopeLabel: scope });
-    await s.built.sessions.releaseLease(lease);
+    const writer = { sessionId: session.id };
+    await s.built.sessions.append(writer, { type: "user", payload: { text: cron.action }, scopeLabel: scope });
 
     const tx = await get(
       s.base,
@@ -652,19 +646,17 @@ test("monitor delivery origin context is scope-gated in admin", async () => {
       "dm",
       "personal:U-carol",
     );
-    const { lease } = await s.built.sessions.acquireLease(source.id);
-    assert.ok(lease);
-    const sourceUser = await s.built.sessions.append(lease, {
+    const writer = { sessionId: source.id };
+    const sourceUser = await s.built.sessions.append(writer, {
       type: "user",
       payload: { text: "monitor wake" },
       scopeLabel: "personal:U-carol",
     });
-    const sourceAssistant = await s.built.sessions.append(lease, {
+    const sourceAssistant = await s.built.sessions.append(writer, {
       type: "assistant",
       payload: { text: "Approval is due." },
       scopeLabel: "personal:U-carol",
     });
-    await s.built.sessions.releaseLease(lease);
     await s.built.sessions.recordLlmRequest(source.id, {
       turnSeq: sourceUser.seq,
       step: 0,
@@ -796,14 +788,12 @@ test("history separates background cron monologues from human conversations", as
     });
 
     const human = await s.built.sessions.getOrCreateByThread("ch:C9:thread", "channel", scope, "security");
-    const { lease: humanLease } = await s.built.sessions.acquireLease(human.id);
-    assert.ok(humanLease);
-    await s.built.sessions.append(humanLease, {
+    const humanWriter = { sessionId: human.id };
+    await s.built.sessions.append(humanWriter, {
       type: "user",
       payload: { text: "what happened in prod?" },
       scopeLabel: scope,
     });
-    await s.built.sessions.releaseLease(humanLease);
 
     const monologue = await s.built.sessions.getOrCreateByThread(
       `agent:main:cron:${cron.id}`,
@@ -811,10 +801,8 @@ test("history separates background cron monologues from human conversations", as
       scope,
       "security",
     );
-    const { lease: monologueLease } = await s.built.sessions.acquireLease(monologue.id);
-    assert.ok(monologueLease);
-    await s.built.sessions.append(monologueLease, { type: "user", payload: { text: cron.action }, scopeLabel: scope });
-    await s.built.sessions.releaseLease(monologueLease);
+    const monologueWriter = { sessionId: monologue.id };
+    await s.built.sessions.append(monologueWriter, { type: "user", payload: { text: cron.action }, scopeLabel: scope });
 
     const conversations = await getJson(s.base, `/v1/admin/sessions?scope=${encodeURIComponent(scope)}`);
     assert.equal(conversations.category, "conversation");
@@ -863,10 +851,8 @@ test("the Crons history lists cron fires as session rows; ?cron= paginates one c
     const mkFires = async (cronId: string, n: number) => {
       for (let i = 0; i < n; i++) {
         const sess = await s.built.sessions.getOrCreateByThread(`cron:${cronId}:slot${i}`, "channel", scope, "eng");
-        const { lease } = await s.built.sessions.acquireLease(sess.id);
-        assert.ok(lease);
-        await s.built.sessions.append(lease, { type: "user", payload: { text: "fire " + i }, scopeLabel: scope });
-        await s.built.sessions.releaseLease(lease);
+        const writer = { sessionId: sess.id };
+        await s.built.sessions.append(writer, { type: "user", payload: { text: "fire " + i }, scopeLabel: scope });
       }
     };
     const cron = await s.built.app.createCron({
@@ -928,14 +914,12 @@ test("cron fire rows carry the fire's result digest from the cron's fire log", a
     });
     const mkFire = async (slot: string) => {
       const sess = await s.built.sessions.getOrCreateByThread(`cron:${cron.id}:${slot}`, "channel", scope, "eng");
-      const { lease } = await s.built.sessions.acquireLease(sess.id);
-      assert.ok(lease);
-      await s.built.sessions.append(lease, {
+      const writer = { sessionId: sess.id };
+      await s.built.sessions.append(writer, {
         type: "user",
         payload: { text: "Stored cron task: Check yna's watched stickies" },
         scopeLabel: scope,
       });
-      await s.built.sessions.releaseLease(lease);
       return sess;
     };
     const replied = await mkFire("slot0");
@@ -1437,10 +1421,8 @@ test("the sessions listing digests cron fires from the fire table, even after th
     });
     const threadRef = `cron:${cron.id}:fire:abc123`;
     const session = await s.built.sessions.getOrCreateByThread(threadRef, "channel", scope, "ops");
-    const { lease } = await s.built.sessions.acquireLease(session.id);
-    assert.ok(lease);
-    await s.built.sessions.append(lease, { type: "user", payload: { text: "count signups" }, scopeLabel: scope });
-    await s.built.sessions.releaseLease(lease);
+    const writer = { sessionId: session.id };
+    await s.built.sessions.append(writer, { type: "user", payload: { text: "count signups" }, scopeLabel: scope });
     await s.built.crons.recordFire(cron.id, {
       fireKey: `cron:${cron.id}:1000`,
       threadRef,

@@ -154,25 +154,15 @@ for (const backend of backends) {
     assert.notEqual(again.run.id, first.id);
   });
 
-  test(`[${backend.name}] a run refused as session_busy frees its dedup key; other outcomes keep it`, async () => {
+  test(`[${backend.name}] a refused run keeps its dedup key`, async () => {
     const { runs } = backend.make();
-    const busy = (await runs.enqueue({ sessionId: "sE", request: turn("later"), dedupKey: "kb" })).run;
+    const first = (await runs.enqueue({ sessionId: "sE", request: turn("later"), dedupKey: "kb" })).run;
     const claimed = await runs.claim("w", 5_000);
-    assert.equal(claimed?.id, busy.id);
-    await runs.complete(busy.id, claimed!.leaseToken!, {
-      status: "refused",
-      refusalKind: "session_busy",
-      reason: "busy",
-    });
-    assert.equal((await runs.get(busy.id))?.dedupKey, null);
-    const retry = await runs.enqueue({ sessionId: "sE", request: turn("later"), dedupKey: "kb" });
-    assert.equal(retry.deduped, false, "a busy refusal never handled the request, so the key is free to run again");
-    assert.notEqual(retry.run.id, busy.id);
-
-    const done = await runs.claim("w", 5_000);
-    await runs.complete(done!.id, done!.leaseToken!, { status: "refused", reason: "policy" });
+    assert.equal(claimed?.id, first.id);
+    await runs.complete(first.id, claimed!.leaseToken!, { status: "refused", reason: "policy" });
     const dup = await runs.enqueue({ sessionId: "sE", request: turn("later"), dedupKey: "kb" });
-    assert.equal(dup.deduped, true, "an ordinary refusal was handled and stays deduped");
+    assert.equal(dup.deduped, true, "a refusal was handled and stays deduped");
+    assert.equal(dup.run.id, first.id);
   });
 
   test(`[${backend.name}] activeSessionIds lists distinct in-flight sessions, drops terminal ones`, async () => {
@@ -389,7 +379,7 @@ for (const backend of backends) {
     await sleep(15);
 
     const events: import("../src/runs/run-store.ts").ReapEvent[] = [];
-    const swept = await runs.reapExpired(undefined, { maxAgeMs: 5, onReap: (e) => events.push(e) });
+    const swept = await runs.reapExpired({ maxAgeMs: 5, onReap: (e) => events.push(e) });
     assert.deepEqual(swept, { requeued: 0, parked: 1 }, "an over-age run is parked, not requeued");
     const parked = await runs.get(r.id);
     assert.equal(parked?.status, "failed", "parked run is terminal failed (loud)");
@@ -412,7 +402,7 @@ for (const backend of backends) {
     await sleep(10);
 
     const events: import("../src/runs/run-store.ts").ReapEvent[] = [];
-    const swept = await runs.reapExpired(undefined, { maxAgeMs: 60_000, onReap: (e) => events.push(e) });
+    const swept = await runs.reapExpired({ maxAgeMs: 60_000, onReap: (e) => events.push(e) });
     assert.deepEqual(swept, { requeued: 1, parked: 0 }, "a young expired run still requeues");
     assert.equal((await runs.get(r.id))?.status, "pending");
     assert.equal(events.length, 1);

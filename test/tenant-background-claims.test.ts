@@ -185,8 +185,7 @@ test(
           return { status: "silent" as const };
         },
       } as unknown as Orchestrator;
-      const sessions = { getByThread: async () => null, fenceTurnLease: async () => undefined };
-      const worker = createWorker({ runs: app.runs, sessions, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
+      const worker = createWorker({ runs: app.runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5 });
       withTenant(B, () => worker.start());
       for (let i = 0; i < 400 && ran.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 5));
       await worker.stop(1);

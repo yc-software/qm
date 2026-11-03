@@ -77,7 +77,7 @@ export interface LedgerItemView {
 }
 
 export function agentSourcePayload(payload: LoopSourcePayload, source?: string): LoopSourcePayload {
-  if ((source ?? payload.source) !== "slack") return payload;
+  if (source !== "slack") return payload;
   const result = { ...payload };
   delete result.slackAvatarsRefreshAt;
   for (const key of ["participants", "context"]) {

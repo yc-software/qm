@@ -68,13 +68,12 @@ test("each decision gesture mints a fresh key, so a retry after a failure is nev
 test("a refused approval resume rejects with the refusal reason", async () => {
   stubApprovalResolve({
     status: "refused",
-    refusalKind: "session_busy",
-    reason:
-      "Give me a moment — I'm still finishing something else in this conversation. Send that again in a minute and I'll pick it up.",
+    refusalKind: "model_budget",
+    reason: "the model budget for this conversation is spent",
   });
   await assert.rejects(
     runApprovalTurn(fakeAgent(), { requestId: "a-1", approved: true, scope: "once" }, undefined),
-    /finishing something else/,
+    /model budget for this conversation is spent/,
   );
 });
 
@@ -119,15 +118,14 @@ test("a synchronous core refusal surfaces its reason, not a bare HTTP status", a
   stubResolveResponse(
     {
       status: "refused",
-      refusalKind: "session_busy",
-      reason:
-        "Give me a moment — I'm still finishing something else in this conversation. Send that again in a minute and I'll pick it up.",
+      refusalKind: "model_budget",
+      reason: "the model budget for this conversation is spent",
     },
     403,
   );
   await assert.rejects(
     runApprovalTurn(fakeAgent(), { requestId: "a-1", approved: true }, undefined),
-    /finishing something else/,
+    /model budget for this conversation is spent/,
   );
 });
 

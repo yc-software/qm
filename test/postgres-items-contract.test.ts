@@ -47,10 +47,9 @@ test("pg items keep turn, author and time in typed columns", { skip }, async () 
   await withSchema("items_columns", async ({ raw, store }) => {
     const scope = scopeId("personal", "alice");
     const session = await store.getOrCreateByThread("web:columns", "dm", scope);
-    const { lease } = await store.acquireLease(session.id);
-    assert.ok(lease);
+    const writer = { sessionId: session.id };
     const runId = randomUUID();
-    const turn = { ...lease, turnId: runId };
+    const turn = { ...writer, turnId: runId };
     const user = await store.append(turn, {
       type: "user",
       payload: { text: "hi" },
@@ -70,14 +69,14 @@ test("pg items keep turn, author and time in typed columns", { skip }, async () 
       author: "ignored-on-agent-items",
     });
     await store.append(
-      { ...lease, turnId: "not-a-uuid" },
+      { ...writer, turnId: "not-a-uuid" },
       {
         type: "tool_call",
         payload: { tool: "execute", callId: "c1" },
         scopeLabel: scope,
       },
     );
-    await store.append(lease, { type: "system", payload: { kind: "turn_failure", message: "x" }, scopeLabel: scope });
+    await store.append(writer, { type: "system", payload: { kind: "turn_failure", message: "x" }, scopeLabel: scope });
     const stopped = await store.append(turn, {
       type: "system",
       payload: { kind: "turn_stopped", reason: "user", text: "Stopped" },
@@ -91,10 +90,9 @@ test("pg items keep turn, author and time in typed columns", { skip }, async () 
       runId,
     });
     await assert.rejects(
-      store.append(lease, { type: "system", payload: { kind: "goal", goal: {} }, scopeLabel: scope }),
+      store.append(writer, { type: "system", payload: { kind: "goal", goal: {} }, scopeLabel: scope }),
       /goal/,
     );
-    await store.releaseLease(lease);
 
     const rows = (
       await raw.query(
@@ -130,8 +128,7 @@ test("pg items reject a second call with the same call id, leaving the log untou
   await withSchema("items_calls", async ({ store }) => {
     const scope = scopeId("personal", "alice");
     const session = await store.getOrCreateByThread("web:calls", "dm", scope);
-    const { lease } = await store.acquireLease(session.id);
-    assert.ok(lease);
+    const writer = { sessionId: session.id };
     const callId = "cron:1";
     const call = {
       type: "tool_call" as const,
@@ -143,14 +140,13 @@ test("pg items reject a second call with the same call id, leaving the log untou
       payload: { tool: "deliver", callId, result: "delivered" },
       scopeLabel: scope,
     };
-    await store.appendMany(lease, [call, result]);
-    await assert.rejects(store.appendMany(lease, [call, result]), DuplicateCallError);
+    await store.appendMany(writer, [call, result]);
+    await assert.rejects(store.appendMany(writer, [call, result]), DuplicateCallError);
     const entries = await store.getEntries(session.id);
     assert.equal(entries.length, 2);
     assert.equal((entries[0]!.payload as { callId: string }).callId, callId);
-    const next = await store.append(lease, { type: "assistant", payload: { text: "after" }, scopeLabel: scope });
+    const next = await store.append(writer, { type: "assistant", payload: { text: "after" }, scopeLabel: scope });
     assert.equal(next.seq, 2);
-    await store.releaseLease(lease);
   });
 });
 
@@ -181,11 +177,10 @@ test(
         const full = "ünï line\n".repeat(10_000);
         const blob = await outputs.save(full);
         const callId = `call_${randomUUID()}__thought__${randomBytes(4_500).toString("base64")}`;
-        const { lease } = await store.acquireLease(session.id);
-        assert.ok(lease);
+        const writer = { sessionId: session.id };
         const call = { type: "tool_call" as const, payload: { tool: "execute", callId }, scopeLabel: scope };
-        await store.append(lease, call);
-        await store.append(lease, {
+        await store.append(writer, call);
+        await store.append(writer, {
           type: "tool_result",
           payload: {
             tool: "execute",
@@ -195,13 +190,12 @@ test(
           },
           scopeLabel: scope,
         });
-        await assert.rejects(store.append(lease, call), DuplicateCallError);
-        await store.append(lease, {
+        await assert.rejects(store.append(writer, call), DuplicateCallError);
+        await store.append(writer, {
           type: "tool_result",
           payload: { tool: "execute", callId: "toolu_short", result: "head…tail", output: { blob } },
           scopeLabel: scope,
         });
-        await store.releaseLease(lease);
         const entries = await store.getEntries(session.id);
         assert.deepEqual(
           entries.map((entry) => (entry.payload as { callId?: string }).callId),
@@ -231,14 +225,13 @@ test("pg items hide a Slack reply receipt once the real message arrives", { skip
   await withSchema("items_receipts", async ({ store }) => {
     const scope = scopeId("personal", "alice");
     const session = await store.getOrCreateByThread("slack:T1:C1:1.0", "dm", scope);
-    const { lease } = await store.acquireLease(session.id);
-    assert.ok(lease);
+    const writer = { sessionId: session.id };
     const receipt = {
       type: "user" as const,
       payload: { text: "sent from web", name: "Alice", ts: "2.0", slackReplyReceipt: true, deliveryKey: "k-1" },
       scopeLabel: scope,
     };
-    await store.appendMany({ ...lease, turnId: randomUUID() }, [receipt]);
+    await store.appendMany({ ...writer, turnId: randomUUID() }, [receipt]);
     assert.equal(await store.hasDeliveryEntry(session.id, "k-1"), true);
     assert.equal(await store.hasDeliveryEntry(session.id, "k-2", "2.0"), true);
     assert.equal(await store.hasDeliveryEntry(session.id, "k-2", "3.0"), false);
@@ -248,7 +241,7 @@ test("pg items hide a Slack reply receipt once the real message arrives", { skip
         return [payload.text, payload.slackReplyReceipt === true];
       });
     assert.deepEqual(await texts(), [["sent from web", true]]);
-    await store.append(lease, { type: "user", payload: { text: "sent from web", ts: "2.0" }, scopeLabel: scope });
+    await store.append(writer, { type: "user", payload: { text: "sent from web", ts: "2.0" }, scopeLabel: scope });
     assert.deepEqual(await texts(), [["sent from web", false]]);
     assert.equal(await store.countEntriesBefore(session.id, 10), 1);
     assert.equal((await store.getEntries(session.id)).length, 2);
@@ -260,16 +253,14 @@ test("message-only transcript reads filter before pagination and retain visibili
     const scope = scopeId("personal", "alice");
     const session = await store.getOrCreateByThread("web:message-pages", "dm", scope);
     await store.addParticipant(session.id, "alice");
-    const { lease } = await store.acquireLease(session.id);
-    assert.ok(lease);
-    await store.append(lease, { type: "user", scopeLabel: scope, payload: { text: "question" } });
-    const answer = await store.append(lease, { type: "assistant", scopeLabel: scope, payload: { text: "answer" } });
-    await store.append(lease, {
+    const writer = { sessionId: session.id };
+    await store.append(writer, { type: "user", scopeLabel: scope, payload: { text: "question" } });
+    const answer = await store.append(writer, { type: "assistant", scopeLabel: scope, payload: { text: "answer" } });
+    await store.append(writer, {
       type: "tool_result",
       scopeLabel: scope,
       payload: { callId: "read", tool: "read", result: "irrelevant tool output" },
     });
-    await store.releaseLease(lease);
     assert.deepEqual(
       (await store.getEntries(session.id, { messagesOnly: true, limit: 1 })).map((e) => e.seq),
       [answer.seq],

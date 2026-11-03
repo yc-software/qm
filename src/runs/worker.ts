@@ -21,12 +21,10 @@ import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { inTenantOf } from "../tenants/claim.ts";
 import { withoutTenant } from "../tenants/context.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
 import { FLUSH_MS, traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
-  sessions: Pick<SessionStore, "getByThread" | "fenceTurnLease">;
   orchestrator: Orchestrator;
   leaseTtlMs: number;
   heartbeatIntervalMs?: number;
@@ -45,11 +43,7 @@ export const SHUTDOWN_EXIT_MS = SHUTDOWN_RELEASE_MS + SHUTDOWN_HANDBACK_MS + FLU
 
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 
-export async function processRun(
-  deps: ProcessDeps,
-  run: Run,
-  opts?: { background?: boolean; shutdown?: AbortSignal },
-): Promise<TurnResult> {
+export async function processRun(deps: ProcessDeps, run: Run, opts?: { shutdown?: AbortSignal }): Promise<TurnResult> {
   const { trace, ...request } = run.request;
   return inTenantOf(run.tenantId, () =>
     traceQueued(
@@ -71,11 +65,7 @@ export async function processRun(
   );
 }
 
-async function attemptRun(
-  deps: ProcessDeps,
-  run: Run,
-  opts?: { background?: boolean; shutdown?: AbortSignal },
-): Promise<TurnResult> {
+async function attemptRun(deps: ProcessDeps, run: Run, opts?: { shutdown?: AbortSignal }): Promise<TurnResult> {
   const token = run.leaseToken;
   if (token === null) throw new Error(`processRun called with an unleased run ${run.id}`);
   const intervalMs = deps.heartbeatIntervalMs ?? Math.max(1_000, Math.floor(deps.leaseTtlMs / 3));
@@ -138,7 +128,6 @@ async function attemptRun(
       ...(run.lastStop ? { resumeCause: run.lastStop } : {}),
       runLeaseToken: token,
       finalAttempt: errorParks(run, deps.runs.maxClaims),
-      background: opts?.background ?? false,
       cancel: cancel.signal,
       ...(opts?.shutdown ? { shutdown: opts.shutdown } : {}),
       ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
@@ -201,8 +190,6 @@ async function handBack(
     return;
   }
   console.warn(`[worker] run ${run.id} ignored shutdown; handing it back to resume after this process exits`);
-  const session = await deps.sessions.getByThread(run.sessionId);
-  if (session) await deps.sessions.fenceTurnLease(session.id, exited);
   await deps.runs.releaseLease(run.id, token, stop, exited);
 }
 
@@ -315,7 +302,7 @@ export function createWorker(deps: WorkerDeps): Worker {
       claimed();
       claimDone = null;
       try {
-        const work = () => processRun(deps, run, { background: true, shutdown: shutdown.signal });
+        const work = () => processRun(deps, run, { shutdown: shutdown.signal });
         if (deps.admittedWork) await deps.admittedWork.run(work);
         else await work();
       } catch (e) {

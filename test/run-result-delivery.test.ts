@@ -14,6 +14,7 @@ import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/securit
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { holdThread, testRuns } from "./support/live-run.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string, deliveryTarget?: string): OrchestratorInput => ({
@@ -367,7 +368,7 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
   const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
   const { sessions, session } = await failureSessions();
 
-  assert.equal(await recordRunFailureEntry(sessions, failedRun()), true);
+  assert.equal(await recordRunFailureEntry(sessions, testRuns(), failedRun()), true);
   const entries = await sessions.getEntries(session.id);
   assert.equal(entries.length, 1);
   assert.equal(entries[0]!.type, "system");
@@ -377,44 +378,57 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
     runId: "r-1",
   });
 
-  assert.equal(await recordRunFailureEntry(sessions, failedRun()), false, "recording is idempotent");
+  assert.equal(await recordRunFailureEntry(sessions, testRuns(), failedRun()), false, "recording is idempotent");
+  assert.equal((await sessions.getEntries(session.id)).length, 1);
+});
+
+test("a failure entry waits for a live turn on the conversation to finish before it lands", async () => {
+  const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
+  const { sessions, session } = await failureSessions();
+  const runs = testRuns();
+  const finishTurn = await holdThread(runs, "slack:D1");
+
+  const recording = recordRunFailureEntry(sessions, runs, failedRun());
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal((await sessions.getEntries(session.id)).length, 0, "nothing lands inside the live turn");
+
+  await finishTurn();
+  assert.equal(await recording, true);
   assert.equal((await sessions.getEntries(session.id)).length, 1);
 });
 
 test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry", async () => {
   const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
   const { sessions, session } = await failureSessions();
-  const { lease } = await sessions.acquireLease(session.id);
-  await sessions.append(lease!, {
+  const writer = { sessionId: session.id };
+  await sessions.append(writer, {
     type: "system",
     payload: { kind: "turn_failure", message: "already recorded by the turn", runId: "r-1" },
     scopeLabel: session.scopeId,
   });
-  await sessions.releaseLease(lease!);
 
-  assert.equal(await recordRunFailureEntry(sessions, failedRun()), false);
+  assert.equal(await recordRunFailureEntry(sessions, testRuns(), failedRun()), false);
   assert.equal((await sessions.getEntries(session.id)).length, 1, "no duplicate entry");
 });
 
 test("a web-drain-recorded failure delivery suppresses the onTerminal entry by its key", async () => {
   const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
   const { sessions, session } = await failureSessions();
-  const { lease } = await sessions.acquireLease(session.id);
-  await sessions.append(lease!, {
+  const writer = { sessionId: session.id };
+  await sessions.append(writer, {
     type: "system",
     payload: { kind: "turn_failure", message: "recorded at the web drain", deliveryKey: "run:r-1" },
     scopeLabel: session.scopeId,
   });
-  await sessions.releaseLease(lease!);
 
-  assert.equal(await recordRunFailureEntry(sessions, failedRun()), false);
+  assert.equal(await recordRunFailureEntry(sessions, testRuns(), failedRun()), false);
   assert.equal((await sessions.getEntries(session.id)).length, 1);
 });
 
 test("a done run records nothing", async () => {
   const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
   const { sessions, session } = await failureSessions();
-  assert.equal(await recordRunFailureEntry(sessions, run({ sessionId: "slack:D1" })), false);
+  assert.equal(await recordRunFailureEntry(sessions, testRuns(), run({ sessionId: "slack:D1" })), false);
   assert.equal((await sessions.getEntries(session.id)).length, 0);
 });
 
@@ -467,7 +481,7 @@ test("failed internal swarm notifications never append user-facing failure entri
       throw new Error("must not access the transcript");
     },
   } as unknown as TurnFailureSessions;
-  assert.equal(await recordRunFailureEntry(sessions, failed), false);
+  assert.equal(await recordRunFailureEntry(sessions, testRuns(), failed), false);
 });
 
 for (const surface of ["slack", "web"] as const) {

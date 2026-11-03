@@ -107,6 +107,27 @@ test("rows derive working, waiting, done and failed; done folds away, failed sta
   );
 });
 
+test("a working subagent under an idle one moves up to the nearest shown ancestor", () => {
+  const tree = [
+    row("root"),
+    row("a", "root", { working: true }),
+    row("idle", "a"),
+    row("leaf", "idle", { working: true }),
+    row("top-idle", "root"),
+    row("orphan", "top-idle", { working: true }),
+  ];
+  const rows = visibleSubagents(subagentRows(tree, "root"), new Set());
+  assert.deepEqual(
+    rows.map((r) => [r.session.id, r.depth]),
+    [
+      ["a", 1],
+      ["orphan", 1],
+      ["leaf", 2],
+    ],
+  );
+  assert.equal(subagentSummary(rows), "3 subagents running");
+});
+
 test("peek shows the latest tool steps and message", () => {
   const entry = (type: SessionEntry["type"], payload: unknown): SessionEntry => ({ type, payload, createdAt: 0 });
   const lines = peekLines(
