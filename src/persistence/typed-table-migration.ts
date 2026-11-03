@@ -7,6 +7,7 @@ export interface TypedTableSpec {
   primaryKey: readonly string[];
   backfill: Readonly<Record<string, string>>;
   indexes?: readonly string[];
+  constraints?: readonly string[];
   where?: string;
 }
 
@@ -17,16 +18,12 @@ export function typedTableMigration(spec: TypedTableSpec): PgMigrationDefinition
   if (!IDENTIFIER.test(table)) throw new Error(`invalid table name: ${table}`);
   const old = `${table}_kv`;
   const targets = Object.keys(spec.backfill);
-  const primaryKey = spec.primaryKey.join(", ");
-  const tenancy = tenantTables(`tenancy/${table}/0001-typed`, [{ table, primaryKey }], { after: spec.indexes ?? [] });
-  return {
-    id: tenancy.id,
-    statements: [
-      `SET LOCAL lock_timeout = '5s'`,
+  return tenantTables(`tenancy/${table}/0001-typed`, [{ table, primaryKey: spec.primaryKey.join(", ") }], {
+    before: [
       `CREATE TABLE IF NOT EXISTS ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
       `ALTER TABLE ${table} RENAME TO ${old}`,
       `ALTER INDEX ${table}_pkey RENAME TO ${old}_pkey`,
-      `CREATE TABLE ${table}(${[...spec.columns, `PRIMARY KEY (${primaryKey})`].join(", ")})`,
+      `CREATE TABLE ${table}(${[...spec.columns, ...(spec.constraints ?? [])].join(", ")})`,
       `INSERT INTO ${table}(${targets.join(", ")})
          SELECT ${targets.map((column) => spec.backfill[column]).join(", ")} FROM ${old}${spec.where ? ` WHERE ${spec.where}` : ""}`,
       `DROP TABLE ${old}`,
@@ -35,7 +32,7 @@ export function typedTableMigration(spec: TypedTableSpec): PgMigrationDefinition
            DELETE FROM durable_map_versions WHERE tbl = '${table}';
          END IF;
        END $drop_version$`,
-      ...tenancy.statements,
     ],
-  };
+    after: spec.indexes ?? [],
+  });
 }
