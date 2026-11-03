@@ -157,8 +157,12 @@ export function createTurnMethods(
         approvedRequest.conversation.threadRef === req.conversation.threadRef;
       let privateRequest = req.privateSessionMessage ? req : undefined;
       if (approvedRequest?.privateSessionMessage) privateRequest = approvedRequest;
-      if (!req.origin && LEGACY_ORIGIN_KEYS.some((key) => key in req))
+      if (!req.origin && LEGACY_ORIGIN_KEYS.some((key) => key in req)) {
+        console.warn(
+          `[turn] refused a request with retired origin fields and no origin thread=${req.conversation.threadRef}${replay ? ` signal=${replay.signalDedupKey}` : ""}`,
+        );
         return { status: "refused", reason: "turn request carries retired origin fields but no origin" };
+      }
       let origin: TurnOrigin = req.origin ?? { kind: "direct" };
       if (privateRequest && privateRequest === approvedRequest) {
         if (!privateRequest.origin) throw new Error("stored approval request has no origin");
