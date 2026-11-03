@@ -8,9 +8,14 @@ import { test } from "node:test";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 import { seedTestTenants } from "./support/tenant-seed.ts";
+import { testTenantHeaders } from "./support/test-tenants.ts";
 
 const databaseUrl = process.env.MODEL_OVERLAY_TEST_DATABASE_URL;
-const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const headers = {
+  "content-type": "application/json",
+  "x-admin-actor": "admin-alice@default-org",
+  ...testTenantHeaders(),
+};
 const runtimePath = "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org";
 
 async function start(databaseUrl: string, upstream: string) {
