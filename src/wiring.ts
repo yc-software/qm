@@ -2974,12 +2974,10 @@ export function buildApp(
     deploymentLayerReady,
     deploymentLayerRefresh,
     registerTenants: async () => {
-      const [install] = await pgArtifactMap.pool.q("SELECT qm_tenant_id()::text AS id");
-      const all = await pgArtifactMap.pool.q("SELECT id::text AS id FROM tenants");
-      registerTenants(
-        String(install?.id),
-        all.map((row) => String(row.id)),
+      const [row] = await pgArtifactMap.pool.q(
+        "SELECT qm_tenant_id()::text AS install, sole::text AS sole FROM qm_sole_tenant()",
       );
+      registerTenants(String(row?.install), typeof row?.sole === "string" ? row.sole : undefined);
     },
     tenantLoader,
     rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(pgArtifactMap.pool),

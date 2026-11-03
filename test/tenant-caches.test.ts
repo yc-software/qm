@@ -288,20 +288,33 @@ test("surface branding is fetched and cached per tenant", async () => {
   assert.equal(withTenant(A, () => branding.current()).orgName, `Org ${A}`);
 });
 
-test("a tenant loader loads each tenant once and refreshes every loaded tenant under its own binding", async () => {
+test("a tenant loader loads each tenant once and retries a tenant whose load failed", async () => {
   const loads: string[] = [];
   const loader = createTenantLoader([async () => loads.push(cacheTenant())]);
   await withTenant(A, () => loader.load());
   await withTenant(A, () => loader.load());
   await withTenant(B, () => loader.load());
   assert.deepEqual(loads, [A, B]);
-  const refreshed: string[] = [];
-  await loader.forEachLoaded(async () => refreshed.push(cacheTenant()));
-  assert.deepEqual(refreshed, [A, B]);
+  let attempts = 0;
+  const failing = createTenantLoader([
+    async () => {
+      attempts += 1;
+      throw new Error("load failed");
+    },
+  ]);
+  await assert.rejects(
+    withTenant(A, () => failing.load()),
+    /load failed/,
+  );
+  await assert.rejects(
+    withTenant(A, () => failing.load()),
+    /load failed/,
+  );
+  assert.equal(attempts, 2);
 });
 
 test("with several tenants, unbound cache reads fail closed, org identities differ, and seeds stay with the install", async () => {
-  registerTenants(A, [A, B]);
+  registerTenants(A, undefined);
   const slot = perTenant(() => ({}));
   assert.throws(() => slot(), /No tenant is bound/);
   assert.equal(unboundTenantAllowed(), false);
@@ -342,7 +355,7 @@ test("with several tenants, unbound cache reads fail closed, org identities diff
 });
 
 test("with exactly one tenant, unbound work resolves to it", () => {
-  registerTenants(A, [A]);
+  registerTenants(A, A);
   const slot = perTenant(() => ({ id: randomUUID() }));
   assert.equal(
     slot().id,

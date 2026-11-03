@@ -1,4 +1,3 @@
-import { reportFailureAs } from "../util/errors.ts";
 import { boundTenant, isTenantId, pinTenant, withoutTenant, withTenant } from "../../plugins/chassis/src/tenant.ts";
 
 export { boundTenant, isTenantId, pinTenant, withoutTenant, withTenant };
@@ -14,35 +13,46 @@ export function currentTenant(): string {
   return id;
 }
 
-interface KnownTenants {
+interface SettledTenancy {
   install: string;
   sole: string | undefined;
 }
 
-let known: KnownTenants | undefined;
+let settled: SettledTenancy | undefined;
 
-export function registerTenants(install: string, all: readonly string[]): void {
-  known = { install, sole: all.length === 1 ? all[0] : undefined };
+export function registerTenants(install: string, sole: string | undefined): void {
+  settled = { install, sole };
+}
+
+export function soleTenantNow(): string | undefined {
+  return settled?.sole;
+}
+
+export function installTenantNow(): string | undefined {
+  return settled?.install;
+}
+
+export function unboundTenantAllowed(): boolean {
+  return !settled || soleTenantNow() !== undefined;
 }
 
 export function cacheTenant(): string {
   const bound = boundTenant();
   if (bound !== undefined) return bound;
-  if (!known) return "";
-  if (known.sole !== undefined) return known.sole;
+  const sole = soleTenantNow();
+  if (sole !== undefined) return sole;
+  if (unboundTenantAllowed()) return "";
   throw new Error("No tenant is bound to this work");
 }
 
-export function unboundTenantAllowed(): boolean {
-  return !known || known.sole !== undefined;
-}
-
 export function withInstallTenant<T>(fn: () => T): T {
-  return known ? withTenant(known.install, fn) : fn();
+  const install = installTenantNow();
+  return install === undefined ? fn() : withTenant(install, fn);
 }
 
 export function isInstallTenant(): boolean {
-  return !known || cacheTenant() === known.install;
+  const install = installTenantNow();
+  return install === undefined || cacheTenant() === install;
 }
 
 export function perTenant<V>(create: () => V): () => V {
@@ -59,7 +69,6 @@ export function perTenant<V>(create: () => V): () => V {
 
 export interface TenantLoader {
   load(): Promise<void>;
-  forEachLoaded(fn: () => Promise<unknown>): Promise<void>;
 }
 
 export function createTenantLoader(loaders: ReadonlyArray<() => Promise<unknown>>): TenantLoader {
@@ -73,10 +82,6 @@ export function createTenantLoader(loaders: ReadonlyArray<() => Promise<unknown>
       loads.set(id, run);
       run.catch(() => loads.get(id) === run && loads.delete(id));
       return run;
-    },
-    async forEachLoaded(fn) {
-      for (const id of [...loads.keys()])
-        await (id ? withTenant(id, fn) : fn()).catch(reportFailureAs("tenants: refresh a loaded tenant", undefined));
     },
   };
 }
