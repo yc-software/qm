@@ -149,7 +149,7 @@ test("the settings route writes to the tenant its slug names and refuses unknown
 
 test("the operator sets the admin values the CLI imports, in the named tenant, audited as the operator", async () => {
   const srv = await fixture();
-  const scopes = `/v1/admin/scopes/${orgScope()}`;
+  const scopes = "/v1/admin/scopes/tenant";
   try {
     const flag = await srv.put(
       { tenant: SLUG, featureName: "inbox_loops", scopeId: "personal:ada@example.com", on: true },

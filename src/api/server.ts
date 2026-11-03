@@ -29,6 +29,7 @@ import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrR
 import { findRoute, run, type AdminAccess, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
 import { requireOperatorControl } from "./routes/background-work.ts";
 import { operatorTenant } from "./routes/tenant-settings.ts";
+import { orgScope } from "../config.ts";
 import { withTenant } from "../tenants/context.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
@@ -362,10 +363,14 @@ function paramsSchema(path: string): object {
   };
 }
 
+const TENANT_ROOT_SCOPE_ALIAS = "tenant";
+
 async function runApi(route: Route<ApiCtx>, params: Record<string, string>, ctx: ApiCtx): Promise<void> {
   if (!ctx.operator) return run(route, params, ctx);
   const tenant = await operatorTenant(ctx);
-  if (tenant) await withTenant(tenant, () => run(route, params, ctx));
+  if (!tenant) return;
+  const resolved = params.scope === TENANT_ROOT_SCOPE_ALIAS ? { ...params, scope: orgScope() } : params;
+  await withTenant(tenant, () => run(route, resolved, ctx));
 }
 
 function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstance; routing: RequestListener } {
