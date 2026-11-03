@@ -34,6 +34,7 @@ interface Received {
 
 async function fakePartnerChat(status = 200) {
   const received: Received[] = [];
+  const messages = new Map<string, { chat_id: unknown; thread_id: unknown; body: unknown }>();
   let next = 41;
   const server = createServer((req: IncomingMessage, res) => {
     let raw = "";
@@ -46,13 +47,20 @@ async function fakePartnerChat(status = 200) {
         signature: String(req.headers["x-qm-signature"]),
         raw,
       });
+      const id = String(++next);
+      const body = received.at(-1)!.body;
+      const edited = /^\/qm_surface\/messages\/(\d+)\/update$/.exec(req.url ?? "")?.[1];
+      if (status === 200 && edited && messages.has(edited)) messages.get(edited)!.body = body.body;
+      else if (status === 200 && !edited)
+        messages.set(id, { chat_id: body.chat_id, thread_id: body.thread_id, body: body.body });
       res.writeHead(status, { "content-type": "application/json" });
-      res.end(JSON.stringify(status === 200 ? { message_id: String(++next) } : { error: "nope" }));
+      res.end(JSON.stringify(status === 200 ? { message_id: id } : { error: "nope" }));
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { url, received, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+  const shown = () => [...messages.entries()].map(([id, m]) => ({ id, ...m }));
+  return { url, received, shown, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
 }
 
 function event(
@@ -143,16 +151,13 @@ test("an @-mention starts a turn whose reply lands in the chat once, even when t
     const mention = event({ body: "!post on it", mentions: true, eventId: "ev-mention", messageId: "1002" });
     assert.equal((await deliver(mention)).status, 200);
     assert.equal((await deliver(mention)).status, 200);
-    await settle(async () => partnerChat.received.length > 0);
+    await settle(async () => partnerChat.shown().some((m) => m.body === "on it"));
     await new Promise((r) => setTimeout(r, 1_000));
-    assert.equal(partnerChat.received.length, 1);
-    const [post] = partnerChat.received;
-    assert.equal(post!.path, "/qm_surface/messages");
-    assert.equal(post!.signature, signPartnerChat(SECRET, post!.timestamp, post!.raw));
-    assert.equal(post!.body.chat_id, "88");
-    assert.equal(post!.body.thread_id, "1002");
-    assert.equal(post!.body.body, "on it");
-    assert.match(String(post!.body.client_message_id), /^post:/);
+    assert.deepEqual(
+      partnerChat.shown().map((m) => [m.chat_id, m.thread_id, m.body]),
+      [["88", "1002", "on it"]],
+    );
+    assert.ok(partnerChat.received.every((r) => r.signature === signPartnerChat(SECRET, r.timestamp, r.raw)));
     const session = await built.sessions.getByThread(CONTAINER);
     assert.equal(session?.surface, "partner-chat");
   } finally {
@@ -180,33 +185,31 @@ test("unmentioned chatter goes to the ambient judge, whose worker posts into the
 test("a reply in a thread the agent already posted in is addressed without a mention", async () => {
   const { built, partnerChat, deliver } = await partnerChatApp();
   try {
+    const bodies = () => partnerChat.shown().map((m) => [m.thread_id, m.body]);
     await deliver(event({ body: "!post first answer", mentions: true, eventId: "ev-m", messageId: "1008" }));
-    const own = () =>
-      built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", self: true, noFallback: true });
-    await settle(async () => (await own()).length === 1);
+    const own = async () =>
+      (await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", self: true, noFallback: true }))
+        .map((m) => [m.sub, m.text])
+        .sort();
+    await settle(async () => (await own()).some(([, text]) => text === "first answer"));
     await deliver(event({ body: "!post following up", eventId: "ev-thread", messageId: "1011", thread: "1008" }));
-    await settle(async () => partnerChat.received.length === 2);
-    assert.deepEqual(
-      partnerChat.received.map((r) => [r.body.thread_id, r.body.body]),
-      [
-        ["1008", "first answer"],
-        ["1008", "following up"],
-      ],
-    );
-    await settle(async () => (await own()).length === 2);
-    assert.deepEqual((await own()).map((m) => [m.ts.split(".")[1]!.replace(/^0+/, ""), m.sub, m.text]).sort(), [
-      ["42", "1008", "first answer"],
-      ["43", "1008", "following up"],
+    await settle(async () => bodies().some(([, b]) => b === "following up"));
+    assert.deepEqual(bodies(), [
+      ["1008", "first answer"],
+      ["1008", "following up"],
     ]);
-    await deliver(event({ body: "!post under your post", eventId: "ev-root", messageId: "1012", thread: "42" }));
-    await settle(async () => partnerChat.received.length === 3);
-    assert.deepEqual(
-      [partnerChat.received[2]!.body.thread_id, partnerChat.received[2]!.body.body],
-      ["42", "under your post"],
-    );
+    await settle(async () => (await own()).some(([, text]) => text === "following up"));
+    assert.deepEqual(await own(), [
+      ["1008", "first answer"],
+      ["1008", "following up"],
+    ]);
+    const root = partnerChat.shown()[0]!.id;
+    await deliver(event({ body: "!post under your post", eventId: "ev-root", messageId: "1012", thread: root }));
+    await settle(async () => bodies().some(([, b]) => b === "under your post"));
+    assert.deepEqual(bodies().at(-1), [root, "under your post"]);
     await deliver(event({ body: "!post nobody asked", eventId: "ev-other", messageId: "1013", thread: "1001" }));
-    await new Promise((r) => setTimeout(r, 1_000));
-    assert.equal(partnerChat.received.length, 3);
+    await new Promise((r) => setTimeout(r, 3_000));
+    assert.equal(partnerChat.shown().length, 3);
   } finally {
     await partnerChat.close();
   }
@@ -223,15 +226,8 @@ test("a post into another message's thread keeps the chat id", async () => {
         messageId: "1014",
       }),
     );
-    await settle(async () => partnerChat.received.length > 0);
-    assert.deepEqual(
-      [
-        partnerChat.received[0]!.body.chat_id,
-        partnerChat.received[0]!.body.thread_id,
-        partnerChat.received[0]!.body.body,
-      ],
-      ["88", "1001", "over there"],
-    );
+    await settle(async () => partnerChat.shown().some((m) => m.body === "over there"));
+    assert.ok(partnerChat.shown().some((m) => m.chat_id === "88" && m.thread_id === "1001" && m.body === "over there"));
   } finally {
     await partnerChat.close();
   }
@@ -472,7 +468,21 @@ test("a direct reply streams into one placeholder that is edited in place until 
   const deliveries = createDeliveryStore();
   let listener: ((e: RunStreamEvent) => void) | undefined;
   let unsubscribed = false;
-  let run = { status: "running", deliveryState: null } as unknown as Run;
+  let run = {
+    id: "run-9",
+    sessionId: CONTAINER,
+    status: "running",
+    deliveryState: null,
+    request: {
+      surface: "partner-chat",
+      surfaceTools: true,
+      deliveryTarget: `${CONTAINER}:1002`,
+      actor: { id: "ada@example.com", type: "internal" },
+      origin: { kind: "human" },
+      conversation: { kind: "group", threadRef: CONTAINER },
+    },
+    result: { status: "ok" },
+  } as unknown as Run;
   const live = createPartnerChatLiveReply({
     app: {
       subscribeRun: (_id, l) => {
@@ -501,7 +511,36 @@ test("a direct reply streams into one placeholder that is edited in place until 
   run = { ...run, status: "done" };
   listener!({ runId: "run-9", kind: "delta", offset: 29, text: " Done.", startOffset: 0 });
   await settle(async () => unsubscribed);
-  assert.equal((await sent()).length, 2);
+  assert.deepEqual((await sent())[2], ["stream:run-9:settled", "77", "✓"]);
+  assert.equal((await sent()).length, 3);
+});
+
+test("a quiet direct turn gets a placeholder after two seconds, unless the agent already posted", async () => {
+  for (const posted of [false, true]) {
+    const deliveries = createDeliveryStore();
+    const destination = { type: "partner-chat", target: `${CONTAINER}:1002` };
+    if (posted)
+      await deliveries.enqueue({
+        destination,
+        text: "answer",
+        idempotencyKey: `post:run-q:partner-chat:${CONTAINER}:1002:0`,
+      });
+    const live = createPartnerChatLiveReply({
+      app: { subscribeRun: () => () => {} },
+      runs: { get: async () => ({ status: "running", deliveryState: null }) as unknown as Run },
+      deliveries,
+      intervalMs: 20,
+    });
+    live.follow("run-q", destination);
+    await new Promise((r) => setTimeout(r, 2_300));
+    assert.deepEqual(
+      (await deliveries.pending("partner-chat"))
+        .map((d) => [d.idempotencyKey, d.text])
+        .filter(([k]) => k === "ack:run-q"),
+      posted ? [] : [["ack:run-q", "…"]],
+      String(posted),
+    );
+  }
 });
 
 test("a streamed edit is dropped once the run's final reply or a deliberate post has taken the placeholder", async () => {
