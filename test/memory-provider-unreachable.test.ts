@@ -10,6 +10,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 async function closedPort(): Promise<number> {
   const server = createServer();
@@ -51,10 +52,13 @@ test("wiring: an unreachable fail-open MCP memory provider still serves turns vi
       conversation: { kind: "dm", threadRef: thread },
       text,
     });
-    assert.equal((await app.turn(dm("remember my X handle is be17832773", "dm:U1:tA"))).status, "ok");
+    assert.equal(
+      (await inTestTenant(() => app.turn(dm("remember my X handle is be17832773", "dm:U1:tA")))).status,
+      "ok",
+    );
     let reply = "";
     for (let i = 0; i < 100; i++) {
-      const b = await app.turn(dm("!sysprompt", "dm:U1:tB"));
+      const b = await inTestTenant(() => app.turn(dm("!sysprompt", "dm:U1:tB")));
       assert.equal(b.status, "ok");
       reply = b.reply ?? "";
       if (/be17832773/.test(reply)) break;

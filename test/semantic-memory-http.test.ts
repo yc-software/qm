@@ -14,6 +14,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 const fact = "Prefers validating changes with before-and-after browser tests.";
 const filler = Array.from(
@@ -99,31 +100,35 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   );
   databaseFixture.stop = () => built.runtime.stop();
   await migrateRegisteredPgSchemas(databaseUrl);
-  await built.memory.capture("personal:unconfigured", ["a fact before model configuration"], Date.now());
-  await built.memory.recall("personal:unconfigured", { query: "no model configured" });
+  await inTestTenant(async () => {
+    await built.memory.capture("personal:unconfigured", ["a fact before model configuration"], Date.now());
+    await built.memory.recall("personal:unconfigured", { query: "no model configured" });
+  });
   const inspector = new pg.Client({ connectionString: databaseUrl });
   await inspector.connect();
   try {
     const { rows } = await inspector.query(
       "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector') AS installed, to_regclass('memory_fact_vectors') AS vectors",
     );
-    assert.equal(rows[0].installed, false);
-    assert.equal(rows[0].vectors, null);
+    assert.equal(rows[0].installed, true);
+    assert.equal(rows[0].vectors, "memory_fact_vectors");
   } finally {
     await inspector.end();
   }
   const embeddingId = "test-model";
-  await built.modelRegistry.upsert(
-    { kind: "embedding", id: embeddingId, name: "Embeddings", provider: "openai" },
-    "admin",
-  );
-  await built.config.setEmbeddingModel(embeddingId);
   const orgFact = "Browser regression tests should also cover Firefox.";
-  await built.memory.capture("org:default-org", [orgFact], Date.now());
   const otherFact = "Another user's confidential browser preference";
-  await built.memory.capture("personal:U1", [fact, ...filler], Date.now());
-  await built.memory.capture("personal:U2", [otherFact], Date.now());
-  await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, ["org:default-org", "personal:U1"]);
+  await inTestTenant(async () => {
+    await built.modelRegistry.upsert(
+      { kind: "embedding", id: embeddingId, name: "Embeddings", provider: "openai" },
+      "admin",
+    );
+    await built.config.setEmbeddingModel(embeddingId);
+    await built.memory.capture("org:default-org", [orgFact], Date.now());
+    await built.memory.capture("personal:U1", [fact, ...filler], Date.now());
+    await built.memory.capture("personal:U2", [otherFact], Date.now());
+    await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, ["org:default-org", "personal:U1"]);
+  });
   const server = createInsecureTestServer(built.app, {
     memory: built.memory,
     capabilitySecret: TEST_CAPABILITY_SECRET,
@@ -133,7 +138,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   const post = async (path: string, body: unknown, headers: Record<string, string> = {}) =>
     fetch(base + path, {
       method: "POST",
-      headers: { "content-type": "application/json", ...headers },
+      headers: { "content-type": "application/json", ...testTenantHeaders(), ...headers },
       body: JSON.stringify(body),
     });
   const request = {
@@ -152,14 +157,16 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   assert.ok(!result.reply.includes(otherFact));
   const memoryBlock = result.reply.split("## What you remember\n")[1] ?? "";
   assert.ok(memoryBlock.indexOf(fact) < memoryBlock.indexOf("warehouse") || !memoryBlock.includes("warehouse"));
-  const cap = await mintCapabilityToken(
-    {
-      actorId: "U1",
-      scopeId: "personal:U1",
-      exp: Date.now() + CAPABILITY_TTL_MS,
-      memory: { write: "personal:U1", read: ["personal:U1"] },
-    },
-    TEST_CAPABILITY_SECRET,
+  const cap = await inTestTenant(() =>
+    mintCapabilityToken(
+      {
+        actorId: "U1",
+        scopeId: "personal:U1",
+        exp: Date.now() + CAPABILITY_TTL_MS,
+        memory: { write: "personal:U1", read: ["personal:U1"] },
+      },
+      TEST_CAPABILITY_SECRET,
+    ),
   );
   const grep = await post("/v1/memory/search", { query: "shipment 119" }, { "x-agent-capability": cap });
   assert.equal(grep.status, 200);
@@ -170,11 +177,13 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   assert.deepEqual(((await forbidden.json()) as { results: unknown[] }).results, []);
   assert.ok(inputs.every((batch) => batch.every((text) => !text.includes(otherFact))));
 
-  const personalFact = (await built.memory.facts!("personal:U1")).find((row) => row.text === fact)!;
-  await built.memory.edit!("personal:U1", [
-    { id: personalFact.id, text: "Updated preference: use browser smoke tests." },
-  ]);
-  await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, ["personal:U1"]);
+  await inTestTenant(async () => {
+    const personalFact = (await built.memory.facts!("personal:U1")).find((row) => row.text === fact)!;
+    await built.memory.edit!("personal:U1", [
+      { id: personalFact.id, text: "Updated preference: use browser smoke tests." },
+    ]);
+    await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, ["personal:U1"]);
+  });
   const updated = await post("/v1/turns", { ...request, conversation: { kind: "dm", threadRef: "updated" } });
   const newResult = (await updated.json()) as { reply: string };
   assert.ok(!newResult.reply.includes(fact));
@@ -226,41 +235,46 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
     }),
   );
   databaseFixture.stop = () => built.runtime.stop();
-  await built.modelRegistry.upsert({ kind: "embedding", id: "test", name: "Embeddings", provider: "openai" }, "admin");
-  await built.config.setEmbeddingModel("test");
   const personal = "personal:U1",
     room = "channel:C1",
     denied = "channel:C2";
-  await built.directory.replaceChannels(
-    [
-      { channelId: "C1", name: "room", isPrivate: true },
-      { channelId: "C2", name: "closed", isPrivate: true },
-    ],
-    [
-      { channelId: "C1", principalId: "U1" },
-      { channelId: "C2", principalId: "U1" },
-    ],
-  );
-  for (const scope of [room, denied]) {
-    const session = await built.sessions.getOrCreateByThread(`${scope}:seed`, "channel", scope);
-    await built.sessions.addParticipant(session.id, "U1");
-  }
-  await built.config.setSharingPosture(denied, "isolated");
-  await built.memory.capture(
-    personal,
-    ["0.7 LOCAL_NEAR", ...Array.from({ length: 120 }, (_, i) => `0.6 local ${i} ${"x".repeat(70)}`)],
-    Date.now(),
-  );
-  await built.memory.capture(room, ["0.99 REMOTE_BEST", "0.72 REMOTE_NEAR"], Date.now());
-  await built.memory.capture(denied, ["1 DENIED_NOTEBOOK"], Date.now());
-  await seedVectors(built.memory, databaseUrl, "test", providerUrl, [personal, room]);
+  await inTestTenant(async () => {
+    await built.modelRegistry.upsert(
+      { kind: "embedding", id: "test", name: "Embeddings", provider: "openai" },
+      "admin",
+    );
+    await built.config.setEmbeddingModel("test");
+    await built.directory.replaceChannels(
+      [
+        { channelId: "C1", name: "room", isPrivate: true },
+        { channelId: "C2", name: "closed", isPrivate: true },
+      ],
+      [
+        { channelId: "C1", principalId: "U1" },
+        { channelId: "C2", principalId: "U1" },
+      ],
+    );
+    for (const scope of [room, denied]) {
+      const session = await built.sessions.getOrCreateByThread(`${scope}:seed`, "channel", scope);
+      await built.sessions.addParticipant(session.id, "U1");
+    }
+    await built.config.setSharingPosture(denied, "isolated");
+    await built.memory.capture(
+      personal,
+      ["0.7 LOCAL_NEAR", ...Array.from({ length: 120 }, (_, i) => `0.6 local ${i} ${"x".repeat(70)}`)],
+      Date.now(),
+    );
+    await built.memory.capture(room, ["0.99 REMOTE_BEST", "0.72 REMOTE_NEAR"], Date.now());
+    await built.memory.capture(denied, ["1 DENIED_NOTEBOOK"], Date.now());
+    await seedVectors(built.memory, databaseUrl, "test", providerUrl, [personal, room]);
+  });
   const server = createInsecureTestServer(built.app);
   const base = await listen(server);
   t.after(() => close(server));
   const turn = async (text: string, thread: string) => {
     const response = await fetch(base + "/v1/turns", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...testTenantHeaders() },
       body: JSON.stringify({
         surface: "test",
         origin: { kind: "human" },
@@ -286,11 +300,11 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   assert.equal(inputs.filter((batch) => batch.length === 1 && batch[0]!.includes("verify the change")).length, 1);
   assert.match(await turn("!memoryread channel:C1", "read-shared"), /REMOTE_BEST/);
   assert.doesNotMatch(await turn("!memoryread channel:C2", "read-denied"), /DENIED_NOTEBOOK/);
-  await built.directory.replaceChannels([{ channelId: "C1", name: "room", isPrivate: true }], []);
+  await inTestTenant(() => built.directory.replaceChannels([{ channelId: "C1", name: "room", isPrivate: true }], []));
   assert.doesNotMatch(await turn("!memoryread channel:C1", "read-revoked"), /REMOTE_BEST/);
   assert.doesNotMatch(await turn("!sysprompt\nverify the change", "recall-revoked"), /REMOTE_BEST/);
   assert.ok(
-    (await built.auditLog.events()).some(
+    (await inTestTenant(() => built.auditLog.events())).some(
       (event) => event.action === "sharing.cross_context_read" && event.resource === "memory",
     ),
   );

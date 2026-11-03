@@ -5,6 +5,7 @@ import type { SandboxResource } from "../src/sandbox/sandbox-resources.ts";
 import type { ProcessSandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 
 function fixture() {
   const exited = new Set<string>();
@@ -12,7 +13,7 @@ function fixture() {
   const finished: string[] = [];
   const errors: unknown[] = [];
   const old = new Date(Date.now() - 10 * 60_000).toISOString();
-  const computers: SandboxResource[] = ["job-a", "job-b", "job-new"].map((id) => ({
+  const computers: Array<SandboxResource & { tenantId: string }> = ["job-a", "job-b", "job-new"].map((id) => ({
     id,
     backend: "local",
     ownerScopeId: "channel:room",
@@ -23,6 +24,7 @@ function fixture() {
     legacy: false,
     state: "ready",
     jobOnly: true,
+    tenantId: testTenants()[0],
   }));
   const processes = createPostgresProcessRegistry(testDatabaseUrl());
   const sandbox = {
@@ -31,7 +33,7 @@ function fixture() {
     },
     async teardown() {},
     async listProcesses(handle: SandboxHandle) {
-      return (await processes.listByScope("channel:room"))
+      return (await inTestTenant(() => processes.listByScope("channel:room")))
         .filter((job) => job.sandboxId === handle.resourceId)
         .map((job) => ({
           processId: job.processId,
@@ -85,19 +87,21 @@ test("the job sweep retires a job computer only after its jobs end and write bac
     ["p-a", "job-a"],
     ["p-b", "job-b"],
   ] as const)
-    await f.processes.register({
-      processId,
-      scopeId: "channel:room",
-      sandboxId,
-      kind: "background",
-      command: "bg: sync",
-      ttlMs: 600_000,
-    });
+    await inTestTenant(() =>
+      f.processes.register({
+        processId,
+        scopeId: "channel:room",
+        sandboxId,
+        kind: "background",
+        command: "bg: sync",
+        ttlMs: 600_000,
+      }),
+    );
   f.exited.add("p-a");
   await f.sweep();
   assert.deepEqual(f.retired, ["job-a"]);
   assert.deepEqual(f.finished, ["p-a"]);
-  assert.equal((await f.processes.get("p-a"))?.status, "exited");
+  assert.equal((await inTestTenant(() => f.processes.get("p-a")))?.status, "exited");
   f.exited.add("p-b");
   await f.sweep();
   assert.deepEqual(f.retired, ["job-a"], "a box checked within the last five minutes is left alone");

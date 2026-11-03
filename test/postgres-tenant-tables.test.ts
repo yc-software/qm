@@ -6,25 +6,28 @@ import { scopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { grantAppLogin } from "../src/tenants/logins.ts";
 import { applyPgMigrations, definePgMigration, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
-import { testMigratedDatabaseUrl } from "./support/test-database.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { ownerUrlOf, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 import { createAppLogin, type AppLogin } from "./support/app-login.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenant table tests";
 const [a, b] = process.env.DATABASE_URL ? testTenants() : ["", ""];
-const UNTENANTED = [
-  "background_ownership",
-  "durable_map_versions",
-  "fly_deploy_ports",
-  "fly_peer_claims",
-  "qm_schema_migrations",
-  "qm_settings",
-  "qm_tenant",
-  "render_sandbox_bases",
-  "source_auth_replay",
-  "superserve_config_epochs",
-  "tenants",
-];
+const UNTENANTED_REASONS: Record<string, string> = {
+  background_ownership: "which deployment runs background work for the whole install",
+  deployment_layer: "the tools and skills bundle of the whole install, loaded once per process",
+  durable_map_versions: "version counters of the durable map store itself",
+  fly_deploy_ports: "ports on a shared Fly app, unique across every tenant's deployments",
+  fly_peer_claims: "WireGuard peer leases of the install's Fly tunnel",
+  instance_heartbeats: "liveness and build of each server process, shared by every tenant",
+  qm_schema_migrations: "the migration ledger of the database",
+  qm_settings: "install-wide settings",
+  qm_tenant: "the legacy single-install tenant id, copied into tenants by the upgrade",
+  render_sandbox_bases: "the base snapshot for each configured sandbox image, shared by every tenant",
+  source_auth_replay: "replay guard for signed source requests, checked before any tenant is known",
+  superserve_config_epochs: "the sandbox config generation of each deployment, shared by every tenant",
+  tenants: "the tenant registry",
+};
+const UNTENANTED = Object.keys(UNTENANTED_REASONS);
 const BOUND_BY_ITEMS_TENANT = ["blobs", "items"];
 const TABLES = ["sessions", "runs", "deliveries", "acl_grants", "audit_log", "memory_facts"];
 
@@ -52,11 +55,13 @@ let login: AppLogin;
 before(async () => {
   if (skip) return;
   url = testMigratedDatabaseUrl();
-  owner = new pg.Pool({ connectionString: url });
-  login = await createAppLogin(url);
+  owner = new pg.Pool({ connectionString: ownerUrlOf(url) });
+  login = await createAppLogin(ownerUrlOf(url));
   app = new pg.Pool({ connectionString: login.url });
   const store = createPostgresSessionStore(url);
-  const session = await store.getOrCreateByThread(`tables-${randomUUID()}`, "dm", scopeId("personal", "t"));
+  const session = await inTestTenant(() =>
+    store.getOrCreateByThread(`tables-${randomUUID()}`, "dm", scopeId("personal", "t")),
+  );
   await inTenant(app, a, async (c) => {
     await c.query(
       "INSERT INTO runs(id, session_id, status, request, idempotency_key, created_at) VALUES ('r1', $1, 'pending', '{}', 'k', 1)",
@@ -172,5 +177,5 @@ test("granting refuses a login that is missing or owns the tables", { skip }, as
 test("the app login verifies applied migrations and refuses to apply pending ones", { skip }, async () => {
   await applyPgMigrations(app, registeredPgMigrations(url));
   const pending = definePgMigration({ id: `zz-pending-${randomUUID()}`, statements: ["SELECT 1"] });
-  await assert.rejects(applyPgMigrations(app, [pending]), /cannot apply pending migrations zz-pending-/);
+  await assert.rejects(applyPgMigrations(app, [pending]), /permission denied/);
 });

@@ -48,7 +48,7 @@ const MAX_ACTIVE_UPLOAD_BYTES = 500 * 1024 ** 3;
 const HOLDS_QUOTA =
   "actor_id=$1 AND state NOT IN ('complete','aborted','failed') AND NOT (state='pending' AND expires_at <= $2)";
 
-export const FILE_UPLOAD_MIGRATIONS: PgMigrationDefinition[] = [
+export const FILE_UPLOAD_MIGRATIONS: readonly PgMigrationDefinition[] = [
   TENANCY_BASE,
   {
     id: "files/uploads/0001",
@@ -133,7 +133,6 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
     async expired(now) {
       return (
         await claimAcrossTenants(
-          connectionString,
           `WITH due AS (
                SELECT id FROM file_uploads
                WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
@@ -146,7 +145,6 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
     },
     async completingUploadId(id) {
       const { rows } = await claimAcrossTenants(
-        connectionString,
         "SELECT data->>'uploadId' AS upload_id FROM file_uploads WHERE id=$1 AND state='completing'",
         [id],
       );

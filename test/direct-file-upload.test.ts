@@ -16,7 +16,18 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
+
+function tenantBound<T extends object>(store: T): T {
+  return new Proxy(store, {
+    get: (target, key) => {
+      const value = Reflect.get(target, key);
+      return typeof value === "function"
+        ? (...args: unknown[]) => inTestTenant(() => value.apply(target, args))
+        : value;
+    },
+  });
+}
 
 const checksum = (text: string) => createHash("sha256").update(text).digest("base64");
 function fixture() {
@@ -60,7 +71,7 @@ function fixture() {
         .map((r) => ({ ...r, tenantId: testTenants()[0] }));
     },
   };
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const files = tenantBound(createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()));
   const calls: Array<{ name: string; input: Record<string, any> }> = [];
   let head: Record<string, unknown> | undefined;
   let parts: Array<Record<string, unknown>> = [];

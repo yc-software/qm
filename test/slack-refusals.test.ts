@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { refusalNote, refusalDelivery, postThenAckRunDelivery } from "../src/slack/lib.ts";
-import { SESSION_BUSY_USER_TEXT } from "../src/core/failure-copy.ts";
 
 const ADMIN_URL = "https://portal.example.com/admin/?view=history&session=s-1";
 
@@ -35,13 +34,12 @@ test("refusalNote: no adminUrl ⇒ reason only, no dangling link", () => {
   assert.doesNotMatch(note, /Full error/);
 });
 
-test("refusalNote: a busy session reads as a human note, with no error framing and no link", () => {
+test("refusalNote: a typed refusal reads as a human note, with no error framing and no link", () => {
   const note = refusalNote(
-    { status: "refused", refusalKind: "session_busy", reason: SESSION_BUSY_USER_TEXT, adminUrl: ADMIN_URL },
+    { status: "refused", refusalKind: "model_budget", reason: "the model budget is spent", adminUrl: ADMIN_URL },
     "channel",
   );
-  assert.equal(note, SESSION_BUSY_USER_TEXT);
-  assert.doesNotMatch(note, /session busy/);
+  assert.equal(note, "the model budget is spent");
   assert.doesNotMatch(note, /error/i);
 });
 

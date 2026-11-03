@@ -2,6 +2,7 @@ import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { ProcessRecord, ProcessRegistry } from "./process-registry.ts";
 import { reconcileProcesses } from "./reconcile.ts";
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 
 const STARTUP_GRACE_MS = 2 * 60_000;
 const PROVISION_LIMIT_MS = 15 * 60_000;
@@ -20,10 +21,10 @@ export function createJobComputerSweep(deps: {
   const attemptedAt = new Map<string, number>();
   const emptySince = new Map<string, number>();
   const clock = deps.now ?? Date.now;
-  return async () => {
+  return crossTenantLoop(async () => {
     const now = clock();
     for (const computer of await deps.resources.jobComputers()) {
-      try {
+      await inTenantOf(computer.tenantId, async () => {
         const retire = async () => {
           await deps.resources.retireJobComputer(computer.id, computer.state);
           attemptedAt.delete(computer.id);
@@ -31,16 +32,16 @@ export function createJobComputerSweep(deps: {
         };
         const throttled = now - (attemptedAt.get(computer.id) ?? 0) < RETRY_EVERY_MS;
         if (computer.state === "provisioning") {
-          if (now - Date.parse(computer.createdAt) < PROVISION_LIMIT_MS || throttled) continue;
+          if (now - Date.parse(computer.createdAt) < PROVISION_LIMIT_MS || throttled) return;
           attemptedAt.set(computer.id, now);
           await retire();
-          continue;
+          return;
         }
         if (computer.state === "retired" || computer.error) {
-          if (throttled) continue;
+          if (throttled) return;
           attemptedAt.set(computer.id, now);
           await retire();
-          continue;
+          return;
         }
         const jobs = async () =>
           (await deps.processes.listByScope(computer.ownerScopeId)).filter((job) => job.sandboxId === computer.id);
@@ -48,11 +49,11 @@ export function createJobComputerSweep(deps: {
         if (!current.length) {
           const since = emptySince.get(computer.id) ?? now;
           emptySince.set(computer.id, since);
-          if (now - since < STARTUP_GRACE_MS) continue;
+          if (now - since < STARTUP_GRACE_MS) return;
         }
         if (current.some(live)) {
           emptySince.delete(computer.id);
-          if (throttled) continue;
+          if (throttled) return;
           attemptedAt.set(computer.id, now);
           const handle = await deps.sandbox.provision([{ scopeId: computer.ownerScopeId, mode: "rw", mountPath: "" }], {
             sandboxId: computer.id,
@@ -65,13 +66,11 @@ export function createJobComputerSweep(deps: {
               .catch((error: unknown) => deps.onError(error, computer.ownerScopeId));
           }
           current = await jobs();
-          if (current.some(live)) continue;
+          if (current.some(live)) return;
         }
         attemptedAt.set(computer.id, now);
         await retire();
-      } catch (error) {
-        deps.onError(error, computer.ownerScopeId);
-      }
+      }).catch((error: unknown) => deps.onError(error, computer.ownerScopeId));
     }
-  };
+  });
 }

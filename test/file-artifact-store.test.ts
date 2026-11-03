@@ -14,7 +14,7 @@ import { fileArtifactId, type PutFileInput } from "../src/files/file-artifact-st
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 
 const [TEST_TENANT] = testTenants();
 
@@ -108,129 +108,139 @@ test("DurableByteStore.open returns null for an absent or malformed key", async 
   assert.equal(await bytes.open("not-a-key"), null);
 });
 
-test("put: deterministic id makes a requeue a no-op upsert (no dup, no byte re-store)", async () => {
-  const bytes = createMemoryDurableByteStore();
-  let putCount = 0;
-  const counting: DurableByteStore = {
-    put: (s, o) => {
-      putCount++;
-      return bytes.put(s, o);
-    },
-    open: (k) => bytes.open(k),
-    delete: (k) => bytes.delete(k),
-  };
-  const store = createPostgresFileArtifactStore(testDatabaseUrl(), counting);
+test("put: deterministic id makes a requeue a no-op upsert (no dup, no byte re-store)", () =>
+  inTestTenant(async () => {
+    const bytes = createMemoryDurableByteStore();
+    let putCount = 0;
+    const counting: DurableByteStore = {
+      put: (s, o) => {
+        putCount++;
+        return bytes.put(s, o);
+      },
+      open: (k) => bytes.open(k),
+      delete: (k) => bytes.delete(k),
+    };
+    const store = createPostgresFileArtifactStore(testDatabaseUrl(), counting);
 
-  const first = await store.put(put());
-  assert.equal(first.created, true);
-  const second = await store.put(put({ name: "ignored-rename.png" }));
-  assert.equal(second.created, false);
-  assert.equal(second.artifact.name, "pirate_flag.png", "existing row returned unchanged");
-  assert.equal(putCount, 1, "no byte re-store on requeue");
+    const first = await store.put(put());
+    assert.equal(first.created, true);
+    const second = await store.put(put({ name: "ignored-rename.png" }));
+    assert.equal(second.created, false);
+    assert.equal(second.artifact.name, "pirate_flag.png", "existing row returned unchanged");
+    assert.equal(putCount, 1, "no byte re-store on requeue");
 
-  const page = await store.listOwnedByScopes([owner]);
-  assert.equal(page.files.length, 1, "no duplicate row");
-});
+    const page = await store.listOwnedByScopes([owner]);
+    assert.equal(page.files.length, 1, "no duplicate row");
+  }));
 
-test("put + open round-trips binary through the artifact store", async () => {
-  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const { artifact } = await store.put(put());
-  assert.equal(artifact.mimetype, "image/png");
-  assert.equal(artifact.sizeBytes, PNG.length);
-  assert.equal(artifact.blobKey, `files/${artifact.sha256}`);
-  const back = await drain(store, artifact.id);
-  assert.deepEqual(back, PNG);
-});
+test("put + open round-trips binary through the artifact store", () =>
+  inTestTenant(async () => {
+    const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    const { artifact } = await store.put(put());
+    assert.equal(artifact.mimetype, "image/png");
+    assert.equal(artifact.sizeBytes, PNG.length);
+    assert.equal(artifact.blobKey, `files/${artifact.sha256}`);
+    const back = await drain(store, artifact.id);
+    assert.deepEqual(back, PNG);
+  }));
 
-test("listOwnedByScopes: recency DESC, scope-filtered, keyset-paginated", async () => {
-  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  await store.put(put({ id: "a", path: "p/a", data: Buffer.from("a"), createdAt: 100 }));
-  await store.put(put({ id: "b", path: "p/b", data: Buffer.from("b"), createdAt: 200 }));
-  await store.put(put({ id: "c", path: "p/c", data: Buffer.from("c"), createdAt: 300 }));
-  await store.put(put({ id: "z", ownerScopeId: other, path: "p/z", data: Buffer.from("z"), createdAt: 999 }));
+test("listOwnedByScopes: recency DESC, scope-filtered, keyset-paginated", () =>
+  inTestTenant(async () => {
+    const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    await store.put(put({ id: "a", path: "p/a", data: Buffer.from("a"), createdAt: 100 }));
+    await store.put(put({ id: "b", path: "p/b", data: Buffer.from("b"), createdAt: 200 }));
+    await store.put(put({ id: "c", path: "p/c", data: Buffer.from("c"), createdAt: 300 }));
+    await store.put(put({ id: "z", ownerScopeId: other, path: "p/z", data: Buffer.from("z"), createdAt: 999 }));
 
-  const all = await store.listOwnedByScopes([owner]);
-  assert.deepEqual(
-    all.files.map((f) => f.id),
-    ["c", "b", "a"],
-    "newest first, other-owner excluded",
-  );
+    const all = await store.listOwnedByScopes([owner]);
+    assert.deepEqual(
+      all.files.map((f) => f.id),
+      ["c", "b", "a"],
+      "newest first, other-owner excluded",
+    );
 
-  const p1 = await store.listOwnedByScopes([owner], { limit: 2 });
-  assert.deepEqual(
-    p1.files.map((f) => f.id),
-    ["c", "b"],
-  );
-  assert.ok(p1.nextCursor, "expected a next cursor");
-  const p2 = await store.listOwnedByScopes([owner], { limit: 2, cursor: p1.nextCursor! });
-  assert.deepEqual(
-    p2.files.map((f) => f.id),
-    ["a"],
-  );
-  assert.equal(p2.nextCursor, undefined, "last page has no cursor");
-});
+    const p1 = await store.listOwnedByScopes([owner], { limit: 2 });
+    assert.deepEqual(
+      p1.files.map((f) => f.id),
+      ["c", "b"],
+    );
+    assert.ok(p1.nextCursor, "expected a next cursor");
+    const p2 = await store.listOwnedByScopes([owner], { limit: 2, cursor: p1.nextCursor! });
+    assert.deepEqual(
+      p2.files.map((f) => f.id),
+      ["a"],
+    );
+    assert.equal(p2.nextCursor, undefined, "last page has no cursor");
+  }));
 
-test("listOwnedByScopes: nameQuery matches names case-insensitively across the whole set", async () => {
-  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  await store.put(put({ id: "a", name: "Quarterly Report.pdf", path: "p/a", data: Buffer.from("a"), createdAt: 100 }));
-  await store.put(put({ id: "b", name: "notes.txt", path: "p/b", data: Buffer.from("b"), createdAt: 200 }));
-  await store.put(put({ id: "c", name: "report-draft.txt", path: "p/c", data: Buffer.from("c"), createdAt: 300 }));
+test("listOwnedByScopes: nameQuery matches names case-insensitively across the whole set", () =>
+  inTestTenant(async () => {
+    const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    await store.put(
+      put({ id: "a", name: "Quarterly Report.pdf", path: "p/a", data: Buffer.from("a"), createdAt: 100 }),
+    );
+    await store.put(put({ id: "b", name: "notes.txt", path: "p/b", data: Buffer.from("b"), createdAt: 200 }));
+    await store.put(put({ id: "c", name: "report-draft.txt", path: "p/c", data: Buffer.from("c"), createdAt: 300 }));
 
-  const hit = await store.listOwnedByScopes([owner], { nameQuery: "REPORT" });
-  assert.deepEqual(
-    hit.files.map((f) => f.id),
-    ["c", "a"],
-    "matches by name regardless of case, newest first",
-  );
-  assert.equal((await store.listOwnedByScopes([owner], { nameQuery: "missing" })).files.length, 0);
-});
+    const hit = await store.listOwnedByScopes([owner], { nameQuery: "REPORT" });
+    assert.deepEqual(
+      hit.files.map((f) => f.id),
+      ["c", "a"],
+      "matches by name regardless of case, newest first",
+    );
+    assert.equal((await store.listOwnedByScopes([owner], { nameQuery: "missing" })).files.length, 0);
+  }));
 
-test("resolveByIds returns the SHARED set by (owner, id); disabled excluded", async () => {
-  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  await store.put(put({ id: "a", path: "p/a", data: Buffer.from("a") }));
-  await store.put(put({ id: "b", path: "p/b", data: Buffer.from("b") }));
+test("resolveByIds returns the SHARED set by (owner, id); disabled excluded", () =>
+  inTestTenant(async () => {
+    const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    await store.put(put({ id: "a", path: "p/a", data: Buffer.from("a") }));
+    await store.put(put({ id: "b", path: "p/b", data: Buffer.from("b") }));
 
-  const hit = await store.resolveByIds([{ ownerScopeId: owner, id: "a" }]);
-  assert.deepEqual(
-    hit.map((f) => f.id),
-    ["a"],
-  );
+    const hit = await store.resolveByIds([{ ownerScopeId: owner, id: "a" }]);
+    assert.deepEqual(
+      hit.map((f) => f.id),
+      ["a"],
+    );
 
-  await store.setEnabled("a", false);
-  assert.equal((await store.resolveByIds([{ ownerScopeId: owner, id: "a" }])).length, 0, "disabled excluded");
-  assert.equal(await store.get("a"), null, "get hides disabled by default");
-  assert.ok(await store.get("a", { includeDisabled: true }), "get can surface disabled");
-});
+    await store.setEnabled("a", false);
+    assert.equal((await store.resolveByIds([{ ownerScopeId: owner, id: "a" }])).length, 0, "disabled excluded");
+    assert.equal(await store.get("a"), null, "get hides disabled by default");
+    assert.ok(await store.get("a", { includeDisabled: true }), "get can surface disabled");
+  }));
 
-test("delete removes the ROW only — bytes shared with another row stay openable", async () => {
-  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const { artifact: out } = await store.put(put({ id: "out", direction: "out", path: "p/out", data: PNG }));
-  const { artifact: inb } = await store.put(put({ id: "in", direction: "in", path: "p/in", data: PNG }));
-  assert.equal(out.blobKey, inb.blobKey, "identical bytes dedup to one blob");
+test("delete removes the ROW only — bytes shared with another row stay openable", () =>
+  inTestTenant(async () => {
+    const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    const { artifact: out } = await store.put(put({ id: "out", direction: "out", path: "p/out", data: PNG }));
+    const { artifact: inb } = await store.put(put({ id: "in", direction: "in", path: "p/in", data: PNG }));
+    assert.equal(out.blobKey, inb.blobKey, "identical bytes dedup to one blob");
 
-  await store.delete("out");
-  assert.equal(await store.get("out"), null, "row gone");
-  const back = await drain(store, "in");
-  assert.deepEqual(back, PNG, "the surviving row's bytes are intact (no inline byte delete)");
-});
+    await store.delete("out");
+    assert.equal(await store.get("out"), null, "row gone");
+    const back = await drain(store, "in");
+    assert.deepEqual(back, PNG, "the surviving row's bytes are intact (no inline byte delete)");
+  }));
 
-test("document listing groups authorized copies before pagination", async () => {
-  await assertDocumentListing(createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()));
-});
+test("document listing groups authorized copies before pagination", () =>
+  inTestTenant(async () => {
+    await assertDocumentListing(createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()));
+  }));
 
-test("document listing keeps unknown hashes separate and picks deterministic representatives", async () => {
-  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  const { artifact: b } = await store.put(put({ id: "b", path: "b", createdAt: 100 }));
-  await store.put(put({ id: "a", path: "a", createdAt: 100 }));
-  for (const id of ["unknown-1", "unknown-2"]) {
-    const { data: _data, ...input } = put({ id, path: id, createdAt: 100 });
-    await store.publish({ ...input, blobKey: b.blobKey!, sizeBytes: b.sizeBytes, sha256: null });
-  }
-  assert.deepEqual(
-    (await store.listDocuments([owner], [])).files.map((f) => f.id),
-    ["unknown-2", "unknown-1", "a"],
-  );
-});
+test("document listing keeps unknown hashes separate and picks deterministic representatives", () =>
+  inTestTenant(async () => {
+    const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    const { artifact: b } = await store.put(put({ id: "b", path: "b", createdAt: 100 }));
+    await store.put(put({ id: "a", path: "a", createdAt: 100 }));
+    for (const id of ["unknown-1", "unknown-2"]) {
+      const { data: _data, ...input } = put({ id, path: id, createdAt: 100 });
+      await store.publish({ ...input, blobKey: b.blobKey!, sizeBytes: b.sizeBytes, sha256: null });
+    }
+    assert.deepEqual(
+      (await store.listDocuments([owner], [])).files.map((f) => f.id),
+      ["unknown-2", "unknown-1", "a"],
+    );
+  }));
 
 test("local stream failure removes partial bytes and publishes nothing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "qm-file-failure-"));
@@ -247,6 +257,9 @@ test("local stream failure removes partial bytes and publishes nothing", async (
   }
 });
 
-test("shared file refs authorize only the exact record ID", async () => {
-  await assertSharedRecordIdentity(createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()));
-});
+test("shared file refs authorize only the exact record ID", () =>
+  inTestTenant(async () => {
+    await assertSharedRecordIdentity(
+      createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
+    );
+  }));

@@ -11,7 +11,9 @@ import { NeedsApproval } from "../../src/tools/primitives.ts";
 import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/agent/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
-import { recordStoppedTurn } from "../../src/agent/turn-support.ts";
+import { emitEntry, recordStoppedTurn } from "../../src/agent/turn-support.ts";
+import type { NewEntry } from "../../src/sessions/session-store.ts";
+import type { SessionEntry } from "../../src/types.ts";
 import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
@@ -78,7 +80,9 @@ function mockProviderMessages(
   });
 }
 
-function withCallIds(emit: AgentTurnInput["emit"]): AgentTurnInput["emit"] {
+type RecordEntry = (entry: Pick<NewEntry, "type" | "payload" | "author">) => Promise<SessionEntry>;
+
+function withCallIds(emit: RecordEntry): RecordEntry {
   const open: string[] = [];
   return (entry) => {
     if (entry.type !== "tool_call" && entry.type !== "tool_result") return emit(entry);
@@ -101,19 +105,19 @@ export function createMockAgent(): Agent {
   const flakyScreens = new Set<string>();
   const agent: Agent = {
     async runTurn(input: AgentTurnInput): Promise<AgentTurnResult> {
-      let turn: AgentTurnInput = { ...input, emit: withCallIds(input.emit) };
+      let turn: AgentTurnInput = input;
+      const record = withCallIds((entry) => emitEntry(input, entry));
       const continued = turn.continueTurn ? turn.history.find((e) => e.seq === turn.resumeUserSeq) : undefined;
       if (continued) turn = { ...turn, input: "", environment: undefined };
       const userEntry =
         continued ??
-        (await turn.emit({
+        (await record({
           type: "user",
           payload: {
             text: turn.input,
             ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
             ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
           },
-          scopeLabel: turn.scopeLabel,
           ...(turn.runtimeActorId ? { author: turn.runtimeActorId } : {}),
         }));
       const modelPrompt = [turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
@@ -196,16 +200,14 @@ export function createMockAgent(): Agent {
       } else if (resumePostSessions.has(turn.session.id)) {
         const msg = resumePostSessions.get(turn.session.id)!;
         resumePostSessions.delete(turn.session.id);
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "slack", action: "post", bytes: msg.length },
-          scopeLabel: turn.scopeLabel,
         });
         const r = await turn.tools.post(msg);
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok ? "(posted after resume)" : `[not sent] ${r.message ?? "failed"}`;
@@ -213,15 +215,13 @@ export function createMockAgent(): Agent {
         shutdownResumeSessions.delete(turn.session.id);
         reply = "finished after resume";
       } else if (command0 === "!work-until-shutdown") {
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "execute", callId: "build", command: "make build" },
-          scopeLabel: turn.scopeLabel,
         });
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "execute", callId: "build", ok: true },
-          scopeLabel: turn.scopeLabel,
         });
         shutdownResumeSessions.add(turn.session.id);
         await new Promise<void>((resolve) => {
@@ -232,10 +232,9 @@ export function createMockAgent(): Agent {
         return { reply: "(stopped)", stopped: true, modelCalls: 1 };
       } else if (command0.startsWith("!post-lost-result ")) {
         const msg = cmd.slice(cmd.indexOf("!post-lost-result ") + "!post-lost-result ".length);
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "slack", action: "post", bytes: msg.length },
-          scopeLabel: turn.scopeLabel,
         });
         await turn.tools.post(msg);
         resumePostSessions.set(turn.session.id, `${msg} (repost)`);
@@ -252,26 +251,23 @@ export function createMockAgent(): Agent {
         const bar = rest.indexOf("|");
         const first = bar === -1 ? rest : rest.slice(0, bar);
         const second = bar === -1 ? rest : rest.slice(bar + 1);
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "slack", action: "post", bytes: first.length },
-          scopeLabel: turn.scopeLabel,
         });
         const r = await turn.tools.post(first);
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-          scopeLabel: turn.scopeLabel,
         });
         resumePostSessions.set(turn.session.id, second);
         throw new Error("boom: simulated fault after a completed post");
       } else if (command0 === "!work-then-boom") {
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "execute", command: "make build" },
-          scopeLabel: turn.scopeLabel,
         });
-        await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
+        await record({ type: "tool_result", payload: { tool: "execute", ok: true } });
         throw new Error("boom: simulated mid-turn fault");
       } else if (command0 === "!refuse") {
         throw new NonRetryableTurnError(
@@ -283,13 +279,12 @@ export function createMockAgent(): Agent {
         if (shedSessions.has(turn.session.id)) {
           reply = "worklog: did the thing but never posted";
         } else {
-          await turn.emit({
+          await record({
             type: "tool_call",
             payload: { tool: "slack", action: "post" },
-            scopeLabel: turn.scopeLabel,
           });
           const r = await turn.tools.post("nudged reply");
-          await turn.emit({ type: "tool_result", payload: { tool: "post", ok: r.ok }, scopeLabel: turn.scopeLabel });
+          await record({ type: "tool_result", payload: { tool: "post", ok: r.ok } });
           usedTool = true;
           reply = r.ok ? "(posted after nudge)" : `[not sent] ${r.message ?? "failed"}`;
         }
@@ -305,49 +300,45 @@ export function createMockAgent(): Agent {
           cmd.slice(cmd.indexOf("!preamble-then-quiet") + "!preamble-then-quiet".length).trim() ||
           "Still queued — silent.";
         if (turn.onDelta) for (const chunk of streamChunks(preamble)) turn.onDelta(chunk);
-        await turn.emit({ type: "text", payload: { text: preamble }, scopeLabel: turn.scopeLabel });
-        await turn.emit({
+        await record({ type: "text", payload: { text: preamble } });
+        await record({
           type: "tool_call",
           payload: { tool: "execute", command: "check" },
-          scopeLabel: turn.scopeLabel,
         });
-        await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
+        await record({ type: "tool_result", payload: { tool: "execute", ok: true } });
         usedTool = true;
         silent = turn.pollFire === true;
         reply = turn.pollFire ? "" : preamble;
       } else if (command0.startsWith("!phased-reply")) {
         await turn.onTextBlockStart?.("commentary");
         turn.onDelta?.("Checking.");
-        await turn.emit({
+        await record({
           type: "text",
           payload: { text: "Checking.", phase: "commentary" },
-          scopeLabel: turn.scopeLabel,
         });
         await turn.onTextBlockStart?.("final_answer");
         reply = "All clear.";
       } else if (command0.startsWith("!preamble")) {
         const preamble = cmd.slice(cmd.indexOf("!preamble") + "!preamble".length).trim() || "On it — checking.";
         if (turn.onDelta) for (const chunk of streamChunks(preamble)) turn.onDelta(chunk);
-        await turn.emit({ type: "text", payload: { text: preamble }, scopeLabel: turn.scopeLabel });
-        await turn.emit({
+        await record({ type: "text", payload: { text: preamble } });
+        await record({
           type: "tool_call",
           payload: { tool: "execute", command: "check" },
-          scopeLabel: turn.scopeLabel,
         });
-        await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
+        await record({ type: "tool_result", payload: { tool: "execute", ok: true } });
         usedTool = true;
         turn.onTextBlockStart?.();
         reply = `${preamble}\n\nAll clear — nothing broke.`;
       } else if (command0.startsWith("!speakpost ")) {
         const msg = cmd.slice(cmd.indexOf("!speakpost ") + "!speakpost ".length);
         if (turn.onDelta) for (const chunk of streamChunks("Answering directly.")) turn.onDelta(chunk);
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "slack", action: "post", bytes: msg.length },
-          scopeLabel: turn.scopeLabel,
         });
         const r = await turn.tools.post(msg);
-        await turn.emit({ type: "tool_result", payload: { tool: "post", ok: r.ok }, scopeLabel: turn.scopeLabel });
+        await record({ type: "tool_result", payload: { tool: "post", ok: r.ok } });
         usedTool = true;
         reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
       } else if (command0 === "!finish-silent") {
@@ -355,11 +346,10 @@ export function createMockAgent(): Agent {
         silent = turn.pollFire === true || turn.surfaceTools === true;
         reply = silent ? "" : "Nothing to report; ending silently.";
         if (silent) {
-          await turn.emit({ type: "tool_call", payload: { tool: "finish_silently" }, scopeLabel: turn.scopeLabel });
-          await turn.emit({
+          await record({ type: "tool_call", payload: { tool: "finish_silently" } });
+          await record({
             type: "tool_result",
             payload: { tool: "finish_silently", silent: true },
-            scopeLabel: turn.scopeLabel,
           });
         }
       } else if (command0 === "!finish-silent-approval") {
@@ -381,10 +371,9 @@ export function createMockAgent(): Agent {
         const thinking = command0.slice("!think ".length);
         const step = { id: randomUUID(), index: 0 };
         for (const chunk of streamChunks(thinking)) turn.onReasoningDelta?.(step.id, step.index, chunk);
-        await turn.emit({
+        await record({
           type: "thinking",
           payload: { thinking, thinkingSignature: "OPAQUE-SIG-BYTES", step },
-          scopeLabel: turn.scopeLabel,
         });
         reply = "thought about it";
       } else if (command0.startsWith("!execute ")) {
@@ -399,7 +388,7 @@ export function createMockAgent(): Agent {
           scratch: params.scratch,
           sandboxId: params.sandboxId,
         });
-        await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+        await record({ type: "tool_result", payload: result });
         turn.onProgress?.({ toolCalls: 1 });
         usedTool = true;
         reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
@@ -408,24 +397,23 @@ export function createMockAgent(): Agent {
         const inboxDir = / shared \S+ \(\.\/(\S+)\/[^/)]+\)\./.exec(turn.environment ?? "")?.[1] ?? "inbox";
         const command = cmd.slice(cmd.indexOf(tag) + tag.length).replaceAll("{INBOX}", inboxDir);
         if (gateTool("execute")) {
-          await turn.emit({
+          await record({
             type: "tool_call",
             payload: { tool: "execute", command, blocked: "needs_approval" },
-            scopeLabel: turn.scopeLabel,
           });
           usedTool = true;
           reply = "";
         } else {
-          await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
+          await record({ type: "tool_call", payload: { tool: "execute", command } });
           const result = await turn.tools.execute(command, tag === "!scratch " ? { scratch: true } : undefined);
-          await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+          await record({ type: "tool_result", payload: result });
           turn.onProgress?.({ toolCalls: 1 });
           usedTool = true;
           reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
         }
       } else if (command0.startsWith("!screened-run ")) {
         const command = cmd.slice(cmd.indexOf("!screened-run ") + "!screened-run ".length);
-        await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
+        await record({ type: "tool_call", payload: { tool: "execute", command } });
         const result = await turn.tools.execute(command);
         const output = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
         const screen = turn.screenToolResult
@@ -440,7 +428,7 @@ export function createMockAgent(): Agent {
           : ({ outcome: "allow" } as ToolResultScreen);
         if (screen.outcome === "quarantine") {
           const stub = "[tool output quarantined by the security screen]";
-          await turn.emit({
+          await record({
             type: "tool_result",
             payload: {
               tool: "execute",
@@ -449,21 +437,19 @@ export function createMockAgent(): Agent {
               result: stub,
               isError: true,
             },
-            scopeLabel: turn.scopeLabel,
           });
           reply = stub;
         } else {
-          await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+          await record({ type: "tool_result", payload: result });
           reply = output;
         }
         turn.onProgress?.({ toolCalls: 1 });
         usedTool = true;
       } else if (command0.startsWith("!paused-approval ")) {
         const command = command0.slice("!paused-approval ".length);
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "execute", command, blocked: "needs_approval" },
-          scopeLabel: turn.scopeLabel,
         });
         collected.push({ command, reason: "requires approval" });
         pausedOnApproval = true;
@@ -477,17 +463,16 @@ export function createMockAgent(): Agent {
         reply = "";
       } else if (command0.startsWith("!collect-approval ")) {
         const command = command0.slice("!collect-approval ".length);
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "execute", command, blocked: "needs_approval" },
-          scopeLabel: turn.scopeLabel,
         });
         collected.push({ command, reason: "requires approval" });
         usedTool = true;
         reply = `worked around it; done`;
       } else if (command0.startsWith("!collect-exec ")) {
         const command = command0.slice("!collect-exec ".length);
-        await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
+        await record({ type: "tool_call", payload: { tool: "execute", command } });
         try {
           const result = await turn.tools.execute(command);
           reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
@@ -508,10 +493,10 @@ export function createMockAgent(): Agent {
         const command = command0.slice("!double-exec ".length);
         let ran = 0;
         for (let i = 0; i < 2; i++) {
-          await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
+          await record({ type: "tool_call", payload: { tool: "execute", command } });
           try {
             const result = await turn.tools.execute(command);
-            await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+            await record({ type: "tool_result", payload: result });
             ran++;
           } catch (e) {
             if (!(e instanceof NeedsApproval)) throw e;
@@ -550,10 +535,9 @@ export function createMockAgent(): Agent {
       } else if (command0.startsWith("!read ")) {
         const path = command0.slice(6).trim();
         const { content } = await turn.tools.read(path);
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "read", path, found: content != null },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = content ?? `(no file: ${path})`;
@@ -589,10 +573,9 @@ export function createMockAgent(): Agent {
       } else if (command0.startsWith("!skill ")) {
         const [name, path] = command0.slice(7).trim().split(/\s+/);
         const r = await turn.tools.skill(name!, path ? { path } : undefined);
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "skill", name, found: r.content != null, ...(r.dir ? { dir: r.dir } : {}) },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply =
@@ -628,16 +611,14 @@ export function createMockAgent(): Agent {
             await turn.tools.execute(`printf %s ${JSON.stringify(data)} > ${JSON.stringify(path)}`);
           }
         }
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "attach", files: paths },
-          scopeLabel: turn.scopeLabel,
         });
         const r = await turn.tools.attach(paths);
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: r.ok ? { tool: "attach", ok: true, files: r.files } : { tool: "attach", ok: false },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         if (tag === "!attachsilent ") silent = turn.pollFire === true;
@@ -647,16 +628,14 @@ export function createMockAgent(): Agent {
         const sp = rest.indexOf(" ");
         const channel = sp === -1 ? rest : rest.slice(0, sp);
         const msg = sp === -1 ? "" : rest.slice(sp + 1);
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "reach", channel, bytes: msg.length },
-          scopeLabel: turn.scopeLabel,
         });
         const r = await turn.tools.reach(msg, { channel });
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "reach", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok ? `(reached ${r.matched ?? channel})` : `[not sent] ${r.message ?? "failed"}`;
@@ -665,31 +644,27 @@ export function createMockAgent(): Agent {
         const sp = rest.indexOf(" ");
         const threadTs = sp === -1 ? rest : rest.slice(0, sp);
         const msg = sp === -1 ? "" : rest.slice(sp + 1);
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "slack", action: "post", ts: threadTs, bytes: msg.length },
-          scopeLabel: turn.scopeLabel,
         });
         const r = await turn.tools.post(msg, { ts: threadTs });
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok ? "(posted in thread)" : `[not sent] ${r.message ?? "failed"}`;
       } else if (command0.startsWith("!broadcast ")) {
         const msg = cmd.slice(cmd.indexOf("!broadcast ") + "!broadcast ".length);
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "slack", action: "post", broadcast: true, bytes: msg.length },
-          scopeLabel: turn.scopeLabel,
         });
         const r = await turn.tools.post(msg, { broadcast: true });
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok ? "(broadcast to channel)" : `[not sent] ${r.message ?? "failed"}`;
@@ -699,16 +674,14 @@ export function createMockAgent(): Agent {
         const msgs = bar === -1 ? [rest] : [rest.slice(0, bar), rest.slice(bar + 1)];
         let sent = 0;
         for (const msg of msgs) {
-          await turn.emit({
+          await record({
             type: "tool_call",
             payload: { tool: "slack", action: "post", bytes: msg.length },
-            scopeLabel: turn.scopeLabel,
           });
           const r = await turn.tools.post(msg);
-          await turn.emit({
+          await record({
             type: "tool_result",
             payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-            scopeLabel: turn.scopeLabel,
           });
           if (r.ok) sent++;
         }
@@ -716,16 +689,14 @@ export function createMockAgent(): Agent {
         reply = `(posted ${sent})`;
       } else if (command0.startsWith("!post ")) {
         const msg = cmd.slice(cmd.indexOf("!post ") + "!post ".length);
-        await turn.emit({
+        await record({
           type: "tool_call",
           payload: { tool: "slack", action: "post", bytes: msg.length },
-          scopeLabel: turn.scopeLabel,
         });
         const r = await turn.tools.post(msg);
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
@@ -736,20 +707,18 @@ export function createMockAgent(): Agent {
         const paths = (sp === -1 ? rest : rest.slice(0, sp)).split(",").filter(Boolean);
         const msg = sp === -1 ? "" : rest.slice(sp + 1);
         const r = await turn.tools.post(msg, undefined, paths);
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok ? "(posted files)" : `[not sent] ${r.message ?? "failed"}`;
       } else if (command0.startsWith("!react ")) {
         const [, ts, emoji] = command0.split(/\s+/);
         const r = await turn.tools.react({ ts: ts ?? "", emoji: emoji ?? "" });
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "react", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok ? "(reacted)" : `[not reacted] ${r.message ?? "failed"}`;
@@ -759,38 +728,34 @@ export function createMockAgent(): Agent {
         const editRef = sp === -1 ? rest : rest.slice(0, sp);
         const newText = sp === -1 ? "" : rest.slice(sp + 1);
         const r = await turn.tools.edit({ ref: editRef, text: newText });
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "edit", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok ? "(edited)" : `[not edited] ${r.message ?? "failed"}`;
       } else if (command0.startsWith("!delete ")) {
         const [, delRef] = command0.split(/\s+/);
         const r = await turn.tools.delete({ ref: delRef ?? "" });
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "delete", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok ? "(deleted)" : `[not deleted] ${r.message ?? "failed"}`;
       } else if (command0 === "!read_thread" || command0.startsWith("!read_thread ")) {
         const r = await turn.tools.readThread();
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "read_thread", ok: r.ok, count: (r.messages ?? []).length },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok ? `read ${(r.messages ?? []).length} message(s)` : `[couldn't read] ${r.message ?? "unavailable"}`;
       } else if (command0 === "!whats_new") {
         const r = await turn.tools.whatsNew();
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "whats_new", ok: r.ok },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok
@@ -805,10 +770,9 @@ export function createMockAgent(): Agent {
           q = q.slice(sourceMatch[0].length);
         }
         const r = await turn.tools.search(q, source ? { source } : undefined);
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "search", ok: r.ok, count: (r.hits ?? []).length },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         const first = (r.hits ?? [])[0];
@@ -817,10 +781,9 @@ export function createMockAgent(): Agent {
           : `[couldn't search] ${r.message ?? "unavailable"}`;
       } else if (command0 === "!read_members") {
         const r = await turn.tools.readMembers();
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "read_members", ok: r.ok, count: (r.members ?? []).length },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok
@@ -829,19 +792,17 @@ export function createMockAgent(): Agent {
       } else if (command0.startsWith("!set_standing_order ")) {
         const orders = cmd.slice(cmd.indexOf("!set_standing_order ") + "!set_standing_order ".length).trim();
         const r = await turn.tools.setStandingOrder(orders);
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "set_standing_order", ok: r.ok },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok ? "standing order set" : `[couldn't set standing order] ${r.message ?? "unavailable"}`;
       } else if (command0 === "!get_standing_order") {
         const r = await turn.tools.getStandingOrder();
-        await turn.emit({
+        await record({
           type: "tool_result",
           payload: { tool: "get_standing_order", ok: r.ok },
-          scopeLabel: turn.scopeLabel,
         });
         usedTool = true;
         reply = r.ok
@@ -888,7 +849,7 @@ export function createMockAgent(): Agent {
 
       if (turn.onDelta) for (const chunk of streamChunks(reply)) turn.onDelta(chunk);
 
-      await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+      await record({ type: "assistant", payload: { text: reply } });
       const modelCalls = usedTool ? 2 : 1;
       const steps = Array.from({ length: modelCalls }, (_, step) => callUsage(step));
       const cacheUsage = steps.reduce(

@@ -1,3 +1,4 @@
+import type { AdmittedWork } from "../../util/admitted-work.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { GoalCreateInput } from "../../agent/goal.ts";
 import type { RunStop } from "../../runs/run-store.ts";
@@ -98,7 +99,6 @@ export interface OrchestratorInput extends Omit<
 
   runStartedAt?: number;
   finalAttempt?: boolean;
-  background?: boolean;
   cancel?: AbortSignal;
   shutdown?: AbortSignal;
   sessionParticipantIds?: readonly string[];
@@ -109,6 +109,8 @@ export interface OrchestratorInput extends Omit<
 }
 
 export interface OrchestratorDeps {
+  /** Tracks each turn's detached tail so shutdown drains it (box reclaim, fallback title). */
+  admittedWork?: AdmittedWork;
   externalSlackPolicies?: ExternalSlackPolicies;
   swarms?: SwarmService;
   refreshModels?: () => Promise<void>;
@@ -133,7 +135,6 @@ export interface OrchestratorDeps {
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
   approvalSummaryTimeoutMs?: number;
-  turnLeaseWaitMs?: number;
   securityScreenTimeoutMs?: number;
   securityScreener?: SecurityScreener;
   backgroundJobTtlMs?: number;
@@ -156,7 +157,7 @@ export interface OrchestratorDeps {
   memoryStrategy?: MemoryStrategy;
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
-  skillsReady?: Promise<void>;
+  skillsReady?: () => Promise<void>;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
   errors?: ErrorLog;

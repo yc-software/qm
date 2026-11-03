@@ -14,6 +14,7 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const SECRET = "agent-files-secret".repeat(3);
 
@@ -43,14 +44,16 @@ describe("agent files self-API", async () => {
   let binaryId: string;
 
   const capFor = (actorId: string) =>
-    mintCapabilityToken(
-      {
-        actorId,
-        scopeId: scopeId("personal", actorId),
-        aud: CONTROL_PLANE_AUD,
-        exp: Date.now() + CAPABILITY_TTL_MS,
-      },
-      SECRET,
+    inTestTenant(() =>
+      mintCapabilityToken(
+        {
+          actorId,
+          scopeId: scopeId("personal", actorId),
+          aud: CONTROL_PLANE_AUD,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+        },
+        SECRET,
+      ),
     );
 
   const get = async (path: string, token?: string) =>
@@ -68,46 +71,54 @@ describe("agent files self-API", async () => {
     theirsId = fileArtifactId("theirs", "out", 0);
     encodedId = fileArtifactId("encoded", "out", 0);
     binaryId = fileArtifactId("binary", "out", 0);
-    await built.files.put({
-      id: mineId,
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      name: "mine.txt",
-      path: `artifacts/${mineId}/mine.txt`,
-      mimetype: "text/plain",
-      data: Buffer.from("mine"),
-      direction: "out",
-    });
-    await built.files.put({
-      id: theirsId,
-      ownerScopeId: scopeId("personal", "U2"),
-      createdBy: "U2",
-      name: "theirs.txt",
-      path: `artifacts/${theirsId}/theirs.txt`,
-      mimetype: "text/plain",
-      data: Buffer.from("theirs"),
-      direction: "out",
-    });
-    await built.files.put({
-      id: encodedId,
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      name: "encoded.json",
-      path: `artifacts/${encodedId}/encoded.json`,
-      mimetype: "application/json; charset=iso-8859-1",
-      data: Buffer.from("{}"),
-      direction: "out",
-    });
-    await built.files.put({
-      id: binaryId,
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      name: "binary.png",
-      path: `artifacts/${binaryId}/binary.png`,
-      mimetype: "image/png",
-      data: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
-      direction: "out",
-    });
+    await inTestTenant(() =>
+      built.files.put({
+        id: mineId,
+        ownerScopeId: scopeId("personal", "U1"),
+        createdBy: "U1",
+        name: "mine.txt",
+        path: `artifacts/${mineId}/mine.txt`,
+        mimetype: "text/plain",
+        data: Buffer.from("mine"),
+        direction: "out",
+      }),
+    );
+    await inTestTenant(() =>
+      built.files.put({
+        id: theirsId,
+        ownerScopeId: scopeId("personal", "U2"),
+        createdBy: "U2",
+        name: "theirs.txt",
+        path: `artifacts/${theirsId}/theirs.txt`,
+        mimetype: "text/plain",
+        data: Buffer.from("theirs"),
+        direction: "out",
+      }),
+    );
+    await inTestTenant(() =>
+      built.files.put({
+        id: encodedId,
+        ownerScopeId: scopeId("personal", "U1"),
+        createdBy: "U1",
+        name: "encoded.json",
+        path: `artifacts/${encodedId}/encoded.json`,
+        mimetype: "application/json; charset=iso-8859-1",
+        data: Buffer.from("{}"),
+        direction: "out",
+      }),
+    );
+    await inTestTenant(() =>
+      built.files.put({
+        id: binaryId,
+        ownerScopeId: scopeId("personal", "U1"),
+        createdBy: "U1",
+        name: "binary.png",
+        path: `artifacts/${binaryId}/binary.png`,
+        mimetype: "image/png",
+        data: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+        direction: "out",
+      }),
+    );
   });
 
   after(async () => {

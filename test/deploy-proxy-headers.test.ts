@@ -9,6 +9,7 @@ import { createAdminService } from "../src/admin/admin-service.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { testAdminGrantStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testTenantHeaders, testTenants } from "./support/test-tenants.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;
@@ -431,9 +432,10 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
     const ts = Math.floor(Date.now() / 1000);
     const res = await fetch(`${base}${path}`, {
       headers: {
+        ...testTenantHeaders(),
         "x-admin-actor": actor,
         "x-timestamp": String(ts),
-        "x-signature": signRequest(SECRET, ts, `GET\n${path}\n${actor}`),
+        "x-signature": signRequest(SECRET, ts, `GET\n${path}\n${testTenants()[0]}\n${actor}`),
       },
     });
     assert.equal(res.status, 200);

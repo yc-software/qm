@@ -1,4 +1,4 @@
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 export type AppViewAuthMode = "signed_in" | "public" | "app_only";
@@ -26,7 +26,8 @@ const DROP_REPORT_INTERVAL_MS = 60_000;
 
 const clip = (value: string | null, max: number): string | null => (value === null ? null : value.slice(0, max));
 
-export const APP_PAGE_VIEW_MIGRATIONS = [
+export const APP_PAGE_VIEW_MIGRATIONS: readonly PgMigrationDefinition[] = [
+  TENANCY_BASE,
   {
     id: "deploy/app-page-views/0002-standalone",
     statements: [
@@ -49,7 +50,7 @@ export const APP_PAGE_VIEW_MIGRATIONS = [
 ];
 
 export function createPostgresAppPageViewLog(connectionString: string): AppPageViewLog {
-  const { q } = createPgPool(connectionString, [TENANCY_BASE, ...APP_PAGE_VIEW_MIGRATIONS]);
+  const { q } = createPgPool(connectionString, APP_PAGE_VIEW_MIGRATIONS);
   let inFlight = 0;
   let dropped = 0;
   let lastDropReport = 0;

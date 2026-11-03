@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import test from "node:test";
 import pg from "pg";
-import { createPgPool, migrateRegisteredPgSchemas, PG_MIGRATIONS_TABLE } from "../src/persistence/pg-pool.ts";
+import { PG_MIGRATIONS_TABLE } from "../src/persistence/pg-pool.ts";
 import { testBareDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -19,29 +19,6 @@ async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>)
     await admin.end();
   }
 }
-
-test("slow lazy migrations queue with dynamic and bulk migrations before pool acquisition", { skip }, async () => {
-  await withDatabase(async (url, admin) => {
-    const slow = createPgPool(url, [{ id: "startup/0001", statements: ["SELECT pg_sleep(11)"] }]);
-    const next = createPgPool(url, [{ id: "startup/0002", statements: ["CREATE TABLE startup_result(value INT)"] }]);
-    try {
-      const first = slow.q("SELECT 1");
-      const second = next.q("SELECT 2");
-      const dynamic = next.migrate({ id: "startup/0003", statements: ["INSERT INTO startup_result VALUES (3)"] });
-      await Promise.all([first, second, dynamic, migrateRegisteredPgSchemas(url)]);
-      assert.deepEqual((await admin.query("SELECT value FROM startup_result")).rows, [{ value: 3 }]);
-      assert.equal((await admin.query(`SELECT count(*)::int AS count FROM ${PG_MIGRATIONS_TABLE}`)).rows[0].count, 3);
-      await assert.rejects(next.migrate({ id: "startup/0004", statements: ["SELECT * FROM missing_table"] }));
-      await next.migrate({ id: "startup/0005", statements: ["INSERT INTO startup_result VALUES (5)"] });
-      assert.deepEqual((await admin.query("SELECT value FROM startup_result ORDER BY value")).rows, [
-        { value: 3 },
-        { value: 5 },
-      ]);
-    } finally {
-      await Promise.all([slow.close(), next.close()]);
-    }
-  });
-});
 
 test("concurrent cold and repeat migration entrypoints exit and reject checksum drift", { skip }, async () => {
   await withDatabase(async (url, admin) => {

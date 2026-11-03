@@ -5,6 +5,7 @@ import { APP_PAGE_VIEW_MIGRATIONS } from "./page-views.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { typedColumns } from "../persistence/typed-columns.ts";
 import { jsonBackfill } from "../persistence/typed-statements.ts";
+import { claimAcrossTenants, rowTenant, type Claimed } from "../tenants/claim.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
@@ -105,6 +106,7 @@ export interface DeployStore {
   get(id: string): Promise<Deployment | null>;
   getByName(name: string): Promise<Deployment | null>;
   list(): Promise<Deployment[]>;
+  running(): Promise<Array<Claimed<Deployment>>>;
   setCurrentVersion(id: string, version: number): Promise<void>;
   setVersionImage(id: string, version: number, image: string): Promise<void>;
   setStatus(id: string, status: DeploymentStatus): Promise<void>;
@@ -134,6 +136,7 @@ export interface DeploymentRows {
   put(id: string, deployment: Deployment): Promise<void>;
   merge(id: string, patch: Partial<Deployment>): Promise<unknown>;
   list(): Promise<Deployment[]>;
+  running(): Promise<Array<Claimed<Deployment>>>;
   byName(name: string): Promise<Deployment | null>;
   touch(id: string, at: number): Promise<boolean>;
 }
@@ -256,6 +259,12 @@ export function createPostgresDeploymentRows(databaseUrl: string): DeploymentRow
     put: table.put,
     merge: table.merge,
     list: () => rows("true"),
+    running: async () =>
+      (
+        await claimAcrossTenants(
+          `SELECT tenant_id, ${read.names} FROM deployments WHERE status = 'running' ORDER BY tenant_id, id`,
+        )
+      ).rows.map((r) => ({ ...withEndpoint(read.fromRow(r)), ...rowTenant(r) })),
     byName: async (name) => (await rows("name = $1", [name]))[0] ?? null,
     touch: async (id, at) =>
       (
@@ -387,6 +396,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     get: (id) => backingMap.get(id),
     getByName: (name) => backingMap.byName(name),
     list: () => backingMap.list(),
+    running: () => backingMap.running(),
     async setCurrentVersion(id, version) {
       const d = await backingMap.get(id);
       if (!d) return;

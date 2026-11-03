@@ -11,8 +11,9 @@ import { createNoopAdvisoryLock, type AdvisoryLock } from "../src/persistence/ad
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { testDeployBackings, testDatabaseUrl, testDeploymentRows } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const nonLeaderLease: LeaderLease = {
   async hold() {
@@ -21,7 +22,8 @@ const nonLeaderLease: LeaderLease = {
 };
 
 function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean } = {}) {
-  const deployStore = createDeployStore(testDeployBackings());
+  const url = testDatabaseUrl();
+  const deployStore = createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) }));
   let destroys = 0;
   const provider: DeployProvider = {
     profile: { managedScaleToZero: opts.managed ?? false },
@@ -35,7 +37,7 @@ function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    acl: createAclStore(createPostgresGrantStore(url)),
     deployDir: mkdtempSync(join(tmpdir(), "concurrency-")),
     ...(opts.lease ? { leaderLease: opts.lease } : {}),
     ...(opts.lock ? { advisoryLock: opts.lock } : {}),
@@ -53,30 +55,34 @@ const future = Date.now() + 1_000_000;
 
 test("reaper: a non-leader skips the sweep — returns 0 and destroys nothing", async () => {
   const { deploy, deployStore, destroys } = svc({ lease: nonLeaderLease });
-  const d = await deploy.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-  });
+  const d = await inTestTenant(() =>
+    deploy.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+    }),
+  );
   const stopped = await deploy.reapIdleDeployments(60_000, future);
   assert.equal(stopped, 0, "non-leader returns 0");
   assert.equal(destroys, 0, "non-leader destroyed nothing");
-  assert.equal((await deployStore.get(d.id))!.status, "running", "the deployment stays running");
+  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "running", "the deployment stays running");
 });
 
 test("reaper: the leader (default no-op lease) reaps as before", async () => {
   const { deploy, deployStore } = svc();
-  const d = await deploy.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-  });
+  const d = await inTestTenant(() =>
+    deploy.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+    }),
+  );
   const stopped = await deploy.reapIdleDeployments(60_000, future);
   assert.equal(stopped, 1, "the leader reaps the idle deployment");
-  assert.equal((await deployStore.get(d.id))!.status, "stopped");
-  assert.equal((await deployStore.get(d.id))!.endpoint, null);
+  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.status, "stopped");
+  assert.equal((await inTestTenant(() => deployStore.get(d.id)))!.endpoint, null);
 });
 
 function spyLock(): { lock: AdvisoryLock; keys: string[] } {
@@ -94,24 +100,27 @@ function spyLock(): { lock: AdvisoryLock; keys: string[] } {
 test("withDeployLock: redeploy/rollback/archive each acquire the advisory mutex keyed deploy:<id>", async () => {
   const { lock, keys } = spyLock();
   const { deploy } = svc({ lock });
-  const d = await deploy.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-  });
+  const d = await inTestTenant(() =>
+    deploy.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+    }),
+  );
   assert.deepEqual(keys, [], "the initial create takes no deploy lock");
 
-  await deploy.redeploy(d.id, { entrypoint: "y", files: [] });
-  await deploy.rollbackDeployment(d.id, 1);
-  await deploy.archiveDeployment(d.id);
+  await inTestTenant(() => deploy.redeploy(d.id, { entrypoint: "y", files: [] }));
+  await inTestTenant(() => deploy.rollbackDeployment(d.id, 1));
+  await inTestTenant(() => deploy.archiveDeployment(d.id));
 
   const want = `deploy:${d.id}`;
   assert.deepEqual(keys, [want, want, want], "redeploy, rollback, archive each lock deploy:<id>");
 });
 
 test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)", async () => {
-  const deployStore = createDeployStore(testDeployBackings());
+  const url = testDatabaseUrl();
+  const deployStore = createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) }));
   let active = 0;
   let maxActive = 0;
   const provider: DeployProvider = {
@@ -130,24 +139,26 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+    acl: createAclStore(createPostgresGrantStore(url)),
     deployDir: mkdtempSync(join(tmpdir(), "serialize-")),
   });
-  const d = await deploy.deploy({
-    ownerScopeId: scopeId("personal", "U1"),
-    createdBy: "U1",
-    entrypoint: "x",
-    files: [],
-  });
+  const d = await inTestTenant(() =>
+    deploy.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+    }),
+  );
   await Promise.all([
-    deploy.redeploy(d.id, { entrypoint: "a", files: [] }),
-    deploy.redeploy(d.id, { entrypoint: "b", files: [] }),
+    inTestTenant(() => deploy.redeploy(d.id, { entrypoint: "a", files: [] })),
+    inTestTenant(() => deploy.redeploy(d.id, { entrypoint: "b", files: [] })),
   ]);
   assert.equal(maxActive, 1, "two redeploys on one deployment never ran apply() concurrently");
 });
 
-function copyingDeployStore(): DeployStore {
-  return createDeployStore(testDeployBackings());
+function copyingDeployStore(url: string): DeployStore {
+  return createDeployStore(testDeployBackings({ deployments: testDeploymentRows(url) }));
 }
 
 for (const [visit, stop, status] of [
@@ -156,7 +167,8 @@ for (const [visit, stop, status] of [
   ["keep-warm", "archive", "archived"],
 ] as const) {
   test(`withDeployLock: a ${visit} waiting on the ${stop} leaves the app ${status} and never re-applies it`, async () => {
-    const deployStore = copyingDeployStore();
+    const url = testDatabaseUrl();
+    const deployStore = copyingDeployStore(url);
     let applies = 0;
     const destroying = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
@@ -181,24 +193,29 @@ for (const [visit, stop, status] of [
       deployStore,
       provider,
       auditLog: { record() {}, events: async () => [], tail: async () => [] },
-      acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+      acl: createAclStore(createPostgresGrantStore(url)),
       deployDir: mkdtempSync(join(tmpdir(), "reach-stop-")),
     });
-    const d = await deploy.deploy({
-      ownerScopeId: scopeId("personal", "U1"),
-      createdBy: "U1",
-      entrypoint: "x",
-      files: [],
-      alwaysOn: visit === "keep-warm",
-    });
-    const stopping = stop === "archive" ? deploy.archiveDeployment(d.id) : deploy.reapIdleDeployments(60_000, future);
+    const d = await inTestTenant(() =>
+      deploy.deploy({
+        ownerScopeId: scopeId("personal", "U1"),
+        createdBy: "U1",
+        entrypoint: "x",
+        files: [],
+        alwaysOn: visit === "keep-warm",
+      }),
+    );
+    const stopping =
+      stop === "archive"
+        ? inTestTenant(() => deploy.archiveDeployment(d.id))
+        : deploy.reapIdleDeployments(60_000, future);
     await destroying.promise;
     let settled = false;
-    const visiting = (visit === "reach" ? deploy.reachDeployment(d.id, "U1") : deploy.maintainDeployments()).finally(
-      () => {
-        settled = true;
-      },
-    );
+    const visiting = (
+      visit === "reach" ? inTestTenant(() => deploy.reachDeployment(d.id, "U1")) : deploy.maintainDeployments()
+    ).finally(() => {
+      settled = true;
+    });
     await resolving.promise;
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(settled, false, `the ${visit} waits while the ${stop} holds the deploy lock`);
@@ -206,7 +223,7 @@ for (const [visit, stop, status] of [
     await stopping;
     const result = await visiting;
     assert.equal(applies, 1, `the waiting ${visit} does not re-apply the ${status} app`);
-    const after = (await deployStore.get(d.id))!;
+    const after = (await inTestTenant(() => deployStore.get(d.id)))!;
     assert.equal(after.status, status, `the app stays ${status}`);
     assert.equal(after.endpoint, null);
     assert.deepEqual(result, visit === "reach" ? { status: "not_found" } : 0);

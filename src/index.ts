@@ -12,13 +12,13 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { useOwnerDatabase } from "./tenants/claim.ts";
-import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { verifyRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 
 const config = loadConfig();
 useOwnerDatabase(config.databaseOwnerUrl);
 
 const built = buildApp(config);
-await migrateRegisteredPgSchemas(config.databaseUrl);
+await verifyRegisteredPgSchemas(config.databaseUrl);
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
@@ -45,7 +45,7 @@ const server = createServer(built.app, {
 await built.config.hydrate?.();
 await built.refreshCustomProviders();
 await built.identity.refresh();
-await built.deploymentLayerReady;
+await built.startup();
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 

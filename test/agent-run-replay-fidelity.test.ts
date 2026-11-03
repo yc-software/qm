@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createAgent, EMPTY_ENDING_NOTE } from "../src/agent/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
+import { entryFromItem, storedItem } from "../src/sessions/items.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { type RunSignalStore } from "../src/runs/run-signal-store.ts";
@@ -12,7 +12,9 @@ import { artifactImageLoader } from "../src/agent/replay-images.ts";
 import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sessions/tool-output.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -136,18 +138,11 @@ async function runTurn(
       } as unknown as ToolContext,
       scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
       orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
-      emit: async (e: NewEntry) => {
-        const appended: SessionEntry = {
-          sessionId: "fidelity",
-          seq: seq++,
-          parentSeq: null,
-          type: e.type,
-          payload: jsonb(e.payload),
-          scopeLabel: e.scopeLabel,
-          createdAt: Date.now(),
-        };
-        emitted.push(appended);
-        return appended;
+      emit: async (item) => {
+        const body = jsonb(item.body ?? {}) as Record<string, unknown>;
+        const stored = storedItem({ ...item, body }, { sessionId: "fidelity", seq: seq++, createdAt: Date.now() });
+        emitted.push(entryFromItem(stored, "personal:tester"));
+        return stored;
       },
       recordModelCall: () => {},
       ...overrides,
@@ -340,109 +335,112 @@ test("the next turn's OpenAI Responses request replays the previous turn's reaso
   ]);
 });
 
-test("a steer and an empty-ending re-prompt replay as the exact user messages the model saw", async () => {
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
-  const first = await runTurn(
-    "where is the budget doc?",
-    [],
-    [
-      () =>
-        anthropicSse([{ type: "tool_use", id: "toolu_1", name: "history", input: { query: "budget" } }], "tool_use"),
-      () => anthropicSse([{ type: "thinking", thinking: "Nothing to add.", signature: "sig-empty" }], "end_turn"),
-      () => anthropicSse([{ type: "text", text: "Q2 is in shared/q2.md; no Q3 doc." }], "end_turn"),
-    ],
-    { prepareSteer: async (text) => ({ text: `<steer>${text}</steer>` }) },
-    signals,
-    async () => {
-      await signals.send("run-1", { kind: "steer", text: "also check Q3", ts: "steer.1" });
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    },
-  );
-  assert.equal(first.result.reply, "Q2 is in shared/q2.md; no Q3 doc.");
-  assert.equal(first.bodies.length, 3);
-  const steered = first.emitted.find((e) => (e.payload as { steered?: boolean }).steered)!;
-  assert.equal(
-    (steered.payload as { text?: string }).text,
-    "also check Q3",
-    "the transcript keeps what the person typed",
-  );
+test("a steer and an empty-ending re-prompt replay as the exact user messages the model saw", () =>
+  inTestTenant(async () => {
+    const signals = createPostgresRunSignalStore(testDatabaseUrl());
+    const first = await runTurn(
+      "where is the budget doc?",
+      [],
+      [
+        () =>
+          anthropicSse([{ type: "tool_use", id: "toolu_1", name: "history", input: { query: "budget" } }], "tool_use"),
+        () => anthropicSse([{ type: "thinking", thinking: "Nothing to add.", signature: "sig-empty" }], "end_turn"),
+        () => anthropicSse([{ type: "text", text: "Q2 is in shared/q2.md; no Q3 doc." }], "end_turn"),
+      ],
+      { prepareSteer: async (text) => ({ text: `<steer>${text}</steer>` }) },
+      signals,
+      async () => {
+        await signals.send("run-1", { kind: "steer", text: "also check Q3", ts: "steer.1" });
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      },
+    );
+    assert.equal(first.result.reply, "Q2 is in shared/q2.md; no Q3 doc.");
+    assert.equal(first.bodies.length, 3);
+    const steered = first.emitted.find((e) => (e.payload as { steered?: boolean }).steered)!;
+    assert.equal(
+      (steered.payload as { text?: string }).text,
+      "also check Q3",
+      "the transcript keeps what the person typed",
+    );
 
-  const second = await runTurn("thanks", forModelContext(first.emitted), [
-    () => anthropicSse([{ type: "text", text: "Anytime." }], "end_turn"),
-  ]);
-  const before = withoutCacheControl(first.bodies[2]!.messages) as unknown[];
-  const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
-  assert.match(JSON.stringify(before), /<steer>also check Q3<\/steer>/);
-  assert.ok(JSON.stringify(before).includes(JSON.stringify(EMPTY_ENDING_NOTE)), "the re-prompt reached the model");
-  assert.equal(
-    JSON.stringify(after.slice(0, before.length + 1)),
-    JSON.stringify([
-      ...before,
-      { role: "assistant", content: [{ type: "text", text: "Q2 is in shared/q2.md; no Q3 doc." }] },
-    ]),
-  );
-});
+    const second = await runTurn("thanks", forModelContext(first.emitted), [
+      () => anthropicSse([{ type: "text", text: "Anytime." }], "end_turn"),
+    ]);
+    const before = withoutCacheControl(first.bodies[2]!.messages) as unknown[];
+    const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
+    assert.match(JSON.stringify(before), /<steer>also check Q3<\/steer>/);
+    assert.ok(JSON.stringify(before).includes(JSON.stringify(EMPTY_ENDING_NOTE)), "the re-prompt reached the model");
+    assert.equal(
+      JSON.stringify(after.slice(0, before.length + 1)),
+      JSON.stringify([
+        ...before,
+        { role: "assistant", content: [{ type: "text", text: "Q2 is in shared/q2.md; no Q3 doc." }] },
+      ]),
+    );
+  }));
 
 const PNG_A = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const PNG_B = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
-test("user and steer images replay as the exact image blocks the model saw, restored from their durable files", async () => {
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  for (const [id, data] of [
-    ["art-photo", PNG_A],
-    ["art-steer", PNG_B],
-  ] as const)
-    await files.put({
-      id,
-      ownerScopeId: "personal:tester" as never,
-      createdBy: "tester",
-      name: `${id}.png`,
-      path: `${id}.png`,
-      mimetype: "image/png",
-      data: Buffer.from(data, "base64"),
-      direction: "in",
-      createdAt: 1,
-    });
-  const signals = createPostgresRunSignalStore(testDatabaseUrl());
-  const first = await runTurn(
-    "what is in this photo?",
-    [],
-    [
-      () => anthropicSse([{ type: "tool_use", id: "toolu_1", name: "history", input: { query: "photo" } }], "tool_use"),
-      () => anthropicSse([{ type: "text", text: "A single pixel, twice." }], "end_turn"),
-    ],
-    {
-      images: [{ mimeType: "image/png", dataBase64: PNG_A, artifactId: "art-photo" }],
-      prepareSteer: async (text) => ({
-        text,
-        images: [{ mimeType: "image/png", dataBase64: PNG_B, artifactId: "art-steer" }],
-      }),
-    },
-    signals,
-    async () => {
-      await signals.send("run-1", { kind: "steer", text: "and this one", ts: "steer.img" });
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    },
-  );
-  assert.equal(first.result.reply, "A single pixel, twice.");
-  assert.doesNotMatch(JSON.stringify(first.emitted), new RegExp(PNG_A.slice(30, 60)), "no image bytes in entries");
+test("user and steer images replay as the exact image blocks the model saw, restored from their durable files", () =>
+  inTestTenant(async () => {
+    const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    for (const [id, data] of [
+      ["art-photo", PNG_A],
+      ["art-steer", PNG_B],
+    ] as const)
+      await files.put({
+        id,
+        ownerScopeId: "personal:tester" as never,
+        createdBy: "tester",
+        name: `${id}.png`,
+        path: `${id}.png`,
+        mimetype: "image/png",
+        data: Buffer.from(data, "base64"),
+        direction: "in",
+        createdAt: 1,
+      });
+    const signals = createPostgresRunSignalStore(testDatabaseUrl());
+    const first = await runTurn(
+      "what is in this photo?",
+      [],
+      [
+        () =>
+          anthropicSse([{ type: "tool_use", id: "toolu_1", name: "history", input: { query: "photo" } }], "tool_use"),
+        () => anthropicSse([{ type: "text", text: "A single pixel, twice." }], "end_turn"),
+      ],
+      {
+        images: [{ mimeType: "image/png", dataBase64: PNG_A, artifactId: "art-photo" }],
+        prepareSteer: async (text) => ({
+          text,
+          images: [{ mimeType: "image/png", dataBase64: PNG_B, artifactId: "art-steer" }],
+        }),
+      },
+      signals,
+      async () => {
+        await signals.send("run-1", { kind: "steer", text: "and this one", ts: "steer.img" });
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      },
+    );
+    assert.equal(first.result.reply, "A single pixel, twice.");
+    assert.doesNotMatch(JSON.stringify(first.emitted), new RegExp(PNG_A.slice(30, 60)), "no image bytes in entries");
 
-  const second = await runTurn(
-    "thanks",
-    forModelContext(first.emitted),
-    [() => anthropicSse([{ type: "text", text: "Anytime." }], "end_turn")],
-    { loadImage: artifactImageLoader(files, () => true) },
-  );
-  const before = withoutCacheControl(first.bodies[1]!.messages) as unknown[];
-  const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
-  const image = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
-  const sent = JSON.stringify(before);
-  assert.ok(sent.includes(JSON.stringify(image(PNG_A))) && sent.includes(JSON.stringify(image(PNG_B))));
-  assert.equal(
-    JSON.stringify(after.slice(0, before.length + 1)),
-    JSON.stringify([...before, { role: "assistant", content: [{ type: "text", text: "A single pixel, twice." }] }]),
-  );
-});
+    const second = await runTurn(
+      "thanks",
+      forModelContext(first.emitted),
+      [() => anthropicSse([{ type: "text", text: "Anytime." }], "end_turn")],
+      { loadImage: artifactImageLoader(files, () => true) },
+    );
+    const before = withoutCacheControl(first.bodies[1]!.messages) as unknown[];
+    const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
+    const image = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+    const sent = JSON.stringify(before);
+    assert.ok(sent.includes(JSON.stringify(image(PNG_A))) && sent.includes(JSON.stringify(image(PNG_B))));
+    assert.equal(
+      JSON.stringify(after.slice(0, before.length + 1)),
+      JSON.stringify([...before, { role: "assistant", content: [{ type: "text", text: "A single pixel, twice." }] }]),
+    );
+  }));
 
 test("a tool result that cannot be recorded stops the turn with that error before the model sees it", async () => {
   const failing = new Error("session store unavailable");
@@ -460,17 +458,9 @@ test("a tool result that cannot be recorded stops the turn with that error befor
         },
       ],
       {
-        emit: async (e: NewEntry) => {
-          if (e.type === "tool_result") throw failing;
-          return {
-            sessionId: "fidelity",
-            seq: 1,
-            parentSeq: null,
-            type: e.type,
-            payload: e.payload,
-            scopeLabel: e.scopeLabel,
-            createdAt: 0,
-          };
+        emit: async (item) => {
+          if (item.kind === "ToolResult") throw failing;
+          return storedItem(item, { sessionId: "fidelity", seq: 1, createdAt: 0 });
         },
       },
     ),
@@ -480,7 +470,7 @@ test("a tool result that cannot be recorded stops the turn with that error befor
 });
 
 test("a parallel call's result is recorded as soon as its tool returns, while a sibling is still running", async () => {
-  const recorded: Array<{ type: string; callId?: unknown }> = [];
+  const recorded: Array<{ kind: string; callId?: unknown }> = [];
   let seenBeforeSlowFinished: string[] = [];
   let seq = 1;
   const result = await runTurn(
@@ -502,22 +492,14 @@ test("a parallel call's result is recorded as soon as its tool returns, while a 
         async history(query: string) {
           if (query === "slow") {
             await new Promise((resolve) => setTimeout(resolve, 100));
-            seenBeforeSlowFinished = recorded.filter((e) => e.type === "tool_result").map((e) => String(e.callId));
+            seenBeforeSlowFinished = recorded.filter((e) => e.kind === "ToolResult").map((e) => String(e.callId));
           }
           return [`result for ${query}`];
         },
       } as unknown as ToolContext,
-      emit: async (e: NewEntry) => {
-        recorded.push({ type: e.type, callId: (e.payload as { callId?: unknown }).callId });
-        return {
-          sessionId: "fidelity",
-          seq: seq++,
-          parentSeq: null,
-          type: e.type,
-          payload: e.payload,
-          scopeLabel: e.scopeLabel,
-          createdAt: 0,
-        };
+      emit: async (item) => {
+        recorded.push({ kind: item.kind, callId: item.callId });
+        return storedItem(item, { sessionId: "fidelity", seq: seq++, createdAt: 0 });
       },
     },
   );
@@ -525,30 +507,31 @@ test("a parallel call's result is recorded as soon as its tool returns, while a 
   assert.deepEqual(seenBeforeSlowFinished, ["toolu_fast"]);
 });
 
-test("a replayed image is read from the file store once, not on every turn", async () => {
-  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
-  await files.put({
-    id: "art-once",
-    ownerScopeId: "personal:tester" as never,
-    createdBy: "tester",
-    name: "once.png",
-    path: "once.png",
-    mimetype: "image/png",
-    data: Buffer.from(PNG_A, "base64"),
-    direction: "in",
-    createdAt: 1,
-  });
-  let opens = 0;
-  const open = files.open.bind(files);
-  files.open = async (id) => {
-    opens += 1;
-    return open(id);
-  };
-  const load = artifactImageLoader(files, () => true);
-  const first = await load({ artifactId: "art-once", mimeType: "image/png" }, 10_000_000);
-  const second = await load({ artifactId: "art-once", mimeType: "image/png" }, 10_000_000);
-  assert.deepEqual([first, second, opens], [{ data: PNG_A, sizeBytes: 70 }, { data: PNG_A, sizeBytes: 70 }, 1]);
-});
+test("a replayed image is read from the file store once, not on every turn", () =>
+  inTestTenant(async () => {
+    const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    await files.put({
+      id: "art-once",
+      ownerScopeId: "personal:tester" as never,
+      createdBy: "tester",
+      name: "once.png",
+      path: "once.png",
+      mimetype: "image/png",
+      data: Buffer.from(PNG_A, "base64"),
+      direction: "in",
+      createdAt: 1,
+    });
+    let opens = 0;
+    const open = files.open.bind(files);
+    files.open = async (id) => {
+      opens += 1;
+      return open(id);
+    };
+    const load = artifactImageLoader(files, () => true);
+    const first = await load({ artifactId: "art-once", mimeType: "image/png" }, 10_000_000);
+    const second = await load({ artifactId: "art-once", mimeType: "image/png" }, 10_000_000);
+    assert.deepEqual([first, second, opens], [{ data: PNG_A, sizeBytes: 70 }, { data: PNG_A, sizeBytes: 70 }, 1]);
+  }));
 
 const PG_URL = process.env.DATABASE_URL;
 
@@ -559,40 +542,29 @@ async function withPgSession(
     toolOutput: ToolOutputStore;
   }) => Promise<void>,
 ): Promise<void> {
-  const { randomUUID } = await import("node:crypto");
   const { createPostgresSessionStore } = await import("../src/sessions/postgres-session-store.ts");
-  const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: PG_URL });
-  const schema = `replay_pg_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new globalThis.URL(PG_URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
-  const { seedTestTenants } = await import("./support/tenant-seed.ts");
-  await seedTestTenants(url.toString());
-  const store = createPostgresSessionStore(url.toString());
-  const raw = new pg.Pool({ connectionString: url.toString() });
+  const url = testDatabaseUrl();
+  const store = createPostgresSessionStore(url);
+  const pool = createPgPool(url);
   try {
     const session = await store.getOrCreateByThread(
       "web:replay",
       "dm",
       "personal:tester" as SessionEntry["scopeLabel"],
     );
-    const { lease } = await store.acquireLease(session.id);
-    assert.ok(lease);
-    await raw.query("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
+    const writer = { sessionId: session.id };
+    await pool.q("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
     await fn({
       toolOutput: createPostgresToolOutputStore({
-        pool: { q: async (sql, params) => (await raw.query(sql, params)).rows },
+        pool,
         bytes: createMemoryDurableByteStore(),
       }),
-      emit: (entry) => store.append({ ...lease, turnId: "run-pg" }, entry),
-      history: async () => forModelContext(await store.getEntries(session.id)),
+      emit: (entry) => store.append({ ...writer, turnId: "run-pg" }, entry),
+      history: async () =>
+        forModelContext((await store.getItems(session.id)).map((item) => entryFromItem(item, session.scopeId))),
     });
-    await store.releaseLease(lease);
   } finally {
-    await raw.end();
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.end();
+    await pool.close();
   }
 }
 
@@ -606,108 +578,109 @@ const pgTools = {
 test(
   "after a round trip through Postgres items, the next anthropic request replays a cut result and a delivery byte-for-byte",
   { skip: PG_URL ? false : "set DATABASE_URL" },
-  async () => {
-    await withPgSession(async ({ emit, history, toolOutput }) => {
-      const step1: Reply = [
-        { type: "thinking", thinking: "I should search history.", signature: "sig-one" },
-        { type: "text", text: "Checking." },
-        {
-          type: "tool_use",
-          id: "toolu_1",
-          name: "history",
-          input: { query: "budget", type: "dm", nested: { a: [1] } },
-        },
-        { type: "tool_use", id: "toolu_2", name: "history", input: { limit: "many" } },
-      ];
-      const step2: Reply = [
-        { type: "thinking", thinking: "Found it.", signature: "sig-two" },
-        { type: "text", text: "Done." },
-      ];
-      const tools = { ...pgTools, toolOutput } as ToolContext;
-      const first = await runTurn(
-        "where is the budget doc?",
-        [],
-        [() => anthropicSse(step1, "tool_use"), () => anthropicSse(step2, "end_turn")],
-        { emit, tools },
-      );
-      const scopeLabel = "personal:tester" as SessionEntry["scopeLabel"];
-      await emit({ type: "assistant", payload: { text: "Daily digest", via: "cron" }, scopeLabel });
-      const second = await runTurn(
-        "and Q3?",
-        await history(),
-        [() => anthropicSse([{ type: "text", text: "None." }], "end_turn")],
-        { emit, tools },
-      );
-      const before = withoutCacheControl(first.bodies[1]!.messages) as unknown[];
-      const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
-      assert.ok(!JSON.stringify(before).includes(bigResult.trim()));
-      assert.match(JSON.stringify(before), /tool-output\/md5\/[0-9a-f]{32}/);
-      assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
-      assert.deepEqual(after.slice(before.length), [
-        {
-          role: "assistant",
-          content: [
-            { type: "thinking", thinking: "Found it.", signature: "sig-two" },
-            { type: "text", text: "Done." },
-          ],
-        },
-        { role: "assistant", content: [{ type: "text", text: "Daily digest" }] },
-        { role: "user", content: [{ type: "text", text: "and Q3?" }] },
-      ]);
-    });
-  },
+  () =>
+    inTestTenant(async () => {
+      await withPgSession(async ({ emit, history, toolOutput }) => {
+        const step1: Reply = [
+          { type: "thinking", thinking: "I should search history.", signature: "sig-one" },
+          { type: "text", text: "Checking." },
+          {
+            type: "tool_use",
+            id: "toolu_1",
+            name: "history",
+            input: { query: "budget", type: "dm", nested: { a: [1] } },
+          },
+          { type: "tool_use", id: "toolu_2", name: "history", input: { limit: "many" } },
+        ];
+        const step2: Reply = [
+          { type: "thinking", thinking: "Found it.", signature: "sig-two" },
+          { type: "text", text: "Done." },
+        ];
+        const tools = { ...pgTools, toolOutput } as ToolContext;
+        const first = await runTurn(
+          "where is the budget doc?",
+          [],
+          [() => anthropicSse(step1, "tool_use"), () => anthropicSse(step2, "end_turn")],
+          { emit, tools },
+        );
+        await emit({ kind: "AgentMessage", text: "Daily digest", body: { via: "cron" } });
+        const second = await runTurn(
+          "and Q3?",
+          await history(),
+          [() => anthropicSse([{ type: "text", text: "None." }], "end_turn")],
+          { emit, tools },
+        );
+        const before = withoutCacheControl(first.bodies[1]!.messages) as unknown[];
+        const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
+        assert.ok(!JSON.stringify(before).includes(bigResult.trim()));
+        assert.match(JSON.stringify(before), /tool-output\/md5\/[0-9a-f]{32}/);
+        assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
+        assert.deepEqual(after.slice(before.length), [
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "Found it.", signature: "sig-two" },
+              { type: "text", text: "Done." },
+            ],
+          },
+          { role: "assistant", content: [{ type: "text", text: "Daily digest" }] },
+          { role: "user", content: [{ type: "text", text: "and Q3?" }] },
+        ]);
+      });
+    }),
 );
 
 test(
   "after a round trip through Postgres items, the next OpenAI Responses request replays the previous turn exactly",
   { skip: PG_URL ? false : "set DATABASE_URL" },
-  async () => {
-    await withPgSession(async ({ emit, history }) => {
-      const reasoning = (id: string, text: string) => ({
-        type: "reasoning",
-        id,
-        summary: [{ type: "summary_text", text }],
-        encrypted_content: `enc-${id}`,
+  () =>
+    inTestTenant(async () => {
+      await withPgSession(async ({ emit, history }) => {
+        const reasoning = (id: string, text: string) => ({
+          type: "reasoning",
+          id,
+          summary: [{ type: "summary_text", text }],
+          encrypted_content: `enc-${id}`,
+        });
+        const message = (id: string, text: string) => ({
+          type: "message",
+          id,
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text, annotations: [] }],
+        });
+        const overrides: Partial<AgentTurnInput> = {
+          runtime: { modelId: "gpt-5.4" },
+          providerKeys: { openai: "sk-openai" },
+          emit,
+          tools: pgTools,
+        };
+        const step1: Reply = [
+          reasoning("rs_1", "Search history."),
+          {
+            type: "function_call",
+            id: "fc_1",
+            call_id: "call_1",
+            name: "history",
+            arguments: '{"type":"dm","query":"budget"}',
+          },
+        ];
+        const first = await runTurn(
+          "where is the budget doc?",
+          [],
+          [() => openaiSse(step1), () => openaiSse([reasoning("rs_2", ""), message("msg_2", "Done.")])],
+          overrides,
+        );
+        const second = await runTurn(
+          "and Q3?",
+          await history(),
+          [() => openaiSse([message("msg_3", "None.")])],
+          overrides,
+        );
+        const before = first.bodies[1]!.input!;
+        const after = second.bodies[0]!.input!;
+        assert.ok(JSON.stringify(before).includes(bigResult.trim()));
+        assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
       });
-      const message = (id: string, text: string) => ({
-        type: "message",
-        id,
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text, annotations: [] }],
-      });
-      const overrides: Partial<AgentTurnInput> = {
-        runtime: { modelId: "gpt-5.4" },
-        providerKeys: { openai: "sk-openai" },
-        emit,
-        tools: pgTools,
-      };
-      const step1: Reply = [
-        reasoning("rs_1", "Search history."),
-        {
-          type: "function_call",
-          id: "fc_1",
-          call_id: "call_1",
-          name: "history",
-          arguments: '{"type":"dm","query":"budget"}',
-        },
-      ];
-      const first = await runTurn(
-        "where is the budget doc?",
-        [],
-        [() => openaiSse(step1), () => openaiSse([reasoning("rs_2", ""), message("msg_2", "Done.")])],
-        overrides,
-      );
-      const second = await runTurn(
-        "and Q3?",
-        await history(),
-        [() => openaiSse([message("msg_3", "None.")])],
-        overrides,
-      );
-      const before = first.bodies[1]!.input!;
-      const after = second.bodies[0]!.input!;
-      assert.ok(JSON.stringify(before).includes(bigResult.trim()));
-      assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
-    });
-  },
+    }),
 );

@@ -1,5 +1,4 @@
-import { typedTableMigration } from "../persistence/typed-table-migration.ts";
-import { jsonBackfill } from "../persistence/typed-statements.ts";
+import { typedColumns } from "../persistence/typed-columns.ts";
 import { createHash } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { pgRows, type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
@@ -264,23 +263,36 @@ const DEPLOYMENT_LAYER_COLUMNS: RowColumns<StoredDeploymentLayer, "id"> = {
 export const DEPLOYMENT_LAYER: RowTable<StoredDeploymentLayer, "id"> = {
   table: "deployment_layer",
   key: "id",
+  global: true,
   columns: DEPLOYMENT_LAYER_COLUMNS,
   migrations: [
-    typedTableMigration({
-      table: "deployment_layer",
-      columns: [
-        "id TEXT NOT NULL",
-        "content_hash TEXT NOT NULL",
-        "version BIGINT NOT NULL",
-        "updated_at BIGINT NOT NULL",
-        "updated_by TEXT NOT NULL",
-        "bundle JSONB NOT NULL",
-        "resolved JSONB NOT NULL",
-        "pending_audits JSONB",
+    {
+      id: "tenancy/deployment_layer/0001-typed",
+      statements: [
+        `SET LOCAL lock_timeout = '5s'`,
+        `CREATE TABLE IF NOT EXISTS deployment_layer(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+        `ALTER TABLE deployment_layer RENAME TO deployment_layer_kv`,
+        `ALTER INDEX deployment_layer_pkey RENAME TO deployment_layer_kv_pkey`,
+        `CREATE TABLE deployment_layer(
+           id TEXT PRIMARY KEY,
+           content_hash TEXT NOT NULL,
+           version BIGINT NOT NULL,
+           updated_at BIGINT NOT NULL,
+           updated_by TEXT NOT NULL,
+           bundle JSONB NOT NULL,
+           resolved JSONB NOT NULL,
+           pending_audits JSONB
+         )`,
+        `INSERT INTO deployment_layer(id, content_hash, version, updated_at, updated_by, bundle, resolved, pending_audits)
+           SELECT ${typedColumns(DEPLOYMENT_LAYER_COLUMNS).fromJson("deployment_layer_kv")} FROM deployment_layer_kv`,
+        `DROP TABLE deployment_layer_kv`,
+        `DO $drop_version$ BEGIN
+           IF to_regclass('durable_map_versions') IS NOT NULL THEN
+             DELETE FROM durable_map_versions WHERE tbl = 'deployment_layer';
+           END IF;
+         END $drop_version$`,
       ],
-      primaryKey: ["id"],
-      backfill: { ...jsonBackfill("deployment_layer", DEPLOYMENT_LAYER_COLUMNS) },
-    }),
+    },
   ],
 };
 

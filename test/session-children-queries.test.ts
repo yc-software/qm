@@ -11,6 +11,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import type { Principal, Session } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
 
 async function childrenQueries(children: number, busyTrees: number): Promise<number> {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "children-")), seedSkills: false }));
@@ -35,20 +36,23 @@ async function childrenQueries(children: number, busyTrees: number): Promise<num
       },
     });
   try {
-    const root = await session("web:U1:root");
-    let parent = root;
-    for (let i = 0; i < children; i++) {
-      const child = await session(`subagent:root:${i}`, i % 2 ? parent : root);
-      if (i % 5 === 0) await busy(child);
-      parent = child;
-    }
-    for (let t = 0; t < busyTrees; t++) {
-      let leaf = await session(`web:U1:other${t}`);
-      for (let d = 0; d < 3; d++) leaf = await session(`subagent:other${t}:${d}`, leaf);
-      await busy(leaf);
-    }
+    const root = await inTestTenant(async () => {
+      const root = await session("web:U1:root");
+      let parent = root;
+      for (let i = 0; i < children; i++) {
+        const child = await session(`subagent:root:${i}`, i % 2 ? parent : root);
+        if (i % 5 === 0) await busy(child);
+        parent = child;
+      }
+      for (let t = 0; t < busyTrees; t++) {
+        let leaf = await session(`web:U1:other${t}`);
+        for (let d = 0; d < 3; d++) leaf = await session(`subagent:other${t}:${d}`, leaf);
+        await busy(leaf);
+      }
+      return root;
+    });
     const url = `${base}/v1/sessions/${root.id}/children?principalId=U1`;
-    await fetch(url);
+    await fetch(url, { headers: testTenantHeaders() });
     let count = 0;
     const query = pg.Client.prototype.query;
     pg.Client.prototype.query = function (this: pg.Client, ...args: Parameters<typeof query>) {
@@ -56,7 +60,7 @@ async function childrenQueries(children: number, busyTrees: number): Promise<num
       return query.apply(this, args);
     } as typeof query;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { headers: testTenantHeaders() });
       const body = (await res.json()) as { sessions: Session[] };
       assert.equal(body.sessions.length, children);
     } finally {
@@ -80,22 +84,24 @@ test("listing a root's children costs the same number of queries for 3 children 
 test("a session's same-scope ancestors come back nearest first, skipping ancestors in another scope", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ancestors-")), seedSkills: false }));
   try {
-    const session = async (threadRef: string, scope: string, parent?: Session) => {
-      const s = await built.sessions.getOrCreateByThread(threadRef, "dm", scope, undefined, "web");
-      if (parent) await built.sessions.setParentSession(s.id, parent.id);
-      return s;
-    };
-    const root = await session("web:U1:root", "personal:U1");
-    const elsewhere = await session("subagent:root:1", "channel:C1", root);
-    const mid = await session("subagent:root:2", "personal:U1", elsewhere);
-    const leaf = await session("subagent:root:3", "personal:U1", mid);
-    const ancestors = await built.sessions.sameScopeAncestors([leaf.threadRef, "web:U1:missing"]);
-    assert.deepEqual(
-      ancestors.map((a) => a.threadRef),
-      [mid.threadRef, root.threadRef],
-      "nearest ancestor first",
-    );
-    assert.deepEqual(await built.sessions.sameScopeAncestors([root.threadRef]), []);
+    await inTestTenant(async () => {
+      const session = async (threadRef: string, scope: string, parent?: Session) => {
+        const s = await built.sessions.getOrCreateByThread(threadRef, "dm", scope, undefined, "web");
+        if (parent) await built.sessions.setParentSession(s.id, parent.id);
+        return s;
+      };
+      const root = await session("web:U1:root", "personal:U1");
+      const elsewhere = await session("subagent:root:1", "channel:C1", root);
+      const mid = await session("subagent:root:2", "personal:U1", elsewhere);
+      const leaf = await session("subagent:root:3", "personal:U1", mid);
+      const ancestors = await built.sessions.sameScopeAncestors([leaf.threadRef, "web:U1:missing"]);
+      assert.deepEqual(
+        ancestors.map((a) => a.threadRef),
+        [mid.threadRef, root.threadRef],
+        "nearest ancestor first",
+      );
+      assert.deepEqual(await built.sessions.sameScopeAncestors([root.threadRef]), []);
+    });
   } finally {
     await built.runtime.stop();
   }

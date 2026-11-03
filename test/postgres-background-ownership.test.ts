@@ -7,6 +7,8 @@ import {
   type BackgroundOwnership,
 } from "../src/runs/background-ownership.ts";
 import { seedKeyValueTable, withTypedTableDb } from "./support/typed-table.ts";
+import { grantTestAppLogin } from "./support/app-login.ts";
+import { ownerUrlOf } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 test(
@@ -52,8 +54,11 @@ test(
   { skip: !databaseUrl, timeout: 20_000 },
   async () => {
     const { createPgBossCronQueue } = await import("../src/cron/job-queue.ts");
-    const schema = `handover_${randomUUID().replaceAll("-", "")}`;
-    const queue = createPgBossCronQueue(databaseUrl!, schema);
+    const provisioner = createPgBossCronQueue(ownerUrlOf(databaseUrl!));
+    await provisioner.start({ onFire: async () => {} });
+    await provisioner.stop();
+    await grantTestAppLogin(ownerUrlOf(databaseUrl!), databaseUrl!);
+    const queue = createPgBossCronQueue(databaseUrl!);
     const oldEntered = Promise.withResolvers<void>();
     const oldFinish = Promise.withResolvers<void>();
     const newEntered = Promise.withResolvers<void>();
@@ -84,10 +89,6 @@ test(
     } finally {
       oldFinish.resolve();
       await queue.stop();
-      const { default: pg } = await import("pg");
-      const pool = new pg.Pool({ connectionString: databaseUrl! });
-      await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-      await pool.end();
     }
   },
 );
