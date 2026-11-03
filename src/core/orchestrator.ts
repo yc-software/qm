@@ -88,6 +88,7 @@ import { configuredConnectorProviders } from "../credentials/connector-status.ts
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
+import { createSpendLimits, spendLimitNote, spendLimitRefusal } from "../ratelimit/spend-limits.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -264,6 +265,12 @@ const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 
 export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
+  const config = deps.config;
+  const spendReport = deps.sessions.spendReport?.bind(deps.sessions);
+  const spendLimits =
+    config && spendReport
+      ? createSpendLimits({ orgId, getSpendLimit: (scope) => config.getSpendLimitDurable(scope), spendReport })
+      : undefined;
   const pending = deps.approvals;
   const transcripts = createTranscriptSource(deps.sessions);
   const approvalGrants = deps.approvalGrants;
@@ -637,6 +644,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const scopeId = deps.resolution.scopeFor(conversation, actor);
       const audit = (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) =>
         deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
+      const spendLimit = spendLimits
+        ? await spendLimits.status(scopeId).catch((e: unknown) => {
+            deps.errors?.record(
+              { category: "turn", code: "spend_limit_check", message: errMessage(e), scopeLabel: scopeId },
+              e,
+            );
+            return null;
+          })
+        : null;
+      if (spendLimit?.over) {
+        audit({ action: "spend_limit.refused", resource: scopeId, detail: spendLimit.over });
+        return { status: "refused", reason: spendLimitRefusal(spendLimit), refusalKind: "model_budget" };
+      }
       const issueApproval = async (
         requestId: string,
         fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
@@ -1004,6 +1024,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
       const turnContextBlocks: SystemContextBlocks = {};
       const turnEvents: string[] = [];
+      if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
       let rosterMembers: DirectoryMember[] | undefined;
       let scopeAskList: KeychainAsk[] = [];
       const nameOf = (id: string): string | undefined =>
