@@ -389,6 +389,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     automated: boolean;
     runId?: string;
     surface?: string;
+    shutdown?: AbortSignal;
   }): Promise<{ lease: Lease; waitedMs: number } | { lease: null; waitedMs: number; refusal: TurnResult }> {
     const budget = deps.turnLeaseWaitMs ?? CONFIG_DEFAULTS.turnLeaseWaitMs;
     const attempt = await acquireLeaseWithin(
@@ -399,6 +400,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       { waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn" },
     );
     const waitedMs = attempt.waitedMs ?? 0;
+    if (attempt.lease && args.shutdown?.aborted) {
+      await deps.sessions.releaseLease(attempt.lease);
+      const runId = args.runId ? { runId: args.runId } : {};
+      return { lease: null, waitedMs, refusal: { status: "queued", sessionId: args.sessionId, ...runId } };
+    }
     if (attempt.lease)
       return { lease: args.runId ? { ...attempt.lease, turnId: args.runId } : attempt.lease, waitedMs };
     if (attempt.heldUntil === undefined) {
@@ -992,6 +998,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           automated: automatedTurn,
           ...(input.runId ? { runId: input.runId } : {}),
           ...(input.surface ? { surface: input.surface } : {}),
+          ...(input.shutdown ? { shutdown: input.shutdown } : {}),
         });
         if (!acquired.lease) return acquired.refusal;
         const lease = acquired.lease;
@@ -1956,13 +1963,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         automated: automatedTurn,
         ...(input.runId ? { runId: input.runId } : {}),
         ...(input.surface ? { surface: input.surface } : {}),
+        ...(input.shutdown ? { shutdown: input.shutdown } : {}),
       });
       if (!acquired.lease) return acquired.refusal;
       const lease = acquired.lease;
-      if (input.shutdown?.aborted) {
-        await deps.sessions.releaseLease(lease);
-        return { status: "queued", sessionId: session.id, ...(input.runId ? { runId: input.runId } : {}) };
-      }
       if (!ambientTurn) assignSessionTitle();
       const trackRevisions = input.surface === "slack" && Boolean(deps.surfaceCache);
       const revisionAnchor = trackRevisions ? await revisionAnchorAt(deps.sessions, session.id) : undefined;

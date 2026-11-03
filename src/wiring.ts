@@ -2889,20 +2889,23 @@ export function buildApp(
     backgroundStopping = draining;
     return draining;
   }
-  async function releaseInFlightRuns(): Promise<void> {
+  let releasing: Promise<void> | null = null;
+  function releaseInFlightRuns(): Promise<void> {
     inlineShutdown.abort();
-    await Promise.all([
+    releasing ??= Promise.all([
       withTimeout(
         () => admittedWork.drained(),
         SHUTDOWN_SETTLE_MS + SHUTDOWN_HANDBACK_MS,
         "inline turn handback",
       ).catch(swallowAs("wiring: inline turn handback failed", undefined)),
       ...workers.map((w) => w.releaseInFlight()),
-    ]);
+    ]).then(() => {});
+    return releasing;
   }
   const runtime: Runtime = {
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      releasing = null;
       flyTunnel?.monitor();
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
