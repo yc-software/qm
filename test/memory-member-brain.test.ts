@@ -30,7 +30,14 @@ function ownedBy(url: string, owner: string): MemoryRegistry {
   const registered = putBrain(
     EMPTY_MEMORY_REGISTRY,
     BRAIN,
-    { preset: "gbrain-v1", url, clientId: "qm-member", clientSecret: "member-secret", label: "Alice's brain" },
+    {
+      preset: "gbrain-v1",
+      url,
+      clientId: "qm-member",
+      clientSecret: "member-secret",
+      label: "Alice's brain",
+      timeoutMs: 300,
+    },
     change,
   );
   const owned = { ...registered, brains: registered.brains.map((brain) => ({ ...brain, owner })) };
@@ -97,12 +104,12 @@ test("a stalled member brain ends at its deadline, and QM cancels the request it
     outcomes.filter(({ provider }) => provider === BRAIN).map(({ outcome }) => outcome),
     ["timed_out"],
   );
-  assert.ok(elapsed < 4_500, `took ${elapsed}ms`);
+  assert.ok(elapsed < 1_500, `took ${elapsed}ms`);
   const call = requests.find(({ rpc }) => rpc === "tools/call");
   assert.equal(call?.signal?.aborted, true);
 });
 
-test("an oversized member brain response fails at the size limit, and an endless one is cut there and ends at the deadline", async (t) => {
+test("an oversized or endless member brain response fails as soon as it passes the size limit", async (t) => {
   const oversized = await brainServer(t, () => ({ content: [{ type: "text", text: "x".repeat(1_100_000) }] }));
   const big = serving(ownedBy(oversized.url, "U1"), loopbackFetch);
   assert.deepEqual(
@@ -138,7 +145,11 @@ test("an oversized member brain response fails at the size limit, and an endless
   const started = Date.now();
   assert.deepEqual(
     (await flood.search()).problems.map(({ code }) => code),
-    ["memory_provider_timeout"],
+    ["memory_provider_failed"],
   );
-  assert.ok(closedAt - started < 1_000, "the stream ran for " + (closedAt - started) + "ms");
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 1_000, `the call took ${elapsed}ms`);
+  assert.match(causes(flood.errors[0]), /larger than 1000000 bytes/);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(closedAt > started && closedAt - started < 1_000, `the stream ran for ${closedAt - started}ms`);
 });

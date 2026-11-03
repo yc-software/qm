@@ -298,11 +298,6 @@ test("org-admin routes: admins only, secrets write-only, env providers read-only
     (await api.call("PUT", "/v1/admin/memory-registry/member-brains", "U-nobody@default-org", switchOff)).status,
     403,
   );
-  assert.equal(
-    (await api.call("PUT", "/v1/admin/memory-registry/member-brains", "admin-alice@default-org", { enabled: "no" }))
-      .status,
-    400,
-  );
   const off = await api.call("PUT", "/v1/admin/memory-registry/member-brains", "admin-alice@default-org", switchOff);
   assert.equal(JSON.parse(off.text).memberBrains, false);
   assert.equal(

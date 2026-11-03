@@ -129,7 +129,7 @@ function brainBlock(
   overlayIds: ReadonlySet<string>,
 ): RegistryDisabledCode | undefined {
   if (!presetOf(brain)) return "preset_unknown";
-  if (brain.owner && record.memberBrains === false) return "member_brains_off";
+  if (brain.owner && !memberBrainsOn(record)) return "member_brains_off";
   if (overlayIds.has(brain.id)) return "id_taken";
   if (!brain.auth.clientSecretEnc) return "secret_missing";
   return undefined;
@@ -341,7 +341,9 @@ export function setBrainSecret(
   return putBrain(record, target.id, { clientSecret }, change);
 }
 
-const MEMBER_BRAIN_FIELDS = new Set(["url", "clientId", "label", "timeoutMs"]);
+const MEMBER_BRAIN_FIELDS = new Set(["url", "clientId", "label"]);
+
+export const memberBrainsOn = (record: MemoryRegistry): boolean => record.memberBrains !== false;
 
 export const memberBrainId = (owner: string): string =>
   `member-${createHash("sha256").update(owner).digest("hex").slice(0, 16)}`;
@@ -355,7 +357,7 @@ export function putMemberBrain(
   input: unknown,
   change: RegistryChange,
 ): MemoryRegistry {
-  if (record.memberBrains === false) throw memberBrainsOff();
+  if (!memberBrainsOn(record)) throw memberBrainsOff();
   const body = object(input);
   if (body.clientSecret !== undefined) throw invalid(AGENT_SECRET_REFUSAL);
   const extra = Object.keys(body).filter((key) => !MEMBER_BRAIN_FIELDS.has(key));
@@ -396,7 +398,7 @@ export function brainRefusal(
 ): string | undefined {
   if (standing === "admin") return undefined;
   if (standing === "member" && brain.owner === principalId)
-    return record.memberBrains === false ? memberBrainsOff().message : undefined;
+    return memberBrainsOn(record) ? undefined : memberBrainsOff().message;
   return `only an org admin or the brain's owner can set brain ${brain.id}'s secret`;
 }
 

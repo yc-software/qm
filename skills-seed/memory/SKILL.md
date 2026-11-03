@@ -70,7 +70,7 @@ A member who runs their own gbrain can make it their personal memory, on a turn 
    the id their gbrain must link to their gbrain member. On their gbrain they also need a
    confidential client-credentials client that may attest an actor.
 2. `PUT $AGENT_API_URL/v1/memory/brain` with `{"url":"https://…/mcp","clientId":"…"}`
-   (optionally `label` and `timeoutMs`). The URL must be public `https://`. Never ask for or
+   (optionally `label`). The URL must be public `https://`. Never ask for or
    send the client secret: `clientSecret` is refused here.
 3. Mint the secret link for the returned `brain.id` (see the `secret-drop` skill). The form
    shows them where their memory goes before they submit.

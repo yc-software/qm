@@ -453,13 +453,12 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     when: (v) => livePersonCapability(v.claims) && !v.claims.triggered,
-    guidance: "Connecting a member's own memory brain is documented in the memory skill.",
     routes: [
       {
         method: "GET|PUT|DELETE",
         path: "/v1/memory/brain",
         summary:
-          "the speaker's own memory brain, a gbrain they run: read it (with the principal id their gbrain must link), connect or change it ({url, clientId, label?, timeoutMs?}, never the client secret), or disconnect it",
+          "the speaker's own memory brain, a gbrain they run: read it (with the principal id their gbrain must link), connect or change it ({url, clientId, label?}, never the client secret), or disconnect it; see the memory skill",
       },
     ],
   },

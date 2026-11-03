@@ -91,7 +91,7 @@ Capture policies are:
 
 MCP reads receive `query` and `acting_user` by default. Writes receive `content` and `acting_user`. Operation entries can map optional fields with `queryArg`, `contentArg`, `actorArg`, `scopeArg`, `maxCharsArg`, `inputArg`, `replyArg`, `capturedAtArg`, `sourceArg`, and `idempotencyArg`. Only configured optional fields are sent, so providers can match strict MCP schemas.
 
-Read and write operations use separate OAuth client-credential pairs. Omit `write` and set route capture to `off` for a read-only provider. Each provider call has a hard deadline of `timeoutMs` (3 seconds by default) that cancels the connection, the OAuth token request and the tool call alike, and QM stops reading any response at 1 MB, so an oversized reply fails the call and an endless one is cut off there and ends at the deadline. QM continues to decide readable/writable scopes and passes the acting user to the provider.
+Read and write operations use separate OAuth client-credential pairs. Omit `write` and set route capture to `off` for a read-only provider. Each provider call has a hard deadline of `timeoutMs` (3 seconds by default) that cancels the connection, the OAuth token request and the tool call alike, and QM stops reading any response at 1 MB, so an oversized or endless reply fails the call there. QM continues to decide readable/writable scopes and passes the acting user to the provider.
 
 External routes fail open by default (`failOpen: true`): a failing or slow provider contributes nothing, the turn continues with the other routes, and the failure is recorded as an [outcome](#provider-outcomes). Set `failOpen: false` on a route to make it strict: any failure of that provider then fails the whole recall or search for every scope the route serves, so one provider outage stops memory there. Explicit writes report a provider failure the same way on either kind of route, as described under [Provider outcomes](#provider-outcomes), because the other routes may already have stored the facts.
 
@@ -208,13 +208,13 @@ A member's brain gets stricter transport than one an admin registered, because n
 
 An org admin's switch, `PUT /v1/admin/memory-registry/member-brains` with `{"enabled": false}`, stops every member's brain at once (code `member_brains_off`) and refuses new ones, without deleting them; `{"enabled": true}` turns them back on. It defaults on.
 
-| Route                     | Body or result                                                                                                                         |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /v1/memory/brain`    | `principalId`, `memberBrains` (the switch), the member's `brain` and `binding` (or `null`) and their `disabled` rows                   |
-| `PUT /v1/memory/brain`    | `url`, `clientId`, and optionally `label` and `timeoutMs`; `clientSecret` is refused. Audited as `memory-registry.member-brain.update` |
-| `DELETE /v1/memory/brain` | Deletes the brain and its binding. Audited as `memory-registry.member-brain.delete`                                                    |
+| Route                     | Body or result                                                                                                         |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/memory/brain`    | `principalId`, `memberBrains` (the switch), the member's `brain` and `binding` (or `null`) and their `disabled` rows   |
+| `PUT /v1/memory/brain`    | `url`, `clientId`, and optionally `label`; `clientSecret` is refused. Audited as `memory-registry.member-brain.update` |
+| `DELETE /v1/memory/brain` | Deletes the brain and its binding. Audited as `memory-registry.member-brain.delete`                                    |
 
-These routes take only an agent capability for an active member, refuse triggered turns, and are blocked like any other control-plane change in a strict conversation. An admin can still change or delete a member's brain through the admin routes; its `owner` never changes.
+These routes take only an agent capability from a turn the member sent (never a triggered one), refuse inactive members, and are blocked like any other control-plane change in a strict conversation. An admin can still change or delete a member's brain through the admin routes; its `owner` never changes.
 
 ### API
 

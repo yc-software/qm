@@ -4,6 +4,7 @@ import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { boundedResponse } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
 
@@ -101,7 +102,12 @@ export interface McpClient {
   ): Promise<CallToolResult>;
 }
 
-export function createMcpClient(opts: { url: string; auth: McpAuth; fetch?: AddressFetch }): McpClient {
+export function createMcpClient(opts: {
+  url: string;
+  auth: McpAuth;
+  fetch?: AddressFetch;
+  maxResponseBytes?: number;
+}): McpClient {
   const trimmed = opts.url.replace(/\/+$/g, "");
   const endpoint = new URL(new URL(trimmed).pathname === "/" ? `${trimmed}/mcp` : trimmed);
   const { auth } = opts;
@@ -117,25 +123,35 @@ export function createMcpClient(opts: { url: string; auth: McpAuth; fetch?: Addr
 
   async function session<T>(
     op: string,
-    work: (client: Client) => Promise<T>,
+    work: (client: Client, signal: AbortSignal) => Promise<T>,
     extraHeaders: Record<string, string> = {},
     signal?: AbortSignal,
   ): Promise<T> {
     const headers = { ...extraHeaders, ...(auth.mode === "bearer" ? { authorization: `Bearer ${auth.token}` } : {}) };
+    const overflow = new AbortController();
+    const stop = signal ? AbortSignal.any([signal, overflow.signal]) : overflow.signal;
+    const { maxResponseBytes } = opts;
     const transport = new StreamableHTTPClientTransport(endpoint, {
       ...(authProvider ? { authProvider } : {}),
       ...(Object.keys(headers).length ? { requestInit: { headers } } : {}),
-      fetch: (url, init) =>
-        fetchFn(url, {
+      fetch: async (url, init) => {
+        const response = await fetchFn(url, {
           ...init,
           redirect: "error",
-          ...(signal ? { signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal } : {}),
-        }),
+          signal: init?.signal ? AbortSignal.any([init.signal, stop]) : stop,
+        });
+        if (maxResponseBytes === undefined) return response;
+        return boundedResponse(response, maxResponseBytes, () => {
+          const error = new Error(`${new URL(url).origin} sent a response larger than ${maxResponseBytes} bytes`);
+          overflow.abort(error);
+          return error;
+        });
+      },
     });
     const client = new Client({ name: "qm", version: "1.0.0" });
     try {
-      await client.connect(transport, signal ? { signal } : undefined);
-      return await work(client);
+      await client.connect(transport, { signal: stop });
+      return await work(client, stop);
     } catch (e) {
       const status = httpStatus(e);
       throw new McpCallError(`mcp ${op} failed${status ? ` (HTTP ${status})` : ""}`, {
@@ -144,7 +160,7 @@ export function createMcpClient(opts: { url: string; auth: McpAuth; fetch?: Addr
         cause: e,
       });
     } finally {
-      if (!signal?.aborted) await transport.terminateSession().catch(swallowAs("mcp: end session", undefined));
+      if (!stop.aborted) await transport.terminateSession().catch(swallowAs("mcp: end session", undefined));
       await client.close();
     }
   }
@@ -178,11 +194,8 @@ export function createMcpClient(opts: { url: string; auth: McpAuth; fetch?: Addr
     async callTool(name, args, headers, signal) {
       const result = (await session(
         "tools/call",
-        (client) =>
-          client.callTool({ name, arguments: args }, undefined, {
-            timeout: CALL_TIMEOUT_MS,
-            ...(signal ? { signal } : {}),
-          }),
+        (client, stop) =>
+          client.callTool({ name, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS, signal: stop }),
         headers,
         signal,
       )) as CallToolResult;

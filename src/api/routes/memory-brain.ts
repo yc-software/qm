@@ -1,7 +1,9 @@
 import { canonicalPerson } from "../../directory/person.ts";
+import { livePersonCapability } from "../artifact-share.ts";
 import {
   deleteMemberBrain,
   memberBrainId,
+  memberBrainsOn,
   putMemberBrain,
   readRegistry,
   redactBrain,
@@ -15,10 +17,10 @@ import { writeRegistry } from "./admin/memory-registry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { adminStanding, audit, orgScope } from "./shared.ts";
 
-const TRIGGERED = "a memory brain can only be connected on a turn a person sent — this turn was fired by a trigger";
+const NOT_LIVE = "a member's memory brain can only be managed on a turn that person sent";
 
 async function member(ctx: ApiCtx) {
-  const { res, deps, capability, method } = ctx;
+  const { res, deps, capability } = ctx;
   if (!capability) {
     sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
     return null;
@@ -27,8 +29,8 @@ async function member(ctx: ApiCtx) {
     sendJson(res, 404, { error: "not_found" });
     return null;
   }
-  if (method !== "GET" && capability.triggered) {
-    sendJson(res, 403, { error: "forbidden", message: TRIGGERED });
+  if (capability.triggered || !livePersonCapability(capability)) {
+    sendJson(res, 403, { error: "forbidden", message: NOT_LIVE });
     return null;
   }
   const owner = canonicalPerson(capability.actorId);
@@ -42,12 +44,13 @@ async function member(ctx: ApiCtx) {
 function ownBrain(record: MemoryRegistry, registry: MemoryRegistryStore, owner: string) {
   const id = memberBrainId(owner);
   const brain = record.brains.find((entry) => entry.id === id && entry.owner === owner);
+  const bindings = brain ? record.bindings.filter((binding) => binding.brain === id) : [];
   return {
     principalId: owner,
-    memberBrains: record.memberBrains !== false,
+    memberBrains: memberBrainsOn(record),
     brain: brain ? redactBrain(brain) : null,
-    binding: (brain && record.bindings.find((binding) => binding.brain === id)) ?? null,
-    disabled: brain ? resolveMemoryRegistry(record, registry).disabled.filter(({ provider }) => provider === id) : [],
+    binding: bindings[0] ?? null,
+    disabled: brain ? resolveMemoryRegistry({ ...record, brains: [brain], bindings }, registry).disabled : [],
   };
 }
 

@@ -1,6 +1,5 @@
 import { createMcpClient } from "../mcp/mcp-client.ts";
 import { errMessage } from "../util/errors.ts";
-import { boundedResponse } from "../util/bytes.ts";
 import type { AddressFetch } from "../util/network.ts";
 import { createMcpMemoryProvider, type McpMemoryOperation } from "./mcp-memory-provider.ts";
 import type { MemoryProviderConfig, McpMemoryOperationConfig } from "./provider-config.ts";
@@ -21,12 +20,8 @@ function operation(
     client: createMcpClient({
       url,
       auth: { mode: "client-credentials", ...spec.auth },
-      fetch: async (input, init) =>
-        boundedResponse(
-          await fetchFn(input, init),
-          MAX_RESPONSE_BYTES,
-          () => new Error(`${new URL(input).origin} sent a response larger than ${MAX_RESPONSE_BYTES} bytes`),
-        ),
+      fetch: fetchFn,
+      maxResponseBytes: MAX_RESPONSE_BYTES,
     }),
     tool: spec.tool,
     timeoutMs,

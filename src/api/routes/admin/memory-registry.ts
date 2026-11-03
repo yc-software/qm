@@ -2,6 +2,7 @@ import {
   AGENT_SECRET_REFUSAL,
   deleteBinding,
   deleteBrain,
+  memberBrainsOn,
   MemoryRegistryError,
   putBinding,
   putBrain,
@@ -30,7 +31,7 @@ async function registryAdmin(ctx: ApiCtx) {
 
 function view(record: MemoryRegistry, registry: MemoryRegistryStore) {
   return {
-    memberBrains: record.memberBrains !== false,
+    memberBrains: memberBrainsOn(record),
     brains: record.brains.map(redactBrain),
     bindings: record.bindings,
     disabled: resolveMemoryRegistry(record, registry).disabled,
