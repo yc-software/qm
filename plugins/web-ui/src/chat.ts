@@ -34,7 +34,7 @@ import { ref } from "lit/directives/ref.js";
 import { guard } from "lit/directives/guard.js";
 import {
   Activity,
-  Ban,
+  ArrowDown,
   BookOpen,
   Search,
   Brain,
@@ -179,6 +179,7 @@ import {
   replacePendingSession,
   groupDmTitle,
   refreshSessions,
+  refreshTree,
   renderList,
   sessionsState,
   sessionSlackUrl,
@@ -379,7 +380,7 @@ export function createChatSurface(
     if (!speakerId) return undefined;
     const project = contextsState.list.find((c) => c.scopeId === chatState.scopeId)?.project;
     const member = project?.members.find((m) => m.principalId === speakerId);
-    if (member?.avatarUrl || !isReadOnlySlackView()) return member;
+    if (member?.avatarUrl) return member;
     return { principalId: speakerId, avatarUrl: speakerAvatar(speakerId) };
   }
 
@@ -804,6 +805,7 @@ export function createChatSurface(
   });
 
   function dispose(): void {
+    syncSubagentRowsRefresh(null);
     redrawHooks.delete(redrawForConnector);
     stopAvatarWatch();
     stopPrefsWatch();
@@ -1635,7 +1637,7 @@ export function createChatSurface(
     if (activePendingApprovals().length) return "Needs your approval";
     if (agent.state.isStreaming || chatState.resolvingApprovals.size > 0) {
       const work = chatState.liveWork ?? { status: "thinking", activity: [] };
-      if (runSlot.stopGeneration === runSlot.generation) return "Stop requested";
+      if (runSlot.stopGeneration === runSlot.generation) return "Stopping…";
       if (currentTextPhase(work)?.phase === "final_answer") return "Responding…";
       const summary = liveWorkSummary(work);
       if (!summary) return "Thinking…";
@@ -1783,6 +1785,9 @@ export function createChatSurface(
               ${goalStrip(agent)} ${ctx.composer.queuedStrip(agent)} ${subagentStrip()}
               ${swarmUi.strip(chatState.sessionId)} ${backgroundActivityStrip()} ${ctx.composer.composerForm(agent)}
               ${ctx.pane ? nothing : suggestions}
+              <button class="scroll-bottom-btn" type="button" aria-label="Scroll to bottom" @click=${scrollToBottom}>
+                ${icon(ArrowDown, 16)}
+              </button>
             </div>
           </div>
           ${sideChats.view()}
@@ -2615,7 +2620,7 @@ export function createChatSurface(
     const mins = Math.round((expiresAt - Date.now()) / 60_000);
     if (mins <= 0) return "expiring";
     if (mins < 60) return `${mins}m left`;
-    return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m left`;
+    return `${Math.floor(mins / 60)}h ${mins % 60}m left`;
   }
 
   function backgroundActivityStrip(): TemplateResult | typeof nothing {
@@ -2718,12 +2723,15 @@ export function createChatSurface(
 
   const swarmUi = createSwarmStrip(() => drawActiveChat());
   const SUBAGENT_ACK_KEY = "qm.subagentAck";
+  const SUBAGENT_POLL_MS = 4000;
   const subagentUi = {
     expanded: false,
     peekId: null as string | null,
     peek: null as PeekLine[] | null,
     ticking: false,
     timer: null as ReturnType<typeof setInterval> | null,
+    rowsRoot: null as string | null,
+    rowsTimer: null as ReturnType<typeof setInterval> | null,
     approvals: new Map<string, PendingApproval[]>(),
     approvalsKey: "",
     acknowledged: new Set<string>(
@@ -2736,6 +2744,13 @@ export function createChatSurface(
       })(),
     ),
   };
+
+  function syncSubagentRowsRefresh(rootId: string | null): void {
+    if (subagentUi.rowsRoot === rootId) return;
+    if (subagentUi.rowsTimer) clearInterval(subagentUi.rowsTimer);
+    subagentUi.rowsTimer = rootId ? setInterval(() => refreshTree(rootId), SUBAGENT_POLL_MS) : null;
+    subagentUi.rowsRoot = rootId;
+  }
 
   function stopSubagentPeek(): void {
     if (subagentUi.timer) clearInterval(subagentUi.timer);
@@ -2758,7 +2773,7 @@ export function createChatSurface(
     if (same) return drawActiveChat();
     subagentUi.peekId = id;
     void refreshSubagentPeek(id);
-    if (row.state === "working") subagentUi.timer = setInterval(() => void refreshSubagentPeek(id), 4000);
+    if (row.state === "working") subagentUi.timer = setInterval(() => void refreshSubagentPeek(id), SUBAGENT_POLL_MS);
     drawActiveChat();
   }
 
@@ -2836,7 +2851,14 @@ export function createChatSurface(
         ${row.state === "waiting" ? html`<span class="awaiting-dot" aria-hidden="true"></span>` : nothing}
         ${row.state === "failed" ? html`<span class="subagent-failed-mark">${icon(TriangleAlert, 12)}</span>` : nothing}
         <span class="subagent-row-title" dir="auto">${title}</span>
-        <span class="subagent-row-meta">${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}</span>
+        ${
+          row.state === "working" && row.session.purpose
+            ? html`<span class="subagent-row-purpose" dir="auto">${row.session.purpose}</span>`
+            : nothing
+        }
+        <span class="subagent-row-meta"
+          >${row.state === "working" ? elapsed : `${SUBAGENT_STATE_LABEL[row.state]} · ${elapsed}`}</span
+        >
       </button>
       ${
         row.state === "failed"
@@ -2875,8 +2897,12 @@ export function createChatSurface(
 
   function subagentStrip(): TemplateResult | typeof nothing {
     const rootId = chatState.sessionId;
-    if (!rootId) return nothing;
+    if (!rootId) {
+      syncSubagentRowsRefresh(null);
+      return nothing;
+    }
     const rows = visibleSubagents(subagentRows(sessionsState.list, rootId), subagentUi.acknowledged);
+    syncSubagentRowsRefresh(rows.some((row) => row.state === "working") ? rootId : null);
     if (subagentUi.peekId && !rows.some((row) => row.session.id === subagentUi.peekId)) stopSubagentPeek();
     syncSubagentApprovals(rows);
     subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
@@ -2961,12 +2987,14 @@ export function createChatSurface(
 
   function liveWorkStatus(agent: Agent): TemplateResult | typeof nothing {
     if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0) return nothing;
-    if (runSlot.stopGeneration === runSlot.generation)
-      return html`<div class="stopped-head" role="status">${icon(Ban, 13)}<span>Stop requested</span></div>`;
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
+    const streaming = agent.state.streamingMessage as AssistantWork | undefined;
+    if (runSlot.stopGeneration === runSlot.generation)
+      return shouldShowWork(streaming?.work ?? work, "")
+        ? nothing
+        : html`<div class="stopped-head" role="status">Stopping…</div>`;
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     if (currentTextPhase(work)?.phase === "final_answer" || shouldShowWork(work, "")) return nothing;
-    const streaming = agent.state.streamingMessage as AssistantWork | undefined;
     if (streaming && streaming.work === work && preStepWork(work)) return nothing;
     const summary = liveWorkSummary(work);
     const expandable = Boolean(summary?.detail);
@@ -3094,6 +3122,7 @@ export function createChatSurface(
     return html`${segments.map((segment, index) => {
       const steer = segment[0];
       if (steer?.kind === "steer") return renderTimelineItem(steer, work);
+      if (steer?.kind === "text") return renderTimelineItem(steer, work);
       const last = index === segments.length - 1;
       const replies: string[] = [];
       const timeline = segment.filter((item) => {
@@ -3104,14 +3133,16 @@ export function createChatSurface(
       });
       const tail = active && last ? streamedAnswer(text, work) : "";
       const stopping = isStreaming && runSlot.stopGeneration === runSlot.generation;
+      const ending = last && (stopped || stopping);
       const animating = active && last && !stopping;
-      const oneStep = animating && !work.stale && !work.pendingApprovals?.length;
+      const live = active && last && !work.stale && !work.pendingApprovals?.length;
+      const oneStep = live && !stopping;
       const step = oneStep
         ? currentStep(timeline, work, (payload) => TOOL_META[toolCategory(payload)] ?? UNKNOWN_TOOL)
         : null;
       let label = last ? workLabel(work) : "Worked";
       if (step) label = step.label;
-      if (stopping && last) label = "Stop requested";
+      if (stopping && last) label = "Stopping…";
       if (stopped && last) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
       const elapsed = step ? liveWorkDuration(work) : "";
       if (last) liveStepLine.track(step);
@@ -3125,16 +3156,16 @@ export function createChatSurface(
       let fold =
         timeline.length || tail.trim() || (last && (active || work.pendingApprovals?.length))
           ? html`<details
-              class=${stopped && last ? "stopped-work" : `work work-fold work-${work.status}`}
-              ?open=${last && (oneStep ? liveFoldOpened : active || !!work.pendingApprovals?.length)}
+              class=${ending ? "stopped-work" : `work work-fold work-${work.status}`}
+              ?open=${last && (live ? liveFoldOpened : active || !!work.pendingApprovals?.length)}
               @toggle=${(event: Event) => {
-                if (oneStep) liveFoldOpened = (event.currentTarget as HTMLDetailsElement).open;
+                if (live) liveFoldOpened = (event.currentTarget as HTMLDetailsElement).open;
               }}
             >
-              <summary class=${stopped && last ? "stopped-head" : "work-head"}>
+              <summary class=${ending ? "stopped-head" : "work-head"}>
                 ${liveStepLine.line(step && last ? step : null, label, animating, elapsed)}
               </summary>
-              ${stopped && last ? nothing : html`<div class="work-divider"></div>`}
+              ${ending ? nothing : html`<div class="work-divider"></div>`}
               <div class="work-rows">
                 ${guard(
                   [
@@ -3155,7 +3186,7 @@ export function createChatSurface(
                       activityGroups(timeline),
                       (items) => timelineKey(items[0]!),
                       (items) => {
-                        if (items.length === 1 || items[0]?.kind === "text") return renderTimelineItem(items[0]!, work);
+                        if (items.length === 1) return renderTimelineItem(items[0]!, work);
                         const summary = activityGroupSummary(items, work.status);
                         const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
                           summary.category
@@ -3175,12 +3206,16 @@ export function createChatSurface(
                       },
                     ),
                 )}
-                ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamedAnswer(baseline, work))}</div>` : nothing}
               </div>
             </details>`
           : nothing;
-      if (stopped && last && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
-      return html`${fold}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+      if (ending && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
+      const said = tail.trim()
+        ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}" dir="auto">
+            ${markdown(tail, animating, streamedAnswer(baseline, work))}
+          </div>`
+        : nothing;
+      return html`${fold}${said}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
     })}`;
   }
 
@@ -3269,38 +3304,36 @@ export function createChatSurface(
         <div class="thinking-body">${markdown(thought.body)}</div>
       </details>`;
     }
-    if (item.kind === "text") return messageRow(item.activity);
+    if (item.kind === "text") return interimReply(item.activity);
     if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
   }
 
-  function messageRow(activity: ToolActivity): TemplateResult {
+  function interimReply(activity: ToolActivity): TemplateResult {
     const text = (activity.payload as { text?: string } | null)?.text ?? "";
-    return html`<div class="work-message">${markdown(text)}</div>`;
+    return html`<div class="work-said streaming-text" dir="auto">${markdown(text)}</div>`;
   }
 
-  const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {
-    execute: { icon: Terminal, active: "Running command", done: "Ran command", attempted: "Tried command" },
-    read: { icon: BookOpen, active: "Reading file", done: "Read file", attempted: "Tried reading file" },
-    skill: { icon: BookOpen, active: "Loading skill", done: "Loaded skill", attempted: "Tried loading skill" },
-    write: { icon: Pencil, active: "Writing file", done: "Wrote file", attempted: "Tried writing file" },
-    publish: { icon: Rocket, active: "Publishing", done: "Published", attempted: "Tried publishing" },
-    recall: { icon: Brain, active: "Searching memory", done: "Searched memory", attempted: "Tried searching memory" },
-    memory: { icon: Brain, active: "Using memory", done: "Used memory", attempted: "Tried using memory" },
+  const TOOL_META: Record<string, { icon: IconNode; active: string; attempted: string }> = {
+    execute: { icon: Terminal, active: "Running command", attempted: "Tried running command" },
+    read: { icon: BookOpen, active: "Reading file", attempted: "Tried reading file" },
+    skill: { icon: BookOpen, active: "Loading skill", attempted: "Tried loading skill" },
+    write: { icon: Pencil, active: "Writing file", attempted: "Tried writing file" },
+    publish: { icon: Rocket, active: "Publishing", attempted: "Tried publishing" },
+    recall: { icon: Brain, active: "Searching memory", attempted: "Tried searching memory" },
+    memory: { icon: Brain, active: "Using memory", attempted: "Tried using memory" },
     history: {
       icon: ScrollText,
       active: "Searching history",
-      done: "Searched history",
       attempted: "Tried searching history",
     },
     background: {
       icon: Terminal,
       active: "Managing process",
-      done: "Managed process",
       attempted: "Tried managing process",
     },
   };
-  const UNKNOWN_TOOL = { icon: Wrench, active: "Working", done: "Finished step", attempted: "Tried step" };
+  const UNKNOWN_TOOL = { icon: Wrench, active: "Working", attempted: "Tried step" };
 
   function toolName(tool: string): string {
     const parts = tool.split(/__|[/:.]/).filter(Boolean);
@@ -3491,7 +3524,7 @@ export function createChatSurface(
     else if (kind === "running") {
       const active = knownMeta ? meta.active : name;
       label = stale ? `${active} — interrupted` : active;
-    } else if (kind === "ok") label = knownMeta ? meta.done : name;
+    } else if (kind === "ok") label = knownMeta ? meta.active : name;
     else if (kind === "failed") label = `Failed ${name}`;
     let why = "";
     if (kind === "approval") why = firstLine(result.reason ?? "", 90);

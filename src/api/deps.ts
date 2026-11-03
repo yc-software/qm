@@ -74,7 +74,6 @@ import type { ChannelPolicyStore } from "../surface-cache/channel-policy-store.t
 import type { UiStateStore } from "../surfaces/ui-state.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { ConnectorTokenSource, SlackUserClient } from "../loops/sources/adapter.ts";
-import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
 import type { BudgetTracker } from "../ratelimit/budget.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
@@ -152,7 +151,6 @@ export interface ServerDeps {
   emailAuthPrincipals?: readonly string[];
   emailAuthDomain?: string;
   slackAllowFrom?: readonly string[];
-  rateLimiter?: RateLimiter;
   budget?: BudgetTracker;
   sessions?: SessionStore;
   auditLog?: AuditLog;

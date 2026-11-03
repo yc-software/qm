@@ -5,7 +5,7 @@ import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
 
-test("stopping returns Send immediately and queues every submit path without interrupting the live run", async (t) => {
+test("stopping holds a disabled Stopping… button beside Send and queues every submit path without interrupting the live run", async (t) => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><div id="composer"></div>', {
     url: "http://localhost/",
     pretendToBeVisual: true,
@@ -121,7 +121,10 @@ test("stopping returns Send immediately and queues every submit path without int
     assert.equal(button(".send-btn").disabled, false);
     button(".stop-btn").click();
     assert.equal(stops, 1);
-    assert.equal(host.querySelector(".stop-btn"), null);
+    assert.equal(button(".stop-btn").disabled, true);
+    assert.equal(button(".stop-btn").getAttribute("aria-label"), "Stopping…");
+    button(".stop-btn").click();
+    assert.equal(stops, 1);
     assert.equal(button(".send-btn").getAttribute("aria-label"), "Send");
     assert.equal(button(".send-btn").disabled, false);
     assert.equal(composer!.state.draft, "Keep this draft");

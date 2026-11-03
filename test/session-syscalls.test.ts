@@ -287,10 +287,8 @@ test("read lists children with status and renders a child's recent transcript", 
   const opened = await syscalls.open({ task: "research callers", name: "research_callers" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id, "turn");
-  assert.ok(lease);
-  await r.sessions.append(lease!, { type: "assistant", payload: { text: "found 3 call sites" }, scopeLabel: scope });
-  await r.sessions.releaseLease(lease!);
+  const writer = { sessionId: child.id };
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "found 3 call sites" });
 
   const list = await syscalls.read({});
   assert.ok(list.ok && list.mode === "children");
@@ -343,9 +341,8 @@ test("a silent child mails a completed-without-reply notice without borrowing tr
   const opened = await r.syscallsFor(r.room).open({ task: "quiet work" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id, "turn");
-  await r.sessions.append(lease!, { type: "assistant", payload: { text: "halfway there" }, scopeLabel: scope });
-  await r.sessions.releaseLease(lease!);
+  const writer = { sessionId: child.id };
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "halfway there" });
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
   await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "silent" });
@@ -421,14 +418,8 @@ test("concurrent opens and wakes share one admission limit; a wake past it sends
 test("session reads hide history outside the viewer's participant tenure", async () => {
   const r = await rig();
   const target = await r.sessions.getOrCreateByThread("web:private-old", "dm", scope);
-  const { lease } = await r.sessions.acquireLease(target.id);
-  assert.ok(lease);
-  await r.sessions.append(lease, {
-    type: "assistant",
-    payload: { text: "hidden-before-membership" },
-    scopeLabel: scope,
-  });
-  await r.sessions.releaseLease(lease);
+  const writer = { sessionId: target.id };
+  await r.sessions.append(writer, { kind: "AgentMessage", text: "hidden-before-membership" });
   await r.sessions.addParticipant(target.id, actor.id);
   const view = await r.syscallsFor(r.room).read({ target: target.id });
   assert.ok(view.ok && view.mode === "transcript");
@@ -969,13 +960,8 @@ test("queued results recheck source-entry visibility after participant tenure ch
   const opened = await api.open({ task: "shared result" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id);
-  const entry = await r.sessions.append(lease!, {
-    type: "assistant",
-    payload: { text: "OLD_PRIVATE_RESULT" },
-    scopeLabel: sharedScope,
-  });
-  await r.sessions.releaseLease(lease!);
+  const writer = { sessionId: child.id };
+  const entry = await r.sessions.append(writer, { kind: "AgentMessage", text: "OLD_PRIVATE_RESULT" });
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   const claimed = await r.runs.claimById(run!.id, "child-worker", 30_000);
   await r.runs.complete(run!.id, claimed!.leaseToken!, {
@@ -990,7 +976,7 @@ test("queued results recheck source-entry visibility after participant tenure ch
   assert.equal((await api.receive!()).length, 1);
   await r.sessions.removeParticipant(child.id, other.id);
   await r.sessions.addParticipant(child.id, other.id);
-  assert.equal((await r.sessions.visibleEntries(child.id, other.id)).length, 0);
+  assert.equal((await r.sessions.visibleItems(child.id, other.id)).length, 0);
   assert.deepEqual(await api.receive!(), []);
   assert.equal((await r.mailbox.pending(shared.id)).length, 1);
 });

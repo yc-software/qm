@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import pg from "pg";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the harness choice migration test";
@@ -11,18 +11,12 @@ const exec = promisify(execFile);
 const JSON_TABLES = ["base_model_configs", "approved_harness_configs", "auto_flagger_configs", "crons", "swarms"];
 
 async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
-  const parent = new pg.Pool({ connectionString: databaseUrl });
-  const name = `drop_harness_${randomUUID().replaceAll("-", "")}`;
-  await parent.query(`CREATE DATABASE ${name}`);
-  const url = new URL(databaseUrl!);
-  url.pathname = `/${name}`;
-  const admin = new pg.Pool({ connectionString: url.toString() });
+  const url = testDatabaseUrl();
+  const admin = new pg.Pool({ connectionString: url });
   try {
-    await run(url.toString(), admin);
+    await run(url, admin);
   } finally {
     await admin.end();
-    await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
-    await parent.end();
   }
 }
 

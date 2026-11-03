@@ -173,6 +173,7 @@ interface ReachNowInput {
   attachments?: OutgoingAttachment[];
   react?: { messageTs: string; emoji: string };
   delete?: { messageTs: string };
+  edit?: { messageTs: string };
   currentDestination?: Destination;
 }
 export type ReachNowResult =
@@ -448,7 +449,7 @@ export interface App {
     scopeId: ScopeId,
     content: string,
     actorId: string,
-    opts?: { allowSharedScope?: boolean; expectedVersion?: number },
+    opts?: { allowSharedScope?: boolean; expectedVersion?: number; sessionId?: string },
   ): Promise<number>;
   createCron(input: CreateCronInput): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;

@@ -86,7 +86,6 @@ export interface LoopItemLedger {
   prune(loopId: string, options: PruneOptions): Promise<number>;
   get(id: string): Promise<LoopItem | null>;
   byLoop(loopId: string): Promise<LoopItem[]>;
-  moveSource(from: string, to: string, source: string): Promise<void>;
   summaries(
     loopIds: string[],
     options?: { includeInboxMetadata?: boolean },
@@ -242,44 +241,9 @@ export function createLoopItemLedger(
   const forLoop = async (loopId: string): Promise<LoopItem[]> =>
     (await backing.all()).filter((item) => item.loopId === loopId);
 
-  const idFor = async (loopId: string, sourceKey: string): Promise<string> => {
-    const id = loopItemId(loopId, sourceKey);
-    if (await backing.get(id)) return id;
-    return (
-      (
-        await backing.select({
-          where: { field: "loopId", anyOfFold: [loopId] },
-          omit: ["sourcePayload", "proposal", "agentDrafts", "thread"],
-        })
-      ).find((item) => item.loopId === loopId && item.sourceKey === sourceKey)?.id ?? id
-    );
-  };
-
   const ledger: LoopItemLedger = {
-    async moveSource(from, to, source) {
-      const targets = await forLoop(to);
-      for (const item of await forLoop(from)) {
-        if ((item.source ?? item.sourcePayload?.source) !== source) continue;
-        if (targets.some((target) => target.sourceKey === item.sourceKey && target.id !== item.id)) continue;
-        await update(item.id, (current) => {
-          if (
-            current.loopId !== from ||
-            current.status === "in_progress" ||
-            (current.decisionToken && (current.decisionAt ?? 0) + DECISION_LEASE_MS > Date.now())
-          )
-            return current;
-          return {
-            ...current,
-            source,
-            loopId: to,
-            previousLoopId: from,
-            inboxPreview: inboxPreview(current.sourcePayload),
-          };
-        });
-      }
-    },
     async enqueue(input) {
-      const id = await idFor(input.loopId, input.sourceKey);
+      const id = loopItemId(input.loopId, input.sourceKey);
       const now = Date.now();
       const candidate: LoopItem = {
         id,
@@ -305,14 +269,12 @@ export function createLoopItemLedger(
       const items = await backing.select({
         where: { field: "loopId", anyOfFold: loopIds },
         omit: ["proposal", "agentDrafts", "thread"],
-        pickNested: { sourcePayload: ["source", "automated", "participants", "slackAvatarsRefreshAt"] },
+        pickNested: { sourcePayload: ["automated", "participants", "slackAvatarsRefreshAt"] },
       });
       return items.map(({ sourcePayload, ...item }) => {
-        const source = item.source ?? (typeof sourcePayload?.source === "string" ? sourcePayload.source : undefined);
         return {
           ...item,
-          ...(source !== undefined ? { source } : {}),
-          ...(source === "slack"
+          ...(item.source === "slack"
             ? {
                 inboxPreview: {
                   ...item.inboxPreview,
@@ -321,7 +283,7 @@ export function createLoopItemLedger(
                 },
               }
             : {}),
-          ...(source === "gmail"
+          ...(item.source === "gmail"
             ? { inboxPreview: { ...item.inboxPreview, automated: sourcePayload?.automated === true } }
             : {}),
         };
@@ -330,23 +292,10 @@ export function createLoopItemLedger(
     async ingest(entries) {
       const outcome: IngestOutcome = { created: 0, updated: 0, skipped: 0 };
       if (!entries.length) return outcome;
-      const existing = await backing.select({
-        where: { field: "loopId", anyOfFold: [...new Set(entries.map((entry) => entry.loopId))] },
-        omit: ["sourcePayload", "proposal", "agentDrafts", "thread"],
-      });
-      const ids = new Set(existing.map((item) => item.id));
-      const legacy = new Map<string, string>();
-      for (const item of existing) {
-        const key = JSON.stringify([item.loopId, item.sourceKey]);
-        if (!legacy.has(key)) legacy.set(key, item.id);
-      }
       const changed: LoopItem[] = [];
       await backing.mutateMany(
         entries.map((entry) => {
-          const canonical = loopItemId(entry.loopId, entry.dedupeKey);
-          const id = ids.has(canonical)
-            ? canonical
-            : (legacy.get(JSON.stringify([entry.loopId, entry.dedupeKey])) ?? canonical);
+          const id = loopItemId(entry.loopId, entry.dedupeKey);
           return {
             id,
             apply: (item: LoopItem | null): LoopItem => {
@@ -701,22 +650,14 @@ export function createLoopItemLedger(
     },
   };
   if (!coordination) return ledger;
-  const guarded = async <T>(ids: string[], fn: () => Promise<T>, check = true): Promise<T> => {
-    let run = async () => {
-      if (check)
-        for (const id of ids)
-          if (!(await coordination.accepts(id))) throw new Error("This Loop no longer accepts intake");
+  const guarded = <T>(loopId: string, fn: () => Promise<T>): Promise<T> =>
+    coordination.lock.withLock(`loop-intake:${loopId}`, async () => {
+      if (!(await coordination.accepts(loopId))) throw new Error("This Loop no longer accepts intake");
       return fn();
-    };
-    for (const id of [...new Set(ids)].sort().reverse()) {
-      const next = run;
-      run = () => coordination.lock.withLock(`loop-intake:${id}`, next);
-    }
-    return run();
-  };
+    });
   return {
     ...ledger,
-    enqueue: (input) => guarded([input.loopId], () => ledger.enqueue(input)),
+    enqueue: (input) => guarded(input.loopId, () => ledger.enqueue(input)),
     ingest: async (entries) => {
       const result = { created: 0, updated: 0, skipped: 0 };
       const groups = new Map<string, typeof entries>();
@@ -726,13 +667,12 @@ export function createLoopItemLedger(
         groups.set(entry.loopId, group);
       }
       for (const [loopId, group] of groups) {
-        const next = await guarded([loopId], () => ledger.ingest(group));
+        const next = await guarded(loopId, () => ledger.ingest(group));
         result.created += next.created;
         result.updated += next.updated;
         result.skipped += next.skipped;
       }
       return result;
     },
-    moveSource: (from, to, source) => guarded([from, to], () => ledger.moveSource(from, to, source), false),
   };
 }

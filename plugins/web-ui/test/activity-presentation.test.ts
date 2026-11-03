@@ -25,7 +25,7 @@ function row(command: string, result: ToolPayload | null = { code: 0 }): ToolRow
 
 test("simple shell reads and searches get semantic labels, compound commands stay exact", () => {
   assert.equal(activityLabel(row("cat /workspace/src/main.ts"), "complete"), "main.ts");
-  assert.equal(activityLabel(row("rg -n 'gateway' src/main.ts"), "complete"), "Searched for gateway in main.ts");
+  assert.equal(activityLabel(row("rg -n 'gateway' src/main.ts"), "complete"), "Searching for gateway in main.ts");
   for (const command of [
     "cat file; rm file",
     "rg foo src | head -10",
@@ -37,10 +37,10 @@ test("simple shell reads and searches get semantic labels, compound commands sta
   }
   assert.equal(
     activityLabel(row("rg -n 'gateway|secret' src/main.ts"), "complete"),
-    "Searched for gateway|secret in main.ts",
+    "Searching for gateway|secret in main.ts",
   );
   assert.equal(activityLabel(row("sed -n '1,120p' src/main.ts"), "complete"), "main.ts");
-  assert.equal(activityLabel(row("rg --files src"), "complete"), "Searched for files in src");
+  assert.equal(activityLabel(row("rg --files src"), "complete"), "Searching for files in src");
   assert.deepEqual(activityDescription({ tool: "skill", name: "publish" }), {
     category: "read",
     target: "publish",
@@ -57,7 +57,7 @@ test("simple shell reads and searches get semantic labels, compound commands sta
 
 test("status labels never report missing or failed results as successful", () => {
   assert.equal(activityLabel(row("npm test", null), "working"), "Running npm test");
-  assert.equal(activityLabel(row("npm test", null), "complete"), "Tried running npm test");
+  assert.equal(activityLabel(row("npm test", null), "complete"), "Running npm test · Unconfirmed");
   assert.equal(activityLabel(row("cat missing", { code: 1 }), "complete"), "missing · exit 1");
   assert.equal(activityLabel(row("npm test", { blocked: "needs_approval" }), "working"), null);
 });
@@ -68,7 +68,7 @@ test("groups describe categories and surface errors and approvals", () => {
     { kind: "tool", row: row("npm test") },
   ];
   assert.deepEqual(activityGroupSummary(items, "complete"), {
-    label: "Read files, ran commands",
+    label: "Reading files, running commands",
     category: "read",
     attention: false,
   });
@@ -105,12 +105,16 @@ test("session actions identify their recipient and retain failure state", () => 
     text: "Check the remaining tests",
   };
   assert.deepEqual(sessionPresentation(tool, "complete"), {
-    label: "Sent message to",
+    label: "Sending message to",
     target: "compaction-exact",
     preview: "Check the remaining tests",
   });
   tool.result!.payload = { isError: true };
   assert.equal(sessionPresentation(tool, "complete")?.label, "Failed to send message to");
+  tool.call!.payload = { tool: "subagents", action: "wait" };
+  tool.result!.payload = {};
+  assert.equal(sessionPresentation(tool, "complete")?.label, "Waiting on");
+  assert.equal(sessionPresentation(tool, "complete")?.target, "subagents");
   tool.call!.payload = { tool: "session", action: "open", name: "worker" };
   tool.result!.payload = { title: "Named worker", sessionId: "id" };
   assert.equal(sessionPresentation(tool, "complete")?.target, "Named worker");
@@ -165,7 +169,7 @@ test("purpose takes precedence over commands while retaining failure and incompl
 test("ordinary command exits stay neutral while tool errors retain failure labels", () => {
   for (const identity of [{ tool: "execute" }, { tool: "sandbox", action: "exec" }]) {
     for (const [command, label] of [
-      ["grep absent file", "Searched for absent in file"],
+      ["grep absent file", "Searching for absent in file"],
       ["[ -d dir ]", "[ -d dir ]"],
     ]) {
       const tool = row(command!, { code: 1, isError: false });
@@ -192,7 +196,7 @@ test("historical completed nonzero exits do not inherit the old error flag", () 
       tool.call!.payload = { ...identity, command: "[ -d dir ]", purpose: "Check directory" };
       assert.equal(activityLabel(tool, "complete"), "Check directory · exit 1");
       assert.deepEqual(activityGroupSummary([{ kind: "tool", row: tool }], "complete"), {
-        label: "Ran commands",
+        label: "Running commands",
         category: "execute",
         attention: false,
       });

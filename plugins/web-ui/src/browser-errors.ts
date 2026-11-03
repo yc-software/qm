@@ -32,6 +32,7 @@ const API_RESOURCES = new Set([
   "sessions",
   "skills",
   "slack-installation",
+  "spend",
   "suggested-activities",
   "surface-config",
   "turn",

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { raceTurnWallClock } from "../src/agent/agent-run.ts";
+import { raceTurnWallClock, wallClockTurnFailure } from "../src/agent/agent-run.ts";
 
 const never = new Promise<void>(() => {});
 
@@ -124,4 +124,14 @@ test("without extendMs the cap behaves exactly as before", async () => {
     abort: async () => release(),
   });
   assert.equal(outcome, "aborted");
+});
+
+test("wall-clock failure survives a cancel only for abandoned turns", () => {
+  assert.equal(wallClockTurnFailure("ok", false, false), false);
+  assert.equal(wallClockTurnFailure("ok", false, true), false);
+  assert.equal(wallClockTurnFailure("aborted", false, false), true);
+  assert.equal(wallClockTurnFailure("aborted", true, false), false);
+  assert.equal(wallClockTurnFailure("aborted", false, true), false);
+  assert.equal(wallClockTurnFailure("abandoned", false, true), true);
+  assert.equal(wallClockTurnFailure("abandoned", false, false), true);
 });

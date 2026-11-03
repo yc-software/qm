@@ -104,7 +104,6 @@ export function createGmailPushClient(tokens: ConnectorTokenSource, config: Gmai
               summary: message.snippet ?? "New email",
               sourceAt: at,
               sourcePayload: {
-                source: "gmail",
                 title: header("subject") ?? "(No subject)",
                 from: header("from") ?? cursor.email,
                 snippet: message.snippet ?? "New email",

@@ -320,8 +320,8 @@ export function withThread(destination: Destination, threadTs: string | undefine
     : { ...destination, target: `${destination.target}:${threadTs}` };
 }
 
-export function withEdit(destination: Destination, editRef: string | undefined): Destination {
-  return editRef ? { ...destination, editRef } : destination;
+export function withEdit(destination: Destination, messageTs: string | undefined): Destination {
+  return messageTs ? { ...destination, edit: { messageTs } } : destination;
 }
 
 export function withWebTranscriptText(destination: Destination): Destination {

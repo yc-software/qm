@@ -1,5 +1,6 @@
 import { securityScreenEnv, type QmConfig, type RenderConfig } from "./config.ts";
 import { CliError } from "./log.ts";
+import { sandboxBaseRef } from "./manifest.ts";
 import { discoverPlugins, type ResolvedPlugin } from "./plugins.ts";
 import type { ServiceType } from "./render-api.ts";
 import { computedSecrets, runtimeSecretNames } from "./secrets.ts";
@@ -50,7 +51,7 @@ export type RenderWorkload = RenderBuild & {
   diskSizeGB?: number;
 };
 
-export function renderManagedCoreEnv(render: RenderConfig): Record<string, string> {
+export function renderManagedCoreEnv(render: RenderConfig, baseImage?: string): Record<string, string> {
   return {
     DATA_DIR: "/data",
     WORKSPACE_STORE: "postgres",
@@ -61,6 +62,7 @@ export function renderManagedCoreEnv(render: RenderConfig): Record<string, strin
     RENDER_WORKSPACE_ID: render.workspaceId,
     RENDER_REGION: render.region,
     RENDER_APP_REGION: render.appRegion ?? render.region,
+    RENDER_SANDBOX_IMAGE: baseImage ?? sandboxBaseRef(),
   };
 }
 
@@ -130,7 +132,7 @@ export function renderServiceEnv(
   if (service === "core")
     Object.assign(out, {
       ...securityScreenEnv(config),
-      ...renderManagedCoreEnv(render),
+      ...renderManagedCoreEnv(render, config.sandbox?.baseImage),
       ...managedValues,
       ...(connections.projectId ? { RENDER_PROJECT_ID: connections.projectId } : {}),
       ...(connections.minioServiceId ? { RENDER_MINIO_SERVICE_ID: connections.minioServiceId } : {}),

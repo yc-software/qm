@@ -24,7 +24,7 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
     if (now - cacheAt > LOOP_CACHE_TTL_MS) {
       const all = await deps.loops.list();
       cachedInboxLoops = all
-        .filter((loop) => (loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) && loop.state !== "archived")
+        .filter((loop) => loop.surface?.startsWith("inbox:") && loop.state !== "archived")
         .map((loop) => ({ id: loop.id, owner: loop.owner }));
       cacheAt = now;
     }
@@ -40,7 +40,7 @@ export function createInboxRealtime(deps: InboxRealtimeDeps): {
         const owner = Boolean(event.senderEmail && event.senderEmail.toLowerCase() === loop.owner.toLowerCase());
         const matched = (await deps.items.byLoop(loop.id)).filter(
           (item) =>
-            (item.source ?? item.sourcePayload?.source) === event.source &&
+            item.source === event.source &&
             adapter.matchesEvent(item, event.conversationRef) &&
             !(owner && isResolved(item)),
         );

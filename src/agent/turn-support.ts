@@ -12,9 +12,10 @@ import type { TurnLlmRequestRecord, ModelUtilities, AgentTurnInput, AgentTurnRes
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./agent-run.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
+import { entryFromItem, type Item, itemFromEntry, storedItem } from "../sessions/items.ts";
+import type { NewEntry } from "../sessions/session-store.ts";
 
 export interface ToolPlumbing {
-  reachExec?: boolean;
   controlTools?: boolean;
   sandboxResources?: boolean;
   execTimeoutMs?: number;
@@ -57,8 +58,15 @@ export function imageRefs(images: AgentTurnInput["images"]): { images?: ReplayIm
   };
 }
 
+export async function emitEntry(
+  turn: Pick<AgentTurnInput, "emit" | "scopeLabel">,
+  entry: Pick<NewEntry, "type" | "payload" | "author">,
+): Promise<SessionEntry> {
+  return entryFromItem(await turn.emit(itemFromEntry(entry)), turn.scopeLabel);
+}
+
 export async function recordSteerIntake(turn: AgentTurnInput, steer: SteerIntake): Promise<void> {
-  await turn.emit({
+  await emitEntry(turn, {
     type: "user",
     payload: {
       text: steer.text,
@@ -68,7 +76,6 @@ export async function recordSteerIntake(turn: AgentTurnInput, steer: SteerIntake
       ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
       ...imageRefs(steer.images),
     },
-    scopeLabel: turn.scopeLabel,
     ...(steer.author ? { author: steer.author } : {}),
   });
   await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
@@ -84,17 +91,9 @@ export async function recordStoppedTurn(
 ): Promise<SessionEntry | null> {
   if (turn.shutdown?.aborted) return null;
   const answer = partial.trim()
-    ? await turn.emit({
-        type: "assistant",
-        payload: { text: partial, stopped: true, ...replay },
-        scopeLabel: turn.scopeLabel,
-      })
+    ? await emitEntry(turn, { type: "assistant", payload: { text: partial, stopped: true, ...replay } })
     : null;
-  const note = await turn.emit({
-    type: "system",
-    payload: { kind: TURN_STOPPED_KIND, reason },
-    scopeLabel: turn.scopeLabel,
-  });
+  const note = await emitEntry(turn, { type: "system", payload: { kind: TURN_STOPPED_KIND, reason } });
   return note ?? answer;
 }
 
@@ -112,7 +111,7 @@ export function turnToolContext(turn: AgentTurnInput): ToolContextRef {
     ...(turn.continueTurn ? { goalRound: 1 } : {}),
     saveGoal: turn.saveGoal,
     ...(turn.goalInbox ? { goalInbox: turn.goalInbox } : {}),
-    emit: turn.emit,
+    emit: (entry) => emitEntry(turn, entry),
     scopeLabel: turn.scopeLabel,
     orgScopeId: turn.orgScopeId,
     screenToolResult: turn.screenToolResult,
@@ -125,7 +124,6 @@ export function turnToolContext(turn: AgentTurnInput): ToolContextRef {
 
 export function turnToolOptions(opts: ToolPlumbing, turn?: AgentTurnInput): AgentToolsOptions {
   return {
-    reachExec: opts.reachExec,
     ...(turn?.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
     controlTools: opts.controlTools,
     sandboxResources: opts.sandboxResources,
@@ -241,7 +239,7 @@ export function oneShotRunner(runPrompt: (turn: AgentTurnInput) => Promise<Agent
   return async (systemPrompt, prompt, signal, observe, modelOverride) => {
     const session = { id: `oneshot-${randomBytes(8).toString("hex")}` } as AgentTurnInput["session"];
     const scope = { kind: "org", id: "oneshot" } as unknown as ScopeId;
-    const emitted: SessionEntry[] = [];
+    const emitted: Item[] = [];
     const result = await runPrompt({
       session,
       input: prompt,
@@ -253,21 +251,15 @@ export function oneShotRunner(runPrompt: (turn: AgentTurnInput) => Promise<Agent
       ...(signal ? { cancel: signal } : {}),
       ...(modelOverride ? { runtime: { modelId: modelOverride } } : {}),
       readOnly: true,
-      emit: async (entry) => {
-        const saved = {
-          ...entry,
-          sessionId: session.id,
-          seq: emitted.length + 1,
-          createdAt: Date.now(),
-        } as SessionEntry;
+      emit: async (item) => {
+        const saved = storedItem(item, { sessionId: session.id, seq: emitted.length + 1, createdAt: Date.now() });
         emitted.push(saved);
         return saved;
       },
       recordModelCall: observe?.recordModelCall ?? (() => {}),
       ...(observe?.recordLlmRequest
         ? {
-            recordLlmRequest: (rec: TurnLlmRequestRecord, requestSignal?: AbortSignal) =>
-              observe.recordLlmRequest!({ ...rec, turnSeq: null }, requestSignal),
+            recordLlmRequest: (rec: TurnLlmRequestRecord) => observe.recordLlmRequest!({ ...rec, turnSeq: null }),
           }
         : {}),
     });
@@ -288,8 +280,7 @@ export function oneShotModelUtilities(
           recordModelCall,
           ...(recordLlmRequest
             ? {
-                recordLlmRequest: (rec, requestSignal) =>
-                  recordLlmRequest({ ...rec, step: SECURITY_SCREEN_STEP }, requestSignal),
+                recordLlmRequest: (rec) => recordLlmRequest({ ...rec, step: SECURITY_SCREEN_STEP }),
               }
             : {}),
         }),

@@ -5,7 +5,7 @@ import type { MemoryProviderConfig, McpMemoryOperationConfig } from "./provider-
 import type { MemoryService } from "./memory-service.ts";
 import { createMemorableMemoryProvider } from "./memorable/provider.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
-import type { SessionEntry } from "../types.ts";
+import type { Item } from "../sessions/items.ts";
 
 function operation(url: string, spec: McpMemoryOperationConfig, timeoutMs: number): McpMemoryOperation {
   return {
@@ -30,12 +30,12 @@ export const logMemoryProviderError = (error: unknown, provider: string, operati
 
 export function createMemoryProviders(
   configs: MemoryProviderConfig["providers"],
-  opts: { sessionEntries?: (sessionId: string) => Promise<SessionEntry[]> } = {},
+  opts: { sessionItems?: (sessionId: string) => Promise<Item[]> } = {},
 ): Record<string, MemoryService> {
   const providers: Record<string, MemoryService> = {};
   for (const provider of configs) {
     if (provider.type === "memorable") {
-      if (!opts.sessionEntries)
+      if (!opts.sessionItems)
         throw new Error(`memory provider ${provider.id} needs session access to record procedures`);
       providers[provider.id] = createMemorableMemoryProvider({
         argv: provider.argv,
@@ -43,7 +43,7 @@ export function createMemoryProviders(
         injectTimeoutMs: provider.injectTimeoutMs,
         recordTimeoutMs: provider.recordTimeoutMs,
         mask: createSecretValueMasker(provider.redactValues),
-        loadEntries: opts.sessionEntries,
+        loadItems: opts.sessionItems,
       });
       continue;
     }
