@@ -122,8 +122,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   const keys = triageKeys(
     candidates,
     (item) => loopsById.get(item.loopId),
-    // Loop cards (e.g. GitLab/GitHub PRs) carry the upstream activity time in sourceAt; mail and Slack keep arrival order.
-    (item) => (item.source === "gmail" || item.source === "slack" ? item.createdAt : (item.sourceAt ?? item.createdAt)),
+    (item) => item.sourceAt ?? item.createdAt,
   );
   let feed = candidates
     .filter((item) => !filter || item.loopId === filter)
