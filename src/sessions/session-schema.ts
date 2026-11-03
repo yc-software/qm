@@ -350,12 +350,11 @@ const SESSION_TABLES = tenantTables(
     after: SPEND_TRIGGERS,
   },
 );
-const TENANT_BACKFILL: PgMigrationDefinition = {
+export const TENANT_BACKFILL: PgMigrationDefinition = {
   id: "sessions/store/0050-tenant-backfill",
   statements: [
     `INSERT INTO tenants(id, slug, name)
      SELECT id, id::text, id::text FROM qm_tenant
-      WHERE EXISTS (SELECT 1 FROM items) OR EXISTS (SELECT 1 FROM blobs)
      ON CONFLICT (id) DO NOTHING`,
   ],
 };
