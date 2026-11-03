@@ -180,7 +180,7 @@ import {
   replacePendingSession,
   groupDmTitle,
   refreshSessions,
-  refreshSubagentRows,
+  refreshTree,
   renderList,
   sessionsState,
   sessionSlackUrl,
@@ -2749,7 +2749,7 @@ export function createChatSurface(
   function syncSubagentRowsRefresh(rootId: string | null): void {
     if (subagentUi.rowsRoot === rootId) return;
     if (subagentUi.rowsTimer) clearInterval(subagentUi.rowsTimer);
-    subagentUi.rowsTimer = rootId ? setInterval(() => void refreshSubagentRows(rootId), SUBAGENT_POLL_MS) : null;
+    subagentUi.rowsTimer = rootId ? setInterval(() => refreshTree(rootId), SUBAGENT_POLL_MS) : null;
     subagentUi.rowsRoot = rootId;
   }
 
