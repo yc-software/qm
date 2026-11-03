@@ -142,11 +142,12 @@ export function workspaceTools(kit: ToolKit) {
       const message =
         isObj(response.body) && typeof response.body.message === "string"
           ? response.body.message
-          : `HTTP ${response.status}${response.requestId ? ` (request ${response.requestId})` : ""}`;
+          : (typeof response.body === "string" ? response.body : JSON.stringify(response.body)).slice(0, 500);
+      const where = `HTTP ${response.status}${response.requestId ? `, request ${response.requestId}` : ""}`;
       return recordResult(
         callId,
-        { tool: "skills", action, status: response.status },
-        text(`[error] ${message}`),
+        { tool: "skills", action, status: response.status, requestId: response.requestId, error: message },
+        text(`[error] ${message} (${where})`),
         true,
       );
     }

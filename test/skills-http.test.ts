@@ -1258,10 +1258,10 @@ test("the skills tool saves a skill into the turn's scope and edits it through t
     assert.match(edited, /^Updated skill investor-update/);
     assert.equal((await srv.skills.get(sk.id))!.manifest.body, "# investor-update v2");
     const version = (await srv.skills.get(sk.id))!.version;
-    assert.equal(await jordan({ action: "edit", id: sk.id }), "[error] description or body required");
-    assert.equal(
+    assert.match(await jordan({ action: "edit", id: sk.id }), /^\[error\] description or body required \(HTTP 400/);
+    assert.match(
       await jordan({ action: "edit", id: sk.id, description: " ", body: "# investor-update v3" }),
-      "[error] description and body can't be blank",
+      /^\[error\] description and body can't be blank \(HTTP 400/,
     );
     assert.equal(await jordan({ action: "edit", id: ".." }), "[error] Invalid API path: /v1/skills/..");
     assert.equal((await srv.skills.get(sk.id))!.version, version);
@@ -1285,30 +1285,32 @@ test("the skills tool cannot save or edit where the skill API refuses", async ()
       [{ channelId: "C9", principalId: "avery" }],
     );
     const trigger = skillsTool(createSelfApiCall(srv.base, await srv.cap("avery", scopeId("channel", "C9"), false)));
-    assert.equal(
-      await trigger({ action: "save", name: "auto-thing", description: "d", body: "# b" }),
-      `[error] ${SHARED_SKILL_TRIGGER_REFUSAL}`,
+    assert.ok(
+      (await trigger({ action: "save", name: "auto-thing", description: "d", body: "# b" })).startsWith(
+        `[error] ${SHARED_SKILL_TRIGGER_REFUSAL} (HTTP 403`,
+      ),
     );
 
     await srv.config.setSecurityPosture(scopeId("personal", "strict-user"), "strict");
     const strict = skillsTool(createSelfApiCall(srv.base, await srv.cap("strict-user")));
-    assert.equal(
+    assert.match(
       await strict({ action: "save", name: "strict-thing", description: "d", body: "# b" }),
-      "[error] Strict posture blocks direct control-plane mutations",
+      /^\[error\] Strict posture blocks direct control-plane mutations \(HTTP 403/,
     );
 
     const id = await seedChannelSkill(srv);
     const outsider = skillsTool(createSelfApiCall(srv.base, await srv.cap("mallory")));
     assert.match(await outsider({ action: "edit", id, description: "taken over" }), /isn't yours to edit/);
 
-    assert.equal(
-      await skillsTool(createSelfApiCall(srv.base, await srv.cap("namer")))({
-        action: "save",
-        name: "Weekly Investor Update",
-        description: "d",
-        body: "# b",
-      }),
-      `[error] ${SKILL_NAME_RULE}`,
+    assert.ok(
+      (
+        await skillsTool(createSelfApiCall(srv.base, await srv.cap("namer")))({
+          action: "save",
+          name: "Weekly Investor Update",
+          description: "d",
+          body: "# b",
+        })
+      ).startsWith(`[error] ${SKILL_NAME_RULE} (HTTP 400`),
     );
     assert.deepEqual(skillsActions(), ["list", "search", "read", "share", "move"]);
     assert.equal(
@@ -1323,7 +1325,7 @@ test("the skills tool cannot save or edit where the skill API refuses", async ()
         id,
         body: "# b",
       }),
-      "[error] HTTP 502 (request r1)",
+      "[error] <html>bad gateway</html> (HTTP 502, request r1)",
     );
     const names = (await srv.skills.list()).map((s) => s.manifest.name);
     for (const name of ["auto-thing", "strict-thing", "Weekly Investor Update"]) assert.ok(!names.includes(name), name);
