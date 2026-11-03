@@ -965,6 +965,36 @@ test("a delegation chain whose older runs were pruned still sends; a deleted cur
   });
 });
 
+test("a stopped tree stays stopped after its released parent run is withdrawn", async () => {
+  const r = await rig();
+  const opened = await r.syscallsFor(r.room).open({ task: "long task", name: "long" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  for (const queued of await r.runs.inFlightForThread(child.threadRef)) await r.runs.withdraw(queued.id);
+  const { run: parent } = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    request: { actor, conversation, origin: { kind: "direct" }, text: "spawn" },
+  });
+  const parentLease = await r.runs.claimById(parent.id, "parent-worker", 30_000);
+  const { run: childRun } = await r.runs.enqueue({
+    sessionId: child.threadRef,
+    request: { actor, conversation, origin: { kind: "direct" }, text: "work", delegatingRunId: parent.id },
+  });
+  const childLease = await r.runs.claimById(childRun.id, "child-worker", 30_000);
+  await r.runs.complete(childRun.id, childLease!.leaseToken!, { status: "ok", reply: "done" });
+  await r.runs.releaseLease(parent.id, parentLease!.leaseToken!);
+  assert.equal(await stopSessionTree(r, r.room, "by the person"), true);
+  assert.equal(await r.runs.get(parent.id), null);
+  assert.equal(
+    await deliverSubagentMail(
+      { ...r, maxAttempts: 3, delegationEnabled: async () => true },
+      (await r.runs.get(childRun.id))!,
+    ),
+    true,
+  );
+  assert.equal(await r.runs.getByDedupKey(`subagent-return:${childRun.id}`), null);
+});
+
 test("an empty mailbox check skips sender validation and a delivered message still validates", async () => {
   const r = await rig();
   let checks = 0;
@@ -2130,6 +2160,25 @@ for (const origin of [
     assert.equal(followup.request.delegatingRunId, r.run.id);
   });
 }
+
+test("a session started from a delegated turn keeps the authority that turn carried", async () => {
+  const r = await delegatedHumanRig();
+  const fresh = await r.sessions.getOrCreateByThread("web:U1:fresh", "dm", scope, undefined, "web");
+  const first: OrchestratorInput = {
+    actor,
+    conversation: { kind: "dm", threadRef: fresh.threadRef, audience: [actor] },
+    surface: "web",
+    origin: { kind: "human" },
+    text: "go",
+    sessionSenderId: r.child.id,
+    delegatingRunId: r.run.id,
+  };
+  assert.equal(await delegatedAuthorizationOrigin(first, r), undefined);
+  const claimed = { ...first, delegatedAuthority: { kind: "human" as const } };
+  assert.deepEqual(await delegatedAuthorizationOrigin(claimed, r), { kind: "human" });
+  await r.sessions.setParentSession(r.child.id, null);
+  assert.equal(await delegatedAuthorizationOrigin(claimed, r), undefined);
+});
 
 test("detaching an ancestor revokes a descendant's delegated live authority", async () => {
   const r = await delegatedHumanRig();

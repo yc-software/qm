@@ -296,6 +296,10 @@ export function createTurnMethods(
         ...(sameApprovedMessage && approvedRequest?.delegatingRunId
           ? { delegatingRunId: approvedRequest.delegatingRunId }
           : {}),
+        ...(req.spawned && req.delegatedAuthority ? { delegatedAuthority: req.delegatedAuthority } : {}),
+        ...(sameApprovedMessage && approvedRequest?.delegatedAuthority
+          ? { delegatedAuthority: approvedRequest.delegatedAuthority }
+          : {}),
         ...(req.deliveryTarget ? { deliveryTarget: req.deliveryTarget } : {}),
         ...(req.deliveryCandidates?.length ? { deliveryCandidates: req.deliveryCandidates } : {}),
         actor,

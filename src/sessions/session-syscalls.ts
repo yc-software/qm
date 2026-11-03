@@ -73,7 +73,6 @@ export async function delegatedAuthorizationOrigin(
   const parent = source.request;
   if (!authorityReaches(parent, request, sender, child)) return;
   if (!isSessionTurn(parent)) return humanAuthored(parent) ? parent.origin : undefined;
-  if (!delegated && !continued) return;
   const claim = request.delegatedAuthority;
   if (!claim || claim.kind !== request.origin.kind) return;
   if (!(await treeIntact(deps.sessions, delegated ? child : sender))) return;
@@ -337,6 +336,7 @@ export interface SessionSyscallDeps {
         origin?: OrchestratorInput["origin"];
         sessionSenderId?: string;
         delegatingRunId?: string;
+        delegatedAuthority?: TurnOrigin;
       },
     ): Promise<{ session: Session; refused?: string } | { error: string }>;
   };
@@ -526,11 +526,11 @@ async function sessionRunCancelled(
   const seen = new Set<string>();
   while (runId) {
     if (seen.has(runId)) return true;
+    if ((await signals.pending(runId)).some(({ signal }) => signal.kind === "abort")) return true;
     const run = await runs.get(runId);
     if (!run) return seen.size === 0;
+    if (run.result?.stopped) return true;
     seen.add(runId);
-    if (run.result?.stopped || (await signals.pending(runId)).some(({ signal }) => signal.kind === "abort"))
-      return true;
     runId = run.request.delegatingRunId;
   }
   return false;
@@ -1072,6 +1072,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               origin: binding.request.origin,
               sessionSenderId: binding.session.id,
               ...(binding.request.runId ? { delegatingRunId: binding.request.runId } : {}),
+              ...(binding.authority ? { delegatedAuthority: binding.authority } : {}),
               ...(input.fork ? { forkOf: binding.session.id } : {}),
               ...(text ? { text } : {}),
               ...(input.title?.trim() ? { title: input.title.trim() } : {}),
@@ -1117,34 +1118,26 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
   if (run.request.delegatingRunId && !initiatingRun)
     console.warn(
-      `[subagent-return] delegating run ${run.request.delegatingRunId} of ${run.id} is gone; returning with the child's spawn context and no inherited authority`,
+      `[subagent-return] delegating run ${run.request.delegatingRunId} of ${run.id} is gone; returning with the parent's stored context and no inherited authority`,
     );
-  const initiatingContext =
-    initiatingRun?.request ??
-    (run.request.delegatingRunId
-      ? {
-          ...child.spawnMeta,
-          actor: run.request.actor,
-          origin: { kind: "automation" as const },
-          unattendedGrants: undefined,
-        }
-      : child.spawnMeta);
+  const initiatingContext = initiatingRun?.request ?? (run.request.delegatingRunId ? undefined : child.spawnMeta);
   const currentContext = storedContext(parent);
-  const originalParent = parent.threadRef === initiatingContext.conversation.threadRef;
+  const originalParent = !!initiatingContext && parent.threadRef === initiatingContext.conversation.threadRef;
   if (!originalParent && !currentContext) throw new Error("the current parent has no verified runtime context yet");
-  const meta = originalParent
-    ? initiatingContext
-    : {
-        ...currentContext!,
-        actor: run.request.actor,
-        origin: {
-          kind: "automation" as const,
-          ...(currentContext!.origin?.kind === "automation" && currentContext!.origin.destination
-            ? { destination: currentContext!.origin.destination }
-            : {}),
-        },
-        unattendedGrants: undefined,
-      };
+  const meta =
+    originalParent && initiatingContext
+      ? initiatingContext
+      : {
+          ...currentContext!,
+          actor: run.request.actor,
+          origin: {
+            kind: "automation" as const,
+            ...(currentContext!.origin?.kind === "automation" && currentContext!.origin.destination
+              ? { destination: currentContext!.origin.destination }
+              : {}),
+          },
+          unattendedGrants: undefined,
+        };
   const title = child.title?.trim() || child.id;
   const result = run.result;
   let kind: SubagentMailKind;
@@ -1179,7 +1172,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   delete inherited.openFingerprint;
   delete inherited.delegatedAuthority;
   const delegatedAuthority =
-    initiatingRun && deps.runs.get && isSessionTurn(initiatingRun.request)
+    originalParent && initiatingRun && deps.runs.get && isSessionTurn(initiatingRun.request)
       ? await delegatedAuthorizationOrigin(initiatingRun.request, {
           runs: { get: deps.runs.get },
           sessions: deps.sessions,

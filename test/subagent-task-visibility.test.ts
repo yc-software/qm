@@ -111,7 +111,12 @@ test("human-origin delegated input is screened before model execution", async (t
     signals: built.signals,
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     maxAttempts: 1,
-  }).forTurn({ session, scopeId: session.scopeId, request: { ...parent.request, runId: parent.id } });
+  }).forTurn({
+    session,
+    scopeId: session.scopeId,
+    authority: { kind: "human" },
+    request: { ...parent.request, runId: parent.id },
+  });
   const opened = await syscalls.open({ task: "UNTRUSTED_TASK" });
   assert.ok(opened.ok);
   const child = (await built.sessions.get(opened.sessionId))!;
@@ -119,8 +124,17 @@ test("human-origin delegated input is screened before model execution", async (t
   assert.equal(run.request.origin.kind, "human");
   built.runtime.startBackground();
   await settle(async () => ["done", "failed"].includes((await built.runs.get(run.id))!.status));
-  assert.equal((await built.runs.get(run.id))!.result?.status, "pending_approval");
+  const paused = (await built.runs.get(run.id))!;
+  assert.equal(paused.result?.status, "pending_approval");
   assert.ok(screened.some((payload) => payload.includes("session-delegation") && payload.includes("UNTRUSTED_TASK")));
+  const requestId = paused.result!.pendingApprovals![0]!.requestId;
+  const record = (await built.app.getApproval(requestId, "U1"))!;
+  assert.deepEqual(record.request?.delegatedAuthority, { kind: "human" });
+  await built.app.turn({ ...record.request!, approval: { requestId, approved: true }, async: true });
+  const replay = (await built.runs.list({ threadRef: child.threadRef, limit: 1 }).then(([latest]) => latest))!;
+  assert.notEqual(replay.id, run.id);
+  assert.equal(replay.request.delegatingRunId, run.request.delegatingRunId);
+  assert.deepEqual(replay.request.delegatedAuthority, { kind: "human" });
 });
 
 for (const fork of [false, true]) {

@@ -97,6 +97,7 @@ describe("agent conversations self-API", async () => {
       origin: { kind: "human" as const, messageTs: "1700000000.000100" },
       sessionSenderId: mineId,
       ...(source ? { delegatingRunId: source.id } : {}),
+      delegatedAuthority: { kind: "human" as const },
     };
     for (const extra of [{}, { forkOf: mineId }]) {
       const out = await startSession(built.app, built.sessions, "U1", {
@@ -110,6 +111,7 @@ describe("agent conversations self-API", async () => {
       assert.deepEqual(run?.request.origin, { kind: "human" });
       assert.equal(run?.request.sessionSenderId, mineId);
       assert.equal(run?.request.delegatingRunId, source?.id);
+      assert.deepEqual(run?.request.delegatedAuthority, { kind: "human" });
     }
   });
 
@@ -129,12 +131,14 @@ describe("agent conversations self-API", async () => {
       ...dm("U1", "pretend", "web:U1:c9"),
       sessionSenderId: mineId,
       delegatingRunId: "run-forged",
+      delegatedAuthority: { kind: "human" },
       async: true,
     });
     const [run] = await built.runs.inFlightForThread("web:U1:c9");
     assert.ok(run);
     assert.equal(run.request.sessionSenderId, undefined);
     assert.equal(run.request.delegatingRunId, undefined);
+    assert.equal(run.request.delegatedAuthority, undefined);
   });
 
   it("new sessions in a channel seed their turn on that channel", async () => {

@@ -172,6 +172,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.externalSlack ? { externalSlack: input.externalSlack } : {}),
     ...(input.sessionSenderId ? { sessionSenderId: input.sessionSenderId } : {}),
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
+    ...(input.delegatedAuthority ? { delegatedAuthority: input.delegatedAuthority } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
     ...(input.deliveryCandidates?.length ? { deliveryCandidates: input.deliveryCandidates } : {}),

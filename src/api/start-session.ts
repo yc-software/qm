@@ -15,6 +15,7 @@ export async function startSession(
     origin?: TurnOrigin;
     sessionSenderId?: string;
     delegatingRunId?: string;
+    delegatedAuthority?: TurnOrigin;
   },
 ): Promise<{ session: Session; refused?: string } | { error: string }> {
   const out = input.forkOf
@@ -38,6 +39,7 @@ export async function startSession(
     ...(input.origin ? { origin: sessionTurnOrigin(input.origin, input.text) } : {}),
     ...(input.sessionSenderId ? { sessionSenderId: input.sessionSenderId } : {}),
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
+    ...(input.delegatedAuthority ? { delegatedAuthority: input.delegatedAuthority } : {}),
     spawned: true,
     async: true,
   });

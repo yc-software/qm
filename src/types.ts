@@ -353,6 +353,7 @@ export interface TurnRequest {
   };
   sessionSenderId?: string;
   delegatingRunId?: string;
+  delegatedAuthority?: TurnOrigin;
   privateSessionMessage?: true;
   sessionMessageDepth?: number;
   surface: string;
