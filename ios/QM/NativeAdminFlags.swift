@@ -9,7 +9,7 @@ struct NativeFeatureFlag: Decodable, Identifiable {
   var id: String { featureName }
   var title: String { label ?? featureName.replacingOccurrences(of: "_", with: " ") }
   func accepts(_ scopeId: String) -> Bool {
-    personalOnly != true || scopeId.hasPrefix("personal:")
+    personalOnly != true || ScopeKind(scopeId: scopeId) == .personal
   }
 }
 

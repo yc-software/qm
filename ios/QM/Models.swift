@@ -42,15 +42,17 @@ struct Conversation: Codable, Identifiable, Hashable {
   var forkedFrom: ForkOrigin?
   var forkBoundarySeq: Int?
 
-  var isShared: Bool { scopeId.hasPrefix("group:") || scopeId.hasPrefix("channel:") }
+  var isShared: Bool { [.group, .channel].contains(ScopeKind(scopeId: scopeId)) }
 
   var contextLabel: String? {
     if let channelName, !channelName.isEmpty { return channelName }
-    if scopeId.hasPrefix("personal:") { return nil }
-    if scopeId.hasPrefix("project:") { return "Project conversation" }
-    if scopeId.hasPrefix("group:") { return "Group conversation" }
-    if scopeId.hasPrefix("channel:") { return "Slack channel" }
-    return "Shared conversation"
+    switch ScopeKind(scopeId: scopeId) {
+    case .personal: return nil
+    case .project: return "Project conversation"
+    case .group: return "Group conversation"
+    case .channel: return "Slack channel"
+    case nil: return "Shared conversation"
+    }
   }
 
   private var slackArchivePath: String? {

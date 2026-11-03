@@ -366,8 +366,7 @@ final class NativeVoiceModel: NSObject {
   }
   nonisolated static func submissionKey(revision: UUID, delegation: String?) -> String {
     let source = "\(revision.uuidString.lowercased()):\(delegation ?? UUID().uuidString)"
-    let digest = SHA256.hash(data: Data(source.utf8)).map { String(format: "%02x", $0) }
-    return "voice-" + digest.joined()
+    return "voice-" + SHA256.hash(data: Data(source.utf8)).hex
   }
   private static var clock: Double { ProcessInfo.processInfo.systemUptime }
   var canSpeak: Bool { connected && !stopping && !audioPaused }

@@ -27,7 +27,7 @@ struct DraftStore {
   }
 
   private static func hashKey(_ value: String) -> String {
-    SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    SHA256.hash(data: Data(value.utf8)).hex
   }
 
   private static func directory(_ account: String) -> URL {
@@ -43,10 +43,17 @@ struct DraftStore {
   }
 
   private static func load(_ file: URL) throws -> Record? {
+    let data: Data
     do {
-      return try JSONDecoder().decode(Record.self, from: Data(contentsOf: file))
+      data = try Data(contentsOf: file)
     } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
       return nil
+    } catch {
+      Log.drafts.failure("Reading draft", error)
+      throw error
+    }
+    do {
+      return try JSONDecoder().decode(Record.self, from: data)
     } catch {
       setAside(file, error)
       throw error
@@ -76,6 +83,7 @@ struct DraftStore {
   func write(_ record: Record) throws {
     try Self.epochs.withLock { epochs in
       guard epochs[account] == epoch else { throw CancellationError() }
+      if FileManager.default.fileExists(atPath: file.path) { _ = try Data(contentsOf: file) }
       var directory = file.deletingLastPathComponent()
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
       var resources = URLResourceValues()
@@ -114,7 +122,9 @@ struct DraftStore {
     let files = records(account)
     var referenced: Set<String> = []
     for file in files {
-      guard let record = try load(file) else { continue }
+      let loaded: Record?
+      do { loaded = try load(file) } catch { return }
+      guard let record = loaded else { continue }
       referenced.formUnion(
         ((record.attachments ?? []) + (record.pending?.attachments ?? [])).compactMap(\.localSHA))
     }

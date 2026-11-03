@@ -28,19 +28,19 @@ struct WorkspaceContext: Decodable, Identifiable, Hashable {
   let sessionCount: Int
   let project: WorkspaceProject?
   var id: String { scopeId }
-  private var scopeKind: Substring { scopeId.prefix { $0 != ":" } }
-  var isPersonal: Bool { scopeKind == "personal" }
+  private var scopeKind: ScopeKind? { ScopeKind(scopeId: scopeId) }
+  var isPersonal: Bool { scopeKind == .personal }
   var icon: String {
     if isPersonal { return "person" }
     if project != nil { return "folder" }
-    if scopeKind == "group" { return "person.2" }
-    if scopeKind == "channel" { return "number" }
+    if scopeKind == .group { return "person.2" }
+    if scopeKind == .channel { return "number" }
     return "folder"
   }
   var section: String {
     if isPersonal { return "Personal" }
     if project != nil { return "Projects" }
-    if scopeKind == "channel" { return "Channels" }
+    if scopeKind == .channel { return "Channels" }
     return "Shared spaces"
   }
   var title: String {

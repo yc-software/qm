@@ -50,6 +50,10 @@ struct NativeHTMLText {
   ]
   private static let named: [String: String] = [
     "nbsp": " ", "quot": "\"", "apos": "'", "lt": "<", "gt": ">", "amp": "&",
+    "lsquo": "\u{2018}", "rsquo": "\u{2019}", "ldquo": "\u{201C}", "rdquo": "\u{201D}",
+    "ndash": "\u{2013}", "mdash": "\u{2014}", "hellip": "\u{2026}", "bull": "\u{2022}",
+    "middot": "\u{00B7}", "copy": "\u{00A9}", "reg": "\u{00AE}", "trade": "\u{2122}",
+    "euro": "\u{20AC}", "pound": "\u{00A3}", "laquo": "\u{00AB}", "raquo": "\u{00BB}",
   ]
   private(set) var text = ""
   private let source: [Character]
@@ -246,6 +250,8 @@ struct NativeSentMailDetail: View {
   let user: String
   let original: NativeSentEmail
   @State private var detail: NativeSentEmail?
+  @State private var plainBody = ""
+  @State private var chatTrimmed = false
   @State private var item: NativeInboxItem?
   @State private var error: String?
   @State private var busy = false
@@ -274,7 +280,7 @@ struct NativeSentMailDetail: View {
           Section {
             if let from = detail.from { LabeledContent("From", value: from) }
             if let cc = detail.cc, !cc.isEmpty { LabeledContent("Cc", value: cc) }
-            Text(detail.plainBody.isEmpty ? "This email has no text body." : detail.plainBody)
+            Text(plainBody.isEmpty ? "This email has no text body." : plainBody)
               .textSelection(.enabled)
             if let attachments = detail.attachments, !attachments.isEmpty {
               Text("Attachments: " + attachments.joined(separator: ", ")).font(.caption)
@@ -284,7 +290,7 @@ struct NativeSentMailDetail: View {
         Button("Ask QM about this email", systemImage: "bubble.left.and.bubble.right") {
           Task { await openChat(detail) }
         }.disabled(busy)
-        if detail.chatTrimmed {
+        if chatTrimmed {
           Text(
             "This email is longer than \(NativeSentEmail.chatLimit.formatted()) characters. QM will only see the first \(NativeSentEmail.chatLimit.formatted())."
           ).font(.caption).foregroundStyle(.secondary)
@@ -306,9 +312,12 @@ struct NativeSentMailDetail: View {
     busy = true
     defer { busy = false }
     do {
-      detail = try await client.fetch(
+      let fetched: NativeSentEmail = try await client.fetch(
         "api/inbox/sent/\(original.id.apiComponent)",
         query: [.init(name: "accountType", value: original.accountType ?? "default")])
+      plainBody = fetched.plainBody
+      chatTrimmed = fetched.chatTrimmed
+      detail = fetched
       error = nil
     } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
   }

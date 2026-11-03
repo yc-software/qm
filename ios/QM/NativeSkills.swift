@@ -292,7 +292,7 @@ struct NativeSkillEditor: View {
     name != (skill?.name ?? "") || description != (skill?.description ?? "")
       || bodyText != (skill?.body ?? "")
   }
-  private var shared: Bool { !scope.hasPrefix("personal:") }
+  private var shared: Bool { ScopeKind(scopeId: scope) != .personal }
   var body: some View {
     NavigationStack {
       QMForm {

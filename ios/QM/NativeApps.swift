@@ -28,7 +28,8 @@ struct NativeDeployment: Decodable, Identifiable {
   func tab(user: String) -> String {
     if status == "archived" { return "Archived" }
     return ownerScopeId == "personal:\(user)"
-      || (ownerScopeId?.hasPrefix("personal:") != true && createdBy == user) ? "Yours" : "Shared"
+      || (ownerScopeId.flatMap(ScopeKind.init(scopeId:)) != .personal && createdBy == user)
+      ? "Yours" : "Shared"
   }
   func url(base: URL) -> URL? {
     guard let webUrl, let url = URL(string: webUrl, relativeTo: base)?.absoluteURL,
