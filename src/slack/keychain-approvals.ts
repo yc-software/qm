@@ -45,6 +45,15 @@ export function keychainApprovalMessage(
   ];
   if (pending) {
     blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: "Forwarded copy? Click the original message's timestamp above to approve or deny. Buttons only work on the original message.",
+        },
+      ],
+    });
+    blocks.push({
       type: "actions",
       block_id: `keychain_ask:${ask.id}`,
       elements: [
@@ -85,8 +94,6 @@ export async function keychainApprovalOrigin(
   return url.toString();
 }
 
-// Posts the approval card in the requesting conversation; a later `ask:<id>:resolved` delivery
-// finds that card and updates it in place, so a decision made on the web shows here too.
 export async function deliverKeychainCard(
   core: SlackCoreClient,
   client: any,

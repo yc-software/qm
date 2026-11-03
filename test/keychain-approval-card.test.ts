@@ -160,7 +160,6 @@ test("the card links the conversation inline and omits command-policy fields", a
   );
   assert.doesNotMatch(wire, /Why:/);
   assert.ok(!wire.includes(view.ask.purpose), "the card never echoes the requester's purpose text");
-  assert.ok(card.blocks.every((block) => block.type !== "context"));
   const settled = keychainApprovalMessage(
     { ...view, ask: { ...view.ask, status: "approved" }, mode: "standing" },
     origin,
@@ -354,7 +353,7 @@ test("a sub-agent request shows in both sessions, and deciding anywhere syncs th
   assert.deepEqual(calls, [{ method: "update", ts: "5.5" }], "the original card is updated in place, not reposted");
 });
 
-test("a click without its source message (a shared copy of the card) still decides and reports back", async () => {
+test("a delivered interaction without source message metadata still decides and reports back", async () => {
   const f = await fixture();
   let handler: (args: any) => Promise<void> = async () => {};
   registerKeychainApprovalActions(
