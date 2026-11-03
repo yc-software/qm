@@ -697,13 +697,13 @@ export function imageTransferArgs(source: string, tagged: string): string[] {
 function buildCacheArgs(ref: string): string[] {
   const exportsCache = captureBoth("docker", ["buildx", "inspect"])
     .split("\n")
-    .some((line) => line.startsWith("Driver:") && line.slice("Driver:".length).trim() !== "docker");
+    .some((line) => line.startsWith("Driver:") && !["", "docker"].includes(line.slice("Driver:".length).trim()));
   if (!exportsCache) return [];
   return [
     "--cache-from",
     `type=registry,ref=${ref}`,
     "--cache-to",
-    `type=registry,ref=${ref},mode=max,image-manifest=true,oci-mediatypes=true`,
+    `type=registry,ref=${ref},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true`,
   ];
 }
 

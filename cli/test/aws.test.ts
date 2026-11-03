@@ -3066,7 +3066,7 @@ fs.writeFileSync(path.join(dir, "started-" + name), "");
 });
 
 test("AWS source builds reuse a per-repository registry cache when the builder can export one", async () => {
-  for (const driver of ["docker", "docker-container"]) {
+  for (const driver of ["", "docker", "docker-container"]) {
     const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-cache-"));
     const candidatePath = join(dir, "candidate.json");
     const calls = join(dir, "docker-calls");
@@ -3098,12 +3098,12 @@ else if (args[0] !== "login") require("node:fs").appendFileSync(${JSON.stringify
       for (const args of builds) {
         const tagged = args[args.indexOf("-t") + 1]!;
         const ref = `${tagged.slice(0, tagged.lastIndexOf(":"))}:buildcache-${args[args.indexOf("--platform") + 1]!.split("/")[1]}`;
-        if (driver === "docker") assert.ok(!args.includes("--cache-from") && !args.includes("--cache-to"));
+        if (driver !== "docker-container") assert.ok(!args.includes("--cache-from") && !args.includes("--cache-to"));
         else {
           assert.equal(args[args.indexOf("--cache-from") + 1], `type=registry,ref=${ref}`);
           assert.equal(
             args[args.indexOf("--cache-to") + 1],
-            `type=registry,ref=${ref},mode=max,image-manifest=true,oci-mediatypes=true`,
+            `type=registry,ref=${ref},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true`,
           );
         }
       }
