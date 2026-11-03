@@ -2624,7 +2624,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? await runCronScript(
                 input.cronScript,
                 {
-                  execute: (command, opts) => baseTools.execute(command, opts),
+                  execute: (command, opts) => tools.execute(command, opts),
                   screening: securityPolicy.screening,
                   classify: classifyAs(
                     { sessionId: session.id, hook: "tool_response", request: input.text, surface: "cron_script" },

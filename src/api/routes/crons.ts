@@ -1,4 +1,5 @@
 import { isCronRuntime } from "../../cron/runtime.ts";
+import { CRON_SCRIPT_TOOL_ONLY } from "../../cron/script.ts";
 import type { Cron } from "../../triggers/types.ts";
 import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
@@ -167,8 +168,6 @@ const CRON_ERROR_STATUS: Record<string, number> = {
   cron_update_failed: 400,
   already_running: 409,
 };
-
-const CRON_SCRIPT_TOOL_ONLY = "set a cron's script with the cron tool, which runs it once first";
 
 async function createCron(ctx: ApiCtx): Promise<void> {
   const { res, app, body, capability } = ctx;

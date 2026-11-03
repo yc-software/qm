@@ -1,8 +1,8 @@
 import { unattendedGrantRefusal } from "../cron/authority.ts";
 import { isDeepStrictEqual } from "node:util";
 import type { Destination } from "../types.ts";
-import type { Cron, CronFireLogEntry, CronSchedule, Webhook } from "../triggers/types.ts";
-import { cronScriptFrom, type CronScriptRequest } from "../cron/script.ts";
+import type { Cron, CronFireLogEntry, CronSchedule, CronScript, Webhook } from "../triggers/types.ts";
+import { cronScriptFrom, type CronScriptTrial } from "../cron/script.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -47,7 +47,7 @@ export interface CronCreateRequest {
   unfurlLinks?: boolean;
   unattendedGrants?: string[];
   session?: boolean;
-  script?: CronScriptRequest;
+  script?: CronScript;
 }
 
 export type CronCreateResult =
@@ -98,7 +98,7 @@ export interface CronPatchRequest {
   unfurlLinks?: boolean;
   unattendedGrants?: string[];
   session?: boolean;
-  script?: CronScriptRequest | null;
+  script?: CronScript | null;
 }
 
 export interface CronRunsRequest {
@@ -116,11 +116,14 @@ export const CRON_PATCH_NOTHING_TO_CHANGE =
 
 export const CRON_FIRE_NOTE_MAX_CHARS = 400;
 
+const CRON_SCRIPT_HOME_ONLY =
+  "a cron's script can only be set from a conversation in the scope the cron runs in, so its trial run matches its fires";
+
 export type ControlOk<T> = { ok: true } & T;
 export type ControlErr<C extends string> = { ok: false; code: C; message: string };
 
 export interface ControlService {
-  createCron(req: CronCreateRequest, claims: CapabilityClaims): Promise<CronCreateResult>;
+  createCron(req: CronCreateRequest, claims: CapabilityClaims, trial?: CronScriptTrial): Promise<CronCreateResult>;
   listCrons(claims: CapabilityClaims): Promise<{ crons: Cron[]; visible: VisibleCron[] }>;
   getCron(
     id: string,
@@ -135,6 +138,7 @@ export interface ControlService {
     id: string,
     req: CronPatchRequest,
     claims: CapabilityClaims,
+    trial?: CronScriptTrial,
   ): Promise<ControlOk<{ cron: Cron }> | ControlErr<"not_found" | "forbidden" | "bad_request" | "cron_update_failed">>;
   noteCron(
     id: string,
@@ -352,7 +356,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       ...(detail ? { detail } : {}),
     });
   return {
-    async createCron(req, capability): Promise<CronCreateResult> {
+    async createCron(req, capability, trial): Promise<CronCreateResult> {
       if (req.unattendedGrants !== undefined) {
         const invalid = validateUnattendedGrants(req.unattendedGrants);
         if (invalid) return { ok: false, code: "bad_request", message: invalid };
@@ -479,6 +483,8 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         };
       }
       if (destination) destination = withSlackUnfurlOption(destination, req.unfurlLinks);
+      if (script && ownerScopeId !== capability.scopeId)
+        return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
 
       const input: CreateCronInput = {
         schedule: withDefaultTimezone(req.schedule, capability),
@@ -496,7 +502,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       const sessionRef = req.session === false ? undefined : liveSessionRef(capability, ownerScopeId);
       if (sessionRef) input.sessionRef = sessionRef;
       try {
-        const cron = await app.createCron(input);
+        const cron = await app.createCron(input, trial);
         return {
           ok: true,
           cron,
@@ -540,7 +546,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       return { ok: true, cron, runs, total };
     },
 
-    async patchCron(id, req, capability) {
+    async patchCron(id, req, capability, trial) {
       const before = await app.getCron(id);
       if (!before) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, before, capability.actorId)))
@@ -554,12 +560,10 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (req.script !== undefined && !(await ownsCron(app, before, capability.actorId)))
         return { ok: false, code: "forbidden", message: "only the cron's owner can change its script" };
       if (req.script) {
-        const script = cronScriptFrom(req.script, {
-          ...before,
-          ...(req.action !== undefined ? { action: req.action } : {}),
-          ...(req.text !== undefined ? { text: req.text } : {}),
-        });
+        const script = cronScriptFrom(req.script, before, req);
         if (typeof script === "string") return { ok: false, code: "bad_request", message: script };
+        if (before.ownerScopeId !== capability.scopeId)
+          return { ok: false, code: "bad_request", message: CRON_SCRIPT_HOME_ONLY };
         patch.script = script;
       } else if (before.script && (req.script === null || req.text !== undefined)) patch.script = null;
       if (req.unattendedGrants !== undefined) patch.unattendedGrants = req.unattendedGrants;
@@ -570,7 +574,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         if (refusal) return { ok: false, ...refusal };
       }
       try {
-        const cron = await app.updateCron(id, patch);
+        const cron = await app.updateCron(id, patch, trial);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
         const changeSummary: string[] = [];
         if (req.runtime !== undefined) changeSummary.push("runtime");

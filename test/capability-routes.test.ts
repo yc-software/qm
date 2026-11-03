@@ -775,9 +775,10 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     });
     const control = createControlService(built.app, built.scheduler, built.admin);
     const script = { command: "./standup.sh" };
-    const byTeammate = await control.patchCron(cron.id, { script }, channelClaims("U2"));
+    const passes = async () => undefined;
+    const byTeammate = await control.patchCron(cron.id, { script }, channelClaims("U2"), passes);
     assert.equal(byTeammate.ok ? "" : byTeammate.code, "forbidden");
-    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"));
+    const byOwner = await control.patchCron(cron.id, { script }, channelClaims("U1"), passes);
     assert.deepEqual(byOwner.ok && byOwner.cron.script, script);
     const removed = await control.patchCron(cron.id, { script: null }, channelClaims("U2"));
     assert.equal(removed.ok ? "" : removed.code, "forbidden");

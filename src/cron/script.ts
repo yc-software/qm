@@ -11,18 +11,35 @@ import {
   type SecurityScreenVerdict,
 } from "../security/security-posture.ts";
 import { randomBytes } from "node:crypto";
+import { normalizeSchedule } from "./schedule.ts";
+import type { CronSchedule } from "../triggers/types.ts";
 
-export interface CronScriptRequest {
-  command: string;
-  credentials?: string[];
-  sandboxId?: string;
+export const CRON_SCRIPT_TOOL_ONLY = "set a cron's script with the cron tool, which runs it once first";
+
+export type CronScriptTrial = (script: CronScript) => Promise<string | undefined>;
+
+export async function trialBeforeSave(
+  script: CronScript | null | undefined,
+  schedule: CronSchedule | undefined,
+  trial: CronScriptTrial | undefined,
+): Promise<void> {
+  if (!script) return;
+  if (!trial) throw new Error(CRON_SCRIPT_TOOL_ONLY);
+  if (schedule) normalizeSchedule(schedule, Date.now());
+  const refused = await trial(script);
+  if (refused) throw new Error(refused);
 }
 
+type ScriptedCron = { action?: string; message?: string; text?: string; loopId?: string };
+
 export function cronScriptFrom(
-  req: CronScriptRequest,
-  cron: { action?: string; message?: string; text?: string; loopId?: string },
+  req: CronScript,
+  cron: ScriptedCron,
+  patch: Pick<ScriptedCron, "action" | "text"> = {},
 ): CronScript | string {
-  if (cron.action === undefined || cron.message !== undefined || cron.text !== undefined || cron.loopId)
+  const action = patch.action ?? cron.action;
+  const text = patch.text ?? cron.text;
+  if (action === undefined || cron.message !== undefined || text !== undefined || cron.loopId)
     return "script needs a cron with a task for the agent";
   if (typeof req.command !== "string" || !req.command.trim()) return "script.command must be a command";
   if (

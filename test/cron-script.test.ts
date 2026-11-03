@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createControlService } from "../src/api/control-service.ts";
-import type { CronScriptRequest } from "../src/cron/script.ts";
+import type { CronScript } from "../src/triggers/types.ts";
 import { scopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -38,11 +38,14 @@ async function setup() {
   return { built, control };
 }
 
-async function fireOnce(script: CronScriptRequest) {
+const passes = async () => undefined;
+
+async function fireOnce(script: CronScript) {
   const { built, control } = await setup();
   const created = await control.createCron(
     { schedule: { everyMs: 3_600_000 }, action: "post the new rows", script, session: false },
     claims(),
+    passes,
   );
   assert.ok(created.ok, created.ok ? "" : created.message);
   await runNowSettled(built.scheduler, created.cron.id);
@@ -83,12 +86,14 @@ test("a script needs a task cron and is removed by patch null or a switch to tex
   const relay = await control.createCron(
     { schedule: { everyMs: 3_600_000 }, text: "standup!", script: { command: "true" } },
     claims(),
+    passes,
   );
   assert.deepEqual(relay, { ok: false, code: "bad_request", message: "script needs a cron with a task for the agent" });
 
   const created = await control.createCron(
     { schedule: { everyMs: 3_600_000 }, action: "check", script: { command: "./check.sh", credentials: ["gh"] } },
     claims(),
+    passes,
   );
   assert.ok(created.ok);
   assert.deepEqual(created.cron.script, { command: "./check.sh", credentials: ["gh"] });
@@ -97,7 +102,7 @@ test("a script needs a task cron and is removed by patch null or a switch to tex
   assert.ok(removed.ok);
   assert.equal(removed.cron.script, undefined);
 
-  await control.patchCron(created.cron.id, { script: { command: "./check.sh" } }, claims());
+  await control.patchCron(created.cron.id, { script: { command: "./check.sh" } }, claims(), passes);
   const relayed = await control.patchCron(created.cron.id, { text: "standup!" }, claims());
   assert.ok(relayed.ok);
   assert.equal(relayed.cron.script, undefined);
@@ -173,7 +178,12 @@ test("setting a script runs it once first and keeps it only when that run exits 
   const runs = ran.length;
   const onRelay = await tools.cronPatch(relay.cron.id, { script: { command: "./quiet.sh" } });
   assert.ok(!onRelay.ok);
-  assert.equal(onRelay.message, "script needs a cron with a task for the agent");
+  const badSchedule = await tools.cronCreate({
+    schedule: { cron: "99 99 * * *", timezone: "UTC" },
+    action: "check",
+    script: { command: "./quiet.sh" },
+  });
+  assert.ok(!badSchedule.ok);
   assert.equal(ran.length, runs);
   assert.equal((await built.app.listCrons()).length, 3);
 });

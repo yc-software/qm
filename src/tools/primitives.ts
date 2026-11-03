@@ -1,4 +1,4 @@
-import { cronScriptFrom, trialCronScript, type CronScriptRequest } from "../cron/script.ts";
+import { trialCronScript, type CronScriptTrial } from "../cron/script.ts";
 import type { AdminToolAccess } from "./admin.ts";
 import { parkedOutputKey, type ToolOutputStore } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
@@ -627,16 +627,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
   const runId = deps.runId;
 
-  async function trialScript(
-    req: CronScriptRequest | null | undefined,
-    cron: Parameters<typeof cronScriptFrom>[1],
-    tools: Pick<ToolContext, "execute">,
-  ): Promise<{ ok: false; code: "bad_request"; message: string } | undefined> {
-    const script = req ? cronScriptFrom(req, cron) : undefined;
-    if (!script || typeof script === "string") return undefined;
-    const refused = await trialCronScript(script, (command, opts) => tools.execute(command, opts), deps.toolOutput);
-    return refused === undefined ? undefined : { ok: false, code: "bad_request", message: refused };
-  }
+  const trialOn =
+    (tools: Pick<ToolContext, "execute">): CronScriptTrial =>
+    (script) =>
+      trialCronScript(script, (command, opts) => tools.execute(command, opts), deps.toolOutput);
 
   function controlOp<R>(
     run: (control: ControlService, claims: CapabilityClaims) => Promise<R>,
@@ -1260,24 +1254,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.monitorBroker!.unwatch(monitorId);
     },
 
-    async cronCreate(req) {
-      return (await trialScript(req.script, req, this)) ?? (await controlOp((c, cl) => c.createCron(req, cl)));
+    cronCreate(req) {
+      return controlOp((c, cl) => c.createCron(req, cl, trialOn(this)));
     },
     cronList: () => controlOp((c, cl) => c.listCrons(cl)),
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
-    async cronPatch(id, req) {
-      const before = req.script ? await this.cronGet(id) : undefined;
-      const cron = before?.ok
-        ? {
-            ...before.cron,
-            ...(req.action !== undefined ? { action: req.action } : {}),
-            ...(req.text !== undefined ? { text: req.text } : {}),
-          }
-        : undefined;
-      return (
-        (cron && (await trialScript(req.script, cron, this))) ?? (await controlOp((c, cl) => c.patchCron(id, req, cl)))
-      );
+    cronPatch(id, req) {
+      return controlOp((c, cl) => c.patchCron(id, req, cl, trialOn(this)));
     },
     cronNote: (id, note) => controlOp((c, cl) => c.noteCron(id, note, cl)),
     cronDelete: (id) => controlOp((c, cl) => c.deleteCron(id, cl)),
