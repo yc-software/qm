@@ -1,7 +1,7 @@
 import { parkIfOverCap } from "../../sessions/tool-output.ts";
 import { handbackStop } from "../../runs/run-store.ts";
 import { createKeyedQueue } from "../../util/async.ts";
-import type { EntryType, ScopeId } from "../../types.ts";
+import type { ScopeId } from "../../types.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";
 import { headSlice, tailSlice } from "../../util/text.ts";
@@ -60,20 +60,45 @@ function capPayloadStrings(v: unknown): unknown {
 }
 
 export function createRecorder(ref: ToolContextRef) {
-  const log = async (type: EntryType, payload: unknown): Promise<void> => {
+  const log = async (
+    kind: "ToolCall" | "ToolResult",
+    summary: { callId: string } & Record<string, unknown>,
+  ): Promise<void> => {
     if (!ref.emit || !ref.scopeLabel) return;
-    if (type === "tool_result" && isObj(payload)) {
-      if (ref.shutdown?.aborted) payload = { ...payload, interrupted: true, stop: handbackStop(ref.shutdown) };
-      else if (ref.abortSignal?.aborted) payload = { ...payload, stopped: true };
+    const { tool, callId, ...body } = summary;
+    const columns = { tool: typeof tool === "string" ? tool : null, callId };
+    if (kind === "ToolCall") return void (await ref.emit({ kind, ...columns, body }));
+    const { isError, result, output, ...rest } = body;
+    const text = typeof result === "string" ? result : null;
+    if (text === null && result !== undefined) rest.result = result;
+    if (typeof isError !== "boolean" && isError !== undefined) rest.isError = isError;
+    for (const key of ["stdout", "stderr"]) {
+      const stream = rest[key];
+      if (typeof stream === "string" && text?.includes(stream)) delete rest[key];
     }
-    await ref.emit({ type, payload, scopeLabel: ref.scopeLabel });
+    if (ref.shutdown?.aborted) Object.assign(rest, { interrupted: true, stop: handbackStop(ref.shutdown) });
+    else if (ref.abortSignal?.aborted) rest.stopped = true;
+    let blobSha: string | null = null;
+    if (isObj(output) && typeof output.blob === "string") {
+      const { blob, ...kept } = output;
+      blobSha = blob;
+      rest.output = kept;
+    } else if (output !== undefined) rest.output = output;
+    await ref.emit({
+      kind,
+      ...columns,
+      isError: typeof isError === "boolean" ? isError : null,
+      text,
+      blobSha,
+      body: rest,
+    });
   };
 
   const retryMarks = new Map<string, RetryMark>();
   const recordCall = async (callId: string, payload: Record<string, unknown>): Promise<void> => {
     if (ref.stoppedCalls?.has(callId)) return;
     const mark = retryMarks.get(callId);
-    return log("tool_call", {
+    return log("ToolCall", {
       ...payload,
       callId,
       ...(mark ? { retrySafe: mark.safe, ...(mark.rerun ? { rerun: mark.rerun } : {}) } : {}),
@@ -237,7 +262,7 @@ export function createRecorder(ref: ToolContextRef) {
         result += `\n\n${arrived}`;
       }
       if (stopped()) return ret;
-      await log("tool_result", {
+      await log("ToolResult", {
         ...(capPayloadStrings(persistedSummary) as Record<string, unknown>),
         callId,
         isError,

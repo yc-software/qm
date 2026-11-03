@@ -138,7 +138,7 @@ export function computerTools(kit: ToolKit) {
           true,
         );
       }
-      await log("tool_result", {
+      await log("ToolResult", {
         tool: "execute",
         ...scopeNote,
         callId,

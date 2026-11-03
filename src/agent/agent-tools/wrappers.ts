@@ -261,7 +261,7 @@ export function withRuntimeBarrier(
       } catch (error) {
         if (signal?.aborted) {
           stopped.add(callId);
-          await log("tool_result", { tool: tool.name, callId, isError: true, result: errMessage(error) }).catch(
+          await log("ToolResult", { tool: tool.name, callId, isError: true, result: errMessage(error) }).catch(
             swallowAs(`${tool.name}: record stopped result`, undefined),
           );
         }

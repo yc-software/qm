@@ -70,13 +70,6 @@ export const ITEM_COLUMNS = [
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (value: unknown): string | null => (typeof value === "string" && value !== "" ? value : null);
-const AUTHORED_KINDS: ReadonlySet<ItemKind> = new Set([
-  "UserMessage",
-  "SteeringMessage",
-  "ElicitationResponse",
-  "Stop",
-  "RuntimeChange",
-]);
 const TEXT_KEYS: Partial<Record<ItemKind, string>> = {
   UserMessage: "text",
   SteeringMessage: "text",
@@ -256,18 +249,14 @@ export function entryFromItem(row: Item, scopeLabel: ScopeId): SessionEntry {
   };
 }
 
-export function storedItem(
-  item: NewItem,
+export function storedItem<K extends ItemKind>(
+  item: NewItem<K>,
   at: { sessionId: string; seq: number; createdAt: number; turnId?: string | undefined },
-): Item {
+): Item<K> {
   const turnId = at.turnId ?? item.turnId;
-  return {
-    sessionId: at.sessionId,
-    seq: at.seq,
-    createdAt: at.createdAt,
-    kind: item.kind,
+  const columns: ItemColumns = {
     turnId: turnId && UUID.test(turnId) ? turnId.toLowerCase() : null,
-    author: AUTHORED_KINDS.has(item.kind) ? str(item.author) : null,
+    author: str(item.author),
     callId: str(item.callId),
     elicitId: str(item.elicitId),
     wakeCause: item.wakeCause ?? null,
@@ -283,14 +272,41 @@ export function storedItem(
     approved: item.approved ?? null,
     blobSha: str(item.blobSha),
     body: item.body ?? {},
-  } as Item;
+  };
+  return { ...item, ...columns, sessionId: at.sessionId, seq: at.seq, createdAt: at.createdAt } as Item<K>;
 }
 
 export const USER_ITEM_KINDS: readonly string[] = ["UserMessage", "SteeringMessage"];
 export const USER_KINDS = `(${USER_ITEM_KINDS.map((kind) => `'${kind}'`).join(", ")})`;
-export const isUserItem = (item: { kind: ItemKind }): boolean => USER_ITEM_KINDS.includes(item.kind);
+export const isUserItem = (item: Pick<Item, "kind">): item is Item<"UserMessage" | "SteeringMessage"> =>
+  USER_ITEM_KINDS.includes(item.kind);
 export const isAgentReply = (item: { kind: ItemKind; variant?: AgentMessageVariant | null }): boolean =>
   item.kind === "AgentMessage" && !item.variant;
+export const isOverheard = (item: Pick<Item, "kind" | "body">): boolean =>
+  item.kind === "UserMessage" && item.body.overheard === true;
+export const messageTs = (item: Pick<Item, "kind" | "externalId" | "body">): string | null => {
+  if (item.kind === "UserMessage") return item.externalId;
+  return item.kind === "SteeringMessage" && typeof item.body.ts === "string" && item.body.ts ? item.body.ts : null;
+};
+const PROSE_KINDS: ReadonlySet<ItemKind> = new Set([
+  "UserMessage",
+  "SteeringMessage",
+  "AgentMessage",
+  "ContextCompaction",
+]);
+export function proseText(item: Pick<Item, "kind" | "text" | "body">): string | null {
+  if (PROSE_KINDS.has(item.kind)) return item.text ?? "";
+  return typeof item.body.text === "string" ? item.body.text : null;
+}
+export function itemFields(item: Item): Record<string, unknown> {
+  const { sessionId: _s, seq: _q, createdAt: _c, kind: _k, turnId: _t, step: _p, body, ...columns } = item;
+  const { wire: _w, ...rest } = body;
+  return { ...Object.fromEntries(Object.entries(columns).filter(([, value]) => value !== null)), ...rest };
+}
+export function stepMessage(item: Pick<Item, "body">): Record<string, unknown> | null {
+  const wire = item.body.wire;
+  return isObj(wire) && isObj(wire.message) ? wire.message : null;
+}
 export const AGENT_REPLY_ITEM = (col: string): string => `${col}.kind = 'AgentMessage'`;
 export const SEARCHABLE_ITEM = (col: string): string =>
   `(${col}.kind IN ('UserMessage','SteeringMessage','AgentMessage') AND ${col}.variant IS DISTINCT FROM 'files_delivered' AND ${col}.text IS NOT NULL)`;

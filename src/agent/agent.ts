@@ -9,7 +9,6 @@ import type {
   ConversationTurn,
   ScopeId,
   Session,
-  SessionEntry,
   TurnRequest,
   TurnRuntime,
 } from "../types.ts";
@@ -92,7 +91,7 @@ export interface AgentTurnInput {
   pollFire?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;
-  history: SessionEntry[];
+  history: Item[];
   goal?: GoalRecord | null;
   goalMeter?: GrindMeter;
   saveGoal?(goal: GoalRecord): Promise<void>;
@@ -146,7 +145,7 @@ export interface DetectInput {
   threadOpener?: string;
   systemPrompt: string;
   reactionGuidance?: string;
-  history: SessionEntry[];
+  history: Item[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: TurnLlmRequestRecord): void | Promise<void>;
 }
@@ -159,7 +158,7 @@ export interface DetectResult {
 
 export interface CompactInput {
   session: Session;
-  history: SessionEntry[];
+  history: Item[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
 }
 
