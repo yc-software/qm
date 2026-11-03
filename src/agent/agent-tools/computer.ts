@@ -622,19 +622,11 @@ export function validateSandboxTool(
   return {
     ...tool,
     parameters: schema,
-    async execute(callId, rawParams, signal, onUpdate, ctx) {
-      const action = isObj(rawParams) ? String(rawParams.action) : "";
+    async execute(callId, params, signal, onUpdate, ctx) {
+      const action = isObj(params) ? String(params.action) : "";
       const operations = operationFields[tool.name];
       const fields = operations && Object.hasOwn(operations, action) ? operations[action] : undefined;
       const allowed = fields ? new Set(["action", "purpose", ...fields]) : undefined;
-      // Some models fill every advertised field with a placeholder. A null or "" on a field this
-      // operation doesn't use carries no intent, so drop it rather than reject the call.
-      const params =
-        allowed && isObj(rawParams)
-          ? Object.fromEntries(
-              Object.entries(rawParams).filter(([key, value]) => allowed.has(key) || (value !== null && value !== "")),
-            )
-          : rawParams;
       let required: string[];
       if (tool.name === "execute") required = ["command", "purpose"];
       else if (tool.name === "sandbox") {
