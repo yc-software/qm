@@ -17,20 +17,17 @@ interface StartupWorkDeps {
   checkBrokerCredentials?: () => Promise<void>;
 }
 
-interface StartupWork {
-  deploymentLayer: Promise<unknown>;
-  skills: Promise<void>;
-}
-
 interface Startup {
-  begin(): StartupWork;
+  skills: Promise<void>;
+  begin(): Promise<void>;
   stop(): void;
 }
 
 export function createStartup(deps: StartupWorkDeps): Startup {
-  let work: StartupWork | undefined;
+  const skills = Promise.withResolvers<void>();
+  let work: Promise<void> | undefined;
   let unlisten: (() => void) | undefined;
-  const run = (): StartupWork => {
+  const run = (): Promise<void> => {
     unlisten = deps.listen();
     void deps.identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
     void deps.configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
@@ -52,9 +49,12 @@ export function createStartup(deps: StartupWorkDeps): Startup {
     const seeded = deps
       .seedCatalogs?.()
       .catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e)));
-    return { deploymentLayer, skills: Promise.all([seeded, layerReady]).then(() => undefined) };
+    const skillsSeeded = Promise.all([seeded, layerReady]).then(() => undefined);
+    skills.resolve(skillsSeeded);
+    return Promise.all([deploymentLayer, skillsSeeded]).then(() => undefined);
   };
   return {
+    skills: skills.promise,
     begin: () => (work ??= run()),
     stop: () => unlisten?.(),
   };

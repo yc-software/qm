@@ -3,6 +3,7 @@ import type { Config } from "../../src/config.ts";
 import type { Agent, ScreenSecurityInput } from "../../src/agent/agent.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockAgent } from "./mock-agent.ts";
+import { swallowAs } from "../../src/util/errors.ts";
 
 const built: BuiltApp[] = [];
 after(() => Promise.all(built.splice(0).map((app) => app.runtime.stop())));
@@ -45,5 +46,6 @@ export function buildApp(
       { agent: recordingModelCalls(createMockAgent(), modelCalls), ...overrides },
     ),
   );
+  void app.startup().catch(swallowAs("test: startup", undefined));
   return Object.assign(app, { modelCalls });
 }
