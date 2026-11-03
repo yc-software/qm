@@ -12,7 +12,7 @@ const ID = /^[a-z][a-z0-9-]{0,62}$/;
 const SOURCE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SCOPE_KINDS: readonly string[] = ["personal", "channel", "team", "org", "group"];
 
-export const BRAIN_PRESETS = {
+const BRAIN_PRESETS = {
   "gbrain-v1": {
     scopeRecall: false,
     read: { tool: "memory_recall", queryArg: "query", maxCharsArg: "max_chars" },
@@ -20,7 +20,7 @@ export const BRAIN_PRESETS = {
   },
 } as const;
 
-export interface RegistryPoolSource {
+interface RegistryPoolSource {
   source: string;
   kinds: ScopeKind[];
 }
@@ -42,7 +42,7 @@ export interface RegistryBrain {
   updatedBy: string;
 }
 
-export interface RegistryBinding {
+interface RegistryBinding {
   id: string;
   brain: string;
   endpoint: string;
@@ -66,7 +66,7 @@ export interface MemoryRegistry {
 
 export const EMPTY_MEMORY_REGISTRY: MemoryRegistry = { schema: 1, memberBrains: true, brains: [], bindings: [] };
 
-export type RegistryDisabledCode =
+type RegistryDisabledCode =
   "brain_off" | "secret_missing" | "preset_unknown" | "id_taken" | "scope_recall_unsupported" | "invalid_config";
 
 export interface DisabledRegistryRoute extends Pick<MemoryProviderRoute, "provider" | "scopes" | "recall" | "capture"> {
@@ -91,7 +91,7 @@ function presetOf(brain: Pick<RegistryBrain, "preset">) {
     : undefined;
 }
 
-export function brainEndpoint(url: string): string {
+function brainEndpoint(url: string): string {
   const parsed = new URL(url);
   return `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, "") || "/mcp"}`.toLowerCase();
 }
