@@ -38,12 +38,13 @@ async function withTenantColumn(url: string, table: string, tenants: Record<stri
 
 test("a cross-tenant claim refuses to run under a bound tenant", async () => {
   let ran = 0;
+  const pg = { query: async () => ({ rows: [{ ran: ++ran }], rowCount: 1 }) };
   await assert.rejects(
-    withTenant(A, () => claimAcrossTenants(async () => ++ran)),
+    withTenant(A, () => claimAcrossTenants(pg, "SELECT 1")),
     /A cross-tenant claim cannot run while a tenant is bound/,
   );
   assert.equal(ran, 0);
-  assert.equal(await claimAcrossTenants(async () => ++ran), 1);
+  assert.deepEqual((await claimAcrossTenants(pg, "SELECT 1")).rows, [{ ran: 1 }]);
 });
 
 test("loop bodies and sweeps run unbound even when started under a tenant", async () => {

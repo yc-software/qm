@@ -391,9 +391,9 @@ END $base_schema$`,
       return rows[0] ? rowToRun(rows[0]) : null;
     },
     async pendingReturns(limit = 100, afterId = "") {
-      const { rows } = await claimAcrossTenants(() =>
-        q(
-          `SELECT * FROM (
+      const { rows } = await claimAcrossTenants(
+        { query: q },
+        `SELECT * FROM (
            SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
            AND session_id LIKE 'agent:main:subagent:%' AND id > $2
            UNION
@@ -404,19 +404,17 @@ END $base_schema$`,
            AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
            AND child.id > $2
          ) pending WHERE retry_after <= $3 ORDER BY id LIMIT $1`,
-          [limit, afterId, Date.now()],
-        ),
+        [limit, afterId, Date.now()],
       );
       return rows.map(rowToRun);
     },
     async terminalFinished(after, beforeMs, limit) {
-      const { rows } = await claimAcrossTenants(() =>
-        q(
-          `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
+      const { rows } = await claimAcrossTenants(
+        { query: q },
+        `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
            AND (finished_at > $2 OR (finished_at = $2 AND id > $3))
          ORDER BY finished_at, id LIMIT $4`,
-          [beforeMs, after.finishedAt, after.id, limit],
-        ),
+        [beforeMs, after.finishedAt, after.id, limit],
       );
       return rows.map(rowToRun);
     },
@@ -515,10 +513,10 @@ END $base_schema$`,
       opts?: { maxAgeMs?: number; onReap?: (event: ReapEvent) => void },
     ): Promise<{ requeued: number; parked: number }> {
       const now = Date.now();
-      const { rows } = await claimAcrossTenants(() =>
-        q("SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1", [
-          now,
-        ]),
+      const { rows } = await claimAcrossTenants(
+        { query: q },
+        "SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1",
+        [now],
       );
       const expired = rows.map(rowToRun);
       let requeued = 0;
