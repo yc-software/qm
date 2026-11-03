@@ -56,6 +56,7 @@ test("a fully migrated database skips the base schema and drops only the retired
       search TSVECTOR, target_seq BIGINT,
       CONSTRAINT items_target_seq_kind CHECK (target_seq IS NULL OR kind = 'Retraction'))`);
     await admin.query("CREATE TABLE tool_calls(run_id TEXT)");
+    await admin.query("CREATE TABLE qm_tenant(id UUID PRIMARY KEY)");
     await admin.query("CREATE FUNCTION safe_json(t text) RETURNS json LANGUAGE sql AS 'SELECT t::json'");
     await migrate(url);
     const columns = await admin.query(
