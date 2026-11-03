@@ -1,7 +1,9 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { randomBytes } from "node:crypto";
 import { renderJobCommand } from "../../cli/src/render-job-command.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import { sleep } from "../util/async.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { shq } from "../util/shell.ts";
@@ -15,6 +17,35 @@ export interface StoredRenderAppStorage {
   enabled: boolean;
   prefix?: string;
 }
+
+const RENDER_APP_STORAGE_COLUMNS: RowColumns<StoredRenderAppStorage, "deploymentId"> = {
+  deploymentId: "text",
+  accessKey: "text",
+  secretKeyEnc: "text",
+  enabled: "boolean",
+  prefix: "text",
+};
+
+export const RENDER_APP_STORAGE: RowTable<StoredRenderAppStorage, "deploymentId"> = {
+  table: "render_app_storage",
+  key: "deploymentId",
+  recordKey: true,
+  columns: RENDER_APP_STORAGE_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "render_app_storage",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "access_key TEXT NOT NULL",
+        "secret_key_enc TEXT NOT NULL",
+        "enabled BOOLEAN NOT NULL",
+        "prefix TEXT",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("render_app_storage", RENDER_APP_STORAGE_COLUMNS), deployment_id: "id" },
+    }),
+  ],
+};
 
 interface Job {
   id: string;
@@ -58,7 +89,7 @@ export function createRenderAppStorage(opts: {
   bucket: string;
   prefix?: string;
   region?: string;
-  store: DurableMap<StoredRenderAppStorage>;
+  store: Pick<KeyedRows<StoredRenderAppStorage>, "get" | "put" | "putIfAbsent">;
   keyMaterial: string | Buffer;
   api?: RenderApi;
   pollIntervalMs?: number;

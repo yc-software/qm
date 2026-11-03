@@ -28,7 +28,7 @@ test(
           return pg.q(sql, params, options);
         },
       });
-      for (const kind of ["skills", "crons", "deploys", "webhooks"] as const) await store.search(kind, "zanzibar", 50);
+      for (const kind of ["skills", "crons", "webhooks"] as const) await store.search(kind, "zanzibar", 50);
       for (const [table, record] of [
         [
           "skills",
@@ -46,15 +46,6 @@ test(
           { title: "zanzibar digest", action: "release checklist", fireLog: [{ note: "history ".repeat(10000) }] },
         ],
         [
-          "deployments",
-          {
-            name: "zanzibar",
-            displayName: "Release checklist",
-            versions: [{ files: "version ".repeat(10000) }],
-            endpoint: { secret: "never return" },
-          },
-        ],
-        [
           "webhooks",
           { action: "zanzibar release checklist", verification: { scheme: "github", secret: "never return" } },
         ],
@@ -63,15 +54,14 @@ test(
           "hit",
           JSON.stringify({ id: "hit", ...record, owner: "U1", ownerScopeId: "personal:U1", scopeId: "personal:U1" }),
         ]);
-        const kind = table === "deployments" ? "deploys" : table;
-        const rows = await store.search(kind, "zanz release", 50);
+        const rows = await store.search(table, "zanz release", 50);
         const actualSql = searchSql;
         const actualParams = searchParams;
         assert.equal(rows.length, 1);
         assert.ok(JSON.stringify(rows).length < 1000);
         assert.equal(JSON.stringify(rows).includes("never return"), false);
-        assert.equal((await store.search(kind, "privatebody", 50)).length, 0);
-        assert.equal((await store.search(kind, "' | &", 50)).length, 0);
+        assert.equal((await store.search(table, "privatebody", 50)).length, 0);
+        assert.equal((await store.search(table, "' | &", 50)).length, 0);
         const indexes = await pg.q(
           "SELECT indexdef FROM pg_indexes WHERE schemaname=$1 AND tablename=$2 AND indexname LIKE '%resource_search_gin'",
           [schema, table],
@@ -90,7 +80,7 @@ test(
         await pg.q(`UPDATE ${table} SET json = $1 WHERE id = 'hit'`, [
           JSON.stringify({ id: "hit", title: "other", action: "other", name: "other", manifest: { name: "other" } }),
         ]);
-        assert.equal((await store.search(kind, "zanzibar", 50)).length, 0);
+        assert.equal((await store.search(table, "zanzibar", 50)).length, 0);
       }
     } finally {
       await pg.close();

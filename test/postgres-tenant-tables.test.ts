@@ -12,11 +12,16 @@ import { createAppLogin, type AppLogin } from "./support/app-login.ts";
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenant table tests";
 const [a, b] = process.env.DATABASE_URL ? testTenants() : ["", ""];
 const UNTENANTED = [
+  "background_ownership",
   "durable_map_versions",
+  "fly_deploy_ports",
+  "fly_peer_claims",
   "qm_schema_migrations",
   "qm_settings",
   "qm_tenant",
+  "render_sandbox_bases",
   "source_auth_replay",
+  "superserve_config_epochs",
   "tenants",
 ];
 const BOUND_BY_ITEMS_TENANT = ["blobs", "items"];
