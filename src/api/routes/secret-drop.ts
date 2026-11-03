@@ -168,7 +168,7 @@ function dropFormHtml(
   const inputs = fields
     .map(
       (f, i) =>
-        `<div class="field"><label for="field-${i}">${escapeHtml(f.key === null ? "Credential" : f.label)}</label><input id="field-${i}" type=${f.secret ? "password" : "text"} autocomplete=off autocapitalize=off spellcheck=false placeholder="${escapeHtml(f.label)}"></div>`,
+        `<div class="field"><label for="field-${i}">${escapeHtml(f.key === null ? "Credential" : f.label)}</label><input id="field-${i}" type=${f.secret ? "password" : "text"} required autocomplete=off autocapitalize=off spellcheck=false placeholder="${escapeHtml(f.label)}"></div>`,
     )
     .join("\n");
   const keys = JSON.stringify(fields.map((f) => f.key));
