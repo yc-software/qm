@@ -329,3 +329,27 @@ test("reconcile never answers a call that already holds a result, wherever that 
     resumed: true,
   });
 });
+
+test("reconcile leaves another turn's calls and call-id-less rows alone, and re-runs only calls marked retry-safe", () => {
+  const foreign = item({ kind: "ToolCall", tool: "execute", callId: "c2", turnId: OTHER_TURN, body: {} }, 2);
+  assert.deepEqual(reconcile([user("go", 1), foreign], { userSeq: 1, workEntries: 1 }), {
+    settleItems: [],
+    resumed: true,
+  });
+  const marked = (retrySafe: boolean) =>
+    item(
+      {
+        kind: "ToolCall",
+        tool: "history",
+        callId: "c2",
+        body: { retrySafe, rerun: { tool: "history", input: { query: "deploy" } } },
+      },
+      2,
+    );
+  assert.deepEqual(reconcile([user("go", 1), marked(false)], { userSeq: 1, workEntries: 1 }), {
+    settleItems: settled([["c2", "history"]]),
+    resumed: true,
+  });
+  const legacy = item({ kind: "ToolCall", tool: "execute", body: {} }, 3);
+  assert.equal(reconcile([user("go", 1), marked(true), legacy], { userSeq: 1, workEntries: 2 }).rerun?.callId, "c2");
+});
