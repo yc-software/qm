@@ -27,8 +27,7 @@ before proxying, and the keychain stores credentials under the canonical owner.
 - **Links are flat.** A canonical principal is never itself linked onward, and
   a linked sign-in cannot become canonical for others.
 - **Only people are linked.** A QM system actor (`system:…`) is QM itself, not
-  a person, so the admin API refuses a link with one on either side (400), and
-  qm ignores any such link already stored rather than deleting it.
+  a person, so the admin API refuses a link with one on either side (400).
 - **Evidence is required.** Every link records how the two identities were
   verified as one person and which admin created it.
 - **Links are reversible.** Deleting a link restores two separate principals.

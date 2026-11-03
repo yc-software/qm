@@ -50,7 +50,6 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
     byAlias.clear();
     byCanonical.clear();
     for (const row of rows) {
-      if (isSystemActor(row.principalId) || isSystemActor(row.canonicalId)) continue;
       byAlias.set(foldPrincipalId(row.principalId), row);
       const key = foldPrincipalId(row.canonicalId);
       const list = byCanonical.get(key) ?? [];

@@ -100,19 +100,6 @@ describe("principal link service: one person, several sign-ins", () => {
     );
   });
 
-  it("never folds a system actor into a person, even from a stored link", async () => {
-    const backing = testMap<PrincipalLink>();
-    for (const [principalId, canonicalId] of [
-      ["system:digest", EMAIL],
-      [SLACK, "system:svc"],
-    ] as const)
-      await backing.put(principalId, { principalId, canonicalId, evidence: EVIDENCE, linkedBy: "a", createdAt: 1 });
-    const links = createPrincipalLinkService(backing, testAdvisoryLock());
-    await links.refresh(true);
-    assert.equal(links.canonical("system:digest"), undefined);
-    assert.equal(links.canonical(SLACK), undefined);
-  });
-
   it("reads links written by another process on refresh", async () => {
     const backing = testMap<PrincipalLink>();
     const links = createPrincipalLinkService(backing, testAdvisoryLock());
