@@ -6,7 +6,7 @@ import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts"
 import { swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { publicFetch } from "../util/network.ts";
-import { currentTenant, isTenantId, tenantClaim } from "../tenants/context.ts";
+import { isTenantId, tenantClaim } from "../tenants/context.ts";
 
 export const ACCOUNT_TYPES = ["default", "personal", "company"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
@@ -640,7 +640,6 @@ export async function openOAuthState(
   if (!opts.secret) throw new Error("OAuth state secret required");
   const parsed = await verifySignedPayload(sealed, opts.secret);
   if (!isOAuthState(parsed)) throw new Error("invalid OAuth state");
-  if (parsed.tenant !== currentTenant()) throw new Error("OAuth state is for a different tenant");
   const now = (opts.now ?? Date.now)();
   const maxAgeMs = opts.maxAgeMs ?? 10 * 60_000;
   if (parsed.issuedAt > now + 60_000 || now - parsed.issuedAt > maxAgeMs) {

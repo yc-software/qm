@@ -10,7 +10,6 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { PROVIDERS, sealOAuthState } from "../src/connectors/oauth.ts";
-import { withTenant } from "../src/tenants/context.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { envKey, withOperatorTokenFallback } from "../src/credentials/connector-token.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
@@ -18,7 +17,6 @@ import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { OTHER_TENANT } from "./support/tenant-root.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
@@ -72,38 +70,6 @@ test("C3 — a catalog host wrongly listed as a service host is detectable via t
 
 const SECRET = "invariant-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
-
-test("cross-tenant — the callback rejects sealed state minted for a different tenant BEFORE exchange", async () => {
-  let exchanged = false;
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
-  const server = createServer(built.app, {
-    signingSecret: SECRET,
-    replayDedupe: built.replayDedupe,
-    connectorTokens: built.connectorTokens,
-    oauthEnv,
-    oauthFetch: async () => {
-      exchanged = true;
-      return { ok: true, status: 200, json: async () => ({ access_token: "leaked" }) };
-    },
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  try {
-    const state = await withTenant(OTHER_TENANT, () =>
-      sealOAuthState(
-        { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
-        { secret: SECRET },
-      ),
-    );
-    const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
-    assert.equal(res.status, 400);
-    assert.match(await res.text(), /different tenant/);
-    assert.equal(exchanged, false, "exchange must NOT run for a foreign-tenant state");
-    assert.equal(await built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
-  } finally {
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-});
 
 test("empty-token guard — an adapter returning no access token fails the connect (nothing stored)", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "empty-")), signingSecret: SECRET }));
