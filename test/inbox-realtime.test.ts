@@ -9,7 +9,7 @@ import type { Loop } from "../src/loops/types.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
 import { testMap } from "./support/test-database.ts";
 
-const LOOP = { id: "loop-inbox", owner: "owner@example.com", surface: "inbox" } as unknown as Loop;
+const LOOP = { id: "loop-inbox", owner: "owner@example.com", surface: "inbox:slack" } as unknown as Loop;
 
 function slackEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
   return {

@@ -207,6 +207,7 @@ import {
   deliveryMenu,
   environmentNote,
   membershipEvent,
+  guidanceUpdateEvent,
   renderConversationRoster,
   renderGatewayContext,
   renderSandboxProviders,
@@ -396,6 +397,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     automated: boolean;
     runId?: string;
     surface?: string;
+    shutdown?: AbortSignal;
   }): Promise<{ lease: Lease; waitedMs: number } | { lease: null; waitedMs: number; refusal: TurnResult }> {
     const budget = deps.turnLeaseWaitMs ?? CONFIG_DEFAULTS.turnLeaseWaitMs;
     const attempt = await acquireLeaseWithin(
@@ -406,6 +408,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       { waitFor: (heldBy) => heldBy !== undefined && heldBy !== "turn" },
     );
     const waitedMs = attempt.waitedMs ?? 0;
+    if (attempt.lease && args.shutdown?.aborted) {
+      await deps.sessions.releaseLease(attempt.lease);
+      const runId = args.runId ? { runId: args.runId } : {};
+      return { lease: null, waitedMs, refusal: { status: "queued", sessionId: args.sessionId, ...runId } };
+    }
     if (attempt.lease)
       return { lease: args.runId ? { ...attempt.lease, turnId: args.runId } : attempt.lease, waitedMs };
     if (attempt.heldUntil === undefined) {
@@ -1015,6 +1022,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           automated: automatedTurn,
           ...(input.runId ? { runId: input.runId } : {}),
           ...(input.surface ? { surface: input.surface } : {}),
+          ...(input.shutdown ? { shutdown: input.shutdown } : {}),
         });
         if (!acquired.lease) return acquired.refusal;
         const lease = acquired.lease;
@@ -1984,6 +1992,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         automated: automatedTurn,
         ...(input.runId ? { runId: input.runId } : {}),
         ...(input.surface ? { surface: input.surface } : {}),
+        ...(input.shutdown ? { shutdown: input.shutdown } : {}),
       });
       if (!acquired.lease) return acquired.refusal;
       const lease = acquired.lease;
@@ -3210,11 +3219,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             recallOutcomes,
           );
           const snapshot = membershipEvent(rosterMembers, continuation?.history ?? rawEntries, session.id);
+          const guidance =
+            !external && deps.config
+              ? guidanceUpdateEvent(
+                  {
+                    version: deps.config.soulVersion(scopeId),
+                    personal: conversation.kind === "dm",
+                    revisions: deps.config.soulHistory(scopeId),
+                  },
+                  continuation?.history ?? rawEntries,
+                  session.id,
+                )
+              : undefined;
           const turnEnvironment = environmentNote(
             [
               turnEnvironmentContents,
               continuation ? "" : mailbox?.text,
               snapshot.text,
+              guidance?.text,
               recall.text ? `${memoryHeading}${recall.text}` : "",
               inboundIssuesNote(inboundIssues),
             ]
@@ -3222,7 +3244,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               .join("\n\n"),
           );
           const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
-          const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
+          const silentResume = continueTurn && !continuation && !snapshot.text && !guidance?.text && !recall.text;
           let recordedRecall = false;
           const emit: AgentTurnInput["emit"] = async (entry) => {
             turnProgress++;
@@ -3245,6 +3267,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (!recordedRecall && !payload.steered && !payload.overheard) {
                 recordedRecall = true;
                 if (snapshot.record) payload.rosterSnapshot = snapshot.record;
+                if (guidance) payload.guidanceSnapshot = guidance.record;
                 if (environment) payload.environment = environment;
                 if (recall.text) payload.memoryRecall = recall.record;
                 if (!continuation && recallOutcomes.length) payload.memoryRecallOutcomes = recallOutcomes;

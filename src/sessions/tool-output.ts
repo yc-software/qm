@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { currentTenant } from "../tenants/context.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -91,12 +90,15 @@ export function createPostgresToolOutputStore(opts: {
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
   let setting: { value: number; at: number } | null = null;
-  const tenantBytes = new Map<string, DurableByteStore>();
-  const bytesOf = (id: string): DurableByteStore => {
-    let bytes = tenantBytes.get(id);
-    if (!bytes) tenantBytes.set(id, (bytes = opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`)));
-    return bytes;
-  };
+  let tenant: Promise<{ id: string; bytes: DurableByteStore }> | null = null;
+  const tenantBytes = (): Promise<{ id: string; bytes: DurableByteStore }> =>
+    (tenant ??= opts.pool.q("SELECT qm_tenant_id()::text AS id").then((rows) => {
+      const id = rows[0]?.id as string;
+      return { id, bytes: opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`) };
+    })).catch((err: unknown) => {
+      tenant = null;
+      throw err;
+    });
   return {
     async inlineTokens() {
       if (setting && now() - setting.at < SETTING_CACHE_MS) return setting.value;
@@ -105,8 +107,8 @@ export function createPostgresToolOutputStore(opts: {
       return setting.value;
     },
     async save(text) {
-      const id = currentTenant();
-      const put = await bytesOf(id).put(Buffer.from(text, "utf8"));
+      const { id, bytes } = await tenantBytes();
+      const put = await bytes.put(Buffer.from(text, "utf8"));
       await opts.pool.q(
         `INSERT INTO blobs(tenant_id, sha256, size, mime, storage_key, created_at, expires_at)
          VALUES ($1::uuid, decode($2, 'hex'), $3, 'text/plain; charset=utf-8', $4,
@@ -128,7 +130,7 @@ export function createPostgresToolOutputStore(opts: {
         `SELECT b.storage_key, i.created_at <= now() - interval '30 days' AS expired
            FROM items i
       LEFT JOIN blobs b ON b.tenant_id = i.tenant_id AND b.sha256 = i.blob_sha
-          WHERE i.tenant_id = qm_bound_tenant() AND i.session_id = $1 AND i.kind = 'ToolResult'
+          WHERE i.tenant_id = qm_tenant_id() AND i.session_id = $1 AND i.kind = 'ToolResult'
             AND md5(i.call_id) = $2 AND ($3::text IS NULL OR i.call_id = $3)
             AND i.blob_sha IS NOT NULL`,
         [sessionId, ref.digest, ref.callId ?? null],
@@ -138,9 +140,9 @@ export function createPostgresToolOutputStore(opts: {
       if (row.expired === true) return { expired: true };
       if (typeof row.storage_key !== "string")
         throw new Error(`tool output ${ref.digest}: the result names a parked blob with no blobs row`);
-      const id = currentTenant();
+      const { bytes, id } = await tenantBytes();
       const key = String(row.storage_key).slice(`${TOOL_OUTPUT_PATH}${id}/`.length);
-      const text = await readText(bytesOf(id), key);
+      const text = await readText(bytes, key);
       if (text === null)
         throw new Error(`tool output ${ref.digest}: parked bytes ${row.storage_key} are missing from storage`);
       return { text };

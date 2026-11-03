@@ -1,7 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
-import { currentTenant } from "../tenants/context.ts";
 
 interface BrokerSession {
   email: string;
@@ -45,10 +44,10 @@ export function createPostgresBrokerSessions(connectionString: string): BrokerSe
       const token = randomBytes(32).toString("base64url");
       await pg.query("DELETE FROM auth_broker_sessions WHERE expires_at <= now()");
       const result = await pg.query(
-        `INSERT INTO auth_broker_sessions (tenant_id, token_hash, email, expires_at, absolute_expires_at, idle_seconds)
-         VALUES ($5, $1, $2, now() + $3 * interval '1 second', now() + $4 * interval '1 second', $3)
+        `INSERT INTO auth_broker_sessions (token_hash, email, expires_at, absolute_expires_at, idle_seconds)
+         VALUES ($1, $2, now() + $3 * interval '1 second', now() + $4 * interval '1 second', $3)
          RETURNING email, authenticated_at, expires_at`,
-        [hash(token), email, Math.min(idleS, absoluteS), absoluteS, currentTenant()],
+        [hash(token), email, Math.min(idleS, absoluteS), absoluteS],
       );
       return { ...session(result.rows[0]!), token };
     },
@@ -56,14 +55,14 @@ export function createPostgresBrokerSessions(connectionString: string): BrokerSe
       const result = await pg.query(
         `UPDATE auth_broker_sessions
          SET expires_at = LEAST(absolute_expires_at, now() + idle_seconds * interval '1 second')
-         WHERE tenant_id = $2 AND token_hash = $1 AND expires_at > now() AND absolute_expires_at > now()
+         WHERE token_hash = $1 AND expires_at > now() AND absolute_expires_at > now()
          RETURNING email, authenticated_at, expires_at`,
-        [hash(token), currentTenant()],
+        [hash(token)],
       );
       return result.rows[0] ? session(result.rows[0]) : null;
     },
     async revoke(email) {
-      await pg.query("DELETE FROM auth_broker_sessions WHERE tenant_id = $2 AND email = $1", [email, currentTenant()]);
+      await pg.query("DELETE FROM auth_broker_sessions WHERE email = $1", [email]);
     },
   };
 }

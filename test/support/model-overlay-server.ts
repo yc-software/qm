@@ -3,7 +3,6 @@ import type { AddressInfo } from "node:net";
 import { buildApp, serverDeps } from "../../src/wiring.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { testConfig } from "./test-config.ts";
-import { TEST_TENANT } from "./tenant.ts";
 
 const config = testConfig({
   providerBaseUrls: { openai: `${process.env.MODEL_OVERLAY_TEST_UPSTREAM}/v1` },
@@ -13,6 +12,6 @@ const config = testConfig({
   openaiApiKey: "local-test-key",
 });
 const built = buildApp(config, { modelCredentialFetch: async () => Response.json({ data: [] }) });
-const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
+const server = createInsecureTestServer(built.app, serverDeps(config, built));
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 process.send?.({ base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` });

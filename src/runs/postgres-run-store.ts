@@ -319,10 +319,10 @@ END $base_schema$`,
       return rowCount > 0;
     },
 
-    async releaseLease(runId, leaseToken, stop): Promise<boolean> {
+    async releaseLease(runId, leaseToken, stop, retryAfter = 0): Promise<boolean> {
       const { rowCount } = await q(
-        "UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, last_stop=COALESCE($3, last_stop), preemptions=preemptions+$4 WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING pg_notify('qm_run_available', 'null')",
-        [runId, leaseToken, stop ? JSON.stringify(stop) : null, stop?.kind === "parked" ? 1 : 0],
+        "UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, last_stop=COALESCE($3, last_stop), preemptions=preemptions+$4, retry_after=GREATEST(retry_after, $5) WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING pg_notify('qm_run_available', 'null')",
+        [runId, leaseToken, stop ? JSON.stringify(stop) : null, stop?.kind === "parked" ? 1 : 0, retryAfter],
       );
       return rowCount > 0;
     },

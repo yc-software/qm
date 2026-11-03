@@ -1,170 +1,79 @@
-import { after, before, describe, it } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { IncomingMessage, request, ServerResponse, type Server } from "node:http";
+import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
-import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { withRowTenant } from "../src/api/tenant-ingress.ts";
+import { withRequestTenant } from "../src/api/tenant-ingress.ts";
+import { CAPABILITY_HEADER } from "../src/api/contract.ts";
 import { mintCapabilityToken, verifyCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { mintPortalIdentity, verifyPortalIdentity } from "../src/auth/portal-identity.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { currentTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
-import { singleTenantResolver } from "../src/tenants/resolver.ts";
-import { signedRequestHeaders, TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
-import { buildApp } from "./support/build-app.ts";
-import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
-import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
-import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { openOAuthState, sealOAuthState } from "../src/connectors/oauth.ts";
+import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
+import { canonicalPayload, signedRequestHeaders, TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 
-const SOURCE = "tenant-binding-source-secret-0123456789abcdef";
+const TENANT_A = "0d6f6f1e-5a3c-4a7e-9a52-3c1f0b8e2a11";
+const TENANT_B = "7b2e9c44-1d8f-4f60-8e3b-5a9d2c7f4b22";
+const SECRET = "tenant-binding-capability-secret-0123456789";
 const IDENTITY = "tenant-binding-identity-secret-0123456789ab";
-const CONTROL = "tenant-binding-control-secret-0123456789abcd";
-const HOSTS: Record<string, string> = { "a.example": TEST_TENANT, "b.example": OTHER_TENANT };
+const claims = { actorId: "U1", scopeId: "personal:U1", aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 };
 
-describe("tenant resolution", () => {
-  it("the single-tenant resolver answers only when exactly one tenant exists", async () => {
-    assert.equal(await singleTenantResolver(async () => [TEST_TENANT]).forHost("any.example"), TEST_TENANT);
-    assert.equal(await singleTenantResolver(async () => [TEST_TENANT]).forSlackTeam("T1"), TEST_TENANT);
-    assert.equal(await singleTenantResolver(async () => []).forHost("any.example"), null);
-    assert.equal(await singleTenantResolver(async () => [TEST_TENANT, OTHER_TENANT]).forHost("a.example"), null);
+function requestWith(headers: Record<string, string>): IncomingMessage {
+  const req = new IncomingMessage(new Socket());
+  req.headers = headers;
+  return req;
+}
+
+async function tenantSeenBy(headers: Record<string, string>, auth: "source" | "public" = "source") {
+  let seen: string | undefined = "unset";
+  await withRequestTenant(requestWith(headers), { auth }, SECRET, () => {
+    seen = boundTenant();
+  });
+  return seen;
+}
+
+describe("tenant claims", () => {
+  it("capability tokens carry the minting tenant", async () => {
+    const token = await withTenant(TENANT_B, () => mintCapabilityToken(claims, SECRET));
+    assert.equal((await verifyCapabilityToken(token, SECRET))?.tenant, TENANT_B);
+    const unbound = await withoutTenant(() => mintCapabilityToken(claims, SECRET));
+    assert.equal((await verifyCapabilityToken(unbound, SECRET))?.tenant, undefined);
+    const forged = await mintSignedPayload({ ...claims, tenant: "not-a-tenant" }, SECRET);
+    assert.equal(await verifyCapabilityToken(forged, SECRET), null);
   });
 
-  it("an owner row lookup binds the row's tenant and refuses unknown or ambiguous rows", async () => {
-    const rows: Record<string, string[]> = { one: [OTHER_TENANT], none: [], both: [TEST_TENANT, OTHER_TENANT] };
-    const statuses: Record<string, number> = {};
-    for (const id of Object.keys(rows)) {
-      let seen: string | undefined;
-      const res = new ServerResponse(new IncomingMessage(new Socket()));
-      await withRowTenant(
-        res,
-        async (_table, _columns, value) => rows[value]!,
-        { table: "webhooks", columns: ["id"], id },
-        () => {
-          seen = currentTenant();
-        },
-      );
-      statuses[id] = seen ? 200 : res.statusCode;
-      if (seen) assert.equal(seen, OTHER_TENANT);
-    }
-    assert.deepEqual(statuses, { one: 200, none: 404, both: 404 });
-  });
-
-  it("a portal identity only verifies inside the tenant it names", async () => {
-    const token = await mintPortalIdentity({ t: TEST_TENANT, p: "U1", exp: Date.now() + 60_000 }, IDENTITY);
-    assert.equal((await withTenant(TEST_TENANT, () => verifyPortalIdentity(token, IDENTITY, Date.now())))?.p, "U1");
-    assert.equal(await withTenant(OTHER_TENANT, () => verifyPortalIdentity(token, IDENTITY, Date.now())), null);
+  it("a portal identity verifies only inside the tenant it names", async () => {
+    const token = await mintPortalIdentity({ t: TENANT_A, p: "U1", exp: Date.now() + 60_000 }, IDENTITY);
+    assert.equal((await withTenant(TENANT_A, () => verifyPortalIdentity(token, IDENTITY, Date.now())))?.p, "U1");
+    assert.equal(await withTenant(TENANT_B, () => verifyPortalIdentity(token, IDENTITY, Date.now())), null);
     assert.equal(await withoutTenant(() => verifyPortalIdentity(token, IDENTITY, Date.now())), null);
-    const tenantless = await mintSignedPayload({ p: "U1", exp: Date.now() + 60_000 }, IDENTITY);
-    assert.equal(await withTenant(TEST_TENANT, () => verifyPortalIdentity(tenantless, IDENTITY, Date.now())), null);
   });
 
-  it("capability tokens carry the minting tenant and tokens without one are refused", async () => {
-    const claims = { actorId: "U1", scopeId: "personal:U1", aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 };
-    await assert.rejects(
-      () => withoutTenant(() => mintCapabilityToken(claims, TEST_CAPABILITY_SECRET)),
-      /No tenant is bound/,
-    );
-    const token = await withTenant(OTHER_TENANT, () => mintCapabilityToken(claims, TEST_CAPABILITY_SECRET));
-    assert.equal((await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET))?.tenant, OTHER_TENANT);
-    const tenantless = await mintSignedPayload(claims, TEST_CAPABILITY_SECRET);
-    assert.equal(await verifyCapabilityToken(tenantless, TEST_CAPABILITY_SECRET), null);
+  it("OAuth state carries the tenant that started the flow", async () => {
+    const state = { provider: "github", principalId: "U1", redirectUri: "https://example.test/cb" };
+    const sealed = await withTenant(TENANT_A, () => sealOAuthState(state, { secret: SECRET }));
+    assert.equal((await openOAuthState(sealed, { secret: SECRET, maxAgeMs: 60_000 })).tenant, TENANT_A);
+  });
+
+  it("signed requests cover the tenant header", () => {
+    const headers = withTenant(TENANT_A, () => signedRequestHeaders(SECRET, "GET", "/v1/x", "", {}, 1));
+    assert.equal(headers[TENANT_HEADER], TENANT_A);
+    assert.notEqual(canonicalPayload("GET", "/v1/x", "", TENANT_A), canonicalPayload("GET", "/v1/x", "", TENANT_B));
   });
 });
 
-describe("core ingress binds the verified tenant", () => {
-  let server: Server;
-  let port: number;
-
-  before(async () => {
-    const built = buildApp(testConfig());
-    server = createServer(built.app, {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-      signingSecret: SOURCE,
-      capabilitySecret: TEST_CAPABILITY_SECRET,
-      portalIdentitySecret: IDENTITY,
-      scheduler: built.scheduler,
-      identity: built.identity,
-      config: built.config,
-      tenants: { forHost: async (host) => HOSTS[host] ?? null, forSlackTeam: async () => null },
-      deploymentControlSecret: CONTROL,
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    port = (server.address() as AddressInfo).port;
+describe("request ingress", () => {
+  it("binds the tenant of a verified capability token over any tenant header", async () => {
+    const token = await withTenant(TENANT_B, () => mintCapabilityToken(claims, SECRET));
+    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: token, [TENANT_HEADER]: TENANT_A }), TENANT_B);
   });
 
-  after(() => new Promise<void>((resolve) => server.close(() => resolve())));
-
-  const call = (host: string, path: string, headers: Record<string, string>) =>
-    new Promise<{ status: number; body: { message?: string } }>((resolve, reject) => {
-      const req = request({ host: "127.0.0.1", port, path, headers: { ...headers, host } }, (res) => {
-        let text = "";
-        res.on("data", (chunk) => (text += chunk));
-        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(text) as { message?: string } }));
-      });
-      req.on("error", reject);
-      req.end();
-    });
-
-  it("refuses a signed request that names no tenant", async () => {
-    const { status, body } = await call(
-      "a.example",
-      "/v1/surface-config",
-      withoutTenant(() => signedRequestHeaders(SOURCE, "GET", "/v1/surface-config")),
-    );
-    assert.equal(status, 401);
-    assert.match(body.message ?? "", /no verifiable tenant/);
+  it("binds the signed tenant header and ignores malformed ones", async () => {
+    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }), TENANT_A);
+    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: "nope" }), undefined);
   });
 
-  it("serves a signed request inside the tenant it names", async () => {
-    const headers = signedRequestHeaders(SOURCE, "GET", "/v1/surface-config", "", { [TENANT_HEADER]: TEST_TENANT });
-    assert.equal((await call("a.example", "/v1/surface-config", headers)).status, 200);
-  });
-
-  it("refuses a tenant header the signature does not cover", async () => {
-    const headers = signedRequestHeaders(SOURCE, "GET", "/v1/surface-config", "", { [TENANT_HEADER]: TEST_TENANT });
-    const forged = { ...headers, [TENANT_HEADER]: OTHER_TENANT };
-    const { status, body } = await call("b.example", "/v1/surface-config", forged);
-    assert.equal(status, 401);
-    assert.match(body.message ?? "", /signature mismatch/);
-  });
-
-  it("refuses a credential from tenant A on tenant B's host", async () => {
-    const headers = signedRequestHeaders(SOURCE, "GET", "/v1/surface-config", "", { [TENANT_HEADER]: TEST_TENANT });
-    const { status, body } = await call("b.example", "/v1/surface-config", headers);
-    assert.equal(status, 403);
-    assert.match(body.message ?? "", /another tenant/);
-    const token = await withTenant(TEST_TENANT, () =>
-      mintCapabilityToken(
-        { actorId: "U1", scopeId: "personal:U1", aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 },
-        TEST_CAPABILITY_SECRET,
-      ),
-    );
-    const capability = await call("b.example", "/v1/runs/nope", { "x-agent-capability": token });
-    assert.equal(capability.status, 403);
-    assert.match(capability.body.message ?? "", /another tenant/);
-  });
-
-  it("binds the host's tenant for operator routes only with the deployment-control bearer", async () => {
-    const signed = () => withoutTenant(() => signedRequestHeaders(SOURCE, "GET", "/v1/deployment-layer"));
-    const operator = () => ({ ...signed(), authorization: `Bearer ${CONTROL}` });
-    assert.equal((await call("a.example", "/v1/deployment-layer", operator())).status, 404);
-    for (const [host, headers] of [
-      ["a.example", signed()],
-      ["a.example", { ...signed(), authorization: `Bearer ${SOURCE}` }],
-      ["unknown.example", operator()],
-    ] as const) {
-      const refused = await call(host, "/v1/deployment-layer", headers);
-      assert.equal(refused.status, 401);
-      assert.match(refused.body.message ?? "", /no verifiable tenant/);
-    }
-  });
-
-  it("requires a portal identity on person routes even with a valid signature", async () => {
-    const path = "/v1/runs/nope";
-    const headers = signedRequestHeaders(SOURCE, "GET", path, "", { [TENANT_HEADER]: TEST_TENANT });
-    const unsigned = await call("a.example", path, headers);
-    assert.equal(unsigned.status, 401);
-    assert.match(unsigned.body.message ?? "", /portal identity required/);
+  it("leaves public routes and unverifiable tokens unbound", async () => {
+    assert.equal(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, "public"), undefined);
+    assert.equal(await tenantSeenBy({ [CAPABILITY_HEADER]: "garbage" }), undefined);
   });
 });
