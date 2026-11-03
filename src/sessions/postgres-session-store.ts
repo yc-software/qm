@@ -616,7 +616,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async setRuntime(sessionId, runtime): Promise<void> {
-      await q("UPDATE sessions SET runtime = $2::jsonb WHERE id = $1", [sessionId, JSON.stringify(runtime)]);
+      await q("UPDATE sessions SET runtime = $2::jsonb WHERE id = $1 AND runtime IS DISTINCT FROM $2::jsonb", [
+        sessionId,
+        JSON.stringify(runtime),
+      ]);
     },
 
     async endedInFailure(sessionIds): Promise<Set<string>> {

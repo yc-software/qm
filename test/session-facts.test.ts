@@ -18,7 +18,8 @@ function request(threadRef: string, extra: Partial<OrchestratorInput> = {}): Orc
 }
 
 test("a session keeps the Slack binding it was created with and follows its latest context", async () => {
-  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
   const first = request("slack:dm:facts");
   const created = await sessions.getOrCreateByThread("slack:dm:facts", "dm", scope, undefined, "slack", undefined, {
     slackBinding: slackSource,
@@ -36,6 +37,14 @@ test("a session keeps the Slack binding it was created with and follows its late
   assert.equal(stored.spawnMeta?.timezone, "America/Los_Angeles");
   await sessions.setRuntime(stored.id, { modelId: "m1", label: "Model One" });
   assert.deepEqual((await sessions.get(stored.id))?.runtime, { modelId: "m1", label: "Model One" });
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: url });
+  const version = async () =>
+    (await raw.query("SELECT xmin::text FROM sessions WHERE id = $1", [stored.id])).rows[0].xmin;
+  const before = await version();
+  await sessions.setRuntime(stored.id, { label: "Model One", modelId: "m1" });
+  assert.equal(await version(), before, "an unchanged runtime writes nothing");
+  await raw.end();
 });
 
 test("a session ended in failure while its newest item is an error", async () => {

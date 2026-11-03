@@ -71,7 +71,7 @@ export async function delegatedAuthorizationOrigin(
     source.sessionId === sender.threadRef;
   if (!delegated && !continued && !started) return;
   const parent = source.request;
-  if (!authorityReaches(parent, request, request, sender, child)) return;
+  if (!authorityReaches(parent, request, sender, child)) return;
   if (!isSessionTurn(parent)) return humanAuthored(parent) ? parent.origin : undefined;
   if (!delegated && !continued) return;
   const holder = delegated ? child : sender;
@@ -79,7 +79,7 @@ export async function delegatedAuthorizationOrigin(
   if (!stamped?.authority || stamped.authority.kind !== request.origin.kind) return;
   if (!(await stampedTreeIntact(deps.sessions, holder))) return;
   const stamp = { actor: stamped.actor, conversation: stamped.conversation, origin: stamped.authority };
-  return authorityReaches(stamp, request, request, sender, child) && humanAuthored(stamp) ? stamp.origin : undefined;
+  return authorityReaches(stamp, request, sender, child) && humanAuthored(stamp) ? stamp.origin : undefined;
 }
 
 async function stampedTreeIntact(sessions: Pick<SessionStore, "get">, holder: Session): Promise<boolean> {
@@ -98,7 +98,6 @@ async function stampedTreeIntact(sessions: Pick<SessionStore, "get">, holder: Se
 function authorityReaches(
   parent: Pick<OrchestratorInput, "actor" | "conversation" | "readOnly" | "privateSessionMessage" | "swarm">,
   request: OrchestratorInput,
-  current: OrchestratorInput,
   sender: Session,
   child: Session,
 ): boolean {
@@ -111,8 +110,8 @@ function authorityReaches(
     parent.swarm ||
     sender.scopeId !== child.scopeId ||
     child.scopeId !== conversationScope(parent.conversation, parent.actor.id) ||
-    child.scopeId !== conversationScope(current.conversation, current.actor.id) ||
-    current.conversation.audience.some((person) => !audience.has(person.id))
+    child.scopeId !== conversationScope(request.conversation, request.actor.id) ||
+    request.conversation.audience.some((person) => !audience.has(person.id))
   );
 }
 
@@ -1120,6 +1119,10 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
   const initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
+  if (run.request.delegatingRunId && !initiatingRun)
+    console.warn(
+      `[subagent-return] delegating run ${run.request.delegatingRunId} of ${run.id} is gone; returning with the child's spawn context and no inherited authority`,
+    );
   const initiatingContext =
     initiatingRun?.request ??
     (run.request.delegatingRunId

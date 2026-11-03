@@ -55,11 +55,13 @@ export async function backfillSessionFacts(
     ]);
     for (let i = 0; i < page.length; i += BACKFILL_CONCURRENCY)
       await Promise.all(
-        page
-          .slice(i, i + BACKFILL_CONCURRENCY)
-          .map((session) =>
-            fillSession(deps, session, latest.get(session.threadRef), latestPublic.get(session.threadRef)),
+        page.slice(i, i + BACKFILL_CONCURRENCY).map((session) =>
+          fillSession(deps, session, latest.get(session.threadRef), latestPublic.get(session.threadRef)).catch(
+            (cause: unknown) => {
+              throw new Error(`session facts backfill failed for session ${session.id}`, { cause });
+            },
           ),
+        ),
       );
     cursor = { id: page[page.length - 1]!.id };
     await deps.sessions.saveSessionFactsCursor(cursor);

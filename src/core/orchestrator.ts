@@ -11,6 +11,7 @@ import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugin
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
 import { resolveBrowserModel } from "../model/browser-model.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
@@ -3768,7 +3769,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
-        if (turnRuntime && JSON.stringify(turnRuntime) !== JSON.stringify(session.runtime))
+        if (turnRuntime && canonicalJson(turnRuntime) !== canonicalJson(session.runtime ?? null))
           await deps.sessions.setRuntime(session.id, turnRuntime);
         await fallbackTitleWrite;
 
