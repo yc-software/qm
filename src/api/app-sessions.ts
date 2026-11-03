@@ -1276,7 +1276,7 @@ export function createSessionMethods(
           ? { id: f.id, ownerScopeId: f.ownerScopeId, createdBy: f.createdBy, grantRef: encodeRef(fileRef(f.id)) }
           : null;
       }
-      const d = (await deps.deploy.listDeployments()).find((x) => x.id === idOrName || x.name === idOrName);
+      const d = await deps.deploy.getDeployment(idOrName);
       return d
         ? { id: d.id, ownerScopeId: d.ownerScopeId, createdBy: d.createdBy, grantRef: encodeRef(deployRef(d.id)) }
         : null;
