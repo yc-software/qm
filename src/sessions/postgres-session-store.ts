@@ -336,7 +336,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       `WITH RECURSIVE tree(id, root_id, thread_ref) AS (
          SELECT id, parent_session_id, thread_ref FROM sessions WHERE parent_session_id = ANY($1::text[])
          UNION
-         SELECT s.id, t.root_id, s.thread_ref FROM sessions s JOIN tree t ON s.parent_session_id = t.id
+         SELECT c.id, t.root_id, c.thread_ref FROM tree t
+           CROSS JOIN LATERAL (SELECT id, thread_ref FROM sessions WHERE parent_session_id = t.id OFFSET 0) c
        )
        SELECT id, root_id, thread_ref FROM tree`,
       [[...rootIds]],
