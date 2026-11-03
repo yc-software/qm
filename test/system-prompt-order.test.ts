@@ -366,7 +366,7 @@ test("Open advertises the source and audits a carried skill read without grantin
     source: personal,
     target: scopeId("channel", "C1"),
   });
-  assert.deepEqual(await acl.list(), []);
+  assert.deepEqual(await acl.find({ ownerScopeId: personal }), []);
 });
 
 test("Open keeps unclassified personal memory out of rooms, loads room memory in DMs, and capture stays in the room", async () => {

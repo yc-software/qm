@@ -19,6 +19,7 @@ import type { ManagesArtifactHome } from "../src/resolution/scope-membership.ts"
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl, testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { allGrants } from "./support/acl-grants.ts";
 
 const ORG = "default-org";
 
@@ -31,6 +32,7 @@ interface FakeState {
   recipients: Record<string, RecipientResolution>;
   privateChannels: Set<string>;
   acl: ReturnType<typeof createAclStore>;
+  aclDatabaseUrl: string;
   files: FileArtifactStore;
 }
 
@@ -111,6 +113,7 @@ const cap = (actorId: string, scope?: ScopeId, liveActor = true): CapabilityClai
 
 function baseState(over: Partial<FakeState> = {}): FakeState {
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const aclDatabaseUrl = testDatabaseUrl();
   const state: FakeState = {
     artifacts: {},
     scopesByPrincipal: {},
@@ -120,7 +123,8 @@ function baseState(over: Partial<FakeState> = {}): FakeState {
     recipients: {},
     privateChannels: new Set(),
     files,
-    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+    aclDatabaseUrl,
+    acl: createAclStore(createPostgresGrantStore(aclDatabaseUrl), {
       manages: (p, s, a) => manages(s, a ?? "", p),
       resolveFiles: (refs) => files.resolveByIds(refs),
     }),
@@ -130,9 +134,7 @@ function baseState(over: Partial<FakeState> = {}): FakeState {
   return state;
 }
 
-async function grantsOf(state: FakeState): Promise<Grant[]> {
-  return [...(await state.acl.list())];
-}
+const grantsOf = (state: FakeState) => allGrants(state.aclDatabaseUrl);
 
 async function ownerState(): Promise<FakeState> {
   const home = (type: ArtifactType, id: string): ArtifactHome & { type: ArtifactType } => ({
