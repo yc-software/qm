@@ -44,7 +44,6 @@ interface SpendReport {
   asOf?: number;
 }
 
-// Core serves at most 93 days of personal spend per request.
 const MAX_DAYS = 93;
 const DAY = 86_400_000;
 const SOURCES = [
@@ -67,7 +66,6 @@ function split(t: SpendTotals): string {
   ].join(" · ");
 }
 
-// Opens the cron in the Crons view; the shell routes popstate to the linked view.
 function cronLink(c: NamedCron) {
   const href = deepLinkPath(UI_BASE, "crons", null, null, c.cronId);
   return {
@@ -87,7 +85,8 @@ function cronLink(c: NamedCron) {
 type NamedCron = SpendCron & { info: NonNullable<SpendCron["info"]> };
 const named = (c: SpendCron): c is NamedCron => c.info !== null;
 function spaceName(scopeId: string, name: string): string {
-  if (!name) return "Personal";
+  if (scopeId.startsWith("personal:")) return "Personal";
+  if (!name) return scopeId.startsWith("group:") ? "Group DM" : scopeId;
   return scopeId.startsWith("channel:") ? `#${name}` : name;
 }
 const space = (c: SpendCron) => spaceName(c.scopeId, c.scopeName);

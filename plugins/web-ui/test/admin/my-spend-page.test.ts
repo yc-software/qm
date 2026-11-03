@@ -17,7 +17,10 @@ const REPORT = {
   org: totals(5.75),
   series: [{ day: "2026-09-02", live: { costUsd: 4 }, background: { sources: { cron: { costUsd: 1.75 } } } }],
   people: [{ principalId: "alice", scopeId: "personal:alice", displayName: "", ...totals(2.5) }],
-  scopes: [{ principalId: null, scopeId: "channel:C1", displayName: "general", ...totals(3) }],
+  scopes: [
+    { principalId: null, scopeId: "channel:C1", displayName: "general", ...totals(3) },
+    { principalId: null, scopeId: "group:G1", displayName: "", ...totals(0) },
+  ],
   crons: [
     {
       cronId: "mine",
@@ -62,7 +65,10 @@ test("my spend: asks for the window, charts it, and splits spaces, crons and mod
     [...doc.querySelectorAll(".card .head p")][0]!.textContent!,
     /^2026-09-01 to 2026-09-03 \(UTC, daily\) · Yours \$2\.50 · Shared spaces \$3\.00$/,
   );
-  assert.deepEqual(rows(doc, "By shared space"), [["#general", "Live $3.00", "$3.00"]]);
+  assert.deepEqual(rows(doc, "By shared space"), [
+    ["#general", "Live $3.00", "$3.00"],
+    ["Group DM", "Live $0.00", "$0.00"],
+  ]);
   assert.deepEqual(rows(doc, "Your crons"), [["Morning digest", "Personal", "cron 0 9 * * *", "$0.50"]]);
   assert.deepEqual(rows(doc, "Crons others made"), [["Standup notes", "Bob Smith", "#general", "every 1d", "$1.00"]]);
   assert.deepEqual(rows(doc, "Deleted or private crons"), [["Cron gone1234", "Personal", "$0.25"]]);
