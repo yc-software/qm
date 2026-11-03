@@ -95,7 +95,13 @@ test("an attested provider sends the canonical person on every request and the s
   const memory = configured(attested.url, { attestActor: true });
   await memory.recall("personal:U1", { query: "launch", actorId: "U1" });
   await memory.recall("personal:U1", { query: "launch", actorId: "u1@acme.test" });
-  await memory.capture("personal:U1", ["fact"], 1, "u1@acme.test", { mode: "explicit", actorId: "u1@acme.test" });
+  await memory.capture(
+    "personal:U1",
+    ["fact"],
+    1,
+    { actorId: "u1@acme.test", context: "conversation" },
+    { mode: "explicit" },
+  );
 
   assert.ok(attested.requests.length > 0);
   assert.deepEqual(new Set(attested.requests.map((request) => request.actor)), new Set(["U1"]));
@@ -272,14 +278,21 @@ test("explicit writes record committed, pending and unknown with a stable UUID i
   });
   const memory = configured(mcp.url, { timeoutMs: 200 });
   const write = (facts: string[], turn?: string) =>
-    writeFacts(memory, "personal:U1", facts, "U1", { mode: "explicit", actorId: "U1" }, turn);
+    writeFacts(memory, "personal:U1", facts, { actorId: "U1", context: "conversation" }, { mode: "explicit" }, turn);
 
   const committed = await write(["fact"], "run-1");
   const repeated = await write(["fact"], "run-1");
   const pending = await write(["queued"], "run-1");
   await write(["fact"], "run-2");
   await write(["fact"]);
-  await writeFacts(memory, "personal:U2", ["fact"], "U1", { mode: "explicit", actorId: "U1" }, "run-1");
+  await writeFacts(
+    memory,
+    "personal:U2",
+    ["fact"],
+    { actorId: "U1", context: "conversation" },
+    { mode: "explicit" },
+    "run-1",
+  );
   const unknown = await write(["slow"], "run-1");
   release();
   await settled(mcp, 7);
@@ -321,7 +334,14 @@ test("a failing built-in notebook write stays QM's own error, not a provider pro
   };
   const memory = configured(mcp.url, {}, ENV, broken);
   await assert.rejects(
-    writeFacts(memory, "personal:U1", ["fact"], "U1", { mode: "explicit", actorId: "U1" }, "run-1"),
+    writeFacts(
+      memory,
+      "personal:U1",
+      ["fact"],
+      { actorId: "U1", context: "conversation" },
+      { mode: "explicit" },
+      "run-1",
+    ),
     /notebook disk full/,
   );
 });

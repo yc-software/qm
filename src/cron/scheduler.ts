@@ -86,6 +86,7 @@ export interface SchedulerDeps {
   sessions?: TriggerDeps["sessions"];
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
+  notebookOnlyMemory?: (cron: Cron) => Promise<boolean>;
   deleteCron?: (id: string) => Promise<void>;
   fireLoop?: (
     loopId: string,
@@ -279,6 +280,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       const runtimeProblem = cron.runtime ? await deps.runtimeError?.(cron.ownerScopeId, cron.runtime) : null;
+      const notebookOnly = await deps.notebookOnlyMemory?.(cron);
       outcome = await runTrigger(
         {
           deliveries: deps.deliveries,
@@ -298,6 +300,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           surface: "cron",
           ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
+          ...(notebookOnly ? { memoryNotebookOnly: true } : {}),
           onClaimed: async () => {
             await deps.crons.beginFire(cron.id, runningEntry);
           },

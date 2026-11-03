@@ -29,6 +29,7 @@ type ContextInput = Omit<Parameters<typeof sharingSourcesForTurn>[0], "posture">
   acl: Pick<AclStore, "sharedOfKindForAudience">;
   memoryPolicy: MemoryPolicy;
   useMemory: boolean;
+  notebookOnly?: boolean;
   memory: MemoryService;
   files: FileArtifactStore;
   skills?: SkillStore;
@@ -50,7 +51,11 @@ export async function resolveTurnContext(input: ContextInput) {
   ];
   const memoryAccess =
     (useMemory && memoryPolicy.capture !== "off") || read.length
-      ? { ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}), read }
+      ? {
+          ...(useMemory && memoryPolicy.capture !== "off" ? { write: memoryScopeId } : {}),
+          read,
+          ...(input.notebookOnly ? { notebookOnly: true as const } : {}),
+        }
       : undefined;
   const recordRead = (scope: ScopeId, resource: string) => {
     if (!sharingSources.includes(scope)) return;
@@ -69,6 +74,7 @@ export async function resolveTurnContext(input: ContextInput) {
     nativeScopes: baseRecallScopes,
     audience: input.audience,
     open: resolution.sharingPosture === "open",
+    ...(input.notebookOnly ? { notebookOnly: true } : {}),
     config: input.config,
     isCurrentSharedScopeMember: input.isCurrentSharedScopeMember,
     currentScopeMembers: input.currentScopeMembers,

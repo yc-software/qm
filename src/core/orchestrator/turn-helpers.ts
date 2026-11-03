@@ -207,6 +207,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
       ? { privateSessionMessage: true as const, sessionMessageDepth: input.sessionMessageDepth }
       : {}),
     ...(input.skipMemory ? { skipMemory: true } : {}),
+    ...(input.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
     ...(input.addressed ? { addressed: true } : {}),
     ...(input.envelopeWrapped ? { envelopeWrapped: true } : {}),

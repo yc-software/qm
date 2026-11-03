@@ -1041,6 +1041,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         resolution,
         memoryPolicy,
         useMemory,
+        notebookOnly: input.memoryNotebookOnly === true,
         memory: deps.memory,
         files: deps.files,
         skills: deps.skills,

@@ -25,7 +25,11 @@ export function createMemoryTidyService(deps: {
   crons: CronStore;
   scheduler: Pick<Scheduler, "notifyChanged">;
 }) {
+  const manages = async (cron: Pick<Cron, "id" | "ownerScopeId">): Promise<boolean> =>
+    (await deps.store.get(cron.ownerScopeId))?.cronId === cron.id;
   return {
+    manages,
+
     async ensure(scope: ScopeId): Promise<void> {
       const { kind, ref } = parseScopeId(scope);
       if (kind !== "personal" && kind !== "channel" && kind !== "group") return;
@@ -51,7 +55,7 @@ export function createMemoryTidyService(deps: {
     },
 
     async skipFire(cron: Cron): Promise<string | undefined> {
-      if (!deps.memory.facts || (await deps.store.get(cron.ownerScopeId))?.cronId !== cron.id) return undefined;
+      if (!deps.memory.facts || !(await manages(cron))) return undefined;
       const facts = await deps.memory.facts(cron.ownerScopeId);
       const changedAt = facts.reduce((latest, fact) => Math.max(latest, fact.updatedAt), 0);
       const { runs } = await deps.crons.listFires(cron.id, { limit: 10 });

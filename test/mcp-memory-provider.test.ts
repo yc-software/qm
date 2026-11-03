@@ -42,7 +42,16 @@ test("MCP provider passes query, actor, and explicit writes through configured t
     recallText(await memory.recall("org:acme", { query: "launch", actorId: "u1", maxChars: 2000 })),
     "result",
   );
-  assert.equal(await memory.capture("org:acme", ["decision"], 10, "u1", { mode: "explicit", actorId: "u1" }), 1);
+  assert.equal(
+    await memory.capture(
+      "org:acme",
+      ["decision"],
+      10,
+      { actorId: "u1", context: "conversation" },
+      { mode: "explicit" },
+    ),
+    1,
+  );
   assert.deepEqual(calls, [
     { tool: "search_knowledge", args: { query: "launch", acting_user: "u1", namespace: "org:acme", max_chars: 2000 } },
     {

@@ -42,7 +42,6 @@ export interface MemoryRecallContext extends MemoryOutcomeSink {
 
 export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutcomeSink {
   mode: "explicit" | "automatic";
-  actorId?: string;
   input?: string;
   reply?: string;
   autonomous?: boolean;
@@ -54,6 +53,19 @@ export interface MemoryEdit {
   text: string;
 }
 
+export interface MemoryAuthority {
+  actorId: string;
+  context: "conversation" | "self" | "admin" | "maintenance";
+}
+
+export function changesNotebookOnly(by: MemoryAuthority | undefined): boolean {
+  return by?.context !== "conversation" || !by.actorId.trim();
+}
+
+export function turnAuthority(actorId: string, access: { notebookOnly?: true } | undefined): MemoryAuthority {
+  return { actorId, context: access?.notebookOnly ? "maintenance" : "conversation" };
+}
+
 export interface MemoryService {
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
@@ -61,14 +73,14 @@ export interface MemoryService {
     scopeId: ScopeId,
     facts: string[],
     at: number,
-    author?: string,
+    by?: MemoryAuthority,
     context?: MemoryCaptureContext,
   ): Promise<number>;
   query(scopeId: ScopeId, q: string, limit?: number, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   read(scopeId: ScopeId): Promise<string>;
   facts?(scopeId: ScopeId): Promise<MemoryFact[]>;
-  edit?(scopeId: ScopeId, edits: MemoryEdit[], author?: string, context?: MemoryCaptureMetadata): Promise<void>;
-  delete?(scopeId: ScopeId, ids: string[], author?: string): Promise<void>;
+  edit?(scopeId: ScopeId, edits: MemoryEdit[], by?: MemoryAuthority, context?: MemoryCaptureMetadata): Promise<void>;
+  delete?(scopeId: ScopeId, ids: string[], by?: MemoryAuthority): Promise<void>;
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }
 
@@ -137,7 +149,7 @@ export function createNotebookMemory(store: FactStore): MemoryService {
       return recentCandidates(await store.list(scopeId));
     },
 
-    async capture(scopeId, facts, at, author, context) {
+    async capture(scopeId, facts, at, by, context) {
       const lines = cleanCapturedFacts(facts);
       if (!lines.length) return 0;
       const provenance = captureProvenance(scopeId, context);
@@ -155,7 +167,13 @@ export function createNotebookMemory(store: FactStore): MemoryService {
             }
             continue;
           }
-          const fact = { text, ...provenance, ...(author ? { author } : {}), createdAt: at, updatedAt: at };
+          const fact = {
+            text,
+            ...provenance,
+            ...(by?.actorId ? { author: by.actorId } : {}),
+            createdAt: at,
+            updatedAt: at,
+          };
           await tx.insert(fact);
           existing.set(key, { ...fact, id: "" });
           added++;
@@ -174,7 +192,7 @@ export function createNotebookMemory(store: FactStore): MemoryService {
 
     facts: (scopeId) => store.list(scopeId),
 
-    async edit(scopeId, edits, _author, context) {
+    async edit(scopeId, edits, _by, context) {
       const at = Date.now();
       const exposure = context ? captureProvenance(scopeId, context) : undefined;
       await store.transact(scopeId, async (tx) => {

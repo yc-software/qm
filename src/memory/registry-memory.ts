@@ -2,7 +2,7 @@ import { SCOPE_KINDS, type SessionEntry, type ScopeId } from "../types.ts";
 import { reportFailure } from "../util/errors.ts";
 import { publicFetch, type AddressFetch } from "../util/network.ts";
 import { disclosedMemory, type MemoryDisclosure } from "./disclosure.ts";
-import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
+import { changesNotebookOnly, type MemoryRecallContext, type MemoryService } from "./memory-service.ts";
 import type { MemoryProviderConfig } from "./provider-config.ts";
 import { createMemoryProviders, logMemoryProviderError } from "./provider-factory.ts";
 import {
@@ -98,7 +98,7 @@ export function createRegistryMemoryService(opts: {
       if (!disclosed) views.set(served.service, (disclosed = disclosedMemory(served.service, access)));
       return { ...served, service: disclosed };
     };
-    const reads = (route: DisabledRegistryRoute) => route.recall !== false;
+    const reads = (route: DisabledRegistryRoute) => route.recall !== false && !access?.notebookOnly;
     return {
       withDisclosure: (next) => view(next),
       async recall(scopeId, context) {
@@ -111,22 +111,23 @@ export function createRegistryMemoryService(opts: {
         flag(disabled, scopeId, context, reads);
         return service.query(scopeId, q, limit, context);
       },
-      async capture(scopeId, facts, at, author, context) {
+      async capture(scopeId, facts, at, by, context) {
         const { service, disabled } = await serve();
-        flag(disabled, scopeId, context, (route) => captureAllowed(route.capture, context?.mode ?? "explicit"));
-        return service.capture(scopeId, facts, at, author, context);
+        if (!changesNotebookOnly(by))
+          flag(disabled, scopeId, context, (route) => captureAllowed(route.capture, context?.mode ?? "explicit"));
+        return service.capture(scopeId, facts, at, by, context);
       },
       read: async (scopeId) => (await serve()).service.read(scopeId),
       facts: async (scopeId) => (await (await serve()).service.facts?.(scopeId)) ?? [],
-      async edit(scopeId, edits, author, context) {
+      async edit(scopeId, edits, by, context) {
         const { service } = await serve();
         if (!service.edit) throw new Error(`memory for ${scopeId} is not directly editable`);
-        await service.edit(scopeId, edits, author, context);
+        await service.edit(scopeId, edits, by, context);
       },
-      async delete(scopeId, ids, author) {
+      async delete(scopeId, ids, by) {
         const { service } = await serve();
         if (!service.delete) throw new Error(`memory for ${scopeId} is not directly editable`);
-        await service.delete(scopeId, ids, author);
+        await service.delete(scopeId, ids, by);
       },
       metadata: async () => (await (await serve()).service.metadata?.()) ?? new Map(),
     };

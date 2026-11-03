@@ -34,7 +34,7 @@ export interface TriggerDeps {
   resolveRecipient?: (query: string) => Promise<RecipientResolution>;
 }
 
-export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "attachments"> {
+export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "attachments" | "memoryNotebookOnly"> {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
   owner: string;
@@ -298,6 +298,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(spec.model ? { model: spec.model } : {}),
         ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
         ...(spec.readOnly ? { readOnly: true } : {}),
+        ...(spec.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
         ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
         ...(spec.destination ? { triggerDestination: spec.destination } : {}),
         ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),

@@ -381,6 +381,7 @@ export function createTurnMethods(
             }
           : {}),
         ...(req.skipMemory ? { skipMemory: true } : {}),
+        ...(req.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
         ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
         ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),

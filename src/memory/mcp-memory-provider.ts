@@ -115,10 +115,10 @@ export function createMcpMemoryProvider(opts: {
       return rows(result, context?.maxChars, "- ");
     },
 
-    async capture(scopeId, facts, at, author, context) {
+    async capture(scopeId, facts, at, by, context) {
       const op = opts.write;
       if (!op) throw new Error("memory provider write is not configured");
-      const actor = context?.actorId ?? author;
+      const actor = by?.actorId;
       if (opts.attestActor && actor === undefined) return 0;
       const args: Record<string, unknown> = { [op.contentArg ?? "content"]: facts.join("\n") };
       if (context?.input && op.inputArg) args[op.inputArg] = context.input;

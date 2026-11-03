@@ -148,7 +148,7 @@ describe("memorable live extended e2e", { skip: skipReason() }, () => {
   const errors: string[] = [];
 
   const capture = (scope: ScopeId, sessionId: string) =>
-    memory.capture(scope, [], Date.now(), "U1", { mode: "automatic", sessionId, actorId: "U1" });
+    memory.capture(scope, [], Date.now(), { actorId: "U1", context: "conversation" }, { mode: "automatic", sessionId });
   const rows = async (scope?: ScopeId) =>
     (
       await pool.query(

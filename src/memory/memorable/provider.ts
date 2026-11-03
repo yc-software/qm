@@ -63,7 +63,7 @@ export function createMemorableMemoryProvider(deps: MemorableProviderDeps): Memo
       return block ? [{ text: block }] : [];
     },
 
-    async capture(scopeId: ScopeId, _facts, _at, _author, context) {
+    async capture(scopeId: ScopeId, _facts, _at, _by, context) {
       if (context?.mode !== "automatic" || !context.sessionId) return 0;
       const entries = await deps.loadEntries(context.sessionId);
       const raw = captureSession(context.sessionId, entries);

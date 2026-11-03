@@ -38,11 +38,11 @@ function stricter(a: Sensitivity | undefined, b: Sensitivity): Sensitivity {
 export function classifiedMemory(base: MemoryService, agent: ModelUtilities): MemoryService {
   return {
     ...base,
-    async capture(scope, facts, at, author, context) {
+    async capture(scope, facts, at, by, context) {
       let sensitivity = context?.sensitivity;
       if (context?.mode !== "automatic" || sensitivity === undefined)
         sensitivity = stricter(sensitivity, await classify(agent, facts));
-      return base.capture(scope, facts, at, author, {
+      return base.capture(scope, facts, at, by, {
         ...context,
         mode: context?.mode ?? "explicit",
         sensitivity,
@@ -50,7 +50,7 @@ export function classifiedMemory(base: MemoryService, agent: ModelUtilities): Me
     },
     ...(base.edit
       ? {
-          async edit(scope, edits, author, context) {
+          async edit(scope, edits, by, context) {
             const sensitivity = stricter(
               context?.sensitivity,
               await classify(
@@ -58,7 +58,7 @@ export function classifiedMemory(base: MemoryService, agent: ModelUtilities): Me
                 edits.map((edit) => edit.text),
               ),
             );
-            return base.edit!(scope, edits, author, { ...context, sensitivity });
+            return base.edit!(scope, edits, by, { ...context, sensitivity });
           },
         }
       : {}),

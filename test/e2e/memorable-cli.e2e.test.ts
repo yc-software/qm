@@ -90,11 +90,16 @@ describe(
     });
 
     it("automatic capture records a redacted procedure into the qm backend", { timeout: 120_000 }, async () => {
-      const stored = await memory.capture(personal, ["Josh's project is Osprey"], Date.now(), "U1", {
-        mode: "automatic",
-        sessionId: "s-e2e",
-        actorId: "U1",
-      });
+      const stored = await memory.capture(
+        personal,
+        ["Josh's project is Osprey"],
+        Date.now(),
+        { actorId: "U1", context: "conversation" },
+        {
+          mode: "automatic",
+          sessionId: "s-e2e",
+        },
+      );
       assert.ok(stored >= 1);
       const rows = await pool.query("SELECT id, json->>'title' AS title FROM memorable_procedures");
       assert.equal(rows.rows.length, 1);
