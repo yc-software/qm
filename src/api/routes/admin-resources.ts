@@ -677,7 +677,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       "Model spend caps in USD: { dailyUsd?, monthlyUsd? } per UTC day and month. On the org scope it is the default for each person's personal scope; on any other scope it caps that scope and overrides the default. {} means no cap there; { inherit: true } clears it.",
     readKey: "spendLimit",
-    get: (deps, scope) => deps.config!.getSpendLimit(scope),
+    get: (deps, scope) => deps.config!.getSpendLimitDurable(scope),
     apply: generic<SpendLimit | null>(
       (body) => parseSpendLimit(body),
       (deps, scope, limit) => deps.config!.setSpendLimit(scope, limit),

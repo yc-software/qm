@@ -17,7 +17,7 @@ export interface SpendLimitStatus {
 
 interface SpendLimitDeps {
   orgId: () => string;
-  getSpendLimit: (scope: ScopeId) => SpendLimit | null;
+  getSpendLimit: (scope: ScopeId) => Promise<SpendLimit | null>;
   spendReport: (range: { from: number; to: number }) => Promise<{ rows: SpendRow[] }>;
   now?: () => number;
   cacheMs?: number;
@@ -83,17 +83,17 @@ export function createSpendLimits(deps: SpendLimitDeps) {
     return inflight;
   };
 
-  const effectiveLimit = (scopeId: ScopeId): { limit: SpendLimit; orgDefault: boolean } | null => {
-    const own = deps.getSpendLimit(scopeId);
+  const effectiveLimit = async (scopeId: ScopeId): Promise<{ limit: SpendLimit; orgDefault: boolean } | null> => {
+    const own = await deps.getSpendLimit(scopeId);
     if (own) return { limit: own, orgDefault: false };
     if (parseScopeId(scopeId).kind !== "personal") return null;
-    const fallback = deps.getSpendLimit(toScopeId("org", deps.orgId()));
+    const fallback = await deps.getSpendLimit(toScopeId("org", deps.orgId()));
     return fallback ? { limit: fallback, orgDefault: true } : null;
   };
 
   return {
     async status(scopeId: ScopeId): Promise<SpendLimitStatus | null> {
-      const applies = effectiveLimit(scopeId);
+      const applies = await effectiveLimit(scopeId);
       if (!applies) return null;
       const { limit } = applies;
       if (limit.dailyUsd === undefined && limit.monthlyUsd === undefined) return null;
@@ -121,10 +121,6 @@ export function spendLimitRefusal(s: SpendLimitStatus): string {
 }
 
 export function spendLimitNote(s: SpendLimitStatus): string {
-  const whose = s.orgDefault ? "the org's default limit for each person" : `a limit set on ${s.scopeId}`;
-  return [
-    `Model spend in this scope is capped by ${whose}: ${usageParts(s).join(", ")} (UTC; totals lag a couple of minutes).`,
-    "Once a cap is reached, new turns here are refused until the day or month resets. As it gets close, prefer cheaper approaches and say so when it matters to what they're asking; don't mention it otherwise.",
-    "Admins change it with the admin configure action, resource spend-limit.",
-  ].join(" ");
+  const whose = s.orgDefault ? "the org's per-person default" : "this scope's own limit";
+  return `Spend cap here (${whose}): ${usageParts(s).join(", ")}, UTC. At the cap, new turns here are refused until it resets.`;
 }

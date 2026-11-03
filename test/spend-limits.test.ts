@@ -41,7 +41,7 @@ function limits(configured: Record<string, SpendLimit>, rows: SpendRow[], now = 
   const reads: { from: number; to: number }[] = [];
   const tracker = createSpendLimits({
     orgId: () => "acme",
-    getSpendLimit: (scope) => configured[scope] ?? null,
+    getSpendLimit: async (scope) => configured[scope] ?? null,
     spendReport: async (range) => {
       reads.push(range);
       return { rows };
@@ -74,7 +74,7 @@ test("monthly caps count the whole UTC month, and shared scopes cap only when se
   const s = await tracker.status("group:proj");
   assert.equal(s?.over, "monthly");
   assert.match(spendLimitRefusal(s!), /\$101\.00 of \$100\.00 this month.*on the 1st/);
-  assert.match(spendLimitNote(s!), /a limit set on group:proj: \$31\.00 of \$40\.00 today, \$101\.00 of \$100\.00/);
+  assert.match(spendLimitNote(s!), /this scope's own limit\): \$31\.00 of \$40\.00 today, \$101\.00 of \$100\.00/);
 });
 
 test("totals are re-read after the cache window and when the day turns", async () => {
@@ -122,10 +122,7 @@ test("a person over their spend limit is refused; under it, the turn sees where 
   await built.config.setSpendLimit("org:default-org", { dailyUsd: 25 });
   const ok = await built.app.turn(dm("hello", 1));
   assert.equal(ok.status, "ok");
-  assert.match(
-    environments.at(-1) ?? "",
-    /capped by the org's default limit for each person: \$0\.00 of \$25\.00 today/,
-  );
+  assert.match(environments.at(-1) ?? "", /the org's per-person default\): \$0\.00 of \$25\.00 today/);
 
   await built.config.setSpendLimit("org:default-org", { dailyUsd: 0 });
   const refused = await built.app.turn(dm("again", 2));

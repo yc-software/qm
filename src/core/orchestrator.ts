@@ -269,7 +269,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const spendReport = deps.sessions.spendReport?.bind(deps.sessions);
   const spendLimits =
     config && spendReport
-      ? createSpendLimits({ orgId, getSpendLimit: (scope) => config.getSpendLimit(scope), spendReport })
+      ? createSpendLimits({ orgId, getSpendLimit: (scope) => config.getSpendLimitDurable(scope), spendReport })
       : undefined;
   const pending = deps.approvals;
   const transcripts = createTranscriptSource(deps.sessions);
@@ -645,7 +645,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const audit = (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) =>
         deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
       const spendLimit = spendLimits
-        ? await spendLimits.status(scopeId).catch(swallowAs("orchestrator: spend limit check", null))
+        ? await spendLimits.status(scopeId).catch((e: unknown) => {
+            deps.errors?.record(
+              { category: "turn", code: "spend_limit_check", message: errMessage(e), scopeLabel: scopeId },
+              e,
+            );
+            return null;
+          })
         : null;
       if (spendLimit?.over) {
         audit({ action: "spend_limit.refused", resource: scopeId, detail: spendLimit.over });

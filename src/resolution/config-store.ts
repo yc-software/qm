@@ -164,7 +164,7 @@ export interface ScopedConfigStore {
   getBranding(id: ScopeId): OrgBranding | null;
   setBranding(id: ScopeId, branding: OrgBranding | null): Promise<void>;
   getBrandingDurable(id: ScopeId): Promise<OrgBranding | null>;
-  getSpendLimit(id: ScopeId): SpendLimit | null;
+  getSpendLimitDurable(id: ScopeId): Promise<SpendLimit | null>;
   setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
@@ -742,7 +742,7 @@ export function createConfigStore(
     getBranding: (id) => settings.branding.get(id) ?? null,
     setBranding: (id, value) => settings.branding.set(id, value),
     getBrandingDurable: async (id) => (await settings.branding.durable(id)) ?? null,
-    getSpendLimit: (id) => settings.spendLimits.get(id) ?? null,
+    getSpendLimitDurable: async (id) => (await settings.spendLimits.durable(id)) ?? null,
     setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
