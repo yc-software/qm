@@ -32,6 +32,7 @@ function fixture(options: { token?: string | null; sessions?: SessionStore | nul
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),
+    requireSignedPortalIdentity: true,
     admin: built.admin,
     auditLog: built.auditLog,
     ...(sessions ? { sessions } : {}),

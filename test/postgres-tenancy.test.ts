@@ -7,7 +7,7 @@ import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction }
 import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { TENANCY_BASE } from "../src/tenants/migrations.ts";
-import { testBareDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
 
@@ -156,7 +156,7 @@ test("work spawned inside a transaction may bind another tenant only after it en
 });
 
 test("upgrading copies the existing tenant into tenants", { skip }, async () => {
-  const pool = new pg.Pool({ connectionString: testBareDatabaseUrl(), max: 1 });
+  const pool = new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
   try {
     const previous = SESSION_MIGRATIONS.filter((m) => m !== TENANCY_BASE && m !== TENANT_BACKFILL);
     await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...previous].map(definePgMigration));

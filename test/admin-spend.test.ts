@@ -15,7 +15,6 @@ import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 const DAY = 86_400_000;
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
@@ -24,7 +23,7 @@ const ORG = "org:default-org";
 
 function start(sessions?: SessionStore) {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-spend-")) }));
-  const server = createInsecureTestServer(TEST_TENANT, built.app, {
+  const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: sessions ?? built.sessions,
     auditLog: built.auditLog,

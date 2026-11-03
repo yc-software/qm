@@ -5,7 +5,6 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const sharedTemplate = new URL("../dist-web/shared.html", import.meta.url);
 const createdTemplate = !existsSync(sharedTemplate);
@@ -17,8 +16,7 @@ test.after(() => {
   if (createdTemplate) unlinkSync(sharedTemplate);
 });
 
-const calls: Array<{ path: string; method: string; body: string; actor: string | undefined; tenant: unknown }> = [];
-const shareCalls = () => calls.filter((call) => !call.path.startsWith("/v1/surface-config"));
+const calls: Array<{ path: string; method: string; body: string; actor: string | undefined }> = [];
 const core = createServer(async (req, res) => {
   let body = "";
   for await (const chunk of req) body += chunk;
@@ -27,7 +25,6 @@ const core = createServer(async (req, res) => {
     method: req.method!,
     body,
     actor: req.headers[PORTAL_IDENTITY_HEADER] as string | undefined,
-    tenant: req.headers["x-qm-tenant"],
   });
   res.writeHead(200, { "content-type": "application/json" });
   res.end(
@@ -50,7 +47,7 @@ const { handler } = await import("../server/index.ts");
 const web = createServer(handler);
 await new Promise<void>((resolve) => web.listen(0, resolve));
 const base = `http://localhost:${(web.address() as AddressInfo).port}`;
-const token = mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 }, "sharing-route-test-secret");
+const token = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, "sharing-route-test-secret");
 const headers = { [PORTAL_IDENTITY_HEADER]: token, "content-type": "application/json" };
 test.after(() => {
   web.close();
@@ -64,16 +61,12 @@ test("sharing proxy binds identity and shared page loads only the filtered endpo
     body: JSON.stringify({ principalId: "mallory", audience: "external" }),
   });
   assert.deepEqual(JSON.parse(calls.at(-1)!.body), { principalId: "alice", audience: "external" });
-  assert.equal(calls.at(-1)!.tenant, TEST_TENANT);
-  const before = shareCalls().length;
+  const before = calls.length;
   const response = await fetch(`${base}/share/internal/11111111-1111-4111-8111-111111111111`, { headers });
   assert.equal(response.status, 200);
-  assert.equal(shareCalls().length, before + 1);
-  assert.ok(
-    shareCalls().at(-1)!.path.startsWith("/v1/shared-sessions/11111111-1111-4111-8111-111111111111?viewer=alice"),
-  );
-  assert.equal(shareCalls().at(-1)!.actor, token);
-  assert.equal(shareCalls().at(-1)!.tenant, TEST_TENANT);
+  assert.equal(calls.length, before + 1);
+  assert.ok(calls.at(-1)!.path.startsWith("/v1/shared-sessions/11111111-1111-4111-8111-111111111111?viewer=alice"));
+  assert.equal(calls.at(-1)!.actor, token);
   const html = await response.text();
   assert.ok(html.includes("\\u003cscript>"));
   assert.equal(html.includes('<script>alert("secret")</script>'), false);
@@ -103,12 +96,12 @@ test("snapshot JSON cannot escape its inert script element", () => {
 });
 
 test("external share is readable without identity using only the public projection", async () => {
-  const before = shareCalls().length;
+  const before = calls.length;
   const response = await fetch(`${base}/share/external/11111111-1111-4111-8111-111111111111`);
   assert.equal(response.status, 200);
-  assert.equal(shareCalls().length, before + 1);
-  assert.ok(shareCalls().at(-1)!.path.startsWith("/v1/public-shares/11111111-1111-4111-8111-111111111111?"));
-  assert.equal(shareCalls().at(-1)!.actor, undefined);
+  assert.equal(calls.length, before + 1);
+  assert.ok(calls.at(-1)!.path.startsWith("/v1/public-shares/11111111-1111-4111-8111-111111111111?"));
+  assert.equal(calls.at(-1)!.actor, undefined);
   const html = await response.text();
   assert.match(html, /shared-transcript/);
   assert.equal(response.headers.get("cache-control"), "no-store");
