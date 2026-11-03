@@ -1267,8 +1267,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     cronGet: (id) => controlOp((c, cl) => c.getCron(id, cl)),
     cronRuns: (id, req) => controlOp((c, cl) => c.getCronRuns(id, req ?? {}, cl)),
     async cronPatch(id, req) {
+      const before = req.script ? await this.cronGet(id) : undefined;
+      const cron = before?.ok
+        ? {
+            ...before.cron,
+            ...(req.action !== undefined ? { action: req.action } : {}),
+            ...(req.text !== undefined ? { text: req.text } : {}),
+          }
+        : undefined;
       return (
-        (await trialScript(req.script, { action: "" }, this)) ?? (await controlOp((c, cl) => c.patchCron(id, req, cl)))
+        (cron && (await trialScript(req.script, cron, this))) ?? (await controlOp((c, cl) => c.patchCron(id, req, cl)))
       );
     },
     cronNote: (id, note) => controlOp((c, cl) => c.noteCron(id, note, cl)),

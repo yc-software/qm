@@ -54,7 +54,7 @@ async function fireOnce(script: CronScriptRequest) {
   return { fire, llmCalls, prompt };
 }
 
-test("a live script that exits 0 handles the fire without waking the agent", async () => {
+test("a script that exits 0 handles the fire without waking the agent", async () => {
   const { fire, llmCalls } = await fireOnce({ command: "echo checked 40 rows; echo posted 3 rows" });
   assert.equal(fire.status, "silent");
   assert.equal(fire.note, "handled by script: posted 3 rows");
@@ -62,7 +62,7 @@ test("a live script that exits 0 handles the fire without waking the agent", asy
   assert.equal(llmCalls, 0);
 });
 
-test("a live script that exits non-zero escalates to the agent with its output", async () => {
+test("a script that exits non-zero escalates to the agent with its output", async () => {
   const { fire, llmCalls, prompt } = await fireOnce({ command: "echo row 7 has no owner; exit 1" });
   assert.equal(fire.status, "ok");
   assert.equal(fire.note, "escalated (exit 1): row 7 has no owner");
@@ -71,7 +71,7 @@ test("a live script that exits non-zero escalates to the agent with its output",
   assert.ok(llmCalls > 0);
 });
 
-test("a live script that cannot run escalates instead of hiding the fire", async () => {
+test("a script that cannot run escalates instead of hiding the fire", async () => {
   const { fire, prompt } = await fireOnce({ command: "echo hi", credentials: ["no-such-credential"] });
   assert.equal(fire.status, "ok");
   assert.match(fire.note ?? "", /^escalated \(could not run: .+\)$/);
@@ -168,5 +168,12 @@ test("setting a script runs it once first and keeps it only when that run exits 
     credentials: ["gh"],
     sandboxId: "sb-1",
   });
-  assert.equal((await built.app.listCrons()).length, 2);
+  const relay = await tools.cronCreate({ schedule: { everyMs: 3_600_000 }, text: "standup!" });
+  assert.ok(relay.ok);
+  const runs = ran.length;
+  const onRelay = await tools.cronPatch(relay.cron.id, { script: { command: "./quiet.sh" } });
+  assert.ok(!onRelay.ok);
+  assert.equal(onRelay.message, "script needs a cron with a task for the agent");
+  assert.equal(ran.length, runs);
+  assert.equal((await built.app.listCrons()).length, 3);
 });
