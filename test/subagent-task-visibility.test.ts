@@ -8,6 +8,7 @@ import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { testMap, testAdvisoryLock } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 test("a subagent shows its delegated tasks while the parent's completion wake stays hidden", async (t) => {
   const built = buildApp(testConfig({ memoryCapture: "off" }));
@@ -17,18 +18,20 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
     await built.runtime.stop();
   });
   const threadRef = "dm:U1:subagent-visibility";
-  await built.app.turn({
-    surface: "test",
-    surfaceTools: true,
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef },
-    text: "hello",
-    origin: { kind: "human" },
-  });
-  const parentRun = (await built.runs.latestForThread(threadRef))!;
-  const parentSession = (await built.sessions.getByThread(threadRef))!;
-  await built.config.setPersonalModelAuth("U1", true, "openai");
-  await built.featureFlags.setEnabled("responsive_spine", parentSession.scopeId, true, "U1");
+  await inTestTenant(() =>
+    built.app.turn({
+      surface: "test",
+      surfaceTools: true,
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef },
+      text: "hello",
+      origin: { kind: "human" },
+    }),
+  );
+  const parentRun = (await inTestTenant(() => built.runs.latestForThread(threadRef)))!;
+  const parentSession = (await inTestTenant(() => built.sessions.getByThread(threadRef)))!;
+  await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
+  await inTestTenant(() => built.featureFlags.setEnabled("responsive_spine", parentSession.scopeId, true, "U1"));
   const syscalls = createSessionSyscalls({
     advisoryLock: testAdvisoryLock(),
     sessions: built.sessions,
@@ -43,22 +46,22 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   });
   const finished = async (lookup: () => Promise<Run | null | undefined>) => {
     let run: Run | null | undefined;
-    await settle(async () => ["done", "failed"].includes((run = await lookup())?.status ?? ""));
+    await settle(async () => ["done", "failed"].includes((run = await inTestTenant(lookup))?.status ?? ""));
     assert.equal(run?.result?.status, "ok", JSON.stringify(run?.result));
     return run!;
   };
   const userEntry = async (run: Run) => {
-    const session = (await built.sessions.getByThread(run.sessionId))!;
-    const entries = await built.sessions.getEntries(session.id);
+    const session = (await inTestTenant(() => built.sessions.getByThread(run.sessionId)))!;
+    const entries = await inTestTenant(() => built.sessions.getEntries(session.id));
     const { payload } = entries.find((entry) => entry.type === "user" && entry.seq === run.turnUserSeq)!;
     const { hidden, display, speakerId } = payload as { hidden?: boolean; display?: string; speakerId?: string };
     assert.equal(speakerId, undefined, "delegated input is not a new human message");
     return { hidden: hidden === true, display };
   };
 
-  const opened = await syscalls.open({ task: "Summarize the repo", name: "repo summary" });
+  const opened = await inTestTenant(() => syscalls.open({ task: "Summarize the repo", name: "repo summary" }));
   assert.ok(opened.ok);
-  const child = (await built.sessions.get(opened.sessionId))!;
+  const child = (await inTestTenant(() => built.sessions.get(opened.sessionId)))!;
   built.runtime.startBackground();
   const first = await finished(() => built.runs.latestForThread(child.threadRef));
   assert.equal(first.request.origin.kind, "human");
@@ -67,7 +70,9 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   assert.equal((await userEntry(wake)).hidden, true);
   assert.equal(wake.request.origin.kind, "human");
 
-  assert.ok((await syscalls.write({ wake: true, target: child.id, text: "Check the tests too" })).ok);
+  assert.ok(
+    (await inTestTenant(() => syscalls.write({ wake: true, target: child.id, text: "Check the tests too" }))).ok,
+  );
   const second = await finished(() => built.runs.latestForThread(child.threadRef));
   assert.deepEqual(await userEntry(second), { hidden: false, display: "Check the tests too" });
 });
@@ -95,15 +100,17 @@ test("human-origin delegated input is screened before model execution", async (t
     await built.runtime.stop();
   });
   const threadRef = "dm:U1:screen-delegation";
-  await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef },
-    origin: { kind: "human" },
-    text: "inspect a task",
-  });
-  const parent = (await built.runs.latestForThread(threadRef))!;
-  const session = (await built.sessions.getByThread(threadRef))!;
+  await inTestTenant(() =>
+    built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef },
+      origin: { kind: "human" },
+      text: "inspect a task",
+    }),
+  );
+  const parent = (await inTestTenant(() => built.runs.latestForThread(threadRef)))!;
+  const session = (await inTestTenant(() => built.sessions.getByThread(threadRef)))!;
   const syscalls = createSessionSyscalls({
     advisoryLock: testAdvisoryLock(),
     sessions: built.sessions,
@@ -112,14 +119,14 @@ test("human-origin delegated input is screened before model execution", async (t
     mailbox: createSessionMailbox(testMap<SessionMessage>()),
     maxAttempts: 1,
   }).forTurn({ session, scopeId: session.scopeId, request: { ...parent.request, runId: parent.id } });
-  const opened = await syscalls.open({ task: "UNTRUSTED_TASK" });
+  const opened = await inTestTenant(() => syscalls.open({ task: "UNTRUSTED_TASK" }));
   assert.ok(opened.ok);
-  const child = (await built.sessions.get(opened.sessionId))!;
-  const run = (await built.runs.latestForThread(child.threadRef))!;
+  const child = (await inTestTenant(() => built.sessions.get(opened.sessionId)))!;
+  const run = (await inTestTenant(() => built.runs.latestForThread(child.threadRef)))!;
   assert.equal(run.request.origin.kind, "human");
   built.runtime.startBackground();
-  await settle(async () => ["done", "failed"].includes((await built.runs.get(run.id))!.status));
-  assert.equal((await built.runs.get(run.id))!.result?.status, "pending_approval");
+  await settle(async () => ["done", "failed"].includes((await inTestTenant(() => built.runs.get(run.id)))!.status));
+  assert.equal((await inTestTenant(() => built.runs.get(run.id)))!.result?.status, "pending_approval");
   assert.ok(screened.some((payload) => payload.includes("session-delegation") && payload.includes("UNTRUSTED_TASK")));
 });
 
@@ -133,32 +140,38 @@ for (const fork of [false, true]) {
       await built.runtime.stop();
     });
     const threadRef = `web:U1:seed-${fork}`;
-    await built.app.turn({
-      surface: "web",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef },
-      origin: { kind: "human" },
-      text: "start another task",
-    });
-    const parent = (await built.runs.latestForThread(threadRef))!;
-    const session = (await built.sessions.getByThread(threadRef))!;
-    await built.config.setPersonalModelAuth("U1", true, "openai");
-    const out = await startSession(built.app, built.sessions, "U1", {
-      scopeId: session.scopeId,
-      ...(fork ? { forkOf: session.id } : {}),
-      text: "work on the seed",
-      origin: parent.request.origin,
-      sessionSenderId: session.id,
-      delegatingRunId: parent.id,
-    });
+    await inTestTenant(() =>
+      built.app.turn({
+        surface: "web",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef },
+        origin: { kind: "human" },
+        text: "start another task",
+      }),
+    );
+    const parent = (await inTestTenant(() => built.runs.latestForThread(threadRef)))!;
+    const session = (await inTestTenant(() => built.sessions.getByThread(threadRef)))!;
+    await inTestTenant(() => built.config.setPersonalModelAuth("U1", true, "openai"));
+    const out = await inTestTenant(() =>
+      startSession(built.app, built.sessions, "U1", {
+        scopeId: session.scopeId,
+        ...(fork ? { forkOf: session.id } : {}),
+        text: "work on the seed",
+        origin: parent.request.origin,
+        sessionSenderId: session.id,
+        delegatingRunId: parent.id,
+      }),
+    );
     assert.ok("session" in out);
-    const queued = (await built.runs.latestForThread(out.session.threadRef))!;
+    const queued = (await inTestTenant(() => built.runs.latestForThread(out.session.threadRef)))!;
     assert.equal(queued.request.modelAccount, "company");
     built.runtime.startBackground();
-    await settle(async () => (await built.runs.get(queued.id))!.status === "done");
-    const run = (await built.runs.get(queued.id))!;
+    await settle(async () => (await inTestTenant(() => built.runs.get(queued.id)))!.status === "done");
+    const run = (await inTestTenant(() => built.runs.get(queued.id)))!;
     assert.equal(run.result?.status, "ok");
-    const entry = (await built.sessions.getEntries(out.session.id)).find((entry) => entry.seq === run.turnUserSeq)!;
+    const entry = (await inTestTenant(() => built.sessions.getEntries(out.session.id))).find(
+      (entry) => entry.seq === run.turnUserSeq,
+    )!;
     const payload = entry.payload as { hidden?: boolean; speakerId?: string; text?: string };
     assert.equal(payload.hidden === true, false);
     assert.equal(payload.speakerId, undefined);
