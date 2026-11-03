@@ -155,6 +155,8 @@ export interface RunStore {
 
   list(opts?: { limit?: number; threadRef?: string }): Promise<Run[]>;
 
+  pruneFinished(cutoff: number, opts: { deadline: number; stop: () => boolean }): Promise<number>;
+
   reapExpired(opts?: {
     maxAgeMs?: number;
     onReap?: (event: ReapEvent) => void;
@@ -210,3 +212,5 @@ export function errorParks(
 export function leaseLapsed(run: Pick<Run, "status" | "leaseExpiresAt">, asOf: number): boolean {
   return run.status === "running" && run.leaseExpiresAt !== null && run.leaseExpiresAt <= asOf;
 }
+
+export const RUN_RETENTION_MS = 30 * 24 * 60 * 60_000;

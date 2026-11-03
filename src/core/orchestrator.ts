@@ -2570,6 +2570,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   scopeId: scopeId as ScopeId,
                   orgScopeId: resolution.orgScopeId,
                   liveTurn,
+                  ...(liveAuthorTurn ? { authority: delegatedOrigin ?? input.origin } : {}),
                   request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
                 }),
               }

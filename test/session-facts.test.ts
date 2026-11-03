@@ -125,3 +125,41 @@ test("the session facts migration copies each conversation's facts from its late
   assert.equal(untouched.slackBinding ?? untouched.runtime ?? untouched.spawnMeta, undefined);
   await runtime.close?.();
 });
+
+test("the recopy migration fills conversations an old instance wrote after the first copy and keeps stored facts", async () => {
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const { runs, close } = createPostgresRunStore(url);
+  const finish = async (threadRef: string, input: OrchestratorInput) => {
+    const { run } = await runs.enqueue({ sessionId: threadRef, request: input });
+    const lease = (await runs.claimById(run.id, "w", 60_000))!.leaseToken!;
+    await runs.complete(run.id, lease, { status: "ok", reply: "ok", runtime: { modelId: "m1" } });
+  };
+  const late = await sessions.getOrCreateByThread("slack:dm:late", "dm", scope, undefined, "slack");
+  await finish(late.threadRef, request(late.threadRef, { slackSource }));
+  const kept = await sessions.getOrCreateByThread("slack:dm:kept", "dm", scope, undefined, "slack", undefined, {
+    slackBinding: { ...slackSource, accountId: "A9" },
+  });
+  await finish(kept.threadRef, request(kept.threadRef, { slackSource }));
+
+  const raw = new pg.Pool({ connectionString: url, max: 1 });
+  try {
+    await raw.query("UPDATE sessions SET slack_binding = NULL, runtime = NULL, spawn_meta = NULL WHERE id = $1", [
+      late.id,
+    ]);
+    await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'sessions/store/0054-session-facts-recopy'");
+    await applyPgMigrations(
+      raw,
+      SESSION_MIGRATIONS.filter((m) => m.id === "sessions/store/0054-session-facts-recopy").map(definePgMigration),
+    );
+  } finally {
+    await raw.end();
+  }
+
+  const filled = (await sessions.get(late.id))!;
+  assert.deepEqual(filled.slackBinding, slackSource);
+  assert.deepEqual(filled.runtime, { modelId: "m1" });
+  assert.equal(filled.spawnMeta?.origin?.kind, "human");
+  assert.deepEqual((await sessions.get(kept.id))?.slackBinding, { ...slackSource, accountId: "A9" });
+  await close?.();
+});

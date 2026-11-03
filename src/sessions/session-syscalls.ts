@@ -41,68 +41,90 @@ export function requiresDelegation(
 
 export async function delegatedAuthorizationOrigin(
   request: OrchestratorInput,
-  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "getByThread" | "getForParticipant"> },
+  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "get" | "getByThread" | "getForParticipant"> },
 ): Promise<OrchestratorInput["origin"] | undefined> {
+  if (
+    request.origin.kind === "automation" ||
+    request.readOnly ||
+    request.privateSessionMessage ||
+    request.swarm ||
+    !request.delegatingRunId ||
+    !request.sessionSenderId
+  )
+    return;
+  const source = await deps.runs.get(request.delegatingRunId);
+  const sender = await deps.sessions.getForParticipant(request.sessionSenderId, request.actor.id);
+  const child = await deps.sessions.getByThread(request.conversation.threadRef);
+  if (!source || !sender || !child) return;
+  const delegated =
+    isSubagentThreadRef(child.threadRef) &&
+    child.parentSessionId === sender.id &&
+    source.sessionId === sender.threadRef;
+  const continued =
+    isSubagentThreadRef(sender.threadRef) &&
+    sender.parentSessionId === child.id &&
+    source.sessionId === child.threadRef;
+  const started =
+    request.surface === "web" &&
+    !child.parentSessionId &&
+    !isSubagentThreadRef(child.threadRef) &&
+    source.sessionId === sender.threadRef;
+  if (!delegated && !continued && !started) return;
+  const parent = source.request;
+  if (!authorityReaches(parent, request, sender, child)) return;
+  if (!isSessionTurn(parent)) return humanAuthored(parent) ? parent.origin : undefined;
+  if (!delegated && !continued) return;
+  const claim = request.delegatedAuthority;
+  if (!claim || claim.kind !== request.origin.kind) return;
+  if (!(await treeIntact(deps.sessions, delegated ? child : sender))) return;
+  const granted = { conversation: parent.conversation, origin: claim };
+  return humanAuthored(granted) ? claim : undefined;
+}
+
+async function treeIntact(sessions: Pick<SessionStore, "get">, subagent: Session): Promise<boolean> {
   const seen = new Set<string>();
-  let current = request;
-  for (let depth = 0; depth < 32; depth++) {
-    if (
-      current.origin.kind === "automation" ||
-      current.readOnly ||
-      current.privateSessionMessage ||
-      current.swarm ||
-      !current.delegatingRunId ||
-      !current.sessionSenderId ||
-      seen.has(current.delegatingRunId)
-    )
-      return;
-    seen.add(current.delegatingRunId);
-    const source = await deps.runs.get(current.delegatingRunId);
-    const sender = await deps.sessions.getForParticipant(current.sessionSenderId, request.actor.id);
-    const child = await deps.sessions.getByThread(current.conversation.threadRef);
-    if (!source || !sender || !child) return;
-    const delegated =
-      isSubagentThreadRef(child.threadRef) &&
-      child.parentSessionId === sender.id &&
-      source.sessionId === sender.threadRef;
-    const continued =
-      isSubagentThreadRef(sender.threadRef) &&
-      sender.parentSessionId === child.id &&
-      source.sessionId === child.threadRef;
-    const started =
-      current.surface === "web" &&
-      !child.parentSessionId &&
-      !isSubagentThreadRef(child.threadRef) &&
-      source.sessionId === sender.threadRef;
-    if (!delegated && !continued && !started) return;
-    const parent = source.request;
-    const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
-    if (
-      parent.actor.id !== request.actor.id ||
-      parent.actor.type !== "internal" ||
-      parent.readOnly ||
-      parent.privateSessionMessage ||
-      parent.swarm ||
-      sender.scopeId !== child.scopeId ||
-      child.scopeId !== conversationScope(parent.conversation, parent.actor.id) ||
-      child.scopeId !== conversationScope(current.conversation, current.actor.id) ||
-      current.conversation.audience.some((person) => !audience.has(person.id))
-    )
-      return;
-    const internal =
-      parent.conversation.audience.every((person) => person.type === "internal") &&
-      (parent.conversation.kind === "dm" ||
-        (!!parent.conversation.publishMembers?.length &&
-          parent.conversation.publishMembers.every((person) => person.type === "internal")));
-    if (
-      !isSessionTurn(parent) &&
-      internal &&
-      (parent.origin.kind === "human" ||
-        (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
-    )
-      return parent.origin;
+  let current = subagent;
+  while (isSubagentThreadRef(current.threadRef)) {
+    if (seen.has(current.id) || !current.parentSessionId) return false;
+    seen.add(current.id);
+    const parent = await sessions.get(current.parentSessionId);
+    if (!parent || parent.scopeId !== subagent.scopeId) return false;
     current = parent;
   }
+  return true;
+}
+
+function authorityReaches(
+  parent: Pick<OrchestratorInput, "actor" | "conversation" | "readOnly" | "privateSessionMessage" | "swarm">,
+  request: OrchestratorInput,
+  sender: Session,
+  child: Session,
+): boolean {
+  const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
+  return !(
+    parent.actor.id !== request.actor.id ||
+    parent.actor.type !== "internal" ||
+    parent.readOnly ||
+    parent.privateSessionMessage ||
+    parent.swarm ||
+    sender.scopeId !== child.scopeId ||
+    child.scopeId !== conversationScope(parent.conversation, parent.actor.id) ||
+    child.scopeId !== conversationScope(request.conversation, request.actor.id) ||
+    request.conversation.audience.some((person) => !audience.has(person.id))
+  );
+}
+
+function humanAuthored(parent: Pick<OrchestratorInput, "conversation" | "origin">): boolean {
+  const internal =
+    parent.conversation.audience.every((person) => person.type === "internal") &&
+    (parent.conversation.kind === "dm" ||
+      (!!parent.conversation.publishMembers?.length &&
+        parent.conversation.publishMembers.every((person) => person.type === "internal")));
+  return (
+    internal &&
+    (parent.origin.kind === "human" ||
+      (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
+  );
 }
 
 export function ownsSessionContext(
@@ -237,6 +259,7 @@ interface SessionSyscallBinding {
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
   liveTurn?: boolean;
+  authority?: TurnOrigin;
   request: Pick<
     OrchestratorInput,
     | "cancel"
@@ -503,9 +526,9 @@ async function sessionRunCancelled(
   const seen = new Set<string>();
   while (runId) {
     if (seen.has(runId)) return true;
-    seen.add(runId);
     const run = await runs.get(runId);
-    if (!run) return true;
+    if (!run) return seen.size === 0;
+    seen.add(runId);
     if (run.result?.stopped || (await signals.pending(runId)).some(({ signal }) => signal.kind === "abort"))
       return true;
     runId = run.request.delegatingRunId;
@@ -751,6 +774,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 ...childRunRequest(child, meta, text, task),
                 sessionSenderId: binding.session.id,
                 ...(binding.request.runId ? { delegatingRunId: binding.request.runId } : {}),
+                ...(binding.authority ? { delegatedAuthority: binding.authority } : {}),
               };
               await deps.runs.enqueue({
                 sessionId: child.threadRef,
@@ -895,6 +919,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;
               request.delegatingRunId = binding.request.runId;
+              if (binding.authority) request.delegatedAuthority = binding.authority;
+              else delete request.delegatedAuthority;
               await deps.runs.enqueue({
                 sessionId: target.threadRef,
                 dedupKey,
@@ -1069,7 +1095,7 @@ export interface SubagentMailDeps {
   deliveries?: Pick<DeliveryStore, "enqueue">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "latestItemSeq" | "visibleItems">;
+  sessions: Pick<SessionStore, "get" | "getByThread" | "getForParticipant" | "latestItemSeq" | "visibleItems">;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
@@ -1089,8 +1115,20 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
   const initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
-  if (run.request.delegatingRunId && !initiatingRun) throw new Error("the delegation's originating run is unavailable");
-  const initiatingContext = initiatingRun?.request ?? child.spawnMeta;
+  if (run.request.delegatingRunId && !initiatingRun)
+    console.warn(
+      `[subagent-return] delegating run ${run.request.delegatingRunId} of ${run.id} is gone; returning with the child's spawn context and no inherited authority`,
+    );
+  const initiatingContext =
+    initiatingRun?.request ??
+    (run.request.delegatingRunId
+      ? {
+          ...child.spawnMeta,
+          actor: run.request.actor,
+          origin: { kind: "automation" as const },
+          unattendedGrants: undefined,
+        }
+      : child.spawnMeta);
   const currentContext = storedContext(parent);
   const originalParent = parent.threadRef === initiatingContext.conversation.threadRef;
   if (!originalParent && !currentContext) throw new Error("the current parent has no verified runtime context yet");
@@ -1137,10 +1175,19 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     body:
       body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
   });
-  const inherited = { ...meta };
-  delete (inherited as Partial<SpawnMeta>).openFingerprint;
+  const inherited = { ...meta } as typeof meta & { openFingerprint?: string; delegatedAuthority?: TurnOrigin };
+  delete inherited.openFingerprint;
+  delete inherited.delegatedAuthority;
+  const delegatedAuthority =
+    initiatingRun && deps.runs.get && isSessionTurn(initiatingRun.request)
+      ? await delegatedAuthorizationOrigin(initiatingRun.request, {
+          runs: { get: deps.runs.get },
+          sessions: deps.sessions,
+        })
+      : undefined;
   const request: OrchestratorInput = {
     ...inherited,
+    ...(delegatedAuthority ? { delegatedAuthority } : {}),
     sessionSenderId: child.id,
     conversation: {
       ...meta.conversation,

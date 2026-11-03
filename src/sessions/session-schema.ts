@@ -328,11 +328,8 @@ const SESSION_FACTS: PgMigrationDefinition = {
   ],
 };
 
-const SESSION_FACTS_COPY: PgMigrationDefinition = {
-  id: "sessions/store/0053-session-facts-copy",
-  autocommit: true,
-  statements: [
-    `CREATE OR REPLACE PROCEDURE qm_copy_session_facts() LANGUAGE plpgsql AS $session_facts$
+const COPY_SESSION_FACTS = [
+  `CREATE OR REPLACE PROCEDURE qm_copy_session_facts() LANGUAGE plpgsql AS $session_facts$
 DECLARE
   after_id TEXT := '';
   page TEXT[];
@@ -399,9 +396,20 @@ BEGIN
   COMMIT;
   END LOOP;
 END $session_facts$`,
-    `CALL qm_copy_session_facts()`,
-    `DROP PROCEDURE qm_copy_session_facts()`,
-  ],
+  `CALL qm_copy_session_facts()`,
+  `DROP PROCEDURE qm_copy_session_facts()`,
+];
+
+const SESSION_FACTS_COPY: PgMigrationDefinition = {
+  id: "sessions/store/0053-session-facts-copy",
+  autocommit: true,
+  statements: COPY_SESSION_FACTS,
+};
+
+const SESSION_FACTS_RECOPY: PgMigrationDefinition = {
+  id: "sessions/store/0054-session-facts-recopy",
+  autocommit: true,
+  statements: COPY_SESSION_FACTS,
 };
 
 export const SESSION_MIGRATIONS = [
@@ -413,4 +421,5 @@ export const SESSION_MIGRATIONS = [
   SPEND_RECOVERY_INDEX,
   SESSION_FACTS,
   SESSION_FACTS_COPY,
+  SESSION_FACTS_RECOPY,
 ];
