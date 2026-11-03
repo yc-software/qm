@@ -2758,11 +2758,6 @@ qm-markdown .tok-in {
 .work-fold {
   margin: var(--work-fold-space) 0;
 }
-.work-message {
-  color: color-mix(in srgb, var(--muted-foreground) 85%, var(--foreground));
-  font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
-  line-height: 1.6;
-}
 .sheen-label {
   position: relative;
   display: inline-block;

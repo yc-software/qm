@@ -3098,6 +3098,7 @@ export function createChatSurface(
     return html`${segments.map((segment, index) => {
       const steer = segment[0];
       if (steer?.kind === "steer") return renderTimelineItem(steer, work);
+      if (steer?.kind === "text") return renderTimelineItem(steer, work);
       const last = index === segments.length - 1;
       const replies: string[] = [];
       const timeline = segment.filter((item) => {
@@ -3159,7 +3160,7 @@ export function createChatSurface(
                       activityGroups(timeline),
                       (items) => timelineKey(items[0]!),
                       (items) => {
-                        if (items.length === 1 || items[0]?.kind === "text") return renderTimelineItem(items[0]!, work);
+                        if (items.length === 1) return renderTimelineItem(items[0]!, work);
                         const summary = activityGroupSummary(items, work.status);
                         const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
                           summary.category
@@ -3179,12 +3180,16 @@ export function createChatSurface(
                       },
                     ),
                 )}
-                ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamedAnswer(baseline, work))}</div>` : nothing}
               </div>
             </details>`
           : nothing;
       if (stopped && last && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
-      return html`${fold}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+      const said = tail.trim()
+        ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}" dir="auto">
+            ${markdown(tail, animating, streamedAnswer(baseline, work))}
+          </div>`
+        : nothing;
+      return html`${fold}${said}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
     })}`;
   }
 
@@ -3273,14 +3278,14 @@ export function createChatSurface(
         <div class="thinking-body">${markdown(thought.body)}</div>
       </details>`;
     }
-    if (item.kind === "text") return messageRow(item.activity);
+    if (item.kind === "text") return interimReply(item.activity);
     if (item.kind === "approval") return approvalMarker(item.approval);
     return toolRow(item.row, work, status, stale);
   }
 
-  function messageRow(activity: ToolActivity): TemplateResult {
+  function interimReply(activity: ToolActivity): TemplateResult {
     const text = (activity.payload as { text?: string } | null)?.text ?? "";
-    return html`<div class="work-message">${markdown(text)}</div>`;
+    return html`<div class="work-said streaming-text" dir="auto">${markdown(text)}</div>`;
   }
 
   const TOOL_META: Record<string, { icon: IconNode; active: string; done: string; attempted: string }> = {
