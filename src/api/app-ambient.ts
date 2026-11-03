@@ -112,8 +112,9 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       return { act: false };
     }
     const self = ambientSelf.get(`${orgIdOf()}:${surface}`);
-    const forJudge = delta.filter((m) => !m.mentionsSelf);
-    if (forJudge.length < delta.length)
+    const unmentioned = delta.filter((m) => !m.mentionsSelf);
+    const forJudge = unmentioned.filter((m) => m.text.trim());
+    if (unmentioned.length < delta.length)
       recordJudgment({
         surface,
         container,
@@ -171,6 +172,16 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
         prompt,
         ...(judgeModel ? { model: judgeModel } : {}),
         latencyMs: Date.now() - startedAt,
+        ...(tsFrom ? { tsFrom } : {}),
+        ...(tsTo ? { tsTo } : {}),
+        createdAt: Date.now(),
+      });
+    } else if (unmentioned.length) {
+      recordJudgment({
+        surface,
+        container,
+        decision: "ignore",
+        reason: "no readable text in new messages",
         ...(tsFrom ? { tsFrom } : {}),
         ...(tsTo ? { tsTo } : {}),
         createdAt: Date.now(),
