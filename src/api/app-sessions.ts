@@ -259,7 +259,8 @@ export function createSessionMethods(
       }));
   };
 
-  async function decorateSessions(principalId: string, all: Session[]): Promise<Session[]> {
+  async function decorateSessions(principalId: string, rows: Session[]): Promise<Session[]> {
+    const all = rows.map(({ spawnMeta: _spawnMeta, slackBinding: _slackBinding, ...row }) => row);
     const visibleById = new Map(all.map((session) => [session.id, session]));
     const roots = all.map((session) => session.id);
     const descendants = roots.length ? await deps.sessions.descendantsOf(roots) : [];
