@@ -124,52 +124,14 @@ export interface PgPool {
 
 type PgSetting = readonly [name: string, value: string];
 
-function tenantSettings(tenant: string | undefined): PgSetting[] {
+function tenantSettings(tenant = boundTenant()): PgSetting[] {
   return tenant === undefined ? [] : [["qm.tenant_id", tenant]];
 }
 
-function querySettings(tenant: string | undefined, timeoutMs: number | undefined): PgSetting[] {
-  if (timeoutMs === undefined) return tenantSettings(tenant);
+function querySettings(timeoutMs: number | undefined): PgSetting[] {
+  if (timeoutMs === undefined) return tenantSettings();
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error("Query timeout must be a positive finite number");
-  return [...tenantSettings(tenant), ["statement_timeout", String(Math.round(timeoutMs))]];
-}
-
-type RunQuery = (text: string) => Promise<QueryResult>;
-
-let soleTenant: Promise<string | undefined> | undefined;
-
-async function lookupSoleTenant(run: RunQuery): Promise<{ tenant?: string; settled: boolean }> {
-  const pg = (await import("pg")).default;
-  try {
-    const { rows } = await run("SELECT sole::text AS sole, tenants::int AS tenants FROM qm_sole_tenant()");
-    const row = rows[0] as { sole: string | null; tenants: number } | undefined;
-    if (!row || row.tenants === 0) return { settled: false };
-    return row.sole === null ? { settled: true } : { tenant: row.sole, settled: true };
-  } catch (error) {
-    if (error instanceof pg.DatabaseError && error.code === "42883") return { settled: false };
-    throw error;
-  }
-}
-
-function unboundTenant(run: RunQuery): Promise<string | undefined> {
-  const pending = (soleTenant ??= lookupSoleTenant(run).then(
-    ({ tenant, settled }) => {
-      if (!settled) soleTenant = undefined;
-      return tenant;
-    },
-    (error: unknown) => {
-      soleTenant = undefined;
-      throw error;
-    },
-  ));
-  return pending;
-}
-
-export async function queryTenant(pg: Pick<PgPool, "pool">): Promise<string | undefined> {
-  const bound = boundTenant();
-  if (bound !== undefined) return bound;
-  const pool = await pg.pool();
-  return unboundTenant((text) => pool.query(text));
+  return [...tenantSettings(), ["statement_timeout", String(Math.round(timeoutMs))]];
 }
 
 function settingsQuery(settings: readonly PgSetting[]): { text: string; values: string[] } {
@@ -234,7 +196,7 @@ async function rollbackOrReport(client: PoolClient, context: string): Promise<Er
 }
 
 async function beginTransaction(client: PoolClient): Promise<void> {
-  const settings = tenantSettings(boundTenant() ?? (await unboundTenant((text) => client.query(text))));
+  const settings = tenantSettings();
   await client.query("BEGIN");
   if (settings.length) await client.query(settingsQuery(settings));
 }
@@ -322,19 +284,31 @@ async function lockSchema(client: PoolClient, name: string): Promise<void> {
   }
 }
 
+async function ownsSchema(client: PoolClient): Promise<boolean> {
+  const { rows } = await client.query<{ owner: boolean }>(
+    `SELECT c.oid IS NULL OR pg_has_role(current_user, c.relowner, 'USAGE') AS owner
+       FROM (SELECT to_regclass($1) AS oid) t LEFT JOIN pg_class c ON c.oid = t.oid`,
+    [PG_MIGRATIONS_TABLE],
+  );
+  return rows[0]?.owner === true;
+}
+
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
   if (!migrations.length) return;
   const client = await pool.connect();
   let discard: Error | undefined;
   try {
     await lockSchema(client, "qm:schema-migrations");
-    await client.query(
-      `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
+    const owner = await ownsSchema(client);
+    if (owner) {
+      await client.query(
+        `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
         id TEXT PRIMARY KEY,
         checksum TEXT NOT NULL,
         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
-    );
+      );
+    }
     for (const migration of migrations) {
       const applied = await client.query<{ checksum: string }>(
         `SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`,
@@ -347,6 +321,11 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
           );
         }
         continue;
+      }
+      if (!owner) {
+        throw new Error(
+          `pg-pool: migration ${migration.id} is not applied, and this login does not own the schema; run migrations as the table owner`,
+        );
       }
       if (migration.autocommit) {
         for (const statement of migration.statements) await client.query(statement);
@@ -477,6 +456,7 @@ async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[
   const client = await pool.connect();
   let discard: Error | undefined;
   try {
+    if (!(await ownsSchema(client))) return;
     await lockSchema(client, "qm:schema-maintenance");
     for (const operation of maintenance) {
       await client.query("BEGIN");
@@ -565,8 +545,8 @@ export function createPgPool(
     params: unknown[] = [],
     { signal, timeoutMs }: PgQueryOptions = {},
   ): Promise<{ rows: Rows; rowCount: number }> {
+    const settings = querySettings(timeoutMs);
     const p = await pool();
-    const settings = querySettings(boundTenant() ?? (await unboundTenant((text) => p.query(text))), timeoutMs);
     if (!signal && !settings.length) {
       const res = await p.query(text, params);
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };

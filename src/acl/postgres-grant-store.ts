@@ -150,7 +150,7 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
         await client.query(
           `INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by)
            VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (owner_scope_id, path, grantee_scope_id, permission)
+           ON CONFLICT (tenant_id, owner_scope_id, path, grantee_scope_id, permission)
            DO UPDATE SET granted_by = EXCLUDED.granted_by`,
           [g.ownerScopeId, g.ref, g.granteeScopeId, g.permission, g.grantedBy],
         );

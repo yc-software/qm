@@ -43,7 +43,7 @@ export async function twoTenantDatabase(registerStores: (ownerUrl: string) => un
      END $role$`,
   );
   await owner.query(`GRANT CONNECT ON DATABASE "${database}" TO ${role}`);
-  await owner.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
+  await owner.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${role}`);
   await owner.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
   await owner.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
   const appUrl = withLogin(ownerUrl, role);

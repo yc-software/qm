@@ -1,7 +1,8 @@
-import { createPgPool, queryTenant, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
+import { createPgPool, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
 import { TENANCY, tenantColumn, tenantPolicies } from "../tenants/migrations.ts";
+import { workTenant } from "../tenants/work-tenant.ts";
 
 export interface TenantEntry<T> {
   tenantId: string;
@@ -141,16 +142,18 @@ export function createPostgresMap<T>(
   const caches = new Map<string, { v: string; fetchedAt: number; entries: Array<[string, T]> }>();
   async function snapshot(): Promise<Array<[string, T]>> {
     await ready();
-    const tenant = await queryTenant(pg);
-    const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
+    const tenant = await workTenant(pg);
+    const vRows = await pg.q(
+      `SELECT v FROM ${VERSIONS_TABLE} WHERE tenant_id = qm_bound_tenant() AND tbl = '${table}'`,
+    );
     const v = vRows.length ? String(vRows[0]!.v) : "";
-    const cached = tenant === undefined ? undefined : caches.get(tenant);
+    const cached = caches.get(tenant);
     if (cached && cached.v === v && Date.now() - cached.fetchedAt <= CACHE_MAX_AGE_MS) {
       return structuredClone(cached.entries);
     }
     const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
     const entries = rows.map((row): [string, T] => [row.id as string, row.json as T]);
-    if (tenant !== undefined) caches.set(tenant, { v, fetchedAt: Date.now(), entries });
+    caches.set(tenant, { v, fetchedAt: Date.now(), entries });
     return structuredClone(entries);
   }
   async function selectRows<K extends Extract<keyof T, string>>(

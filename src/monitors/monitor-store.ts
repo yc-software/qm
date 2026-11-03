@@ -1,4 +1,5 @@
 import type { Claimed } from "../tenants/claim.ts";
+import { withTenant } from "../tenants/context.ts";
 import { randomUUID } from "node:crypto";
 import type { Monitor } from "../triggers/types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
@@ -26,7 +27,8 @@ export interface MonitorStore {
   get(id: string): Promise<Monitor | null>;
   list(): Promise<Monitor[]>;
   ownedBy(scopeId: string): Promise<Monitor[]>;
-  enabled(): Promise<Array<Claimed<Monitor>>>;
+  enabled(): Promise<Monitor[]>;
+  enabledAcrossTenants(): Promise<Array<Claimed<Monitor>>>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   delete(id: string): Promise<void>;
   deleteDefunct(now: number): Promise<number>;
@@ -69,6 +71,11 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
     async enabled() {
       return (await backing.all()).filter((m) => m.enabled);
     },
+    async enabledAcrossTenants() {
+      return (await backing.acrossTenants())
+        .filter(({ value }) => value.enabled)
+        .map(({ tenantId, value }) => ({ ...value, tenantId }));
+    },
     setEnabled(id, enabled) {
       return setTriggerEnabled(backing, id, enabled);
     },
@@ -76,8 +83,8 @@ export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
     async deleteDefunct(now) {
       const isDefunct = defunctBefore(now - DEFUNCT_MONITOR_GRACE_MS);
       let deleted = 0;
-      for (const m of (await backing.all()).filter(isDefunct)) {
-        if (await backing.deleteIf(m.id, isDefunct)) deleted++;
+      for (const { tenantId, id, value } of await backing.acrossTenants()) {
+        if (isDefunct(value) && (await withTenant(tenantId, () => backing.deleteIf(id, isDefunct)))) deleted++;
       }
       return deleted;
     },

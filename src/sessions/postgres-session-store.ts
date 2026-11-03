@@ -166,7 +166,7 @@ function rowToItem(r: Record<string, unknown>): Item {
 
 const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ${msOf("i.created_at")} AS created_at`;
 const ITEM_FROM = "items i";
-const TENANT = "qm_tenant_id()";
+const TENANT = "qm_bound_tenant()";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
@@ -588,7 +588,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ...(surface ? { surface } : {}),
       };
       await q(
-        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, client_tools) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10::jsonb) ON CONFLICT (thread_ref) DO NOTHING",
+        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, client_tools) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10::jsonb) ON CONFLICT (tenant_id, thread_ref) DO NOTHING",
         [
           session.id,
           session.type,
@@ -745,7 +745,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                                      active_since, completion_note, cancel_note, governor, pause_reason,
                                      created_at, updated_at)
            VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
-           ON CONFLICT (session_id) DO UPDATE SET
+           ON CONFLICT (tenant_id, session_id) DO UPDATE SET
              objective = EXCLUDED.objective, status = EXCLUDED.status, floor = EXCLUDED.floor,
              token_cap = EXCLUDED.token_cap, tokens_used = EXCLUDED.tokens_used, active_ms = EXCLUDED.active_ms,
              active_since = EXCLUDED.active_since, completion_note = EXCLUDED.completion_note,
@@ -835,7 +835,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       if (envelope) {
         await q(
           `INSERT INTO llm_prompt_envelopes(hash, body, created_at) VALUES ($1,$2,$3)
-           ON CONFLICT (hash) DO UPDATE SET created_at = EXCLUDED.created_at
+           ON CONFLICT (tenant_id, hash) DO UPDATE SET created_at = EXCLUDED.created_at
             WHERE llm_prompt_envelopes.created_at < EXCLUDED.created_at - ${ENVELOPE_TOUCH_MS}`,
           [envelope.hash, envelope.body, now()],
         );
@@ -929,7 +929,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          INSERT INTO participants(session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq, title)
          SELECT $1,$2,$3,NULL,boundary.seq,NULL,$4 FROM boundary
-         ON CONFLICT (session_id, principal_id) DO UPDATE
+         ON CONFLICT (tenant_id, session_id, principal_id) DO UPDATE
            SET valid_from = CASE
                  WHEN $5 THEN 0
                  WHEN participants.valid_to IS NULL THEN participants.valid_from
