@@ -720,7 +720,7 @@ async function publishWorkloadImage(
   const tagged = `${ecrHost(aws)}/${spec.ecrRepository}:${label}`;
   const architecture = workloadArchitecture(config, workload);
   const platform = `linux/${architecture}`;
-  const cache = buildCacheArgs(`${ecrHost(aws)}/${spec.ecrRepository}:buildcache-${architecture}`);
+  const cacheRef = `${ecrHost(aws)}/${spec.ecrRepository}:buildcache-${architecture}`;
   if (plugin?.kind === "source") {
     const args = [
       "buildx",
@@ -729,7 +729,7 @@ async function publishWorkloadImage(
       platform,
       "--provenance=false",
       "--push",
-      ...cache,
+      ...buildCacheArgs(cacheRef),
       "-f",
       plugin.dockerfile!,
       "-t",
@@ -753,7 +753,7 @@ async function publishWorkloadImage(
       platform,
       "--provenance=false",
       "--push",
-      ...cache,
+      ...buildCacheArgs(cacheRef),
       "-f",
       dockerfile,
       "-t",
