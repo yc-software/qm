@@ -101,7 +101,7 @@ export interface RunStore {
   enqueue(input: EnqueueInput): Promise<EnqueueResult>;
   getByDedupKey(dedupKey: string): Promise<Run | null>;
 
-  claim(workerId: string, ttlMs: number): Promise<Run | null>;
+  claim(workerId: string, ttlMs: number, limit?: number): Promise<Run[]>;
 
   claimById(runId: string, workerId: string, ttlMs: number): Promise<Run | null>;
 

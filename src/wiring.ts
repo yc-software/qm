@@ -316,7 +316,7 @@ import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
-import { createRunPreemption, createWorker, SHUTDOWN_RELEASE_MS, type Worker } from "./runs/worker.ts";
+import { createRunPreemption, createWorker, SHUTDOWN_RELEASE_MS } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
   createPostgresInstanceRegistry,
@@ -2680,19 +2680,18 @@ export function buildApp(
       : createNoopInstanceRegistry();
   const drain: DrainController = createDrainController({ registry: instanceRegistry });
   const canClaimRuns = () => backgroundAdmission() && drain.canClaim();
-  const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
-    createWorker({
-      admittedWork,
-      runs,
-      orchestrator,
-      leaseTtlMs,
-      heartbeatIntervalMs: config.heartbeatIntervalMs,
-      errors,
-      pollMs: 250,
-      canClaim: canClaimRuns,
-    }),
-  );
-  const preemption = createRunPreemption({ runs, workers, canClaim: canClaimRuns });
+  const worker = createWorker({
+    admittedWork,
+    runs,
+    orchestrator,
+    leaseTtlMs,
+    heartbeatIntervalMs: config.heartbeatIntervalMs,
+    errors,
+    slots: config.workers,
+    pollMs: 250,
+    canClaim: canClaimRuns,
+  });
+  const preemption = createRunPreemption({ runs, worker, canClaim: canClaimRuns });
   const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {
@@ -2799,15 +2798,7 @@ export function buildApp(
     admittedWork.resume();
     drain.start();
     const generation = ++backgroundGeneration;
-    for (const worker of workers) {
-      const drained = worker.drained();
-      worker.start();
-      void drained
-        .then(() => {
-          if (backgroundRunning && generation === backgroundGeneration) worker.start();
-        })
-        .catch(swallowAs("wiring: worker resume failed", undefined));
-    }
+    worker.start();
     preemptionSweeper.start();
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
@@ -2869,7 +2860,7 @@ export function buildApp(
       runResultSweeper.stop(),
       approvalDeliverySweeper.stop(),
       preemptionSweeper.stop(),
-      ...workers.map((worker) => worker.stopClaims()),
+      worker.stopClaims(),
     ];
     backgroundClaimsStopping = Promise.all(stopping).then(() => {});
     const draining = Promise.all([previous, backgroundClaimsStopping, monitorStopping])
@@ -2887,7 +2878,7 @@ export function buildApp(
       withTimeout(() => admittedWork.drained(), SHUTDOWN_RELEASE_MS, "inline turn handback").catch(
         swallowAs("wiring: inline turn handback failed", undefined),
       ),
-      ...workers.map((w) => w.releaseInFlight()),
+      worker.releaseInFlight(),
     ]).then(() => {});
     return releasing;
   }
@@ -2910,12 +2901,12 @@ export function buildApp(
     },
     async stopBackgroundClaims() {
       void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
-      await Promise.all([backgroundClaimsStopping, ...workers.map((worker) => worker.stopClaims())]);
+      await Promise.all([backgroundClaimsStopping, worker.stopClaims()]);
     },
     stopBackground,
     async backgroundDrained() {
       await backgroundStopping;
-      await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
+      await Promise.all([admittedWork.drained(), worker.drained()]);
     },
     releaseInFlightRuns,
     async stop() {
@@ -2925,7 +2916,7 @@ export function buildApp(
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
           swallowAs("wiring: admitted work drain failed", undefined),
         ),
-        ...workers.map((w) => w.stop(config.shutdownDrainMs)),
+        worker.stop(config.shutdownDrainMs),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await releaseInFlightRuns();
       await drain.stop();

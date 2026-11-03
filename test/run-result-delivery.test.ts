@@ -234,7 +234,7 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
   wireRunResultDeliveries(runs, deliveries);
 
   const crashed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  const c1 = await runs.claim("w1", 5_000);
+  const c1 = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.setDeliveryState(crashed.id, null, { editRef: "171.002" });
   await runs.complete(crashed.id, c1?.leaseToken ?? "", { status: "ok", reply: "recovered reply" });
   const pending = await deliveries.pending("slack");
@@ -244,7 +244,7 @@ test("wired stores: a completed turn lands in the outbox unless the live path ac
   assert.equal(pending[0]!.idempotencyKey, `run:${crashed.id}`);
 
   const live = (await runs.enqueue({ sessionId: "sB", request: turn("b", "C9") })).run;
-  const c2 = await runs.claim("w2", 5_000);
+  const c2 = (await runs.claim("w2", 5_000))[0] ?? null;
   await deliveries.ackByKey(`run:${live.id}`, 99);
   await runs.complete(live.id, c2?.leaseToken ?? "", { status: "ok", reply: "delivered live" });
   await new Promise((r) => setTimeout(r, 0));
@@ -260,7 +260,7 @@ test("sweep enqueues the recovery delivery for a terminal run whose outbox row n
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
   const bypassed = (await runs.enqueue({ sessionId: "sA", request: turn("a", "C9:171.001") })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.complete(bypassed.id, claimed?.leaseToken ?? "", { status: "ok", reply: "lost on the way out" });
   const recovery = wireRunResultDeliveries(runs, deliveries);
   assert.deepEqual(await deliveries.pending("slack"), [], "wired after the fact: nothing enqueued");
@@ -336,7 +336,7 @@ test("wired stores: a parked run lands a durable, non-ackable failure note", asy
   wireRunResultDeliveries(runs, deliveries);
 
   const parked = (await runs.enqueue({ sessionId: "sP", request: turn("p", "C9:171.001"), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.fail(parked.id, claimed?.leaseToken ?? "", "boom", { retry: true });
   await new Promise((r) => setTimeout(r, 0));
 
@@ -448,7 +448,7 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
   wireRunResultDeliveries(runs, deliveries, undefined, sessions);
 
   const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
-  const claimed = await runs.claim("w1", 5_000);
+  const claimed = (await runs.claim("w1", 5_000))[0] ?? null;
   await runs.fail(parked.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
 
   for (let i = 0; i < 50 && (await sessions.getItems(session.id)).length === 0; i++) {
