@@ -14,6 +14,7 @@ const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) t
 const [a, b] = process.env.DATABASE_URL ? testTenants() : ["", ""];
 const UNTENANTED_REASONS: Record<string, string> = {
   background_ownership: "which deployment runs background work for the whole install",
+  deployment_layer: "the tools and skills bundle of the whole install, loaded once per process",
   durable_map_versions: "version counters of the durable map store itself",
   fly_deploy_ports: "ports on a shared Fly app, unique across every tenant's deployments",
   fly_peer_claims: "WireGuard peer leases of the install's Fly tunnel",

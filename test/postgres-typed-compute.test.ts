@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { withTenant } from "../src/tenants/context.ts";
-import { useOwnerDatabase } from "../src/tenants/claim.ts";
-import { restoreFileOwner } from "./support/test-database.ts";
 import { createSandboxResourceStores } from "../src/sandbox/sandbox-resource-store.ts";
 import type { SandboxResource } from "../src/sandbox/sandbox-resources.ts";
 import { DEPLOYMENT_LAYER, type StoredDeploymentLayer } from "../src/deployment/deployment-layer-store.ts";
@@ -75,7 +73,7 @@ test("sandbox resources and defaults backfill from key-value rows onto the exist
 });
 
 test("sandbox resources and defaults stay inside their tenant", { skip }, async () => {
-  await withTypedTableDb(createSandboxResourceStores, async ({ store, tenant, otherTenant, ownerUrl }) => {
+  await withTypedTableDb(createSandboxResourceStores, async ({ store, tenant, otherTenant }) => {
     await withTenant(tenant, async () => {
       await store.records.put("a", resource("a", { holders: [] }));
       await store.records.put("job", resource("job", { jobOnly: true }));
@@ -100,16 +98,14 @@ test("sandbox resources and defaults stay inside their tenant", { skip }, async 
       assert.deepEqual(held?.holders, ["run-2"]);
       assert.deepEqual((await store.records.get("a"))?.holders, ["run-2"]);
     });
-    useOwnerDatabase(ownerUrl);
     assert.deepEqual(
       (await store.records.jobComputers()).map((r) => [r.id, r.tenantId]),
       [["job", tenant]],
     );
-    restoreFileOwner();
   });
 });
 
-test("the deployment layer row backfills and stays per tenant", { skip }, async () => {
+test("the deployment layer row backfills into one install-wide row that every tenant shares", { skip }, async () => {
   const layer: StoredDeploymentLayer = {
     contentHash: "abc",
     version: 3,
@@ -121,19 +117,15 @@ test("the deployment layer row backfills and stays per tenant", { skip }, async 
   } as unknown as StoredDeploymentLayer;
   await withTypedTableDb(
     table(DEPLOYMENT_LAYER),
-    async ({ store, tenant, otherTenant }) => {
-      await withTenant(tenant, async () => assert.deepEqual(await store.get("current"), layer));
+    async ({ store, otherTenant }) => {
+      assert.deepEqual(await store.get("current"), layer);
       await withTenant(otherTenant, async () => {
-        assert.equal(await store.get("current"), null);
-        assert.equal(await store.update("current", (current) => ({ ...current, version: 9 })), null);
-        assert.equal((await store.putIfAbsent("current", { ...layer, contentHash: "mine" })).contentHash, "mine");
-      });
-      await withTenant(tenant, async () => {
+        assert.equal((await store.putIfAbsent("current", { ...layer, contentHash: "mine" })).contentHash, "abc");
         const next = await store.update("current", (current) => ({ ...current, version: 4, pendingAudits: undefined }));
         assert.equal(next?.version, 4);
-        const { pendingAudits: _cleared, ...rest } = layer;
-        assert.deepEqual(await store.get("current"), { ...rest, version: 4 });
       });
+      const { pendingAudits: _cleared, ...rest } = layer;
+      assert.deepEqual(await store.get("current"), { ...rest, version: 4 });
     },
     (admin) => seedKeyValueTable(admin, "deployment_layer", { current: layer }),
   );
