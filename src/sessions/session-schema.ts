@@ -288,3 +288,12 @@ END $base_schema$`,
     `DROP FUNCTION IF EXISTS safe_json(text)`,
   ],
 };
+
+/** Chat-message-only search index: about an eighth of items, so searches skip tool output entirely. */
+export const MESSAGE_SEARCH_INDEX: PgMigrationDefinition = {
+  id: "sessions/store/0048-message-search-index",
+  statements: [
+    `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_message_search ON items USING gin (tenant_id, search)
+      WHERE kind IN ('UserMessage','SteeringMessage','AgentMessage') AND text IS NOT NULL`,
+  ],
+};

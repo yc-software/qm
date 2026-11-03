@@ -36,7 +36,7 @@ import type {
   StoreOptions,
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
-import { SESSION_SCHEMA, SPEND_INDEXABLE } from "./session-schema.ts";
+import { MESSAGE_SEARCH_INDEX, SESSION_SCHEMA, SPEND_INDEXABLE } from "./session-schema.ts";
 import {
   cronIdOf,
   promptEnvelopeBody,
@@ -170,6 +170,10 @@ const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.creat
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
 const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
+/** Chats a person actually talks in: no subagents, automations, or collapsed side chats. */
+const OWN_CHAT = (s: string): string =>
+  `${s}.parent_session_id IS NULL AND (${s}.side_chat IS NULL OR ${s}.side_chat->>'expanded' = 'true')
+   AND (${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
 
 const tsOf = (ms: string): string => `to_timestamp((${ms})::double precision / 1000)`;
 
@@ -289,9 +293,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     const params: unknown[] = [principalId];
     const where: string[] = [
       "p.principal_id = $1",
-      "s.parent_session_id IS NULL",
-      "(s.side_chat IS NULL OR s.side_chat->>'expanded' = 'true')",
-      `(s.surface IS NULL OR s.surface NOT IN ${AUTOMATION_SURFACES})`,
+      OWN_CHAT("s"),
       HAS_CONTENT,
     ];
     const param = (value: unknown): string => {
@@ -402,7 +404,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
-  const { pool, q, query } = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, SESSION_SCHEMA]);
+  const { pool, q, query } = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, SESSION_SCHEMA, MESSAGE_SEARCH_INDEX]);
 
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
@@ -1086,7 +1088,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       if (needle.length < 2) return [];
       const like = `%${needle.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       const rows = await q(
-        participantSessionsSql(" AND COALESCE(p.title, s.title) ILIKE $2") +
+        participantSessionsSql(` AND ${OWN_CHAT("s")} AND COALESCE(p.title, s.title) ILIKE $2`) +
           " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $3",
         [principalId, like, Math.max(1, Math.min(Math.floor(limit), 100))],
         { timeoutMs: SEARCH_TIMEOUT_MS },
@@ -1105,7 +1107,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                 s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
            FROM items i
            JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $1
-           JOIN sessions s ON s.id = i.session_id
+           JOIN sessions s ON s.id = i.session_id AND ${OWN_CHAT("s")}
           WHERE i.tenant_id = ${TENANT} AND i.search @@ to_tsquery('simple', $2)
             AND ${SEARCHABLE_ITEM("i")}
             AND ${withinParticipantWindow("i", "p")}

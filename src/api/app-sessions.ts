@@ -655,8 +655,10 @@ export function createSessionMethods(
 
     async searchSessions(principalId, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
       const capped = Math.max(1, Math.min(Math.floor(limit), 100));
-      const hits = await deps.sessions.searchEntries(principalId, query, capped);
-      const titleHits = await titleSearchHits(principalId, query, capped);
+      const [hits, titleHits] = await Promise.all([
+        deps.sessions.searchEntries(principalId, query, capped),
+        titleSearchHits(principalId, query, capped),
+      ]);
       if (!hits.length) return titleHits;
       const allowed = new Map(
         await Promise.all(
