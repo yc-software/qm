@@ -1,7 +1,7 @@
 import pg from "pg";
 import { applyPgMigrations, definePgMigration, migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { TENANCY_BASE } from "../../src/tenants/migrations.ts";
-import { createAppLogin } from "./app-login.ts";
+import { createAppLogin, type AppLogin } from "./app-login.ts";
 import { testBareDatabaseUrl } from "./test-database.ts";
 import { testTenants } from "./test-tenants.ts";
 
@@ -15,6 +15,7 @@ export interface TypedTableDb<S> {
   store: S;
   admin: pg.Pool;
   url: string;
+  ownerUrl: string;
   tenant: string;
   otherTenant: string;
 }
@@ -27,20 +28,19 @@ export async function withTypedTableDb<S extends Closable>(
   const [tenant, otherTenant] = testTenants();
   const url = testBareDatabaseUrl();
   const admin = new pg.Pool({ connectionString: url });
-  const owner = make(url);
-  let login: Awaited<ReturnType<typeof createAppLogin>> | undefined;
   let store: S | undefined;
+  let login: AppLogin | undefined;
   try {
     await seed?.(admin);
     await applyPgMigrations(admin, [definePgMigration(TENANCY_BASE)]);
     await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [tenant]);
+    const owner = make(url);
     await migrateRegisteredPgSchemas(url);
     await owner.close?.();
     await admin.query(`INSERT INTO tenants(id) VALUES ($1)`, [otherTenant]);
-    await admin.query(`GRANT CREATE ON SCHEMA public TO PUBLIC`);
     login = await createAppLogin(url);
     store = make(login.url);
-    await fn({ store, admin, url: login.url, tenant, otherTenant });
+    await fn({ store, admin, url: login.url, ownerUrl: url, tenant, otherTenant });
   } finally {
     await store?.close?.();
     await login?.drop();
