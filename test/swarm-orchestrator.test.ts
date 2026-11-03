@@ -49,10 +49,10 @@ mock.module("./support/mock-agent.ts", {
   },
 });
 const wiring = await import("./support/build-app.ts");
-const { orgId } = await import("../src/config.ts");
+const { tenantRootScope } = await import("../src/tenants/context.ts");
 const buildApp = (...args: Parameters<typeof wiring.buildApp>): ReturnType<typeof wiring.buildApp> => {
   const built = wiring.buildApp(...args);
-  void built.featureFlags.setEnabled("swarms", `org:${orgId()}`, true, "test");
+  void built.featureFlags.setEnabled("swarms", tenantRootScope(), true, "test");
   return built;
 };
 test.after(() => fake.cleanup());
