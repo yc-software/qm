@@ -6,7 +6,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { AddressInfo } from "node:net";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
@@ -26,7 +26,7 @@ import {
 import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
 
 const definition = {
   kind: "embedding",
@@ -39,7 +39,7 @@ afterEach(() => {
   setGatewayModels([]);
 });
 
-test("verified embedding definitions survive registry reload but never become chat models", async () => {
+tenantTest("verified embedding definitions survive registry reload but never become chat models", async () => {
   const credentials = createModelCredentialStore({
     backing: testMap(),
     keyMaterial: "test-key",
@@ -84,7 +84,7 @@ test("verified embedding definitions survive registry reload but never become ch
   assert.equal(resolveEmbeddingModel("embed-small"), undefined);
 });
 
-test("key-scoped gateway embeddings need no chat capabilities and use gateway credentials only", async () => {
+tenantTest("key-scoped gateway embeddings need no chat capabilities and use gateway credentials only", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const catalog = createGatewayCatalog(
     {
@@ -142,7 +142,7 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
   assert.equal(resolveEmbeddingModel("gateway/embed"), undefined);
 });
 
-test("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
+tenantTest("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
   const baseModels = testMap<PersistedBaseModel>();
   const first = testConfigStore("test", { baseModels });
   await first.setEmbeddingModel("gateway/embed");
@@ -154,7 +154,7 @@ test("org embedding selection is durable and survives chat runtime replacement a
   assert.equal(await first.getEmbeddingModelDurable(), null);
 });
 
-test("HTTP embedding selection accepts only known embedding models and survives a new recall", async (t) => {
+tenantTest("HTTP embedding selection accepts only known embedding models and survives a new recall", async (t) => {
   const config = testConfig({ openaiApiKey: "test-key" });
   const built = buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [{ index: 0, embedding: [1, 0] }] }),

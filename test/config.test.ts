@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import {
@@ -11,6 +10,7 @@ import {
 } from "../src/config.ts";
 import { boolEnv, numEnv } from "../src/util/env.ts";
 import { enabledSandboxBackends } from "../src/sandbox/sandbox-settings.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 const RENDER_IMAGE = `ghcr.io/yc-software/qm/sandbox-base:${"c".repeat(40)}@sha256:${"d".repeat(64)}`;
 
@@ -25,7 +25,7 @@ const productionEnv = {
   DATABASE_URL: "postgres://qm@localhost/qm",
 } as const;
 
-test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
+tenantTest("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
   assert.equal(loadConfig({}).spritesSandbox.egressProxyAdditionalUrls, undefined);
   const config = loadConfig({
     SPRITES_EGRESS_PROXY_URL: "https://primary.example.com",
@@ -38,14 +38,14 @@ test("Sprites proxy transition URLs are optional and parsed independently of the
   ]);
 });
 
-test("capability compression is explicitly enabled after verifier rollout", () => {
+tenantTest("capability compression is explicitly enabled after verifier rollout", () => {
   assert.equal(loadConfig({}).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "1" }).capabilityTokenCompression, true);
   assert.throws(() => loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "invalid" }), /CAPABILITY_TOKEN_COMPRESSION/);
 });
 
-test("ORG_BRAND_* parses into a validated branding default", () => {
+tenantTest("ORG_BRAND_* parses into a validated branding default", () => {
   assert.equal(loadConfig({}).brandingDefault, undefined);
   assert.deepEqual(
     loadConfig({ ORG_BRAND_ACCENT: "#6366f1", ORG_BRAND_MARK: "Q", ORG_BRAND_SELF_LABEL: "qm" }).brandingDefault,
@@ -59,7 +59,7 @@ test("ORG_BRAND_* parses into a validated branding default", () => {
   assert.deepEqual(loadConfig({ ORG_BRAND_SELF_LABEL: "{{straylight}}" }).brandingDefault, { selfLabel: "straylight" });
 });
 
-test("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => {
+tenantTest("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => {
   assert.equal(loadConfig({}).emailAuthPrincipals, undefined);
   assert.deepEqual(
     loadConfig({ AUTH_ALLOWED_EMAILS: " New@Example.com,other@example.com,new@example.com " }).emailAuthPrincipals,
@@ -67,13 +67,13 @@ test("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => 
   );
 });
 
-test("deploy provider defaults to docker and rejects unknown values", () => {
+tenantTest("deploy provider defaults to docker and rejects unknown values", () => {
   assert.equal(loadConfig({}).deployProvider, "docker");
   assert.equal(loadConfig({ DEPLOY_PROVIDER: "fly", FLY_DEPLOY_API_TOKEN: "test-token" }).deployProvider, "fly");
   assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "flly" }), /DEPLOY_PROVIDER="flly" is not recognized/);
 });
 
-test("production and unauthenticated-core escape hatch are parsed once", () => {
+tenantTest("production and unauthenticated-core escape hatch are parsed once", () => {
   assert.throws(() => loadConfig({ NODE_ENV: "production" }), /missing or insecure required core secrets/);
   assert.equal(loadConfig(productionEnv).production, true);
   assert.equal(loadConfig({}).production, false);
@@ -81,7 +81,7 @@ test("production and unauthenticated-core escape hatch are parsed once", () => {
   assert.throws(() => loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "sometimes" }), /not a recognized boolean/);
 });
 
-test("agent security posture defaults to auto and validates named modes", () => {
+tenantTest("agent security posture defaults to auto and validates named modes", () => {
   assert.equal(loadConfig({}).securityPosture, "auto");
   assert.equal(loadConfig({}).securityScreen, "off");
   assert.equal(loadConfig({}).securityScreenClassifier, "model");
@@ -142,11 +142,11 @@ test("agent security posture defaults to auto and validates named modes", () => 
   }
 });
 
-test("QM_CORE_CONTAINER reaches the local sandbox settings", () => {
+tenantTest("QM_CORE_CONTAINER reaches the local sandbox settings", () => {
   assert.equal(loadConfig({ QM_CORE_CONTAINER: "qm-acme-core" }).localSandbox.coreContainer, "qm-acme-core");
 });
 
-test("sharing posture defaults to isolated and accepts only isolated or open", () => {
+tenantTest("sharing posture defaults to isolated and accepts only isolated or open", () => {
   assert.equal(loadConfig({}).sharingPosture, "isolated");
   assert.equal(loadConfig({ HARNESS_SHARING_POSTURE: "Open" }).sharingPosture, "open");
   assert.equal(loadConfig({ HARNESS_SHARING_POSTURE: "isolated" }).sharingPosture, "isolated");
@@ -156,7 +156,7 @@ test("sharing posture defaults to isolated and accepts only isolated or open", (
   );
 });
 
-test("Modal without an egress proxy warns that sandboxes run fail-open", () => {
+tenantTest("Modal without an egress proxy warns that sandboxes run fail-open", () => {
   const warnings: string[] = [];
   const original = console.warn;
   console.warn = (msg: unknown) => void warnings.push(String(msg));
@@ -169,17 +169,17 @@ test("Modal without an egress proxy warns that sandboxes run fail-open", () => {
   assert.equal(warnings.filter((w) => w.includes("MODAL_EGRESS_PROXY_URL")).length, 1);
 });
 
-test("a harmless ARTIFACT_STORE=memory (now a dead knob) is ignored, not fatal", () => {
+tenantTest("a harmless ARTIFACT_STORE=memory (now a dead knob) is ignored, not fatal", () => {
   assert.doesNotThrow(() => loadConfig({ ARTIFACT_STORE: "memory" }));
 });
 
-test("boolEnv: one vocabulary for every boolean env knob", () => {
+tenantTest("boolEnv: one vocabulary for every boolean env knob", () => {
   for (const v of ["1", "true", "yes", "on", "TRUE", " On "]) assert.equal(boolEnv(v), true, v);
   for (const v of ["0", "false", "no", "off", "none", "OFF"]) assert.equal(boolEnv(v), false, v);
   for (const v of [undefined, "", "2", "enabled"]) assert.equal(boolEnv(v), undefined, String(v));
 });
 
-test("every boolean knob accepts the shared vocabulary (off means off)", () => {
+tenantTest("every boolean knob accepts the shared vocabulary (off means off)", () => {
   const off = loadConfig({
     SEED_SKILLS: "off",
     SURFACE_DEBUG_FOOTER: "off",
@@ -200,14 +200,14 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   assert.equal(unset.captureLlmRequests, true, "capture defaults on");
 });
 
-test("numEnv: empty and non-numeric values fall back instead of poisoning config with NaN", () => {
+tenantTest("numEnv: empty and non-numeric values fall back instead of poisoning config with NaN", () => {
   assert.equal(numEnv(""), undefined);
   assert.equal(numEnv("abc"), undefined);
   assert.equal(numEnv("42"), 42);
   assert.equal(loadConfig({ PORT: "" }).port, CONFIG_DEFAULTS.port);
 });
 
-test("a set-but-unparseable env value refuses to boot instead of silently taking the default", () => {
+tenantTest("a set-but-unparseable env value refuses to boot instead of silently taking the default", () => {
   assert.throws(() => loadConfig({ WORKERS: "not-a-number" }), /WORKERS="not-a-number" is not a number/);
   assert.throws(() => loadConfig({ BUDGET_USD_PER_WINDOW: "10$" }), /BUDGET_USD_PER_WINDOW="10\$" is not a number/);
   assert.throws(
@@ -219,7 +219,7 @@ test("a set-but-unparseable env value refuses to boot instead of silently taking
   assert.equal(loadConfig({ SURFACE_DEBUG_FOOTER: "" }).surfaceDebugFooter, false);
 });
 
-test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
+tenantTest("Slack HTTP ingress exposes only a valid configured receiver port", () => {
   assert.equal(loadConfig({ SLACK_EVENTS_MODE: "http", SLACK_EVENTS_PORT: "8182" }).slackEventsPort, 8182);
   assert.equal(loadConfig({ SLACK_EVENTS_MODE: "socket", SLACK_EVENTS_PORT: "8182" }).slackEventsPort, undefined);
   assert.throws(
@@ -228,7 +228,7 @@ test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
   );
 });
 
-test("sandbox backend is parsed once before production backend guards", () => {
+tenantTest("sandbox backend is parsed once before production backend guards", () => {
   assert.equal(loadConfig({ SANDBOX_BACKEND: " aws " }).sandboxBackend, "aws");
   assert.throws(
     () => loadConfig({ ...productionEnv, SANDBOX_BACKEND: "bogus" }),
@@ -237,7 +237,7 @@ test("sandbox backend is parsed once before production backend guards", () => {
 });
 
 for (const primary of ["render", "local"] as const) {
-  test(`production requires durable Render recovery when the primary backend is ${primary}`, () => {
+  tenantTest(`production requires durable Render recovery when the primary backend is ${primary}`, () => {
     const env = {
       ...productionEnv,
       SANDBOX_BACKEND: primary,
@@ -254,7 +254,7 @@ for (const primary of ["render", "local"] as const) {
     assert.ok(enabledSandboxBackends(loadConfig({ ...env, NODE_ENV: "development" })).includes("render"));
   });
 
-  test(`Render timeout limits apply when the primary backend is ${primary}`, () => {
+  tenantTest(`Render timeout limits apply when the primary backend is ${primary}`, () => {
     const env = {
       SANDBOX_BACKEND: primary,
       WORKSPACE_STORE: "postgres",
@@ -268,11 +268,11 @@ for (const primary of ["render", "local"] as const) {
   });
 }
 
-test("Render guards do not limit an unconfigured sandbox backend", () => {
+tenantTest("Render guards do not limit an unconfigured sandbox backend", () => {
   assert.equal(loadConfig({ ...productionEnv, SANDBOX_TIMEOUT_SEC: "86400" }).sandboxBackend, "local");
 });
 
-test("production refuses to boot without Postgres", () => {
+tenantTest("production refuses to boot without Postgres", () => {
   const { DATABASE_URL: _databaseUrl, ...noDatabase } = productionEnv;
   assert.throws(
     () => loadConfig(noDatabase),
@@ -285,7 +285,7 @@ test("production refuses to boot without Postgres", () => {
   );
 });
 
-test("production refuses missing, placeholder, or weak signing keys", () => {
+tenantTest("production refuses missing, placeholder, or weak signing keys", () => {
   assert.throws(
     () => loadConfig({ NODE_ENV: "production" }),
     /CAPABILITY_SECRET, CONNECTOR_SECRET_KEY, CORE_SIGNING_SECRET, PORTAL_IDENTITY_SECRET, SKILL_SIGNING_SECRET/,
@@ -304,7 +304,7 @@ test("production refuses missing, placeholder, or weak signing keys", () => {
   );
 });
 
-test("defaults come from CONFIG_DEFAULTS, set exactly once", () => {
+tenantTest("defaults come from CONFIG_DEFAULTS, set exactly once", () => {
   const def = loadConfig({});
   assert.equal(CONFIG_DEFAULTS.workers, 16);
   assert.equal(def.workers, CONFIG_DEFAULTS.workers);
@@ -321,7 +321,7 @@ test("defaults come from CONFIG_DEFAULTS, set exactly once", () => {
   assert.equal(def.runWaitMs, def.runMaxAgeMs + 60_000);
 });
 
-test("turn wall clock config drives run bounds only when capped", () => {
+tenantTest("turn wall clock config drives run bounds only when capped", () => {
   const capped = loadConfig({ TURN_WALL_CLOCK_SEC: "120" });
   assert.equal(capped.turnWallClockMs, 120_000);
   assert.equal(capped.runMaxAgeMs, 240_000);
@@ -330,17 +330,17 @@ test("turn wall clock config drives run bounds only when capped", () => {
   assert.equal(explicit.runMaxAgeMs, 999_999);
 });
 
-test("APPROVAL_SUMMARY_TIMEOUT_MS overrides the approval-summary deadline; unset uses the 6s default", () => {
+tenantTest("APPROVAL_SUMMARY_TIMEOUT_MS overrides the approval-summary deadline; unset uses the 6s default", () => {
   assert.equal(loadConfig({ APPROVAL_SUMMARY_TIMEOUT_MS: "9000" }).approvalSummaryTimeoutMs, 9000);
   assert.equal(loadConfig({}).approvalSummaryTimeoutMs, 6_000);
 });
 
-test("deploy proxy dial timeout is parsed once from config", () => {
+tenantTest("deploy proxy dial timeout is parsed once from config", () => {
   assert.equal(loadConfig({ DEPLOY_DIAL_TIMEOUT_MS: "1234" }).deployDialTimeoutMs, 1234);
   assert.throws(() => loadConfig({ DEPLOY_DIAL_TIMEOUT_MS: "soon" }), /DEPLOY_DIAL_TIMEOUT_MS="soon" is not a number/);
 });
 
-test("PUBLIC_API_URL is not treated as the human-facing web URL", () => {
+tenantTest("PUBLIC_API_URL is not treated as the human-facing web URL", () => {
   const apiOnly = loadConfig({ PUBLIC_API_URL: "https://agent-api.example" });
   assert.equal(apiOnly.apiBaseUrl, "https://agent-api.example");
   assert.equal(apiOnly.publicUrl, "https://agent-api.example");
@@ -357,7 +357,7 @@ test("PUBLIC_API_URL is not treated as the human-facing web URL", () => {
   assert.equal(web.publicWebUrl, "https://portal.example");
 });
 
-test("plugin skill directories can be overridden or disabled", () => {
+tenantTest("plugin skill directories can be overridden or disabled", () => {
   assert.deepEqual(loadConfig({ PLUGIN_SKILLS_DIRS: "plugins/onboarding/skills, custom/skills" }).pluginSkillDirs, [
     resolve("plugins/onboarding/skills"),
     resolve("custom/skills"),
@@ -366,14 +366,14 @@ test("plugin skill directories can be overridden or disabled", () => {
   assert.deepEqual(loadConfig({}).pluginSkillDirs, [resolve("plugins/onboarding/skills")]);
 });
 
-test("the server can boot before an admin configures a model provider", () => {
+tenantTest("the server can boot before an admin configures a model provider", () => {
   assert.doesNotThrow(() => loadConfig({}));
   assert.doesNotThrow(() => loadConfig({ ANTHROPIC_API_KEY: "sk-ant" }));
   assert.doesNotThrow(() => loadConfig(productionEnv));
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, ANTHROPIC_API_KEY: "sk-ant" }));
 });
 
-test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () => {
+tenantTest("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () => {
   for (const value of ["9007199254740993", "-1", "0.5", "NaN", "Infinity"]) {
     assert.throws(() => loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }), /SUPERSERVE_CONFIG_GENERATION/, value);
   }
@@ -385,7 +385,7 @@ test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () =
   }
 });
 
-test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary variable is tolerated", () => {
+tenantTest("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary variable is tolerated", () => {
   assert.equal(loadConfig({}).sandboxBackend, "local");
   assert.throws(
     () => loadConfig({ ...productionEnv, SANDBOX_BACKEND: undefined }),
@@ -488,7 +488,7 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
   );
 });
 
-test("Fly identity and Slack runtime settings are parsed once into Config", () => {
+tenantTest("Fly identity and Slack runtime settings are parsed once into Config", () => {
   const config = loadConfig({
     FLY_APP_NAME: "qm-core",
     SLACK_BOT_TOKEN: "xoxb-test",
@@ -503,19 +503,19 @@ test("Fly identity and Slack runtime settings are parsed once into Config", () =
   });
 });
 
-test("maxClaims defaults from CONFIG_DEFAULTS and MAX_CLAIMS overrides", () => {
+tenantTest("maxClaims defaults from CONFIG_DEFAULTS and MAX_CLAIMS overrides", () => {
   assert.equal(loadConfig({}).maxClaims, CONFIG_DEFAULTS.maxClaims);
   assert.equal(loadConfig({ MAX_CLAIMS: "5" }).maxClaims, 5);
   assert.throws(() => loadConfig({ MAX_CLAIMS: "lots" }), /MAX_CLAIMS="lots" is not a number/);
 });
 
-test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
+tenantTest("MODEL_PROVIDER declares the vendor that bills the base model", () => {
   assert.equal(loadConfig({}).modelProvider, undefined);
   assert.equal(loadConfig({ MODEL_PROVIDER: " openrouter ", OPENROUTER_API_KEY: "k" }).modelProvider, "openrouter");
   assert.throws(() => loadConfig({ MODEL_PROVIDER: "bedrock" }), /MODEL_PROVIDER.*not recognized/);
 });
 
-test("baseModelProviders constrains the base model only when a provider is declared", () => {
+tenantTest("baseModelProviders constrains the base model only when a provider is declared", () => {
   assert.deepEqual(
     baseModelProviders(loadConfig({ MODEL_PROVIDER: "openrouter", OPENROUTER_API_KEY: "k", ANTHROPIC_API_KEY: "k" })),
     { anthropic: false, openai: false, openrouter: true },
@@ -528,7 +528,7 @@ test("baseModelProviders constrains the base model only when a provider is decla
   );
 });
 
-test("DEPLOY_PROVIDER=porter selects the Porter deploy provider and reads its env", () => {
+tenantTest("DEPLOY_PROVIDER=porter selects the Porter deploy provider and reads its env", () => {
   const config = loadConfig({
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_PROJECT_ID: "7",
@@ -550,12 +550,12 @@ test("DEPLOY_PROVIDER=porter selects the Porter deploy provider and reads its en
   });
 });
 
-test("DEPLOY_PROVIDER=e2b selects E2B publishing and needs the E2B key", () => {
+tenantTest("DEPLOY_PROVIDER=e2b selects E2B publishing and needs the E2B key", () => {
   assert.equal(loadConfig({ DEPLOY_PROVIDER: "e2b", E2B_API_KEY: "e2b-key" }).deployProvider, "e2b");
   assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "e2b" }), /missing or insecure required core secrets: E2B_API_KEY/);
 });
 
-test("the deploy runner image falls back to the sandbox image", () => {
+tenantTest("the deploy runner image falls back to the sandbox image", () => {
   const config = loadConfig({
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_PROJECT_ID: "7",
@@ -567,7 +567,7 @@ test("the deploy runner image falls back to the sandbox image", () => {
   assert.equal(config.porterDeploy.runnerImage, "localhost:5000/qm-sandbox:latest");
 });
 
-test("DEPLOY_PROVIDER=porter refuses to boot without a cluster and tolerates a missing apps domain", () => {
+tenantTest("DEPLOY_PROVIDER=porter refuses to boot without a cluster and tolerates a missing apps domain", () => {
   assert.throws(
     () =>
       loadConfig({
@@ -600,7 +600,7 @@ test("DEPLOY_PROVIDER=porter refuses to boot without a cluster and tolerates a m
   );
 });
 
-test("PORTER_DEPLOY_VISIBILITY=internal is accepted and refuses an apps domain", () => {
+tenantTest("PORTER_DEPLOY_VISIBILITY=internal is accepted and refuses an apps domain", () => {
   const cluster = {
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_API_TOKEN: "tok",
@@ -615,7 +615,7 @@ test("PORTER_DEPLOY_VISIBILITY=internal is accepted and refuses an apps domain",
   );
 });
 
-test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's token", () => {
+tenantTest("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's token", () => {
   assert.throws(
     () => loadConfig({ SANDBOX_BACKEND: "porter", PORTER_DEPLOY_API_TOKEN: "tok" }),
     /PORTER_DEPLOY_PROJECT_ID/,
@@ -632,36 +632,39 @@ test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's to
   assert.equal(inCluster.porterDeploy.token, "tok");
 });
 
-test("DEPLOY_APPS_DOMAIN is the one-var apps setup: it feeds the gate and defaults every provider's domain", () => {
-  const config = loadConfig({
-    DEPLOY_PROVIDER: "porter",
-    PORTER_DEPLOY_API_TOKEN: "tok",
-    PORTER_DEPLOY_PROJECT_ID: "7",
-    PORTER_DEPLOY_CLUSTER_ID: "9",
-    DEPLOY_APPS_DOMAIN: "apps.example.com",
-    AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
-  });
-  assert.equal(config.deployAppsDomain, "apps.example.com");
-  assert.equal(
-    config.porterDeploy.appsDomain,
-    undefined,
-    "the gate domain must not be registered on Porter ingress — that would bypass the gate or loop the proxy",
-  );
-  assert.equal(config.awsDeploy.appsDomain, "apps.example.com");
-  const overridden = loadConfig({
-    DEPLOY_PROVIDER: "porter",
-    PORTER_DEPLOY_API_TOKEN: "tok",
-    PORTER_DEPLOY_PROJECT_ID: "7",
-    PORTER_DEPLOY_CLUSTER_ID: "9",
-    DEPLOY_APPS_DOMAIN: "apps.example.com",
-    PORTER_DEPLOY_APPS_DOMAIN: "apps.other.example.com",
-    AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
-  });
-  assert.equal(overridden.porterDeploy.appsDomain, "apps.other.example.com");
-  assert.equal(overridden.deployAppsDomain, "apps.example.com");
-});
+tenantTest(
+  "DEPLOY_APPS_DOMAIN is the one-var apps setup: it feeds the gate and defaults every provider's domain",
+  () => {
+    const config = loadConfig({
+      DEPLOY_PROVIDER: "porter",
+      PORTER_DEPLOY_API_TOKEN: "tok",
+      PORTER_DEPLOY_PROJECT_ID: "7",
+      PORTER_DEPLOY_CLUSTER_ID: "9",
+      DEPLOY_APPS_DOMAIN: "apps.example.com",
+      AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
+    });
+    assert.equal(config.deployAppsDomain, "apps.example.com");
+    assert.equal(
+      config.porterDeploy.appsDomain,
+      undefined,
+      "the gate domain must not be registered on Porter ingress — that would bypass the gate or loop the proxy",
+    );
+    assert.equal(config.awsDeploy.appsDomain, "apps.example.com");
+    const overridden = loadConfig({
+      DEPLOY_PROVIDER: "porter",
+      PORTER_DEPLOY_API_TOKEN: "tok",
+      PORTER_DEPLOY_PROJECT_ID: "7",
+      PORTER_DEPLOY_CLUSTER_ID: "9",
+      DEPLOY_APPS_DOMAIN: "apps.example.com",
+      PORTER_DEPLOY_APPS_DOMAIN: "apps.other.example.com",
+      AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef",
+    });
+    assert.equal(overridden.porterDeploy.appsDomain, "apps.other.example.com");
+    assert.equal(overridden.deployAppsDomain, "apps.example.com");
+  },
+);
 
-test("the active provider's own apps domain reaches the gate when DEPLOY_APPS_DOMAIN is unset", () => {
+tenantTest("the active provider's own apps domain reaches the gate when DEPLOY_APPS_DOMAIN is unset", () => {
   const porter = loadConfig({
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_API_TOKEN: "tok",
@@ -680,7 +683,7 @@ test("the active provider's own apps domain reaches the gate when DEPLOY_APPS_DO
   assert.equal(loadConfig({}).deployAppsDomain, undefined);
 });
 
-test("DEPLOY_APPS_DOMAIN refuses shared platform domains that cannot carry per-app subdomains", () => {
+tenantTest("DEPLOY_APPS_DOMAIN refuses shared platform domains that cannot carry per-app subdomains", () => {
   assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "myapp.onporter.run" }), /shared platform domain/);
   assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "myapp.fly.dev" }), /shared platform domain/);
   assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "8081-abc.e2b.app" }), /shared platform domain/);
@@ -691,7 +694,7 @@ test("DEPLOY_APPS_DOMAIN refuses shared platform domains that cannot carry per-a
   );
 });
 
-test("DEPLOY_APPS_DOMAIN must be a bare DNS name, normalized to lowercase without a trailing dot", () => {
+tenantTest("DEPLOY_APPS_DOMAIN must be a bare DNS name, normalized to lowercase without a trailing dot", () => {
   const gate = { AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef" };
   assert.equal(loadConfig({ DEPLOY_APPS_DOMAIN: "Apps.Example.COM.", ...gate }).deployAppsDomain, "apps.example.com");
   assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "https://apps.example.com", ...gate }), /bare domain/);
@@ -700,7 +703,7 @@ test("DEPLOY_APPS_DOMAIN must be a bare DNS name, normalized to lowercase withou
   assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "myapp.fly.dev.", ...gate }), /shared platform domain/);
 });
 
-test("the portal session secret doubles as the deploy-apps viewer secret when a login URL exists", () => {
+tenantTest("the portal session secret doubles as the deploy-apps viewer secret when a login URL exists", () => {
   const derived = loadConfig({ PORTAL_SESSION_SECRET: "shared", PUBLIC_WEB_URL: "https://qm.example.com" });
   assert.equal(derived.deployAppsSessionSecret, "shared");
   assert.equal(derived.deployAppsLoginUrl, "https://qm.example.com");
@@ -718,7 +721,7 @@ test("the portal session secret doubles as the deploy-apps viewer secret when a 
   assert.equal(explicit.deployAppsSessionSecret, "own");
 });
 
-test("the deploy-apps sign-in address defaults to the public web URL", () => {
+tenantTest("the deploy-apps sign-in address defaults to the public web URL", () => {
   const derived = loadConfig({
     DEPLOY_APPS_SESSION_SECRET: "s",
     PUBLIC_WEB_URL: "https://qm.example.com/",
@@ -748,17 +751,20 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   );
 });
 
-test("a Claude subscription token in ANTHROPIC_API_KEY or a keychain credential counts as company subscription auth", () => {
-  const subscription = loadConfig({ ANTHROPIC_API_KEY: "sk-ant-oat01-company" });
-  assert.equal(providerKeysPresent(subscription).anthropic, true);
-  assert.equal(companySubscriptionAuth(subscription), "anthropic");
-  assert.equal(companySubscriptionAuth(loadConfig({ ANTHROPIC_API_KEY: "sk-ant-api" })), undefined);
-  const keychainHeld = loadConfig({ CLAUDE_AUTH_CREDENTIAL: "cred-1" });
-  assert.equal(providerKeysPresent(keychainHeld).anthropic, true);
-  assert.equal(companySubscriptionAuth(keychainHeld), "anthropic");
-});
+tenantTest(
+  "a Claude subscription token in ANTHROPIC_API_KEY or a keychain credential counts as company subscription auth",
+  () => {
+    const subscription = loadConfig({ ANTHROPIC_API_KEY: "sk-ant-oat01-company" });
+    assert.equal(providerKeysPresent(subscription).anthropic, true);
+    assert.equal(companySubscriptionAuth(subscription), "anthropic");
+    assert.equal(companySubscriptionAuth(loadConfig({ ANTHROPIC_API_KEY: "sk-ant-api" })), undefined);
+    const keychainHeld = loadConfig({ CLAUDE_AUTH_CREDENTIAL: "cred-1" });
+    assert.equal(providerKeysPresent(keychainHeld).anthropic, true);
+    assert.equal(companySubscriptionAuth(keychainHeld), "anthropic");
+  },
+);
 
-test("company ChatGPT auth satisfies model onboarding without an API key", () => {
+tenantTest("company ChatGPT auth satisfies model onboarding without an API key", () => {
   const config = loadConfig({});
   assert.equal(companySubscriptionAuth({ ...config, codexAuthCredential: "cred-1" }), "openai");
   assert.equal(companySubscriptionAuth(config), undefined);
@@ -766,7 +772,7 @@ test("company ChatGPT auth satisfies model onboarding without an API key", () =>
   assert.equal(loadConfig({ MODEL_PROVIDER: "openai", CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthCredential, "cred-1");
 });
 
-test("Modal native retention and interval configuration are parsed into Config", () => {
+tenantTest("Modal native retention and interval configuration are parsed into Config", () => {
   const config = loadConfig({
     MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC: "60",
     MODAL_SNAPSHOT_RETENTION_SEC: "86400",
@@ -775,7 +781,7 @@ test("Modal native retention and interval configuration are parsed into Config",
   assert.equal(config.modalSandbox.snapshotRetentionSec, 86400);
 });
 
-test("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config", () => {
+tenantTest("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config", () => {
   const config = loadConfig({
     SMOLMACHINES_TOKEN: "smk_test",
     SMOLMACHINES_AUTOSTOP_SEC: "900",
@@ -793,14 +799,14 @@ test("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config"
   assert.throws(() => loadConfig({ SMOLMACHINES_AUTOSTOP_SEC: "soon" }), /SMOLMACHINES_AUTOSTOP_SEC/);
 });
 
-test("suggestion generation defaults on and can be explicitly disabled", () => {
+tenantTest("suggestion generation defaults on and can be explicitly disabled", () => {
   assert.equal(loadConfig({}).suggestedActivitiesEnabled, true);
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "true" }).suggestedActivitiesEnabled, true);
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "false" }).suggestedActivitiesEnabled, false);
   assert.throws(() => loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "maybe" }));
 });
 
-test("legacy sandbox scope defaults are parsed for upgrade", () => {
+tenantTest("legacy sandbox scope defaults are parsed for upgrade", () => {
   const credentials = {
     SPRITES_TOKEN: "unit-test-sprites",
     MODAL_TOKEN_ID: "unit-test-modal-id",
@@ -822,7 +828,7 @@ test("legacy sandbox scope defaults are parsed for upgrade", () => {
     assert.throws(() => loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: value }));
 });
 
-test("Fly shared application name is passed to the deployment provider", () => {
+tenantTest("Fly shared application name is passed to the deployment provider", () => {
   const config = loadConfig({
     DEPLOY_PROVIDER: "fly",
     FLY_DEPLOY_SHARED_APP_NAME: "qm-example-apps",
@@ -834,7 +840,7 @@ test("Fly shared application name is passed to the deployment provider", () => {
   assert.equal(config.flyDeploy.dataVolumeSizeGb, 1);
 });
 
-test("background ownership requires durable storage and an independent deployment authority", () => {
+tenantTest("background ownership requires durable storage and an independent deployment authority", () => {
   const env = {
     BACKGROUND_DEPLOYMENT_ID: "core:release-a",
     DATABASE_URL: "postgres://localhost/test",
@@ -857,41 +863,47 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
 });
 
-test("the spend export token is optional, strong, trimmed and never shared with another environment value", () => {
-  const env = {
-    CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
-    CAPABILITY_SECRET: "capability-secret-0123456789abcdef0123",
-    PORTAL_IDENTITY_SECRET: "portal-identity-secret-0123456789abcdef",
-    SPEND_EXPORT_TOKEN: "spend-export-token-0123456789abcdef01234",
-  };
-  assert.equal(loadConfig(env).spendExportToken, env.SPEND_EXPORT_TOKEN);
-  assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: undefined }).spendExportToken, undefined);
-  assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: "" }).spendExportToken, undefined);
-  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: "short" }), /SPEND_EXPORT_TOKEN/);
-  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: " ".repeat(40) }), /SPEND_EXPORT_TOKEN/);
-  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: `${env.SPEND_EXPORT_TOKEN}\n` }), /SPEND_EXPORT_TOKEN/);
-  for (const name of [
-    "CORE_SIGNING_SECRET",
-    "QM_SLACK_SERVICE_TOKEN",
-    "DEPLOY_APPS_SESSION_SECRET",
-    "SLACK_SIGNING_SECRET",
-  ]) {
+tenantTest(
+  "the spend export token is optional, strong, trimmed and never shared with another environment value",
+  () => {
+    const env = {
+      CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
+      CAPABILITY_SECRET: "capability-secret-0123456789abcdef0123",
+      PORTAL_IDENTITY_SECRET: "portal-identity-secret-0123456789abcdef",
+      SPEND_EXPORT_TOKEN: "spend-export-token-0123456789abcdef01234",
+    };
+    assert.equal(loadConfig(env).spendExportToken, env.SPEND_EXPORT_TOKEN);
+    assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: undefined }).spendExportToken, undefined);
+    assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: "" }).spendExportToken, undefined);
+    assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: "short" }), /SPEND_EXPORT_TOKEN/);
+    assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: " ".repeat(40) }), /SPEND_EXPORT_TOKEN/);
     assert.throws(
-      () => loadConfig({ ...env, [name]: env.SPEND_EXPORT_TOKEN }),
+      () => loadConfig({ ...env, SPEND_EXPORT_TOKEN: `${env.SPEND_EXPORT_TOKEN}\n` }),
       /SPEND_EXPORT_TOKEN/,
-      `${name} must not share the export token`,
     );
-  }
-});
+    for (const name of [
+      "CORE_SIGNING_SECRET",
+      "QM_SLACK_SERVICE_TOKEN",
+      "DEPLOY_APPS_SESSION_SECRET",
+      "SLACK_SIGNING_SECRET",
+    ]) {
+      assert.throws(
+        () => loadConfig({ ...env, [name]: env.SPEND_EXPORT_TOKEN }),
+        /SPEND_EXPORT_TOKEN/,
+        `${name} must not share the export token`,
+      );
+    }
+  },
+);
 
-test("sandbox capability TTL is deployment-configurable with a 48-hour default", () => {
+tenantTest("sandbox capability TTL is deployment-configurable with a 48-hour default", () => {
   assert.equal(loadConfig({}).sandboxCapabilityTtlMs, 48 * 3_600_000);
   assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "168" }).sandboxCapabilityTtlMs, 168 * 3_600_000);
   assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "none" }).sandboxCapabilityTtlMs, 0);
   assert.throws(() => loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "-5" }), /SANDBOX_CAPABILITY_TTL_HOURS/);
 });
 
-test("a subscription-only company ChatGPT deployment defaults pi to the plain Codex model id", () => {
+tenantTest("a subscription-only company ChatGPT deployment defaults pi to the plain Codex model id", () => {
   const base = loadConfig({});
   assert.equal(configuredModel({ ...base, codexAuthCredential: "cred-1" }), "gpt-6.1-sol");
   assert.equal(configuredModel({ ...base, codexAuthCredential: "cred-1", anthropicApiKey: "k" }), undefined);
@@ -899,7 +911,7 @@ test("a subscription-only company ChatGPT deployment defaults pi to the plain Co
   assert.equal(configuredModel(base), undefined);
 });
 
-test("Render app region defaults to the core region and accepts a separate creation region", () => {
+tenantTest("Render app region defaults to the core region and accepts a separate creation region", () => {
   assert.equal(loadConfig({}).renderDeploy.appRegion, "oregon");
   assert.equal(loadConfig({ RENDER_REGION: "ohio" }).renderDeploy.appRegion, "ohio");
   const config = loadConfig({ RENDER_REGION: "oregon", RENDER_APP_REGION: " virginia " });
@@ -907,7 +919,7 @@ test("Render app region defaults to the core region and accepts a separate creat
   assert.equal(config.renderDeploy.appRegion, "virginia");
 });
 
-test("Render app publishing needs a complete source, project, and environment", () => {
+tenantTest("Render app publishing needs a complete source, project, and environment", () => {
   const env = {
     DEPLOY_PROVIDER: "render",
     RENDER_API_KEY: "rnd_key",
@@ -928,7 +940,7 @@ test("Render app publishing needs a complete source, project, and environment", 
   assert.throws(() => loadConfig({ ...env, RENDER_ENVIRONMENT_ID: "" }), /requires RENDER_ENVIRONMENT_ID/);
 });
 
-test("The Render sandbox backend needs the Postgres workspace store", () => {
+tenantTest("The Render sandbox backend needs the Postgres workspace store", () => {
   const env = {
     SANDBOX_BACKEND: "render",
     RENDER_API_KEY: "rnd_key",
@@ -939,7 +951,7 @@ test("The Render sandbox backend needs the Postgres workspace store", () => {
   assert.equal(loadConfig({ ...env, WORKSPACE_STORE: "postgres" }).sandboxBackend, "render");
 });
 
-test("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IMAGE", () => {
+tenantTest("The Render sandbox backend needs a tagged, digest-pinned RENDER_SANDBOX_IMAGE", () => {
   const env = {
     SANDBOX_BACKEND: "render",
     WORKSPACE_STORE: "postgres",

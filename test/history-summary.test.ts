@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { zstdDecompressSync } from "node:zlib";
 import { contentText, createAssistantMessageEventStream, type StopReason } from "@earendil-works/pi-ai";
@@ -8,6 +7,7 @@ import { createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { buildModelRuntime, zeroUsage } from "../src/model/model-runtime.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 const model = getRequiredModel("claude-opus-5");
 const summary = "## Goal\nInvestigate migration failures.\n## Constraints & Preferences\nDo not change production.";
@@ -37,7 +37,7 @@ function response(text = summary, stopReason: StopReason = "stop") {
 }
 
 for (const ending of ["Reconstruct the migration hash from the test files.", "what? local recovery what?"]) {
-  test(`compaction closes the transcript and requests a summary after: ${ending}`, async () => {
+  tenantTest(`compaction closes the transcript and requests a summary after: ${ending}`, async () => {
     const result = await summarizeHistory(
       [
         entry(1, "user", { text: "Investigate the migration. Don't change production." }),
@@ -66,7 +66,7 @@ for (const ending of ["Reconstruct the migration hash from the test files.", "wh
   });
 }
 
-test("repeated compaction separates the latest summary and only summarizes its uncovered suffix", async () => {
+tenantTest("repeated compaction separates the latest summary and only summarizes its uncovered suffix", async () => {
   const history = [
     entry(1, "user", { text: "covered request" }),
     entry(2, "system", createContextSummaryPayload(1, "superseded summary")),
@@ -88,7 +88,7 @@ test("repeated compaction separates the latest summary and only summarizes its u
   });
 });
 
-test("compaction rejects a provider error as a typed ProviderTurnError", async () => {
+tenantTest("compaction rejects a provider error as a typed ProviderTurnError", async () => {
   await assert.rejects(
     summarizeHistory([], model, () => response("partial summary", "error")),
     (err: unknown) => err instanceof ProviderTurnError,
@@ -96,7 +96,7 @@ test("compaction rejects a provider error as a typed ProviderTurnError", async (
 });
 
 for (const stopReason of ["length", "aborted", "toolUse"] as const) {
-  test(`compaction rejects ${stopReason} even when partial text exists`, async () => {
+  tenantTest(`compaction rejects ${stopReason} even when partial text exists`, async () => {
     await assert.rejects(
       summarizeHistory([], model, () => response("partial summary", stopReason)),
       /did not complete/,
@@ -104,7 +104,7 @@ for (const stopReason of ["length", "aborted", "toolUse"] as const) {
   });
 }
 
-test("compaction propagates transport failures and rejects empty output", async () => {
+tenantTest("compaction propagates transport failures and rejects empty output", async () => {
   await assert.rejects(
     summarizeHistory([], model, () => {
       throw new Error("connection lost");
@@ -118,7 +118,7 @@ test("compaction propagates transport failures and rejects empty output", async 
 });
 
 for (const modelId of ["gpt-6-astra", "claude-opus-5", "gpt-4.1"]) {
-  test(`compaction enables low reasoning only when supported by ${modelId}`, async () => {
+  tenantTest(`compaction enables low reasoning only when supported by ${modelId}`, async () => {
     const summaryModel = getRequiredModel(modelId);
     await summarizeHistory([], summaryModel, (_model, _context, options) => {
       assert.equal(options?.reasoning, summaryModel.reasoning ? "low" : undefined);
@@ -127,7 +127,7 @@ for (const modelId of ["gpt-6-astra", "claude-opus-5", "gpt-4.1"]) {
   });
 }
 
-test("Astra compaction serializes a supported reasoning effort through the provider adapter", async (t) => {
+tenantTest("Astra compaction serializes a supported reasoning effort through the provider adapter", async (t) => {
   const runtime = await buildModelRuntime({ openai: "sk-offline-test-key" });
   const originalFetch = globalThis.fetch;
   t.after(() => {

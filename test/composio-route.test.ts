@@ -1,6 +1,5 @@
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
 import { composioRoutes, composioUserId } from "../src/api/routes/composio.ts";
@@ -14,7 +13,7 @@ import { orgId } from "../src/config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
 
 function fixture() {
   const keychain = createKeychain({
@@ -115,16 +114,17 @@ function fixture() {
   return { invoke, own, shared, calls, replies, deps, app, audits };
 }
 
-test("Composio requires a verified actor and never uses another person's key", () =>
+tenantTest("Composio requires a verified actor and never uses another person's key", () =>
   inTestTenant(async () => {
     const f = fixture();
     await f.own("bob");
     assert.equal((await f.invoke("/v1/composio/toolkits", undefined, null)).status, 401);
     assert.equal((await f.invoke("/v1/composio/toolkits")).status, 403);
     assert.equal(f.calls.length, 0);
-  }));
+  }),
+);
 
-test("company credentials require an applicable grant and must be enabled", () =>
+tenantTest("company credentials require an applicable grant and must be enabled", () =>
   inTestTenant(async () => {
     for (const [granted, enabled] of [
       [false, true],
@@ -140,9 +140,10 @@ test("company credentials require an applicable grant and must be enabled", () =
     f.replies.push({ items: [], next_cursor: null });
     assert.equal((await f.invoke("/v1/composio/toolkits")).status, 200);
     assert.equal(new Headers(f.calls[0]!.init?.headers).get("x-api-key"), "company-key");
-  }));
+  }),
+);
 
-test("catalog preserves provider usage order, pagination, and strips raw fields", async () => {
+tenantTest("catalog preserves provider usage order, pagination, and strips raw fields", async () => {
   const f = fixture();
   await f.own();
   f.replies.push({
@@ -165,7 +166,7 @@ test("catalog preserves provider usage order, pagination, and strips raw fields"
   assert.equal(url.searchParams.get("cursor"), "page+1");
 });
 
-test("ambiguous personal keys fail closed rather than switching to the company key", () =>
+tenantTest("ambiguous personal keys fail closed rather than switching to the company key", () =>
   inTestTenant(async () => {
     const f = fixture();
     await f.own();
@@ -173,9 +174,10 @@ test("ambiguous personal keys fail closed rather than switching to the company k
     await f.shared();
     assert.equal((await f.invoke("/v1/composio/toolkits")).status, 409);
     assert.equal(f.calls.length, 0);
-  }));
+  }),
+);
 
-test("authorization binds the session to the authenticated actor, ignoring supplied identity", async () => {
+tenantTest("authorization binds the session to the authenticated actor, ignoring supplied identity", async () => {
   for (const link of ["https://connect.composio.dev/link/lk_test", "https://app.composio.dev/link/lt_test"]) {
     const f = fixture();
     await f.own();
@@ -194,7 +196,7 @@ test("authorization binds the session to the authenticated actor, ignoring suppl
   }
 });
 
-test("invalid toolkits and unsafe authorization destinations are rejected", async () => {
+tenantTest("invalid toolkits and unsafe authorization destinations are rejected", async () => {
   const f = fixture();
   await f.own();
   assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "../../anything" })).status, 400);
@@ -211,7 +213,7 @@ test("invalid toolkits and unsafe authorization destinations are rejected", asyn
   }
 });
 
-test("upstream errors are redacted and identity is stable per organization and person", async () => {
+tenantTest("upstream errors are redacted and identity is stable per organization and person", async () => {
   const f = fixture();
   await f.own();
   f.replies.push(new Error("private-key"));
@@ -226,24 +228,27 @@ test("upstream errors are redacted and identity is stable per organization and p
   });
 });
 
-test("authorization supplies the callback and account binding without accepting unsafe callback schemes", async () => {
-  const f = fixture();
-  await f.own();
-  for (const callbackUrl of ["javascript:alert(1)", "http://evil.example/", "https://user:password@example.com/"]) {
-    assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl })).status, 400);
-  }
-  assert.equal(f.calls.length, 0);
-  const callbackUrl = "https://qm.example/s/chat?composioReturn=nonce";
-  f.replies.push(
-    { session_id: "trs_test" },
-    { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
-  );
-  const r = await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl });
-  assert.equal(r.data.accountId, "ca_test");
-  assert.equal(JSON.parse(String(f.calls[1]!.init?.body)).callback_url, callbackUrl);
-});
+tenantTest(
+  "authorization supplies the callback and account binding without accepting unsafe callback schemes",
+  async () => {
+    const f = fixture();
+    await f.own();
+    for (const callbackUrl of ["javascript:alert(1)", "http://evil.example/", "https://user:password@example.com/"]) {
+      assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl })).status, 400);
+    }
+    assert.equal(f.calls.length, 0);
+    const callbackUrl = "https://qm.example/s/chat?composioReturn=nonce";
+    f.replies.push(
+      { session_id: "trs_test" },
+      { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
+    );
+    const r = await f.invoke("/v1/composio/authorize", { toolkit: "gmail", callbackUrl });
+    assert.equal(r.data.accountId, "ca_test");
+    assert.equal(JSON.parse(String(f.calls[1]!.init?.body)).callback_url, callbackUrl);
+  },
+);
 
-test("connections return only this actor's active accounts and strip credentials", async () => {
+tenantTest("connections return only this actor's active accounts and strip credentials", async () => {
   const f = fixture();
   await f.own();
   const owned = {
@@ -275,7 +280,7 @@ test("connections return only this actor's active accounts and strip credentials
   assert.doesNotMatch(r.text, /secret-token|private-key|user_id/);
 });
 
-test("connections report scopes the app's configuration grants that an older connection lacks", async () => {
+tenantTest("connections report scopes the app's configuration grants that an older connection lacks", async () => {
   const f = fixture();
   await f.own();
   const account = (id: string, scope: string | undefined, config = "ac_x") => ({
@@ -327,7 +332,7 @@ test("connections report scopes the app's configuration grants that an older con
   );
 });
 
-test("scopes granted in URL form match their short configured names", async () => {
+tenantTest("scopes granted in URL form match their short configured names", async () => {
   const f = fixture();
   await f.own();
   f.replies.push(
@@ -349,7 +354,7 @@ test("scopes granted in URL form match their short configured names", async () =
   assert.deepEqual(r.data.items[0].missingScopes, ["Mail.Send"]);
 });
 
-test("people can disconnect only their own connections, on a turn they started", async () => {
+tenantTest("people can disconnect only their own connections, on a turn they started", async () => {
   const f = fixture();
   await f.own();
   const mine = {
@@ -394,21 +399,24 @@ test("people can disconnect only their own connections, on a turn they started",
   assert.equal((await g.invoke("/v1/composio/disconnect", { accountId: "ca_mine" })).status, 404);
 });
 
-test("disconnecting refuses automations, impersonation and malformed accounts before provider calls", async () => {
-  for (const [body, actor, capability, impersonating, status] of [
-    [{ accountId: "ca_mine" }, null, { ...privateCap, liveActor: false, triggered: true }, false, 403],
-    [{ accountId: "ca_mine" }, "alice", undefined, true, 403],
-    [{ accountId: "../ca_mine" }, "alice", undefined, false, 400],
-    [{ accountId: "ca_mine" }, null, undefined, false, 401],
-  ] as const) {
-    const f = fixture();
-    await f.own();
-    assert.equal((await f.invoke("/v1/composio/disconnect", body, actor, capability, impersonating)).status, status);
-    assert.equal(f.calls.length, 0);
-  }
-});
+tenantTest(
+  "disconnecting refuses automations, impersonation and malformed accounts before provider calls",
+  async () => {
+    for (const [body, actor, capability, impersonating, status] of [
+      [{ accountId: "ca_mine" }, null, { ...privateCap, liveActor: false, triggered: true }, false, 403],
+      [{ accountId: "ca_mine" }, "alice", undefined, true, 403],
+      [{ accountId: "../ca_mine" }, "alice", undefined, false, 400],
+      [{ accountId: "ca_mine" }, null, undefined, false, 401],
+    ] as const) {
+      const f = fixture();
+      await f.own();
+      assert.equal((await f.invoke("/v1/composio/disconnect", body, actor, capability, impersonating)).status, status);
+      assert.equal(f.calls.length, 0);
+    }
+  },
+);
 
-test("connections require credential access and fail visibly on upstream errors", () =>
+tenantTest("connections require credential access and fail visibly on upstream errors", () =>
   inTestTenant(async () => {
     const f = fixture();
     assert.equal((await f.invoke("/v1/composio/connections", undefined, null)).status, 401);
@@ -418,9 +426,10 @@ test("connections require credential access and fail visibly on upstream errors"
     const r = await f.invoke("/v1/composio/connections");
     assert.equal(r.status, 502);
     assert.doesNotMatch(r.text, /private-key/);
-  }));
+  }),
+);
 
-test("Slack connection links verified workspace identity to the web owner and persists status", () =>
+tenantTest("Slack connection links verified workspace identity to the web owner and persists status", () =>
   inTestTenant(async () => {
     const f = fixture();
     await f.own();
@@ -464,75 +473,79 @@ test("Slack connection links verified workspace identity to the web owner and pe
     } finally {
       installPrincipalLinks(null);
     }
-  }));
+  }),
+);
 
-test("Slack link rejects changed browser accounts, wrong owner, bots, other workspaces and inactive connections", () =>
-  inTestTenant(async () => {
-    const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
-    const { mintSignedPayload } = await import("../src/auth/signed-token.ts");
-    for (const scenario of [
-      "expired",
-      "other-browser",
-      "wrong-owner",
-      "bot",
-      "wrong-workspace",
-      "pending",
-      "existing-connectors",
-      "existing-key",
-      "different-project",
-    ]) {
-      const f = fixture();
-      await f.own();
-      await f.own("bob");
-      f.deps.signingSecret = "slack-test";
-      f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
-      f.deps.slackAccounts = testMap();
-      f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
-      await f.deps.directory.replace([
-        { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
-      ]);
-      f.deps.slackEnvBotToken = "bot-test";
-      f.deps.slackInstallationFetch = (async () => Response.json({ ok: true, team_id: "T123" })) as typeof fetch;
-      const ticket = await mintSignedPayload(
-        {
-          purpose: "slack-account-link",
-          principal: "alice",
-          org: orgId(),
-          accountId: "ca_test",
-          exp: Date.now() + (scenario === "expired" ? -1000 : 60000),
-        },
-        "slack-test",
-      );
-      f.replies.push(
-        {
-          id: "ca_test",
-          user_id: composioUserId(orgId(), scenario === "wrong-owner" ? "bob" : "alice"),
-          toolkit: { slug: "slack" },
-          status: scenario === "pending" ? "INITIATED" : "ACTIVE",
-        },
-        {
-          data: {
-            ok: true,
-            user_id: "U123",
-            team_id: scenario === "wrong-workspace" ? "T999" : "T123",
-            ...(scenario === "bot" ? { bot_id: "B123" } : {}),
+tenantTest(
+  "Slack link rejects changed browser accounts, wrong owner, bots, other workspaces and inactive connections",
+  () =>
+    inTestTenant(async () => {
+      const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
+      const { mintSignedPayload } = await import("../src/auth/signed-token.ts");
+      for (const scenario of [
+        "expired",
+        "other-browser",
+        "wrong-owner",
+        "bot",
+        "wrong-workspace",
+        "pending",
+        "existing-connectors",
+        "existing-key",
+        "different-project",
+      ]) {
+        const f = fixture();
+        await f.own();
+        await f.own("bob");
+        f.deps.signingSecret = "slack-test";
+        f.deps.principalLinks = createPrincipalLinkService(testMap(), testAdvisoryLock());
+        f.deps.slackAccounts = testMap();
+        f.deps.directory = createPostgresDirectoryStore(testDatabaseUrl());
+        await f.deps.directory.replace([
+          { principalId: "work@example.test", slackId: "U123", displayName: "Alice", type: "internal" },
+        ]);
+        f.deps.slackEnvBotToken = "bot-test";
+        f.deps.slackInstallationFetch = (async () => Response.json({ ok: true, team_id: "T123" })) as typeof fetch;
+        const ticket = await mintSignedPayload(
+          {
+            purpose: "slack-account-link",
+            principal: "alice",
+            org: orgId(),
+            accountId: "ca_test",
+            exp: Date.now() + (scenario === "expired" ? -1000 : 60000),
           },
-        },
-      );
-      if (scenario === "existing-key") await f.own("work@example.test");
-      if (scenario === "different-project") await f.shared();
-      f.replies.push({ items: scenario === "existing-connectors" ? [{ id: "ca_existing" }] : [] });
-      if (scenario === "different-project") f.replies.push({ items: [{ id: "ca_company_existing" }] });
-      const result = await f.invoke(
-        "/v1/composio/slack/complete",
-        { ticket },
-        scenario === "other-browser" ? "bob" : "alice",
-      );
-      assert.ok(result.status >= 400, `${scenario}: ${result.status}`);
-      assert.equal((await f.deps.principalLinks.list()).length, 0);
-      assert.equal((await f.deps.slackAccounts.all()).length, 0);
-    }
-  }));
+          "slack-test",
+        );
+        f.replies.push(
+          {
+            id: "ca_test",
+            user_id: composioUserId(orgId(), scenario === "wrong-owner" ? "bob" : "alice"),
+            toolkit: { slug: "slack" },
+            status: scenario === "pending" ? "INITIATED" : "ACTIVE",
+          },
+          {
+            data: {
+              ok: true,
+              user_id: "U123",
+              team_id: scenario === "wrong-workspace" ? "T999" : "T123",
+              ...(scenario === "bot" ? { bot_id: "B123" } : {}),
+            },
+          },
+        );
+        if (scenario === "existing-key") await f.own("work@example.test");
+        if (scenario === "different-project") await f.shared();
+        f.replies.push({ items: scenario === "existing-connectors" ? [{ id: "ca_existing" }] : [] });
+        if (scenario === "different-project") f.replies.push({ items: [{ id: "ca_company_existing" }] });
+        const result = await f.invoke(
+          "/v1/composio/slack/complete",
+          { ticket },
+          scenario === "other-browser" ? "bob" : "alice",
+        );
+        assert.ok(result.status >= 400, `${scenario}: ${result.status}`);
+        assert.equal((await f.deps.principalLinks.list()).length, 0);
+        assert.equal((await f.deps.slackAccounts.all()).length, 0);
+      }
+    }),
+);
 
 const privateCap: CapabilityClaims = {
   runId: "test-run",
@@ -560,7 +573,7 @@ const aliceAccount = {
 };
 const gmailTool = { slug: execution.tool, version: execution.version, toolkit: { slug: "gmail" } };
 
-test("backend execution binds user and account, pins tool version, and withholds raw response metadata", () =>
+tenantTest("backend execution binds user and account, pins tool version, and withholds raw response metadata", () =>
   inTestTenant(async () => {
     const f = fixture();
     await f.shared();
@@ -579,25 +592,29 @@ test("backend execution binds user and account, pins tool version, and withholds
       arguments: execution.arguments,
     });
     assert.doesNotMatch(result.text, /company-key|hidden/);
-  }));
+  }),
+);
 
-test("execution rejects other owners, inactive accounts, disabled accounts, and mismatched toolkits", async () => {
-  for (const account of [
-    { ...aliceAccount, user_id: composioUserId(orgId(), "bob") },
-    { ...aliceAccount, id: "ca_bob" },
-    { ...aliceAccount, status: "EXPIRED" },
-    { ...aliceAccount, is_disabled: true },
-    { ...aliceAccount, toolkit: { slug: "github" } },
-  ]) {
-    const f = fixture();
-    await f.own();
-    f.replies.push(account, gmailTool);
-    assert.equal((await f.invoke("/v1/composio/execute", execution, null, privateCap)).status, 403);
-    assert.ok(f.calls.every((call) => call.init?.method !== "POST"));
-  }
-});
+tenantTest(
+  "execution rejects other owners, inactive accounts, disabled accounts, and mismatched toolkits",
+  async () => {
+    for (const account of [
+      { ...aliceAccount, user_id: composioUserId(orgId(), "bob") },
+      { ...aliceAccount, id: "ca_bob" },
+      { ...aliceAccount, status: "EXPIRED" },
+      { ...aliceAccount, is_disabled: true },
+      { ...aliceAccount, toolkit: { slug: "github" } },
+    ]) {
+      const f = fixture();
+      await f.own();
+      f.replies.push(account, gmailTool);
+      assert.equal((await f.invoke("/v1/composio/execute", execution, null, privateCap)).status, 403);
+      assert.ok(f.calls.every((call) => call.init?.method !== "POST"));
+    }
+  },
+);
 
-test("agent cannot override identity, credentials, proxy parameters or use meta tools", async () => {
+tenantTest("agent cannot override identity, credentials, proxy parameters or use meta tools", async () => {
   for (const patch of [
     { user_id: "bob" },
     { custom_auth_params: {} },
@@ -612,21 +629,24 @@ test("agent cannot override identity, credentials, proxy parameters or use meta 
   }
 });
 
-test("capabilities without owner authorization, deployments and closed shared scopes fail before provider calls", async () => {
-  for (const cap of [
-    { ...privateCap, ownerConnections: undefined },
-    { ...privateCap, deployment: "app" },
-    { ...privateCap, botActor: true },
-    { ...privateCap, scopeId: "channel:general" },
-  ]) {
-    const f = fixture();
-    await f.own();
-    assert.equal((await f.invoke("/v1/composio/connections", undefined, null, cap)).status, 403);
-    assert.equal(f.calls.length, 0);
-  }
-});
+tenantTest(
+  "capabilities without owner authorization, deployments and closed shared scopes fail before provider calls",
+  async () => {
+    for (const cap of [
+      { ...privateCap, ownerConnections: undefined },
+      { ...privateCap, deployment: "app" },
+      { ...privateCap, botActor: true },
+      { ...privateCap, scopeId: "channel:general" },
+    ]) {
+      const f = fixture();
+      await f.own();
+      assert.equal((await f.invoke("/v1/composio/connections", undefined, null, cap)).status, 403);
+      assert.equal(f.calls.length, 0);
+    }
+  },
+);
 
-test("authorized personal automation may execute but cannot initiate consent", async () => {
+tenantTest("authorized personal automation may execute but cannot initiate consent", async () => {
   const f = fixture();
   await f.own();
   const cap = { ...privateCap, liveActor: false, triggered: true };
@@ -635,7 +655,7 @@ test("authorized personal automation may execute but cannot initiate consent", a
   assert.equal((await f.invoke("/v1/composio/execute", execution, null, cap)).status, 200);
 });
 
-test("cron discovery accepts a current capability with distinct thread and session identifiers", async () => {
+tenantTest("cron discovery accepts a current capability with distinct thread and session identifiers", async () => {
   const f = fixture();
   await f.own();
   f.replies.push({ items: [{ slug: "googlecalendar", name: "Google Calendar" }] });
@@ -646,7 +666,7 @@ test("cron discovery accepts a current capability with distinct thread and sessi
   assert.equal(f.calls.length, 1);
 });
 
-test("execution never retries a provider failure", async () => {
+tenantTest("execution never retries a provider failure", async () => {
   const f = fixture();
   await f.own();
   f.replies.push(aliceAccount, gmailTool, new Error("uncertain write"));
@@ -654,7 +674,7 @@ test("execution never retries a provider failure", async () => {
   assert.equal(f.calls.length, 3);
 });
 
-test("execution failures tell the agent whether the tool timed out", async () => {
+tenantTest("execution failures tell the agent whether the tool timed out", async () => {
   const f = fixture();
   await f.own();
   const timeout = new Error("The operation was aborted due to timeout");
@@ -666,7 +686,7 @@ test("execution failures tell the agent whether the tool timed out", async () =>
   assert.match(result.data.message, /smaller pages/);
 });
 
-test("oversized provider responses are reported with their status", async () => {
+tenantTest("oversized provider responses are reported with their status", async () => {
   const f = fixture();
   await f.own();
   f.replies.push(aliceAccount, gmailTool, new Response("payload too large", { status: 413 }));
@@ -677,7 +697,7 @@ test("oversized provider responses are reported with their status", async () => 
   assert.match(result.data.message, /smaller pages/);
 });
 
-test("callback completion is browser-only and preserves the durable return URL", async () => {
+tenantTest("callback completion is browser-only and preserves the durable return URL", async () => {
   const f = fixture();
   await f.own();
   assert.equal((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" }, null, privateCap)).status, 403);
@@ -702,7 +722,7 @@ test("callback completion is browser-only and preserves the durable return URL",
   );
 });
 
-test("connects without a return page are still audited on completion, and failed completions too", async () => {
+tenantTest("connects without a return page are still audited on completion, and failed completions too", async () => {
   const f = fixture();
   await f.own();
   f.replies.push(
@@ -725,7 +745,7 @@ test("connects without a return page are still audited on completion, and failed
   );
 });
 
-test("finished runs and stale lease capabilities cannot reuse backend connection access", async () => {
+tenantTest("finished runs and stale lease capabilities cannot reuse backend connection access", async () => {
   for (const patch of [
     { runId: undefined },
     { runLeaseToken: "stale" },
@@ -745,7 +765,7 @@ test("finished runs and stale lease capabilities cannot reuse backend connection
   assert.equal(f.calls.length, 0);
 });
 
-test("ending the run during account lookup prevents execution", async () => {
+tenantTest("ending the run during account lookup prevents execution", async () => {
   const f = fixture();
   await f.own();
   const original = f.deps.composioFetch!;
@@ -760,7 +780,7 @@ test("ending the run during account lookup prevents execution", async () => {
   assert.ok(f.calls.every((call) => call.init?.method === "GET"));
 });
 
-test("ending the run during account lookup prevents disconnecting", async () => {
+tenantTest("ending the run during account lookup prevents disconnecting", async () => {
   const f = fixture();
   await f.own();
   const original = f.deps.composioFetch!;
@@ -777,7 +797,7 @@ test("ending the run during account lookup prevents disconnecting", async () => 
   );
 });
 
-test("shared org connections recheck grants for every audience member", () =>
+tenantTest("shared org connections recheck grants for every audience member", () =>
   inTestTenant(async () => {
     const f = fixture();
     await f.shared(false);
@@ -804,9 +824,10 @@ test("shared org connections recheck grants for every audience member", () =>
     await f.shared();
     f.replies.push({ items: [] });
     assert.equal((await f.invoke("/v1/composio/connections", undefined, null, cap)).status, 200);
-  }));
+  }),
+);
 
-test("expired callback returns are discarded after successful browser verification", async () => {
+tenantTest("expired callback returns are discarded after successful browser verification", async () => {
   const f = fixture();
   await f.own();
   const key = `${composioUserId(orgId(), "alice")}:ca_test`;
@@ -820,7 +841,7 @@ test("expired callback returns are discarded after successful browser verificati
   assert.equal(await f.deps.composioReturns!.get(key), null);
 });
 
-test("linked aliases can execute their existing accounts until the identity link is removed", () =>
+tenantTest("linked aliases can execute their existing accounts until the identity link is removed", () =>
   inTestTenant(async () => {
     const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
     const { installPrincipalLinks } = await import("../src/directory/person.ts");
@@ -855,9 +876,10 @@ test("linked aliases can execute their existing accounts until the identity link
     } finally {
       installPrincipalLinks(null);
     }
-  }));
+  }),
+);
 
-test("linked account discovery and Slack status preserve historical aliases without exposing other owners", () =>
+tenantTest("linked account discovery and Slack status preserve historical aliases without exposing other owners", () =>
   inTestTenant(async () => {
     const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
     const { installPrincipalLinks } = await import("../src/directory/person.ts");
@@ -912,9 +934,10 @@ test("linked account discovery and Slack status preserve historical aliases with
     } finally {
       installPrincipalLinks(null);
     }
-  }));
+  }),
+);
 
-test("unlinking an account owner during tool lookup prevents provider execution", () =>
+tenantTest("unlinking an account owner during tool lookup prevents provider execution", () =>
   inTestTenant(async () => {
     const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
     const { installPrincipalLinks } = await import("../src/directory/person.ts");
@@ -940,9 +963,10 @@ test("unlinking an account owner during tool lookup prevents provider execution"
     } finally {
       installPrincipalLinks(null);
     }
-  }));
+  }),
+);
 
-test("consent and browser verification use the canonical identity when signed in through an alias", () =>
+tenantTest("consent and browser verification use the canonical identity when signed in through an alias", () =>
   inTestTenant(async () => {
     const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
     const { installPrincipalLinks } = await import("../src/directory/person.ts");
@@ -971,9 +995,10 @@ test("consent and browser verification use the canonical identity when signed in
     } finally {
       installPrincipalLinks(null);
     }
-  }));
+  }),
+);
 
-test("linked identities retain provider accounts and Slack status until unlinked", () =>
+tenantTest("linked identities retain provider accounts and Slack status until unlinked", () =>
   inTestTenant(async () => {
     const { createPrincipalLinkService } = await import("../src/identity/principal-links.ts");
     const { installPrincipalLinks } = await import("../src/directory/person.ts");
@@ -1047,9 +1072,10 @@ test("linked identities retain provider accounts and Slack status until unlinked
     } finally {
       installPrincipalLinks(null);
     }
-  }));
+  }),
+);
 
-test("authorization failures keep a redacted upstream cause for operators", async (t) => {
+tenantTest("authorization failures keep a redacted upstream cause for operators", async (t) => {
   const f = fixture();
   await f.own();
   const logged: string[] = [];
@@ -1099,47 +1125,50 @@ async function slackReplyFixture() {
   return { ...f, account, identity, message };
 }
 
-test("Slack replies use only the viewer's verified user connection and server-side thread destination", async () => {
-  const f = await slackReplyFixture();
-  f.replies.push(f.account, f.identity, { data: { ok: true } }, { data: { ok: true, ts: "123.789" } });
-  const result = await f.invoke("/v1/composio/slack/reply", {
-    ...f.message,
-    channel: "CATTACK",
-    accountId: "ca_other",
-  });
-  assert.equal(result.status, 200);
-  assert.equal(result.data.sent, true);
-  const receipts = await f.deps.deliveries!.pending("web");
-  assert.equal(receipts.length, 1);
-  assert.equal(receipts[0]!.text, "Hello");
-  assert.deepEqual(receipts[0]!.destination.webTranscript, {
-    kind: "slack_reply",
-    sessionId: "session",
-    ts: "123.789",
-    name: "Alice",
-  });
-  const request = JSON.parse(String(f.calls.at(-1)!.init!.body));
-  assert.equal(request.connected_account_id, "ca_alice");
-  assert.equal(request.endpoint, "https://slack.com/api/chat.postMessage");
-  assert.deepEqual(request.body, {
-    channel: "C123",
-    thread_ts: "123.456",
-    text: "Hello",
-    client_msg_id: f.message.clientMessageId,
-    as_user: true,
-    unfurl_links: false,
-    unfurl_media: false,
-  });
-});
+tenantTest(
+  "Slack replies use only the viewer's verified user connection and server-side thread destination",
+  async () => {
+    const f = await slackReplyFixture();
+    f.replies.push(f.account, f.identity, { data: { ok: true } }, { data: { ok: true, ts: "123.789" } });
+    const result = await f.invoke("/v1/composio/slack/reply", {
+      ...f.message,
+      channel: "CATTACK",
+      accountId: "ca_other",
+    });
+    assert.equal(result.status, 200);
+    assert.equal(result.data.sent, true);
+    const receipts = await f.deps.deliveries!.pending("web");
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0]!.text, "Hello");
+    assert.deepEqual(receipts[0]!.destination.webTranscript, {
+      kind: "slack_reply",
+      sessionId: "session",
+      ts: "123.789",
+      name: "Alice",
+    });
+    const request = JSON.parse(String(f.calls.at(-1)!.init!.body));
+    assert.equal(request.connected_account_id, "ca_alice");
+    assert.equal(request.endpoint, "https://slack.com/api/chat.postMessage");
+    assert.deepEqual(request.body, {
+      channel: "C123",
+      thread_ts: "123.456",
+      text: "Hello",
+      client_msg_id: f.message.clientMessageId,
+      as_user: true,
+      unfurl_links: false,
+      unfurl_media: false,
+    });
+  },
+);
 
-test("Slack reply status verifies personal access without posting", async () => {
+tenantTest("Slack reply status verifies personal access without posting", async () => {
   const f = await slackReplyFixture();
   f.replies.push(f.account, f.identity, { data: { ok: true } });
   assert.equal((await f.invoke("/v1/composio/slack/reply-status", f.message)).data.connected, true);
   assert.equal(f.calls.length, 3);
 });
 
-test("Slack replies cannot target hidden sessions or accept blank messages", async () => {
+tenantTest("Slack replies cannot target hidden sessions or accept blank messages", async () => {
   const f = await slackReplyFixture();
   assert.equal((await f.invoke("/v1/composio/slack/reply", { ...f.message, sessionId: "hidden" })).status, 404);
   assert.equal((await f.invoke("/v1/composio/slack/reply", { ...f.message, text: " " })).status, 400);
@@ -1147,7 +1176,7 @@ test("Slack replies cannot target hidden sessions or accept blank messages", asy
   assert.equal(f.calls.length, 0);
 });
 
-test("Slack replies require a linked user account and never fall back to the bot token", async () => {
+tenantTest("Slack replies require a linked user account and never fall back to the bot token", async () => {
   const f = await slackReplyFixture();
   await f.deps.slackAccounts!.delete("alice");
   f.deps.slackEnvBotToken = "must-not-use";
@@ -1163,14 +1192,14 @@ for (const [label, accountPatch, identityPatch] of [
   ["another user", {}, { user_id: "UOTHER" }],
   ["another workspace", {}, { team_id: "TOTHER" }],
 ] as const)
-  test(`Slack replies reject ${label}`, async () => {
+  tenantTest(`Slack replies reject ${label}`, async () => {
     const f = await slackReplyFixture();
     f.replies.push({ ...f.account, ...accountPatch }, { data: { ...f.identity.data, ...identityPatch } });
     assert.equal((await f.invoke("/v1/composio/slack/reply", f.message)).status, 409);
     assert.ok(f.calls.length <= 2);
   });
 
-test("Slack replies preserve an uncertain send result without retrying", async () => {
+tenantTest("Slack replies preserve an uncertain send result without retrying", async () => {
   const f = await slackReplyFixture();
   f.replies.push(f.account, f.identity, { data: { ok: true } }, new Error("timeout"));
   const result = await f.invoke("/v1/composio/slack/reply", f.message);
@@ -1179,21 +1208,21 @@ test("Slack replies preserve an uncertain send result without retrying", async (
   assert.equal(f.calls.length, 4);
 });
 
-test("Slack replies stop when the personal account cannot access the conversation", async () => {
+tenantTest("Slack replies stop when the personal account cannot access the conversation", async () => {
   const f = await slackReplyFixture();
   f.replies.push(f.account, f.identity, { data: { ok: false, error: "channel_not_found" } });
   assert.equal((await f.invoke("/v1/composio/slack/reply", f.message)).status, 403);
   assert.equal(f.calls.length, 3);
 });
 
-test("Slack replies reject impersonation and agent capabilities", async () => {
+tenantTest("Slack replies reject impersonation and agent capabilities", async () => {
   const f = await slackReplyFixture();
   assert.equal((await f.invoke("/v1/composio/slack/reply", f.message, "alice", undefined, true)).status, 403);
   assert.equal((await f.invoke("/v1/composio/slack/reply", f.message, "alice", {} as CapabilityClaims)).status, 403);
   assert.equal(f.calls.length, 0);
 });
 
-test("Slack replies preserve unthreaded DMs and report Slack permission failures", async () => {
+tenantTest("Slack replies preserve unthreaded DMs and report Slack permission failures", async () => {
   const f = await slackReplyFixture();
   f.app.getSessionForViewer = async () => ({ session: { threadRef: "dm:D123" } });
   f.replies.push(f.account, f.identity, { data: { ok: true } }, { data: { ok: false, error: "missing_scope" } });
@@ -1233,7 +1262,7 @@ async function nativeSlackFixture(linked = true) {
   return { ...f, nativeCalls, nativeReplies, nativeIdentity };
 }
 
-test("native Slack replies use the authenticated user's token and server destination without Composio", () =>
+tenantTest("native Slack replies use the authenticated user's token and server destination without Composio", () =>
   inTestTenant(async () => {
     const f = await nativeSlackFixture();
     f.nativeReplies.push(f.nativeIdentity, { ok: true }, { ok: true, ts: "123.789" });
@@ -1261,9 +1290,10 @@ test("native Slack replies use the authenticated user's token and server destina
       unfurl_links: false,
       unfurl_media: false,
     });
-  }));
+  }),
+);
 
-test("native Slack rejects bot, wrong person, and wrong workspace tokens", () =>
+tenantTest("native Slack rejects bot, wrong person, and wrong workspace tokens", () =>
   inTestTenant(async () => {
     for (const invalid of [{ bot_id: "B123" }, { user_id: "UOTHER" }, { team_id: "TOTHER" }]) {
       const f = await nativeSlackFixture();
@@ -1275,9 +1305,10 @@ test("native Slack rejects bot, wrong person, and wrong workspace tokens", () =>
         false,
       );
     }
-  }));
+  }),
+);
 
-test("native Slack connection status and linking work without a Composio credential", () =>
+tenantTest("native Slack connection status and linking work without a Composio credential", () =>
   inTestTenant(async () => {
     const f = await nativeSlackFixture(false);
     f.deps.keychain = undefined;
@@ -1291,9 +1322,10 @@ test("native Slack connection status and linking work without a Composio credent
     await f.deps.connectorTokens!.setConnectorToken("slack.com", "alice", { accessToken: "alice-user" });
     f.nativeReplies.push(f.nativeIdentity);
     assert.equal((await f.invoke("/v1/composio/slack")).data.connected, true);
-  }));
+  }),
+);
 
-test("configured native OAuth preserves an existing Composio connection", () =>
+tenantTest("configured native OAuth preserves an existing Composio connection", () =>
   inTestTenant(async () => {
     const f = await nativeSlackFixture(false);
     await f.deps.slackAccounts!.put("alice", {
@@ -1310,9 +1342,10 @@ test("configured native OAuth preserves an existing Composio connection", () =>
     f.replies.push(f.account, f.identity, { data: { ok: true } }, { data: { ok: true, ts: "123.789" } });
     assert.equal((await f.invoke("/v1/composio/slack/reply", f.message)).data.sent, true);
     assert.equal(f.nativeCalls.length, 0);
-  }));
+  }),
+);
 
-test("native Slack access denial and uncertain sends never fall through to another transport", () =>
+tenantTest("native Slack access denial and uncertain sends never fall through to another transport", () =>
   inTestTenant(async () => {
     for (const sending of [false, true]) {
       const f = await nativeSlackFixture();
@@ -1323,9 +1356,10 @@ test("native Slack access denial and uncertain sends never fall through to anoth
       if (sending) assert.match(result.data.message, /outcome is unknown/);
       assert.equal(f.calls.length, 0);
     }
-  }));
+  }),
+);
 
-test("a confirmed Slack send is distinguished from a failed transcript write", async () => {
+tenantTest("a confirmed Slack send is distinguished from a failed transcript write", async () => {
   const f = await slackReplyFixture();
   f.deps.deliveries!.enqueue = async () => {
     throw new Error("database unavailable");
@@ -1337,7 +1371,7 @@ test("a confirmed Slack send is distinguished from a failed transcript write", a
   assert.match(result.data.message, /Slack sent your message.*Do not resend/);
 });
 
-test("Slack reply failures redact both provider credentials from diagnostics", (t) =>
+tenantTest("Slack reply failures redact both provider credentials from diagnostics", (t) =>
   inTestTenant(async () => {
     const logged: string[] = [];
     t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.map(String).join(" ")));
@@ -1349,4 +1383,5 @@ test("Slack reply failures redact both provider credentials from diagnostics", (
     assert.equal((await native.invoke("/v1/composio/slack/reply", native.message)).status, 502);
     assert.match(logged.join("\n"), /provider rejected/);
     assert.doesNotMatch(logged.join("\n"), /private-key|alice-user/);
-  }));
+  }),
+);

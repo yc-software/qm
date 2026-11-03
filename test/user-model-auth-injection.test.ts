@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createUserModelCredentialStore } from "../src/model/user-model-credential-store.ts";
@@ -7,6 +6,7 @@ import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routin
 import { resolveModel } from "../src/model/pi-models.ts";
 import type { UserModelCredential } from "../src/model/user-model-credential-store.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 const apikey = (provider: "anthropic" | "openai", apiKey: string): UserModelCredential => ({
   provider,
@@ -39,7 +39,7 @@ function testStore() {
   return { keychain, store: createUserModelCredentialStore({ keychain }) };
 }
 
-test("user model credential store round-trips api key and oauth per user+provider", async () => {
+tenantTest("user model credential store round-trips api key and oauth per user+provider", async () => {
   const { keychain, store } = testStore();
   await store.setApiKey("u1", "anthropic", "sk-ant-abc");
   const anth = await store.get("u1", "anthropic");
@@ -99,7 +99,7 @@ test("user model credential store round-trips api key and oauth per user+provide
   assert.deepEqual(await store.connections("u1"), []);
 });
 
-test("stale subscription tokens refresh once (single-flight) inside the keychain", async () => {
+tenantTest("stale subscription tokens refresh once (single-flight) inside the keychain", async () => {
   let refreshCalls = 0;
   const keychain = createKeychain({
     lock: testAdvisoryLock(),
@@ -141,36 +141,36 @@ test("stale subscription tokens refresh once (single-flight) inside the keychain
   assert.equal(refreshCalls, 1);
 });
 
-test("routing: anthropic api key -> a claude model", () => {
+tenantTest("routing: anthropic api key -> a claude model", () => {
   const r = resolveIndividualAuthRouting(apikey("anthropic", "sk-ant-x"), null, undefined);
   assert.equal(r?.kind, "apikey");
   assert.equal(r?.provider, "anthropic");
   assert.equal((r as { apiKey: string }).apiKey, "sk-ant-x");
 });
 
-test("routing: anthropic OAuth login -> a claude model", () => {
+tenantTest("routing: anthropic OAuth login -> a claude model", () => {
   const r = resolveIndividualAuthRouting(oauth("anthropic"), null, undefined);
   assert.equal(r?.kind, "oauth");
   assert.equal(r?.model, "claude-opus-5");
 });
 
-test("routing: openai OAuth login -> the Codex subscription provider", () => {
+tenantTest("routing: openai OAuth login -> the Codex subscription provider", () => {
   const r = resolveIndividualAuthRouting(null, oauth("openai"), undefined);
   assert.equal(r?.kind, "oauth");
   assert.equal(r?.model, "codex/gpt-6.1-sol");
 });
 
-test("routing: requested model provider wins when that provider is connected", () => {
+tenantTest("routing: requested model provider wins when that provider is connected", () => {
   const r = resolveIndividualAuthRouting(oauth("anthropic"), oauth("openai"), "gpt-5.6-sol");
   assert.equal(r?.model, "codex/gpt-5.6-sol");
 });
 
-test("routing: a requested openai model is namespaced to the subscription provider", () => {
+tenantTest("routing: a requested openai model is namespaced to the subscription provider", () => {
   const r = resolveIndividualAuthRouting(null, oauth("openai"), "gpt-5.6-terra");
   assert.equal(r?.model, "codex/gpt-5.6-terra");
 });
 
-test("codex-subscription model ids resolve to pi-ai's openai-codex provider", () => {
+tenantTest("codex-subscription model ids resolve to pi-ai's openai-codex provider", () => {
   const m = resolveModel("codex/gpt-5.6-sol");
   assert.ok(m, "codex/gpt-5.6-sol must resolve");
   assert.equal(String(m?.provider), "openai-codex");
@@ -180,11 +180,11 @@ test("codex-subscription model ids resolve to pi-ai's openai-codex provider", ()
   assert.equal(String(resolveModel("gpt-5.6-sol")?.provider), "openai");
 });
 
-test("routing: no credentials -> null (falls through to gate, no deployment key)", () => {
+tenantTest("routing: no credentials -> null (falls through to gate, no deployment key)", () => {
   assert.equal(resolveIndividualAuthRouting(null, null, undefined), null);
 });
 
-test("individual OAuth routing preserves exact supported runtime selections", () => {
+tenantTest("individual OAuth routing preserves exact supported runtime selections", () => {
   assert.equal(resolveIndividualAuthRouting(oauth("anthropic"), null, "claude-sonnet-5")?.model, "claude-sonnet-5");
   assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "gpt-6-astra")?.model, "codex/gpt-6-astra");
   assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "codex/gpt-5.5")?.model, "codex/gpt-5.5");

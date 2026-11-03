@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -10,6 +9,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
@@ -54,7 +54,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   return { crons, cron, deliveries, idempotency, ask, deps };
 }
 
-test("cron credential resolution resumes in the original conversation exactly once", async () => {
+tenantTest("cron credential resolution resumes in the original conversation exactly once", async () => {
   const requests: TurnRequest[] = [];
   const f = await fixture(async (request) => {
     requests.push(request);
@@ -78,7 +78,7 @@ test("cron credential resolution resumes in the original conversation exactly on
   assert.equal(pending[0]!.text, "dummy scheduled result");
 });
 
-test("failed cron credential resolution notifies only the owner", async () => {
+tenantTest("failed cron credential resolution notifies only the owner", async () => {
   let runs = 0;
   const f = await fixture(async () => {
     runs++;
@@ -98,7 +98,7 @@ test("failed cron credential resolution notifies only the owner", async () => {
   assert.equal(pending.filter((delivery) => delivery.destination.target === "U_BOB").length, 0);
 });
 
-test("a concurrent sweep cannot mark an in-flight resume notified before it finishes", async () => {
+tenantTest("a concurrent sweep cannot mark an in-flight resume notified before it finishes", async () => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<TurnResult>();
   let runs = 0;

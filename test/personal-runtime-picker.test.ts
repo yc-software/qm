@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { buildApp as buildProductionApp } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
@@ -8,7 +7,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { userRuntimeConfigBody } from "../src/api/runtime-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
-import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -39,7 +38,7 @@ async function setup() {
   return { built, get, put, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-test("personal API-key picker works without company keys and saves model, effort and Fast", async () => {
+tenantTest("personal API-key picker works without company keys and saves model, effort and Fast", async () => {
   const s = await setup();
   try {
     await inTestTenant(() => s.built.userModelCredentials.setApiKey("U1", "openai", "synthetic-openai"));
@@ -65,7 +64,7 @@ test("personal API-key picker works without company keys and saves model, effort
 });
 
 for (const provider of ["anthropic", "openai"] as const) {
-  test(`personal ${provider} OAuth picker advertises only compatible runtimes`, async () => {
+  tenantTest(`personal ${provider} OAuth picker advertises only compatible runtimes`, async () => {
     const s = await setup();
     try {
       await inTestTenant(() =>
@@ -91,7 +90,7 @@ for (const provider of ["anthropic", "openai"] as const) {
   });
 }
 
-test("personal picker keeps org restrictions and shared-scope caller isolation", async () => {
+tenantTest("personal picker keeps org restrictions and shared-scope caller isolation", async () => {
   const s = await setup();
   try {
     await inTestTenant(() => s.built.userModelCredentials.setApiKey("U1", "openai", "synthetic-openai"));

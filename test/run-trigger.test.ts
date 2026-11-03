@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -6,6 +6,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { tenantIt } from "./support/test-tenants.ts";
 
 const toChannel: Destination = { type: "slack", target: "C1:169.7", audienceScopeId: scopeId("channel", "C1") };
 
@@ -39,7 +40,7 @@ function deps(run: (req: TurnRequest) => Promise<TurnResult>, dir?: ReturnType<t
 }
 
 describe("runTrigger: a monitor fire runs first-class live and delivers its own reply", () => {
-  it("passes surfaceTools + addressed + the arming destination, and does NOT enqueue the reply", async () => {
+  tenantIt("passes surfaceTools + addressed + the arming destination, and does NOT enqueue the reply", async () => {
     let req: TurnRequest | undefined;
     const d = deps(async (r) => {
       req = r;
@@ -62,48 +63,54 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     assert.equal((await d.deliveries.pending("slack")).length, 0);
   });
 
-  it("a monitor whose destination is no longer visible stays off the live path: no surface tools, a note, no enqueue", async () => {
-    let req: TurnRequest | undefined;
-    const d = deps(async (r) => {
-      req = r;
-      return { status: "ok", reply: "build passed" };
-    }, directory(false));
-    const out = await runTrigger(d, {
-      owner: "U1",
-      ownerScopeId: scopeId("personal", "U1"),
-      input: "report back",
-      fireKey: "monitor:m2:exit",
-      surface: "monitor",
-      threadRef: "C1:169.7",
-      destination: toChannel,
-    });
-    assert.equal(req?.surfaceTools, undefined, "a non-visible destination does not get the surface tools");
-    assert.match(out.note ?? "", /no longer visible/);
-    assert.equal((await d.deliveries.pending("slack")).length, 0, "and nothing is delivered");
-  });
+  tenantIt(
+    "a monitor whose destination is no longer visible stays off the live path: no surface tools, a note, no enqueue",
+    async () => {
+      let req: TurnRequest | undefined;
+      const d = deps(async (r) => {
+        req = r;
+        return { status: "ok", reply: "build passed" };
+      }, directory(false));
+      const out = await runTrigger(d, {
+        owner: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+        input: "report back",
+        fireKey: "monitor:m2:exit",
+        surface: "monitor",
+        threadRef: "C1:169.7",
+        destination: toChannel,
+      });
+      assert.equal(req?.surfaceTools, undefined, "a non-visible destination does not get the surface tools");
+      assert.match(out.note ?? "", /no longer visible/);
+      assert.equal((await d.deliveries.pending("slack")).length, 0, "and nothing is delivered");
+    },
+  );
 
-  it("§10 leg (a) at fire time: an actor who can no longer READ the trigger's home scope skips the run entirely", async () => {
-    let ranTurn = false;
-    const d = deps(async () => {
-      ranTurn = true;
-      return { status: "ok", reply: "should never compose" };
-    }, directory(false));
-    const out = await runTrigger(d, {
-      owner: "U1",
-      ownerScopeId: scopeId("channel", "C-private"),
-      input: "digest the channel",
-      fireKey: "cron:c9:1",
-      surface: "cron",
-      destination: toChannel,
-    });
-    assert.equal(ranTurn, false, "the turn must not run — it would mount a scope the actor lost");
-    assert.equal(out.ran, true, "the fire is consumed and recorded, not mistaken for a dedupe hit");
-    assert.equal(out.authzFailed, false, "skip-not-disable: a stale directory must not kill the trigger");
-    assert.match(out.note ?? "", /no longer a member/);
-    assert.equal((await d.deliveries.pending("slack")).length, 0);
-  });
+  tenantIt(
+    "§10 leg (a) at fire time: an actor who can no longer READ the trigger's home scope skips the run entirely",
+    async () => {
+      let ranTurn = false;
+      const d = deps(async () => {
+        ranTurn = true;
+        return { status: "ok", reply: "should never compose" };
+      }, directory(false));
+      const out = await runTrigger(d, {
+        owner: "U1",
+        ownerScopeId: scopeId("channel", "C-private"),
+        input: "digest the channel",
+        fireKey: "cron:c9:1",
+        surface: "cron",
+        destination: toChannel,
+      });
+      assert.equal(ranTurn, false, "the turn must not run — it would mount a scope the actor lost");
+      assert.equal(out.ran, true, "the fire is consumed and recorded, not mistaken for a dedupe hit");
+      assert.equal(out.authzFailed, false, "skip-not-disable: a stale directory must not kill the trigger");
+      assert.match(out.note ?? "", /no longer a member/);
+      assert.equal((await d.deliveries.pending("slack")).length, 0);
+    },
+  );
 
-  it("§10 leg (a): a member in good standing runs as before (group home scope)", async () => {
+  tenantIt("§10 leg (a): a member in good standing runs as before (group home scope)", async () => {
     let ranTurn = false;
     const d = deps(async () => {
       ranTurn = true;
@@ -122,37 +129,40 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     assert.equal((await d.deliveries.pending("slack")).length, 1, "output delivered");
   });
 
-  it("a group-DM home destination (slack-typed, group audience scope) is gated by the GROUPS tables, not the channel tables", async () => {
-    const mpimOnly = {
-      channelMember: async () => false,
-      groupMember: async (id: string, who: string) => id === "C-mpim" && who === "U1",
-      listChannelsFor: async () => [],
-      channelPrivacy: async () => undefined,
-      get: async () => null,
-    };
-    let req: TurnRequest | undefined;
-    const d = deps(
-      async (r) => {
-        req = r;
-        return { status: "ok", reply: "delivered" };
-      },
-      mpimOnly as unknown as ReturnType<typeof directory>,
-    );
-    const out = await runTrigger(d, {
-      owner: "U1",
-      ownerScopeId: scopeId("personal", "U1"),
-      input: "remind us here",
-      fireKey: "monitor:m-mpim:exit",
-      surface: "monitor",
-      threadRef: "C-mpim:169.7",
-      destination: { type: "slack", target: "C-mpim:169.7", audienceScopeId: scopeId("group", "C-mpim") },
-    });
-    assert.equal(out.ran, true);
-    assert.equal(req?.surfaceTools, true, "the fire goes live and can deliver into the group DM");
-    assert.doesNotMatch(out.note ?? "", /no longer visible/);
-  });
+  tenantIt(
+    "a group-DM home destination (slack-typed, group audience scope) is gated by the GROUPS tables, not the channel tables",
+    async () => {
+      const mpimOnly = {
+        channelMember: async () => false,
+        groupMember: async (id: string, who: string) => id === "C-mpim" && who === "U1",
+        listChannelsFor: async () => [],
+        channelPrivacy: async () => undefined,
+        get: async () => null,
+      };
+      let req: TurnRequest | undefined;
+      const d = deps(
+        async (r) => {
+          req = r;
+          return { status: "ok", reply: "delivered" };
+        },
+        mpimOnly as unknown as ReturnType<typeof directory>,
+      );
+      const out = await runTrigger(d, {
+        owner: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+        input: "remind us here",
+        fireKey: "monitor:m-mpim:exit",
+        surface: "monitor",
+        threadRef: "C-mpim:169.7",
+        destination: { type: "slack", target: "C-mpim:169.7", audienceScopeId: scopeId("group", "C-mpim") },
+      });
+      assert.equal(out.ran, true);
+      assert.equal(req?.surfaceTools, true, "the fire goes live and can deliver into the group DM");
+      assert.doesNotMatch(out.note ?? "", /no longer visible/);
+    },
+  );
 
-  it("a group-DM destination whose owner LEFT the mpim still fails closed", async () => {
+  tenantIt("a group-DM destination whose owner LEFT the mpim still fails closed", async () => {
     const noOne = {
       channelMember: async () => false,
       groupMember: async () => false,
@@ -182,7 +192,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     assert.equal((await d.deliveries.pending("slack")).length, 0);
   });
 
-  it("a bare monitor (no destination) runs but neither goes live nor enqueues", async () => {
+  tenantIt("a bare monitor (no destination) runs but neither goes live nor enqueues", async () => {
     let req: TurnRequest | undefined;
     const d = deps(async (r) => {
       req = r;
@@ -203,7 +213,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
 });
 
 describe("runTrigger: an autonomous cron does NOT go live (it may be conditionally silent by design)", () => {
-  it("threads grants only for crons homed in their owner's own DM, wherever the output goes", async () => {
+  tenantIt("threads grants only for crons homed in their owner's own DM, wherever the output goes", async () => {
     const requests: TurnRequest[] = [];
     const d = deps(async (request) => {
       requests.push(request);
@@ -237,40 +247,54 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
     assert.equal(requests[4]?.unattendedGrants, undefined, "a cron homed in someone else's DM carries no grants");
   });
 
-  it("a failed fire's error notice carries friendly copy while the fire history keeps the raw reason", async () => {
-    const d = deps(async () => ({ status: "failed", reason: "TypeError: fetch failed at sandbox.ts:42" }));
-    const out = await runTrigger(d, {
-      owner: "U1",
-      ownerScopeId: scopeId("channel", "C1"),
-      input: "report back",
-      fireKey: "monitor:m9:exit",
-      surface: "monitor",
-      threadRef: "C1:169.7",
-      destination: toChannel,
-      errorNotice: (s) => `⚠️ could not run: ${s}`,
-    });
-    assert.equal(out.note, "failed: TypeError: fetch failed at sandbox.ts:42", "the operator record keeps the detail");
-    const pending = await d.deliveries.pending("slack");
-    assert.equal(pending.length, 1);
-    assert.equal(pending[0]!.text, "⚠️ could not run: something went wrong on my end");
-  });
+  tenantIt(
+    "a failed fire's error notice carries friendly copy while the fire history keeps the raw reason",
+    async () => {
+      const d = deps(async () => ({ status: "failed", reason: "TypeError: fetch failed at sandbox.ts:42" }));
+      const out = await runTrigger(d, {
+        owner: "U1",
+        ownerScopeId: scopeId("channel", "C1"),
+        input: "report back",
+        fireKey: "monitor:m9:exit",
+        surface: "monitor",
+        threadRef: "C1:169.7",
+        destination: toChannel,
+        errorNotice: (s) => `⚠️ could not run: ${s}`,
+      });
+      assert.equal(
+        out.note,
+        "failed: TypeError: fetch failed at sandbox.ts:42",
+        "the operator record keeps the detail",
+      );
+      const pending = await d.deliveries.pending("slack");
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0]!.text, "⚠️ could not run: something went wrong on my end");
+    },
+  );
 
-  it("a destination-bearing cron keeps the compose-then-enqueue path: no surface tools, one delivery", async () => {
-    let req: TurnRequest | undefined;
-    const d = deps(async (r) => {
-      req = r;
-      return { status: "ok", reply: "your digest" };
-    });
-    await runTrigger(d, {
-      owner: "U1",
-      ownerScopeId: scopeId("channel", "C1"),
-      input: "compose the digest",
-      fireKey: "cron:c1:t1",
-      surface: "cron",
-      threadRef: "cron:c1:t1",
-      destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
-    });
-    assert.equal(req?.surfaceTools, undefined, "a cron never gets addressed/shed semantics — it may stay silent");
-    assert.equal((await d.deliveries.pending("slack")).length, 1, "core delivers the cron reply via the enqueue path");
-  });
+  tenantIt(
+    "a destination-bearing cron keeps the compose-then-enqueue path: no surface tools, one delivery",
+    async () => {
+      let req: TurnRequest | undefined;
+      const d = deps(async (r) => {
+        req = r;
+        return { status: "ok", reply: "your digest" };
+      });
+      await runTrigger(d, {
+        owner: "U1",
+        ownerScopeId: scopeId("channel", "C1"),
+        input: "compose the digest",
+        fireKey: "cron:c1:t1",
+        surface: "cron",
+        threadRef: "cron:c1:t1",
+        destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+      });
+      assert.equal(req?.surfaceTools, undefined, "a cron never gets addressed/shed semantics — it may stay silent");
+      assert.equal(
+        (await d.deliveries.pending("slack")).length,
+        1,
+        "core delivers the cron reply via the enqueue path",
+      );
+    },
+  );
 });

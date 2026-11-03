@@ -409,6 +409,12 @@ export function defaultModelForProvider(provider: ModelProvider): string | undef
   return modelSupported(model) && modelServiceable(model, only) ? model : undefined;
 }
 
+export function builtinModelForProvider(provider: ModelProvider): string | undefined {
+  return [...PROVIDER_DEFAULT_MODEL_IDS, ...SELECTABLE_BASE_MODELS.map((m) => m.id)].find(
+    (id) => resolveBuiltinModel(id)?.provider === provider,
+  );
+}
+
 export function getRequiredModel(id: string, useOrgEndpoints = true): PiModel {
   const model = resolveModel(id, useOrgEndpoints);
   if (!model) throw new Error(`Unsupported model: ${id}`);

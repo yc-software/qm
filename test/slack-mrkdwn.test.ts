@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   decodeSlackEntities,
@@ -12,41 +11,42 @@ import {
   inlineCode,
 } from "../src/slack/lib.ts";
 import { resolveMentions } from "../src/slack/mrkdwn.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
-test("inlineCode clamps long text and neutralizes backticks", () => {
+tenantTest("inlineCode clamps long text and neutralizes backticks", () => {
   const clamped = inlineCode("`echo hi`" + "y".repeat(60000));
   assert.ok(clamped.length <= 2005, `clamped to ${clamped.length} chars`);
   assert.match(clamped, /^`'echo hi'/);
   assert.match(clamped, /\.\.\.`$/);
 });
 
-test("decodeSlackEntities", () => {
+tenantTest("decodeSlackEntities", () => {
   assert.equal(decodeSlackEntities("echo a &gt; b &amp;&amp; c"), "echo a > b && c");
 });
 
-test("toSlackMrkdwn: bold uses single * (the screenshot bug: **x** rendered literally)", () => {
+tenantTest("toSlackMrkdwn: bold uses single * (the screenshot bug: **x** rendered literally)", () => {
   assert.equal(toSlackMrkdwn("**Git commands**"), "*Git commands*");
   assert.equal(toSlackMrkdwn("__also bold__"), "*also bold*");
   assert.equal(toSlackMrkdwn("**a** and **b**"), "*a* and *b*");
 });
 
-test("toSlackMrkdwn: italic uses _ ; bold-inside-text doesn't get mangled by the italic pass", () => {
+tenantTest("toSlackMrkdwn: italic uses _ ; bold-inside-text doesn't get mangled by the italic pass", () => {
   assert.equal(toSlackMrkdwn("*italic*"), "_italic_");
   assert.equal(toSlackMrkdwn("_already_"), "_already_");
   assert.equal(toSlackMrkdwn("use **bold** not *thin*"), "use *bold* not _thin_");
 });
 
-test("toSlackMrkdwn: strikethrough ~~x~~ → ~x~", () => {
+tenantTest("toSlackMrkdwn: strikethrough ~~x~~ → ~x~", () => {
   assert.equal(toSlackMrkdwn("~~gone~~"), "~gone~");
 });
 
-test("toSlackMrkdwn: links [text](url) → <url|text>, images too", () => {
+tenantTest("toSlackMrkdwn: links [text](url) → <url|text>, images too", () => {
   assert.equal(toSlackMrkdwn("see [GitHub](https://github.com)"), "see <https://github.com|GitHub>");
   assert.equal(toSlackMrkdwn("[plain](https://x.io)"), "<https://x.io|plain>");
   assert.equal(toSlackMrkdwn("![alt](https://x.io/a.png)"), "<https://x.io/a.png|alt>");
 });
 
-test("toSlackMrkdwn: bold-wrapped bare URL keeps the * outside the link (the device-code bug)", () => {
+tenantTest("toSlackMrkdwn: bold-wrapped bare URL keeps the * outside the link (the device-code bug)", () => {
   assert.equal(
     toSlackMrkdwn("**https://example.awsapps.com/start/#/device**"),
     "*<https://example.awsapps.com/start/#/device>*",
@@ -55,52 +55,52 @@ test("toSlackMrkdwn: bold-wrapped bare URL keeps the * outside the link (the dev
   assert.equal(toSlackMrkdwn("__https://x.io/a__"), "*<https://x.io/a>*");
 });
 
-test("toSlackMrkdwn: bare URLs get explicit <> boundaries; trailing punctuation stays outside", () => {
+tenantTest("toSlackMrkdwn: bare URLs get explicit <> boundaries; trailing punctuation stays outside", () => {
   assert.equal(toSlackMrkdwn("see https://x.io/a."), "see <https://x.io/a>.");
   assert.equal(toSlackMrkdwn("(see https://x.io/a)"), "(see <https://x.io/a>)");
   assert.equal(toSlackMrkdwn("https://en.wikipedia.org/wiki/Foo_(bar)"), "<https://en.wikipedia.org/wiki/Foo_(bar)>");
   assert.equal(toSlackMrkdwn("https://x.io/a_b_c and *more*"), "<https://x.io/a_b_c> and _more_");
 });
 
-test("toSlackMrkdwn: already-explicit <url> tokens and URLs in code pass through untouched", () => {
+tenantTest("toSlackMrkdwn: already-explicit <url> tokens and URLs in code pass through untouched", () => {
   assert.equal(toSlackMrkdwn("<https://x.io|label> stays"), "<https://x.io|label> stays");
   assert.equal(toSlackMrkdwn("<https://x.io> stays"), "<https://x.io> stays");
   assert.equal(toSlackMrkdwn("run `curl https://x.io/raw**` now"), "run `curl https://x.io/raw**` now");
 });
 
-test("toSlackMrkdwn: headers become bold (mrkdwn has no headers in a text field)", () => {
+tenantTest("toSlackMrkdwn: headers become bold (mrkdwn has no headers in a text field)", () => {
   assert.equal(toSlackMrkdwn("# Title"), "*Title*");
   assert.equal(toSlackMrkdwn("### Deep\nbody"), "*Deep*\nbody");
   assert.equal(toSlackMrkdwn("## **Summary**"), "*Summary*");
   assert.equal(toSlackMrkdwn("# Hello **World**"), "*Hello World*");
 });
 
-test("toSlackMrkdwn: -, *, + bullets → •  ; ordered 1. lists are left alone", () => {
+tenantTest("toSlackMrkdwn: -, *, + bullets → •  ; ordered 1. lists are left alone", () => {
   assert.equal(toSlackMrkdwn("- one\n- two"), "• one\n• two");
   assert.equal(toSlackMrkdwn("* star\n+ plus"), "• star\n• plus");
   assert.equal(toSlackMrkdwn("1. first\n2. second"), "1. first\n2. second");
   assert.equal(toSlackMrkdwn("- **Auth** creds"), "• *Auth* creds");
 });
 
-test("toSlackMrkdwn: code spans and fenced blocks pass through untouched", () => {
+tenantTest("toSlackMrkdwn: code spans and fenced blocks pass through untouched", () => {
   assert.equal(toSlackMrkdwn("run `git **status**` now"), "run `git **status**` now");
   const fenced = "```\n# not a header\n- not a bullet\n**not bold**\n```";
   assert.equal(toSlackMrkdwn(fenced), fenced);
   assert.equal(toSlackMrkdwn("**bold** then `code` then *it*"), "*bold* then `code` then _it_");
 });
 
-test("toSlackMrkdwn: leaves plain text, stray asterisks, and word_underscores alone", () => {
+tenantTest("toSlackMrkdwn: leaves plain text, stray asterisks, and word_underscores alone", () => {
   assert.equal(toSlackMrkdwn("hello world"), "hello world");
   assert.equal(toSlackMrkdwn("2 * 3 * 4"), "2 * 3 * 4");
   assert.equal(toSlackMrkdwn("file_name_here"), "file_name_here");
   assert.equal(toSlackMrkdwn(""), "");
 });
 
-test("toSlackMrkdwn: horizontal rule line → a divider", () => {
+tenantTest("toSlackMrkdwn: horizontal rule line → a divider", () => {
   assert.equal(toSlackMrkdwn("above\n---\nbelow"), "above\n──────────\nbelow");
 });
 
-test("toSlackMrkdwn: GFM tables → aligned monospace block (Slack has no table syntax)", () => {
+tenantTest("toSlackMrkdwn: GFM tables → aligned monospace block (Slack has no table syntax)", () => {
   assert.equal(
     toSlackMrkdwn("| Name | Score |\n|------|-------|\n| Alice | 91 |\n| Bo | 7 |"),
     "```\nName  | Score\n------+------\nAlice | 91\nBo    | 7\n```",
@@ -109,7 +109,7 @@ test("toSlackMrkdwn: GFM tables → aligned monospace block (Slack has no table 
   assert.equal(toSlackMrkdwn("```\n| x | y |\n```"), "```\n| x | y |\n```");
 });
 
-test("toSlackMrkdwn: a full agent reply (the screenshot) converts end-to-end", () => {
+tenantTest("toSlackMrkdwn: a full agent reply (the screenshot) converts end-to-end", () => {
   const md = [
     "# GitHub access",
     "",
@@ -129,13 +129,13 @@ test("toSlackMrkdwn: a full agent reply (the screenshot) converts end-to-end", (
   assert.ok(out.includes("• You provide _authentication_"), "bullet + italic converted");
 });
 
-test("slackSectionBlocks splits long replies below Slack's section limit", () => {
+tenantTest("slackSectionBlocks splits long replies below Slack's section limit", () => {
   const blocks = slackSectionBlocks("x".repeat(7_000));
   assert.equal(blocks.length, 3);
   assert.ok(blocks.every((block) => (block.text as { text: string }).text.length <= 2_900));
 });
 
-test("resolveMentionsInText: plain, labeled, unknown, multiple", () => {
+tenantTest("resolveMentionsInText: plain, labeled, unknown, multiple", () => {
   const lookup = (id: string): string | undefined => ({ U1: "jordan", U2: "avery" })[id];
   assert.equal(resolveMentionsInText("hey <@U1>", lookup), "hey @jordan");
   assert.equal(resolveMentionsInText("hey <@U1|Jordan Label>", lookup), "hey @Jordan Label");
@@ -145,7 +145,7 @@ test("resolveMentionsInText: plain, labeled, unknown, multiple", () => {
   assert.equal(resolveMentionsInText("no mentions", lookup), "no mentions");
 });
 
-test("toSlackMrkdwn disarms encoded mass mentions outside code, leaves real mentions alone", () => {
+tenantTest("toSlackMrkdwn disarms encoded mass mentions outside code, leaves real mentions alone", () => {
   assert.equal(
     toSlackMrkdwn("ping <!here> and <!channel|channel> and <!EVERYONE>"),
     "ping @\u200bhere and @\u200bchannel and @\u200beveryone",
@@ -160,7 +160,7 @@ test("toSlackMrkdwn disarms encoded mass mentions outside code, leaves real ment
   );
 });
 
-test("neutralizeMassMentions only touches the encoded broadcast forms", () => {
+tenantTest("neutralizeMassMentions only touches the encoded broadcast forms", () => {
   assert.equal(neutralizeMassMentions("<!here> <!here|here> <!Channel>"), "@\u200bhere @\u200bhere @\u200bchannel");
   assert.equal(
     neutralizeMassMentions("@here @channel me@here.com <!date^1234^{ago}|then>"),
@@ -168,7 +168,7 @@ test("neutralizeMassMentions only touches the encoded broadcast forms", () => {
   );
 });
 
-test("armUserMentions: plain @name arms to <@id> via toSlackMrkdwn", () => {
+tenantTest("armUserMentions: plain @name arms to <@id> via toSlackMrkdwn", () => {
   setMentionIndex(
     new Map([
       ["ankit", "U111"],
@@ -199,7 +199,7 @@ test("armUserMentions: plain @name arms to <@id> via toSlackMrkdwn", () => {
   }
 });
 
-test("armUserMentions: reserved broadcast names never arm", () => {
+tenantTest("armUserMentions: reserved broadcast names never arm", () => {
   setMentionIndex(new Map([["here", "U911"]]));
   try {
     assert.equal(toSlackMrkdwn("hey @here look"), "hey @here look");
@@ -209,21 +209,21 @@ test("armUserMentions: reserved broadcast names never arm", () => {
   }
 });
 
-test("tilde fences are stashed like backtick fences, contents unconverted", () => {
+tenantTest("tilde fences are stashed like backtick fences, contents unconverted", () => {
   assert.equal(toSlackMrkdwn("~~~\n**not bold** [x](y)\n~~~"), "```\n**not bold** [x](y)\n```");
   assert.equal(toSlackMrkdwn("~~~python\nprint('hi')\n~~~"), "```python\nprint('hi')\n```");
 });
 
-test("a tilde fence quoting backtick fences is kept verbatim", () => {
+tenantTest("a tilde fence quoting backtick fences is kept verbatim", () => {
   const md = "~~~\nUse ```bash\nls\n``` to fence\n~~~";
   assert.equal(toSlackMrkdwn(md), md);
 });
 
-test("strikethrough tildes are not mistaken for fences", () => {
+tenantTest("strikethrough tildes are not mistaken for fences", () => {
   assert.equal(toSlackMrkdwn("~~gone~~ stays strike"), "~gone~ stays strike");
 });
 
-test("a reformatted table too big for one section is chunked without splitting the fence open", () => {
+tenantTest("a reformatted table too big for one section is chunked without splitting the fence open", () => {
   const rows = Array.from({ length: 200 }, (_, i) => `| cell ${i} | ${"x".repeat(30)} |`).join("\n");
   const md = "| head | data |\n|---|---|\n" + rows;
   const blocks = slackSectionBlocks(toSlackMrkdwn(md));
@@ -239,7 +239,7 @@ test("a reformatted table too big for one section is chunked without splitting t
   }
 });
 
-test("pathological tilde inputs stay linear-time and unmangled", () => {
+tenantTest("pathological tilde inputs stay linear-time and unmangled", () => {
   const unclosed = "~~~x\n".repeat(8_000);
   const t0 = performance.now();
   const out = toSlackMrkdwn(unclosed);
@@ -253,11 +253,11 @@ test("pathological tilde inputs stay linear-time and unmangled", () => {
   assert.ok(converted.includes("block 499 **kept**"), "fence bodies are untouched");
 });
 
-test("an unclosed backtick fence after a tilde fence leaves the tail verbatim", () => {
+tenantTest("an unclosed backtick fence after a tilde fence leaves the tail verbatim", () => {
   assert.equal(toSlackMrkdwn("~~~\na\n~~~\nthen ``` dangling"), "```\na\n```\nthen ``` dangling");
 });
 
-test("wire mentions can be disarmed wholesale or only for the identities another author wrote", () => {
+tenantTest("wire mentions can be disarmed wholesale or only for the identities another author wrote", () => {
   const text = "hey <@U1|ada> and <@U2>, <!here> <!channel|channel> <!subteam^S9|@eng> <!subteam^S8>";
   assert.equal(neutralizeMentions(text), "hey @ada and @U2, @\u200bhere @\u200bchannel @eng @S8");
   assert.deepEqual([...wireMentionKeys("<@U1|ada> <!HERE> <!subteam^S9|@eng> <@U1>")], ["@u1", "!here", "!subteam^s9"]);
@@ -267,7 +267,7 @@ test("wire mentions can be disarmed wholesale or only for the identities another
   );
 });
 
-test("a label-less wire mention is disarmed to the person's name when the directory knows it", () => {
+tenantTest("a label-less wire mention is disarmed to the person's name when the directory knows it", () => {
   setMentionIndex(new Map([["ada", "U1"]]));
   try {
     assert.equal(neutralizeMentions("hi <@U1> and <@U2>"), "hi @ada and @U2");
@@ -276,7 +276,7 @@ test("a label-less wire mention is disarmed to the person's name when the direct
   }
 });
 
-test("pathological inline markdown and mention floods stay linear-time", () => {
+tenantTest("pathological inline markdown and mention floods stay linear-time", () => {
   const untouched = ["[".repeat(60_000), "**a ".repeat(25_000), "~~~~" + "\t\t~~x".repeat(12_000)];
   const heading = "#\tx" + "\t".repeat(60_000) + "\tx\n";
   const started = performance.now();
@@ -293,7 +293,7 @@ test("pathological inline markdown and mention floods stay linear-time", () => {
   assert.ok(elapsed < 1_000, `pathological inline markdown took ${Math.round(elapsed)}ms`);
 });
 
-test("a mention token nested inside another token's label cannot re-form a live mention", () => {
+tenantTest("a mention token nested inside another token's label cannot re-form a live mention", () => {
   assert.equal(toSlackMrkdwn("<!here|<!channel>>"), "@\u200bhere@\u200bchannel>");
   assert.equal(neutralizeMassMentions("<!channel|<!here|x>>"), "@\u200bchannel@\u200bhere>");
   assert.equal(neutralizeMentions("<@U123|<@U456>>"), "@U123@U456>");
@@ -310,14 +310,14 @@ test("a mention token nested inside another token's label cannot re-form a live 
   );
 });
 
-test("toSlackMrkdwn: a link label never swallows an earlier bracket, and closing hashes leave headings", () => {
+tenantTest("toSlackMrkdwn: a link label never swallows an earlier bracket, and closing hashes leave headings", () => {
   assert.equal(toSlackMrkdwn("see [[x](http://a)"), "see [<http://a|x>");
   assert.equal(toSlackMrkdwn("# Title ##"), "*Title*");
   assert.equal(toSlackMrkdwn("## Sub ## "), "*Sub*");
   assert.equal(toSlackMrkdwn("# C#"), "*C#*");
 });
 
-test("bare URL tail trimming stays linear-time on a flood of closing brackets", () => {
+tenantTest("bare URL tail trimming stays linear-time on a flood of closing brackets", () => {
   const flood = `see http://x.y/a${")".repeat(20_000)}`;
   const started = performance.now();
   const out = toSlackMrkdwn(flood);

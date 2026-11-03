@@ -1,9 +1,9 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createTurnHandler } from "../src/slack/turn-handler.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";
 import { createThreadTracker, createDeduper } from "../src/slack/lib.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT", botHandle: "qm" } as BotIdentity;
 const actor = { externalId: "U1", displayName: "Teammate" };
@@ -84,7 +84,7 @@ function agent(run: (hooks: any) => Promise<unknown>) {
   return { handler, client, followup, reactions, posts, postArgs, turns };
 }
 
-test("an unmentioned thread followup QM answers gets the ack reaction added then cleared", async () => {
+tenantTest("an unmentioned thread followup QM answers gets the ack reaction added then cleared", async () => {
   const h = agent(async (hooks) => {
     hooks.onReplying?.();
     await new Promise((r) => setTimeout(r, 2_200));
@@ -96,7 +96,7 @@ test("an unmentioned thread followup QM answers gets the ack reaction added then
   assert.deepEqual(h.posts, ["Staging is green."]);
 });
 
-test("an answered followup's ack clears as soon as QM posts into the thread", async () => {
+tenantTest("an answered followup's ack clears as soon as QM posts into the thread", async () => {
   const h = agent(async (hooks) => {
     hooks.onReplying?.();
     await new Promise((r) => setTimeout(r, 2_200));
@@ -109,7 +109,7 @@ test("an answered followup's ack clears as soon as QM posts into the thread", as
   assert.deepEqual(h.reactions, ["+eyes@2.000", "-eyes@2.000"]);
 });
 
-test("an answered followup whose reply post fails still clears its ack", async () => {
+tenantTest("an answered followup whose reply post fails still clears its ack", async () => {
   const h = agent(async (hooks) => {
     await hooks.onQueued?.("r1");
     hooks.onReplying?.();
@@ -123,7 +123,7 @@ test("an answered followup whose reply post fails still clears its ack", async (
   assert.deepEqual(h.reactions, ["+eyes@2.000", "-eyes@2.000"]);
 });
 
-test("synthetic reaction turns never receive ack hooks", async () => {
+tenantTest("synthetic reaction turns never receive ack hooks", async () => {
   let hooksSeen: string[] = [];
   const h = agent(async (hooks) => {
     hooksSeen = Object.keys(hooks).filter((k) => k.startsWith("on") && typeof hooks[k] === "function");
@@ -136,7 +136,7 @@ test("synthetic reaction turns never receive ack hooks", async () => {
 });
 
 for (const outcome of [{ status: "silent" }, { status: "react", reactions: ["thumbsup"] }] as const) {
-  test(`an unmentioned followup QM declines (${outcome.status}) gets no ack reaction`, async () => {
+  tenantTest(`an unmentioned followup QM declines (${outcome.status}) gets no ack reaction`, async () => {
     const h = agent(async () => {
       await new Promise((r) => setTimeout(r, 2_200));
       return outcome;
@@ -147,7 +147,7 @@ for (const outcome of [{ status: "silent" }, { status: "react", reactions: ["thu
   });
 }
 
-test("waitRun signals replying only once the run has passed detection and begun its reply", async () => {
+tenantTest("waitRun signals replying only once the run has passed detection and begun its reply", async () => {
   const { createSlackCoreClient } = await import("../src/api/slack-core-client.ts");
   const { createTurnStream } = await import("../src/runs/turn-stream.ts");
   const turnStream = createTurnStream();
@@ -174,7 +174,7 @@ test("waitRun signals replying only once the run has passed detection and begun 
   assert.equal(replying, 1);
 });
 
-test("a mention-only thread reply starts a turn with the tag intact", async () => {
+tenantTest("a mention-only thread reply starts a turn with the tag intact", async () => {
   const h = agent(async () => ({ status: "ok", reply: "On it." }));
   await h.handler.handleIncoming({ ...h.followup, unprompted: false, rawText: "<@UBOT>" }, h.client);
   assert.equal(h.turns.length, 1);
@@ -182,7 +182,7 @@ test("a mention-only thread reply starts a turn with the tag intact", async () =
   assert.deepEqual(h.posts, ["On it."]);
 });
 
-test("the bot's own mention reaches the agent instead of being stripped", async () => {
+tenantTest("the bot's own mention reaches the agent instead of being stripped", async () => {
   const h = agent(async () => ({ status: "ok", reply: "Done." }));
   await h.handler.handleIncoming({ ...h.followup, unprompted: false, rawText: "<@UBOT> check &amp; report" }, h.client);
   assert.equal(h.turns[0].text, "@qm check & report");

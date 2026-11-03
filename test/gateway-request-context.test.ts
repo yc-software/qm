@@ -1,5 +1,5 @@
 import "./support/auto-fake-sprites.ts";
-import { test, type TestContext } from "node:test";
+import { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as httpServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -18,7 +18,7 @@ import type { Session, SessionEntry } from "../src/types.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
 import { anthropicStream, contextHeaders, recordRequests } from "./support/gateway-stream.ts";
 
 const gateway = {
@@ -62,7 +62,7 @@ function turn(extra: Partial<AgentTurnInput> = {}): AgentTurnInput {
   };
 }
 
-test("a gateway turn carries the session, actor, scope, purpose and origin it works for", async (t) => {
+tenantTest("a gateway turn carries the session, actor, scope, purpose and origin it works for", async (t) => {
   const requests = recordRequests(t);
   const harness = createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway });
 
@@ -78,7 +78,7 @@ test("a gateway turn carries the session, actor, scope, purpose and origin it wo
   });
 });
 
-test("the gateway gets keyed pseudonyms for people, and none without a key", async (t) => {
+tenantTest("the gateway gets keyed pseudonyms for people, and none without a key", async (t) => {
   const requests = recordRequests(t);
   const personal = { ...cronContext, scopeId: "personal:owner@example.com" };
   await withModelRequestContext(personal, () =>
@@ -102,7 +102,7 @@ test("the gateway gets keyed pseudonyms for people, and none without a key", asy
   });
 });
 
-test("context values the credential broker could not attest are left off", async (t) => {
+tenantTest("context values the credential broker could not attest are left off", async (t) => {
   const requests = recordRequests(t);
   const harness = createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway: gateway });
 
@@ -121,7 +121,7 @@ test("context values the credential broker could not attest are left off", async
   assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { "x-qm-origin": "cron", "x-qm-purpose": "turn" });
 });
 
-test("turns on a user's or the org's own provider key send no request context", async (t) => {
+tenantTest("turns on a user's or the org's own provider key send no request context", async (t) => {
   const requests = recordRequests(t);
   const harness = createAgent({ defaultModelId: "claude-haiku-4-5", apiKey: "org-key", modelGateway: gateway });
 
@@ -138,7 +138,7 @@ test("turns on a user's or the org's own provider key send no request context", 
   );
 });
 
-test("every helper call keeps its work's context and names its own purpose", async (t) => {
+tenantTest("every helper call keeps its work's context and names its own purpose", async (t) => {
   const requests = recordRequests(t);
   const harness = createAgent({
     defaultModelId: "claude-haiku-4-5",
@@ -181,7 +181,7 @@ test("every helper call keeps its work's context and names its own purpose", asy
   }
 });
 
-test("the goal governor judges with its turn's context", async (t) => {
+tenantTest("the goal governor judges with its turn's context", async (t) => {
   const requests = recordRequests(t);
   const pi = createAgent({
     defaultModelId: "claude-haiku-4-5",
@@ -246,7 +246,7 @@ async function gatewayApp(
   return { config, built, seen, sent };
 }
 
-test("app turns and their helper calls tell the gateway which session they serve", async (t) => {
+tenantTest("app turns and their helper calls tell the gateway which session they serve", async (t) => {
   const { built, seen, sent } = await gatewayApp(t);
   await inTestTenant(async () => {
     const dm = await built.app.turn({
@@ -328,7 +328,7 @@ test("app turns and their helper calls tell the gateway which session they serve
   });
 });
 
-test("API work carries its token's turn, the admin replaying screens, or the memory writer", async (t) => {
+tenantTest("API work carries its token's turn, the admin replaying screens, or the memory writer", async (t) => {
   const { config, built, sent } = await gatewayApp(t);
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -382,37 +382,40 @@ test("API work carries its token's turn, the admin replaying screens, or the mem
   });
 });
 
-test("debounced memory capture keeps the context of the turn it came from, even while turns overlap", async (t) => {
-  let release!: () => void;
-  const bothTurnsInFlight = new Promise<void>((resolve) => (release = resolve));
-  let turnsInFlight = 0;
-  const { built, sent } = await gatewayApp(t, { memoryCaptureQuietMs: 200 }, async (headers) => {
-    if (headers["x-qm-purpose"] !== "turn") return;
-    if (++turnsInFlight === 2) release();
-    await bothTurnsInFlight;
-  });
-  const sessions = Object.fromEntries(
-    await Promise.all(
-      ["U1", "U2"].map(async (id) => {
-        const result = await inTestTenant(() =>
-          built.app.turn({
-            surface: "test",
-            actor: { externalId: id },
-            conversation: { kind: "dm", threadRef: `dm:${id}:debounce` },
-            text: "Remember that I prefer short replies",
-          }),
-        );
-        return [id, result.sessionId] as const;
-      }),
-    ),
-  );
-  await settle(async () => Object.values(sessions).every((id) => !!sent("memory_capture", id)));
-  for (const [id, sessionId] of Object.entries(sessions))
-    assert.deepEqual(sent("memory_capture", sessionId), {
-      "x-qm-session-id": sessionId,
-      "x-qm-actor": pseudonym(id),
-      "x-qm-scope": `personal:${pseudonym(id)}`,
-      "x-qm-origin": "conversation",
-      "x-qm-purpose": "memory_capture",
+tenantTest(
+  "debounced memory capture keeps the context of the turn it came from, even while turns overlap",
+  async (t) => {
+    let release!: () => void;
+    const bothTurnsInFlight = new Promise<void>((resolve) => (release = resolve));
+    let turnsInFlight = 0;
+    const { built, sent } = await gatewayApp(t, { memoryCaptureQuietMs: 200 }, async (headers) => {
+      if (headers["x-qm-purpose"] !== "turn") return;
+      if (++turnsInFlight === 2) release();
+      await bothTurnsInFlight;
     });
-});
+    const sessions = Object.fromEntries(
+      await Promise.all(
+        ["U1", "U2"].map(async (id) => {
+          const result = await inTestTenant(() =>
+            built.app.turn({
+              surface: "test",
+              actor: { externalId: id },
+              conversation: { kind: "dm", threadRef: `dm:${id}:debounce` },
+              text: "Remember that I prefer short replies",
+            }),
+          );
+          return [id, result.sessionId] as const;
+        }),
+      ),
+    );
+    await settle(async () => Object.values(sessions).every((id) => !!sent("memory_capture", id)));
+    for (const [id, sessionId] of Object.entries(sessions))
+      assert.deepEqual(sent("memory_capture", sessionId), {
+        "x-qm-session-id": sessionId,
+        "x-qm-actor": pseudonym(id),
+        "x-qm-scope": `personal:${pseudonym(id)}`,
+        "x-qm-origin": "conversation",
+        "x-qm-purpose": "memory_capture",
+      });
+  },
+);

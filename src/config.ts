@@ -41,7 +41,7 @@ import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginC
 import {
   DEFAULT_CODEX_MODEL_ID,
   MODEL_PROVIDERS,
-  defaultModelForProvider,
+  builtinModelForProvider,
   isModelProvider,
   onlyProvider,
   type ModelProvider,
@@ -350,7 +350,7 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
       `MODEL_PROVIDER=${JSON.stringify(declared)} is not recognized — use ${MODEL_PROVIDERS.join(", ")}.`,
     );
   }
-  if (!defaultModelForProvider(declared)) {
+  if (!builtinModelForProvider(declared)) {
     throw new Error(
       `MODEL_PROVIDER=${declared} cannot serve a base model — no ${declared} model is available, so every turn would be refused.`,
     );

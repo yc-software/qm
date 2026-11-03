@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   NON_INTERACTIVE_FAST_MODE,
@@ -6,22 +5,23 @@ import {
   turnModelOptions,
 } from "../src/agent/runtime-choice.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
-test("triggered turns default to extra-high thinking and non-fast mode", () => {
+tenantTest("triggered turns default to extra-high thinking and non-fast mode", () => {
   assert.deepEqual(turnModelOptions({ triggered: true }), {
     thinkingLevel: NON_INTERACTIVE_THINKING_LEVEL,
     fastMode: NON_INTERACTIVE_FAST_MODE,
   });
 });
 
-test("explicit turn model options win over triggered defaults", () => {
+tenantTest("explicit turn model options win over triggered defaults", () => {
   assert.deepEqual(turnModelOptions({ triggered: true, thinkingLevel: "low", fastMode: true }), {
     thinkingLevel: "low",
     fastMode: true,
   });
 });
 
-test("web model controls are bounded by admin configuration", () => {
+tenantTest("web model controls are bounded by admin configuration", () => {
   assert.equal(
     validateWebTurnModelOptions({ model: "claude-sonnet-4-6" }, ["claude-opus-4-8"]),
     "that model is not enabled for the web UI",
@@ -30,11 +30,11 @@ test("web model controls are bounded by admin configuration", () => {
   assert.equal(validateWebTurnModelOptions({ model: "claude-opus-4-8", thinkingLevel: "high" }, null), null);
 });
 
-test("interactive turns do not force model options", () => {
+tenantTest("interactive turns do not force model options", () => {
   assert.deepEqual(turnModelOptions({}), {});
 });
 
-test("a triggered turn with an explicit low thinking level overrides the xhigh trigger default", () => {
+tenantTest("a triggered turn with an explicit low thinking level overrides the xhigh trigger default", () => {
   assert.deepEqual(turnModelOptions({ triggered: true, thinkingLevel: "low" }), {
     thinkingLevel: "low",
     fastMode: NON_INTERACTIVE_FAST_MODE,

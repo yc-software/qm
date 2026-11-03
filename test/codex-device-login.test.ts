@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { test, type TestContext } from "node:test";
+import { type TestContext } from "node:test";
 import { createCodexDeviceLogin } from "../src/model/codex-device-login.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 function accessToken(accountId: string): string {
   const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
@@ -51,7 +52,7 @@ async function settle(poll: () => Promise<unknown>): Promise<unknown> {
   throw new Error("login never settled");
 }
 
-test("device login: start returns the prompt, poll is pending then yields subscription tokens", async (t) => {
+tenantTest("device login: start returns the prompt, poll is pending then yields subscription tokens", async (t) => {
   const server = fakeAuthServer(t);
   const login = createCodexDeviceLogin();
   t.after(() => login.close());
@@ -72,7 +73,7 @@ test("device login: start returns the prompt, poll is pending then yields subscr
   assert.equal(await login.poll(prompt.deviceAuthId, "alice"), "unknown");
 });
 
-test("device login: only the principal who started a login can poll it", async (t) => {
+tenantTest("device login: only the principal who started a login can poll it", async (t) => {
   const server = fakeAuthServer(t);
   const login = createCodexDeviceLogin();
   t.after(() => login.close());
@@ -87,7 +88,7 @@ test("device login: only the principal who started a login can poll it", async (
   assert.equal((tokens as { accountId?: string }).accountId, "acct_9");
 });
 
-test("device login: a denied login surfaces the provider error and cleans up", async (t) => {
+tenantTest("device login: a denied login surfaces the provider error and cleans up", async (t) => {
   const server = fakeAuthServer(t);
   const login = createCodexDeviceLogin();
   t.after(() => login.close());
@@ -98,7 +99,7 @@ test("device login: a denied login surfaces the provider error and cleans up", a
   assert.equal(await login.poll(prompt.deviceAuthId, "alice"), "unknown");
 });
 
-test("device login: a provider failure before the prompt rejects start", async (t) => {
+tenantTest("device login: a provider failure before the prompt rejects start", async (t) => {
   fakeAuthServer(t, { userCodeStatus: 500 });
   const login = createCodexDeviceLogin();
   t.after(() => login.close());

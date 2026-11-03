@@ -1,8 +1,8 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { providerTokenStatuses } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "../src/credentials/keychain.ts";
 import { setPublicOAuthClients } from "../src/connectors/oauth.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 function fakeTokens(status: (host: string, accountType?: string) => OAuthTokenStatus): ConnectorTokenStore {
   return {
@@ -13,7 +13,7 @@ function fakeTokens(status: (host: string, accountType?: string) => OAuthTokenSt
 const hostStatus = async (tokens: ConnectorTokenStore, provider: string, host: string) =>
   (await providerTokenStatuses(tokens, "U1")).find((p) => p.name === provider)?.hosts.find((h) => h.host === host);
 
-test("provider statuses choose a usable account over a lapsed account for the same host", async () => {
+tenantTest("provider statuses choose a usable account over a lapsed account for the same host", async () => {
   const tokens = fakeTokens((host, accountType) => {
     if (host !== "gmail.googleapis.com") return { connected: false };
     if (accountType === "personal") return { connected: true, expiresAt: 5000, accountType: "personal" };
@@ -25,7 +25,7 @@ test("provider statuses choose a usable account over a lapsed account for the sa
   assert.equal(status?.needsReconnect, undefined);
 });
 
-test("provider statuses include linked per-user MCP sign-ins and skip unlinked ones", async (t) => {
+tenantTest("provider statuses include linked per-user MCP sign-ins and skip unlinked ones", async (t) => {
   t.after(() => setPublicOAuthClients([]));
   const client = (name: string, label: string) => ({
     name,

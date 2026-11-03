@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { createServer } from "node:http";
@@ -29,12 +28,13 @@ import type { DetectInput, TurnLlmRequestRecord } from "../src/agent/agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 import { sanitizeLlmPayload, trimPayloadToByteBudget, transportFromModel } from "../src/agent/provider-payload.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
 }
 
-test("toPiMessage gives assistant seeds a usage block so Pi's pre-prompt compaction check can't crash", () => {
+tenantTest("toPiMessage gives assistant seeds a usage block so Pi's pre-prompt compaction check can't crash", () => {
   const user = toPiMessage({ role: "user", text: "ship it" }) as Record<string, unknown>;
   assert.equal("usage" in user, false, "user seeds carry no usage (Pi UserMessage has none)");
 
@@ -47,69 +47,72 @@ test("toPiMessage gives assistant seeds a usage block so Pi's pre-prompt compact
   assert.equal(asst.usage!.totalTokens, 0);
 });
 
-test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. toolResult) onto the live array + persists", () => {
-  const liveMessages: unknown[] = [];
-  const persisted: unknown[] = [];
-  const stubSession = {
-    agent: { state: { messages: liveMessages } },
-    sessionManager: { appendMessage: (m: unknown) => persisted.push(m) },
-  };
-  const history: SessionEntry[] = [
-    {
-      sessionId: "s",
-      seq: 1,
-      parentSeq: null,
-      type: "user",
-      payload: { text: "sign up" },
-      scopeLabel: "org:default-org",
-      createdAt: 1,
-    },
-    {
-      sessionId: "s",
-      seq: 2,
-      parentSeq: null,
-      type: "tool_call",
-      payload: { tool: "execute", command: "browse", callId: "c1" },
-      scopeLabel: "org:default-org",
-      createdAt: 2,
-    },
-    {
-      sessionId: "s",
-      seq: 3,
-      parentSeq: null,
-      type: "tool_result",
-      payload: { tool: "execute", callId: "c1", result: "user: a / pass: b", isError: false },
-      scopeLabel: "org:default-org",
-      createdAt: 3,
-    },
-    {
-      sessionId: "s",
-      seq: 4,
-      parentSeq: null,
-      type: "assistant",
-      payload: { text: "done" },
-      scopeLabel: "org:default-org",
-      createdAt: 4,
-    },
-  ];
-  seedRawMessagesIntoSession(stubSession, reconstructMessagesFromHistory(history));
+tenantTest(
+  "seedRawMessagesIntoSession pushes the reconstructed tool round (incl. toolResult) onto the live array + persists",
+  () => {
+    const liveMessages: unknown[] = [];
+    const persisted: unknown[] = [];
+    const stubSession = {
+      agent: { state: { messages: liveMessages } },
+      sessionManager: { appendMessage: (m: unknown) => persisted.push(m) },
+    };
+    const history: SessionEntry[] = [
+      {
+        sessionId: "s",
+        seq: 1,
+        parentSeq: null,
+        type: "user",
+        payload: { text: "sign up" },
+        scopeLabel: "org:default-org",
+        createdAt: 1,
+      },
+      {
+        sessionId: "s",
+        seq: 2,
+        parentSeq: null,
+        type: "tool_call",
+        payload: { tool: "execute", command: "browse", callId: "c1" },
+        scopeLabel: "org:default-org",
+        createdAt: 2,
+      },
+      {
+        sessionId: "s",
+        seq: 3,
+        parentSeq: null,
+        type: "tool_result",
+        payload: { tool: "execute", callId: "c1", result: "user: a / pass: b", isError: false },
+        scopeLabel: "org:default-org",
+        createdAt: 3,
+      },
+      {
+        sessionId: "s",
+        seq: 4,
+        parentSeq: null,
+        type: "assistant",
+        payload: { text: "done" },
+        scopeLabel: "org:default-org",
+        createdAt: 4,
+      },
+    ];
+    seedRawMessagesIntoSession(stubSession, reconstructMessagesFromHistory(history));
 
-  assert.deepEqual(
-    (liveMessages as Array<{ role: string }>).map((m) => m.role),
-    ["user", "assistant", "toolResult", "assistant"],
-  );
-  assert.deepEqual(persisted, liveMessages);
-  const toolResult = liveMessages[2] as { role: string; toolCallId: string; content: Array<{ text: string }> };
-  assert.equal(toolResult.toolCallId, "c1");
-  assert.match(toolResult.content[0]!.text, /pass: b/);
-});
+    assert.deepEqual(
+      (liveMessages as Array<{ role: string }>).map((m) => m.role),
+      ["user", "assistant", "toolResult", "assistant"],
+    );
+    assert.deepEqual(persisted, liveMessages);
+    const toolResult = liveMessages[2] as { role: string; toolCallId: string; content: Array<{ text: string }> };
+    assert.equal(toolResult.toolCallId, "c1");
+    assert.match(toolResult.content[0]!.text, /pass: b/);
+  },
+);
 
-test("seedRawMessagesIntoSession is a no-op for empty input and degrades gracefully without Pi internals", () => {
+tenantTest("seedRawMessagesIntoSession is a no-op for empty input and degrades gracefully without Pi internals", () => {
   seedRawMessagesIntoSession({ agent: { state: { messages: [] } } }, []);
   assert.doesNotThrow(() => seedRawMessagesIntoSession({}, reconstructMessagesFromHistory([])));
 });
 
-test("agentConfigOptions maps every Config knob the agent consumes, field by field", () => {
+tenantTest("agentConfigOptions maps every Config knob the agent consumes, field by field", () => {
   const opts = agentConfigOptions(
     testConfig({
       modelId: "model-base",
@@ -157,31 +160,34 @@ test("agentConfigOptions maps every Config knob the agent consumes, field by fie
   });
 });
 
-test("agentConfigOptions leaves controlTools off unless a self-API (signing secret + api base) is configured", () => {
-  assert.equal(agentConfigOptions(testConfig()).controlTools, false);
-  assert.equal(
-    agentConfigOptions(testConfig({ signingSecret: "sek" })).controlTools,
-    false,
-    "secret alone isn't enough",
-  );
-  assert.equal(
-    agentConfigOptions(testConfig({ apiBaseUrl: "https://core.test" })).controlTools,
-    false,
-    "api base alone isn't enough",
-  );
-  assert.equal(
-    agentConfigOptions(testConfig({ signingSecret: "sek", apiBaseUrl: "https://core.test" })).controlTools,
-    true,
-  );
-});
+tenantTest(
+  "agentConfigOptions leaves controlTools off unless a self-API (signing secret + api base) is configured",
+  () => {
+    assert.equal(agentConfigOptions(testConfig()).controlTools, false);
+    assert.equal(
+      agentConfigOptions(testConfig({ signingSecret: "sek" })).controlTools,
+      false,
+      "secret alone isn't enough",
+    );
+    assert.equal(
+      agentConfigOptions(testConfig({ apiBaseUrl: "https://core.test" })).controlTools,
+      false,
+      "api base alone isn't enough",
+    );
+    assert.equal(
+      agentConfigOptions(testConfig({ signingSecret: "sek", apiBaseUrl: "https://core.test" })).controlTools,
+      true,
+    );
+  },
+);
 
-test("agentConfigOptions carries the deployment provider into Pi auxiliary model selection", () => {
+tenantTest("agentConfigOptions carries the deployment provider into Pi auxiliary model selection", () => {
   const opts = agentConfigOptions(testConfig({ modelProvider: "openai", openaiApiKey: "sk-openai-test" }));
   assert.equal(opts.defaultModelId, "gpt-6.1-sol");
   assert.equal(auxiliaryModelFor(opts.defaultModelId!), "gpt-5.6-luna");
 });
 
-test("Pi title generation returns no title without an auxiliary-model credential", async () => {
+tenantTest("Pi title generation returns no title without an auxiliary-model credential", async () => {
   const agent = createAgent({
     defaultModelId: "gpt-5.6-sol",
     resolveProviderKeys: async () => ({}),
@@ -189,7 +195,7 @@ test("Pi title generation returns no title without an auxiliary-model credential
   assert.equal(await agent.generateTitle!("User:\nPrioritize the public qm issues"), undefined);
 });
 
-test("Pi title generation surfaces provider failures to its caller", async (t) => {
+tenantTest("Pi title generation surfaces provider failures to its caller", async (t) => {
   const server = createServer((_request, response) => {
     response.writeHead(401, { "content-type": "application/json" });
     response.end(JSON.stringify({ error: { message: "title model rejected request" } }));
@@ -220,71 +226,78 @@ test("Pi title generation surfaces provider failures to its caller", async (t) =
   await assert.rejects(agent.generateTitle!("User:\nInvestigate the deploy"));
 });
 
-test("Pi title generation rejects a reply-shaped answer with the rule that fired and the rejected text", async (t) => {
-  const server = createServer((request, response) => {
-    request.resume();
-    request.on("end", () => {
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      for (const event of [
-        {
-          type: "message_start",
-          message: {
-            id: "msg_title",
-            type: "message",
-            role: "assistant",
-            model: "title-model",
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: 1, output_tokens: 0 },
+tenantTest(
+  "Pi title generation rejects a reply-shaped answer with the rule that fired and the rejected text",
+  async (t) => {
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        for (const event of [
+          {
+            type: "message_start",
+            message: {
+              id: "msg_title",
+              type: "message",
+              role: "assistant",
+              model: "title-model",
+              content: [],
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
           },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sorry, I can't summarize that" } },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
-          usage: { output_tokens: 1 },
-        },
-        { type: "message_stop" },
-      ]) {
-        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-      }
-      response.end();
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "Sorry, I can't summarize that" },
+          },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn", stop_sequence: null },
+            usage: { output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ]) {
+          response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+        response.end();
+      });
     });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  t.after(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  );
-  const address = server.address();
-  assert(address && typeof address !== "string");
-  const agent = createAgent({
-    defaultModelId: "claude-opus-4-8",
-    titleModelId: "claude-haiku-4-5",
-    modelGateway: {
-      url: `http://127.0.0.1:${address.port}`,
-      apiKey: "gateway-key",
-      apiKeyHeader: "api-key",
-      models: { "claude-haiku-4-5": "title-model" },
-    },
-  });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    t.after(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        }),
+    );
+    const address = server.address();
+    assert(address && typeof address !== "string");
+    const agent = createAgent({
+      defaultModelId: "claude-opus-4-8",
+      titleModelId: "claude-haiku-4-5",
+      modelGateway: {
+        url: `http://127.0.0.1:${address.port}`,
+        apiKey: "gateway-key",
+        apiKeyHeader: "api-key",
+        models: { "claude-haiku-4-5": "title-model" },
+      },
+    });
 
-  await assert.rejects(agent.generateTitle!("User:\nInvestigate the deploy"), {
-    name: "TitleRejected",
-    rule: "reply_opener",
-    message: 'reply_opener: "Sorry, I can\'t summarize that"',
-  });
-});
+    await assert.rejects(agent.generateTitle!("User:\nInvestigate the deploy"), {
+      name: "TitleRejected",
+      rule: "reply_opener",
+      message: 'reply_opener: "Sorry, I can\'t summarize that"',
+    });
+  },
+);
 
-test("Pi title generation accepts the prompted NONE sentinel without reporting a failure", async (t) => {
+tenantTest("Pi title generation accepts the prompted NONE sentinel without reporting a failure", async (t) => {
   const server = createServer((request, response) => {
     request.resume();
     request.on("end", () => {
@@ -429,7 +442,7 @@ async function detectAgainst(
   return { outcome, rows };
 }
 
-test(
+tenantTest(
   "Pi turn detection records each model call it was billed for, refused or retried, for the session's ledger",
   { timeout: 20_000 },
   async (t) => {
@@ -453,14 +466,14 @@ test(
   },
 );
 
-test("agentConfigOptions omits the optional fields when the config leaves them unset", () => {
+tenantTest("agentConfigOptions omits the optional fields when the config leaves them unset", () => {
   const opts = agentConfigOptions(testConfig());
   for (const key of ["defaultModelId", "detectModelId", "titleModelId", "apiKey"] as const) {
     assert.equal(key in opts, false, `${key} must be omitted, not undefined`);
   }
 });
 
-test("oneShot removes its temp dirs even when the session call throws", async () => {
+tenantTest("oneShot removes its temp dirs even when the session call throws", async () => {
   const prefix = "pi-onesh-test";
   const before = countTempDirs(`${prefix}-agent-`);
 
@@ -472,7 +485,7 @@ test("oneShot removes its temp dirs even when the session call throws", async ()
   assert.equal(after, before, "oneShot must leave no agent dirs behind");
 });
 
-test("oneShot completes an authenticated Pi 0.82 turn", async (t) => {
+tenantTest("oneShot completes an authenticated Pi 0.82 turn", async (t) => {
   let apiKey: string | undefined;
   let requestBody = "";
   const server = createServer((request, response) => {
@@ -536,130 +549,133 @@ test("oneShot completes an authenticated Pi 0.82 turn", async (t) => {
   assert.match(requestBody, /hello/);
 });
 
-test("oneShot routes configured models through the model gateway without mutating transport metadata", async (t) => {
-  let lastBody = "";
-  let stopReason = "end_turn";
-  const requests: Array<{ gatewayKey?: string; providerKey?: string; model?: string; marker?: string }> = [];
-  const server = createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => {
-      body += String(chunk);
-    });
-    request.on("end", () => {
-      lastBody = body;
-      const requestModel = (JSON.parse(body) as { model?: string }).model;
-      requests.push({
-        ...(request.headers["api-key"] ? { gatewayKey: String(request.headers["api-key"]) } : {}),
-        ...(request.headers["x-api-key"] ? { providerKey: String(request.headers["x-api-key"]) } : {}),
-        ...(requestModel ? { model: requestModel } : {}),
-        ...(request.headers["x-model-marker"] ? { marker: String(request.headers["x-model-marker"]) } : {}),
+tenantTest(
+  "oneShot routes configured models through the model gateway without mutating transport metadata",
+  async (t) => {
+    let lastBody = "";
+    let stopReason = "end_turn";
+    const requests: Array<{ gatewayKey?: string; providerKey?: string; model?: string; marker?: string }> = [];
+    const server = createServer((request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        body += String(chunk);
       });
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      for (const event of [
-        {
-          type: "message_start",
-          message: {
-            id: "msg_gateway",
-            type: "message",
-            role: "assistant",
-            model: requestModel,
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: 1, output_tokens: 0 },
+      request.on("end", () => {
+        lastBody = body;
+        const requestModel = (JSON.parse(body) as { model?: string }).model;
+        requests.push({
+          ...(request.headers["api-key"] ? { gatewayKey: String(request.headers["api-key"]) } : {}),
+          ...(request.headers["x-api-key"] ? { providerKey: String(request.headers["x-api-key"]) } : {}),
+          ...(requestModel ? { model: requestModel } : {}),
+          ...(request.headers["x-model-marker"] ? { marker: String(request.headers["x-model-marker"]) } : {}),
+        });
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        for (const event of [
+          {
+            type: "message_start",
+            message: {
+              id: "msg_gateway",
+              type: "message",
+              role: "assistant",
+              model: requestModel,
+              content: [],
+              stop_reason: null,
+              stop_sequence: null,
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
           },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "gateway" } },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: stopReason, stop_sequence: null },
-          usage: { output_tokens: 1 },
-        },
-        { type: "message_stop" },
-      ]) {
-        response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-      }
-      response.end();
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "gateway" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: stopReason, stop_sequence: null },
+            usage: { output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ]) {
+          response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+        response.end();
+      });
     });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  t.after(async () => {
     await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
     });
-  });
-  const address = server.address();
-  assert(address && typeof address !== "string");
-  const modelGateway = {
-    url: `http://127.0.0.1:${address.port}`,
-    apiKey: "gateway-secret",
-    apiKeyHeader: "api-key",
-    models: { "claude-haiku-4-5": "router/haiku", "retired-model-name": "router/retired" },
-  };
-  const model = { ...getRequiredModel("claude-haiku-4-5"), headers: { "x-model-marker": "preserved" } };
-  assert.equal(await oneShot("pi-gateway-test", model, {}, "system", "hello", { modelGateway }), "gateway");
-  const directModel = { ...getRequiredModel("claude-opus-4-8"), baseUrl: modelGateway.url };
-  await assert.rejects(
-    oneShot("pi-unmapped-test", directModel, {}, "system", "hello", { modelGateway }),
-    /No API key found|Provider is not configured/,
-  );
+    t.after(async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    });
+    const address = server.address();
+    assert(address && typeof address !== "string");
+    const modelGateway = {
+      url: `http://127.0.0.1:${address.port}`,
+      apiKey: "gateway-secret",
+      apiKeyHeader: "api-key",
+      models: { "claude-haiku-4-5": "router/haiku", "retired-model-name": "router/retired" },
+    };
+    const model = { ...getRequiredModel("claude-haiku-4-5"), headers: { "x-model-marker": "preserved" } };
+    assert.equal(await oneShot("pi-gateway-test", model, {}, "system", "hello", { modelGateway }), "gateway");
+    const directModel = { ...getRequiredModel("claude-opus-4-8"), baseUrl: modelGateway.url };
+    await assert.rejects(
+      oneShot("pi-unmapped-test", directModel, {}, "system", "hello", { modelGateway }),
+      /No API key found|Provider is not configured/,
+    );
 
-  assert.equal(
-    await oneShot("pi-direct-test", directModel, "direct-provider-key", "system", "hello", { modelGateway }),
-    "gateway",
-  );
-  assert.deepEqual(requests, [
-    { gatewayKey: "gateway-secret", providerKey: "gateway-secret", model: "router/haiku", marker: "preserved" },
-    { providerKey: "direct-provider-key", model: "claude-opus-4-8" },
-  ]);
-  const routed = modelGatewayRequest(modelGateway, model);
-  assert.equal(routed?.model.id, "claude-haiku-4-5");
-  assert.equal(routed?.target, "router/haiku");
-  assert.deepEqual(transportFromModel(model), {
-    modelId: "claude-haiku-4-5",
-    headers: { "x-model-marker": "preserved" },
-  });
-  const agent = createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway });
-  const compact = agent.compactHistory!;
-  const input: Parameters<typeof compact>[0] = {
-    session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],
-    history: [
-      {
-        sessionId: "summary-session",
-        seq: 136,
-        parentSeq: null,
-        type: "user",
-        payload: { text: "what? local recovery what?" },
-        scopeLabel: "personal:test",
-        createdAt: 0,
-      },
-    ],
-    recordModelCall: () => {},
-  };
-  assert.equal(await compact(input), "gateway");
-  assert.deepEqual(requests.at(-1), {
-    gatewayKey: "gateway-secret",
-    providerKey: "gateway-secret",
-    model: "router/haiku",
-  });
-  const body = JSON.parse(lastBody) as { messages: Array<{ content: Array<{ text?: string }> }> };
-  const prompt = body.messages
-    .flatMap((message) => message.content)
-    .map((block) => block.text ?? "")
-    .join("\n");
-  assert.ok(prompt.indexOf("</conversation>") > prompt.indexOf("user#136"));
-  assert.match(prompt.slice(prompt.indexOf("</conversation>")), /Create a structured context checkpoint summary/);
-  stopReason = "max_tokens";
-  await assert.rejects(compact(input), /did not complete \(length\)/);
-});
+    assert.equal(
+      await oneShot("pi-direct-test", directModel, "direct-provider-key", "system", "hello", { modelGateway }),
+      "gateway",
+    );
+    assert.deepEqual(requests, [
+      { gatewayKey: "gateway-secret", providerKey: "gateway-secret", model: "router/haiku", marker: "preserved" },
+      { providerKey: "direct-provider-key", model: "claude-opus-4-8" },
+    ]);
+    const routed = modelGatewayRequest(modelGateway, model);
+    assert.equal(routed?.model.id, "claude-haiku-4-5");
+    assert.equal(routed?.target, "router/haiku");
+    assert.deepEqual(transportFromModel(model), {
+      modelId: "claude-haiku-4-5",
+      headers: { "x-model-marker": "preserved" },
+    });
+    const agent = createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway });
+    const compact = agent.compactHistory!;
+    const input: Parameters<typeof compact>[0] = {
+      session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],
+      history: [
+        {
+          sessionId: "summary-session",
+          seq: 136,
+          parentSeq: null,
+          type: "user",
+          payload: { text: "what? local recovery what?" },
+          scopeLabel: "personal:test",
+          createdAt: 0,
+        },
+      ],
+      recordModelCall: () => {},
+    };
+    assert.equal(await compact(input), "gateway");
+    assert.deepEqual(requests.at(-1), {
+      gatewayKey: "gateway-secret",
+      providerKey: "gateway-secret",
+      model: "router/haiku",
+    });
+    const body = JSON.parse(lastBody) as { messages: Array<{ content: Array<{ text?: string }> }> };
+    const prompt = body.messages
+      .flatMap((message) => message.content)
+      .map((block) => block.text ?? "")
+      .join("\n");
+    assert.ok(prompt.indexOf("</conversation>") > prompt.indexOf("user#136"));
+    assert.match(prompt.slice(prompt.indexOf("</conversation>")), /Create a structured context checkpoint summary/);
+    stopReason = "max_tokens";
+    await assert.rejects(compact(input), /did not complete \(length\)/);
+  },
+);
 
-test("Pi assistant error messages fail the turn instead of becoming a blank reply", () => {
+tenantTest("Pi assistant error messages fail the turn instead of becoming a blank reply", () => {
   const session = {
     getLastAssistantText: () => undefined,
     messages: [
@@ -691,7 +707,7 @@ const overloaded = {
   },
 };
 
-test("Pi provider errors are surfaced from the structured body as readable chat errors", () => {
+tenantTest("Pi provider errors are surfaced from the structured body as readable chat errors", () => {
   const session = failedSession({
     errorMessage: "400 Your credit balance is too low.",
     providerError: {
@@ -706,12 +722,12 @@ test("Pi provider errors are surfaced from the structured body as readable chat 
   );
 });
 
-test("piTurnError recovers the session's structured error when the agent loop rejects generically", () => {
+tenantTest("piTurnError recovers the session's structured error when the agent loop rejects generically", () => {
   const err = piTurnError(failedSession(overloaded), new Error("An unknown error occurred"));
   assert.match(err.message, /Model provider API error \(overloaded_error\): Overloaded/);
 });
 
-test("Pi retryability comes from status and type, never errorMessage", () => {
+tenantTest("Pi retryability comes from status and type, never errorMessage", () => {
   const retryable: FailedFields[] = [
     overloaded,
     { errorMessage: "500", providerError: { status: 500, type: "api_error" } },
@@ -737,7 +753,7 @@ test("Pi retryability comes from status and type, never errorMessage", () => {
   }
 });
 
-test("piTurnError falls back to the thrown error when the session has no structured error", () => {
+tenantTest("piTurnError falls back to the thrown error when the session has no structured error", () => {
   const session = {
     getLastAssistantText: () => undefined,
     messages: [{ role: "assistant", stopReason: "stop", content: [] }],
@@ -747,7 +763,7 @@ test("piTurnError falls back to the thrown error when the session has no structu
   assert.equal(piTurnError(session, "boom").message, "boom");
 });
 
-test("piTurnError ignores a PRIOR turn's stale error when nothing new was appended this prompt", () => {
+tenantTest("piTurnError ignores a PRIOR turn's stale error when nothing new was appended this prompt", () => {
   const session = failedSession(overloaded);
   const err = piTurnError(session, new Error("socket hang up"), 1);
   assert.equal(err.message, "socket hang up");
@@ -755,14 +771,17 @@ test("piTurnError ignores a PRIOR turn's stale error when nothing new was append
   assert.match(recovered.message, /Model provider API error \(overloaded_error\): Overloaded/);
 });
 
-test("parseDetectVerdict: a YES whose rationale contains 'no' still replies (anchored on the verdict token)", () => {
-  assert.equal(parseDetectVerdict("YES (a direct answer to you, no mention needed)", false).respond, true);
-  assert.equal(parseDetectVerdict("YES — no question mark, but it's feedback aimed at you", true).respond, true);
-  assert.equal(parseDetectVerdict("Verdict: YES (no mention needed)", false).respond, true);
-  assert.equal(parseDetectVerdict("**YES** — follow-up to your work", false).respond, true);
-});
+tenantTest(
+  "parseDetectVerdict: a YES whose rationale contains 'no' still replies (anchored on the verdict token)",
+  () => {
+    assert.equal(parseDetectVerdict("YES (a direct answer to you, no mention needed)", false).respond, true);
+    assert.equal(parseDetectVerdict("YES — no question mark, but it's feedback aimed at you", true).respond, true);
+    assert.equal(parseDetectVerdict("Verdict: YES (no mention needed)", false).respond, true);
+    assert.equal(parseDetectVerdict("**YES** — follow-up to your work", false).respond, true);
+  },
+);
 
-test("parseDetectVerdict: NO verdicts stay silent even when the rationale contains 'yes'", () => {
+tenantTest("parseDetectVerdict: NO verdicts stay silent even when the rationale contains 'yes'", () => {
   assert.equal(parseDetectVerdict("NO (they said yes to each other, not to you)", false).respond, false);
   assert.equal(parseDetectVerdict("Answer: no — chit-chat", false).respond, false);
   assert.equal(parseDetectVerdict("", false).respond, false);
@@ -770,7 +789,7 @@ test("parseDetectVerdict: NO verdicts stay silent even when the rationale contai
   assert.equal(parseDetectVerdict("Eyes on this one", false).respond, false, "'yes' inside a word does not count");
 });
 
-test("parseDetectVerdict: REACT verdicts return reactions without replying", () => {
+tenantTest("parseDetectVerdict: REACT verdicts return reactions without replying", () => {
   const r = parseDetectVerdict("REACT :pray:", true);
   assert.equal(r.respond, false);
   assert.deepEqual(r.reactions, ["pray"]);
@@ -780,21 +799,21 @@ test("parseDetectVerdict: REACT verdicts return reactions without replying", () 
   assert.equal(parseDetectVerdict("REACT :pray:", false).respond, false, "reactions disabled → REACT is not a YES");
 });
 
-test("turn-detection prompt treats plain-text assistant handle + sensitive question as a reply", () => {
+tenantTest("turn-detection prompt treats plain-text assistant handle + sensitive question as a reply", () => {
   const prompt = buildDetectionPrompt("Use :pray: for thanks.");
   assert.match(prompt, /plain-text assistant name\/handle/);
   assert.match(prompt, /"agent prod"/);
   assert.match(prompt, /Do NOT choose NO just because the topic is legal/);
 });
 
-test("turn-detection prompt says conversational flow can imply the assistant should answer", () => {
+tenantTest("turn-detection prompt says conversational flow can imply the assistant should answer", () => {
   const prompt = buildDetectionPrompt();
   assert.match(prompt, /conversation flow/);
   assert.match(prompt, /no mention needed/);
   assert.match(prompt, /can you send the chart/);
 });
 
-test("turn-detection prompt treats implied assistant-target follow-ups as addressed", () => {
+tenantTest("turn-detection prompt treats implied assistant-target follow-ups as addressed", () => {
   const prompt = buildDetectionPrompt();
   assert.match(prompt, /implied target is the assistant/);
   assert.match(prompt, /even if the assistant is not explicitly mentioned/);
@@ -803,7 +822,7 @@ test("turn-detection prompt treats implied assistant-target follow-ups as addres
   assert.match(prompt, /<@U123> what do you mean by that\?[^]*NO/);
 });
 
-test("sanitizeLlmPayload captures the prompt envelope and drops the message array", () => {
+tenantTest("sanitizeLlmPayload captures the prompt envelope and drops the message array", () => {
   const payload = {
     model: "claude-opus-4-8",
     system: [{ type: "text", text: "be helpful" }],
@@ -822,14 +841,14 @@ test("sanitizeLlmPayload captures the prompt envelope and drops the message arra
 
 const imageBlock = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
 
-test("trimPayloadToByteBudget returns the payload untouched when it fits", () => {
+tenantTest("trimPayloadToByteBudget returns the payload untouched when it fits", () => {
   const payload = { messages: [{ role: "user", content: [imageBlock("AAAA".repeat(100))] }] };
   assert.equal(trimPayloadToByteBudget(payload, 10_000_000), payload, "same reference — no clone, no cache churn");
   assert.equal(trimPayloadToByteBudget(null, 10), null);
   assert.equal(trimPayloadToByteBudget("nope", 10), "nope");
 });
 
-test("trimPayloadToByteBudget sheds the OLDEST images first and keeps the newest", () => {
+tenantTest("trimPayloadToByteBudget sheds the OLDEST images first and keeps the newest", () => {
   const big = "AAAA".repeat(2_000_000);
   const payload = {
     messages: [
@@ -848,7 +867,7 @@ test("trimPayloadToByteBudget sheds the OLDEST images first and keeps the newest
   assert.equal((payload.messages[0]!.content[1] as any).type, "image", "input payload not mutated");
 });
 
-test("trimPayloadToByteBudget reaches images nested in tool_result content", () => {
+tenantTest("trimPayloadToByteBudget reaches images nested in tool_result content", () => {
   const big = "AAAA".repeat(5_000_000);
   const payload = {
     messages: [
@@ -864,7 +883,7 @@ test("trimPayloadToByteBudget reaches images nested in tool_result content", () 
   assert.ok(JSON.stringify(out).length <= 18_000_000);
 });
 
-test("trimPayloadToByteBudget also trims the OpenAI Responses wire shape", () => {
+tenantTest("trimPayloadToByteBudget also trims the OpenAI Responses wire shape", () => {
   const dataUrl = `data:image/png;base64,${"AAAA".repeat(5_000_000)}`;
   const payload = {
     input: [
@@ -881,7 +900,7 @@ test("trimPayloadToByteBudget also trims the OpenAI Responses wire shape", () =>
   assert.ok(JSON.stringify(out).length <= 18_000_000);
 });
 
-test("trimPayloadToByteBudget keeps a shed image block's cache_control breakpoint", () => {
+tenantTest("trimPayloadToByteBudget keeps a shed image block's cache_control breakpoint", () => {
   const big = "AAAA".repeat(5_000_000);
   const payload = {
     messages: [
@@ -903,7 +922,7 @@ test("trimPayloadToByteBudget keeps a shed image block's cache_control breakpoin
   assert.equal(out.messages[0].content[0].type, "text");
 });
 
-test("transportFromModel keeps the model id + string headers (the anthropic-beta that the body omits)", () => {
+tenantTest("transportFromModel keeps the model id + string headers (the anthropic-beta that the body omits)", () => {
   const model = { id: "claude-opus-4-8", headers: { "anthropic-beta": "fast,interleaved", "x-num": 7 } };
   assert.deepEqual(
     transportFromModel(model),
@@ -917,7 +936,7 @@ test("transportFromModel keeps the model id + string headers (the anthropic-beta
   assert.equal(transportFromModel(null), undefined, "no model → no transport");
 });
 
-test("sanitizeLlmPayload attaches transport from the model arg alongside the redacted body", () => {
+tenantTest("sanitizeLlmPayload attaches transport from the model arg alongside the redacted body", () => {
   const model = { id: "claude-opus-4-8", headers: { "anthropic-beta": "fast-mode" } };
   const out = sanitizeLlmPayload({ messages: [{ role: "user", content: "hi" }] }, model);
   assert.deepEqual(out.transport, { modelId: "claude-opus-4-8", headers: { "anthropic-beta": "fast-mode" } });
@@ -925,7 +944,7 @@ test("sanitizeLlmPayload attaches transport from the model arg alongside the red
   assert.equal(sanitizeLlmPayload({ messages: [] }).transport, undefined);
 });
 
-test("sanitizeLlmPayload redacts image bytes that appear outside the message array", () => {
+tenantTest("sanitizeLlmPayload redacts image bytes that appear outside the message array", () => {
   const big = "AAAA".repeat(2000);
   const payload = {
     system: [{ type: "image", source: { type: "base64", media_type: "image/png", data: big } }],
@@ -937,7 +956,7 @@ test("sanitizeLlmPayload redacts image bytes that appear outside the message arr
   assert.match(block.source.data, /<base64 image\/png omitted: \d+ chars>/, "image bytes never persist");
 });
 
-test("renderDetectPrompt uses prior assistant replies, not assembled prior user prompts", () => {
+tenantTest("renderDetectPrompt uses prior assistant replies, not assembled prior user prompts", () => {
   const prompt = renderDetectPrompt({
     session: {} as any,
     message: "yes, send it",
@@ -962,14 +981,14 @@ test("renderDetectPrompt uses prior assistant replies, not assembled prior user 
   assert.match(prompt, /NEWEST message:\nyes, send it/);
 });
 
-test("resolveConfiguredModelId: known ids pass through, unknown ids fall back to the default", () => {
+tenantTest("resolveConfiguredModelId: known ids pass through, unknown ids fall back to the default", () => {
   assert.equal(resolveConfiguredModelId("claude-opus-4-8"), "claude-opus-4-8");
   assert.equal(resolveConfiguredModelId(undefined), DEFAULT_AGENT_MODEL_ID);
   assert.equal(resolveConfiguredModelId("claude-dropped-by-pi-ai"), DEFAULT_AGENT_MODEL_ID);
   assert.equal(resolveConfiguredModelId("claude-dropped-by-pi-ai", "claude-opus-4-8"), "claude-opus-4-8");
 });
 
-test("Pi provider errors are classified once into a typed code from structured fields", () => {
+tenantTest("Pi provider errors are classified once into a typed code from structured fields", () => {
   const classify = (fields: FailedFields) => piTurnError(failedSession(fields), new Error("x")) as ProviderTurnError;
   const budget = classify({
     errorMessage: "429: Budget has been exceeded! Limit=$1000.00",
@@ -1008,19 +1027,22 @@ test("Pi provider errors are classified once into a typed code from structured f
   }
 });
 
-test("refusalFallbackNote names both models, carries the provider's refusal, and tells the agent to inform the user", () => {
-  const note = refusalFallbackNote(
-    "Claude Fable 5",
-    "Claude Opus 4.8",
-    "This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering.",
-  );
-  assert.match(note, /Claude Fable 5/);
-  assert.match(note, /Claude Opus 4.8/);
-  assert.match(note, /restrictions on reverse engineering/);
-  assert.match(note, /telling the user/);
-});
+tenantTest(
+  "refusalFallbackNote names both models, carries the provider's refusal, and tells the agent to inform the user",
+  () => {
+    const note = refusalFallbackNote(
+      "Claude Fable 5",
+      "Claude Opus 4.8",
+      "This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering.",
+    );
+    assert.match(note, /Claude Fable 5/);
+    assert.match(note, /Claude Opus 4.8/);
+    assert.match(note, /restrictions on reverse engineering/);
+    assert.match(note, /telling the user/);
+  },
+);
 
-test("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refused model back", () => {
+tenantTest("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refused model back", () => {
   assert.equal(refusalFallbackModelId("claude-fable-5-1"), "claude-opus-5");
   assert.equal(refusalFallbackModelId("claude-fable-5"), "claude-opus-5");
   assert.equal(refusalFallbackModelId("claude-opus-5"), "claude-sonnet-5");
@@ -1036,15 +1058,18 @@ test("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refuse
   }
 });
 
-test("resolveConfiguredModelId: an unresolvable default is rejected too, so auxiliaries never chase a dead id", () => {
-  assert.equal(resolveConfiguredModelId(undefined, "anthropic/claude-sonnet-4-5"), DEFAULT_AGENT_MODEL_ID);
-  assert.equal(resolveConfiguredModelId("also-not-real", "anthropic/claude-sonnet-4-5"), DEFAULT_AGENT_MODEL_ID);
-  assert.doesNotThrow(() =>
-    getRequiredModel(auxiliaryModelFor(resolveConfiguredModelId(undefined, "anthropic/claude-sonnet-4-5"))),
-  );
-});
+tenantTest(
+  "resolveConfiguredModelId: an unresolvable default is rejected too, so auxiliaries never chase a dead id",
+  () => {
+    assert.equal(resolveConfiguredModelId(undefined, "anthropic/claude-sonnet-4-5"), DEFAULT_AGENT_MODEL_ID);
+    assert.equal(resolveConfiguredModelId("also-not-real", "anthropic/claude-sonnet-4-5"), DEFAULT_AGENT_MODEL_ID);
+    assert.doesNotThrow(() =>
+      getRequiredModel(auxiliaryModelFor(resolveConfiguredModelId(undefined, "anthropic/claude-sonnet-4-5"))),
+    );
+  },
+);
 
-test("Pi judge uses supported reasoning effort when configured with Astra", async (t) => {
+tenantTest("Pi judge uses supported reasoning effort when configured with Astra", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {
     globalThis.fetch = originalFetch;
@@ -1066,7 +1091,7 @@ test("Pi judge uses supported reasoning effort when configured with Astra", asyn
   assert.equal(request.reasoning?.effort, "low");
 });
 
-test("oneShot stops a request whose abort lands before Pi starts its run", { timeout: 10_000 }, async (t) => {
+tenantTest("oneShot stops a request whose abort lands before Pi starts its run", { timeout: 10_000 }, async (t) => {
   let requests = 0;
   const server = createServer((request) => {
     requests += 1;

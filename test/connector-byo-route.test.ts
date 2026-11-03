@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +15,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
 
 const ADMIN = {
   "content-type": "application/json",
@@ -73,7 +72,7 @@ const putConnector = (base: string, b: object) =>
     body: JSON.stringify(b),
   });
 
-test("the slack-installation createUrl adopts the live branding label", async () => {
+tenantTest("the slack-installation createUrl adopts the live branding label", async () => {
   const srv = start();
   try {
     const nameFrom = async (): Promise<string> => {
@@ -102,7 +101,7 @@ test("the slack-installation createUrl adopts the live branding label", async ()
   }
 });
 
-test("admin registers a BYO client → /start uses it; the secret is never echoed", async () => {
+tenantTest("admin registers a BYO client → /start uses it; the secret is never echoed", async () => {
   const srv = start();
   try {
     const redirectUri = `${srv.base}/v1/connectors/oauth/google/callback`;
@@ -147,7 +146,7 @@ test("admin registers a BYO client → /start uses it; the secret is never echoe
   }
 });
 
-test("admin stores validated Slack tokens without ever returning them", async () => {
+tenantTest("admin stores validated Slack tokens without ever returning them", async () => {
   const srv = start();
   try {
     const put = await fetch(`${srv.base}/v1/admin/slack-installation`, {
@@ -177,7 +176,7 @@ test("admin stores validated Slack tokens without ever returning them", async ()
   }
 });
 
-test("admin rejects Slack bot and Socket Mode tokens from different apps", async () => {
+tenantTest("admin rejects Slack bot and Socket Mode tokens from different apps", async () => {
   const srv = start("A-OTHER");
   try {
     const put = await fetch(`${srv.base}/v1/admin/slack-installation`, {
@@ -193,7 +192,7 @@ test("admin rejects Slack bot and Socket Mode tokens from different apps", async
   }
 });
 
-test("disabling a BYO connector grays it out in the app-grid status", async () => {
+tenantTest("disabling a BYO connector grays it out in the app-grid status", async () => {
   const srv = start();
   try {
     await putConnector(srv.base, { provider: "google", clientId: "c", clientSecret: "s", enabled: true });
@@ -213,7 +212,7 @@ test("disabling a BYO connector grays it out in the app-grid status", async () =
   }
 });
 
-test("the catalog endpoint exposes per-provider setup guidance (no secrets)", async () => {
+tenantTest("the catalog endpoint exposes per-provider setup guidance (no secrets)", async () => {
   const srv = start();
   try {
     const { catalog } = (await (
@@ -232,42 +231,45 @@ test("the catalog endpoint exposes per-provider setup guidance (no secrets)", as
   }
 });
 
-test("managed deployments accept validated own apps and preserve credentials on invalid replacement", async () => {
-  const srv = start("A-ACME", true);
-  try {
-    await inTestTenant(() =>
-      srv.built.slackInstallation.setManaged({
-        botToken: "xoxb-managed",
-        appId: "A123",
-        teamId: "T-ACME",
-        installId: "I1",
-        installedAt: 1,
-      }),
-    );
-    const put = (botToken: string) =>
-      fetch(`${srv.base}/v1/admin/slack-installation`, {
-        method: "PUT",
-        headers: ADMIN,
-        body: JSON.stringify({ botToken, appToken: "xapp-own" }),
-      });
-    assert.equal((await put("invalid")).status, 400);
-    assert.equal((await inTestTenant(() => srv.built.slackInstallation.get()))?.botToken, "xoxb-managed");
-    assert.equal((await put("xoxb-own")).status, 200);
-    const status = (await (await fetch(`${srv.base}/v1/admin/slack-installation`, { headers: ADMIN })).json()) as {
-      source: string;
-      installAvailable: boolean;
-      createUrl: string;
-    };
-    assert.equal(status.source, "admin");
-    assert.equal(status.installAvailable, true);
-    assert.equal(new URL(status.createUrl).searchParams.get("new_app"), "1");
-    assert.equal((await inTestTenant(() => srv.built.slackInstallation.get()))?.botToken, "xoxb-own");
-  } finally {
-    await srv.close();
-  }
-});
+tenantTest(
+  "managed deployments accept validated own apps and preserve credentials on invalid replacement",
+  async () => {
+    const srv = start("A-ACME", true);
+    try {
+      await inTestTenant(() =>
+        srv.built.slackInstallation.setManaged({
+          botToken: "xoxb-managed",
+          appId: "A123",
+          teamId: "T-ACME",
+          installId: "I1",
+          installedAt: 1,
+        }),
+      );
+      const put = (botToken: string) =>
+        fetch(`${srv.base}/v1/admin/slack-installation`, {
+          method: "PUT",
+          headers: ADMIN,
+          body: JSON.stringify({ botToken, appToken: "xapp-own" }),
+        });
+      assert.equal((await put("invalid")).status, 400);
+      assert.equal((await inTestTenant(() => srv.built.slackInstallation.get()))?.botToken, "xoxb-managed");
+      assert.equal((await put("xoxb-own")).status, 200);
+      const status = (await (await fetch(`${srv.base}/v1/admin/slack-installation`, { headers: ADMIN })).json()) as {
+        source: string;
+        installAvailable: boolean;
+        createUrl: string;
+      };
+      assert.equal(status.source, "admin");
+      assert.equal(status.installAvailable, true);
+      assert.equal(new URL(status.createUrl).searchParams.get("new_app"), "1");
+      assert.equal((await inTestTenant(() => srv.built.slackInstallation.get()))?.botToken, "xoxb-own");
+    } finally {
+      await srv.close();
+    }
+  },
+);
 
-test("an agent capability token can read the connector catalog; an unauthenticated request cannot", async () => {
+tenantTest("an agent capability token can read the connector catalog; an unauthenticated request cannot", async () => {
   const secret = "catalog-route-secret".repeat(3);
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "catalog-")), signingSecret: secret }));
   const server = createServer(built.app, {
@@ -293,7 +295,7 @@ test("an agent capability token can read the connector catalog; an unauthenticat
   }
 });
 
-test("connector writes save without consulting another scope's client", async () => {
+tenantTest("connector writes save without consulting another scope's client", async () => {
   const srv = start();
   try {
     const disabled = await putConnector(srv.base, {

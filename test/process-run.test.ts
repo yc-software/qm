@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { processRun, LEASE_LOST_CONSECUTIVE } from "../src/runs/worker.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
@@ -7,7 +6,7 @@ import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.t
 import type { Principal, TurnResult } from "../src/types.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
 import { withoutTenant } from "../src/tenants/context.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -60,7 +59,7 @@ const microtasks = async (): Promise<void> => {
   while (heartbeatsInFlight > 0) await nextTurn();
 };
 
-test("processRun refuses a run that holds no lease", async () => {
+tenantTest("processRun refuses a run that holds no lease", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const r = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn }))).run;
   const orchestrator = fakeOrchestrator(async () => {
@@ -70,7 +69,7 @@ test("processRun refuses a run that holds no lease", async () => {
   assert.equal((await inTestTenant(() => runs.get(r.id)))?.status, "pending", "the run was not touched");
 });
 
-test("processRun threads runId into the turn and completes the run with the result", async () => {
+tenantTest("processRun threads runId into the turn and completes the run with the result", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const seen: OrchestratorInput[] = [];
   const orchestrator = fakeOrchestrator(async (input) => {
@@ -92,7 +91,7 @@ test("processRun threads runId into the turn and completes the run with the resu
   assert.equal(done?.leaseToken, null, "the lease is released on completion");
 });
 
-test("processRun rejects when a reaped attempt finishes after a retry claims the run", async () => {
+tenantTest("processRun rejects when a reaped attempt finishes after a retry claims the run", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   let finish = (_: TurnResult) => {};
   const turnResult = new Promise<TurnResult>((resolve) => {
@@ -117,7 +116,7 @@ test("processRun rejects when a reaped attempt finishes after a retry claims the
   assert.equal(current?.result, null);
 });
 
-test("processRun upgrades legacy queued provenance before orchestration", async () => {
+tenantTest("processRun upgrades legacy queued provenance before orchestration", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const legacy = { ...turn, origin: undefined, liveActor: true, triggerTs: "1" } as unknown as OrchestratorInput;
   await inTestTenant(() => runs.enqueue({ sessionId: "legacy", request: legacy }));
@@ -137,7 +136,7 @@ test("processRun upgrades legacy queued provenance before orchestration", async 
   assert.deepEqual(seen?.origin, { kind: "human", messageTs: "1" });
 });
 
-test("processRun heartbeats the lease while the turn runs, and the beat stops with the turn", async (t) => {
+tenantTest("processRun heartbeats the lease while the turn runs, and the beat stops with the turn", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const store = createPostgresRunStore(testDatabaseUrl());
   const { runs, beats } = spyHeartbeats(store.runs);
@@ -176,7 +175,7 @@ test("processRun heartbeats the lease while the turn runs, and the beat stops wi
   );
 });
 
-test("a retryable turn failure requeues the run, rethrows, and stops the heartbeat", async (t) => {
+tenantTest("a retryable turn failure requeues the run, rethrows, and stops the heartbeat", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval", "Date"], now: Date.now() });
   const store = createPostgresRunStore(testDatabaseUrl());
   const { runs, beats } = spyHeartbeats(store.runs);
@@ -231,7 +230,7 @@ test("a retryable turn failure requeues the run, rethrows, and stops the heartbe
   assert.deepEqual(seen[0]?.resumeCause, { kind: "error" }, "the retry is told why the last attempt stopped");
 });
 
-test("finalAttempt marks the attempt whose error would park the run, from the claim-time budget", async (t) => {
+tenantTest("finalAttempt marks the attempt whose error would park the run, from the claim-time budget", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const seen: OrchestratorInput[] = [];
@@ -259,7 +258,7 @@ test("finalAttempt marks the attempt whose error would park the run, from the cl
   );
 });
 
-test("finalAttempt also marks the claim-cap park — an error on an over-claimed run is terminal", async () => {
+tenantTest("finalAttempt also marks the claim-cap park — an error on an over-claimed run is terminal", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl(), { maxClaims: 3 });
   const seen: OrchestratorInput[] = [];
   const orchestrator = fakeOrchestrator(async (input) => {
@@ -311,7 +310,7 @@ function cancellableOrchestrator(): { orchestrator: Orchestrator; cancelled: () 
   };
 }
 
-test("a thrown heartbeat (a DB blip) never cancels the turn", async (t) => {
+tenantTest("a thrown heartbeat (a DB blip) never cancels the turn", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const store = createPostgresRunStore(testDatabaseUrl());
   const runs = scriptedHeartbeat(
@@ -333,7 +332,7 @@ test("a thrown heartbeat (a DB blip) never cancels the turn", async (t) => {
   await pending;
 });
 
-test("a single definitive lease-lost beat does not cancel, but N consecutive do", async (t) => {
+tenantTest("a single definitive lease-lost beat does not cancel, but N consecutive do", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const store = createPostgresRunStore(testDatabaseUrl());
   const script: Array<boolean | Error> = [false, true, ...Array.from({ length: LEASE_LOST_CONSECUTIVE }, () => false)];
@@ -362,7 +361,7 @@ test("a single definitive lease-lost beat does not cancel, but N consecutive do"
   await pending;
 });
 
-test("the heartbeat stops before complete(), so a late tick cannot spuriously abort", async (t) => {
+tenantTest("the heartbeat stops before complete(), so a late tick cannot spuriously abort", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const store = createPostgresRunStore(testDatabaseUrl());
   const { runs, beats } = spyHeartbeats(store.runs);
@@ -399,7 +398,7 @@ test("the heartbeat stops before complete(), so a late tick cannot spuriously ab
   );
 });
 
-test("a NonRetryableTurnError parks the run even with attempts remaining", async () => {
+tenantTest("a NonRetryableTurnError parks the run even with attempts remaining", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const orchestrator = fakeOrchestrator(async () => {
     throw new NonRetryableTurnError("policy says no");
@@ -415,7 +414,7 @@ test("a NonRetryableTurnError parks the run even with attempts remaining", async
   assert.equal(parked?.result?.reason, "policy says no");
 });
 
-test("a crashed turn's raw exception text never reaches the stored reason", async () => {
+tenantTest("a crashed turn's raw exception text never reaches the stored reason", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const orchestrator = fakeOrchestrator(async () => {
     throw new Error("connect ECONNREFUSED db-internal.local:5432 password=hunter2");
@@ -432,7 +431,7 @@ test("a crashed turn's raw exception text never reaches the stored reason", asyn
   assert.match(reason, /operator error log/, "surfaces point operators at the log instead");
 });
 
-test("a NonRetryableTurnError keeps its human-readable reason on the stored result", async () => {
+tenantTest("a NonRetryableTurnError keeps its human-readable reason on the stored result", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const orchestrator = fakeOrchestrator(async () => {
     throw new NonRetryableTurnError("Codex turn exceeded 300s wall clock");
@@ -445,34 +444,37 @@ test("a NonRetryableTurnError keeps its human-readable reason on the stored resu
 });
 
 for (const rejects of [false, true]) {
-  test(`shutdown requeues without spending the error budget when cancellation ${rejects ? "throws" : "returns"}`, async () => {
-    const { runs } = createPostgresRunStore(testDatabaseUrl());
-    const enq = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 }))).run;
-    const run = await withoutTenant(() => runs.claim("old", 5_000));
-    const shutdown = new AbortController();
-    const entered = Promise.withResolvers<void>();
-    const orchestrator = fakeOrchestrator(async (input) => {
-      entered.resolve();
-      await new Promise<void>((resolve) => input.cancel!.addEventListener("abort", () => resolve(), { once: true }));
-      if (rejects) throw new Error("cancelled operation");
-      return { status: "silent", stopped: true };
-    });
-    const work = processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!, { shutdown: shutdown.signal });
-    const settled = rejects ? assert.rejects(work, /cancelled operation/) : work;
-    await entered.promise;
-    shutdown.abort();
-    await settled;
-    const handedBack = (await inTestTenant(() => runs.get(enq.id)))!;
-    assert.equal(handedBack.status, "pending");
-    assert.equal(handedBack.errorAttempts, 0);
-    assert.equal(handedBack.result, null);
-    assert.equal(handedBack.leaseToken, null);
-    assert.deepEqual(handedBack.lastStop, { kind: "shutdown" });
-    assert.ok(await withoutTenant(() => runs.claim("replacement", 5_000)));
-  });
+  tenantTest(
+    `shutdown requeues without spending the error budget when cancellation ${rejects ? "throws" : "returns"}`,
+    async () => {
+      const { runs } = createPostgresRunStore(testDatabaseUrl());
+      const enq = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 }))).run;
+      const run = await withoutTenant(() => runs.claim("old", 5_000));
+      const shutdown = new AbortController();
+      const entered = Promise.withResolvers<void>();
+      const orchestrator = fakeOrchestrator(async (input) => {
+        entered.resolve();
+        await new Promise<void>((resolve) => input.cancel!.addEventListener("abort", () => resolve(), { once: true }));
+        if (rejects) throw new Error("cancelled operation");
+        return { status: "silent", stopped: true };
+      });
+      const work = processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, run!, { shutdown: shutdown.signal });
+      const settled = rejects ? assert.rejects(work, /cancelled operation/) : work;
+      await entered.promise;
+      shutdown.abort();
+      await settled;
+      const handedBack = (await inTestTenant(() => runs.get(enq.id)))!;
+      assert.equal(handedBack.status, "pending");
+      assert.equal(handedBack.errorAttempts, 0);
+      assert.equal(handedBack.result, null);
+      assert.equal(handedBack.leaseToken, null);
+      assert.deepEqual(handedBack.lastStop, { kind: "shutdown" });
+      assert.ok(await withoutTenant(() => runs.claim("replacement", 5_000)));
+    },
+  );
 }
 
-test("explicit user Stop still completes instead of retrying", async () => {
+tenantTest("explicit user Stop still completes instead of retrying", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const enq = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn }))).run;
   const run = await withoutTenant(() => runs.claim("w1", 5_000));
@@ -487,7 +489,7 @@ test("explicit user Stop still completes instead of retrying", async () => {
   assert.equal(await withoutTenant(() => runs.claim("replacement", 5_000)), null);
 });
 
-test("failed shutdown handback retains the lease for expiry without charging an error", async () => {
+tenantTest("failed shutdown handback retains the lease for expiry without charging an error", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const enq = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 }))).run;
   const run = await withoutTenant(() => runs.claim("w1", 5_000));
@@ -508,7 +510,7 @@ test("failed shutdown handback retains the lease for expiry without charging an 
   assert.equal(await withoutTenant(() => runs.claim("replacement", 5_000)), null);
 });
 
-test("a claim that lands after shutdown began is handed back without starting a turn", async () => {
+tenantTest("a claim that lands after shutdown began is handed back without starting a turn", async () => {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const enq = (await inTestTenant(() => runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 1 }))).run;
   const run = await withoutTenant(() => runs.claim("old", 5_000));

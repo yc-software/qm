@@ -2,7 +2,6 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createSessionMethods } from "../src/api/app-sessions.ts";
 import { Readable } from "node:stream";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -12,6 +11,7 @@ import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { scopeId, type SessionEntry } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
   return {
@@ -39,7 +39,7 @@ const entries = [
   entry("assistant", { text: "UNPUBLISHED_SECRET" }, 11),
 ];
 
-test("shared transcript allowlists visible message fields and published replies", () => {
+tenantTest("shared transcript allowlists visible message fields and published replies", () => {
   assert.deepEqual(sharedMessages(entries), [
     { role: "user", text: "Hello" },
     { role: "assistant", text: "Hello back" },
@@ -56,7 +56,7 @@ test("shared transcript allowlists visible message fields and published replies"
   );
 });
 
-test("a delivery into the conversation is shared as the assistant's message", () => {
+tenantTest("a delivery into the conversation is shared as the assistant's message", () => {
   assert.deepEqual(
     sharedMessages([entry("user", { text: "remind me" }, 1), entry("assistant", { text: "Standup now" }, 2)]),
     [
@@ -66,7 +66,7 @@ test("a delivery into the conversation is shared as the assistant's message", ()
   );
 });
 
-test("work phases and approval decisions remain outside the shared message snapshot", () => {
+tenantTest("work phases and approval decisions remain outside the shared message snapshot", () => {
   assert.deepEqual(
     sharedMessages([
       entry("user", { text: "Run the check" }, 1),
@@ -86,7 +86,7 @@ test("work phases and approval decisions remain outside the shared message snaps
   );
 });
 
-test("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
+tenantTest("fresh shares freeze messages and authorized attachments with separate audiences", async (t) => {
   const store = testMap<SessionShare>();
   const bytes = createMemoryDurableByteStore();
   let puts = 0;
@@ -256,7 +256,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.equal((await fetch(`${base}/v1/sessions/s1/share`, { method: "DELETE" })).status, 404);
 });
 
-test("attachment projection includes only user and delivered attachments", () => {
+tenantTest("attachment projection includes only user and delivered attachments", () => {
   const messages = sharedMessages([
     entry("user", { attachments: [{ artifactId: "user" }] }, 1),
     entry("tool_result", { tool: "execute", files: [{ artifactId: "private" }] }, 2),
@@ -275,7 +275,7 @@ test("attachment projection includes only user and delivered attachments", () =>
   ]);
 });
 
-test("snapshot authorization checks mixed tenure bounds without reading transcript payloads", async () => {
+tenantTest("snapshot authorization checks mixed tenure bounds without reading transcript payloads", async () => {
   let allowed = true;
   let window = {
     principalId: "alice",
@@ -307,7 +307,7 @@ test("snapshot authorization checks mixed tenure bounds without reading transcri
   assert.equal(await methods.canViewSessionSnapshot("s1", "alice", { ...bounds, minCreatedAt: 100 }), false);
 });
 
-test("staged tool attachments are never shared without confirmed delivery", () => {
+tenantTest("staged tool attachments are never shared without confirmed delivery", () => {
   const staged = entry("tool_result", { tool: "attach", ok: true, files: [{ artifactId: "PRIVATE_STAGED_FILE" }] }, 1);
   for (const following of [
     [],

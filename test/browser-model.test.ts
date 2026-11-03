@@ -1,7 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import { gatewayActorId } from "../src/model/provider-endpoints.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as httpServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -16,12 +15,12 @@ import {
 } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import type { ProvisionOptions } from "../src/sandbox/sandbox.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
 
 const model = "claude-opus-5";
 const key = "company-gateway-secret";
 
-test("browser inference uses the company gateway with scoped model authorization", async (t) => {
+tenantTest("browser inference uses the company gateway with scoped model authorization", async (t) => {
   const calls: Array<{ url: string; auth: string | undefined; body: Record<string, unknown> }> = [];
   const contexts: Array<Record<string, unknown>> = [];
   let status = 200;
@@ -142,7 +141,7 @@ test("browser inference uses the company gateway with scoped model authorization
   assert.equal(calls.length, 3);
 });
 
-test("gateway deployment provisions a browser token without exposing the company model key", () =>
+tenantTest("gateway deployment provisions a browser token without exposing the company model key", () =>
   inTestTenant(async () => {
     const config = testConfig({
       signingSecret: "ingress-secret".repeat(3),
@@ -180,9 +179,10 @@ test("gateway deployment provisions a browser token without exposing the company
     assert.equal(claims?.sessionId, result.sessionId);
     assert.equal(claims?.origin, "conversation");
     assert.equal((await verifyCapabilityToken(env!.AGENT_API_TOKEN!, TEST_CAPABILITY_SECRET))?.origin, "conversation");
-  }));
+  }),
+);
 
-test("gateway browsing never selects a direct provider when callback signing or URL is missing", () =>
+tenantTest("gateway browsing never selects a direct provider when callback signing or URL is missing", () =>
   inTestTenant(async () => {
     for (const missing of [{ signingSecret: undefined }, { apiBaseUrl: undefined }]) {
       const config = testConfig({
@@ -215,9 +215,10 @@ test("gateway browsing never selects a direct provider when callback signing or 
       assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
       assert.equal(captured?.env?.BROWSE_LAB_MODEL_TOKEN, undefined);
     }
-  }));
+  }),
+);
 
-test("company browsing without a gateway uses current deployment credentials and endpoints", async (t) => {
+tenantTest("company browsing without a gateway uses current deployment credentials and endpoints", async (t) => {
   const calls: Array<{ key: string | undefined; model: string }> = [];
   const upstream = httpServer(async (req, res) => {
     let raw = "";

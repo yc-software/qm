@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { createWebhookReceiver, type DeliverResult } from "../src/webhooks/webhook-receiver.ts";
@@ -8,6 +7,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 const SECRET = "topsecret";
 let inFlight = 0;
@@ -68,7 +68,7 @@ function githubReq(rawBody: string, deliveryId = "d-1", event = "issues") {
   };
 }
 
-test("a valid delivery fires a turn as the owner, in the owner scope, with the event rendered in", async () => {
+tenantTest("a valid delivery fires a turn as the owner, in the owner scope, with the event rendered in", async () => {
   const { webhooks, deliveries, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -101,7 +101,7 @@ test("a valid delivery fires a turn as the owner, in the owner scope, with the e
   assert.equal((await webhooks.get(wh.id))?.lastError, undefined);
 });
 
-test("a channel-owned webhook runs as a channel turn", async () => {
+tenantTest("a channel-owned webhook runs as a channel turn", async () => {
   const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("channel", "C9"),
@@ -116,7 +116,7 @@ test("a channel-owned webhook runs as a channel turn", async () => {
   assert.equal(calls[0]?.conversation.channelRef, "C9");
 });
 
-test("a bad signature is rejected (401) and fires no turn", async () => {
+tenantTest("a bad signature is rejected (401) and fires no turn", async () => {
   const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -133,7 +133,7 @@ test("a bad signature is rejected (401) and fires no turn", async () => {
   assert.equal(calls.length, 0);
 });
 
-test("an unknown or disabled webhook returns a generic 404", async () => {
+tenantTest("an unknown or disabled webhook returns a generic 404", async () => {
   const { webhooks, receiver } = agent();
   assert.equal((await receiver.deliver("nope", githubReq("{}"))).status, 404);
   const wh = await webhooks.create({
@@ -147,7 +147,7 @@ test("an unknown or disabled webhook returns a generic 404", async () => {
   assert.equal((await receiver.deliver(wh.id, githubReq("{}"))).status, 404);
 });
 
-test("a GitHub ping is a handshake (200 pong, no turn)", async () => {
+tenantTest("a GitHub ping is a handshake (200 pong, no turn)", async () => {
   const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -162,7 +162,7 @@ test("a GitHub ping is a handshake (200 pong, no turn)", async () => {
   assert.equal(calls.length, 0);
 });
 
-test("a Slack url_verification challenge is echoed (200), no turn", async () => {
+tenantTest("a Slack url_verification challenge is echoed (200), no turn", async () => {
   const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -183,7 +183,7 @@ test("a Slack url_verification challenge is echoed (200), no turn", async () => 
   assert.equal(calls.length, 0);
 });
 
-test("a pre-filter skips uninteresting events without booting a turn", async () => {
+tenantTest("a pre-filter skips uninteresting events without booting a turn", async () => {
   const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -202,7 +202,7 @@ test("a pre-filter skips uninteresting events without booting a turn", async () 
   assert.equal(calls.length, 1);
 });
 
-test("a re-delivered event id is deduped (200 duplicate), running the turn only once", async () => {
+tenantTest("a re-delivered event id is deduped (200 duplicate), running the turn only once", async () => {
   const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -220,7 +220,7 @@ test("a re-delivered event id is deduped (200 duplicate), running the turn only 
   assert.equal(calls.length, 1);
 });
 
-test("a captured request replayed with a fresh delivery-id header is still deduped", async () => {
+tenantTest("a captured request replayed with a fresh delivery-id header is still deduped", async () => {
   const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -238,25 +238,28 @@ test("a captured request replayed with a fresh delivery-id header is still dedup
   assert.equal(calls.length, 1);
 });
 
-test("fail-closed: a deactivated owner accepts the delivery but runs no turn and disables the webhook", async () => {
-  const { webhooks, identity, calls, receiver } = agent();
-  const wh = await webhooks.create({
-    ownerScopeId: scopeId("personal", "U1"),
-    owner: "U1",
-    createdBy: "U1",
-    action: "x",
-    verification: { scheme: "github", secret: SECRET },
-  });
-  await identity.deactivate("U1");
-  const out = await receiver.deliver(wh.id, githubReq("{}"));
-  assert.equal(out.status, 202);
-  await flush();
-  assert.equal(calls.length, 0);
-  assert.equal((await webhooks.get(wh.id))?.enabled, false);
-  assert.match((await webhooks.get(wh.id))?.lastError ?? "", /internal/i);
-});
+tenantTest(
+  "fail-closed: a deactivated owner accepts the delivery but runs no turn and disables the webhook",
+  async () => {
+    const { webhooks, identity, calls, receiver } = agent();
+    const wh = await webhooks.create({
+      ownerScopeId: scopeId("personal", "U1"),
+      owner: "U1",
+      createdBy: "U1",
+      action: "x",
+      verification: { scheme: "github", secret: SECRET },
+    });
+    await identity.deactivate("U1");
+    const out = await receiver.deliver(wh.id, githubReq("{}"));
+    assert.equal(out.status, 202);
+    await flush();
+    assert.equal(calls.length, 0);
+    assert.equal((await webhooks.get(wh.id))?.enabled, false);
+    assert.match((await webhooks.get(wh.id))?.lastError ?? "", /internal/i);
+  },
+);
 
-test("silent-failure surfacing: a refused turn delivers a notice (the sender already got a 202)", async () => {
+tenantTest("silent-failure surfacing: a refused turn delivers a notice (the sender already got a 202)", async () => {
   const { webhooks, deliveries, receiver } = agent({ status: "refused", reason: "internal-only" });
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -274,7 +277,7 @@ test("silent-failure surfacing: a refused turn delivers a notice (the sender alr
   assert.match((await webhooks.get(wh.id))?.lastError ?? "", /internal-only/);
 });
 
-test("a third-party principal destination delivers to the recipient", async () => {
+tenantTest("a third-party principal destination delivers to the recipient", async () => {
   const { webhooks, deliveries, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -292,7 +295,7 @@ test("a third-party principal destination delivers to the recipient", async () =
   assert.equal(pending[0]?.text, "DID-THE-WORK");
 });
 
-test("linear rejects signed untimed deliveries without firing a turn", async () => {
+tenantTest("linear rejects signed untimed deliveries without firing a turn", async () => {
   const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -332,7 +335,7 @@ const historyWebhook = {
   verification: { scheme: "github" as const, secret: SECRET },
 };
 
-test("history records the agent payload once per delivery without request headers", async () => {
+tenantTest("history records the agent payload once per delivery without request headers", async () => {
   const { webhooks, receiver } = agent();
   const wh = await webhooks.create(historyWebhook);
   const req = githubReq(JSON.stringify({ message: "<script>alert(1)</script>", long: "x".repeat(20_000) }));
@@ -346,7 +349,7 @@ test("history records the agent payload once per delivery without request header
   assert.equal(JSON.stringify(events).includes("x-hub-signature"), false);
 });
 
-test("history excludes rejected signatures, handshakes and filtered deliveries", async () => {
+tenantTest("history excludes rejected signatures, handshakes and filtered deliveries", async () => {
   const { webhooks, receiver } = agent();
   const wh = await webhooks.create({
     ...historyWebhook,
@@ -361,7 +364,7 @@ test("history excludes rejected signatures, handshakes and filtered deliveries",
   assert.deepEqual(await webhooks.listEvents(wh.id), []);
 });
 
-test("history capture failure rejects before acknowledging or starting a turn", async () => {
+tenantTest("history capture failure rejects before acknowledging or starting a turn", async () => {
   const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create(historyWebhook);
   webhooks.recordEvent = async () => {
@@ -372,7 +375,7 @@ test("history capture failure rejects before acknowledging or starting a turn", 
   assert.equal(calls.length, 0);
 });
 
-test("webhook fire accounting failures remain contained when recording the failure also rejects", async (t) => {
+tenantTest("webhook fire accounting failures remain contained when recording the failure also rejects", async (t) => {
   const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -396,7 +399,7 @@ test("webhook fire accounting failures remain contained when recording the failu
   assert.equal((await webhooks.get(wh.id))?.lastError, undefined);
 });
 
-test("an edited task applies to the next delivery at the same URL and secret", async () => {
+tenantTest("an edited task applies to the next delivery at the same URL and secret", async () => {
   const { webhooks, calls, receiver } = agent();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),

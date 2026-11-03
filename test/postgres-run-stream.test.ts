@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
 import { emitRunText, type RunStreamEvent } from "../src/runs/run-stream-events.ts";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 const database = process.env.DATABASE_URL;
 
-test(
+tenantTest(
   "independent worker and API connections replay and push Unicode text over Postgres",
   { skip: !database, timeout: 15_000 },
   async () => {

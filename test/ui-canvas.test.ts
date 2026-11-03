@@ -1,5 +1,5 @@
 import "./support/auto-fake-sprites.ts";
-import { describe, it, before, after } from "node:test";
+import { describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
@@ -16,7 +16,7 @@ import { Readable } from "node:stream";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { inTestTenant, tenantIt, testTenantHeaders } from "./support/test-tenants.ts";
 
 const body = async (r: Response | Promise<Response>): Promise<any> => (await r).json();
 
@@ -108,14 +108,14 @@ describe("ui canvas and ui observe", () => {
     await new Promise<void>((resolve) => sourceServer.close(() => resolve()));
   });
 
-  it("is off until the ui_canvas flag is enabled for the person", async () => {
+  tenantIt("is off until the ui_canvas flag is enabled for the person", async () => {
     const r = await agent("POST", "/v1/ui/canvas", { html: "<p>hi</p>" });
     assert.equal(r.status, 403);
     assert.equal((await body(r)).error, "feature_disabled");
     await inTestTenant(() => built.featureFlags.setEnabled("ui_canvas", scopeId("personal", "U1"), true, "test"));
   });
 
-  it("refuses tokens that are not a live web turn", async () => {
+  tenantIt("refuses tokens that are not a live web turn", async () => {
     for (const extra of [{ surface: "slack" }, { liveActor: false }, { triggered: true }, { botActor: true }]) {
       const r = await agent("POST", "/v1/ui/canvas", { html: "x" }, extra as Partial<CapabilityClaims>);
       assert.equal(r.status, 403, JSON.stringify(extra));
@@ -124,7 +124,7 @@ describe("ui canvas and ui observe", () => {
     assert.equal(ended.status, 409);
   });
 
-  it("writes, updates, pins, replaces and signals only the owner", async () => {
+  tenantIt("writes, updates, pins, replaces and signals only the owner", async () => {
     const first = await body(agent("POST", "/v1/ui/canvas", { html: "<p>a</p>", js: "1" }));
     assert.equal(first.canvas.rev, 1);
     const styled = await body(agent("POST", "/v1/ui/canvas", { css: "p{}" }));
@@ -141,7 +141,7 @@ describe("ui canvas and ui observe", () => {
     assert.deepEqual([event.sessionId, event.participants, event.ui], [sessionId, ["U1"], { kind: "canvas" }]);
   });
 
-  it("installs a shared sidebar file as the always-on canvas", () =>
+  tenantIt("installs a shared sidebar file as the always-on canvas", () =>
     inTestTenant(async () => {
       const file = (body: string) => ({ stream: Readable.from([Buffer.from(body)]) });
       assert.equal(await installSharedCanvas(built.uiState, "U2", null), "no such file is shared with you");
@@ -150,15 +150,16 @@ describe("ui canvas and ui observe", () => {
       await installSharedCanvas(built.uiState, "U2", file('{"html":"<nav/>","js":"1"}'));
       const live = await readUiCanvas(built.uiState, "U2", "always-on");
       assert.deepEqual([live?.html, live?.css, live?.js, live?.pinned], ["<nav/>", "", "1", true]);
-    }));
+    }),
+  );
 
-  it("rejects bad and oversized writes", async () => {
+  tenantIt("rejects bad and oversized writes", async () => {
     assert.equal((await agent("POST", "/v1/ui/canvas", { html: 5 })).status, 400);
     assert.equal((await agent("POST", "/v1/ui/canvas", {})).status, 400);
     assert.equal((await agent("POST", "/v1/ui/canvas", { js: "x".repeat(70_000) })).status, 413);
   });
 
-  it("serves the canvas only to its owner with the flag on, and lets the owner pin or dismiss it", async () => {
+  tenantIt("serves the canvas only to its owner with the flag on, and lets the owner pin or dismiss it", async () => {
     const own = await source("GET", `/v1/ui/canvases/${sessionId}?principalId=U1`);
     assert.equal((await body(own)).canvas.html, "<b/>");
     assert.equal((await source("GET", `/v1/ui/canvases/${sessionId}?principalId=U2`)).status, 404);
@@ -171,7 +172,7 @@ describe("ui canvas and ui observe", () => {
     assert.equal((await body(agent("GET", "/v1/ui/canvas"))).canvas, null);
   });
 
-  it("keeps revisions increasing across a dismiss and never resurrects an empty canvas", async () => {
+  tenantIt("keeps revisions increasing across a dismiss and never resurrects an empty canvas", async () => {
     const before = (await body(agent("POST", "/v1/ui/canvas", { html: "<i/>" }))).canvas.rev;
     assert.equal((await agent("DELETE", "/v1/ui/canvas")).status, 200);
     const pin = await agent("POST", "/v1/ui/canvas", { pinned: true });
@@ -184,7 +185,7 @@ describe("ui canvas and ui observe", () => {
     await agent("DELETE", "/v1/ui/canvas");
   });
 
-  it("keeps canvas and observe keys out of the generic ui-state API", async () => {
+  tenantIt("keeps canvas and observe keys out of the generic ui-state API", async () => {
     for (const key of [`canvas:${sessionId}`, "observe:abc"]) {
       const put = await source("PUT", "/v1/ui-state", { principalId: "U1", key, value: { runId: "run-live" } });
       assert.equal(put.status, 400, key);
@@ -192,12 +193,12 @@ describe("ui canvas and ui observe", () => {
     }
   });
 
-  it("observes only in the person's own conversations", async () => {
+  tenantIt("observes only in the person's own conversations", async () => {
     const shared = await agent("POST", "/v1/ui/observe", {}, { scopeId: scopeId("channel", "C1") });
     assert.equal(shared.status, 403);
   });
 
-  it("returns the snapshot the owner's browser posts back", async () => {
+  tenantIt("returns the snapshot the owner's browser posts back", async () => {
     const pending = agent("POST", "/v1/ui/observe", { selector: ".x", screenshot: true });
     let request: SessionStateEvent | undefined;
     for (let i = 0; i < 100 && !request; i++) {
@@ -225,7 +226,7 @@ describe("ui canvas and ui observe", () => {
     assert.equal(late.status, 404, "a call is answered once");
   });
 
-  it("does not deliver a result into a run the person does not own", async () => {
+  tenantIt("does not deliver a result into a run the person does not own", async () => {
     runs.set("run-other", { id: "run-other", status: "running", request: { actor: { id: "U2" } } });
     await inTestTenant(() =>
       built.uiState.put(uiStateId("U1", "observe:forged"), { value: { runId: "run-other" }, updatedAt: 1 }),

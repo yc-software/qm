@@ -1,5 +1,4 @@
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,7 +10,7 @@ import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
-import { inTestTenant, testTenantHeaders } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
 
 const org = scopeId("org", "default-org");
 const internalActor = { externalId: "U1" };
@@ -30,7 +29,7 @@ function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "esp-")) }));
 }
 
-test("external-slack-participants: default off; the org flip is what turns it on", async () => {
+tenantTest("external-slack-participants: default off; the org flip is what turns it on", async () => {
   const c = testConfigStore("default-org");
   assert.equal(c.getExternalSlackParticipants(org), false);
   await c.setExternalSlackParticipants(org, true);
@@ -39,26 +38,29 @@ test("external-slack-participants: default off; the org flip is what turns it on
   assert.equal(c.getExternalSlackParticipants(org), false);
 });
 
-test("external-slack-participants: the durable read sees a flip from another instance without a restart", async () => {
-  const store = testMap<PersistedScopedFlag>();
-  const a = testConfigStore("default-org", { externalSlackParticipants: store });
-  const b = testConfigStore("default-org", { externalSlackParticipants: store });
+tenantTest(
+  "external-slack-participants: the durable read sees a flip from another instance without a restart",
+  async () => {
+    const store = testMap<PersistedScopedFlag>();
+    const a = testConfigStore("default-org", { externalSlackParticipants: store });
+    const b = testConfigStore("default-org", { externalSlackParticipants: store });
 
-  await a.setExternalSlackParticipants(org, true);
-  await Promise.resolve();
+    await a.setExternalSlackParticipants(org, true);
+    await Promise.resolve();
 
-  assert.equal(b.getExternalSlackParticipants(org), false, "the sibling's stale read-cache hasn't seen the flip");
-  assert.equal(await b.getExternalSlackParticipantsDurable(org), true, "but the durable read picks it up at once");
-});
+    assert.equal(b.getExternalSlackParticipants(org), false, "the sibling's stale read-cache hasn't seen the flip");
+    assert.equal(await b.getExternalSlackParticipantsDurable(org), true, "but the durable read picks it up at once");
+  },
+);
 
-test("a Slack channel turn with an external in the audience is refused while the toggle is off", async () => {
+tenantTest("a Slack channel turn with an external in the audience is refused while the toggle is off", async () => {
   const { app } = freshApp();
   const res = await inTestTenant(() => app.turn(externalChannelTurn("slack")));
   assert.equal(res.status, "refused");
   assert.match(res.reason ?? "", /internal-only/);
 });
 
-test("with the toggle on, an internal actor may drive a Slack turn in a room with an external", async () => {
+tenantTest("with the toggle on, an internal actor may drive a Slack turn in a room with an external", async () => {
   const built = freshApp();
   await built.config.setExternalSlackParticipants(org, true);
   await Promise.resolve();
@@ -67,7 +69,7 @@ test("with the toggle on, an internal actor may drive a Slack turn in a room wit
   assert.match(res.reply ?? "", /You said: hello channel/);
 });
 
-test("the toggle relaxes only Slack: a non-Slack surface with an external audience stays refused", async () => {
+tenantTest("the toggle relaxes only Slack: a non-Slack surface with an external audience stays refused", async () => {
   const built = freshApp();
   await built.config.setExternalSlackParticipants(org, true);
   await Promise.resolve();
@@ -76,7 +78,7 @@ test("the toggle relaxes only Slack: a non-Slack surface with an external audien
   assert.match(res.reason ?? "", /internal-only/);
 });
 
-test("the toggle never lets an external actor interact", async () => {
+tenantTest("the toggle never lets an external actor interact", async () => {
   const built = freshApp();
   await built.config.setExternalSlackParticipants(org, true);
   await Promise.resolve();
@@ -92,7 +94,7 @@ test("the toggle never lets an external actor interact", async () => {
   assert.match(res.reason ?? "", /internal-only/);
 });
 
-test("a bot assertion can enter the turn pipeline", async () => {
+tenantTest("a bot assertion can enter the turn pipeline", async () => {
   const built = freshApp();
   const res = await inTestTenant(() =>
     built.app.turn({
@@ -106,7 +108,7 @@ test("a bot assertion can enter the turn pipeline", async () => {
   assert.equal((await inTestTenant(() => built.runs.list())).length, 1);
 });
 
-test("admin resource: org-only PUT, read-back, and the surface-config echo", async () => {
+tenantTest("admin resource: org-only PUT, read-back, and the surface-config echo", async () => {
   const built = freshApp();
   const server = createInsecureTestServer(built.app, {
     config: built.config,

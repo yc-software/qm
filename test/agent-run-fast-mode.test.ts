@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { applyTurnEffort, createAgent } from "../src/agent/agent-run.ts";
 import type { AgentOptions } from "../src/agent/agent-run.ts";
@@ -16,8 +15,9 @@ import {
   FAST_COST_MULTIPLIER,
   wantsFastMode,
 } from "../src/model/model-runtime.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
-test("modelSupportsFastMode allows only the documented direct Opus ids", () => {
+tenantTest("modelSupportsFastMode allows only the documented direct Opus ids", () => {
   for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"]) {
     assert.equal(modelSupportsFastMode(id), true, `${id} should support fast mode`);
   }
@@ -36,7 +36,7 @@ test("modelSupportsFastMode allows only the documented direct Opus ids", () => {
   }
 });
 
-test('applyFastSpeed injects service_tier:"priority" for OpenAI-API models', () => {
+tenantTest('applyFastSpeed injects service_tier:"priority" for OpenAI-API models', () => {
   const on = { model: "gpt-5.6-sol", input: [] } as Record<string, unknown>;
   applyFastSpeed(on, true, "openai-responses");
   assert.equal(on.service_tier, "priority");
@@ -47,18 +47,18 @@ test('applyFastSpeed injects service_tier:"priority" for OpenAI-API models', () 
   assert.equal("service_tier" in off, false);
 });
 
-test("modelSupportsFastMode covers the GPT-5.6 family (priority tier)", () => {
+tenantTest("modelSupportsFastMode covers the GPT-5.6 family (priority tier)", () => {
   for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
     assert.equal(modelSupportsFastMode(id), true, id);
   }
 });
 
-test("scaleCost doubles OpenAI per-token rates for fast mode", () => {
+tenantTest("scaleCost doubles OpenAI per-token rates for fast mode", () => {
   const scaled = scaleCost({ input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 }, FAST_COST_MULTIPLIER);
   assert.deepEqual(scaled, { input: 8, output: 40, cacheRead: 0.8, cacheWrite: 10 });
 });
 
-test('applyFastSpeed injects speed:"fast" into the body only when fast is requested', () => {
+tenantTest('applyFastSpeed injects speed:"fast" into the body only when fast is requested', () => {
   const on = { model: "claude-opus-4-8", messages: [] } as Record<string, unknown>;
   assert.equal(applyFastSpeed(on, true), on, "returns the same object (in-place mutation)");
   assert.equal(on.speed, "fast");
@@ -69,25 +69,25 @@ test('applyFastSpeed injects speed:"fast" into the body only when fast is reques
   assert.equal("speed" in off, false, "no speed field on a non-fast turn");
 });
 
-test("applyFastSpeed never throws on non-object payloads", () => {
+tenantTest("applyFastSpeed never throws on non-object payloads", () => {
   assert.doesNotThrow(() => applyFastSpeed(undefined, true));
   assert.doesNotThrow(() => applyFastSpeed(null, true));
   assert.doesNotThrow(() => applyFastSpeed("raw", true));
 });
 
-test("defaultInteractiveThinkingLevel keeps human turns light by provider", () => {
+tenantTest("defaultInteractiveThinkingLevel keeps human turns light by provider", () => {
   assert.equal(defaultInteractiveThinkingLevel({ provider: "anthropic", api: "anthropic-messages" }), "low");
   assert.equal(defaultInteractiveThinkingLevel({ provider: "openai", api: "openai-responses" }), "auto");
 });
 
-test("fast mode requires an explicit opt-in on a supported model", () => {
+tenantTest("fast mode requires an explicit opt-in on a supported model", () => {
   assert.equal(wantsFastMode(undefined, "claude-opus-5"), false);
   assert.equal(wantsFastMode(false, "claude-opus-5"), false);
   assert.equal(wantsFastMode(true, "claude-opus-5"), true);
   assert.equal(wantsFastMode(true, "claude-sonnet-5"), false);
 });
 
-test("auto resets a reused Anthropic session to its interactive default", () => {
+tenantTest("auto resets a reused Anthropic session to its interactive default", () => {
   const session = {
     state: {
       model: { provider: "anthropic", api: "anthropic-messages" },
@@ -154,12 +154,12 @@ const pricingCases: Array<[string, Model<Api>, Partial<Usage>, number]> = [
   ["clamped 1h writes", OPUS, { cacheWrite: 4_000, cacheWrite1h: 40_000 }, 0.04],
 ];
 for (const [name, model, usage, standard] of pricingCases) {
-  test(`pricing doubles each component exactly once: ${name}`, () => {
+  tenantTest(`pricing doubles each component exactly once: ${name}`, () => {
     assertUsd(piUsageToCallUsage(usage, model, true, undefined)!.costUsd, standard * FAST_COST_MULTIPLIER);
   });
 }
 
-test("normalization ignores provider pricing, preserves tokens and never mutates usage or the model", () => {
+tenantTest("normalization ignores provider pricing, preserves tokens and never mutates usage or the model", () => {
   const card = structuredClone(ASTRA.cost);
   for (const factor of [1, 2, 0.5]) {
     const usage = {
@@ -187,7 +187,7 @@ test("normalization ignores provider pricing, preserves tokens and never mutates
 const HAIKU = getRequiredModel("claude-haiku-4-5", false) as Model<Api>;
 const BINDING_BETA = "thinking-binding-controls-2026-08-01";
 
-test("request headers preserve rates and existing beta headers", () => {
+tenantTest("request headers preserve rates and existing beta headers", () => {
   for (const model of [ASTRA, OPUS, OPUS_55]) {
     const snapshot = structuredClone(model);
     assert.deepEqual(withRequestHeaders(model, true, true).cost, snapshot.cost);
@@ -205,7 +205,7 @@ test("request headers preserve rates and existing beta headers", () => {
   );
 });
 
-test("direct adaptive-thinking Claude requests opt into thinking binding controls", () => {
+tenantTest("direct adaptive-thinking Claude requests opt into thinking binding controls", () => {
   assert.equal(withRequestHeaders(OPUS, true, false).headers?.["anthropic-beta"], BINDING_BETA);
   assert.equal(withRequestHeaders(OPUS, false, true).headers?.["anthropic-beta"], undefined);
   assert.equal(withRequestHeaders(ASTRA, true, false).headers?.["anthropic-beta"], undefined);
@@ -213,7 +213,7 @@ test("direct adaptive-thinking Claude requests opt into thinking binding control
   assert.equal(withRequestHeaders(HAIKU, true, true).headers?.["anthropic-beta"], "fast-mode-2026-02-01");
 });
 
-test("applyThinkingBinding sets drop_block only on requests that carry the beta header", () => {
+tenantTest("applyThinkingBinding sets drop_block only on requests that carry the beta header", () => {
   const bound = withRequestHeaders(OPUS, true, true);
   const adaptive = { thinking: { type: "adaptive", display: "summarized" } } as Record<string, unknown>;
   assert.equal(applyThinkingBinding(adaptive, bound), adaptive);
@@ -242,7 +242,7 @@ test("applyThinkingBinding sets drop_block only on requests that carry the beta 
   assert.doesNotThrow(() => applyThinkingBinding(undefined, bound));
 });
 
-test("normalization handles absent usage, missing token fields and an unknown model", () => {
+tenantTest("normalization handles absent usage, missing token fields and an unknown model", () => {
   assert.equal(piUsageToCallUsage(undefined, ASTRA, true, undefined), null);
   assert.deepEqual(piUsageToCallUsage({ totalTokens: 500 }, ASTRA, true, undefined), {
     input: 0,
@@ -397,7 +397,7 @@ for (const [name, gateway, fastMode, expected, echoedTier] of [
   ["direct standard with priority default reported as fast", false, false, 0.6, "fast"],
   ["direct fast served at standard", false, true, 0.3, "default"],
 ] as const) {
-  test(`Astra records the billed price: ${name}`, async () => {
+  tenantTest(`Astra records the billed price: ${name}`, async () => {
     const { rows, payloads } = await runTurn(
       name.replaceAll(" ", "-"),
       ASTRA.id,
@@ -419,7 +419,7 @@ for (const [name, gateway, fastMode, expected, echoedTier] of [
   });
 }
 
-test("an unsupported fast-mode request records the standard price", async () => {
+tenantTest("an unsupported fast-mode request records the standard price", async () => {
   const { rows, payloads, betas } = await runTurn("sonnet-fast-ineligible", "claude-sonnet-5", true, () =>
     anthropicReply("standard", ANTHROPIC_WIRE_USAGE),
   );
@@ -433,7 +433,7 @@ test("an unsupported fast-mode request records the standard price", async () => 
   assertUsd(rows[0]!.usage!.costUsd, 0.03);
 });
 
-test("gateway-routed Claude requests carry neither the binding beta nor block_binding", async () => {
+tenantTest("gateway-routed Claude requests carry neither the binding beta nor block_binding", async () => {
   const { payloads, betas } = await runTurn(
     "sonnet-gateway-unbound",
     "claude-sonnet-5",
@@ -447,7 +447,7 @@ test("gateway-routed Claude requests carry neither the binding beta nor block_bi
   assert.equal("block_binding" in (payloads[0]!.thinking as object), false);
 });
 
-test("a refusal fallback prices each step on its actual model and tier", async () => {
+tenantTest("a refusal fallback prices each step on its actual model and tier", async () => {
   const { rows, payloads } = await runTurn("refusal-fallback-pricing", "claude-sonnet-5", true, (_payload, index) =>
     index === 0
       ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal")
@@ -474,39 +474,48 @@ for (const [baseId, cost] of [
   ["gpt-6.1-sol", 0.33],
 ] as const) {
   for (const gateway of [true, false]) {
-    test(`${baseId} Ultrafast prices a successful turn exactly once through ${gateway ? "gateway" : "direct"}`, async () => {
-      const { rows, payloads } = await runTurn(
-        `${baseId}-ultrafast-${gateway}`,
-        `${baseId}-ultrafast`,
-        false,
-        () => responsesReply("done", ASTRA_WIRE_USAGE, "ultrafast"),
-        gateway,
-      );
-      assert.equal(payloads[0]?.model, gateway ? `openai/${baseId}` : baseId);
-      assert.equal(payloads[0]?.service_tier, "ultrafast");
-      assert.equal(rows.length, 1);
-      assertUsd(rows[0]!.usage!.costUsd, cost);
-      assert.equal(rows[0]!.model, `${baseId}-ultrafast`);
-    });
+    tenantTest(
+      `${baseId} Ultrafast prices a successful turn exactly once through ${gateway ? "gateway" : "direct"}`,
+      async () => {
+        const { rows, payloads } = await runTurn(
+          `${baseId}-ultrafast-${gateway}`,
+          `${baseId}-ultrafast`,
+          false,
+          () => responsesReply("done", ASTRA_WIRE_USAGE, "ultrafast"),
+          gateway,
+        );
+        assert.equal(payloads[0]?.model, gateway ? `openai/${baseId}` : baseId);
+        assert.equal(payloads[0]?.service_tier, "ultrafast");
+        assert.equal(rows.length, 1);
+        assertUsd(rows[0]!.usage!.costUsd, cost);
+        assert.equal(rows[0]!.model, `${baseId}-ultrafast`);
+      },
+    );
   }
 }
 
-test("an Ultrafast turn OpenAI serves at another tier is priced at the base model's card for that tier", async () => {
-  for (const [served, cost] of [
-    [undefined, 1.8],
-    ["fast", 0.6],
-    ["priority", 0.6],
-    ["default", 0.3],
-    ["flex", 0.15],
-  ] as const) {
-    const { rows } = await runTurn(`astra-ultrafast-served-${served ?? "silent"}`, "gpt-6-astra-ultrafast", false, () =>
-      responsesReply("done", ASTRA_WIRE_USAGE, served),
-    );
-    assertUsd(rows[0]!.usage!.costUsd, cost);
-  }
-});
+tenantTest(
+  "an Ultrafast turn OpenAI serves at another tier is priced at the base model's card for that tier",
+  async () => {
+    for (const [served, cost] of [
+      [undefined, 1.8],
+      ["fast", 0.6],
+      ["priority", 0.6],
+      ["default", 0.3],
+      ["flex", 0.15],
+    ] as const) {
+      const { rows } = await runTurn(
+        `astra-ultrafast-served-${served ?? "silent"}`,
+        "gpt-6-astra-ultrafast",
+        false,
+        () => responsesReply("done", ASTRA_WIRE_USAGE, served),
+      );
+      assertUsd(rows[0]!.usage!.costUsd, cost);
+    }
+  },
+);
 
-test("a stop_reason refusal retries on the admin-configured fallback runtime", async () => {
+tenantTest("a stop_reason refusal retries on the admin-configured fallback runtime", async () => {
   const { payloads } = await runTurn(
     "refusal-configured-fallback",
     "claude-sonnet-5",
@@ -521,7 +530,7 @@ test("a stop_reason refusal retries on the admin-configured fallback runtime", a
   assert.equal((payloads[1]?.reasoning as { effort?: string } | undefined)?.effort, "low");
 });
 
-test("an unavailable gateway model fails the turn without fallback (no structured signal)", async () => {
+tenantTest("an unavailable gateway model fails the turn without fallback (no structured signal)", async () => {
   const outcome = await runTurn(
     "unavailable-configured-fallback",
     "claude-sonnet-5",
@@ -545,7 +554,7 @@ test("an unavailable gateway model fails the turn without fallback (no structure
   assert.deepEqual(outcome, []);
 });
 
-test("compaction retries a refused summary on the configured fallback model", async () => {
+tenantTest("compaction retries a refused summary on the configured fallback model", async () => {
   const agent = createAgent({
     apiKey: "sk-anthropic-test",
     openaiApiKey: "sk-openai-test",

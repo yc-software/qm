@@ -1,11 +1,11 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { type SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "../src/runs/postgres-session-state-bus.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
-test("events cross bus instances (pg_notify)", async () => {
+tenantTest("events cross bus instances (pg_notify)", async () => {
   const url = testDatabaseUrl();
   const a = createPostgresSessionStateBus(url);
   const b = createPostgresSessionStateBus(url);
@@ -38,7 +38,7 @@ test("events cross bus instances (pg_notify)", async () => {
   }
 });
 
-test("encodeWirePayload measures UTF-8 bytes and sheds participants before dropping the event", async () => {
+tenantTest("encodeWirePayload measures UTF-8 bytes and sheds participants before dropping the event", async () => {
   const { encodeWirePayload } = await import("../src/runs/postgres-session-state-bus.ts");
   const small = { threadRef: "web:U1:t", state: "idle" as const, at: 1, participants: ["a", "b"] };
   assert.equal(encodeWirePayload(small), JSON.stringify(small), "a small event ships whole");
@@ -60,7 +60,7 @@ test("encodeWirePayload measures UTF-8 bytes and sheds participants before dropp
   assert.equal(encodeWirePayload(pathological), null, "an event that cannot fit even bare is dropped");
 });
 
-test("a re-established LISTEN connection announces a resync to subscribers", async () => {
+tenantTest("a re-established LISTEN connection announces a resync to subscribers", async () => {
   const url = testDatabaseUrl();
   const bus = createPostgresSessionStateBus(url);
   const admin = createPgPool(url, []);

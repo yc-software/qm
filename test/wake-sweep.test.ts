@@ -1,9 +1,9 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createWakeSweep, type SweepSource } from "../src/wake/sweep.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 const A = "00000000-0000-4000-8000-0000000000a1";
 const B = "00000000-0000-4000-8000-0000000000b2";
@@ -23,7 +23,7 @@ function recordingSource(over: Partial<SweepSource> = {}): { source: SweepSource
   return { source, swept };
 }
 
-test("a pass sweeps every engaged session", async () => {
+tenantTest("a pass sweeps every engaged session", async () => {
   const { source, swept } = recordingSource();
   const sweep = createWakeSweep(source, { ...singleProcessDeps(), intervalMs: 10_000 });
   const res = await sweep.sweep();
@@ -31,7 +31,7 @@ test("a pass sweeps every engaged session", async () => {
   assert.equal(res.swept, 1);
 });
 
-test("a per-session sweep error is caught, not thrown (a flaky pull must not kill the loop)", async () => {
+tenantTest("a per-session sweep error is caught, not thrown (a flaky pull must not kill the loop)", async () => {
   const { source } = recordingSource({
     async sweepSession() {
       throw new Error("surface pull failed");
@@ -41,7 +41,7 @@ test("a per-session sweep error is caught, not thrown (a flaky pull must not kil
   await assert.rejects(() => sweep.sweep());
 });
 
-test("the engaged registry: engage adds, settle removes, list reflects current (RAM, re-derivable)", () => {
+tenantTest("the engaged registry: engage adds, settle removes, list reflects current (RAM, re-derivable)", () => {
   const reg = createEngagedRegistry();
   assert.deepEqual(reg.list(), []);
   reg.engage("ch:C1:1");
@@ -58,7 +58,7 @@ test("the engaged registry: engage adds, settle removes, list reflects current (
   assert.deepEqual(reg.list(), [{ threadRef: "ch:C2:2" }]);
 });
 
-test("engaged sessions remember their tenant and each is swept under it", async () => {
+tenantTest("engaged sessions remember their tenant and each is swept under it", async () => {
   const reg = createEngagedRegistry();
   withTenant(A, () => reg.engage("ch:C1:1"));
   withTenant(B, () => reg.engage("ch:C1:1"));
@@ -86,7 +86,7 @@ test("engaged sessions remember their tenant and each is swept under it", async 
   assert.deepEqual(reg.list(), []);
 });
 
-test("nothing engaged ⇒ a pass does no work", async () => {
+tenantTest("nothing engaged ⇒ a pass does no work", async () => {
   const { source, swept } = recordingSource({
     async engagedSessions() {
       return [];

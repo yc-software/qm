@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe } from "node:test";
 import assert from "node:assert/strict";
 
 import { openGroupViaSurface, resolveReachTarget, type ReachDirectory } from "../src/reach/reach.ts";
@@ -7,7 +7,7 @@ import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../src/reach/reach.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantIt } from "./support/test-tenants.ts";
 
 const MEMBERS = [
   { principalId: "alice@acme.dev", displayName: "alice", type: "internal" as const },
@@ -66,7 +66,7 @@ function directory(
 }
 
 describe("reaching a group DM that the directory hasn't seen", () => {
-  it("opens the group DM live, registers it, and addresses it by its real id", async () => {
+  tenantIt("opens the group DM live, registers it, and addresses it by its real id", async () => {
     const opened: string[][] = [];
     const dir = directory({
       open: async (participants) => {
@@ -87,7 +87,7 @@ describe("reaching a group DM that the directory hasn't seen", () => {
     assert.deepEqual(dir.registered, [{ groupId: "C-mpim-new", participants: ["kai@acme.dev", "alice@acme.dev"] }]);
   });
 
-  it("resolves participants named however the agent knows them", async () => {
+  tenantIt("resolves participants named however the agent knows them", async () => {
     const dir = directory({ open: async () => ({ groupId: "C-mpim-new" }) });
     const r = await resolveReachTarget(dir, { participants: ["kai", "jo"] }, "alice@acme.dev", {
       mayOpenGroup: true,
@@ -96,7 +96,7 @@ describe("reaching a group DM that the directory hasn't seen", () => {
     assert.deepEqual(dir.registered[0]?.participants, ["kai@acme.dev", "jo@acme.dev", "alice@acme.dev"]);
   });
 
-  it("prefers a group the directory already knows and never opens a second one", async () => {
+  tenantIt("prefers a group the directory already knows and never opens a second one", async () => {
     let openCalls = 0;
     const dir = directory({
       groups: { "C-known": ["alice@acme.dev", "kai@acme.dev"] },
@@ -112,7 +112,7 @@ describe("reaching a group DM that the directory hasn't seen", () => {
     assert.equal(openCalls, 0);
   });
 
-  it("names the person it can't find instead of blaming the group", async () => {
+  tenantIt("names the person it can't find instead of blaming the group", async () => {
     const dir = directory({ open: async () => ({ groupId: "C-mpim-new" }) });
     const r = await resolveReachTarget(dir, { participants: ["nobody"] }, "alice@acme.dev", {
       mayOpenGroup: true,
@@ -122,7 +122,7 @@ describe("reaching a group DM that the directory hasn't seen", () => {
     assert.match((r as any).message, /nobody/);
   });
 
-  it("refuses to open anything for an author it can't place in the directory", async () => {
+  tenantIt("refuses to open anything for an author it can't place in the directory", async () => {
     let openCalls = 0;
     const dir = directory({
       unknownAuthor: true,
@@ -139,7 +139,7 @@ describe("reaching a group DM that the directory hasn't seen", () => {
     assert.equal(openCalls, 0);
   });
 
-  it("won't open a group DM that is really a 1:1, or one Slack can't hold", async () => {
+  tenantIt("won't open a group DM that is really a 1:1, or one Slack can't hold", async () => {
     const dir = directory({ open: async () => ({ groupId: "C-mpim-new" }) });
     const self = await resolveReachTarget(dir, { participants: ["alice"] }, "alice@acme.dev", {
       mayOpenGroup: true,
@@ -165,7 +165,7 @@ describe("reaching a group DM that the directory hasn't seen", () => {
     assert.equal(openCalls, 0);
   });
 
-  it("relays what Slack said when the open fails", async () => {
+  tenantIt("relays what Slack said when the open fails", async () => {
     const dir = directory({ open: async () => ({ error: "kai is deactivated" }) });
     const r = await resolveReachTarget(dir, { participants: ["kai"] }, "alice@acme.dev", {
       mayOpenGroup: true,
@@ -175,7 +175,7 @@ describe("reaching a group DM that the directory hasn't seen", () => {
     assert.match((r as any).message, /deactivated/);
   });
 
-  it("opens nothing unless the caller is actually sending a message", async () => {
+  tenantIt("opens nothing unless the caller is actually sending a message", async () => {
     let openCalls = 0;
     const dir = directory({
       open: async () => {
@@ -191,7 +191,7 @@ describe("reaching a group DM that the directory hasn't seen", () => {
     assert.deepEqual(dir.registered, []);
   });
 
-  it("still says group_not_found when the surface can't open one", async () => {
+  tenantIt("still says group_not_found when the surface can't open one", async () => {
     const dir = directory();
     delete (dir as { openGroup?: unknown }).openGroup;
     const r = await resolveReachTarget(dir, { participants: ["kai"] }, "alice@acme.dev", {
@@ -203,7 +203,7 @@ describe("reaching a group DM that the directory hasn't seen", () => {
 });
 
 describe("openGroupViaSurface", () => {
-  it("asks the surface to open the group and reads back its id", async () => {
+  tenantIt("asks the surface to open the group and reads back its id", async () => {
     const seen: SurfaceContextQuery[] = [];
     const pull = async (query: SurfaceContextQuery): Promise<SurfaceContextResult | null> => {
       seen.push(query);
@@ -213,7 +213,7 @@ describe("openGroupViaSurface", () => {
     assert.deepEqual(seen[0]?.openGroup, { participants: ["a", "b"] });
   });
 
-  it("carries a surface note back as the failure reason, and a silent surface as null", async () => {
+  tenantIt("carries a surface note back as the failure reason, and a silent surface as null", async () => {
     assert.deepEqual(await openGroupViaSurface(async () => ({ messages: [], note: "nope" }), ["a", "b"]), {
       error: "nope",
     });
@@ -248,7 +248,7 @@ describe("the Slack surface opening a group DM", () => {
     return { f, client, fulfilled };
   }
 
-  it("maps principals to Slack ids and opens one conversation for all of them", async () => {
+  tenantIt("maps principals to Slack ids and opens one conversation for all of them", async () => {
     const calls: Array<{ users: string }> = [];
     const syncs: string[] = [];
     const { f, client, fulfilled } = fulfiller(async (args) => {
@@ -269,7 +269,7 @@ describe("the Slack surface opening a group DM", () => {
     assert.deepEqual(syncs, ["sync"], "the surface resyncs so its cached roster keeps the new group");
   });
 
-  it("reports Slack's refusal instead of pretending the group is missing", async () => {
+  tenantIt("reports Slack's refusal instead of pretending the group is missing", async () => {
     const { f, client, fulfilled } = fulfiller(async () => {
       const err = new Error("user_not_found") as Error & { data: { error: string } };
       err.data = { error: "user_not_found" };
@@ -289,7 +289,7 @@ describe("the Slack surface opening a group DM", () => {
 });
 
 describe("pushing the group roster when Slack won't list group DMs", () => {
-  it("omits the roster rather than replacing it with an empty one", async () => {
+  tenantIt("omits the roster rather than replacing it with an empty one", async () => {
     const pushes: Array<Record<string, unknown>> = [];
     const core = {
       pushDirectory: async (body: Record<string, unknown>) => {
@@ -336,7 +336,7 @@ describe("pushing the group roster when Slack won't list group DMs", () => {
 });
 
 describe("the directory crawl when another instance holds the sync lease", () => {
-  it("skips the channel crawl and the push instead of racing the leader", async () => {
+  tenantIt("skips the channel crawl and the push instead of racing the leader", async () => {
     const pushes: Array<Record<string, unknown>> = [];
     const listedMethods: string[] = [];
     const core = {
@@ -377,7 +377,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     assert.deepEqual(listedMethods, ["users.list"], "no channel or group crawl runs on the follower");
   });
 
-  it("retries a skipped sync until the lease frees, then applies the queued revocation", async () => {
+  tenantIt("retries a skipped sync until the lease frees, then applies the queued revocation", async () => {
     const pushes: Array<Record<string, unknown>> = [];
     let locked = true;
     const core = {
@@ -432,7 +432,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com" }]);
   });
 
-  it("retries a push the store refused as stale until the revocation actually lands", async () => {
+  tenantIt("retries a push the store refused as stale until the revocation actually lands", async () => {
     const pushes: Array<Record<string, unknown>> = [];
     let refusals = 1;
     const core = {
@@ -483,7 +483,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
     assert.deepEqual(revocations, [{ channelId: "C1", principalId: "kai@x.com" }]);
   });
 
-  it("discards a crawl whose lease was lost mid-flight instead of pushing it", async () => {
+  tenantIt("discards a crawl whose lease was lost mid-flight instead of pushing it", async () => {
     const pushes: Array<Record<string, unknown>> = [];
     const core = {
       pushDirectory: async (body: Record<string, unknown>) => {
@@ -527,7 +527,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
 });
 
 describe("directory resolution by Slack id", () => {
-  it("resolves a teammate the agent named by their Slack member id", () =>
+  tenantIt("resolves a teammate the agent named by their Slack member id", () =>
     inTestTenant(async () => {
       const store = createPostgresDirectoryStore(testDatabaseUrl());
       await store.replace([
@@ -545,11 +545,12 @@ describe("directory resolution by Slack id", () => {
       });
       assert.equal((await store.resolve("kai")).kind, "one");
       assert.equal((await store.resolve("U-nobody")).kind, "none");
-    }));
+    }),
+  );
 });
 
 describe("directory group upsert", () => {
-  it("makes a just-opened group resolvable and its members visible at once", () =>
+  tenantIt("makes a just-opened group resolvable and its members visible at once", () =>
     inTestTenant(async () => {
       const store = createPostgresDirectoryStore(testDatabaseUrl());
       await store.replaceGroups([]);
@@ -559,5 +560,6 @@ describe("directory group upsert", () => {
       assert.deepEqual(await store.resolveGroupByParticipants(["b", "a"]), { kind: "one", groupId: "C-new" });
       assert.equal(await store.groupMember("C-new", "a"), true);
       assert.equal(await store.groupMember("C-new", "c"), false);
-    }));
+    }),
+  );
 });

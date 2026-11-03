@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,12 +10,13 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 function event(over: Partial<OwnedLedgerEvent> = {}): OwnedLedgerEvent {
   return { loopId: "loop-1", itemId: "item-1", op: "ingest", at: 111, owner: "josh", ...over };
 }
 
-test("ledger events cross bus instances and an unsubscribed listener hears nothing more", async () => {
+tenantTest("ledger events cross bus instances and an unsubscribed listener hears nothing more", async () => {
   const url = testDatabaseUrl();
   const a = createPostgresLedgerEventBus(url);
   const b = createPostgresLedgerEventBus(url);
@@ -57,7 +57,7 @@ test("ledger events cross bus instances and an unsubscribed listener hears nothi
   }
 });
 
-test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped with the loop owner", async () => {
+tenantTest("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped with the loop owner", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-ledger-sse-"));
   const built = buildApp(testConfig({ dataDir, orgId: "acme" }));
   built.runtime.start();

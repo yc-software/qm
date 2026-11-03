@@ -6,7 +6,6 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
 import { createServer } from "../src/api/server.ts";
@@ -23,7 +22,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest } from "./support/test-tenants.ts";
 
 function tenantBound<T extends object>(store: T): T {
   return new Proxy(store, {
@@ -135,7 +134,7 @@ const capFor = (actorId: string, scope?: string) =>
     ),
   );
 
-test("a read token can clone but cannot push (403 on receive-pack)", async () => {
+tenantTest("a read token can clone but cannot push (403 on receive-pack)", async () => {
   const f = fixture();
   try {
     const d = await f.app.deploy({
@@ -166,7 +165,7 @@ test("a read token can clone but cannot push (403 on receive-pack)", async () =>
   }
 });
 
-test("a git request whose body the backend stops reading completes and leaves the endpoint working", async () => {
+tenantTest("a git request whose body the backend stops reading completes and leaves the endpoint working", async () => {
   const f = fixture();
   try {
     const d = await f.app.deploy({
@@ -184,7 +183,7 @@ test("a git request whose body the backend stops reading completes and leaves th
   }
 });
 
-test("a write token can push, and the push registers a new immutable version", async () => {
+tenantTest("a write token can push, and the push registers a new immutable version", async () => {
   const f = fixture();
   try {
     const d = await f.app.deploy({
@@ -215,7 +214,7 @@ test("a write token can push, and the push registers a new immutable version", a
   }
 });
 
-test("a write token minted before principal deactivation is revoked at push time", async () => {
+tenantTest("a write token minted before principal deactivation is revoked at push time", async () => {
   const f = fixture();
   try {
     const d = await f.app.deploy({
@@ -232,7 +231,7 @@ test("a write token minted before principal deactivation is revoked at push time
   }
 });
 
-test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no access", async () => {
+tenantTest("git-url endpoint: write for the owner, read for a read-grantee, 403 for no access", async () => {
   const f = fixture();
   try {
     const d = await f.app.deploy({
@@ -292,7 +291,7 @@ test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no
   }
 });
 
-test("git-url endpoint returns a clonable API URL when web and API origins differ", async () => {
+tenantTest("git-url endpoint returns a clonable API URL when web and API origins differ", async () => {
   let coreBase = "";
   const ingress = createHttpServer((req, res) => {
     const upstream = httpRequest(
@@ -331,39 +330,42 @@ test("git-url endpoint returns a clonable API URL when web and API origins diffe
   }
 });
 
-test("git-url endpoint: an org-owned deployment is read for a plain member, write only with a write grant", async () => {
-  const f = fixture();
-  try {
-    const d = await f.app.deploy({
-      ownerScopeId: scopeId("org", "default-org"),
-      createdBy: "U1",
-      entrypoint: "x",
-      files: [{ path: "server.js", data: "1" }],
-    });
-    const ask = async (actor: string) =>
-      fetch(`${f.base}/v1/deployments/${encodeURIComponent(d.id)}/git-url`, {
-        headers: { "x-agent-capability": await capFor(actor) },
+tenantTest(
+  "git-url endpoint: an org-owned deployment is read for a plain member, write only with a write grant",
+  async () => {
+    const f = fixture();
+    try {
+      const d = await f.app.deploy({
+        ownerScopeId: scopeId("org", "default-org"),
+        createdBy: "U1",
+        entrypoint: "x",
+        files: [{ path: "server.js", data: "1" }],
       });
+      const ask = async (actor: string) =>
+        fetch(`${f.base}/v1/deployments/${encodeURIComponent(d.id)}/git-url`, {
+          headers: { "x-agent-capability": await capFor(actor) },
+        });
 
-    const member = await ask("U2");
-    assert.equal(member.status, 200);
-    assert.equal(((await member.json()) as { permission: string }).permission, "read");
+      const member = await ask("U2");
+      assert.equal(member.status, 200);
+      assert.equal(((await member.json()) as { permission: string }).permission, "read");
 
-    await f.acl.grant({
-      ownerScopeId: scopeId("org", "default-org"),
-      ref: `deployment:${d.id}`,
-      granteeScopeId: scopeId("personal", "U2"),
-      permission: "write",
-      grantedBy: "U1",
-    });
-    const promoted = await ask("U2");
-    assert.equal(((await promoted.json()) as { permission: string }).permission, "write");
-  } finally {
-    await f.close();
-  }
-});
+      await f.acl.grant({
+        ownerScopeId: scopeId("org", "default-org"),
+        ref: `deployment:${d.id}`,
+        granteeScopeId: scopeId("personal", "U2"),
+        permission: "write",
+        grantedBy: "U1",
+      });
+      const promoted = await ask("U2");
+      assert.equal(((await promoted.json()) as { permission: string }).permission, "write");
+    } finally {
+      await f.close();
+    }
+  },
+);
 
-test("a garbage push body that git rejects early fails the request without crashing core", async () => {
+tenantTest("a garbage push body that git rejects early fails the request without crashing core", async () => {
   const f = fixture();
   const uncaught: unknown[] = [];
   const onUncaught = (error: unknown) => uncaught.push(error);

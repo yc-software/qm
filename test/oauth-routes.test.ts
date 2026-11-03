@@ -1,6 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { PROVIDERS, setPublicOAuthClients, type FetchLike } from "../src/connectors/oauth.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testTenantHeaders, inTestTenant } from "./support/test-tenants.ts";
+import { inTestTenant, tenantTest, testTenantHeaders } from "./support/test-tenants.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
 const oauthEnv = {
@@ -50,7 +49,7 @@ function start(
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-test("OAuth start, unsigned callback, status, and revoke are principal-bound", async () => {
+tenantTest("OAuth start, unsigned callback, status, and revoke are principal-bound", async () => {
   let exchanged = false;
   const fetchImpl: FetchLike = async (url, init) => {
     exchanged = true;
@@ -117,7 +116,7 @@ test("OAuth start, unsigned callback, status, and revoke are principal-bound", a
   }
 });
 
-test("revoke clears a connector linked under a non-default account type", async () => {
+tenantTest("revoke clears a connector linked under a non-default account type", async () => {
   const srv = start(async () => {
     throw new Error("no token exchange expected");
   });
@@ -158,7 +157,7 @@ test("revoke clears a connector linked under a non-default account type", async 
   }
 });
 
-test("OAuth status reports expired non-refreshable connectors as reconnect-needed", async () => {
+tenantTest("OAuth status reports expired non-refreshable connectors as reconnect-needed", async () => {
   const srv = start(async () => {
     throw new Error("no token exchange expected");
   });
@@ -180,7 +179,7 @@ test("OAuth status reports expired non-refreshable connectors as reconnect-neede
   }
 });
 
-test("OAuth callback rejects forged state even without source-auth", async () => {
+tenantTest("OAuth callback rejects forged state even without source-auth", async () => {
   const srv = start(async () => {
     throw new Error("must not exchange forged state");
   });
@@ -193,7 +192,7 @@ test("OAuth callback rejects forged state even without source-auth", async () =>
   }
 });
 
-test("connector token route normalizes expiry seconds before storing", async () => {
+tenantTest("connector token route normalizes expiry seconds before storing", async () => {
   const srv = start(async () => {
     throw new Error("token route must not call OAuth exchange");
   });
@@ -222,7 +221,7 @@ test("connector token route normalizes expiry seconds before storing", async () 
 const X_ENV = { X_OAUTH_CLIENT_ID: "xid", X_OAUTH_CLIENT_SECRET: "xsecret" } as NodeJS.ProcessEnv;
 const X_STATE_LIMIT = 500;
 
-test("authorize state stays inside the tightest provider limit and still carries the PKCE verifier", async () => {
+tenantTest("authorize state stays inside the tightest provider limit and still carries the PKCE verifier", async () => {
   let body = "";
   const srv = start(
     async (_url, init) => {
@@ -261,7 +260,7 @@ test("authorize state stays inside the tightest provider limit and still carries
   }
 });
 
-test("OAuth status lists a linked per-user MCP sign-in under its display name", async (t) => {
+tenantTest("OAuth status lists a linked per-user MCP sign-in under its display name", async (t) => {
   t.after(() => setPublicOAuthClients([]));
   const srv = start(async () => {
     throw new Error("no token exchange expected");

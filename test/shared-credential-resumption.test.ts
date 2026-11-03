@@ -1,4 +1,3 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createKeychain, KeychainError, ASK_TTL_MS } from "../src/credentials/keychain.ts";
@@ -12,6 +11,7 @@ import type { Principal, ScopeId, TurnRequest } from "../src/types.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { tenantTest } from "./support/test-tenants.ts";
 
 function keychain(now = Date.now) {
   return createKeychain({
@@ -92,46 +92,49 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
 }
 
 for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-shared"] as const) {
-  test(`scope approval resumes another person's credential for a conversation-owned job in ${scope}`, async () => {
-    const f = await fixture(scope);
+  tenantTest(
+    `scope approval resumes another person's credential for a conversation-owned job in ${scope}`,
+    async () => {
+      const f = await fixture(scope);
 
-    const outcome = await fireAskResolution(f.deps, f.ask);
-    await fireAskResolution(f.deps, f.ask);
+      const outcome = await fireAskResolution(f.deps, f.ask);
+      await fireAskResolution(f.deps, f.ask);
 
-    assert.equal(outcome.status, "ok");
-    assert.equal(f.requests.length, 1);
-    const request = f.requests[0]!;
-    assert.equal(request.actor.externalId, `system:${scope}`);
-    assert.equal(request.triggered, true);
-    assert.equal(request.conversation.threadRef, f.ask.requesterThreadRef);
-    assert.equal(request.conversation.kind, scope.startsWith("channel:") ? "channel" : "group");
-    assert.equal(request.conversation.channelRef, scope.slice(scope.indexOf(":") + 1));
-    assert.deepEqual(request.conversation.audience, [{ externalId: "U_REQUESTER" }]);
-    assert.equal(request.unattendedGrants, undefined);
-    assert.equal(request.ownerKeychainUnion, undefined);
-    assert.deepEqual(request.triggerDestination, f.cron.destination);
-    assert.match(request.text, /approved access for one credential use/);
-    assert.ok(!request.text.includes(f.ask.id) && !request.text.includes(f.ask.purpose));
-    assert.equal(f.grant.audienceScopeId, scope);
-    assert.equal(f.grant.ownerId, "U_CREDENTIAL_OWNER");
-    await assert.rejects(
-      materializeGrant(f.k, f.grant.id, "channel:C_OTHER", request.actor.externalId),
-      (error: KeychainError) => error.status === 403,
-    );
-    const materialized = await materializeGrant(f.k, f.grant.id, scope, request.actor.externalId);
-    assert.ok(materialized.kind === "env" && materialized.env[0]!.value === "dummy-only-secret");
-    await assert.rejects(
-      materializeGrant(f.k, f.grant.id, scope, request.actor.externalId),
-      (error: KeychainError) => error.status === 410,
-    );
-    const pending = await f.deliveries.pending("principal");
-    assert.equal(pending.length, 1);
-    assert.equal(pending[0]!.destination.target, "U_REQUESTER");
-  });
+      assert.equal(outcome.status, "ok");
+      assert.equal(f.requests.length, 1);
+      const request = f.requests[0]!;
+      assert.equal(request.actor.externalId, `system:${scope}`);
+      assert.equal(request.triggered, true);
+      assert.equal(request.conversation.threadRef, f.ask.requesterThreadRef);
+      assert.equal(request.conversation.kind, scope.startsWith("channel:") ? "channel" : "group");
+      assert.equal(request.conversation.channelRef, scope.slice(scope.indexOf(":") + 1));
+      assert.deepEqual(request.conversation.audience, [{ externalId: "U_REQUESTER" }]);
+      assert.equal(request.unattendedGrants, undefined);
+      assert.equal(request.ownerKeychainUnion, undefined);
+      assert.deepEqual(request.triggerDestination, f.cron.destination);
+      assert.match(request.text, /approved access for one credential use/);
+      assert.ok(!request.text.includes(f.ask.id) && !request.text.includes(f.ask.purpose));
+      assert.equal(f.grant.audienceScopeId, scope);
+      assert.equal(f.grant.ownerId, "U_CREDENTIAL_OWNER");
+      await assert.rejects(
+        materializeGrant(f.k, f.grant.id, "channel:C_OTHER", request.actor.externalId),
+        (error: KeychainError) => error.status === 403,
+      );
+      const materialized = await materializeGrant(f.k, f.grant.id, scope, request.actor.externalId);
+      assert.ok(materialized.kind === "env" && materialized.env[0]!.value === "dummy-only-secret");
+      await assert.rejects(
+        materializeGrant(f.k, f.grant.id, scope, request.actor.externalId),
+        (error: KeychainError) => error.status === 410,
+      );
+      const pending = await f.deliveries.pending("principal");
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0]!.destination.target, "U_REQUESTER");
+    },
+  );
 }
 
 for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-shared"] as const) {
-  test(`shared asks in ${scope} deduplicate by job across actors and keep live requests separate`, async () => {
+  tenantTest(`shared asks in ${scope} deduplicate by job across actors and keep live requests separate`, async () => {
     let now = 1_000_000;
     const k = keychain(() => now++);
     const credential = await k.save({ ownerId: "U_OWNER", service: "dummy", secret: "fake", envKey: "DUMMY_TOKEN" });
