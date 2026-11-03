@@ -2,7 +2,6 @@ import "./instrument.ts";
 import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
-import { reportFailureAs } from "../util/errors.ts";
 import { useOwnerDatabase } from "../tenants/claim.ts";
 import { verifyRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 
@@ -12,7 +11,6 @@ const built = buildApp(config);
 await verifyRegisteredPgSchemas(config.databaseUrl);
 await built.sandboxResources.initialize();
 await built.config.hydrate?.();
-void built.deploymentLayerReady().catch(reportFailureAs("worker: deployment layer", undefined));
 const { runtime } = built;
 runtime.start();
 console.log(`[qm:worker] draining runs (org=${config.orgId}, workers=${config.workers})`);

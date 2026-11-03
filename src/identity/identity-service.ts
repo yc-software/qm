@@ -3,6 +3,7 @@ import { createKeyedQueue, createTtlRefresh } from "../util/async.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember, type ExternalMemberStore } from "./external-members.ts";
 
@@ -12,6 +13,12 @@ interface IdentityProvider {
 }
 
 type DeactivationSource = "manual" | "directory-sync";
+
+interface TenantIdentity {
+  deactivated: Map<string, DeactivationRecord>;
+  externals: Map<string, ExternalMember>;
+  refresh(force?: boolean): Promise<void>;
+}
 
 export interface DeactivationRecord {
   principalId: string;
@@ -99,34 +106,44 @@ export function createIdentityService(
   },
 ): IdentityService {
   const externalStore = opts.externalMembers;
-  const deactivated = new Map<string, DeactivationRecord>();
-  const externals = new Map<string, ExternalMember>();
   const directorySyncProtected = opts.directorySyncProtected ?? [];
+  const queue = createKeyedQueue();
+  const tenants = new Map<string, TenantIdentity>();
+
+  function tenantIdentity(): TenantIdentity {
+    const tenant = currentTenant();
+    const existing = tenants.get(tenant);
+    if (existing) return existing;
+    const created: TenantIdentity = {
+      deactivated: new Map(),
+      externals: new Map(),
+      refresh: createTtlRefresh(10_000, () =>
+        exclusive(async () => {
+          await opts.principalLinks?.refresh(true);
+          const [deactivations, members] = await Promise.all([store.list(), externalStore.list()]);
+          created.deactivated.clear();
+          created.externals.clear();
+          for (const r of deactivations) {
+            const key = personKey(r.principalId);
+            if (created.deactivated.get(key)?.source !== "manual") created.deactivated.set(key, r);
+          }
+          for (const m of members) created.externals.set(personKey(m.email), m);
+        }),
+      ),
+    };
+    tenants.set(tenant, created);
+    return created;
+  }
 
   const keptByDirectorySync = (key: string): boolean =>
-    directorySyncProtected.some((id) => personKey(id) === key) || externals.has(key);
+    directorySyncProtected.some((id) => personKey(id) === key) || tenantIdentity().externals.has(key);
   const storeKeys = (externalId: string): string[] => personIds(externalId).map(foldPrincipalId).filter(Boolean);
-
-  const queue = createKeyedQueue();
-  const exclusive = <T>(fn: () => Promise<T>): Promise<T> => queue("identity", fn);
-
-  const refresh = createTtlRefresh(10_000, () =>
-    exclusive(async () => {
-      await opts.principalLinks?.refresh(true);
-      const [deactivations, members] = await Promise.all([store.list(), externalStore.list()]);
-      deactivated.clear();
-      externals.clear();
-      for (const r of deactivations) {
-        const key = personKey(r.principalId);
-        if (deactivated.get(key)?.source !== "manual") deactivated.set(key, r);
-      }
-      for (const m of members) externals.set(personKey(m.email), m);
-    }),
-  );
+  const exclusive = <T>(fn: () => Promise<T>): Promise<T> => queue(`identity:${currentTenant()}`, fn);
 
   function classify(externalId: string, isExternalGuest?: boolean): Principal {
     const id = canonicalPerson(externalId);
     const key = personKey(externalId);
+    const { deactivated, externals } = tenantIdentity();
     const record = deactivated.get(key);
     const external = externals.get(key);
     const inactive =
@@ -139,6 +156,7 @@ export function createIdentityService(
 
   async function deactivateNow(externalId: string, source: DeactivationSource): Promise<void> {
     const key = personKey(externalId);
+    const { deactivated } = tenantIdentity();
     const existing = deactivated.get(key);
     if (existing && (existing.source === "manual" || existing.source === source)) return;
     const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
@@ -147,7 +165,7 @@ export function createIdentityService(
   }
 
   async function reactivateNow(externalId: string): Promise<void> {
-    deactivated.delete(personKey(externalId));
+    tenantIdentity().deactivated.delete(personKey(externalId));
     await store.remove(storeKeys(externalId));
   }
 
@@ -155,44 +173,44 @@ export function createIdentityService(
     classify,
     deactivate: (externalId, source = "manual") => exclusive(() => deactivateNow(externalId, source)),
     deactivationSource(externalId: string): DeactivationSource | undefined {
-      return deactivated.get(personKey(externalId))?.source;
+      return tenantIdentity().deactivated.get(personKey(externalId))?.source;
     },
     reactivate: (externalId) => exclusive(() => reactivateNow(externalId)),
     recordDirectorySync: (removedIds, presentIds) =>
       exclusive(async () => {
         const outcome: DirectorySyncOutcome = { deactivated: [], reactivated: [] };
         for (const id of removedIds) {
-          if (keptByDirectorySync(personKey(id)) || deactivated.has(personKey(id))) continue;
+          if (keptByDirectorySync(personKey(id)) || tenantIdentity().deactivated.has(personKey(id))) continue;
           await deactivateNow(id, "directory-sync");
           outcome.deactivated.push(id);
         }
         for (const id of presentIds) {
-          if (deactivated.get(personKey(id))?.source !== "directory-sync") continue;
+          if (tenantIdentity().deactivated.get(personKey(id))?.source !== "directory-sync") continue;
           await reactivateNow(id);
           outcome.reactivated.push(id);
         }
         return outcome;
       }),
     async listExternalMembers(): Promise<ExternalMember[]> {
-      await refresh();
-      return [...externals.values()];
+      await tenantIdentity().refresh();
+      return [...tenantIdentity().externals.values()];
     },
     externalMember(principalId: string): ExternalMember | undefined {
-      return externals.get(personKey(principalId));
+      return tenantIdentity().externals.get(personKey(principalId));
     },
     putExternalMember(m: ExternalMember): Promise<void> {
       return exclusive(async () => {
-        externals.set(personKey(m.email), m);
+        tenantIdentity().externals.set(personKey(m.email), m);
         await externalStore.put(m);
       });
     },
     removeExternalMember(principalId: string): Promise<void> {
       return exclusive(async () => {
-        externals.delete(personKey(principalId));
+        tenantIdentity().externals.delete(personKey(principalId));
         await externalStore.remove(storeKeys(principalId));
       });
     },
-    refresh,
+    refresh: (force) => tenantIdentity().refresh(force),
     resolve(actor: ActorAssertion): Principal {
       const p = classify(actor.externalId, actor.isExternalGuest);
       return {

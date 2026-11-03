@@ -12,11 +12,10 @@ import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { safeSkillFilePath } from "../src/skills/skill-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { buildApp } from "./support/build-app.ts";
-import { inTestTenant } from "./support/test-tenants.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { testTenants } from "./support/test-tenants.ts";
+import { inTestTenant, testTenants } from "./support/test-tenants.ts";
 import { currentTenant, withTenant } from "../src/tenants/context.ts";
 import { testSkillStore } from "./support/typed-stores.ts";
 
@@ -39,32 +38,33 @@ Run the thing.
   assert.match(manifest.body, /^# Demo/);
 });
 
-test("installSeedSkills publishes the repository starter catalog into org scope", async () => {
-  const skills = testSkillStore({ signingSecret: "seed-test-secret" });
-  const result = await installSeedSkills(skills, { dir: "skills-seed", scopeId: scopeId("org", "default-org") });
-  assert.deepEqual(result.skipped, []);
-  assert.ok(result.installed.includes("cloud-cli"));
-  assert.ok(result.installed.includes("composio"));
-  assert.ok(result.installed.includes("google-workspace"));
-  assert.ok(result.installed.includes("google-drive-sheets"));
-  assert.ok(result.installed.includes("github-gitlab"));
-  assert.ok(result.installed.includes("send"));
-  const github = (await skills.listAll()).find((s) => s.manifest.name === "github-gitlab")!;
-  assert.equal(
-    github.manifest.files?.find((file) => file.path === "scripts/watch-ci.mjs")?.content,
-    readFileSync("skills-seed/github-gitlab/scripts/watch-ci.mjs", "utf8"),
-  );
-  assert.ok(result.installed.includes("taste-skill"));
-  assert.ok(result.installed.includes("use-shared-credential"));
+test("installSeedSkills publishes the repository starter catalog into org scope", () =>
+  inTestTenant(async () => {
+    const skills = testSkillStore({ signingSecret: "seed-test-secret" });
+    const result = await installSeedSkills(skills, { dir: "skills-seed", scopeId: scopeId("org", "default-org") });
+    assert.deepEqual(result.skipped, []);
+    assert.ok(result.installed.includes("cloud-cli"));
+    assert.ok(result.installed.includes("composio"));
+    assert.ok(result.installed.includes("google-workspace"));
+    assert.ok(result.installed.includes("google-drive-sheets"));
+    assert.ok(result.installed.includes("github-gitlab"));
+    assert.ok(result.installed.includes("send"));
+    const github = (await skills.listAll()).find((s) => s.manifest.name === "github-gitlab")!;
+    assert.equal(
+      github.manifest.files?.find((file) => file.path === "scripts/watch-ci.mjs")?.content,
+      readFileSync("skills-seed/github-gitlab/scripts/watch-ci.mjs", "utf8"),
+    );
+    assert.ok(result.installed.includes("taste-skill"));
+    assert.ok(result.installed.includes("use-shared-credential"));
 
-  const published = (await skills.listAll()).filter((s) => s.status === "published");
-  assert.equal(published.length, result.installed.length);
-  assert.ok(published.every((s) => s.scopeId === scopeId("org", "default-org")));
-  assert.ok(published.every((s) => skills.verify(s)));
-  const rerun = await installSeedSkills(skills, { dir: "skills-seed", scopeId: scopeId("org", "default-org") });
-  assert.deepEqual(rerun.skipped.sort(), result.installed.sort());
-  assert.deepEqual(rerun.updated, []);
-});
+    const published = (await skills.listAll()).filter((s) => s.status === "published");
+    assert.equal(published.length, result.installed.length);
+    assert.ok(published.every((s) => s.scopeId === scopeId("org", "default-org")));
+    assert.ok(published.every((s) => skills.verify(s)));
+    const rerun = await installSeedSkills(skills, { dir: "skills-seed", scopeId: scopeId("org", "default-org") });
+    assert.deepEqual(rerun.skipped.sort(), result.installed.sort());
+    assert.deepEqual(rerun.updated, []);
+  }));
 
 test("every licence shipped with a seed skill is MIT, and no tracked source carries Apache licence text", () => {
   const seedDir = "skills-seed";
@@ -108,88 +108,91 @@ function writeSeedAsset(dir: string, name: string, relPath: string, content: str
   writeFileSync(abs, content);
 }
 
-test("installSeedSkills re-seeds a changed manifest over its own prior install, never over another author's", async () => {
-  const skills = testSkillStore({ signingSecret: "seed-test-secret" });
-  const org = scopeId("org", "default-org");
-  const dir = mkdtempSync(join(tmpdir(), "seed-update-"));
-  writeSeedSkill(dir, "demo", "old description", "# Demo v1");
+test("installSeedSkills re-seeds a changed manifest over its own prior install, never over another author's", () =>
+  inTestTenant(async () => {
+    const skills = testSkillStore({ signingSecret: "seed-test-secret" });
+    const org = scopeId("org", "default-org");
+    const dir = mkdtempSync(join(tmpdir(), "seed-update-"));
+    writeSeedSkill(dir, "demo", "old description", "# Demo v1");
 
-  await installSeedSkills(skills, { dir, scopeId: org });
-  writeSeedSkill(dir, "demo", "new description", "# Demo v2");
-  const result = await installSeedSkills(skills, { dir, scopeId: org });
-  assert.deepEqual(result, { installed: [], updated: ["demo"], skipped: [] });
+    await installSeedSkills(skills, { dir, scopeId: org });
+    writeSeedSkill(dir, "demo", "new description", "# Demo v2");
+    const result = await installSeedSkills(skills, { dir, scopeId: org });
+    assert.deepEqual(result, { installed: [], updated: ["demo"], skipped: [] });
 
-  const skill = (await skills.listAll()).find((s) => s.manifest.name === "demo")!;
-  assert.equal(skill.status, "published");
-  assert.equal(skill.version, 2);
-  assert.equal(skill.manifest.description, "new description");
-  assert.ok(skills.verify(skill));
+    const skill = (await skills.listAll()).find((s) => s.manifest.name === "demo")!;
+    assert.equal(skill.status, "published");
+    assert.equal(skill.version, 2);
+    assert.equal(skill.manifest.description, "new description");
+    assert.ok(skills.verify(skill));
 
-  const stranded = await skills.create({
-    scopeId: org,
-    manifest: { name: "stuck", description: "stranded", requiredCapabilities: [], body: "# Stuck" },
-    createdBy: "system:skills-seed",
-  });
-  const strandedDir = mkdtempSync(join(tmpdir(), "seed-stranded-"));
-  writeSeedSkill(strandedDir, "stuck", "stranded", "# Stuck");
-  const repaired = await installSeedSkills(skills, { dir: strandedDir, scopeId: org });
-  assert.deepEqual(repaired, { installed: [], updated: ["stuck"], skipped: [] });
-  assert.equal((await skills.get(stranded.id))!.status, "published");
-
-  const userDir = mkdtempSync(join(tmpdir(), "seed-user-"));
-  writeSeedSkill(userDir, "mine", "user authored", "# Mine");
-  const mine = await skills.create({
-    scopeId: org,
-    manifest: { name: "mine", description: "user authored", requiredCapabilities: [], body: "# Mine" },
-    createdBy: "user:carol",
-  });
-  await skills.review(mine.id, "reviewer:r1", []);
-  await skills.publish(mine.id);
-  writeSeedSkill(userDir, "mine", "catalog tries to take over", "# Catalog");
-  const guarded = await installSeedSkills(skills, { dir: userDir, scopeId: org });
-  assert.deepEqual(guarded, { installed: [], updated: [], skipped: ["mine"] });
-  assert.equal((await skills.get(mine.id))!.manifest.description, "user authored");
-});
-
-test("installSeedSkills leaves an admin-archived catalog skill archived when asked to", async () => {
-  const skills = testSkillStore({ signingSecret: "seed-test-secret" });
-  const org = scopeId("org", "default-org");
-  const dir = mkdtempSync(join(tmpdir(), "seed-archived-"));
-  writeSeedSkill(dir, "retired", "old catalog skill", "# Retired v1");
-  await installSeedSkills(skills, { dir, scopeId: org, respectArchived: true });
-  const installed = (await skills.listAll()).find((s) => s.manifest.name === "retired")!;
-  await skills.archive(installed.id);
-
-  const again = await installSeedSkills(skills, { dir, scopeId: org, respectArchived: true });
-  assert.deepEqual(again, { installed: [], updated: [], skipped: ["retired"] });
-  writeSeedSkill(dir, "retired", "catalog changed upstream", "# Retired v2");
-  const changed = await installSeedSkills(skills, { dir, scopeId: org, respectArchived: true });
-  assert.deepEqual(changed, { installed: [], updated: [], skipped: ["retired"] });
-  const kept = (await skills.listAll()).filter((s) => s.manifest.name === "retired");
-  assert.equal(kept.length, 1, "no replacement record is created beside the archived one");
-  assert.equal(kept[0]!.status, "archived");
-
-  const republished = await installSeedSkills(skills, { dir, scopeId: org });
-  assert.deepEqual(republished, { installed: [], updated: ["retired"], skipped: [] });
-  assert.equal((await skills.get(installed.id))!.status, "published");
-});
-
-test("concurrent upserts of the same scope+name serialize into one record (no duplicate creates)", async () => {
-  const skills = testSkillStore({ signingSecret: "seed-test-secret" });
-  const org = scopeId("org", "default-org");
-  const upsert = (body: string) =>
-    upsertSeedSkill(skills, {
+    const stranded = await skills.create({
       scopeId: org,
-      manifest: { name: "racy", description: "raced", requiredCapabilities: [], body },
+      manifest: { name: "stuck", description: "stranded", requiredCapabilities: [], body: "# Stuck" },
       createdBy: "system:skills-seed",
-      reviewer: "system:skills-reviewer",
     });
-  const outcomes = await Promise.all([upsert("# A"), upsert("# B"), upsert("# C")]);
-  assert.equal(outcomes.filter((o) => o === "installed").length, 1);
-  const records = (await skills.listAll()).filter((s) => s.scopeId === org && s.manifest.name === "racy");
-  assert.equal(records.length, 1);
-  assert.equal(records[0]!.status, "published");
-});
+    const strandedDir = mkdtempSync(join(tmpdir(), "seed-stranded-"));
+    writeSeedSkill(strandedDir, "stuck", "stranded", "# Stuck");
+    const repaired = await installSeedSkills(skills, { dir: strandedDir, scopeId: org });
+    assert.deepEqual(repaired, { installed: [], updated: ["stuck"], skipped: [] });
+    assert.equal((await skills.get(stranded.id))!.status, "published");
+
+    const userDir = mkdtempSync(join(tmpdir(), "seed-user-"));
+    writeSeedSkill(userDir, "mine", "user authored", "# Mine");
+    const mine = await skills.create({
+      scopeId: org,
+      manifest: { name: "mine", description: "user authored", requiredCapabilities: [], body: "# Mine" },
+      createdBy: "user:carol",
+    });
+    await skills.review(mine.id, "reviewer:r1", []);
+    await skills.publish(mine.id);
+    writeSeedSkill(userDir, "mine", "catalog tries to take over", "# Catalog");
+    const guarded = await installSeedSkills(skills, { dir: userDir, scopeId: org });
+    assert.deepEqual(guarded, { installed: [], updated: [], skipped: ["mine"] });
+    assert.equal((await skills.get(mine.id))!.manifest.description, "user authored");
+  }));
+
+test("installSeedSkills leaves an admin-archived catalog skill archived when asked to", () =>
+  inTestTenant(async () => {
+    const skills = testSkillStore({ signingSecret: "seed-test-secret" });
+    const org = scopeId("org", "default-org");
+    const dir = mkdtempSync(join(tmpdir(), "seed-archived-"));
+    writeSeedSkill(dir, "retired", "old catalog skill", "# Retired v1");
+    await installSeedSkills(skills, { dir, scopeId: org, respectArchived: true });
+    const installed = (await skills.listAll()).find((s) => s.manifest.name === "retired")!;
+    await skills.archive(installed.id);
+
+    const again = await installSeedSkills(skills, { dir, scopeId: org, respectArchived: true });
+    assert.deepEqual(again, { installed: [], updated: [], skipped: ["retired"] });
+    writeSeedSkill(dir, "retired", "catalog changed upstream", "# Retired v2");
+    const changed = await installSeedSkills(skills, { dir, scopeId: org, respectArchived: true });
+    assert.deepEqual(changed, { installed: [], updated: [], skipped: ["retired"] });
+    const kept = (await skills.listAll()).filter((s) => s.manifest.name === "retired");
+    assert.equal(kept.length, 1, "no replacement record is created beside the archived one");
+    assert.equal(kept[0]!.status, "archived");
+
+    const republished = await installSeedSkills(skills, { dir, scopeId: org });
+    assert.deepEqual(republished, { installed: [], updated: ["retired"], skipped: [] });
+    assert.equal((await skills.get(installed.id))!.status, "published");
+  }));
+
+test("concurrent upserts of the same scope+name serialize into one record (no duplicate creates)", () =>
+  inTestTenant(async () => {
+    const skills = testSkillStore({ signingSecret: "seed-test-secret" });
+    const org = scopeId("org", "default-org");
+    const upsert = (body: string) =>
+      upsertSeedSkill(skills, {
+        scopeId: org,
+        manifest: { name: "racy", description: "raced", requiredCapabilities: [], body },
+        createdBy: "system:skills-seed",
+        reviewer: "system:skills-reviewer",
+      });
+    const outcomes = await Promise.all([upsert("# A"), upsert("# B"), upsert("# C")]);
+    assert.equal(outcomes.filter((o) => o === "installed").length, 1);
+    const records = (await skills.listAll()).filter((s) => s.scopeId === org && s.manifest.name === "racy");
+    assert.equal(records.length, 1);
+    assert.equal(records[0]!.status, "published");
+  }));
 
 test("a fresh app advertises and materializes only admin-enabled connector skills", async () => {
   const config = testConfig({
@@ -262,71 +265,79 @@ function fakeSandbox() {
   return { sandbox, files };
 }
 
-test("a bundled skill round-trips seed → store → materialize, assets land beside SKILL.md", async () => {
-  const skills = testSkillStore({ signingSecret: "seed-test-secret" });
-  const org = scopeId("org", "default-org");
-  const dir = mkdtempSync(join(tmpdir(), "seed-tree-"));
-  writeSeedSkill(dir, "tooled", "a skill with helpers", "# Tooled\n\nRun scripts/hello.py.");
-  writeSeedAsset(dir, "tooled", "scripts/hello.py", "print('hi')\n");
-  writeSeedAsset(dir, "tooled", "references/notes.md", "# notes\n");
-  writeSeedSkill(dir, "plain", "no helpers", "# Plain");
+test("a bundled skill round-trips seed → store → materialize, assets land beside SKILL.md", () =>
+  inTestTenant(async () => {
+    const skills = testSkillStore({ signingSecret: "seed-test-secret" });
+    const org = scopeId("org", "default-org");
+    const dir = mkdtempSync(join(tmpdir(), "seed-tree-"));
+    writeSeedSkill(dir, "tooled", "a skill with helpers", "# Tooled\n\nRun scripts/hello.py.");
+    writeSeedAsset(dir, "tooled", "scripts/hello.py", "print('hi')\n");
+    writeSeedAsset(dir, "tooled", "references/notes.md", "# notes\n");
+    writeSeedSkill(dir, "plain", "no helpers", "# Plain");
 
-  const result = await installSeedSkills(skills, { dir, scopeId: org });
-  assert.deepEqual(result.installed.sort(), ["plain", "tooled"]);
+    const result = await installSeedSkills(skills, { dir, scopeId: org });
+    assert.deepEqual(result.installed.sort(), ["plain", "tooled"]);
 
-  const tooled = (await skills.listAll()).find((s) => s.manifest.name === "tooled")!;
-  assert.ok(skills.verify(tooled), "signature covers the bundled files");
-  assert.deepEqual((tooled.manifest.files ?? []).map((f) => f.path).sort(), [
-    "references/notes.md",
-    "scripts/hello.py",
-  ]);
-  assert.equal((await skills.listAll()).find((s) => s.manifest.name === "plain")!.manifest.files?.length, 0);
+    const tooled = (await skills.listAll()).find((s) => s.manifest.name === "tooled")!;
+    assert.ok(skills.verify(tooled), "signature covers the bundled files");
+    assert.deepEqual((tooled.manifest.files ?? []).map((f) => f.path).sort(), [
+      "references/notes.md",
+      "scripts/hello.py",
+    ]);
+    assert.equal((await skills.listAll()).find((s) => s.manifest.name === "plain")!.manifest.files?.length, 0);
 
-  const { sandbox, files } = fakeSandbox();
-  const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
-  const resolved = await skills.resolve("tooled", [org]);
-  await materializeSkillTree(sandbox, handle, "skills", resolved);
-  assert.equal(files.get("skills/tooled/SKILL.md"), tooled.manifest.body);
-  assert.equal(files.get("skills/tooled/scripts/hello.py"), "print('hi')\n");
-  assert.equal(files.get("skills/tooled/references/notes.md"), "# notes\n");
-});
+    const { sandbox, files } = fakeSandbox();
+    const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
+    const resolved = await skills.resolve("tooled", [org]);
+    await materializeSkillTree(sandbox, handle, "skills", resolved);
+    assert.equal(files.get("skills/tooled/SKILL.md"), tooled.manifest.body);
+    assert.equal(files.get("skills/tooled/scripts/hello.py"), "print('hi')\n");
+    assert.equal(files.get("skills/tooled/references/notes.md"), "# notes\n");
+  }));
 
-test("a tampered bundled asset fails skill verification", async () => {
-  const skills = testSkillStore({ signingSecret: "seed-test-secret" });
-  const org = scopeId("org", "default-org");
-  const dir = mkdtempSync(join(tmpdir(), "seed-tamper-"));
-  writeSeedSkill(dir, "tooled", "a skill with helpers", "# Tooled");
-  writeSeedAsset(dir, "tooled", "scripts/hello.py", "print('hi')\n");
-  await installSeedSkills(skills, { dir, scopeId: org });
+test("a tampered bundled asset fails skill verification", () =>
+  inTestTenant(async () => {
+    const skills = testSkillStore({ signingSecret: "seed-test-secret" });
+    const org = scopeId("org", "default-org");
+    const dir = mkdtempSync(join(tmpdir(), "seed-tamper-"));
+    writeSeedSkill(dir, "tooled", "a skill with helpers", "# Tooled");
+    writeSeedAsset(dir, "tooled", "scripts/hello.py", "print('hi')\n");
+    await installSeedSkills(skills, { dir, scopeId: org });
 
-  const tooled = (await skills.listAll()).find((s) => s.manifest.name === "tooled")!;
-  assert.ok(skills.verify(tooled));
-  tooled.manifest.files![0]!.content = "import os; os.system('rm -rf /')\n";
-  assert.equal(skills.verify(tooled), false, "a swapped asset is detected");
-});
+    const tooled = (await skills.listAll()).find((s) => s.manifest.name === "tooled")!;
+    assert.ok(skills.verify(tooled));
+    tooled.manifest.files![0]!.content = "import os; os.system('rm -rf /')\n";
+    assert.equal(skills.verify(tooled), false, "a swapped asset is detected");
+  }));
 
-test("a text-only skill signs identically to the pre-files scheme (legacy signatures still verify)", async () => {
-  const secret = "legacy-compat-secret";
-  const skills = testSkillStore({ signingSecret: secret });
-  const org = scopeId("org", "default-org");
-  const legacySig = createHmac("sha256", secret)
-    .update(
-      JSON.stringify({
+test("a text-only skill signs identically to the pre-files scheme (legacy signatures still verify)", () =>
+  inTestTenant(async () => {
+    const secret = "legacy-compat-secret";
+    const skills = testSkillStore({ signingSecret: secret });
+    const org = scopeId("org", "default-org");
+    const legacySig = createHmac("sha256", secret)
+      .update(
+        JSON.stringify({
+          name: "legacy",
+          description: "an old skill",
+          requiredCapabilities: ["command:demo"],
+          body: "# Legacy",
+        }),
+      )
+      .digest("hex");
+    const created = await skills.create({
+      scopeId: org,
+      manifest: {
         name: "legacy",
         description: "an old skill",
         requiredCapabilities: ["command:demo"],
         body: "# Legacy",
-      }),
-    )
-    .digest("hex");
-  const created = await skills.create({
-    scopeId: org,
-    manifest: { name: "legacy", description: "an old skill", requiredCapabilities: ["command:demo"], body: "# Legacy" },
-    createdBy: "system:skills-seed",
-  });
-  assert.equal(created.signature, legacySig, "new sign() reproduces the old payload for a text-only skill");
-  assert.ok(skills.verify(created), "an already-stored legacy signature still verifies");
-});
+      },
+      createdBy: "system:skills-seed",
+    });
+    assert.equal(created.signature, legacySig, "new sign() reproduces the old payload for a text-only skill");
+    assert.ok(skills.verify(created), "an already-stored legacy signature still verifies");
+  }));
 
 test("safeSkillFilePath rejects traversal / absolute / dot segments", () => {
   assert.equal(safeSkillFilePath("scripts/foo.py"), "scripts/foo.py");
@@ -336,46 +347,48 @@ test("safeSkillFilePath rejects traversal / absolute / dot segments", () => {
   }
 });
 
-test("installSeedSkills re-seeds when only a bundled asset changes", async () => {
-  const skills = testSkillStore({ signingSecret: "seed-test-secret" });
-  const org = scopeId("org", "default-org");
-  const dir = mkdtempSync(join(tmpdir(), "seed-asset-change-"));
-  writeSeedSkill(dir, "tooled", "helpers", "# Tooled");
-  writeSeedAsset(dir, "tooled", "scripts/hello.py", "v1\n");
-  await installSeedSkills(skills, { dir, scopeId: org });
+test("installSeedSkills re-seeds when only a bundled asset changes", () =>
+  inTestTenant(async () => {
+    const skills = testSkillStore({ signingSecret: "seed-test-secret" });
+    const org = scopeId("org", "default-org");
+    const dir = mkdtempSync(join(tmpdir(), "seed-asset-change-"));
+    writeSeedSkill(dir, "tooled", "helpers", "# Tooled");
+    writeSeedAsset(dir, "tooled", "scripts/hello.py", "v1\n");
+    await installSeedSkills(skills, { dir, scopeId: org });
 
-  writeSeedAsset(dir, "tooled", "scripts/hello.py", "v2\n");
-  const rerun = await installSeedSkills(skills, { dir, scopeId: org });
-  assert.deepEqual(rerun, { installed: [], updated: ["tooled"], skipped: [] });
-  const tooled = (await skills.listAll()).find((s) => s.manifest.name === "tooled")!;
-  assert.equal(tooled.manifest.files?.find((f) => f.path === "scripts/hello.py")?.content, "v2\n");
-});
+    writeSeedAsset(dir, "tooled", "scripts/hello.py", "v2\n");
+    const rerun = await installSeedSkills(skills, { dir, scopeId: org });
+    assert.deepEqual(rerun, { installed: [], updated: ["tooled"], skipped: [] });
+    const tooled = (await skills.listAll()).find((s) => s.manifest.name === "tooled")!;
+    assert.equal(tooled.manifest.files?.find((f) => f.path === "scripts/hello.py")?.content, "v2\n");
+  }));
 
-test("lazy skill boot runs once per tenant in the caller's tenant and retries after a failure", async () => {
-  const [TEST_TENANT, OTHER] = testTenants();
-  const hydrated: string[] = [];
-  const seeded: string[] = [];
-  let failNext = false;
-  const boot = lazySkillBoot(
-    async () => hydrated.push(currentTenant()),
-    async () => {
-      seeded.push(currentTenant());
-      if (failNext) {
-        failNext = false;
-        throw new Error("seed failed");
-      }
-    },
-  );
-  await boot.skillsReady();
-  await boot.layerReady();
-  await boot.skillsReady();
-  assert.deepEqual(seeded, [TEST_TENANT]);
-  assert.deepEqual(hydrated, [TEST_TENANT]);
-  failNext = true;
-  await withTenant(OTHER, () => boot.skillsReady());
-  assert.deepEqual(seeded, [TEST_TENANT, OTHER]);
-  await withTenant(OTHER, () => boot.skillsReady());
-  await withTenant(OTHER, () => boot.skillsReady());
-  assert.deepEqual(seeded, [TEST_TENANT, OTHER, OTHER]);
-  assert.deepEqual(hydrated, [TEST_TENANT, OTHER, OTHER]);
-});
+test("lazy skill boot runs once per tenant in the caller's tenant and retries after a failure", () =>
+  inTestTenant(async () => {
+    const [TEST_TENANT, OTHER] = testTenants();
+    const hydrated: string[] = [];
+    const seeded: string[] = [];
+    let failNext = false;
+    const boot = lazySkillBoot(
+      async () => hydrated.push(currentTenant()),
+      async () => {
+        seeded.push(currentTenant());
+        if (failNext) {
+          failNext = false;
+          throw new Error("seed failed");
+        }
+      },
+    );
+    await boot.skillsReady();
+    await boot.layerReady();
+    await boot.skillsReady();
+    assert.deepEqual(seeded, [TEST_TENANT]);
+    assert.deepEqual(hydrated, [TEST_TENANT]);
+    failNext = true;
+    await withTenant(OTHER, () => boot.skillsReady());
+    assert.deepEqual(seeded, [TEST_TENANT, OTHER]);
+    await withTenant(OTHER, () => boot.skillsReady());
+    await withTenant(OTHER, () => boot.skillsReady());
+    assert.deepEqual(seeded, [TEST_TENANT, OTHER, OTHER]);
+    assert.deepEqual(hydrated, [TEST_TENANT, OTHER, OTHER]);
+  }));

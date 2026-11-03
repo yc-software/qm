@@ -5,6 +5,7 @@ import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
 import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const identityFailure = new Error("identity persistence unavailable");
 const configFailure = new Error("configuration persistence unavailable");
@@ -51,7 +52,10 @@ test("eager hydration failures are contained while explicit startup hydration re
     await settle(async () => logged("startup: hydrate configuration"));
     assert.ok(logged("startup: hydrate configuration"));
     for (let attempt = 0; attempt < 2; attempt++) {
-      await assert.rejects(built.identity.refresh(), (error: unknown) => error === identityFailure);
+      await assert.rejects(
+        inTestTenant(() => built.identity.refresh()),
+        (error: unknown) => error === identityFailure,
+      );
       await assert.rejects(built.config.hydrate!(), (error: unknown) => error === configFailure);
     }
   } finally {

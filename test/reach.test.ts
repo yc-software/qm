@@ -12,6 +12,7 @@ import {
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Destination, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 
 function fakeDirectory(): ReachDirectory & {
@@ -325,162 +326,168 @@ function triggerDeps(run: (req: TurnRequest) => Promise<TurnResult>): TriggerDep
 }
 
 describe("runTrigger: cron produces deliveries, Reach gates them", () => {
-  it("'summarize THIS channel, DM it to Alice' — channel read scope → teammate DM, gate passes", async () => {
-    const deps = triggerDeps(async () => ({ status: "ok", reply: "3 PRs merged, 1 incident resolved." }));
-    const destination: Destination = {
-      type: "principal",
-      target: "U-alice",
-      audienceScopeId: scopeId("personal", "U-alice"),
-      onBehalfOf: "U-carol",
-    };
-    const out = await runTrigger(deps, {
-      owner: "U-carol",
-      ownerScopeId: scopeId("channel", "C-eng"),
-      input: "summarize this channel",
-      fireKey: "cron:c1:slot",
-      surface: "cron",
-      destination,
-    });
-    assert.equal(out.authzFailed, false);
-    const pending = await deps.deliveries.pending("principal");
-    assert.equal(pending.length, 1);
-    assert.equal(pending[0]!.text, "3 PRs merged, 1 incident resolved.");
-    assert.equal(pending[0]!.destination.target, "U-alice");
-  });
+  it("'summarize THIS channel, DM it to Alice' — channel read scope → teammate DM, gate passes", () =>
+    inTestTenant(async () => {
+      const deps = triggerDeps(async () => ({ status: "ok", reply: "3 PRs merged, 1 incident resolved." }));
+      const destination: Destination = {
+        type: "principal",
+        target: "U-alice",
+        audienceScopeId: scopeId("personal", "U-alice"),
+        onBehalfOf: "U-carol",
+      };
+      const out = await runTrigger(deps, {
+        owner: "U-carol",
+        ownerScopeId: scopeId("channel", "C-eng"),
+        input: "summarize this channel",
+        fireKey: "cron:c1:slot",
+        surface: "cron",
+        destination,
+      });
+      assert.equal(out.authzFailed, false);
+      const pending = await deps.deliveries.pending("principal");
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0]!.text, "3 PRs merged, 1 incident resolved.");
+      assert.equal(pending[0]!.destination.target, "U-alice");
+    }));
 
-  it("conversation-owned cron → an individual's DM including a NON-member of the channel — gate passes, no withhold", async () => {
-    const deps = triggerDeps(async () => ({ status: "ok", reply: "team digest" }));
-    const destination: Destination = {
-      type: "principal",
-      target: "U-alice",
-      audienceScopeId: scopeId("personal", "U-alice"),
-      onBehalfOf: "U-carol",
-    };
-    const members: Principal[] = [
-      { id: "U-carol", type: "internal" },
-      { id: "U-alice", type: "internal" },
-    ];
-    deps.currentScopeMembers = async () => members;
-    const out = await runTrigger(deps, {
-      owner: "system:channel:C-secret",
-      ownerScopeId: scopeId("channel", "C-secret"),
-      input: "digest",
-      fireKey: "cron:team1:slot",
-      surface: "cron",
-      destination,
-    });
-    assert.equal(out.authzFailed, false);
-    const pending = await deps.deliveries.pending("principal");
-    assert.equal(pending.length, 1);
-    assert.equal(pending[0]!.text, "team digest");
-  });
+  it("conversation-owned cron → an individual's DM including a NON-member of the channel — gate passes, no withhold", () =>
+    inTestTenant(async () => {
+      const deps = triggerDeps(async () => ({ status: "ok", reply: "team digest" }));
+      const destination: Destination = {
+        type: "principal",
+        target: "U-alice",
+        audienceScopeId: scopeId("personal", "U-alice"),
+        onBehalfOf: "U-carol",
+      };
+      const members: Principal[] = [
+        { id: "U-carol", type: "internal" },
+        { id: "U-alice", type: "internal" },
+      ];
+      deps.currentScopeMembers = async () => members;
+      const out = await runTrigger(deps, {
+        owner: "system:channel:C-secret",
+        ownerScopeId: scopeId("channel", "C-secret"),
+        input: "digest",
+        fireKey: "cron:team1:slot",
+        surface: "cron",
+        destination,
+      });
+      assert.equal(out.authzFailed, false);
+      const pending = await deps.deliveries.pending("principal");
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0]!.text, "team digest");
+    }));
 
-  it("a verbatim message relay (cron) to a third party is attributed with the sender's name at fire time", async () => {
-    const deps = triggerDeps(async () => {
-      throw new Error("a literal message must NOT re-run a turn");
-    });
-    const destination: Destination = {
-      type: "principal",
-      target: "U-alice",
-      audienceScopeId: scopeId("personal", "U-alice"),
-      onBehalfOf: "U-carol",
-    };
-    const out = await runTrigger(deps, {
-      owner: "U-carol",
-      ownerScopeId: scopeId("personal", "U-carol"),
-      input: "",
-      message: "the deploy is done 🚀",
-      fireKey: "cron:relay1:slot",
-      surface: "cron",
-      destination,
-    });
-    assert.equal(out.authzFailed, false);
-    const pending = await deps.deliveries.pending("principal");
-    assert.equal(pending.length, 1);
-    assert.equal(pending[0]!.text, "the deploy is done 🚀");
-    assert.equal(pending[0]!.destination.relaySender, "Carol");
-  });
+  it("a verbatim message relay (cron) to a third party is attributed with the sender's name at fire time", () =>
+    inTestTenant(async () => {
+      const deps = triggerDeps(async () => {
+        throw new Error("a literal message must NOT re-run a turn");
+      });
+      const destination: Destination = {
+        type: "principal",
+        target: "U-alice",
+        audienceScopeId: scopeId("personal", "U-alice"),
+        onBehalfOf: "U-carol",
+      };
+      const out = await runTrigger(deps, {
+        owner: "U-carol",
+        ownerScopeId: scopeId("personal", "U-carol"),
+        input: "",
+        message: "the deploy is done 🚀",
+        fireKey: "cron:relay1:slot",
+        surface: "cron",
+        destination,
+      });
+      assert.equal(out.authzFailed, false);
+      const pending = await deps.deliveries.pending("principal");
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0]!.text, "the deploy is done 🚀");
+      assert.equal(pending[0]!.destination.relaySender, "Carol");
+    }));
 
-  it("a fire's attachments ride the delivery with the reply (the tweet-digest regression)", async () => {
-    const files = [
-      {
-        name: "1_tweet.png",
-        mimetype: "image/png",
-        sizeBytes: 113329,
-        blobId: "b1",
-        artifactId: "a1",
-        artifactViewerId: "U-carol",
-      },
-      {
-        name: "2_tweet.png",
-        mimetype: "image/png",
-        sizeBytes: 484244,
-        blobId: "b2",
-        artifactId: "a2",
-        artifactViewerId: "U-carol",
-      },
-    ];
-    const deps = triggerDeps(async () => ({ status: "ok", reply: "Today's catch:", attachments: files }));
-    const destination: Destination = {
-      type: "slack",
-      target: "D-carol:1783.1",
-      audienceScopeId: scopeId("personal", "U-carol"),
-    };
-    const out = await runTrigger(deps, {
-      owner: "U-carol",
-      ownerScopeId: scopeId("personal", "U-carol"),
-      input: "daily digest",
-      fireKey: "cron:digest1:slot",
-      surface: "cron",
-      destination,
-    });
-    assert.equal(out.authzFailed, false);
-    const pending = await deps.deliveries.pending("slack");
-    assert.equal(pending.length, 1);
-    assert.equal(pending[0]!.text, "Today's catch:");
-    assert.deepEqual(
-      pending[0]!.attachments?.map((a) => a.name),
-      ["1_tweet.png", "2_tweet.png"],
-    );
-  });
+  it("a fire's attachments ride the delivery with the reply (the tweet-digest regression)", () =>
+    inTestTenant(async () => {
+      const files = [
+        {
+          name: "1_tweet.png",
+          mimetype: "image/png",
+          sizeBytes: 113329,
+          blobId: "b1",
+          artifactId: "a1",
+          artifactViewerId: "U-carol",
+        },
+        {
+          name: "2_tweet.png",
+          mimetype: "image/png",
+          sizeBytes: 484244,
+          blobId: "b2",
+          artifactId: "a2",
+          artifactViewerId: "U-carol",
+        },
+      ];
+      const deps = triggerDeps(async () => ({ status: "ok", reply: "Today's catch:", attachments: files }));
+      const destination: Destination = {
+        type: "slack",
+        target: "D-carol:1783.1",
+        audienceScopeId: scopeId("personal", "U-carol"),
+      };
+      const out = await runTrigger(deps, {
+        owner: "U-carol",
+        ownerScopeId: scopeId("personal", "U-carol"),
+        input: "daily digest",
+        fireKey: "cron:digest1:slot",
+        surface: "cron",
+        destination,
+      });
+      assert.equal(out.authzFailed, false);
+      const pending = await deps.deliveries.pending("slack");
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0]!.text, "Today's catch:");
+      assert.deepEqual(
+        pending[0]!.attachments?.map((a) => a.name),
+        ["1_tweet.png", "2_tweet.png"],
+      );
+    }));
 
-  it("an attachments-only fire (no reply text) still delivers, as a file-only post", async () => {
-    const files = [{ name: "chart.png", mimetype: "image/png", sizeBytes: 9, blobId: "b3" }];
-    const deps = triggerDeps(async () => ({ status: "ok", attachments: files }));
-    const destination: Destination = {
-      type: "slack",
-      target: "D-carol:1783.2",
-      audienceScopeId: scopeId("personal", "U-carol"),
-    };
-    const out = await runTrigger(deps, {
-      owner: "U-carol",
-      ownerScopeId: scopeId("personal", "U-carol"),
-      input: "chart only",
-      fireKey: "cron:digest2:slot",
-      surface: "cron",
-      destination,
-    });
-    assert.equal(out.authzFailed, false);
-    assert.equal(out.note, undefined, "an attachments-only success is not 'produced no reply'");
-    const pending = await deps.deliveries.pending("slack");
-    assert.equal(pending.length, 1);
-    assert.equal(pending[0]!.text, "");
-    assert.equal(pending[0]!.attachments?.length, 1);
-  });
+  it("an attachments-only fire (no reply text) still delivers, as a file-only post", () =>
+    inTestTenant(async () => {
+      const files = [{ name: "chart.png", mimetype: "image/png", sizeBytes: 9, blobId: "b3" }];
+      const deps = triggerDeps(async () => ({ status: "ok", attachments: files }));
+      const destination: Destination = {
+        type: "slack",
+        target: "D-carol:1783.2",
+        audienceScopeId: scopeId("personal", "U-carol"),
+      };
+      const out = await runTrigger(deps, {
+        owner: "U-carol",
+        ownerScopeId: scopeId("personal", "U-carol"),
+        input: "chart only",
+        fireKey: "cron:digest2:slot",
+        surface: "cron",
+        destination,
+      });
+      assert.equal(out.authzFailed, false);
+      assert.equal(out.note, undefined, "an attachments-only success is not 'produced no reply'");
+      const pending = await deps.deliveries.pending("slack");
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0]!.text, "");
+      assert.equal(pending[0]!.attachments?.length, 1);
+    }));
 
-  it("a channel cron whose output is composed from the channel delivers unprefixed", async () => {
-    const deps = triggerDeps(async () => ({ status: "ok", reply: "standup posted" }));
-    const destination: Destination = { type: "slack", target: "C-eng", audienceScopeId: scopeId("channel", "C-eng") };
-    const out = await runTrigger(deps, {
-      owner: "U-carol",
-      ownerScopeId: scopeId("channel", "C-eng"),
-      input: "post the standup",
-      fireKey: "cron:ch1:slot",
-      surface: "cron",
-      destination,
-    });
-    assert.equal(out.authzFailed, false);
-    const pending = await deps.deliveries.pending("slack");
-    assert.equal(pending[0]!.text, "standup posted");
-  });
+  it("a channel cron whose output is composed from the channel delivers unprefixed", () =>
+    inTestTenant(async () => {
+      const deps = triggerDeps(async () => ({ status: "ok", reply: "standup posted" }));
+      const destination: Destination = { type: "slack", target: "C-eng", audienceScopeId: scopeId("channel", "C-eng") };
+      const out = await runTrigger(deps, {
+        owner: "U-carol",
+        ownerScopeId: scopeId("channel", "C-eng"),
+        input: "post the standup",
+        fireKey: "cron:ch1:slot",
+        surface: "cron",
+        destination,
+      });
+      assert.equal(out.authzFailed, false);
+      const pending = await deps.deliveries.pending("slack");
+      assert.equal(pending[0]!.text, "standup posted");
+    }));
 });
