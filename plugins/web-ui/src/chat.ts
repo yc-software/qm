@@ -180,6 +180,7 @@ import {
   replacePendingSession,
   groupDmTitle,
   refreshSessions,
+  refreshSubagentRows,
   renderList,
   sessionsState,
   sessionSlackUrl,
@@ -805,6 +806,7 @@ export function createChatSurface(
   });
 
   function dispose(): void {
+    syncSubagentRowsRefresh(null);
     redrawHooks.delete(redrawForConnector);
     stopAvatarWatch();
     stopPrefsWatch();
@@ -2722,12 +2724,15 @@ export function createChatSurface(
 
   const swarmUi = createSwarmStrip(() => drawActiveChat());
   const SUBAGENT_ACK_KEY = "qm.subagentAck";
+  const SUBAGENT_POLL_MS = 4000;
   const subagentUi = {
     expanded: false,
     peekId: null as string | null,
     peek: null as PeekLine[] | null,
     ticking: false,
     timer: null as ReturnType<typeof setInterval> | null,
+    rowsRoot: null as string | null,
+    rowsTimer: null as ReturnType<typeof setInterval> | null,
     approvals: new Map<string, PendingApproval[]>(),
     approvalsKey: "",
     acknowledged: new Set<string>(
@@ -2740,6 +2745,13 @@ export function createChatSurface(
       })(),
     ),
   };
+
+  function syncSubagentRowsRefresh(rootId: string | null): void {
+    if (subagentUi.rowsRoot === rootId) return;
+    if (subagentUi.rowsTimer) clearInterval(subagentUi.rowsTimer);
+    subagentUi.rowsTimer = rootId ? setInterval(() => void refreshSubagentRows(rootId), SUBAGENT_POLL_MS) : null;
+    subagentUi.rowsRoot = rootId;
+  }
 
   function stopSubagentPeek(): void {
     if (subagentUi.timer) clearInterval(subagentUi.timer);
@@ -2762,7 +2774,7 @@ export function createChatSurface(
     if (same) return drawActiveChat();
     subagentUi.peekId = id;
     void refreshSubagentPeek(id);
-    if (row.state === "working") subagentUi.timer = setInterval(() => void refreshSubagentPeek(id), 4000);
+    if (row.state === "working") subagentUi.timer = setInterval(() => void refreshSubagentPeek(id), SUBAGENT_POLL_MS);
     drawActiveChat();
   }
 
@@ -2886,8 +2898,12 @@ export function createChatSurface(
 
   function subagentStrip(): TemplateResult | typeof nothing {
     const rootId = chatState.sessionId;
-    if (!rootId) return nothing;
+    if (!rootId) {
+      syncSubagentRowsRefresh(null);
+      return nothing;
+    }
     const rows = visibleSubagents(subagentRows(sessionsState.list, rootId), subagentUi.acknowledged);
+    syncSubagentRowsRefresh(rows.some((row) => row.state === "working") ? rootId : null);
     if (subagentUi.peekId && !rows.some((row) => row.session.id === subagentUi.peekId)) stopSubagentPeek();
     syncSubagentApprovals(rows);
     subagentUi.ticking = rows.some((row) => row.state === "working" || row.state === "waiting");
