@@ -77,7 +77,7 @@ for (const backend of ["memory", "postgres"] as const) {
 }
 
 test(
-  "a postgres append holds the lease and writes in five statements, and concurrent appends keep distinct sequences",
+  "a tenant-bound postgres append holds the lease and writes in six statements, and concurrent appends keep distinct sequences",
   { skip: !process.env.DATABASE_URL },
   async () => {
     const store = createPostgresSessionStore(process.env.DATABASE_URL!);
@@ -97,7 +97,7 @@ test(
     } finally {
       pg.Client.prototype.query = query;
     }
-    assert.equal(statements, 5);
+    assert.equal(statements, 6);
     const appended = await Promise.all(
       Array.from({ length: 8 }, (_, i) =>
         store.append(lease, { type: "assistant", payload: { text: `parallel ${i}` }, scopeLabel: scope }),
