@@ -101,7 +101,7 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
   };
   const { run } = await inTestTenant(() => runs.enqueue({ sessionId: threadRef, request, maxAttempts: 1 }));
 
-  const claimed = await runs.claimById(run.id, "w1", leaseTtlMs);
+  const claimed = await inTestTenant(() => runs.claimById(run.id, "w1", leaseTtlMs));
   assert.ok(claimed, "claimed for processing");
   await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs }, claimed!), /boom/);
 

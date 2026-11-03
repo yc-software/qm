@@ -12,8 +12,8 @@ const room = scopeId("channel", "C1");
 beforeEach(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations, team_rooms, team_members, teams CASCADE");
+  const p = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
+  await p.query("TRUNCATE team_rooms, team_members, teams CASCADE");
   await p.end();
 });
 
@@ -57,7 +57,7 @@ test("pg teams: removing a team removes its members and rooms", { skip }, () =>
     assert.deepEqual(await teams.list(), []);
     assert.deepEqual(await teams.forTurn(room, ["ann@x.com"]), []);
     const pg = (await import("pg")).default;
-    const p = new pg.Pool({ connectionString: URL });
+    const p = new pg.Pool({ connectionString: process.env.DATABASE_OWNER_URL });
     const { rows } = await p.query(
       "SELECT (SELECT count(*) FROM team_members)::int + (SELECT count(*) FROM team_rooms)::int AS n",
     );
