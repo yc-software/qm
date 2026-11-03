@@ -88,9 +88,14 @@ describe("request ingress", () => {
     assert.deepEqual(await tenantSeenBy({ [CAPABILITY_HEADER]: "garbage" }), { seen: "rejected", status: 401 });
   });
 
-  it("lets listed routes in unbound so they can resolve their own tenant", async () => {
+  it("lets listed routes in unbound so they can resolve their own tenant, binding any verified one", async () => {
     assert.deepEqual(await tenantSeenBy({}, { auth: "public", tenant: "none" }), { seen: undefined, status: 200 });
+    assert.deepEqual(await tenantSeenBy({}, { auth: "source", tenant: "row" }), { seen: undefined, status: 200 });
     assert.deepEqual(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, { auth: "source", tenant: "row" }), {
+      seen: TENANT_A,
+      status: 200,
+    });
+    assert.deepEqual(await tenantSeenBy({ [TENANT_HEADER]: TENANT_A }, { auth: "public", tenant: "row" }), {
       seen: undefined,
       status: 200,
     });

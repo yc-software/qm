@@ -4,6 +4,7 @@ import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
+import { testTenantHeaders } from "./support/test-tenants.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;
@@ -24,7 +25,7 @@ test("/d/ proxy serves the warming page to a browser navigation when the deploym
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     const res = await fetch(`${base}/d/some-id/`, {
-      headers: { accept: "text/html,application/xhtml+xml", "sec-fetch-dest": "document" },
+      headers: { ...testTenantHeaders(), accept: "text/html,application/xhtml+xml", "sec-fetch-dest": "document" },
     });
     assert.equal(res.status, 503);
     assert.match(String(res.headers.get("content-type")), /text\/html/);
@@ -49,7 +50,7 @@ test("/d/ proxy serves the warming page to a browser navigation when the deploym
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const res = await fetch(`${base}/d/some-id/`, { headers: { accept: "text/html" } });
+    const res = await fetch(`${base}/d/some-id/`, { headers: { ...testTenantHeaders(), accept: "text/html" } });
     assert.equal(res.status, 503);
     assert.match(await res.text(), /starting up/i);
   } finally {
@@ -71,13 +72,15 @@ test("/d/ proxy keeps JSON gateway errors for non-document requests", async () =
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const apiRes = await fetch(`${base}/d/some-id/api/data`, { headers: { accept: "application/json" } });
+    const apiRes = await fetch(`${base}/d/some-id/api/data`, {
+      headers: { ...testTenantHeaders(), accept: "application/json" },
+    });
     assert.equal(apiRes.status, 504);
     assert.equal(((await apiRes.json()) as { error?: string }).error, "gateway_timeout");
 
     const postRes = await fetch(`${base}/d/some-id/`, {
       method: "POST",
-      headers: { accept: "text/html", "content-type": "text/plain", "content-length": "2" },
+      headers: { ...testTenantHeaders(), accept: "text/html", "content-type": "text/plain", "content-length": "2" },
       body: "hi",
     });
     assert.equal(postRes.status, 504);
@@ -104,10 +107,10 @@ test("a recently-healthy upstream keeps the full dial timeout for slow pages", a
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const first = await fetch(`${base}/d/some-id/`, { headers: { accept: "text/html" } });
+    const first = await fetch(`${base}/d/some-id/`, { headers: { ...testTenantHeaders(), accept: "text/html" } });
     assert.equal(await first.text(), "fast-ok");
     slow = true;
-    const second = await fetch(`${base}/d/some-id/`, { headers: { accept: "text/html" } });
+    const second = await fetch(`${base}/d/some-id/`, { headers: { ...testTenantHeaders(), accept: "text/html" } });
     assert.equal(second.status, 200);
     assert.equal(await second.text(), "slow-ok");
   } finally {

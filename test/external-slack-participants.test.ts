@@ -140,7 +140,7 @@ test("admin resource: org-only PUT, read-back, and the surface-config echo", asy
     const read = await fetch(`${base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
     assert.equal(((await read.json()) as { externalSlackParticipants?: boolean }).externalSlackParticipants, true);
 
-    const surf = await fetch(`${base}/v1/surface-config`);
+    const surf = await fetch(`${base}/v1/surface-config`, { headers: testTenantHeaders() });
     assert.equal(((await surf.json()) as { externalSlackParticipants?: boolean }).externalSlackParticipants, true);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));

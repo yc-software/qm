@@ -13,6 +13,7 @@ import { flushErrorReporting, initializeErrorReporting } from "../plugins/chassi
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testTenantHeaders } from "./support/test-tenants.ts";
 import { withTraceCarrier } from "../src/runs/run-store.ts";
 
 const captured: Record<string, any>[] = [];
@@ -51,7 +52,7 @@ test("core requests are named by route template and carry no URL, query or heade
   try {
     await fetch(`${base}/healthz`);
     await fetch(`${base}/v1/sessions/private-session-id?token=private-token`, {
-      headers: { "x-qm-signature": "private-signature", cookie: "private-cookie" },
+      headers: { ...testTenantHeaders(), "x-qm-signature": "private-signature", cookie: "private-cookie" },
     });
     await fetch(`${base}/v1/no-such-route/private-segment-9f3a/deep`, { method: "POST" });
     const coreRequests = () =>

@@ -12,6 +12,7 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { inTestTenant } from "./support/test-tenants.ts";
 
 const secret = "file-upload-test-secret".repeat(3);
 const personal = scopeId("personal", "U1");
@@ -61,7 +62,9 @@ const fake: DirectFileUploads = {
   async stop() {},
 };
 const token = (actorId: string, scope = personal) =>
-  mintCapabilityToken({ actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 }, secret);
+  inTestTenant(() =>
+    mintCapabilityToken({ actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + 60_000 }, secret),
+  );
 const call = async (path: string, cap?: string, method = "GET", body?: unknown) =>
   fetch(base + path, {
     method,

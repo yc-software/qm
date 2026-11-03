@@ -46,9 +46,9 @@ export async function withRequestTenant(
   capabilitySecret: string | undefined,
   next: () => Promise<void> | void,
 ): Promise<void> {
-  if (!route || route.tenant) return next();
-  const tenant = await claimedTenant(req, route.auth, capabilitySecret);
+  const tenant = await claimedTenant(req, route?.auth, capabilitySecret);
   if (tenant) return withTenant(tenant, next);
+  if (!route || route.tenant) return next();
   sendJson(res, 401, { error: "unauthorized", message: "this request carries no verifiable tenant" });
   req.resume();
 }
