@@ -271,6 +271,32 @@ test("a tenant never reads or overwrites another tenant's configuration", { skip
   });
 });
 
+test("a loaded store refuses unbound reads and writes instead of answering from its cache", { skip }, async () => {
+  await withConfigDb(async ({ tenant, store }) => {
+    const config = await store(tenant);
+    await withTenant(tenant, async () => {
+      await config.setExternalSlackParticipants(org, true);
+      await config.setWebuiModels(org, ["gpt-5.5"]);
+      await config.setBaseModel(org, "gpt-5.5");
+      await config.setBranding(org, { orgName: "Mine" });
+    });
+    await withoutTenant(async () => {
+      assert.throws(() => config.getExternalSlackParticipants(org), /No tenant is bound/);
+      assert.throws(() => config.getWebuiModels(org), /No tenant is bound/);
+      assert.throws(() => config.getBranding(org), /No tenant is bound/);
+      for (const read of [
+        () => config.getExternalSlackParticipantsDurable(org),
+        () => config.getWebuiModelsDurable(org),
+        () => config.getBaseModelDurable(org),
+        () => config.getBrandingDurable(org),
+        () => config.setBranding(org, { orgName: "Unbound" }),
+      ]) {
+        await assert.rejects(read, /No tenant is bound/);
+      }
+    });
+  });
+});
+
 test("a tenant added after boot loads its configuration on first use", { skip }, async () => {
   await withConfigDb(async ({ tenant, otherTenant, store }) => {
     const config = await store(tenant);

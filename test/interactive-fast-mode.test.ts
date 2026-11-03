@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "./support/test-tenants.ts";
 import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
 import { resolveTurnFastMode } from "../src/core/turn-options.ts";
