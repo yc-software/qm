@@ -2491,10 +2491,8 @@ export function buildApp(
   orchestratorDeps.surfaceCache = surfaceCache;
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
   const runTriggered = async (req: TurnRequest): Promise<TurnResult> => {
-    const slackSource =
-      !req.slackSource && (await sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
-        ? (await runs.latestForThread(req.conversation.threadRef))?.request.slackSource
-        : undefined;
+    const session = req.slackSource ? undefined : await sessions.getByThread(req.conversation.threadRef);
+    const slackSource = session?.surface === "slack" ? session.slackBinding : undefined;
     return app.turn(slackSource ? { ...req, slackSource } : req);
   };
   const askResolution = keychain

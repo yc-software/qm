@@ -17,7 +17,12 @@ import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
-import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
+import {
+  requiresDelegation,
+  delegatedAuthorizationOrigin,
+  ownsSessionContext,
+  sessionContextOf,
+} from "../sessions/session-syscalls.ts";
 import {
   documentText,
   type DocumentInput,
@@ -1166,6 +1171,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         conversation.channelName,
         input.surface,
         desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
+        {
+          ...(input.slackSource ? { slackBinding: input.slackSource } : {}),
+          ...(ownsSessionContext(conversation.threadRef, input) ? { context: sessionContextOf(input) } : {}),
+        },
       );
       screenSession.id = session.id;
       const origin = await originOf(session);
@@ -3701,6 +3710,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
+        if (turnRuntime) await deps.sessions.setRuntime(session.id, turnRuntime);
         await fallbackTitleWrite;
 
         tailOwnsCleanup = true;

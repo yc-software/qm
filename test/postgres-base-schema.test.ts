@@ -53,8 +53,10 @@ test("a fully migrated database skips the base schema and drops only the retired
       id TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
     await admin.query(`INSERT INTO qm_schema_migrations(id, checksum) VALUES
       ('sessions/store/0046-spend-days-cron-rebuild', 'x'), ('runs/store/0010-drop-turn-metrics', 'x')`);
-    await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY)");
-    await admin.query("CREATE TABLE runs(id TEXT PRIMARY KEY)");
+    await admin.query("CREATE TABLE sessions(id TEXT PRIMARY KEY, thread_ref TEXT, spawn_meta TEXT)");
+    await admin.query(
+      "CREATE TABLE runs(id TEXT PRIMARY KEY, session_id TEXT, request TEXT, result TEXT, created_at BIGINT, seq BIGINT)",
+    );
     await admin.query("CREATE EXTENSION IF NOT EXISTS btree_gin");
     await admin.query(`CREATE TABLE items(seq BIGINT, tenant_id TEXT, kind TEXT, variant TEXT, text TEXT,
       search TSVECTOR, target_seq BIGINT,

@@ -404,16 +404,15 @@ END $base_schema$`,
       return rowCount > 0;
     },
 
-    async latestForThreads(threadRefs, opts) {
+    async activeForThreads(threadRefs) {
       if (!threadRefs.length) return new Map();
       const { rows } = await q(
-        `SELECT latest.* FROM unnest($1::text[]) AS threads(id)
+        `SELECT current.* FROM unnest($1::text[]) AS threads(id)
          CROSS JOIN LATERAL (
-           SELECT * FROM runs WHERE session_id = threads.id
-           AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true')
-           ORDER BY created_at DESC, seq DESC LIMIT 1
-         ) latest`,
-        [[...new Set(threadRefs)], Boolean(opts?.excludePrivateMessages)],
+           SELECT * FROM runs WHERE session_id = threads.id AND status IN ('pending', 'running')
+           ORDER BY status = 'running' DESC, created_at ASC, seq ASC LIMIT 1
+         ) current`,
+        [[...new Set(threadRefs)]],
       );
       return new Map(
         rows.map((row) => {
@@ -421,13 +420,6 @@ END $base_schema$`,
           return [run.sessionId, run];
         }),
       );
-    },
-    async latestForThread(threadRef, opts) {
-      const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND (NOT $2::boolean OR COALESCE(request::jsonb->>'privateSessionMessage', 'false') <> 'true') ORDER BY created_at DESC, seq DESC LIMIT 1",
-        [threadRef, Boolean(opts?.excludePrivateMessages)],
-      );
-      return rows[0] ? rowToRun(rows[0]) : null;
     },
     async pendingReturns(limit = 100, afterId = "") {
       const { rows } = await q(
@@ -471,11 +463,7 @@ END $base_schema$`,
     get: getRun,
 
     async activeForThread(sessionId: string): Promise<Run | null> {
-      const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY (status = 'running') DESC, created_at ASC, seq ASC LIMIT 1",
-        [sessionId],
-      );
-      return rows[0] ? rowToRun(rows[0]) : null;
+      return (await runs.activeForThreads([sessionId])).get(sessionId) ?? null;
     },
 
     async inFlightForThread(sessionId: string): Promise<Run[]> {
@@ -538,10 +526,10 @@ END $base_schema$`,
     async list({ limit = 200, threadRef }: { limit?: number; threadRef?: string } = {}): Promise<Run[]> {
       const { rows } = threadRef
         ? await q(
-            "SELECT * FROM runs WHERE session_id = $1 OR starts_with(session_id, $1 || ':task:') OR starts_with(session_id, $1 || ':status:') ORDER BY created_at DESC LIMIT $2",
+            "SELECT * FROM runs WHERE session_id = $1 OR starts_with(session_id, $1 || ':task:') OR starts_with(session_id, $1 || ':status:') ORDER BY created_at DESC, seq DESC LIMIT $2",
             [threadRef, limit],
           )
-        : await q("SELECT * FROM runs ORDER BY created_at DESC LIMIT $1", [limit]);
+        : await q("SELECT * FROM runs ORDER BY created_at DESC, seq DESC LIMIT $1", [limit]);
       return rows.map(rowToRun);
     },
 
