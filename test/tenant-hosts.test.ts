@@ -104,6 +104,13 @@ describe("host routing", { skip }, () => {
     assert.equal(await seen({ host: "b.example.test", "x-qm-tenant": a }), 403);
   });
 
+  it("refuses a capability token whose tenant disagrees with the portal's tenant header", async () => {
+    const tokenA = await withTenant(a, () => mintCapabilityToken(claims, SECRET));
+    assert.equal(await seen({ host: "core.internal", [CAPABILITY_HEADER]: tokenA, "x-qm-tenant": b }), 400);
+    assert.equal(await seen({ host: "a.example.test", [CAPABILITY_HEADER]: tokenA, "x-qm-tenant": b }), 400);
+    assert.deepEqual(await seen({ host: "core.internal", [CAPABILITY_HEADER]: tokenA, "x-qm-tenant": a }), [1]);
+  });
+
   it("refuses an unknown host once hosts are mapped, but lets verified credentials and probes through", async () => {
     assert.equal(await seen({ host: "stranger.example.test" }), 421);
     assert.equal(await seen({ host: "stranger.example.test" }, { auth: "public" }), 421);
