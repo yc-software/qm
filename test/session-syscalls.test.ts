@@ -285,6 +285,123 @@ test("write queues separately from a running child and interrupts explicitly", a
   assert.ok(rerun.some((run) => /check it again/.test(run.request.text)));
 });
 
+async function runningChild(r: Rig, parent: Session, task: string) {
+  const opened = await r.syscallsFor(parent).open({ task });
+  assert.ok(opened.ok);
+  const session = await freshSession(r.sessions, opened.sessionId);
+  const run = (await r.runs.inFlightForThread(session.threadRef))[0]!;
+  const claimed = await r.runs.claimById(run.id, "worker", 60_000);
+  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session,
+    scopeId: scope,
+    request: { ...run.request, runId: run.id },
+  });
+  return { session, run, leaseToken: claimed!.leaseToken!, api };
+}
+
+test("an interrupt stops only its target's run; the target's own subagent keeps working and reports back", async () => {
+  const r = await rig();
+  const lead = await runningChild(r, r.room, "lead the work");
+  const opened = await lead.api.open({ task: "one lane" });
+  assert.ok(opened.ok);
+  const laneSession = await freshSession(r.sessions, opened.sessionId);
+  const laneRun = (await r.runs.inFlightForThread(laneSession.threadRef))[0]!;
+  const laneClaim = await r.runs.claimById(laneRun.id, "worker", 60_000);
+  const lane = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: laneSession,
+    scopeId: scope,
+    request: { ...laneRun.request, runId: laneRun.id },
+  });
+
+  const interrupted = await r.syscallsFor(r.room).write({ target: lead.session.id, interrupt: true });
+  assert.ok(interrupted.ok);
+  assert.equal(interrupted.delivered, "interrupted");
+  assert.equal((await r.signals.pending(lead.run.id))[0]!.signal.kind, "abort");
+  assert.deepEqual(await r.signals.pending(laneRun.id), []);
+  assert.equal((await r.runs.get(laneRun.id))!.status, "running");
+  assert.ok((await lane.read({})).ok);
+
+  await r.runs.complete(laneRun.id, laneClaim!.leaseToken!, { status: "ok", reply: "lane finished" });
+  assert.equal(await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(laneRun.id))!), true);
+  const [mail] = await r.mailbox.pending(lead.session.id);
+  assert.match(mail!.text, /lane finished/);
+});
+
+test("an interrupt with text makes that text the target's next turn, even when its stopped run held the last slot", async () => {
+  const r = await rig({ treeRunCap: 1 });
+  const child = await runningChild(r, r.room, "watch the deploy");
+  const out = await r
+    .syscallsFor(r.room)
+    .write({ target: child.session.id, interrupt: true, text: "check the canary" });
+  assert.ok(out.ok);
+  assert.equal(out.delivered, "interrupted");
+  assert.equal((await r.signals.pending(child.run.id))[0]!.signal.kind, "abort");
+  await r.runs.complete(child.run.id, child.leaseToken, { status: "ok", reply: "", stopped: true });
+  const [next] = await r.runs.inFlightForThread(child.session.threadRef);
+  assert.match(next!.request.text, /check the canary/);
+  assert.equal(next!.request.delegatingRunId, undefined);
+  assert.equal(next!.request.sessionSenderId, r.room.id);
+
+  const replaced = await r.syscallsFor(r.room).write({
+    target: child.session.id,
+    interrupt: true,
+    text: "only the logs",
+  });
+  assert.ok(replaced.ok);
+  assert.equal(replaced.delivered, "interrupted");
+  const queued = await r.runs.inFlightForThread(child.session.threadRef);
+  assert.deepEqual(
+    queued.map((run) => run.request.displayText),
+    ["only the logs"],
+  );
+});
+
+test("a subagent's wake starts a turn in its top-level parent, or leaves mail while the parent is busy", async () => {
+  const r = await rig();
+  const child = await runningChild(r, r.room, "investigate");
+  const asked = await child.api.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+  assert.ok(asked.ok);
+  assert.deepEqual([asked.delivered, asked.busy], ["queued_turn", false]);
+  const wakes = await r.runs.inFlightForThread(r.room.threadRef);
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0]!.request.sessionSenderId, child.session.id);
+  assert.equal(wakes[0]!.request.actor.id, actor.id);
+  assert.equal(wakes[0]!.request.readOnly, undefined);
+  assert.equal(wakes[0]!.request.privateSessionMessage, undefined);
+  assert.equal(wakes[0]!.request.conversation.threadRef, r.room.threadRef);
+  const [mail] = await r.mailbox.pending(r.room.id);
+  assert.match(mail!.text, /which region\?/);
+
+  const retried = await child.api.write({ target: "parent", wake: true, text: "which region?", requestId: "q1" });
+  assert.ok(retried.ok);
+  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 1);
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
+
+  const again = await child.api.write({ target: "parent", wake: true, text: "also: which account?" });
+  assert.ok(again.ok);
+  assert.deepEqual([again.delivered, again.busy], ["queued_message", true]);
+  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 1);
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 2);
+});
+
+test("a subagent cannot start a turn in a top-level conversation that is not its own parent", async () => {
+  const r = await rig();
+  const child = await runningChild(r, r.room, "lead");
+  const grandchild = await runningChild(r, child.session, "lane");
+  const out = await grandchild.api.write({ target: r.room.id, wake: true, text: "skip the lead" });
+  assert.ok(out.ok);
+  assert.equal(out.delivered, "queued_message");
+  assert.match(out.notWoken ?? "", /top-level conversation/);
+  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
+  const ordinary = await r.sessions.getOrCreateByThread("web:U1:other", "dm", scope, undefined, "web");
+  await r.sessions.addParticipant(ordinary.id, actor.id);
+  await recordContext(r.sessions, ordinary, { actor, conversation, surface: "web" });
+  const stranger = await child.api.write({ target: ordinary.id, wake: true, text: "hello" });
+  assert.ok(stranger.ok);
+  assert.equal(stranger.delivered, "queued_message");
+  assert.equal((await r.runs.inFlightForThread(ordinary.threadRef)).length, 0);
+});
+
 test("write refuses self, cross-scope, and nonparticipant targets", async () => {
   const r = await rig();
   const syscalls = r.syscallsFor(r.room);

@@ -2020,11 +2020,13 @@ export function buildApp(
     refreshModels,
   };
   const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId"]));
+  const delegationEnabled = (actorId: string) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId));
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
+    delegationEnabled,
     enabled: async (actorId) =>
       (await featureFlags.enabled("persistent_subagents", scopeId("personal", actorId))) ||
-      (await featureFlags.enabled("responsive_spine", scopeId("personal", actorId))),
+      (await delegationEnabled(actorId)),
     sessions,
     runs,
     signals: runSignals,
@@ -2415,7 +2417,7 @@ export function buildApp(
             maxAttempts,
             mailbox: sessionMailbox,
             prepareRequest: prepareSessionRequest,
-            delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
+            delegationEnabled,
             deliveries,
             signals: runSignals,
           },
