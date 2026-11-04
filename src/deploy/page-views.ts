@@ -66,7 +66,7 @@ export function createPostgresAppPageViewLog(connectionString: string): AppPageV
       ],
     },
     ...tenantTables("deploy/app-page-views/0002-tenants", [{ table: "app_page_views", primaryKey: "id" }]),
-    durableMapTenancy("deployments"),
+    ...durableMapTenancy("deployments"),
     {
       id: "durable-map/deployments/0012-page-views-tenants",
       statements: [

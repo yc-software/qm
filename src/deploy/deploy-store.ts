@@ -197,7 +197,7 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
     ...TENANCY,
     preKeyed,
     migration,
-    durableMapTenancy("deployments"),
+    ...durableMapTenancy("deployments"),
     ...ACCESS_TENANCY,
     NAME_LOOKUP,
   ];
