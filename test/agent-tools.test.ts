@@ -15,7 +15,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { scopeId, type ClientToolDeclaration } from "../src/types.ts";
+import { scopeId, type ChildIsolation, type ClientToolDeclaration } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
 import { connectorToolsNote, deferredMcpTools } from "../src/agent/deferred-tools.ts";
@@ -3299,6 +3299,38 @@ test("subagents open exposes noComputer and preserves the internal restriction",
     assert.equal(opened.at(-1)!.readOnly, noComputer);
   }
   assert.equal(opened.length, 3);
+});
+
+test("subagents open forwards isolation and reports where the child works", async () => {
+  const opened: Array<{ isolation?: string }> = [];
+  const placement: ChildIsolation = { mode: "worktree", workdir: "subagents/fix-1", branch: "subagent/fix-1" };
+  const tc = fakeToolContext();
+  tc.sessionSyscalls = {
+    open: async (input) => {
+      opened.push(input);
+      return { ok: true, sessionId: "child", title: "child", ...(input.isolation ? { isolation: placement } : {}) };
+    },
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async () => ({
+      ok: true,
+      mode: "children",
+      children: [
+        { sessionId: "child", title: "child", status: "idle", isolation: placement },
+        { sessionId: "other", title: "other", status: "idle" },
+      ],
+    }),
+  };
+  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents");
+  assert.ok(session);
+  assert.ok(!Check(session.parameters, { action: "open", task: "test", isolation: "container" }));
+  assert.doesNotMatch(textOut(await call(session, { action: "open", task: "test" })), /subagents\/fix-1/);
+  assert.equal(opened.at(-1)?.isolation, undefined);
+  const out = textOut(await call(session, { action: "open", task: "test", isolation: "worktree" }));
+  assert.equal(opened.at(-1)?.isolation, "worktree");
+  assert.ok(out.includes("subagents/fix-1") && out.includes("subagent/fix-1"));
+  const [child, other] = textOut(await call(session, { action: "read" })).split("\n");
+  assert.ok(child?.includes("subagents/fix-1"));
+  assert.equal(other, "- other (other) — idle");
 });
 
 test("subagents open schema and dispatch preserve an explicit false fast mode", async () => {

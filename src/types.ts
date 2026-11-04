@@ -84,6 +84,23 @@ export interface SurfaceBriefing {
   instructions?: string;
 }
 
+export type ChildIsolationMode = "shared" | "worktree" | "sandbox";
+
+export interface ChildWorkdir {
+  workdir: string;
+  branch: string;
+  base?: string;
+}
+
+export interface ChildIsolation {
+  mode: ChildIsolationMode;
+  sandboxId?: string;
+  workdir?: string;
+  branch?: string;
+  base?: string;
+  baseChain?: ChildWorkdir[];
+}
+
 export interface SpawnMeta {
   surfaceOrigin?: TurnSurfaceOrigin;
   surfaceTools?: boolean;
@@ -103,6 +120,7 @@ export interface SpawnMeta {
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
+  isolation?: ChildIsolation;
 }
 
 export interface Session {

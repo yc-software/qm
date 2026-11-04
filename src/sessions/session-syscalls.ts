@@ -10,7 +10,17 @@ import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
-import type { Principal, ScopeId, Session, SpawnMeta, StopScope, TurnOrigin } from "../types.ts";
+import type {
+  ChildIsolation,
+  ChildIsolationMode,
+  Principal,
+  ScopeId,
+  Session,
+  SpawnMeta,
+  StopScope,
+  TurnOrigin,
+} from "../types.ts";
+import { childIsolation } from "./child-isolation.ts";
 import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
@@ -168,9 +178,11 @@ export interface SessionOpenInput {
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
+  isolation?: ChildIsolationMode;
 }
 
-type SessionOpenResult = { ok: true; sessionId: string; title: string } | { ok: false; message: string };
+type SessionOpenResult =
+  { ok: true; sessionId: string; title: string; isolation?: ChildIsolation } | { ok: false; message: string };
 
 interface SessionWriteInput {
   target: string;
@@ -206,6 +218,7 @@ interface SessionChildSummary {
   title: string;
   status: SessionStatus;
   lastSaid?: string;
+  isolation?: ChildIsolation;
 }
 
 interface SessionStartInput {
@@ -744,7 +757,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (existing?.spawnMeta?.openFingerprint && existing.spawnMeta.openFingerprint !== fingerprint)
                 throw new Error("the requestId was already used for different work");
               const initialRun = await deps.runs.getByDedupKey(`subagent-open:${threadRef}`);
-              if (existing && initialRun) return { ok: true, sessionId: existing.id, title: visibleTitle(existing) };
+              if (existing && initialRun)
+                return {
+                  ok: true,
+                  sessionId: existing.id,
+                  title: visibleTitle(existing),
+                  ...(existing.spawnMeta?.isolation ? { isolation: existing.spawnMeta.isolation } : {}),
+                };
               const runtime =
                 existing?.spawnMeta ??
                 (await openRuntime(
@@ -763,13 +782,23 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 binding.session.surface ?? binding.request.surface,
               );
               const title = existing ? visibleTitle(existing) : input.name?.trim() || autoTitle(task);
+              const readOnly = input.readOnly || binding.request.readOnly;
+              const isolation = existing?.spawnMeta
+                ? existing.spawnMeta.isolation
+                : childIsolation({
+                    requested: input.isolation,
+                    parent: binding.session.spawnMeta?.isolation,
+                    childId: child.id,
+                    title,
+                    readOnly,
+                  });
               const meta: SpawnMeta = {
                 ...sessionContextOf({
                   ...binding.request,
                   surface: binding.request.surface ?? binding.session.surface ?? "web",
                   origin: caller.origin,
                   unattendedGrants: caller.unattendedGrants,
-                  readOnly: input.readOnly || binding.request.readOnly,
+                  readOnly,
                   model: runtime.model,
                   thinkingLevel: runtime.thinkingLevel,
                   fastMode: runtime.fastMode,
@@ -778,6 +807,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 origin: caller.origin,
                 openFingerprint: fingerprint,
                 ...(binding.request.surfaceOrigin ? { surfaceOrigin: binding.request.surfaceOrigin } : {}),
+                ...(isolation ? { isolation } : {}),
               };
               if (!existing?.spawnMeta) {
                 await deps.sessions.setParentSession(child.id, binding.session.id);
@@ -801,7 +831,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 request: deps.prepareRequest ? await deps.prepareRequest(request) : request,
                 maxAttempts: deps.maxAttempts,
               });
-              return { ok: true, sessionId: child.id, title };
+              return { ok: true, sessionId: child.id, title, ...(isolation ? { isolation } : {}) };
             })
             .catch((error): SessionOpenResult => ({ ok: false, message: errMessage(error) }));
         },
@@ -992,6 +1022,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 title: visibleTitle(child),
                 status: await childStatusOf(child),
                 ...(said ? { lastSaid: snippet(said, 200) } : {}),
+                ...(child.spawnMeta?.isolation ? { isolation: child.spawnMeta.isolation } : {}),
               });
             }
             return { ok: true, mode: "children", children: summaries };
