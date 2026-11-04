@@ -244,7 +244,7 @@ export function createSmolmachinesSandbox(opts: SmolmachinesSandboxOptions): San
     if (!first.ok) {
       const detail = await httpFailure(first);
       if (first.status === 404) idByName.delete(name);
-      if (first.status !== 409 && first.status !== 404 && !/stopped|suspended/i.test(detail)) {
+      if (first.status !== 409 && first.status !== 404) {
         throw new Error(`smolmachines exec ${name}: ${detail}`);
       }
       const retryId = await machineIdFor(name);
