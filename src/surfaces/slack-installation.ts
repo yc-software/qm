@@ -1,4 +1,5 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
+import { tenantOrgId } from "../config.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { SLACK_AUTH_ERRORS } from "../slack/payloads.ts";
 
@@ -80,10 +81,11 @@ export interface SlackInstallationStore {
 }
 
 export function createSlackInstallationStore(
-  orgId: string,
+  fallbackOrgId: string,
   map: DurableMap<StoredSlackInstallation>,
   keyMaterial: Buffer | string,
 ): SlackInstallationStore {
+  const orgId = () => tenantOrgId(fallbackOrgId);
   const key = deriveConnectorKey(keyMaterial, "slack-installation");
   const publicStatus = (record: StoredSlackInstallation | null): SlackInstallationStatus =>
     record && !record.disabled
@@ -99,7 +101,7 @@ export function createSlackInstallationStore(
       : { configured: false, managed: record !== null };
   return {
     async get() {
-      const record = await map.get(orgId);
+      const record = await map.get(orgId());
       if (!record || record.disabled) return null;
       return {
         botToken: decryptSecret(record.botTokenEnc, key),
@@ -115,12 +117,12 @@ export function createSlackInstallationStore(
       };
     },
     async status() {
-      return publicStatus(await map.get(orgId));
+      return publicStatus(await map.get(orgId()));
     },
     async set(input) {
       const updatedAt = Date.now();
       const record: StoredSlackInstallation = {
-        orgId,
+        orgId: orgId(),
         disabled: false,
         serviceBlocked: true,
         botTokenEnc: encryptSecret(input.botToken, key),
@@ -133,8 +135,8 @@ export function createSlackInstallationStore(
         updatedBy: input.updatedBy,
         version: `${updatedAt}:${crypto.randomUUID()}`,
       };
-      await map.putIfAbsent(orgId, record);
-      const stored = await map.update(orgId, (current) => ({
+      await map.putIfAbsent(orgId(), record);
+      const stored = await map.update(orgId(), (current) => ({
         ...record,
         ...(current.installedAt !== undefined ? { installedAt: current.installedAt } : {}),
       }));
@@ -142,15 +144,15 @@ export function createSlackInstallationStore(
       return publicStatus(stored);
     },
     async setManaged(input) {
-      await map.putIfAbsent(orgId, {
-        orgId,
+      await map.putIfAbsent(orgId(), {
+        orgId: orgId(),
         disabled: true,
         updatedAt: 0,
         updatedBy: "slack-service",
         version: "initial",
       });
       let accepted = false;
-      await map.update(orgId, (record) => {
+      await map.update(orgId(), (record) => {
         if (record.serviceBlocked || (!record.disabled && !record.installId)) return record;
         if (!record.disabled && record.installId === input.installId) {
           accepted =
@@ -161,7 +163,7 @@ export function createSlackInstallationStore(
           return record;
         accepted = true;
         return {
-          orgId,
+          orgId: orgId(),
           disabled: false,
           botTokenEnc: encryptSecret(input.botToken, key),
           appId: input.appId,
@@ -178,7 +180,7 @@ export function createSlackInstallationStore(
     },
     async enableManaged() {
       let accepted = true;
-      await map.update(orgId, (record) => {
+      await map.update(orgId(), (record) => {
         if (!record.disabled && !record.installId) {
           accepted = false;
           return record;
@@ -189,11 +191,11 @@ export function createSlackInstallationStore(
     },
     async disableManaged(installId) {
       let disabled = false;
-      await map.update(orgId, (record) => {
+      await map.update(orgId(), (record) => {
         if (record.disabled || record.installId !== installId) return record;
         disabled = true;
         return {
-          orgId,
+          orgId: orgId(),
           disabled: true,
           installedAt: record.installedAt,
           updatedAt: Date.now(),
@@ -204,8 +206,8 @@ export function createSlackInstallationStore(
       return disabled;
     },
     async delete(updatedBy) {
-      const record = await map.update(orgId, (current) => ({
-        orgId,
+      const record = await map.update(orgId(), (current) => ({
+        orgId: orgId(),
         disabled: true,
         serviceBlocked: current.serviceBlocked || (!current.disabled && !current.installId),
         ...(current.installedAt ? { installedAt: current.installedAt } : {}),
@@ -215,8 +217,8 @@ export function createSlackInstallationStore(
       }));
       if (record) return;
       const updatedAt = Date.now();
-      await map.put(orgId, {
-        orgId,
+      await map.put(orgId(), {
+        orgId: orgId(),
         disabled: true,
         updatedAt,
         updatedBy,

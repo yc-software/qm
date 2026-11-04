@@ -51,14 +51,14 @@ export function createFeatureFlagStore(
   backing: DurableMap<FeatureFlagRecord>,
   opts: { now?: () => number } = {},
 ): FeatureFlagStore {
-  const orgScope = scopeId("org", configOrgId());
+  const orgScope = () => scopeId("org", configOrgId());
   const now = opts.now ?? Date.now;
   const key = (featureName: FeatureName) => featureName;
   const list = async () => (await backing.all()).filter((row) => FEATURE_NAMES.includes(row.featureName));
   const enabledFor = async (scope: ScopeId): Promise<ReadonlySet<FeatureName>> =>
     new Set(
       (await list())
-        .filter((row) => row.enabledScopes.includes(orgScope) || row.enabledScopes.includes(scope))
+        .filter((row) => row.enabledScopes.includes(orgScope()) || row.enabledScopes.includes(scope))
         .map((row) => row.featureName),
     );
   return {

@@ -46,9 +46,7 @@ const server = createServer(built.app, {
   managedSlack,
 });
 
-await built.config.hydrate?.();
-await built.refreshCustomProviders();
-await built.identity.refresh();
+await built.loadTenants();
 await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();

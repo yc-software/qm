@@ -12,3 +12,76 @@ export function currentTenant(): string {
   if (id === undefined) throw new Error("No tenant is bound to this work");
   return id;
 }
+
+interface SettledTenancy {
+  install: string;
+  sole: string | undefined;
+}
+
+let settled: SettledTenancy | undefined;
+
+export function registerTenants(install: string, sole: string | undefined): void {
+  settled = { install, sole };
+}
+
+export function soleTenantNow(): string | undefined {
+  return settled?.sole;
+}
+
+export function installTenantNow(): string | undefined {
+  return settled?.install;
+}
+
+export function unboundTenantAllowed(): boolean {
+  return !settled || soleTenantNow() !== undefined;
+}
+
+export function cacheTenant(): string {
+  const bound = boundTenant();
+  if (bound !== undefined) return bound;
+  const sole = soleTenantNow();
+  if (sole !== undefined) return sole;
+  if (unboundTenantAllowed()) return "";
+  throw new Error("No tenant is bound to this work");
+}
+
+export function withInstallTenant<T>(fn: () => T): T {
+  const install = installTenantNow();
+  return install === undefined ? fn() : withTenant(install, fn);
+}
+
+export function isInstallTenant(): boolean {
+  const install = installTenantNow();
+  return install === undefined || cacheTenant() === install;
+}
+
+export function perTenant<V>(create: () => V): () => V {
+  const values = new Map<string, V>();
+  return () => {
+    const id = cacheTenant();
+    const existing = values.get(id);
+    if (existing !== undefined) return existing;
+    const value = create();
+    values.set(id, value);
+    return value;
+  };
+}
+
+export interface TenantLoader {
+  load(): Promise<void>;
+}
+
+export function createTenantLoader(loaders: ReadonlyArray<() => Promise<unknown>>): TenantLoader {
+  const loads = new Map<string, Promise<void>>();
+  return {
+    load() {
+      const id = cacheTenant();
+      const existing = loads.get(id);
+      if (existing) return existing;
+      const run = Promise.all(loaders.map((loader) => loader())).then(() => undefined);
+      loads.set(id, run);
+      run.catch(() => loads.get(id) === run && loads.delete(id));
+      return run;
+    },
+  };
+}

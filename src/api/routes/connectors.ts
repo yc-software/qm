@@ -1,7 +1,7 @@
-import { withRowTenant } from "../tenant-ingress.ts";
+import { bindTenant, withRowTenant } from "../tenant-ingress.ts";
 import { getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
 import { GmailApiError } from "../../connectors/gmail-api.ts";
-import { orgId as configOrgId } from "../../config.ts";
+import { orgId } from "../../config.ts";
 import {
   authorizeUrl,
   exchangeCode,
@@ -27,7 +27,7 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
-import { tenantClaim, withTenant } from "../../tenants/context.ts";
+import { tenantClaim } from "../../tenants/context.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
@@ -157,7 +157,7 @@ async function finishOAuthCallback(ctx: BaseCtx): Promise<void> {
     return sendJson(res, 400, { error: "oauth_callback_failed", message: errMessage(e) });
   }
   const complete = () => completeOAuthCallback(ctx, connectorTokens, code, state);
-  return state.tenant ? withTenant(state.tenant, complete) : complete();
+  return state.tenant ? bindTenant(state.tenant, complete) : complete();
 }
 
 async function completeOAuthCallback(
@@ -170,7 +170,7 @@ async function completeOAuthCallback(
   const oauthRoute = parseOAuthRoute(pathname)!;
   try {
     if (state.provider !== oauthRoute.provider) throw new Error("OAuth provider mismatch");
-    if (state.orgId !== undefined && state.orgId !== configOrgId()) {
+    if (state.orgId !== undefined && state.orgId !== orgId()) {
       throw new Error("OAuth state is for a different org");
     }
     if (
@@ -188,7 +188,7 @@ async function completeOAuthCallback(
       ...(state.codeVerifier ? { codeVerifier: state.codeVerifier } : {}),
     });
     if (!token.accessToken) throw new Error("oauth exchange returned an empty access token");
-    const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: configOrgId() };
+    const stamped = { ...token, clientRef: client.clientRef, accountType, orgId: orgId() };
     for (const host of hosts) await connectorTokens.setConnectorToken(host, state.principalId, stamped, accountType);
     audit(deps, {
       principalId: state.principalId,
@@ -236,7 +236,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { status: peeked.reason === "expired" ? "expired" : "invalid" });
   }
   const rec = peeked.rec;
-  if (rec.orgId !== undefined && rec.orgId !== configOrgId()) return sendJson(res, 200, { status: "invalid" });
+  if (rec.orgId !== undefined && rec.orgId !== orgId()) return sendJson(res, 200, { status: "invalid" });
   if (!oauthProvider(rec.provider)) return sendJson(res, 200, { status: "invalid" });
   if (!samePerson(clicker, rec.principalId)) {
     const clickerConnected = await principalHasProvider(deps, rec.provider, clicker);
@@ -267,7 +267,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
       provider: rec.provider,
       principalId: rec.principalId,
       redirectUri: rec.redirectUri,
-      orgId: configOrgId(),
+      orgId: orgId(),
       ...tenantClaim(),
       ...(rec.accountType !== "default" ? { accountType: rec.accountType } : {}),
       clientRef: client.clientRef,
@@ -352,7 +352,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     safeReturnTo(typeof b.returnTo === "string" ? b.returnTo : null) ?? (deps.portalUrl ? "/connectors" : undefined);
   const { linkId } = await deps.consentLinks.mint({
     principalId: capability.actorId,
-    orgId: configOrgId(),
+    orgId: orgId(),
     provider,
     accountType,
     redirectUri,
@@ -399,7 +399,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
       provider: oauthRoute.provider,
       principalId,
       redirectUri,
-      orgId: configOrgId(),
+      orgId: orgId(),
       ...tenantClaim(),
       ...(accountType !== "default" ? { accountType } : {}),
       clientRef: client.clientRef,
