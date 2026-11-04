@@ -469,6 +469,7 @@ async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Se
 }
 
 export const PARENT_INTERRUPT = "by the parent agent";
+export const ANCESTOR_STOP = "because its parent session was stopped";
 
 async function stopOf(
   signals: Pick<RunSignalStore, "pending">,
@@ -485,16 +486,17 @@ export async function runStopped(
   runId: string | undefined,
 ): Promise<"self" | "ancestor" | undefined> {
   const seen = new Set<string>();
+  let self = false;
   for (let current = runId; current;) {
-    const self = current === runId;
     if (seen.has(current)) return "ancestor";
     seen.add(current);
     const run = await runs.get(current);
     const stop = run && (await stopOf(signals, run));
-    if (!run || (stop && (self || stop.reason !== PARENT_INTERRUPT))) return self ? "self" : "ancestor";
-    current = run.request.delegatingRunId;
+    if (current === runId) self = !run || stop !== undefined;
+    else if (!run || (stop && stop.reason !== PARENT_INTERRUPT)) return "ancestor";
+    current = run?.request.delegatingRunId;
   }
-  return undefined;
+  return self ? "self" : undefined;
 }
 
 const unstarted = (run: Run): boolean => run.status === "pending" && run.attempts === 0 && run.turnUserSeq === null;
@@ -558,7 +560,11 @@ export async function stopSessionTree(
 ): Promise<boolean> {
   let stopped = false;
   for (const session of await treeSessions(deps.sessions, root))
-    if (session.scopeId === root.scopeId && (await stopSessionRuns(deps, session, reason)).length) stopped = true;
+    if (
+      session.scopeId === root.scopeId &&
+      (await stopSessionRuns(deps, session, session.id === root.id ? reason : ANCESTOR_STOP)).length
+    )
+      stopped = true;
   return stopped;
 }
 

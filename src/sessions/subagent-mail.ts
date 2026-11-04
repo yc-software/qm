@@ -11,9 +11,12 @@ import type { SessionStore } from "./session-store.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { swallowAs } from "../util/errors.ts";
+import { proseText } from "./items.ts";
 import {
+  ANCESTOR_STOP,
   assertAudienceCompatible,
   isSubagentThreadRef,
+  PARENT_INTERRUPT,
   requiresDelegation,
   runStopped,
   snippet,
@@ -27,13 +30,14 @@ const MESSAGE_WAKE =
   "A subagent sent you a message. Check internal messages with subagents wait (timeoutMs: 0) and decide whether it affects the user's request; report only what is relevant. If it does not, end without posting.";
 const MESSAGE_DISPLAY = "Subagent sent a message";
 
-export type SubagentMailKind = "final_answer" | "no_reply" | "awaiting_input" | "errored" | "refused";
+export type SubagentMailKind = "final_answer" | "no_reply" | "awaiting_input" | "errored" | "refused" | "stopped";
 
 export function renderSubagentMail(input: {
   title: string;
   sessionId: string;
   kind: SubagentMailKind;
   body: string;
+  stopReason?: string;
 }): string {
   const why: Record<SubagentMailKind, string> = {
     final_answer: "finished a turn and sent back its result",
@@ -41,10 +45,12 @@ export function renderSubagentMail(input: {
     awaiting_input: "is blocked waiting for a human approval",
     errored: "failed",
     refused: "was refused",
+    stopped: "was stopped",
   };
+  const stopReason = input.kind === "stopped" && input.stopReason ? ` ${input.stopReason}` : "";
   return [
     `<wake reason="subagent" name="${xmlAttrEscape(input.title)}" sessionId="${input.sessionId}" kind="${input.kind}" at="${new Date().toISOString()}">`,
-    `  <why>Your subagent session "${xmlEscape(input.title)}" ${why[input.kind]}.</why>`,
+    `  <why>Your subagent session "${xmlEscape(input.title)}" ${why[input.kind]}${xmlEscape(stopReason)}.</why>`,
     `  <content>${xmlEscape(input.body)}</content>`,
     `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is kept with it; use the subagents tool to read it or give it another task.</instructions>`,
     "</wake>",
@@ -286,43 +292,26 @@ export async function wakeForUnreadMail(
 
 export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<boolean> {
   if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return true;
-  const stopped = run.result?.stopped
-    ? "self"
-    : deps.signals && deps.runs.get && (await runStopped({ get: deps.runs.get }, deps.signals, run.id));
-  if (stopped === "self") return true;
+  const stopped =
+    deps.signals && deps.runs.get
+      ? await runStopped({ get: deps.runs.get }, deps.signals, run.id)
+      : run.result?.stopped && "self";
   const child = await deps.sessions.getByThread(run.sessionId);
   if (!child?.parentSessionId || !child.spawnMeta) return true;
   const parent = await deps.sessions.get(child.parentSessionId);
   if (!parent) return true;
   const title = child.title?.trim() || child.id;
   const result = run.result;
-  let kind: SubagentMailKind;
-  let body: string;
-  if (run.status === "failed" || result?.status === "failed") {
-    kind = "errored";
-    body = snippet(result?.reason ?? "the turn failed", MAIL_ERROR_CAP);
-  } else if (result?.pendingApprovals?.length || result?.status === "pending_approval") {
-    kind = "awaiting_input";
-    body = snippet(
-      result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval",
-      MAIL_ERROR_CAP,
-    );
-  } else if (result?.status === "refused") {
-    kind = "refused";
-    body = snippet(result.reason ?? "the turn was refused", MAIL_ERROR_CAP);
-  } else if (result?.status === "ok" && (result.reply?.trim() || result.attachments?.length)) {
-    kind = "final_answer";
-    body = result.reply?.trim() || `Produced ${result.attachments!.map((file) => file.name).join(", ")}.`;
-  } else {
-    kind = "no_reply";
-    body = "completed without sending a reply.";
-  }
+  const failed = run.status === "failed" || result?.status === "failed";
+  const said = result?.stopped || failed ? await turnText(deps, child, run) : undefined;
+  const { kind, body } = mailOf(run, failed, said?.text);
   const text = renderSubagentMail({
     title,
     sessionId: child.id,
     kind,
     body:
       body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
+    ...(result?.stopReason ? { stopReason: result.stopReason } : {}),
   });
   const turn = await parentTurn(
     deps,
@@ -334,10 +323,11 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   );
   const { meta, prepared } = turn;
   const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
-  if (outputSeq !== undefined && outputSeq !== null) {
+  const shownSeqs = [outputSeq, said?.seq].filter((seq) => seq !== undefined && seq !== null);
+  if (shownSeqs.length) {
     for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
-      const visible = await deps.sessions.visibleItems(child.id, id);
-      if (!visible.some((item) => item.seq === outputSeq))
+      const visible = new Set((await deps.sessions.visibleItems(child.id, id)).map((item) => item.seq));
+      if (!shownSeqs.every((seq) => visible.has(seq)))
         throw new Error("the current parent audience cannot read this child result");
     }
   }
@@ -373,5 +363,51 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     text: COMPLETION_WAKE,
     displayText: "Delegated task completed",
   };
-  return (await mailParent(deps, child, parent, turn, mail, stopped ? undefined : wake)) === "settled";
+  const wakes =
+    !stopped ||
+    (stopped === "self" &&
+      result?.stopped === true &&
+      result.stopReason !== PARENT_INTERRUPT &&
+      result.stopReason !== ANCESTOR_STOP);
+  return (await mailParent(deps, child, parent, turn, mail, wakes ? wake : undefined)) === "settled";
+}
+
+async function turnText(
+  deps: Pick<SubagentMailDeps, "sessions">,
+  child: Session,
+  run: Run,
+): Promise<{ seq: number; text: string } | undefined> {
+  const since = run.turnUserSeq ?? run.result?.sourceUserSeq;
+  if (since === undefined || since === null) return undefined;
+  const turnId = run.id.toLowerCase();
+  const items = await deps.sessions.visibleItems(child.id, run.request.actor.id, { sinceSeq: since });
+  for (const item of items.toReversed()) {
+    if (item.turnId !== turnId || item.kind !== "AgentMessage" || item.variant === "files_delivered") continue;
+    const text = proseText(item)?.trim();
+    if (text) return { seq: item.seq, text };
+  }
+  return undefined;
+}
+
+function mailOf(run: Run, failed: boolean, said: string | undefined): { kind: SubagentMailKind; body: string } {
+  const result = run.result;
+  if (result?.stopped) return { kind: "stopped", body: said ?? "It stopped before saying anything." };
+  if (failed) {
+    const reason = snippet(result?.reason ?? "the turn failed", MAIL_ERROR_CAP);
+    return { kind: "errored", body: said ? `${reason}\n\nLast output before the failure:\n${said}` : reason };
+  }
+  if (result?.pendingApprovals?.length || result?.status === "pending_approval")
+    return {
+      kind: "awaiting_input",
+      body: snippet(
+        result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval",
+        MAIL_ERROR_CAP,
+      ),
+    };
+  if (result?.status === "refused")
+    return { kind: "refused", body: snippet(result.reason ?? "the turn was refused", MAIL_ERROR_CAP) };
+  const files = result?.attachments?.map((file) => file.name) ?? [];
+  if (result?.status === "ok" && (result.reply?.trim() || files.length))
+    return { kind: "final_answer", body: result.reply?.trim() || `Produced ${files.join(", ")}.` };
+  return { kind: "no_reply", body: "completed without sending a reply." };
 }

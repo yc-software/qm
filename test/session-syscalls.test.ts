@@ -16,6 +16,7 @@ import {
   stopSessionTree,
   sessionContextOf,
   PARENT_INTERRUPT,
+  ANCESTOR_STOP,
 } from "../src/sessions/session-syscalls.ts";
 import { deliverSubagentMail, renderSubagentMail, wakeForUnreadMail } from "../src/sessions/subagent-mail.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
@@ -818,6 +819,102 @@ test("a silent child mails a completed-without-reply notice without borrowing tr
   assert.equal(mail.length, 1);
   assert.match(mail[0]!.text, /kind="no_reply"/);
   assert.doesNotMatch(mail[0]!.text, /halfway there/);
+});
+
+async function stoppedChildRun(r: Rig, said: string | undefined, result: Parameters<RunStore["complete"]>[2]) {
+  const p = await parentRun(r);
+  const opened = await p.api.open({ task: "trace the callers", name: "tracer" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
+  const writer = { sessionId: child.id, turnId: queued.id };
+  await r.sessions.append({ sessionId: child.id }, { kind: "AgentMessage", text: "an older turn's reply" });
+  const asked = await r.sessions.append(writer, { kind: "UserMessage", text: "trace the callers" });
+  await r.runs.noteTurnUserSeq(queued.id, asked.seq);
+  if (said) await r.sessions.append(writer, { kind: "AgentMessage", variant: "narration", text: said });
+  await r.runs.complete(queued.id, claimed!.leaseToken!, result);
+  return { parent: p, child, run: (await r.runs.get(queued.id))! };
+}
+
+test("a child stopped on its own mails its partial output and wakes its top-level parent", async () => {
+  for (const stopReason of ["by user", "because its goal was cancelled", undefined]) {
+    const r = await rig();
+    const { parent, run } = await stoppedChildRun(r, "found 2 of 3 call sites so far", {
+      status: "ok",
+      reply: "(stopped)",
+      stopped: true,
+      ...(stopReason ? { stopReason } : {}),
+    });
+    await r.runs.complete(parent.run.id, parent.leaseToken, { status: "ok", reply: "delegated" });
+    const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
+    assert.equal(await deliverSubagentMail(deps, run), true);
+    const [mail] = await r.mailbox.pending(r.room.id);
+    assert.match(mail!.text, /kind="stopped"/);
+    assert.ok(mail!.text.includes(`Your subagent session "tracer" was stopped${stopReason ? ` ${stopReason}` : ""}.`));
+    assert.match(mail!.text, /<content>found 2 of 3 call sites so far<\/content>/);
+    assert.deepEqual(
+      (await r.runs.inFlightForThread(r.room.threadRef)).map((wake) => wake.dedupKey),
+      [`subagent-return:${run.id}`],
+    );
+  }
+});
+
+test("a child stopped with its parent, or by its parent agent, leaves stopped mail without waking the parent", async () => {
+  for (const stop of ["tree", "ancestor", "interrupt"] as const) {
+    const r = await rig();
+    const { parent, child, run } = await stoppedChildRun(r, undefined, { status: "silent" });
+    const live = (await r.runs.enqueue({ sessionId: child.threadRef, request: run.request })).run;
+    const claim = await r.runs.claimById(live.id, "w1", 60_000);
+    if (stop === "tree") {
+      await r.runs.complete(parent.run.id, parent.leaseToken, { status: "ok", reply: "delegated" });
+      assert.ok(await stopSessionTree(r, r.room, "by user"));
+      assert.equal((await r.signals.pending(live.id))[0]!.signal.reason, ANCESTOR_STOP);
+    } else if (stop === "ancestor") {
+      await r.signals.send(parent.run.id, { kind: "abort", reason: "by user" });
+      await r.signals.send(live.id, { kind: "abort", reason: "by user" });
+    } else {
+      await r.runs.complete(parent.run.id, parent.leaseToken, { status: "ok", reply: "delegated" });
+      assert.ok((await r.syscallsFor(r.room).write({ target: child.id, interrupt: true })).ok);
+    }
+    const reason = (await r.signals.pending(live.id))[0]!.signal.reason;
+    assert.ok(reason);
+    await r.runs.complete(live.id, claim!.leaseToken!, { status: "silent", stopped: true, stopReason: reason });
+    const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
+    assert.equal(await deliverSubagentMail(deps, (await r.runs.get(live.id))!), true);
+    const [mail] = await r.mailbox.pending(r.room.id);
+    assert.match(mail!.text, /kind="stopped"/);
+    assert.ok(mail!.text.includes(`was stopped ${reason}.`));
+    assert.match(mail!.text, /<content>It stopped before saying anything\.<\/content>/);
+    assert.deepEqual(
+      (await r.runs.inFlightForThread(r.room.threadRef)).filter((wake) => wake.id !== parent.run.id),
+      [],
+    );
+  }
+});
+
+test("a failed child's mail carries the failure reason and the last thing it said in that turn", async () => {
+  const r = await rig();
+  const { parent, child, run } = await stoppedChildRun(r, undefined, { status: "silent" });
+  await r.runs.complete(parent.run.id, parent.leaseToken, { status: "ok", reply: "delegated" });
+  const retry = (await r.runs.enqueue({ sessionId: child.threadRef, request: run.request })).run;
+  const claim = await r.runs.claimById(retry.id, "w1", 60_000);
+  const writer = { sessionId: child.id, turnId: retry.id };
+  const asked = await r.sessions.append(writer, { kind: "UserMessage", text: "try again" });
+  await r.runs.noteTurnUserSeq(retry.id, asked.seq);
+  await r.sessions.append(writer, { kind: "AgentMessage", variant: "narration", text: "patched two of the files" });
+  await r.runs.fail(retry.id, claim!.leaseToken!, "provider returned 500", { retry: false });
+  const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
+  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(retry.id))!), true);
+  const [mail] = await r.mailbox.pending(r.room.id);
+  assert.match(mail!.text, /kind="errored"/);
+  assert.ok(
+    mail!.text.includes(
+      "<content>provider returned 500\n\nLast output before the failure:\npatched two of the files</content>",
+    ),
+  );
+  assert.doesNotMatch(mail!.text, /an older turn's reply/);
+  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 1);
 });
 
 test("a detached child sends no mail; any in-scope session can still be read", async () => {
