@@ -53,6 +53,7 @@ import {
   wakeForUnreadMail,
 } from "./sessions/subagent-mail.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
+import { configRouteOptions, createModelRoutes } from "./model/model-route.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
@@ -375,7 +376,6 @@ import {
 } from "./surface-cache/ambient-judgment-store.ts";
 import { createPostgresAckEmojiPickStore, type AckEmojiPickStore } from "./surface-cache/ack-emoji-pick-store.ts";
 import {
-  auxiliaryModelFor,
   CODEX_SUBSCRIPTION_PROVIDER,
   codexSubscriptionModelId,
   isOverlayModel,
@@ -1488,15 +1488,20 @@ export function buildApp(
           ? { ...directProviderAvailability, modelIds: new Set(Object.keys(gatewayTransport.models)) }
           : undefined),
     );
+  const configDefault = configRouteOptions(config).defaultModelId;
+  const modelRoutes = createModelRoutes({
+    resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
+    ...(configDefault ? { defaultModelId: configDefault } : {}),
+    resolveProviderKeys: resolveCompanyProviderKeys,
+    ...(gatewayTransport ? { modelGateway: gatewayTransport } : {}),
+    ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
+    resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
+  });
   const baseAgent =
     overrides.agent ??
     createAgent({
       ...agentConfigOptions(config),
-      modelGateway: gatewayTransport,
-      resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
-      resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
-      resolveProviderKeys: resolveCompanyProviderKeys,
-      ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
+      routes: modelRoutes,
       signals: runSignals,
     });
   const fallback = {
@@ -1509,7 +1514,7 @@ export function buildApp(
     overrides.decisionBackend ??
       createDecisionBackend({
         providers: async (ids) => (await decisions?.providers(ids)) ?? [],
-        ...(config.modelGateway ? { gateway: config.modelGateway } : {}),
+        ...(modelRoutes.gateway ? { gateway: modelRoutes.gateway } : {}),
         credential: async (slug) => {
           const rec = keychain
             ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", orgId()), slug))
@@ -1519,8 +1524,8 @@ export function buildApp(
       }),
     auditLog,
   );
-  const utilityModelId = (): string => auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
-  const judgeModelId = (): string => config.judgeModelId ?? utilityModelId();
+  const utilityModelId = (): string => modelRoutes.utilityModelId();
+  const judgeModelId = (): string => modelRoutes.utilityModelId(config.judgeModelId);
   const hydrateModelCatalog = async (): Promise<unknown> => {
     await refreshModels();
     if (!(await modelCredentials.availability()).openrouter) return undefined;

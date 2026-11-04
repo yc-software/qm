@@ -1,6 +1,7 @@
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent, EMPTY_ENDING_NOTE } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
 import { type Item, storedItem } from "../src/sessions/items.ts";
@@ -111,7 +112,7 @@ async function runTurn(
   signals?: RunSignalStore,
   onHistory?: () => Promise<void>,
 ) {
-  const agent = createAgent({ apiKey: "sk-test", ...(signals ? { signals } : {}) });
+  const agent = createAgent({ routes: createModelRoutes({ apiKey: "sk-test" }), ...(signals ? { signals } : {}) });
   const emitted: Item[] = [];
   const bodies: Body[] = [];
   let seq = (history.at(-1)?.seq ?? 0) + 1;
