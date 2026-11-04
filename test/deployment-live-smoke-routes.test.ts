@@ -1,7 +1,8 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import type { AddressInfo } from "node:net";
+import { once } from "node:events";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import test from "node:test";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
@@ -11,7 +12,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { runSessionSmoke } from "../src/deployment/postdeploy-smoke.ts";
+import { serverDeps } from "../src/wiring.ts";
 import { installTenantNow } from "../src/tenants/context.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
@@ -193,36 +194,30 @@ test("live smoke fails when a newer build supersedes it mid-check and never retu
 });
 
 test("live smoke runs the real session canary in-process under the install tenant", async () => {
-  const portalIdentitySecret = "portal-identity-secret".repeat(3);
-  const config = testConfig({ signingSecret: sourceSecret, portalIdentitySecret, orgId: "acme" });
+  const probe = createNetServer().listen(0, "127.0.0.1");
+  await once(probe, "listening");
+  const port = (probe.address() as AddressInfo).port;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  const config = testConfig({
+    port,
+    orgId: "acme",
+    signingSecret: sourceSecret,
+    portalIdentitySecret: "portal-identity-secret".repeat(3),
+    requireSignedPortalIdentity: true,
+    backgroundWorkEnabled: true,
+    backgroundDeploymentId: "cohort-a",
+    deploymentControlSecret: controlSecret,
+  });
   const built = buildApp(config);
   await built.loadTenants();
-  assert.ok(installTenantNow(), "the install tenant is registered, so the route binds it");
-  const dedupe = createPostgresReplayDedupe(testDatabaseUrl());
-  let canaryError: unknown;
-  const server = createServer(built.app, {
-    signingSecret: sourceSecret,
-    portalIdentitySecret,
-    capabilitySecret: "capability-only-secret".repeat(3),
-    requireSignedPortalIdentity: true,
-    tenancy: built.tenancy,
-    deploymentControlSecret: controlSecret,
-    deploymentLiveSmoke: {
-      deploymentId: "cohort-a",
-      superseded: () => false,
-      run: () =>
-        runSessionSmoke(config, `http://127.0.0.1:${(server.address() as AddressInfo).port}`).catch((error) => {
-          canaryError = error;
-          throw error;
-        }),
-    },
-    replayDedupe: { claim: (...args) => dedupe.claim(...args) },
-  });
-  server.listen(0);
+  assert.ok(installTenantNow(), "the route binds the registered install tenant");
+  const server = createServer(built.app, serverDeps(config, built));
+  server.listen(port, "127.0.0.1");
+  await once(server, "listening");
   try {
     const raw = JSON.stringify(body());
     const ts = Math.floor(Date.now() / 1000);
-    const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}${path}`, {
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -233,9 +228,7 @@ test("live smoke runs the real session canary in-process under the install tenan
       body: raw,
     });
     assert.equal(response.status, 200);
-    const result = (await response.json()) as { ok: boolean; error?: string };
-    assert.equal(canaryError, undefined);
-    assert.equal(result.ok, true);
+    assert.equal(((await response.json()) as { ok: boolean }).ok, true);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
