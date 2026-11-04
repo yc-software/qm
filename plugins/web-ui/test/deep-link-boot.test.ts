@@ -368,3 +368,35 @@ test("a message link loads older history and highlights the addressed row", asyn
     await h.close();
   }
 });
+
+test("opening a search hit loads older history and highlights the matched message", async () => {
+  const h = await harness({
+    path: "/",
+    messageLink: true,
+    api: (path) =>
+      path.startsWith("/api/search?")
+        ? Response.json({
+            hits: [{ sessionId: "sess-deep", seq: 10, entryType: "user", snippet: "Linked QA message 10", createdAt: 1 }],
+          })
+        : path.startsWith("/api/resources/search?")
+          ? Response.json({ hits: [], failed: [] })
+          : undefined,
+  });
+  try {
+    const booted = h.boot();
+    h.releaseSessions();
+    await booted;
+    h.openChatSearch();
+    const input = document.querySelector<HTMLInputElement>(".chat-search-input")!;
+    input.value = "linked";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(h.requests.some((p) => p.includes("beforeSeq=80")));
+    assert.equal(document.querySelector(".linked-message")?.getAttribute("data-entry-seqs"), "10");
+    assert.equal(document.querySelector(".linked-message")?.getAttribute("data-scrolled"), "true");
+  } finally {
+    await h.close();
+  }
+});
