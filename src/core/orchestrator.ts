@@ -2512,8 +2512,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           liveTurn,
           request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
         });
-        const liveSubagents = async () =>
-          (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("orchestrator: live subagents", ""))) ?? "";
+        const liveNote = async () =>
+          (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
         const baseTools = createToolContext({
           desktopClientId: desktopClientForTurn(input),
           ...(canInstallCanvas
@@ -2940,7 +2940,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           unscreenedNote,
           input.conversationHeader?.trim(),
           ...turnEvents,
-          sessionTurn || automatedTurn || compactedSinceLastTurn(history) ? await liveSubagents() : "",
+          sessionTurn || automatedTurn || compactedSinceLastTurn(history) ? await liveNote() : "",
           deps.keychain
             ? await askResolutionEvents(
                 scopeAskList,
@@ -3621,12 +3621,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               );
             contextRecovered ||= recovery;
             turnAbort.signal.throwIfAborted();
+            const note = recovery && !sessionTurn && !automatedTurn ? await liveNote() : "";
             segment = await runAgentSegment(
               runtimeSwitchNote("choice" in segment.runtimeHandoff ? segment.runtimeHandoff.choice : undefined) +
+                (note && `\n${note}\n`) +
                 (recovery && !resumedHistory.some((item) => isUserItem(item) && (item.text ?? "").startsWith(baseText))
                   ? `\nCurrent request:\n${baseText}`
-                  : "") +
-                (recovery ? `\n${await liveSubagents()}` : ""),
+                  : ""),
               inbound.images.length ? { images: inbound.images } : {},
               { history: resumedHistory },
             );
