@@ -1064,11 +1064,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
     },
 
-    async scanAll(): Promise<Session[]> {
-      const rows = await q("SELECT * FROM sessions");
-      return rows.map(rowToSession);
-    },
-
     async countSessions(): Promise<number> {
       const rows = await q("SELECT COUNT(*) AS n FROM sessions");
       return Number(rows[0]?.n ?? 0);
