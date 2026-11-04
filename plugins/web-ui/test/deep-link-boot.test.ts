@@ -373,14 +373,12 @@ test("opening a search hit loads older history and highlights the matched messag
   const h = await harness({
     path: "/",
     messageLink: true,
-    api: (path) =>
-      path.startsWith("/api/search?")
-        ? Response.json({
-            hits: [{ sessionId: "sess-deep", seq: 10, entryType: "user", snippet: "Linked QA message 10", createdAt: 1 }],
-          })
-        : path.startsWith("/api/resources/search?")
-          ? Response.json({ hits: [], failed: [] })
-          : undefined,
+    api: (path) => {
+      if (path.startsWith("/api/resources/search?")) return Response.json({ hits: [], failed: [] });
+      if (!path.startsWith("/api/search?")) return undefined;
+      const hit = { sessionId: "sess-deep", seq: 10, entryType: "user", snippet: "Linked QA message 10", createdAt: 1 };
+      return Response.json({ hits: [hit] });
+    },
   });
   try {
     const booted = h.boot();

@@ -1,4 +1,10 @@
-import { fetchTranscript, TAIL_TURNS, type CoreSession, type PendingApproval, type TranscriptPage } from "./core-bridge";
+import {
+  fetchTranscript,
+  TAIL_TURNS,
+  type CoreSession,
+  type PendingApproval,
+  type TranscriptPage,
+} from "./core-bridge";
 import { allConversations } from "./conversations";
 import { loadMessageTranscript } from "./message-link.ts";
 import { openSession, revealSessionSurface, sessionsState } from "./sessions";
