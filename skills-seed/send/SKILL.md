@@ -90,7 +90,8 @@ any issues that come up, and merge once CI is **fully** green.
    (`gh pr merge NUMBER --repo OWNER/REPO --squash --match-head-commit REVIEWED_HEAD_SHA` /
    `glab mr merge --squash`). Do **not** use platform auto-merge — it fires the
    moment required checks pass, before async bots like Bugbot finish and before
-   your review is done.
+   your review is done. On a branch that requires a merge queue, that command
+   queues the PR instead; report it merged only once the PR shows as merged.
 
 ## Notes
 
