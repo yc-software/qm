@@ -191,6 +191,7 @@ export interface ServerDeps {
   deploymentControlSecret?: string;
   deployDialTimeoutMs?: number;
   deployAppsDomain?: string;
+  deployAppsTenantSubdomain?: string;
   deployGateSecret?: string;
   deployAppsSessionSecret?: string;
   deployAppsLoginUrl?: string;

@@ -13,6 +13,8 @@ import { drainOnSigterm } from "../../chassis/src/drain.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { cookieHost, parseTenantAppHost, tenantAppsSubdomain } from "./tenant-apps.ts";
 import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
@@ -93,6 +95,7 @@ const SESSION_TTL_S = Number(process.env.PORTAL_SESSION_TTL_S ?? 604800);
 const SESSION_MAX_TTL_S = Number(process.env.PORTAL_SESSION_MAX_TTL_S ?? Math.max(2592000, SESSION_TTL_S));
 const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
 const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || process.env.DEPLOY_APPS_DOMAIN || undefined;
+const TENANT_APPS_SUBDOMAIN = tenantAppsSubdomain(process.env.PORTAL_APPS_TENANT_SUBDOMAIN);
 const COOKIE_DOMAIN =
   process.env.PORTAL_COOKIE_DOMAIN ||
   (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PORTAL_PUBLIC_URL ?? ""), APPS_DOMAIN) : undefined);
@@ -470,6 +473,24 @@ const hostTenantOf = new WeakMap<IncomingMessage, HostTenant & { host: string }>
 function tenantHostOf(req: IncomingMessage): string | undefined {
   const found = hostTenantOf.get(req);
   return found?.multi && boundTenant() ? found.host : undefined;
+}
+
+const requestWebHost = new AsyncLocalStorage<string | undefined>();
+
+// With per-tenant apps domains, a tenant's session cookie is scoped to that tenant's own
+// web host so it reaches `<app>.<label>.<host>` and nothing outside the tenant.
+function tenantWebHostNow(): string | undefined {
+  return TENANT_APPS_SUBDOMAIN && boundTenant() ? requestWebHost.getStore() : undefined;
+}
+
+function cookieDomainNow(): string | undefined {
+  return COOKIE_DOMAIN ?? tenantWebHostNow();
+}
+
+function appsDomainNow(): string | undefined {
+  if (APPS_DOMAIN) return APPS_DOMAIN;
+  const host = tenantWebHostNow();
+  return host && TENANT_APPS_SUBDOMAIN ? `${TENANT_APPS_SUBDOMAIN}.${host}` : undefined;
 }
 
 function sessionTenantClaim(): { t?: string } {
@@ -855,7 +876,7 @@ function sessionCookieSet(value: string, sub: string): string[] {
     path: "/",
     maxAge: SESSION_TTL_S,
     secure: SECURE_COOKIES,
-    ...(COOKIE_DOMAIN ? { domain: COOKIE_DOMAIN } : {}),
+    ...(cookieDomainNow() ? { domain: cookieDomainNow() } : {}),
   };
   return [...sessionCookieHeaders(value, attrs), ...loginProviderCookie(sub)];
 }
@@ -979,7 +1000,13 @@ const server = createServer((req, res) => {
     hostTenantOf.set(req, { ...found, host });
     return found;
   };
-  const served = isAppHost(req) ? handle(req, res) : inHostTenant(lookup, req, res, () => handle(req, res));
+  const host = cookieHost(req.headers.host);
+  const route = (): Promise<void> => {
+    if (isAppHost(req)) return handle(req, res);
+    if (TENANT_APPS_SUBDOMAIN) return serveTenantHost(req, res, host, lookup);
+    return inHostTenant(lookup, req, res, () => handle(req, res));
+  };
+  const served = requestWebHost.run(host, route);
   void served.catch((err: unknown) => {
     errorLogged = true;
     reportBackendError(err);
@@ -988,6 +1015,28 @@ const server = createServer((req, res) => {
     else res.end();
   });
 });
+
+// `<app>.<label>.<tenant host>` goes to core's app gateway, which binds the tenant from the
+// tenant host and finds the app only inside it; any other host is a tenant's own web host.
+async function serveTenantHost(
+  req: IncomingMessage,
+  res: ServerResponse,
+  host: string | undefined,
+  lookup: (host: string) => Promise<HostTenant>,
+): Promise<void> {
+  const appHost = host && TENANT_APPS_SUBDOMAIN ? parseTenantAppHost(host, TENANT_APPS_SUBDOMAIN) : undefined;
+  if (appHost && !(await lookup(host!)).tenant) {
+    if (!(await lookup(appHost.tenantHost)).tenant) {
+      req.resume();
+      return json(res, 404, { error: "not_found" });
+    }
+    res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
+    res.setHeader("referrer-policy", "no-referrer");
+    res.setHeader("x-content-type-options", "nosniff");
+    return proxyToAppHost(req, res, CORE, clientIpOf(req));
+  }
+  return inHostTenant(lookup, req, res, () => handle(req, res));
+}
 
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const method = req.method ?? "GET";
@@ -1092,9 +1141,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       ...(signedOutSession ? loginProviderCookie(signedOutSession.sub) : []),
       clearCookie("portal_impersonate", "/", SECURE_COOKIES),
       clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES),
-      clearCookie("portal_session", "/", SECURE_COOKIES, COOKIE_DOMAIN),
-      clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES, COOKIE_DOMAIN),
-      ...(COOKIE_DOMAIN
+      clearCookie("portal_session", "/", SECURE_COOKIES, cookieDomainNow()),
+      clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES, cookieDomainNow()),
+      ...(cookieDomainNow()
         ? [clearCookie("portal_session", "/", SECURE_COOKIES), clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES)]
         : []),
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
@@ -1623,13 +1672,15 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
     const existing = currentSession(req);
     const trustedPrefix = `oidc:${createHash("sha256").update(trustedConfig.issuer).digest("hex")}:`;
     if (existing && !existing.anon && !existing.appOnly && existing.sub.startsWith(trustedPrefix)) {
+      // An older host-only cookie never reaches app hosts; reissue it under the tenant's cookie domain.
+      if (tenantWebHostNow()) setSession(res, sessionCookieSet(seal(existing, sessionKey), existing.sub));
       res.writeHead(302, {
-        location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN),
+        location: sanitizeReturnTo(returnTo, PUBLIC_URL, appsDomainNow()),
         "cache-control": "no-store",
       });
       return void res.end();
     }
-    const login = trustedEntry.start(sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN));
+    const login = trustedEntry.start(sanitizeReturnTo(returnTo, PUBLIC_URL, appsDomainNow()));
     setSession(res, [setCookie(cookieName, login.cookie, { path, maxAge: login.ttl, secure: SECURE_COOKIES })]);
     res.writeHead(302, { location: login.location, "cache-control": "no-store" });
     return void res.end();
@@ -1653,7 +1704,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
     }
     setAuthenticatedSession(res, identity.sub, identity.name);
     res.writeHead(302, {
-      location: sanitizeReturnTo(identity.returnTo, PUBLIC_URL, APPS_DOMAIN),
+      location: sanitizeReturnTo(identity.returnTo, PUBLIC_URL, appsDomainNow()),
       "cache-control": "no-store",
     });
     res.end();
@@ -1695,14 +1746,14 @@ async function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): P
     readCookie(req.headers.cookie, "portal_login_provider") ===
       createHash("sha256").update(trustedOidc.issuer).digest("hex")
   ) {
-    const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo"), PUBLIC_URL, APPS_DOMAIN);
+    const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo"), PUBLIC_URL, appsDomainNow());
     res.writeHead(302, {
       location: `/auth/trusted/login?returnTo=${encodeURIComponent(returnTo)}`,
       "cache-control": "no-store",
     });
     return void res.end();
   }
-  const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo"), PUBLIC_URL, APPS_DOMAIN);
+  const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo"), PUBLIC_URL, appsDomainNow());
   const localSession = localDevSession(req, Date.now(), true);
   if (localSession) {
     setSession(res, [
@@ -1770,7 +1821,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
 
   setAuthenticatedSession(res, principal.sub, name, principal.appOnly);
   res.writeHead(302, {
-    location: sanitizeReturnTo(tmp.returnTo, PUBLIC_URL, APPS_DOMAIN),
+    location: sanitizeReturnTo(tmp.returnTo, PUBLIC_URL, appsDomainNow()),
     "cache-control": "no-store",
   });
   res.end();
@@ -1816,7 +1867,7 @@ export function bootChecks(): void {
         "PORTAL_PLAYGROUND_MINT_WINDOW_S must be an integer between 60 and 86400 (the core's claim horizon is 24 hours)",
       );
     }
-    if (COOKIE_DOMAIN || APPS_DOMAIN) {
+    if (COOKIE_DOMAIN || APPS_DOMAIN || TENANT_APPS_SUBDOMAIN) {
       problems.push(
         "PORTAL_PLAYGROUND requires PORTAL_COOKIE_DOMAIN and the apps domain (PORTAL_APPS_DOMAIN / DEPLOY_APPS_DOMAIN) unset — a domain-wide cookie would carry anonymous sessions to app subdomains, which never see the anon flag",
       );
@@ -1826,6 +1877,11 @@ export function bootChecks(): void {
         "PORTAL_PLAYGROUND requires PORTAL_DEPLOYMENTS_ENABLED unset — anonymous visitors must not reach deployed apps",
       );
     }
+  }
+  if (TENANT_APPS_SUBDOMAIN && (APPS_DOMAIN || COOKIE_DOMAIN)) {
+    problems.push(
+      "PORTAL_APPS_TENANT_SUBDOMAIN gives each tenant its own apps domain and cookie domain — unset PORTAL_APPS_DOMAIN, DEPLOY_APPS_DOMAIN and PORTAL_COOKIE_DOMAIN",
+    );
   }
   if (APPS_DOMAIN && !COOKIE_DOMAIN) {
     problems.push(

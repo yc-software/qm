@@ -1,5 +1,8 @@
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { orgId as configOrgId } from "../config.ts";
+import { appUrlOf } from "./apps-domain.ts";
+import { boundTenant } from "../tenants/context.ts";
+import { tenantSettings } from "../tenants/settings.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
@@ -83,6 +86,8 @@ export interface AwsDeployProviderOptions {
   maxIdleDurationSeconds?: number;
   suspendedDurationSeconds?: number;
   appsDomain?: string;
+  /** Serve each tenant's apps at `<app>.<label>.<tenant web host>` (multitenant cores). */
+  tenantAppsSubdomain?: string;
   tokenTtlMinutes?: number;
   dataBucket?: string;
   dataPrefix?: string;
@@ -112,13 +117,16 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const resolveCache = new Map<string, { endpoint: DeployEndpoint; checkedMs: number; usedMs: number }>();
   const inflightResolves = new Map<string, Promise<DeployEndpoint | null>>();
   const resolveGens = new Map<string, number>();
+  // Deployment ids are only unique per tenant, so process-wide maps and locks key on both.
+  const keyOf = (id: string): string => `${boundTenant() ?? ""}:${id}`;
   const bumpResolveGen = (id: string): void => {
-    resolveGens.set(id, (resolveGens.get(id) ?? 0) + 1);
-    resolveCache.delete(id);
-    inflightResolves.delete(id);
+    const key = keyOf(id);
+    resolveGens.set(key, (resolveGens.get(key) ?? 0) + 1);
+    resolveCache.delete(key);
+    inflightResolves.delete(key);
   };
   const detached = async (d: Deployment, fn: () => Promise<void>): Promise<void> => {
-    await advisoryLock.tryWithLock(`deploy:${d.id}`, () => launchQueue(d.id, fn));
+    await advisoryLock.tryWithLock(`deploy:${keyOf(d.id)}`, () => launchQueue(keyOf(d.id), fn));
   };
 
   const ingress = opts.ingressConnectorArns?.length ? opts.ingressConnectorArns : [DEFAULT_INGRESS(region)];
@@ -134,7 +142,10 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const maxIdleDurationSeconds = opts.maxIdleDurationSeconds ?? 900;
   const awakeForMs = Math.max(0, maxIdleDurationSeconds * 1000 - 60_000);
   const suspendedDurationSeconds = opts.suspendedDurationSeconds ?? maximumDurationInSeconds;
-  const appsDomain = opts.appsDomain;
+  const appsDomains = {
+    ...(opts.appsDomain ? { deployAppsDomain: opts.appsDomain } : {}),
+    ...(opts.tenantAppsSubdomain ? { deployAppsTenantSubdomain: opts.tenantAppsSubdomain } : {}),
+  };
   const tokenTtlMinutes = opts.tokenTtlMinutes ?? 30;
   const dataBucket = opts.dataBucket;
   const dataPrefix = (opts.dataPrefix ?? "deploy-data").replace(/\/+$/, "");
@@ -147,6 +158,9 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const sts: Pick<STSClient, "send"> | undefined = litestream
     ? (opts.sts ?? new STSClient({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
     : undefined;
+  // A tenant with its own object store (tenant S3_BUCKET) keeps its app data there.
+  const bucketNow = async (): Promise<string | undefined> =>
+    dataBucket ? ((await tenantSettings()).env?.S3_BUCKET ?? dataBucket) : undefined;
   const dataKeyFor = (deploymentId: string): string => `${dataPrefix}/${deploymentId}.tar`;
   const litestreamKeyPrefix = (deploymentId: string): string => `${dataPrefix}/${deploymentId}/litestream`;
 
@@ -187,6 +201,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
 
   async function mintDataCreds(
     deploymentId: string,
+    bucket: string,
   ): Promise<{ accessKeyId: string; secretAccessKey: string; sessionToken: string }> {
     const policy = JSON.stringify({
       Version: "2012-10-17",
@@ -194,12 +209,12 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         {
           Effect: "Allow",
           Action: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
-          Resource: `arn:aws:s3:::${dataBucket}/${litestreamKeyPrefix(deploymentId)}/*`,
+          Resource: `arn:aws:s3:::${bucket}/${litestreamKeyPrefix(deploymentId)}/*`,
         },
         {
           Effect: "Allow",
           Action: "s3:ListBucket",
-          Resource: `arn:aws:s3:::${dataBucket}`,
+          Resource: `arn:aws:s3:::${bucket}`,
           Condition: { StringLike: { "s3:prefix": `${litestreamKeyPrefix(deploymentId)}/*` } },
         },
       ],
@@ -218,15 +233,15 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     return { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken };
   }
 
-  async function stageLitestream(deploymentId: string, id: string, endpoint: string): Promise<void> {
-    const creds = await mintDataCreds(deploymentId);
+  async function stageLitestream(deploymentId: string, bucket: string, id: string, endpoint: string): Promise<void> {
+    const creds = await mintDataCreds(deploymentId, bucket);
     const env = `AWS_ACCESS_KEY_ID=${creds.accessKeyId}\nAWS_SECRET_ACCESS_KEY=${creds.secretAccessKey}\nAWS_SESSION_TOKEN=${creds.sessionToken}\nAWS_REGION=${region}\n`;
     const config = [
       "dbs:",
       `  - path: ${DATA_DB}`,
       "    replicas:",
       "      - type: s3",
-      `        bucket: ${dataBucket}`,
+      `        bucket: ${bucket}`,
       `        path: ${litestreamKeyPrefix(deploymentId)}`,
       `        region: ${region}`,
       "",
@@ -235,12 +250,12 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     await writeAbs(id, endpoint, LITESTREAM_CONFIG, Buffer.from(config));
   }
 
-  const litestreamStartScript = (deploymentId: string): string => {
+  const litestreamStartScript = (deploymentId: string, bucket: string): string => {
     const fail = (code: number): string => `{ tail -c 400 ${shq(LITESTREAM_LOG)} >&2 2>/dev/null; exit ${code}; }`;
     return [
       `command -v litestream >/dev/null 2>&1 && command -v aws >/dev/null 2>&1 || exit 24`,
       `chmod 600 ${shq(LITESTREAM_ENV)} 2>/dev/null || true`,
-      `( set -a; . ${shq(LITESTREAM_ENV)}; set +a; litestream snapshots -config ${shq(LITESTREAM_CONFIG)} ${shq(DATA_DB)} && printf ok | aws s3 cp - s3://${dataBucket}/${litestreamKeyPrefix(deploymentId)}/.write-probe && aws s3 rm s3://${dataBucket}/${litestreamKeyPrefix(deploymentId)}/.write-probe ) >> ${shq(LITESTREAM_LOG)} 2>&1 || ${fail(23)}`,
+      `( set -a; . ${shq(LITESTREAM_ENV)}; set +a; litestream snapshots -config ${shq(LITESTREAM_CONFIG)} ${shq(DATA_DB)} && printf ok | aws s3 cp - s3://${bucket}/${litestreamKeyPrefix(deploymentId)}/.write-probe && aws s3 rm s3://${bucket}/${litestreamKeyPrefix(deploymentId)}/.write-probe ) >> ${shq(LITESTREAM_LOG)} 2>&1 || ${fail(23)}`,
       LIVE_REPLICATOR_PIDS,
       `for q in $(ls_pids); do kill -TERM "$q" 2>/dev/null || true; done`,
       `for i in $(seq 1 40); do [ -z "$(ls_pids)" ] && break; sleep 0.25; done`,
@@ -257,13 +272,16 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   };
 
   async function refreshLitestream(deploymentId: string, id: string, endpoint: string): Promise<void> {
-    await stageLitestream(deploymentId, id, endpoint);
-    const r = await execRaw(id, endpoint, litestreamStartScript(deploymentId), 120);
+    const bucket = await bucketNow();
+    if (!bucket) throw new Error("litestream refresh needs a data bucket");
+    await stageLitestream(deploymentId, bucket, id, endpoint);
+    const r = await execRaw(id, endpoint, litestreamStartScript(deploymentId, bucket), 120);
     if (r.code !== 0) throw new Error(`litestream refresh failed (code ${r.code}): ${r.stderr.slice(0, 400)}`);
   }
 
   async function snapshotData(deploymentId: string, id: string, endpoint: string): Promise<boolean> {
-    if (!s3 || !dataBucket) return false;
+    const bucket = await bucketNow();
+    if (!s3 || !bucket) return false;
     const tarPath = dataTarPath();
     const excl = `--exclude='./app.db' --exclude='./app.db-*' --exclude='./.app.db-litestream'`;
     const ff = `! -name 'app.db' ! -name 'app.db-*' ! -path './.app.db-litestream*'`;
@@ -287,15 +305,16 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       swallowAs("aws-deploy: remove data snapshot tar", undefined),
     );
     if (!tar?.length) throw new Error("data snapshot read-back empty");
-    await s3.send(new PutObjectCommand({ Bucket: dataBucket, Key: dataKeyFor(deploymentId), Body: tar }));
+    await s3.send(new PutObjectCommand({ Bucket: bucket, Key: dataKeyFor(deploymentId), Body: tar }));
     return true;
   }
 
   async function hydrateData(deploymentId: string, id: string, endpoint: string): Promise<void> {
-    if (!s3 || !dataBucket) return;
+    const bucket = await bucketNow();
+    if (!s3 || !bucket) return;
     let tar: Uint8Array | null;
     try {
-      const got = await s3.send(new GetObjectCommand({ Bucket: dataBucket, Key: dataKeyFor(deploymentId) }));
+      const got = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: dataKeyFor(deploymentId) }));
       tar = (await got.Body?.transformToByteArray()) ?? null;
     } catch (e) {
       const code = (e as { name?: string })?.name ?? "";
@@ -355,7 +374,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   }
 
   async function ensureBody(d: Deployment): Promise<{ id: string; endpoint: string; fresh: boolean }> {
-    return launchQueue(d.id, async () => {
+    return launchQueue(keyOf(d.id), async () => {
       let stored = await store.get(d.id);
       if (stored?.replacementMicrovmId) {
         await api
@@ -499,9 +518,11 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       await writeFiles(id, endpoint, HOME_DIR, await readTree(version.homeDir, { tolerateMissing: true }));
     await writeAbs(id, endpoint, READY_PATH, Buffer.from(`${version.commit ?? version.version}\n`));
     if (litestream) {
-      await launchQueue(d.id, async () => {
-        await stageLitestream(d.id, id, endpoint);
-        const r = await execRaw(id, endpoint, `mkdir -p ${shq(DATA_DIR)}; ${litestreamStartScript(d.id)}`, 180);
+      await launchQueue(keyOf(d.id), async () => {
+        const bucket = await bucketNow();
+        if (!bucket) throw new Error("litestream start needs a data bucket");
+        await stageLitestream(d.id, bucket, id, endpoint);
+        const r = await execRaw(id, endpoint, `mkdir -p ${shq(DATA_DIR)}; ${litestreamStartScript(d.id, bucket)}`, 180);
         if (r.code !== 0) {
           let msg = `litestream start failed (code ${r.code}): ${r.stderr.slice(0, 400)}`;
           if (r.code === 24) {
@@ -544,9 +565,8 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       httpVersion: "2",
       proxyHeaders: { "X-aws-proxy-auth": token, "X-aws-proxy-port": String(appPort) },
     };
-    if (appsDomain) {
-      result.publicUrl = `https://${d.name ?? d.id}.${appsDomain}/`;
-    }
+    const publicUrl = appUrlOf(appsDomains, d.name ?? d.id);
+    if (publicUrl) result.publicUrl = publicUrl;
     return result;
   }
 
@@ -561,7 +581,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       const desc = await api.tryGetMicrovm(stored.microvmId);
       if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
         if (genCurrent()) {
-          resolveCache.delete(d.id);
+          resolveCache.delete(keyOf(d.id));
           await store.delete(d.id).catch((e) => swallow("aws-deploy: drop dead body pointer", e));
         }
         return null;
@@ -582,7 +602,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     if (s3 && Date.now() - (stored.lastSnapshotMs ?? 0) > snapshotIntervalMs) {
       void (async () => {
         const claim = (): Promise<StoredDeployBody | null> =>
-          launchQueue(d.id, async () => {
+          launchQueue(keyOf(d.id), async () => {
             const cur = await store.get(d.id);
             if (
               !cur ||
@@ -593,7 +613,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
             await store.put(d.id, { ...cur, lastSnapshotMs: Date.now() });
             return cur;
           });
-        const cur = await advisoryLock.tryWithLock(`deploy:${d.id}`, claim);
+        const cur = await advisoryLock.tryWithLock(`deploy:${keyOf(d.id)}`, claim);
         if (cur) await snapshotData(d.id, cur.microvmId, cur.endpoint);
       })().catch((e) => swallow("aws-deploy: periodic data snapshot", e));
     }
@@ -654,31 +674,31 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     reconcile: (d, version, input) => place(d, version, input),
 
     async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
-      const gen = resolveGens.get(d.id) ?? 0;
-      const genCurrent = (): boolean => (resolveGens.get(d.id) ?? 0) === gen;
+      const gen = resolveGens.get(keyOf(d.id)) ?? 0;
+      const genCurrent = (): boolean => (resolveGens.get(keyOf(d.id)) ?? 0) === gen;
       const revalidate = (): Promise<DeployEndpoint | null> => {
-        const inflight = inflightResolves.get(d.id);
+        const inflight = inflightResolves.get(keyOf(d.id));
         if (inflight) return inflight;
         const resolve = resolveLive(d, version, genCurrent)
           .then((endpoint) => {
             if (!genCurrent()) return endpoint;
             if (!endpoint) {
-              resolveCache.delete(d.id);
+              resolveCache.delete(keyOf(d.id));
               return endpoint;
             }
             if (resolveCache.size > 500) {
               for (const [k, v] of resolveCache) if (Date.now() - v.usedMs >= awakeForMs) resolveCache.delete(k);
             }
-            resolveCache.set(d.id, { endpoint, checkedMs: Date.now(), usedMs: Date.now() });
+            resolveCache.set(keyOf(d.id), { endpoint, checkedMs: Date.now(), usedMs: Date.now() });
             return endpoint;
           })
           .finally(() => {
-            if (inflightResolves.get(d.id) === resolve) inflightResolves.delete(d.id);
+            if (inflightResolves.get(keyOf(d.id)) === resolve) inflightResolves.delete(keyOf(d.id));
           });
-        inflightResolves.set(d.id, resolve);
+        inflightResolves.set(keyOf(d.id), resolve);
         return resolve;
       };
-      const cached = resolveCache.get(d.id);
+      const cached = resolveCache.get(keyOf(d.id));
       const samePlacement = !d.endpoint || d.endpoint.host === cached?.endpoint.host;
       if (cached && samePlacement && Date.now() - cached.usedMs < awakeForMs) {
         cached.usedMs = Date.now();
@@ -693,7 +713,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       if (d.alwaysOn) return;
       const stored = await store.get(d.id);
       if (!stored) return;
-      resolveCache.delete(d.id);
+      resolveCache.delete(keyOf(d.id));
       await api.suspend(stored.microvmId);
     },
 

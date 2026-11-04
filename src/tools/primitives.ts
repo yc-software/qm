@@ -89,6 +89,7 @@ import type { Cron, Webhook } from "../triggers/types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
+import { webUrlBase } from "../deploy/apps-domain.ts";
 
 export interface PublishInput {
   dir?: string;
@@ -1054,7 +1055,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         grantees.map((g) => g.scope),
         d.createdInScope,
       );
-      const urlBase = deps.publicWebUrl?.replace(/\/$/, "") ?? "";
+      const urlBase = webUrlBase(deps.publicWebUrl) ?? "";
       const url = publicUrlOf(d.endpoint) ?? `${urlBase}/d/${ref}/`;
       const dataDir = effectiveEntrypoint ? deps.deploy.providerProfile?.dataDir : undefined;
       return {

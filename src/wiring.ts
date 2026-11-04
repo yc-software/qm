@@ -1653,7 +1653,9 @@ export function buildApp(
     processes = createPostgresProcessRegistry(databaseUrl);
   }
 
-  const appPageViews = config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(databaseUrl) : undefined;
+  const tenantAppsSubdomain = config.deployAppsTenantSubdomain;
+  const appPageViews =
+    config.awsDeploy.appsDomain || tenantAppsSubdomain ? createPostgresAppPageViewLog(databaseUrl) : undefined;
   const brokerSessions = createPostgresBrokerSessions(databaseUrl);
   const replayDedupe = createPostgresReplayDedupe(databaseUrl);
   const credentialUsage = createPostgresCredentialUsageSink(databaseUrl);
@@ -1757,6 +1759,7 @@ export function buildApp(
       ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket ? { dataBucket: config.awsSandbox.s3Bucket } : {}),
       advisoryLock,
       store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
+      ...(tenantAppsSubdomain ? { tenantAppsSubdomain } : {}),
       onError: sandboxOnError,
     });
   if (config.deployProvider === "fly" && config.flyDeploy.sharedAppName && !config.flyDeploy.wireguardPeers)
@@ -1859,7 +1862,11 @@ export function buildApp(
   const deployService = createDeployService({
     deliveries,
     deployAppsDomain: config.awsDeploy.appsDomain,
-    publicLinksAvailable: !!(config.awsDeploy.appsDomain && config.awsDeploy.gateSecret),
+    ...(tenantAppsSubdomain ? { deployAppsTenantSubdomain: tenantAppsSubdomain } : {}),
+    publicLinksAvailable: !!(
+      (config.awsDeploy.appsDomain && config.awsDeploy.gateSecret) ||
+      (tenantAppsSubdomain && config.deployAppsSessionSecret)
+    ),
     publicWebUrl: config.publicWebUrl,
     appPublished: productAnalytics.appPublished,
     deployStore,
@@ -2181,6 +2188,7 @@ export function buildApp(
     ...(gatewayTransport ? { sandboxModels: true } : {}),
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
+    ...(config.deployAppsTenantSubdomain ? { deployAppsTenantSubdomain: config.deployAppsTenantSubdomain } : {}),
     ...(config.resendApiKey && config.emailFrom
       ? { inviteMailer: tenantMailer(config.resendApiKey, config.emailFrom) }
       : {}),
@@ -2377,6 +2385,7 @@ export function buildApp(
     environments,
     deploy: deployService,
     deployAppsDomain: config.awsDeploy.appsDomain,
+    ...(tenantAppsSubdomain ? { deployAppsTenantSubdomain: tenantAppsSubdomain } : {}),
     ...(renderArtifacts ? { deploymentGitPrincipals: renderArtifacts } : {}),
     deploymentLayer,
     ...(processes ? { processes } : {}),
@@ -3240,6 +3249,7 @@ export function serverDeps(
     deploymentLayer: built.deploymentLayerStore,
     deployDialTimeoutMs: config.deployDialTimeoutMs,
     ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
+    ...(config.deployAppsTenantSubdomain ? { deployAppsTenantSubdomain: config.deployAppsTenantSubdomain } : {}),
     ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),
     ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),
     ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),
