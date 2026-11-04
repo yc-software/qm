@@ -299,3 +299,47 @@ test("session status wire values map onto backend states", () => {
 test("the egress allowlist carries just the proxy host", () => {
   assert.deepEqual(managedAgentsEgressAllow("https://egress.example.com:443/path"), ["egress.example.com"]);
 });
+
+test("a wedged guest stream is cancelled at the command deadline even while its provider stays ready", async () => {
+  const s = await session("qm-stalled-guest");
+  await s.runCommand("true");
+  const before = service.cancelledExecCount();
+  service.stallExec("blocked-health-probe");
+  try {
+    const result = await Promise.race([
+      s.runCommand("echo blocked-health-probe", { timeoutMs: 50 }).then(
+        () => "unexpected completion",
+        (e: unknown) => e,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve("still pending after deadline"), 1_000)),
+    ]);
+    assert.ok(result instanceof Error, String(result));
+    assert.match(result.message, /deadline/i);
+    assert.equal((await client.info(s.sessionId)).state, "ready");
+    const until = Date.now() + 1_000;
+    while (service.cancelledExecCount() === before && Date.now() < until)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(service.cancelledExecCount(), before + 1, "the transport cancels the wedged guest stream");
+  } finally {
+    service.stallExec(null);
+  }
+});
+
+test("one RPC deadline preserves concurrent commands and subsequent use of the same session", async () => {
+  const s = await session("qm-concurrent-deadline");
+  await s.runCommand("true");
+  service.stallExec("blocked-health-probe");
+  try {
+    const parallel = s.runCommand("sleep 0.2; echo parallel", { timeoutMs: 1_000 }).then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+    await assert.rejects(s.runCommand("echo blocked-health-probe", { timeoutMs: 50 }), /deadline/i);
+    const concurrent = await parallel;
+    assert.ok("result" in concurrent, "another call was interrupted by the deadline");
+    assert.equal(concurrent.result.stdout.trim(), "parallel");
+    assert.equal((await s.runCommand("echo recovered", { timeoutMs: 1_000 })).stdout.trim(), "recovered");
+  } finally {
+    service.stallExec(null);
+  }
+});
