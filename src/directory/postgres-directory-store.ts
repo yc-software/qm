@@ -542,7 +542,10 @@ export function createPostgresDirectoryStore(connectionString: string): Director
            ON CONFLICT (tenant_id, org_id, group_id) DO UPDATE SET roster_known = TRUE`,
           [orgId(), groupId],
         );
-        await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [orgId(), groupId]);
+        await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [
+          orgId(),
+          groupId,
+        ]);
         await client.query(
           `INSERT INTO directory_group_members (org_id, group_id, principal_id)
            SELECT $1, $2, * FROM unnest($3::text[])`,

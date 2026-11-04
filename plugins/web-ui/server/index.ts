@@ -3,7 +3,7 @@ import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
 import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { swallow } from "../../chassis/src/errors.ts";
-import { withTenant, withoutTenant } from "../../chassis/src/tenant.ts";
+import { withoutTenant } from "../../chassis/src/tenant.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";

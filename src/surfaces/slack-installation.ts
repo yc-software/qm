@@ -102,7 +102,7 @@ export function createSlackInstallationStore(
       : { configured: false, managed: record !== null };
   return {
     async tenantIds() {
-      return (await map.acrossTenants()).filter((entry) => entry.id === orgId).map((entry) => entry.tenantId);
+      return [...new Set((await map.acrossTenants()).map((entry) => entry.tenantId))];
     },
     async get() {
       const record = await map.get(orgId());

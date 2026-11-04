@@ -83,4 +83,3 @@ test("Postgres pending selection retains one live query across sweep timeouts", 
     await factory.pool.close();
   }
 });
-

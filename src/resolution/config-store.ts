@@ -486,7 +486,8 @@ export function createConfigStore(
         state.hydrated = (async () => {
           const expected = tenantOrgId(orgId);
           const identity = await deploymentIdentity.putIfAbsent("singleton", { orgId: expected });
-          if (identity.orgId !== expected) throw new Error(`database belongs to org ${identity.orgId}, not ${expected}`);
+          if (identity.orgId !== expected)
+            throw new Error(`database belongs to org ${identity.orgId}, not ${expected}`);
           for (const r of await soulStore.all()) {
             souls.set(r.scopeId, { content: r.content, version: r.version });
             if (r.history?.length) soulHistory.set(r.scopeId, r.history);
@@ -615,7 +616,9 @@ export function createConfigStore(
     },
     async getSharingPostureDurable(id) {
       const orgPosture = (await settings.sharingPostures.durable(org())) ?? defaultSharingPosture;
-      return id === org() ? orgPosture : composeSharingPostures(orgPosture, [await settings.sharingPostures.durable(id)]);
+      return id === org()
+        ? orgPosture
+        : composeSharingPostures(orgPosture, [await settings.sharingPostures.durable(id)]);
     },
     getSharingPostureOwnDurable: async (id) => (await settings.sharingPostures.durable(id)) ?? null,
     async resolveSharingPostureDurable(personalId, targetId) {
