@@ -1,7 +1,7 @@
 import type { AdminGrant } from "./admin-grant-store.ts";
 import { adminStatusFromGrants, type AdminStatus } from "./admin-service.ts";
 import { forEachAttributedTurn, type AttributionInput } from "./attribution.ts";
-import { canonicalPerson } from "../directory/person.ts";
+import { personKey } from "../directory/person.ts";
 
 export interface AdminUserRow {
   principalId: string;
@@ -13,10 +13,11 @@ export interface AdminUserRow {
 
 export interface UsersInput extends AttributionInput {
   grants: readonly AdminGrant[];
+  people: readonly string[];
 }
 
 export function computeUsers(input: UsersInput): AdminUserRow[] {
-  const { grants } = input;
+  const { grants, people } = input;
 
   const sessionsByUser = new Map<string, Set<string>>();
   const turnsByUser = new Map<string, number>();
@@ -27,25 +28,25 @@ export function computeUsers(input: UsersInput): AdminUserRow[] {
 
   forEachAttributedTurn(input, {
     onParticipant(sessionId, p) {
-      const principalId = canonicalPerson(p.principalId);
+      const principalId = personKey(p.principalId);
       const set = sessionsByUser.get(principalId);
       if (set) set.add(sessionId);
       else sessionsByUser.set(principalId, new Set([sessionId]));
     },
     onTurn(p, turn) {
-      const principalId = canonicalPerson(p.principalId);
+      const principalId = personKey(p.principalId);
       turnsByUser.set(principalId, (turnsByUser.get(principalId) ?? 0) + turn.turns);
       bumpLastSeen(principalId, turn.lastAt);
     },
   });
 
-  const ids = new Set<string>([...sessionsByUser.keys(), ...grants.map((g) => canonicalPerson(g.principalId))]);
+  const ids = new Map(people.map((p) => [personKey(p), p]));
   return [...ids]
-    .map((principalId) => ({
+    .map(([key, principalId]) => ({
       principalId,
-      sessionCount: sessionsByUser.get(principalId)?.size ?? 0,
-      turnCount: turnsByUser.get(principalId) ?? 0,
-      lastSeenAt: lastSeenByUser.get(principalId) ?? null,
+      sessionCount: sessionsByUser.get(key)?.size ?? 0,
+      turnCount: turnsByUser.get(key) ?? 0,
+      lastSeenAt: lastSeenByUser.get(key) ?? null,
       admin: adminStatusFromGrants(grants, principalId),
     }))
     .sort((a, b) => Number(b.admin.isAdmin) - Number(a.admin.isAdmin) || (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0));

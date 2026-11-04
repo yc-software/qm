@@ -18,6 +18,7 @@ import type {
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
+import type { UserStore } from "../../identity/user-store.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
 import type { ModelAccount, OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { UserModelCredentialStore } from "../../model/user-model-credential-store.ts";
@@ -104,6 +105,7 @@ export interface OrchestratorDeps {
   swarms?: SwarmService;
   refreshModels?: () => Promise<void>;
   identity: IdentityService;
+  users: Pick<UserStore, "record">;
   resolution: ResolutionService;
   config?: ScopedConfigStore;
   defaultTurnWallClockMs?: number;
