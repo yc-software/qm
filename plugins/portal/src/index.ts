@@ -1205,7 +1205,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   if (pathname === "/v1/surfaces/partner-chat/events" && method === "POST") {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "", forwardHost: true }, [
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, [
       "content-type",
       "content-length",
       "x-agent-app-request-timestamp",
