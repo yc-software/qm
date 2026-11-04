@@ -300,7 +300,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
          ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
        WHERE group_row.org_id = $1 AND group_row.group_id = ANY($2::text[]) AND group_row.roster_known = TRUE
        ORDER BY group_row.group_id, roster.principal_id`,
-      [orgId, [...groupIds]],
+      [orgId(), [...groupIds]],
     );
     const incomplete = new Set<string>();
     for (const row of rows) {
