@@ -3772,10 +3772,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
 
         let finalResult: TurnResult;
+        const stopReason = result.stopReason ? { stopReason: result.stopReason } : {};
         const sourceUserSeq = turnUserSeq;
         const sourceAssistantEntrySeq = emittedEntries.findLast(isAgentReply)?.seq;
         if (cancelStopped && !result.pendingApprovals?.length) {
-          finalResult = { status: "silent", sessionId: session.id, stopped: true };
+          finalResult = { status: "silent", sessionId: session.id, stopped: true, ...stopReason };
         } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
@@ -3833,14 +3834,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         } else if (isPollFire && !stagedAttachments.length && !reply.trim()) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
-          finalResult = { status: "silent", sessionId: session.id, ...(result.stopped ? { stopped: true } : {}) };
+          finalResult = {
+            status: "silent",
+            sessionId: session.id,
+            ...(result.stopped ? { stopped: true, ...stopReason } : {}),
+          };
         } else {
           finalResult = {
             status: "ok",
             sessionId: session.id,
             reply,
             ...(result.retracted?.length ? { retracted: result.retracted } : {}),
-            ...(result.stopped ? { stopped: true } : {}),
+            ...(result.stopped ? { stopped: true, ...stopReason } : {}),
             ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
             ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
             ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),

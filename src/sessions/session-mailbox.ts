@@ -11,6 +11,7 @@ export interface SessionMessage {
   audience: OrchestratorInput["conversation"]["audience"];
   createdAt: number;
   consumed?: boolean;
+  wake?: { delegatingRunId?: string };
 }
 
 export function createSessionMailbox(backing: DurableMap<SessionMessage>) {

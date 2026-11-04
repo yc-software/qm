@@ -464,6 +464,7 @@ export interface TurnResult {
   steered?: true;
   steerTs?: string;
   stopped?: boolean;
+  stopReason?: string;
   pendingApprovals?: PendingApproval[];
   attachments?: OutgoingAttachment[];
   sourceUserSeq?: number;

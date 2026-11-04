@@ -146,6 +146,7 @@ export interface AgentTurnResult {
   prodded?: string[];
   silent?: boolean;
   stopped?: true;
+  stopReason?: string;
   stoppedByUser?: true;
   pendingApprovals?: Array<{
     command: string;

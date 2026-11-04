@@ -48,13 +48,13 @@ import { createRuntimeService } from "./agent/runtime-control.ts";
 import {
   createSessionSyscalls,
   type SessionSyscallsFactory,
-  deliverSubagentMail,
   sessionTreeRoot,
   sessionTreeRuns,
   sessionTreeWorking,
   stoppableRoot,
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
+import { deliverSubagentMail, wakeForUnreadMail } from "./sessions/subagent-mail.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
@@ -2407,23 +2407,21 @@ export function buildApp(
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
   let lastSignalPrune = 0;
+  const subagentMail = {
+    sessions,
+    runs,
+    maxAttempts,
+    mailbox: sessionMailbox,
+    prepareRequest: prepareSessionRequest,
+    delegationEnabled,
+    deliveries,
+    signals: runSignals,
+    advisoryLock,
+  };
   const returnSessionRun = (run: Run) =>
     advisoryLock
       .withLock("session-tree-admission", async () => {
-        const settled = await deliverSubagentMail(
-          {
-            sessions,
-            runs,
-            maxAttempts,
-            mailbox: sessionMailbox,
-            prepareRequest: prepareSessionRequest,
-            delegationEnabled,
-            deliveries,
-            signals: runSignals,
-          },
-          run,
-        );
-        if (settled) await runs.markReturned(run.id);
+        if (await deliverSubagentMail(subagentMail, run)) await runs.markReturned(run.id);
       })
       .catch(async (error: unknown) => {
         await runs.deferReturn(run.id, 60_000);
@@ -2432,6 +2430,7 @@ export function buildApp(
   runs.onTerminal((run) => {
     if (run.sessionId.startsWith("agent:main:subagent:"))
       void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
+    else void wakeForUnreadMail(subagentMail, run).catch(swallowAs("sessions: unread mail wake", undefined));
   });
   const sweepSessionReturns = async () => {
     let afterId: string | undefined;

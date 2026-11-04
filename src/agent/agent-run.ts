@@ -1651,7 +1651,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             userAborted ? abortReason : "because the run was cancelled",
             steps.closing(reply),
           );
-          return result(reply, { stopped: true });
+          return result(reply, { stopped: true, ...(userAborted && abortReason ? { stopReason: abortReason } : {}) });
         }
 
         await settleGoal(false);

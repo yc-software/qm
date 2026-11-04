@@ -1,9 +1,6 @@
 import { isAgentReply, type Item, proseText } from "./items.ts";
 import { commonEntrySeqs } from "./transcript-source.ts";
 import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
-import { principalDestination } from "../reach/reach.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
@@ -14,12 +11,13 @@ import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
-import type { ScopeId, Session, SpawnMeta, TurnOrigin } from "../types.ts";
+import type { Principal, ScopeId, Session, SpawnMeta, TurnOrigin } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
+import { wakeOwnParent } from "./subagent-mail.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 
@@ -118,7 +116,7 @@ export function ownsSessionContext(
   );
 }
 
-function storedContext(session: Session): SpawnMeta | undefined {
+export function storedContext(session: Session): SpawnMeta | undefined {
   return (
     session.spawnMeta && {
       ...session.spawnMeta,
@@ -159,7 +157,6 @@ const SESSION_LIST_LIMIT = 50;
 const WEB_ONLY = "sessions are a web UI feature and aren't available here.";
 const READ_DEFAULT_MAX_CHARS = 4_000;
 const READ_MAX_CHARS_CEILING = 20_000;
-const MAIL_ERROR_CAP = 1_000;
 const LAST_SAID_SCAN = 40;
 
 interface SessionOpenInput {
@@ -347,7 +344,7 @@ function lastAssistantText(items: readonly Item[]): string | undefined {
   return undefined;
 }
 
-function snippet(text: string, max: number): string {
+export function snippet(text: string, max: number): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
   return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1).trimEnd()}…`;
 }
@@ -369,30 +366,6 @@ function renderSubagentMessage(sender: { title: string; sessionId: string }, tex
     `<subagent-message from="${xmlAttrEscape(sender.title)}" fromSessionId="${sender.sessionId}">`,
     xmlEscape(text.trim()),
     "</subagent-message>",
-  ].join("\n");
-}
-
-export type SubagentMailKind = "final_answer" | "no_reply" | "awaiting_input" | "errored" | "refused";
-
-export function renderSubagentMail(input: {
-  title: string;
-  sessionId: string;
-  kind: SubagentMailKind;
-  body: string;
-}): string {
-  const why: Record<SubagentMailKind, string> = {
-    final_answer: "finished a turn and sent back its result",
-    no_reply: "finished a turn without sending a reply",
-    awaiting_input: "is blocked waiting for a human approval",
-    errored: "failed",
-    refused: "was refused",
-  };
-  return [
-    `<wake reason="subagent" name="${xmlAttrEscape(input.title)}" sessionId="${input.sessionId}" kind="${input.kind}" at="${new Date().toISOString()}">`,
-    `  <why>Your subagent session "${xmlEscape(input.title)}" ${why[input.kind]}.</why>`,
-    `  <content>${xmlEscape(input.body)}</content>`,
-    `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is kept with it; use the subagents tool to read it or give it another task.</instructions>`,
-    "</wake>",
   ].join("\n");
 }
 
@@ -419,8 +392,8 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
   };
 }
 
-function assertAudienceCompatible(
-  source: Pick<OrchestratorInput, "actor" | "conversation">,
+export function assertAudienceCompatible(
+  source: { actor: Pick<Principal, "id">; conversation: Pick<OrchestratorInput["conversation"], "audience"> },
   target: Pick<OrchestratorInput, "actor" | "conversation">,
 ): void {
   const allowed = new Set([source.actor.id, ...source.conversation.audience.map((person) => person.id)]);
@@ -495,15 +468,33 @@ async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Se
   return all;
 }
 
-async function runStopped(
+export const PARENT_INTERRUPT = "by the parent agent";
+
+async function stopOf(
+  signals: Pick<RunSignalStore, "pending">,
+  run: Run,
+): Promise<{ reason: string | undefined } | undefined> {
+  if (run.result?.stopped) return { reason: run.result.stopReason };
+  const abort = (await signals.pending(run.id)).find(({ signal }) => signal.kind === "abort");
+  return abort && { reason: abort.signal.reason };
+}
+
+export async function runStopped(
   runs: Pick<RunStore, "get">,
   signals: Pick<RunSignalStore, "pending">,
   runId: string | undefined,
-): Promise<boolean> {
-  if (!runId) return false;
-  const run = await runs.get(runId);
-  if (!run) return true;
-  return !!run.result?.stopped || (await signals.pending(runId)).some(({ signal }) => signal.kind === "abort");
+): Promise<"self" | "ancestor" | undefined> {
+  const seen = new Set<string>();
+  for (let current = runId; current;) {
+    const self = current === runId;
+    if (seen.has(current)) return "ancestor";
+    seen.add(current);
+    const run = await runs.get(current);
+    const stop = run && (await stopOf(signals, run));
+    if (!run || (stop && (self || stop.reason !== PARENT_INTERRUPT))) return self ? "self" : "ancestor";
+    current = run.request.delegatingRunId;
+  }
+  return undefined;
 }
 
 async function stopSessionRuns(
@@ -514,10 +505,28 @@ async function stopSessionRuns(
   const stopped: string[] = [];
   for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
     await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
-    if (run.status === "pending") await deps.runs.withdraw(run.id);
+    if (run.status === "pending") await deps.runs.withdraw(run.id, { unstartedOnly: reason === PARENT_INTERRUPT });
     stopped.push(run.id);
   }
   return stopped;
+}
+
+async function acceptedFollowup(
+  runs: Pick<RunStore, "getByDedupKey" | "inFlightForThread">,
+  dedupKey: string | undefined,
+  target: Session,
+  stamped: string,
+  title: string,
+): Promise<SessionWriteResult | undefined> {
+  const existing = dedupKey ? await runs.getByDedupKey(dedupKey) : null;
+  if (!existing) return undefined;
+  if (
+    existing.sessionId !== target.threadRef ||
+    (existing.request.text !== stamped && existing.request.text !== pgTextSafe(stamped))
+  )
+    return { ok: false, message: "the requestId was already used for different work" };
+  const others = (await runs.inFlightForThread(target.threadRef)).filter((run) => run.id !== existing.id);
+  return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: others.length > 0 };
 }
 
 export async function stopSessionTree(
@@ -624,42 +633,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           text: "",
         };
         return deps.prepareRequest ? deps.prepareRequest(request) : request;
-      }
-
-      async function wakeOwnParent(
-        parent: Session,
-        mail: () => Promise<Pick<SessionMessage, "id" | "text" | "sourceEntrySeq">>,
-      ): Promise<"woken" | "busy" | "settled" | undefined> {
-        const sender = await deps.sessions.get(binding.session.id);
-        if (
-          !sender ||
-          sender.parentSessionId !== parent.id ||
-          !isSubagentThreadRef(sender.threadRef) ||
-          isSubagentThreadRef(parent.threadRef)
-        )
-          return undefined;
-        const message = await mail();
-        const displayText = "Subagent sent a message";
-        const turn = await parentTurn(deps, sender, parent, binding.request, message.text, displayText);
-        const wake = { dedupKey: `subagent-followup:${message.id}`, text: MESSAGE_WAKE, displayText };
-        return mailParent(deps, sender, parent, turn, message, wake);
-      }
-
-      async function acceptedFollowup(
-        dedupKey: string | undefined,
-        target: Session,
-        stamped: string,
-      ): Promise<SessionWriteResult | undefined> {
-        const existing = dedupKey ? await deps.runs.getByDedupKey(dedupKey) : null;
-        if (!existing) return undefined;
-        if (
-          existing.sessionId !== target.threadRef ||
-          (existing.request.text !== stamped && existing.request.text !== pgTextSafe(stamped))
-        )
-          return { ok: false, message: "the requestId was already used for different work" };
-        const others = (await deps.runs.inFlightForThread(target.threadRef)).filter((run) => run.id !== existing.id);
-        const title = visibleTitle(target);
-        return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: others.length > 0 };
       }
 
       return {
@@ -868,7 +841,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!text) {
                 if (!input.interrupt)
                   return { ok: false, message: "send_message requires `text` (or interrupt: true)." };
-                return (await stopSessionRuns(deps, target, "by the parent agent")).length
+                return (await stopSessionRuns(deps, target, PARENT_INTERRUPT)).length
                   ? { ok: true, sessionId: target.id, title, delivered: "interrupted" }
                   : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };
               }
@@ -877,70 +850,72 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const messageId = input.requestId
                 ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
                 : randomUUID();
-              const mail = async () => {
-                const sourceEntrySeq = await deps.sessions.latestItemSeq(binding.session.id);
-                return { id: messageId, text: stamped, ...(sourceEntrySeq >= 0 ? { sourceEntrySeq } : {}) };
-              };
-              const busy = (await deps.runs.inFlightForThread(target.threadRef)).length > 0;
+              const sourceEntrySeq = await deps.sessions.latestItemSeq(binding.session.id);
+              const mail = { id: messageId, text: stamped, ...(sourceEntrySeq >= 0 ? { sourceEntrySeq } : {}) };
+              const inFlight = await deps.runs.inFlightForThread(target.threadRef);
+              const busy = inFlight.length > 0;
               const leaveMail = async (notWoken?: string): Promise<SessionWriteResult> => {
                 await deps.mailbox.send({
-                  ...(await mail()),
+                  ...mail,
                   recipientId: target.id,
                   senderId: binding.session.id,
                   actor: caller.actor,
                   audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });
-                return {
-                  ok: true,
-                  sessionId: target.id,
-                  title,
-                  delivered: "queued_message",
-                  busy,
-                  ...(notWoken ? { notWoken } : {}),
-                };
+                const reason = notWoken ? { notWoken } : {};
+                return { ok: true, sessionId: target.id, title, delivered: "queued_message", busy, ...reason };
               };
               if (!input.wake && !input.interrupt) return leaveMail();
               if (binding.request.privateSessionMessage)
                 return leaveMail("a private turn cannot start work in another session");
-              const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               if (!target.parentSessionId) {
-                const woken = await wakeOwnParent(target, mail);
+                if (caller.readOnly) return leaveMail("a read-only subagent cannot start a turn in its parent");
+                const woken = await wakeOwnParent(deps, binding.session.id, target, binding.request, mail).catch(
+                  (error: unknown) => ({ failed: errMessage(error) }),
+                );
+                if (typeof woken === "object") return leaveMail(woken.failed);
                 if (!woken)
                   return leaveMail(
                     "a message can start a turn in a top-level conversation only when it is the sender's own parent",
                   );
-                return woken === "busy"
-                  ? { ok: true, sessionId: target.id, title, delivered: "queued_message", busy: true }
-                  : { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: false };
+                const delivered = woken === "woken" ? "queued_turn" : "queued_message";
+                return { ok: true, sessionId: target.id, title, delivered, busy: woken === "busy" };
               }
-              const accepted = await acceptedFollowup(dedupKey, target, stamped);
+              const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
+              const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;
-              const stopped = input.interrupt ? await stopSessionRuns(deps, target, "by the parent agent") : [];
+              const replaced = input.interrupt ? inFlight.map((run) => run.id) : [];
               const live = (
                 await sessionTreeRuns(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target))
-              ).filter((run) => !stopped.includes(run.id));
+              ).filter((run) => !replaced.includes(run.id));
               if (live.length >= cap)
                 return {
                   ok: false,
                   message: `all ${cap} session run slots are in use; nothing was sent. Retry later, or send with wake:false to leave it in the mailbox.`,
                 };
+              const stopped = input.interrupt ? await stopSessionRuns(deps, target, PARENT_INTERRUPT) : [];
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;
               request.delegatingRunId = binding.request.runId;
-              await deps.runs.enqueue({
-                sessionId: target.threadRef,
-                dedupKey,
-                request: {
-                  ...request,
-                  ...(privateMessage
-                    ? { privateSessionMessage: true as const, sessionMessageDepth: messageDepth }
-                    : {}),
-                  text: stamped,
-                  displayText: text,
-                },
-                maxAttempts: deps.maxAttempts,
-              });
+              await deps.runs
+                .enqueue({
+                  sessionId: target.threadRef,
+                  dedupKey,
+                  request: {
+                    ...request,
+                    ...(privateMessage
+                      ? { privateSessionMessage: true as const, sessionMessageDepth: messageDepth }
+                      : {}),
+                    text: stamped,
+                    displayText: text,
+                  },
+                  maxAttempts: deps.maxAttempts,
+                })
+                .catch((error: unknown) => {
+                  if (!stopped.length) throw error;
+                  throw new Error(`stopped its current run, but the message was not queued: ${errMessage(error)}`);
+                });
               if (stopped.length) return { ok: true, sessionId: target.id, title, delivered: "interrupted" };
               return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy };
             })
@@ -1096,240 +1071,4 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       };
     },
   };
-}
-
-export interface SubagentMailDeps {
-  signals?: Pick<RunSignalStore, "pending">;
-  deliveries?: Pick<DeliveryStore, "enqueue">;
-  delegationEnabled?: (actorId: string) => Promise<boolean>;
-  mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "latestItemSeq" | "visibleItems">;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> & Partial<Pick<RunStore, "get">>;
-  maxAttempts: number;
-  prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
-}
-
-const COMPLETION_WAKE =
-  "A delegated task finished. Check internal messages with subagents wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
-const MESSAGE_WAKE =
-  "A subagent sent you a message. Check internal messages with subagents wait (timeoutMs: 0), then act on it or report what is relevant to the user's request. If nothing needs doing, end without posting.";
-
-type ParentMailDeps = Pick<
-  SubagentMailDeps,
-  "mailbox" | "runs" | "maxAttempts" | "prepareRequest" | "delegationEnabled"
->;
-
-async function parentTurn(
-  deps: ParentMailDeps,
-  child: Session,
-  parent: Session,
-  source: Pick<OrchestratorInput, "actor" | "conversation" | "delegatingRunId">,
-  text: string,
-  displayText: string,
-) {
-  if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
-  if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
-  const initiatingRun = source.delegatingRunId ? await deps.runs.get?.(source.delegatingRunId) : undefined;
-  if (source.delegatingRunId && !initiatingRun) throw new Error("the delegation's originating run is unavailable");
-  const initiatingContext = initiatingRun?.request ?? child.spawnMeta;
-  if (!initiatingContext) throw new Error("the subagent has no verified runtime context yet");
-  const currentContext = storedContext(parent);
-  const originalParent = parent.threadRef === initiatingContext.conversation.threadRef;
-  if (!originalParent && !currentContext) throw new Error("the current parent has no verified runtime context yet");
-  const meta = originalParent
-    ? initiatingContext
-    : {
-        ...currentContext!,
-        actor: source.actor,
-        origin: {
-          kind: "automation" as const,
-          ...(currentContext!.origin?.kind === "automation" && currentContext!.origin.destination
-            ? { destination: currentContext!.origin.destination }
-            : {}),
-        },
-        unattendedGrants: undefined,
-      };
-  const request: OrchestratorInput = {
-    ...meta,
-    sessionSenderId: child.id,
-    conversation: {
-      ...meta.conversation,
-      ...(currentContext
-        ? { audience: currentContext.conversation.audience, publishMembers: currentContext.conversation.publishMembers }
-        : {}),
-      threadRef: parent.threadRef,
-    },
-    origin: sessionTurnOrigin(meta.origin, text),
-    text,
-    displayText,
-    envelopeWrapped: true,
-  };
-  Reflect.deleteProperty(request, "openFingerprint");
-  for (const key of [
-    "runId",
-    "attempt",
-    "runLeaseToken",
-    "runStartedAt",
-    "finalAttempt",
-    "cancel",
-    "shutdown",
-    "modelAccount",
-    "privateSessionMessage",
-    "sessionMessageDepth",
-    "delegatingRunId",
-    "swarm",
-    "approval",
-    "proactiveOpener",
-    "redeliveryKey",
-    "attachments",
-    "inboundNotes",
-    "priorTurns",
-    "overheard",
-    "detectContext",
-    "detectOpener",
-    "conversationHeader",
-    "cronScript",
-  ] as const)
-    delete request[key];
-  if (!originalParent) request.addressed = false;
-  const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
-  assertAudienceCompatible(source, prepared);
-  return { meta, prepared, ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}) };
-}
-
-async function mailParent(
-  deps: ParentMailDeps,
-  child: Session,
-  parent: Session,
-  turn: Awaited<ReturnType<typeof parentTurn>>,
-  mail: Pick<SessionMessage, "id" | "text" | "sourceEntrySeq">,
-  wake: { dedupKey: string; text: string; displayText: string },
-): Promise<"woken" | "busy" | "settled"> {
-  const { meta, prepared } = turn;
-  await deps.mailbox.send({
-    ...mail,
-    recipientId: parent.id,
-    senderId: child.id,
-    actor: prepared.actor,
-    audience: prepared.conversation.audience,
-    createdAt: Date.now(),
-  });
-  if (isSubagentThreadRef(parent.threadRef)) return "settled";
-  const existing = await deps.runs.getByDedupKey(wake.dedupKey);
-  if (!(await deps.mailbox.pending(parent.id)).some((message) => message.id === mail.id)) {
-    if (existing?.status === "pending") await deps.runs.withdraw(existing.id, { unstartedOnly: true });
-    return "settled";
-  }
-  if (existing && (existing.status === "done" || existing.status === "failed")) return "settled";
-  if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return "busy";
-  const surfaceTools =
-    meta.surfaceTools === true ||
-    requiresDelegation(prepared, (await deps.delegationEnabled?.(prepared.actor.id)) === true);
-  await deps.runs.enqueue({
-    sessionId: parent.threadRef,
-    dedupKey: wake.dedupKey,
-    request: {
-      ...prepared,
-      ...(surfaceTools ? { surfaceTools } : {}),
-      ...(turn.delegatingRunId ? { delegatingRunId: turn.delegatingRunId } : {}),
-      origin: sessionTurnOrigin(prepared.origin, wake.text),
-      text: wake.text,
-      displayText: wake.displayText,
-    },
-    maxAttempts: deps.maxAttempts,
-  });
-  return "woken";
-}
-
-export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<boolean> {
-  if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return true;
-  if (
-    run.result?.stopped ||
-    (deps.signals && deps.runs.get && (await runStopped({ get: deps.runs.get }, deps.signals, run.id)))
-  )
-    return true;
-  const child = await deps.sessions.getByThread(run.sessionId);
-  if (!child?.parentSessionId || !child.spawnMeta) return true;
-  const parent = await deps.sessions.get(child.parentSessionId);
-  if (!parent) return true;
-  const title = child.title?.trim() || child.id;
-  const result = run.result;
-  let kind: SubagentMailKind;
-  let body: string;
-  if (run.status === "failed" || result?.status === "failed") {
-    kind = "errored";
-    body = snippet(result?.reason ?? "the turn failed", MAIL_ERROR_CAP);
-  } else if (result?.pendingApprovals?.length || result?.status === "pending_approval") {
-    kind = "awaiting_input";
-    body = snippet(
-      result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval",
-      MAIL_ERROR_CAP,
-    );
-  } else if (result?.status === "refused") {
-    kind = "refused";
-    body = snippet(result.reason ?? "the turn was refused", MAIL_ERROR_CAP);
-  } else if (result?.status === "ok" && (result.reply?.trim() || result.attachments?.length)) {
-    kind = "final_answer";
-    body = result.reply?.trim() || `Produced ${result.attachments!.map((file) => file.name).join(", ")}.`;
-  } else {
-    kind = "no_reply";
-    body = "completed without sending a reply.";
-  }
-  const text = renderSubagentMail({
-    title,
-    sessionId: child.id,
-    kind,
-    body:
-      body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
-  });
-  const turn = await parentTurn(
-    deps,
-    child,
-    parent,
-    run.request,
-    text,
-    `[subagent ${title}: ${kind.replace("_", " ")}]`,
-  );
-  const { meta, prepared } = turn;
-  const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
-  if (outputSeq !== undefined && outputSeq !== null) {
-    for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
-      const visible = await deps.sessions.visibleItems(child.id, id);
-      if (!visible.some((item) => item.seq === outputSeq))
-        throw new Error("the current parent audience cannot read this child result");
-    }
-  }
-  if (result?.attachments?.length && deps.deliveries) {
-    const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);
-    const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
-    const destination =
-      candidate ??
-      (meta.origin?.kind === "automation" ? meta.origin.destination : undefined) ??
-      principalDestination(meta.actor.id, meta.actor.id);
-    await deps.deliveries.enqueue({
-      destination,
-      text: "",
-      attachments: result.attachments,
-      idempotencyKey: `subagent-files:${run.id}`,
-      provenance: {
-        trigger: "subagent",
-        surface: meta.surface ?? "unknown",
-        fireKey: `subagent-files:${run.id}`,
-        sourceScopeId: child.scopeId,
-        sourceThreadRef: child.threadRef,
-        sourceSessionId: child.id,
-      },
-    });
-  }
-  const mail = {
-    id: `subagent-mail-${run.id}`,
-    text,
-    ...(outputSeq !== undefined && outputSeq !== null ? { sourceEntrySeq: outputSeq } : {}),
-  };
-  const wake = {
-    dedupKey: `subagent-return:${run.id}`,
-    text: COMPLETION_WAKE,
-    displayText: "Delegated task completed",
-  };
-  return (await mailParent(deps, child, parent, turn, mail, wake)) === "settled";
 }
