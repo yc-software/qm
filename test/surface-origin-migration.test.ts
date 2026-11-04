@@ -51,6 +51,18 @@ const migrate = (url: string) =>
     },
   });
 
+const boot = (url: string) =>
+  exec(process.execPath, ["test/support/test-template.ts", url], {
+    cwd: new URL("..", import.meta.url),
+    timeout: 120_000,
+    env: { PATH: process.env.PATH, NODE_ENV: "test" },
+  });
+
+const rewindRewrite = (admin: pg.Pool) =>
+  admin.query("DELETE FROM qm_schema_migrations WHERE id = ANY($1)", [
+    [SETTLED_CANDIDATES_MIGRATION.id, SETTLED_ORIGIN_MIGRATION.id],
+  ]);
+
 async function rewrite(url: string): Promise<void> {
   const pg = createPgPool(url);
   try {
@@ -221,9 +233,9 @@ test(
           JSON.stringify({ id: "d1", [field]: { ...oldDestination, slackPolicyNamespace: "ns" } }),
         ]);
 
-      await admin.query("DELETE FROM qm_schema_migrations WHERE id = $1", [SETTLED_CANDIDATES_MIGRATION.id]);
+      await rewindRewrite(admin);
       const beforeBoot = await snapshot(admin);
-      await migrate(url);
+      await boot(url);
       assert.deepEqual(await snapshot(admin), beforeBoot);
       const previousReleaseShape = (extra: Record<string, unknown>) => {
         const { origin: _typed, ...legacy } = request(extra);
@@ -482,9 +494,9 @@ test(
         JSON.stringify({ command: "rm", request: turnRequest({}) }),
       ]);
 
-      await admin.query("DELETE FROM qm_schema_migrations WHERE id = $1", [SETTLED_CANDIDATES_MIGRATION.id]);
+      await rewindRewrite(admin);
       const beforeBoot = await snapshot(admin);
-      await migrate(url);
+      await boot(url);
       assert.deepEqual(await snapshot(admin), beforeBoot, "boot writes no stored request");
       await run("settled-after-boot", "done", turnRequest({ unprompted: true, entryTs: "8" }), Date.now());
       await rewrite(url);
@@ -545,9 +557,7 @@ test(
       assert.deepEqual(approvals.a2.origin, { kind: "direct" });
 
       const migrated = await snapshot(admin);
-      await admin.query("DELETE FROM qm_schema_migrations WHERE id = ANY($1)", [
-        [SETTLED_CANDIDATES_MIGRATION.id, SETTLED_ORIGIN_MIGRATION.id],
-      ]);
+      await rewindRewrite(admin);
       await migrate(url);
       await rewrite(url);
       assert.deepEqual(await snapshot(admin), migrated, "a second pass changes nothing");
