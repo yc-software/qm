@@ -259,8 +259,11 @@ function scrollSelectedIntoView(): void {
 
 async function openHit(hit: ChatSearchHit): Promise<void> {
   closeChatSearch();
-  await openSessionAtMessage(hit.sessionId, hit.seq, () =>
-    fetchSessionRow({ id: hit.sessionId }).catch(swallowAs("web-ui: open search hit", null)),
+  await openSessionAtMessage(
+    hit.sessionId,
+    hit.entryType === "title" ? null : hit.seq,
+    () => fetchSessionRow({ id: hit.sessionId }).catch(swallowAs("web-ui: open search hit", null)),
+    "push",
   );
 }
 

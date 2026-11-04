@@ -5,8 +5,9 @@ import {
   type PendingApproval,
   type TranscriptPage,
 } from "./core-bridge";
-import { allConversations } from "./conversations";
-import { loadMessageTranscript } from "./message-link.ts";
+import { allConversations, mainConversation } from "./conversations";
+import { focusedPaneConversation } from "./split";
+import { loadMessageTranscript, messageEntrySeqs } from "./message-link.ts";
 import { openSession, revealSessionSurface, sessionsState } from "./sessions";
 
 /** Switch to `linked` (adding it to the sidebar list if absent) and, given a seq, scroll to and highlight that entry. */
@@ -15,10 +16,11 @@ export async function showLinkedSession(
   transcript?: Promise<TranscriptPage | null>,
   seq: number | null = null,
   approvals?: Promise<{ approvals: PendingApproval[] } | null>,
+  historyMode: "push" | "replace" = "replace",
 ): Promise<void> {
   if (!sessionsState.list.some((s) => s.id === linked.id)) sessionsState.list = [linked, ...sessionsState.list];
   revealSessionSurface(linked);
-  await openSession(linked, transcript, approvals, "replace");
+  await openSession(linked, transcript, approvals, historyMode);
   if (seq !== null)
     requestAnimationFrame(() => {
       for (const conversation of allConversations())
@@ -34,13 +36,21 @@ export async function openSessionAtMessage(
   sessionId: string,
   seq: number | null,
   findSession?: () => Promise<CoreSession | null>,
+  historyMode: "push" | "replace" = "replace",
 ): Promise<boolean> {
-  const open = allConversations().find(
-    (conversation) => conversation.state.sessionId === sessionId && conversation.state.host?.isConnected,
-  );
-  if (open) {
-    if (seq !== null) open.revealEntry(seq);
-    return true;
+  // Reveal in place only when the entry is already rendered in the focused chat; an older entry, or a chat sitting in
+  // an unfocused split pane, goes through a full open so the history is paged back and the pane is activated.
+  const focused = focusedPaneConversation() ?? mainConversation();
+  const host = focused.state.host;
+  if (focused.state.sessionId === sessionId && host?.isConnected) {
+    if (seq === null) return true;
+    if (
+      host.querySelector(`[data-entry-seqs~="${seq}"]`) ||
+      focused.state.inheritedMessages.some((m) => messageEntrySeqs(m).includes(seq))
+    ) {
+      focused.revealEntry(seq);
+      return true;
+    }
   }
   const transcript = loadMessageTranscript((window) => fetchTranscript(sessionId, window), seq, TAIL_TURNS).catch(
     () => null,
@@ -51,6 +61,6 @@ export async function openSessionAtMessage(
     (await transcript)?.session ??
     null;
   if (!linked) return false;
-  await showLinkedSession(linked, transcript, seq);
+  await showLinkedSession(linked, transcript, seq, undefined, historyMode);
   return true;
 }
