@@ -216,13 +216,7 @@ export function sessionTools(kit: ToolKit) {
       }
       return recordResult(
         callId,
-        {
-          tool: "subagents",
-          action: "read",
-          sessionId: result.sessionId,
-          title: result.title,
-          status: result.status,
-        },
+        { tool: "subagents", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
         text(
           `"${result.title}" — ${result.activity ? renderSubagentActivity(result.activity) : result.status}\n${result.rendered}`,
         ),
@@ -344,13 +338,7 @@ export function sessionTools(kit: ToolKit) {
       if (result.mode === "children") return fail("read requires `target`: a sessionId from list.");
       return recordResult(
         callId,
-        {
-          tool: "sessions",
-          action: "read",
-          sessionId: result.sessionId,
-          title: result.title,
-          status: result.status,
-        },
+        { tool: "sessions", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
         text(`"${result.title}" — ${result.status}\n${result.rendered}`),
       );
     },

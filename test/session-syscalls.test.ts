@@ -1026,7 +1026,7 @@ test("read reports each child's latest tool step, last outcome, live descendants
   assert.equal(byTitle.get("failer")?.outcome, "errored");
   assert.deepEqual(
     { status: byTitle.get("delegator")?.status, live: byTitle.get("delegator")?.liveDescendants },
-    { status: "idle", live: 1 },
+    { status: "waiting on subagents", live: 1 },
   );
 
   const transcript = await syscalls.read({ target: "worker" });
