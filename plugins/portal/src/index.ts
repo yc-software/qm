@@ -370,7 +370,7 @@ function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_
   );
 }
 
-const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, ORIGIN);
+const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, originFor(req));
 
 function wantsHtml(req: IncomingMessage): boolean {
   const accept = req.headers.accept;
@@ -468,6 +468,11 @@ const hostTenantOf = new WeakMap<IncomingMessage, HostTenant>();
 
 function tenantHostOf(req: IncomingMessage): string | undefined {
   return hostTenantOf.get(req)?.multi && boundTenant() ? req.headers.host?.toLowerCase() : undefined;
+}
+
+function originFor(req: IncomingMessage): string {
+  const host = tenantHostOf(req);
+  return host ? `${new URL(ORIGIN).protocol}//${host}` : ORIGIN;
 }
 
 function sessionTenantClaim(): { t?: string } {
@@ -764,8 +769,11 @@ async function handleSecretDrop(
   return void res.end(bodyText);
 }
 
-async function handleSelfConnect(res: ServerResponse, o: { provider: string; session: SessionClaims }): Promise<void> {
-  const redirectUri = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(o.provider)}/callback`;
+async function handleSelfConnect(
+  res: ServerResponse,
+  o: { provider: string; session: SessionClaims; publicUrl: string },
+): Promise<void> {
+  const redirectUri = `${o.publicUrl}/v1/connectors/oauth/${encodeURIComponent(o.provider)}/callback`;
   const qs = new URLSearchParams({ principalId: o.session.sub, redirectUri, returnTo: "/connectors" });
   const path = withSourceAuthNonce(
     `/v1/connectors/oauth/${encodeURIComponent(o.provider)}/start?${qs.toString()}`,
@@ -1231,7 +1239,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (method === "GET" && selfConnect) {
     if (!session) return consentBounce();
     if (session.anon) return sendHtml(res, 403, playgroundRestrictedHtml());
-    return handleSelfConnect(res, { provider: decodeURIComponent(selfConnect[1] ?? ""), session });
+    return handleSelfConnect(res, {
+      provider: decodeURIComponent(selfConnect[1] ?? ""),
+      session,
+      publicUrl: tenantHostOf(req) ? originFor(req) : PUBLIC_URL,
+    });
   }
 
   if (isOAuthPublicPassthrough(method, pathname)) {
