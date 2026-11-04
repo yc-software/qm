@@ -1,7 +1,6 @@
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
-import { likeContains } from "../persistence/like.ts";
 import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
@@ -12,15 +11,11 @@ import type {
   SessionPin,
   EntrySearchHit,
   DistinctScope,
-  ParticipantPage,
-  ParticipantPageQuery,
-  ParticipantScope,
   SessionDescendant,
   GetItemsOptions,
   SessionWriter,
   LlmRequestRecord,
   NewLlmRequest,
-  Participant,
   SessionOrigin,
   SessionRef,
   SessionStore,
@@ -30,12 +25,13 @@ import { tsPrefixQuery } from "./entry-search.ts";
 import { ancestry, SESSION_MIGRATIONS } from "./session-schema.ts";
 import { createSessionSpend } from "./session-spend.ts";
 import { createSessionAdminReads } from "./session-admin-reads.ts";
+import { createSessionParticipants, participantSessionsSql } from "./session-participants.ts";
+import { LIST_COLUMNS, OWN_CHAT, rowToParticipantSession, rowToSession } from "./session-rows.ts";
 import {
   cronIdOf,
   promptEnvelopeBody,
   sessionOrigin,
   userMessagePreview,
-  isWebThread,
   DuplicateCallError,
 } from "./session-store.ts";
 import {
@@ -44,7 +40,6 @@ import {
   type NewItem,
   storedItem,
   msOf,
-  AGENT_REPLY_ITEM,
   SEARCHABLE_ITEM,
   searchTypeExpr,
   isUserItem,
@@ -72,50 +67,6 @@ function rowToGoal(r: Record<string, unknown>): GoalRecord {
     ...(r.governor != null ? { governor: r.governor as GoalRecord["governor"] } : {}),
     ...(r.pause_reason != null ? { pauseReason: r.pause_reason as string } : {}),
   };
-}
-
-export function rowToSession(r: Record<string, unknown>): Session {
-  return {
-    id: r.id as string,
-    type: r.type as SessionType,
-    scopeId: r.scope_id as ScopeId,
-    threadRef: r.thread_ref as string,
-    ...(r.surface != null ? { surface: r.surface as string } : {}),
-    ...(r.client_tools ? { clientTools: r.client_tools as Session["clientTools"] } : {}),
-    createdAt: Number(r.created_at),
-    ...(r.title != null ? { title: r.title as string } : {}),
-    ...(r.channel_name != null ? { channelName: r.channel_name as string } : {}),
-    ...(r.side_chat ? { sideChat: r.side_chat as Session["sideChat"] } : {}),
-    ...(r.forked_from_session_id != null && r.fork_boundary_seq != null
-      ? {
-          forkedFrom: {
-            sessionId: r.forked_from_session_id as string,
-            ...(r.forked_from_title != null ? { title: r.forked_from_title as string } : {}),
-          },
-          forkBoundarySeq: Number(r.fork_boundary_seq),
-        }
-      : {}),
-    ...(r.parent_session_id != null ? { parentSessionId: r.parent_session_id as string } : {}),
-    ...(r.origin != null ? { origin: r.origin as SessionOrigin } : {}),
-    ...(r.spawn_meta != null ? { spawnMeta: JSON.parse(r.spawn_meta as string) as Session["spawnMeta"] } : {}),
-    ...((r.slack_binding as { author?: unknown } | null)?.author
-      ? { surfaceBinding: r.slack_binding as Session["surfaceBinding"] }
-      : {}),
-    ...(r.runtime != null ? { runtime: r.runtime as Session["runtime"] } : {}),
-  };
-}
-
-function rowToParticipantSession(r: Record<string, unknown>): Session {
-  const s = rowToSession(r);
-  if (r.p_title != null) s.title = r.p_title as string;
-  if (r.p_archived) s.archived = true;
-  if (r.p_pinned) s.pinned = true;
-  if (r.p_color != null) s.color = r.p_color as string;
-  if (r.agent_last_reply != null && Number(r.agent_last_reply) > Number(r.p_read_at ?? 0) && isWebThread(s.threadRef))
-    s.unread = true;
-  if (r.user_last_activity != null) s.lastActivityAt = Number(r.user_last_activity);
-  if (r.has_entries != null) s.hasEntries = Boolean(r.has_entries);
-  return s;
 }
 
 function rowToLlmRequest(r: Record<string, unknown>): LlmRequestRecord {
@@ -152,12 +103,6 @@ function rowToItem(r: Record<string, unknown>): Item {
 
 const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ${msOf("i.created_at")} AS created_at`;
 const ITEM_FROM = "items i";
-const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
-  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin, s.side_chat`;
-const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
-const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
-const OWN_CHAT = (s: string): string =>
-  `${s}.parent_session_id IS NULL AND (${s}.surface IS NULL OR ${s}.surface NOT IN ${AUTOMATION_SURFACES})`;
 
 const tsOf = (ms: string): string => `to_timestamp((${ms})::double precision / 1000)`;
 
@@ -184,95 +129,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       )
     )`;
   }
-  const SEES_ITEMS = "COALESCE(s.messages, 0) > 0";
-  const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR ${SEES_ITEMS})`;
-  const participantSessionsSql = (extraWhere: string, columns = "s.*"): string =>
-    `SELECT ${columns}, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
-            p.read_at AS p_read_at,
-            (SELECT ${msOf("MAX(e.created_at)")} FROM items e
-              WHERE e.tenant_id = ${TENANT} AND e.session_id = s.id AND ${AGENT_REPLY_ITEM("e")}) AS agent_last_reply,
-            ${USER_ACTIVITY} AS user_last_activity,
-            ${SEES_ITEMS} AS has_entries
-       FROM sessions s
-       JOIN participants p ON p.session_id = s.id
-      WHERE p.principal_id = $1${extraWhere}`;
-  const participantSessions = async (principalId: string, opts?: { limit: number }): Promise<Session[]> => {
-    const limit = opts ? Math.max(0, Math.floor(opts.limit)) : undefined;
-    const rows = await q(
-      participantSessionsSql("", LIST_COLUMNS) +
-        (limit === undefined ? "" : " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $2"),
-      limit === undefined ? [principalId] : [principalId, limit],
-    );
-    return rows.map(rowToParticipantSession);
-  };
-  const participantScopes = async (principalId: string): Promise<ParticipantScope[]> => {
-    const rows = await q(
-      `SELECT s.scope_id, MAX(s.channel_name) AS channel_name,
-              COUNT(*) FILTER (WHERE s.has_content) AS session_count,
-              MAX(s.activity) FILTER (WHERE s.has_content) AS last_activity
-         FROM participants p
-        CROSS JOIN LATERAL (
-          SELECT s.scope_id, s.channel_name, ${USER_ACTIVITY} AS activity, ${HAS_CONTENT} AS has_content
-            FROM sessions s WHERE s.id = p.session_id OFFSET 0
-        ) s
-        WHERE p.principal_id = $1
-        GROUP BY s.scope_id`,
-      [principalId],
-    );
-    return rows.map((r) => ({
-      scopeId: r.scope_id as ScopeId,
-      ...(r.channel_name != null ? { channelName: r.channel_name as string } : {}),
-      sessionCount: Number(r.session_count),
-      lastActivityAt: r.last_activity == null ? null : Number(r.last_activity),
-    }));
-  };
-  const participantPage = async (principalId: string, query: ParticipantPageQuery): Promise<ParticipantPage> => {
-    const params: unknown[] = [principalId];
-    const where: string[] = [
-      "p.principal_id = $1",
-      OWN_CHAT("s"),
-      "(s.side_chat IS NULL OR s.side_chat->>'expanded' = 'true')",
-      HAS_CONTENT,
-    ];
-    const param = (value: unknown): string => {
-      params.push(value);
-      return `$${params.length}`;
-    };
-    where.push(`COALESCE(p.archived, false) = ${param(query.archived === true)}`);
-    if (query.pinned !== undefined) where.push(`COALESCE(p.pinned, false) = ${param(query.pinned)}`);
-    if (query.surface !== undefined) where.push(`s.surface = ${param(query.surface)}`);
-    if (query.scopeId !== undefined) where.push(`s.scope_id = ${param(query.scopeId)}`);
-    if (query.sessionIds !== undefined) where.push(`p.session_id = ANY(${param([...query.sessionIds])}::text[])`);
-    if (query.titleQuery?.trim()) {
-      const pattern = param(likeContains(query.titleQuery.trim()));
-      where.push(`(COALESCE(p.title, s.title) ILIKE ${pattern} OR s.channel_name ILIKE ${pattern})`);
-    }
-    if (query.before)
-      where.push(`(${USER_ACTIVITY}, s.id) < (${param(query.before.activity)}::bigint, ${param(query.before.id)})`);
-    const limit = Math.max(1, Math.min(Math.floor(query.limit), 200));
-    const page = await q(
-      `SELECT s.id, ${USER_ACTIVITY} AS activity
-         FROM participants p ${
-           query.scopeId === undefined
-             ? "CROSS JOIN LATERAL (SELECT * FROM sessions WHERE id = p.session_id OFFSET 0) s"
-             : "JOIN sessions s ON s.id = p.session_id"
-         }
-        WHERE ${where.join(" AND ")}
-        ORDER BY ${USER_ACTIVITY} DESC, s.id DESC
-        LIMIT ${param(limit + 1)}`,
-      params,
-    );
-    const more = page.length > limit;
-    const ids = page.slice(0, limit).map((row) => row.id as string);
-    if (!ids.length) return { sessions: [], next: null };
-    const rows = await q(participantSessionsSql(" AND s.id = ANY($2::text[])", LIST_COLUMNS), [principalId, ids]);
-    const byId = new Map(rows.map((row) => [row.id as string, rowToParticipantSession(row)]));
-    const last = page[limit - 1];
-    return {
-      sessions: ids.flatMap((id) => byId.get(id) ?? []),
-      next: more && last ? { activity: Number(last.activity), id: last.id as string } : null,
-    };
-  };
+
   const descendantsOf = async (rootIds: readonly string[]): Promise<SessionDescendant[]> => {
     if (!rootIds.length) return [];
     const rows = await q(
@@ -286,10 +143,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       [[...rootIds]],
     );
     return rows.map((r) => ({ id: r.id as string, rootId: r.root_id as string, threadRef: r.thread_ref as string }));
-  };
-  const participantSession = async (sessionId: string, principalId: string): Promise<Session | null> => {
-    const rows = await q(participantSessionsSql(" AND s.id = $2"), [principalId, sessionId]);
-    return rows[0] ? rowToParticipantSession(rows[0]) : null;
   };
 
   const db = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS]);
@@ -745,18 +598,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return envelopes;
     },
 
-    async addParticipant(sessionId, principalId, title): Promise<void> {
-      await q(
-        `INSERT INTO participants(session_id, principal_id, title) VALUES ($1, $2, $3)
-         ON CONFLICT (tenant_id, session_id, principal_id) DO UPDATE SET title = EXCLUDED.title WHERE EXCLUDED.title IS NOT NULL`,
-        [sessionId, principalId, title ?? null],
-      );
-    },
-
-    async removeParticipant(sessionId, principalId): Promise<void> {
-      await q("DELETE FROM participants WHERE session_id = $1 AND principal_id = $2", [sessionId, principalId]);
-    },
-
     async deleteSession(sessionId): Promise<void> {
       await withPgTransaction(await pool(), async (client) => {
         await lockSession(client, sessionId);
@@ -784,18 +625,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
     },
 
-    async listByParticipant(principalId, opts): Promise<Session[]> {
-      return participantSessions(principalId, opts);
-    },
-
-    async participantScopes(principalId): Promise<ParticipantScope[]> {
-      return participantScopes(principalId);
-    },
-
-    async listParticipantPage(principalId, query): Promise<ParticipantPage> {
-      return participantPage(principalId, query);
-    },
-
     async descendantsOf(rootIds): Promise<SessionDescendant[]> {
       return descendantsOf(rootIds);
     },
@@ -818,10 +647,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToParticipantSession);
     },
 
-    async getForParticipant(sessionId, principalId): Promise<Session | null> {
-      return participantSession(sessionId, principalId);
-    },
-
     async sameScopeAncestors(threadRefs) {
       const rows = await q(
         `WITH RECURSIVE up(leaf_scope, id, scope_id, parent_id, depth, path) AS (
@@ -835,44 +660,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         [[...threadRefs]],
       );
       return rows.map(rowToSession);
-    },
-
-    async updateParticipantView(sessionId, principalId, patch): Promise<void> {
-      if (patch.title !== undefined) {
-        await q("UPDATE participants SET title = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.title,
-        ]);
-      }
-      if (patch.archived !== undefined) {
-        await q("UPDATE participants SET archived = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.archived,
-        ]);
-      }
-      if (patch.pinned !== undefined) {
-        await q("UPDATE participants SET pinned = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.pinned,
-        ]);
-      }
-      if (patch.color !== undefined) {
-        await q("UPDATE participants SET color = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.color,
-        ]);
-      }
-      if (patch.readAt !== undefined) {
-        await q("UPDATE participants SET read_at = $3 WHERE session_id = $1 AND principal_id = $2", [
-          sessionId,
-          principalId,
-          patch.readAt,
-        ]);
-      }
     },
 
     async addPin(sessionId, pin: NewSessionPin, maxPins?: number): Promise<SessionPin | null> {
@@ -1019,22 +806,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       }));
     },
 
+    ...createSessionParticipants(q),
     ...createSessionAdminReads(q),
     ...createSessionSpend({ db, now }),
-
-    async listParticipants(): Promise<Participant[]> {
-      const rows = await q("SELECT session_id, principal_id FROM participants");
-      return rows.map((r) => ({ sessionId: r.session_id as string, principalId: r.principal_id as string }));
-    },
-
-    async distinctParticipants(): Promise<string[]> {
-      const rows = await q("SELECT DISTINCT principal_id FROM participants");
-      return rows.map((r) => r.principal_id as string);
-    },
-
-    async participantsOf(sessionId): Promise<string[]> {
-      const rows = await q("SELECT principal_id FROM participants WHERE session_id = $1", [sessionId]);
-      return rows.map((r) => r.principal_id as string);
-    },
   };
 }
