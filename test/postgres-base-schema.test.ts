@@ -95,7 +95,14 @@ test("a fully migrated database skips the base schema and drops only the retired
       (await admin.query("SELECT principal_id FROM participants")).rows.map((row) => row.principal_id),
       ["member"],
     );
-    await admin.query("INSERT INTO participants(session_id, principal_id) VALUES ('s1', 'joined')");
+    assert.deepEqual(
+      (
+        await admin.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'participants' ORDER BY ordinal_position",
+        )
+      ).rows.map((row) => row.column_name),
+      ["session_id", "principal_id"],
+    );
     const columns = await admin.query(
       "SELECT column_name FROM information_schema.columns WHERE table_name = 'items' ORDER BY ordinal_position",
     );
