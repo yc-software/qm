@@ -55,6 +55,7 @@ export function registerSlackEvents(
     denyResponder?: DenyResponder;
     webUiPublicUrl?: string;
     backfillHistory?: (client: unknown, channel: string) => Promise<unknown>;
+    agentLabel?: (scope: string) => Promise<string | undefined>;
     ensureHeader?: (
       client: SurfaceHeaderClient,
       channel: string,
@@ -383,6 +384,7 @@ export function registerSlackEvents(
         botUserId: ids.botUserId,
         webUiPublicUrl: deps.webUiPublicUrl,
         syncDirectory: () => forceDirectorySync(client),
+        ...(deps.agentLabel ? { agentLabel: deps.agentLabel } : {}),
         ...(deps.ensureHeader
           ? {
               ensureHeader: (channel: string) =>
