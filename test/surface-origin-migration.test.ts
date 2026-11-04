@@ -88,10 +88,7 @@ test("the retired origin sweep refuses rows the previous release wrote after the
       `INSERT INTO crons (id, json) VALUES ('c1', $1)`,
       { destination: { type: "slack", target: "C1", slackAccountId: "partner" } },
     ],
-    [
-      `UPDATE runs SET status = 'pending', request = $1`,
-      request({ origin: { kind: "human" }, slackSource: { accountId: "partner" } }),
-    ],
+    [`UPDATE runs SET status = 'pending', request = $1`, request({ liveActor: true, triggerTs: "1.0" })],
   ] as const;
   for (const [statement, row] of stale)
     await withDatabase(async (url, db) => {

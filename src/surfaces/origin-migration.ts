@@ -18,7 +18,10 @@ const legacyRequest = (json: string) =>
   `jsonb_typeof(${json}) = 'object' AND (${anyKey(json, SLACK_REQUEST_KEYS)} OR NOT (${json}) ? 'origin' AND ${anyKey(json, RETIRED_ORIGIN_KEYS)})`;
 
 const PREVIOUS_RELEASE_ROWS: [table: string, where: string][] = [
-  ["runs", `status IN ('pending', 'running') AND ${requestText("request")}`],
+  [
+    "runs",
+    `status IN ('pending', 'running') AND pg_input_is_valid(request, 'jsonb') AND ${legacyRequest("request::jsonb")}`,
+  ],
   [
     "run_signals",
     `consumed_at IS NULL AND (${legacyRequest("payload -> 'request'")} OR ${legacyRequest("payload -> 'sessionRequest'")})`,
