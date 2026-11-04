@@ -3333,6 +3333,8 @@ test("subagents send_message wakes by default and says what happened", async () 
       busy: false,
       notWoken: "a message cannot start a turn in a top-level conversation",
     },
+    { ok: true, sessionId: "child", title: "child", delivered: "interrupted" },
+    { ok: true, sessionId: "child", title: "child", delivered: "interrupted" },
   ];
   tc.sessionSyscalls = {
     open: async () => ({ ok: false, message: "unused" }),
@@ -3360,9 +3362,19 @@ test("subagents send_message wakes by default and says what happened", async () 
     `Left in "child"'s mailbox. It has work running or queued and sees this at its next step.`,
   );
   assert.match(await send({}), /^Left in "root"'s mailbox without waking it: a message cannot start a turn/);
+  assert.match(await send({ interrupt: true }), /^Stopped "child"'s current run; it starts on this message next/);
+  assert.match(await send({ interrupt: true, text: undefined }), /^Stopped "child"'s current run; it is idle/);
   assert.deepEqual(
-    writes.map(({ wake }) => wake),
-    [true, true, false, false, true],
+    writes.map(({ wake, interrupt }) => [wake, interrupt]),
+    [
+      [true, undefined],
+      [true, undefined],
+      [false, undefined],
+      [false, undefined],
+      [true, undefined],
+      [true, true],
+      [true, true],
+    ],
   );
 });
 

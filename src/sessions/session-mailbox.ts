@@ -11,6 +11,9 @@ export interface SessionMessage {
   audience: OrchestratorInput["conversation"]["audience"];
   createdAt: number;
   consumed?: boolean;
+  wake?: true;
+  senderRunId?: string;
+  delegatingRunId?: string;
 }
 
 export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
@@ -22,10 +25,27 @@ export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
       const rows = await backing.select({ where: { field: "recipientId", anyOfFold: [recipientId] } });
       return rows.filter((row) => !row.consumed).sort((a, b) => a.createdAt - b.createdAt);
     },
+    async unread(recipientId: string, id: string): Promise<boolean> {
+      const row = await backing.get(id);
+      return row?.recipientId === recipientId && !row.consumed;
+    },
+    async wakesFor(recipientId: string): Promise<SessionMessage[]> {
+      const rows = await backing.select({ where: { field: "wake", anyOfFold: ["true"] } });
+      return rows
+        .filter((row) => row.recipientId === recipientId && !row.consumed)
+        .sort((a, b) => a.createdAt - b.createdAt);
+    },
+    async awaitingWake(afterId?: string): Promise<SessionMessage[]> {
+      return backing.select({ where: { field: "wake", anyOfFold: ["true"] }, limit: 100, afterId });
+    },
+    async settle(recipientId: string, id: string): Promise<void> {
+      const row = await backing.get(id);
+      if (row?.recipientId === recipientId) await backing.merge(id, { wake: undefined });
+    },
     async acknowledge(recipientId: string, ids: string[]): Promise<void> {
       for (const id of ids) {
         const row = await backing.get(id);
-        if (row?.recipientId === recipientId) await backing.merge(id, { consumed: true });
+        if (row?.recipientId === recipientId) await backing.merge(id, { consumed: true, wake: undefined });
       }
     },
   };

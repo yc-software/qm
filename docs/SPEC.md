@@ -14,6 +14,8 @@
 
 **Agent turns.** The system revolves around durable execution against a central write-ahead log: the session's item log, stored in the `items` table. To execute an agent turn, a worker claims a queued run from the run queue; that run claim is the session's only turn lock and fences the turn's writes. The _orchestrator_ assembles context and drives a harness, which fulfills tool calls, and the result is committed to the item log. The system should be robust to interruption at any time, end to end, and scale to swarms that are millions of agents strong.
 
+**Delegation.** Subagents are ring 0: open, message, wake, interrupt, stop, wait and tree status sit on the per-turn hot path and meet the same bar as the turn loop. The contract: an interrupt stops only its target's current run and delivers its text as the target's next turn; a parent agent's interrupt leaves the target's children running, while a stop by the user, a goal cancel or the swarm also stops the stopped run's descendants; a child that is not read-only can wake its top-level parent; liveness is the latest tool step, not the turn end; each child gets its own sandbox unless told otherwise; tool result text states what happened and never recommends a destructive action.
+
 **Models.** Agents have a single tool catalog; their turns are fulfilled by Pi, which calls into the model catalog, the canonical source for model varieties, effort levels, speed multipliers, and their prices. A particular selection of those variables fulfilling a turn is called the _runtime_.
 
 **Scopes.** The original model was one OpenClaw per-person or per-channel. That means isolated compute, memory, files, crons, and apps. Breaking through that isolation requires an explicit and auditable _grant_.

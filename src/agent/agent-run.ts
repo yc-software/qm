@@ -52,7 +52,7 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "default",
   "adaptive",
 ]);
-import type { ConversationTurn } from "../types.ts";
+import type { ConversationTurn, StopScope } from "../types.ts";
 import { isAgentReply, isUserItem, type Item } from "../sessions/items.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
@@ -1246,6 +1246,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         };
         let userAborted = false;
         let abortReason: string | undefined;
+        let abortScope: StopScope | undefined;
         let recoveryDead = false;
         entry.ref.abortSignal = toolAbort.signal;
         const onCancel = (): void => {
@@ -1304,9 +1305,10 @@ export function createAgent(opts?: AgentOptions): Agent {
                     }
                     return false;
                   },
-                  onAbort: async (reason) => {
+                  onAbort: async ({ reason, scope }) => {
                     userAborted = true;
                     abortReason ??= reason;
+                    abortScope ??= scope;
                     toolAbort.abort();
                     entry.agentSession.clearQueue();
                     await entry.agentSession.abort();
@@ -1626,7 +1628,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             userAborted ? abortReason : "because the run was cancelled",
             steps.closing(reply),
           );
-          return result(reply, { stopped: true });
+          return result(reply, { stopped: true, ...(abortScope ? { stopScope: abortScope } : {}) });
         }
 
         await settleGoal(false);
