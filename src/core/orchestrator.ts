@@ -58,7 +58,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, isSessionTurn } from "./turn-origin.ts";
+import { desktopClientForTurn, isPersonAuthored, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -2727,7 +2727,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           memoryRecallQuery(input.text, visibleHistory),
           memoryView.loaded,
           (outcome) => void recallOutcomes.push(outcome),
-          input.text,
+          isPersonAuthored(input.origin.kind) && !sessionTurn ? input.displayText?.trim() || input.text : undefined,
         );
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         const reconciled = partial ? reconcile(visibleHistory, partial, input.resumeCause) : null;
