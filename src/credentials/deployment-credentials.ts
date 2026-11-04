@@ -13,6 +13,8 @@ import {
   type ServiceCredentialStore,
 } from "./keychain.ts";
 import type { ScopeId } from "../types.ts";
+import { boundTenant, isInstallTenant } from "../tenants/context.ts";
+import { loadedTenantSettings } from "../tenants/settings.ts";
 
 export interface DeploymentBrokerCredential {
   slug: string;
@@ -43,7 +45,11 @@ function stringList(value: unknown, label: string, valid: (item: string) => bool
   return value as string[];
 }
 
-function parseEntry(raw: unknown, index: number, env: NodeJS.ProcessEnv): DeploymentBrokerCredential {
+function parseEntry(
+  raw: unknown,
+  index: number,
+  env: Readonly<Record<string, string | undefined>>,
+): DeploymentBrokerCredential {
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
     throw new Error(`BROKER_CREDENTIALS[${index}] must be an object`);
   const entry = raw as Record<string, unknown>;
@@ -88,7 +94,9 @@ function parseEntry(raw: unknown, index: number, env: NodeJS.ProcessEnv): Deploy
   };
 }
 
-export function deploymentBrokerCredentialsFromEnv(env: NodeJS.ProcessEnv): DeploymentBrokerCredential[] {
+export function deploymentBrokerCredentialsFromEnv(
+  env: Readonly<Record<string, string | undefined>>,
+): DeploymentBrokerCredential[] {
   const raw = env.BROKER_CREDENTIALS?.trim();
   if (!raw) return [];
   let parsed: unknown;
@@ -105,6 +113,39 @@ export function deploymentBrokerCredentialsFromEnv(env: NodeJS.ProcessEnv): Depl
     seen.add(slug);
   }
   return credentials;
+}
+
+function tenantBrokerEnv(env: Readonly<Record<string, string>>): string {
+  return JSON.stringify(
+    Object.entries(env)
+      .filter(([name]) => name === "BROKER_CREDENTIALS" || name.startsWith("BROKER_SECRET_"))
+      .sort(([a], [b]) => (a < b ? -1 : 1)),
+  );
+}
+
+export function tenantBrokerCredentials(
+  deployment: readonly DeploymentBrokerCredential[],
+): () => readonly DeploymentBrokerCredential[] {
+  const parsed = new Map<string, { env: string; credentials: readonly DeploymentBrokerCredential[] }>();
+  return () => {
+    const tenant = boundTenant();
+    const env = tenant ? loadedTenantSettings().env : undefined;
+    if (!tenant) return deployment;
+    // The deployment-wide set belongs to the install tenant's org only. Any other tenant
+    // without its own BROKER_CREDENTIALS gets none, never the deployment's secrets.
+    if (!env?.BROKER_CREDENTIALS?.trim()) return isInstallTenant() ? deployment : [];
+    const current = tenantBrokerEnv(env);
+    const cached = parsed.get(tenant);
+    if (cached?.env === current) return cached.credentials;
+    let credentials: readonly DeploymentBrokerCredential[] = [];
+    try {
+      credentials = deploymentBrokerCredentialsFromEnv(env);
+    } catch (error) {
+      console.warn(`[broker-credentials] tenant ${tenant} BROKER_CREDENTIALS ignored: ${errMessage(error)}`);
+    }
+    parsed.set(tenant, { env: current, credentials });
+    return credentials;
+  };
 }
 
 function decrypted(c: DeploymentBrokerCredential): DecryptedServiceCredential {
@@ -139,24 +180,32 @@ function reservedSlugError(slug: string): Error {
 
 export function withDeploymentCredentials(
   store: ServiceCredentialStore,
-  orgScopeId: ScopeId,
-  credentials: readonly DeploymentBrokerCredential[],
+  orgScopeId: ScopeId | (() => ScopeId),
+  credentials: readonly DeploymentBrokerCredential[] | (() => readonly DeploymentBrokerCredential[]),
 ): ServiceCredentialStore {
-  if (!credentials.length) return store;
-  const bySlug = new Map(credentials.map((c) => [c.slug, c]));
-  const reserved = (scope: ScopeId, slug: string) => scope === orgScopeId && bySlug.has(slug);
+  if (typeof credentials !== "function" && !credentials.length) return store;
+  const indexes = new WeakMap<readonly DeploymentBrokerCredential[], Map<string, DeploymentBrokerCredential>>();
+  const active = () => {
+    const list = typeof credentials === "function" ? credentials() : credentials;
+    let bySlug = indexes.get(list);
+    if (!bySlug) indexes.set(list, (bySlug = new Map(list.map((c) => [c.slug, c]))));
+    return { org: typeof orgScopeId === "function" ? orgScopeId() : orgScopeId, list, bySlug };
+  };
   const guard = (scope: ScopeId, slug: string) => {
-    if (reserved(scope, slug)) throw reservedSlugError(slug);
+    const { org, bySlug } = active();
+    if (scope === org && bySlug.has(slug)) throw reservedSlugError(slug);
   };
   return {
     async getServiceCredentialSecret(scope, slug) {
-      const own = scope === orgScopeId ? bySlug.get(slug) : undefined;
+      const { org, bySlug } = active();
+      const own = scope === org ? bySlug.get(slug) : undefined;
       return own ? decrypted(own) : store.getServiceCredentialSecret(scope, slug);
     },
     async listServiceCredentials(scope) {
+      const { org, list, bySlug } = active();
       const stored = await store.listServiceCredentials(scope);
-      if (scope !== orgScopeId) return stored;
-      return [...credentials.map(projected), ...stored.filter((c) => !bySlug.has(c.slug))];
+      if (scope !== org) return stored;
+      return [...list.map(projected), ...stored.filter((c) => !bySlug.has(c.slug))];
     },
     async setServiceCredential(scope, input) {
       guard(scope, input.slug);
