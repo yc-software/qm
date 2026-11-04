@@ -507,6 +507,24 @@ END $base_schema$`,
 
     get: getRun,
 
+    async lastFinishedForThreads(threadRefs) {
+      if (!threadRefs.length) return new Map();
+      const { rows } = await q(
+        `SELECT last.* FROM unnest($1::text[]) AS threads(id)
+         CROSS JOIN LATERAL (
+           SELECT * FROM runs WHERE session_id = threads.id AND status IN ('done', 'failed')
+           ORDER BY created_at DESC, seq DESC LIMIT 1
+         ) last`,
+        [[...new Set(threadRefs)]],
+      );
+      return new Map(
+        rows.map((row) => {
+          const run = rowToRun(row);
+          return [run.sessionId, run];
+        }),
+      );
+    },
+
     async activeForThread(sessionId: string): Promise<Run | null> {
       return (await runs.activeForThreads([sessionId])).get(sessionId) ?? null;
     },

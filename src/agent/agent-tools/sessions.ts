@@ -1,6 +1,7 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { text, type ToolKit } from "./kit.ts";
+import { renderSubagentActivity } from "../../sessions/subagent-status.ts";
 import { isolationLabel } from "../../sessions/child-isolation.ts";
 import type { ChildIsolationMode } from "../../types.ts";
 
@@ -217,7 +218,7 @@ export function sessionTools(kit: ToolKit) {
       if (result.mode === "children") {
         const lines = result.children.map(
           (c) =>
-            `- ${c.title} (${c.sessionId}) — ${c.status}${c.isolation ? ` — ${isolationLabel(c.isolation)}` : ""}${c.lastSaid ? ` — last said: ${c.lastSaid}` : ""}`,
+            `- ${c.title} (${c.sessionId}) — ${renderSubagentActivity(c.activity)}${c.isolation ? ` — ${isolationLabel(c.isolation)}` : ""}${c.lastSaid ? ` — last said: ${c.lastSaid}` : ""}`,
         );
         return recordResult(
           callId,
@@ -228,7 +229,9 @@ export function sessionTools(kit: ToolKit) {
       return recordResult(
         callId,
         { tool: "subagents", action: "read", sessionId: result.sessionId, title: result.title, status: result.status },
-        text(`"${result.title}" — ${result.status}\n${result.rendered}`),
+        text(
+          `"${result.title}" — ${result.activity ? renderSubagentActivity(result.activity) : result.status}\n${result.rendered}`,
+        ),
       );
     },
   });

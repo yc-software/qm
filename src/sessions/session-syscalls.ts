@@ -3,7 +3,7 @@ import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
-import { pgTextSafe } from "../util/text.ts";
+import { pgTextSafe, snippet } from "../util/text.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { errMessage } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
@@ -28,7 +28,18 @@ import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
-import { pendingWork, wakeOwnParent } from "./subagent-mail.ts";
+import { wakeOwnParent } from "./subagent-mail.ts";
+import {
+  liveSubagentsNote,
+  openChildren,
+  runState,
+  sessionActivity,
+  subagentActivity,
+  visibleChildren,
+  type SessionStatus,
+  type SubagentActivity,
+  type SubagentActivityDeps,
+} from "./subagent-status.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 
@@ -211,12 +222,10 @@ interface SessionReadInput {
   maxChars?: number;
 }
 
-type SessionStatus = "running" | "pending" | "waiting on subagents" | "idle";
-
 interface SessionChildSummary {
   sessionId: string;
   title: string;
-  status: SessionStatus;
+  activity: SubagentActivity;
   lastSaid?: string;
   isolation?: ChildIsolation;
 }
@@ -241,7 +250,15 @@ type SessionListResult = { ok: true; sessions: SessionSummary[] } | { ok: false;
 
 type SessionReadResult =
   | { ok: true; mode: "children"; children: SessionChildSummary[] }
-  | { ok: true; mode: "transcript"; sessionId: string; title: string; status: string; rendered: string }
+  | {
+      ok: true;
+      mode: "transcript";
+      sessionId: string;
+      title: string;
+      status: SessionStatus;
+      activity?: SubagentActivity;
+      rendered: string;
+    }
   | { ok: false; message: string };
 
 export interface SessionSyscallBinding {
@@ -283,6 +300,7 @@ export interface SessionSyscalls {
   open(input: SessionOpenInput): Promise<SessionOpenResult>;
   write(input: SessionWriteInput): Promise<SessionWriteResult>;
   read(input: SessionReadInput): Promise<SessionReadResult>;
+  liveSubagents?(): Promise<string>;
   search?(input: { query: string; limit?: number }): ReturnType<CoreSearch["search"]>;
   list?(): Promise<SessionListResult>;
   start?(input: SessionStartInput): Promise<SessionStartResult>;
@@ -311,8 +329,11 @@ export interface SessionSyscallDeps {
     | "visibleItems"
     | "participantsOf"
     | "getForParticipant"
-  >;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw">;
+    | "descendantsOf"
+  > &
+    SubagentActivityDeps["sessions"];
+  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw"> &
+    SubagentActivityDeps["runs"];
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
   advisoryLock: AdvisoryLock;
@@ -363,11 +384,6 @@ function lastAssistantText(items: readonly Item[]): string | undefined {
     if (text) return text;
   }
   return undefined;
-}
-
-export function snippet(text: string, max: number): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1).trimEnd()}…`;
 }
 
 function renderSubagentTask(input: { title: string; parentTitle: string; task: string }): string {
@@ -645,17 +661,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (target.parentSessionId || isSubagentThreadRef(target.threadRef) || target.threadRef.startsWith("swarm:"))
           return `"${target.title?.trim() || target.id}" is a subagent, not a session — use the subagents tool for it.`;
         return null;
-      }
-
-      async function statusOf(session: Session): Promise<SessionStatus> {
-        const inFlight = await deps.runs.inFlightForThread(session.threadRef);
-        if (inFlight.some((r) => r.status === "running")) return "running";
-        return inFlight.length ? "pending" : "idle";
-      }
-
-      async function childStatusOf(session: Session): Promise<SessionStatus> {
-        const status = await statusOf(session);
-        return status === "idle" && (await pendingWork(deps, session)) ? "waiting on subagents" : status;
       }
 
       const visibleTitle = (target: Session) => target.title?.trim() || target.id;
@@ -1008,19 +1013,16 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         async read(input) {
           await currentCaller();
           if (!input.target?.trim()) {
-            const children = await deps.sessions.childrenOf(binding.session.id);
             const summaries: SessionChildSummary[] = [];
-            for (const child of children) {
-              if (
-                child.scopeId !== binding.scopeId ||
-                !(await deps.sessions.getForParticipant(child.id, binding.request.actor.id))
-              )
-                continue;
+            for (const { session: child, activity } of await subagentActivity(
+              deps,
+              await visibleChildren(deps, binding, await deps.sessions.childrenOf(binding.session.id)),
+            )) {
               const said = lastAssistantText((await visibleHistory(child)).slice(-LAST_SAID_SCAN));
               summaries.push({
                 sessionId: child.id,
                 title: visibleTitle(child),
-                status: await childStatusOf(child),
+                activity,
                 ...(said ? { lastSaid: snippet(said, 200) } : {}),
                 ...(child.spawnMeta?.isolation ? { isolation: child.spawnMeta.isolation } : {}),
               });
@@ -1050,14 +1052,22 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           }
           let rendered = lines.join("\n");
           if (rendered.length > maxChars) rendered = `…${rendered.slice(rendered.length - maxChars)}`;
+          const activity = await sessionActivity(deps, target);
           return {
             ok: true,
             mode: "transcript",
             sessionId: target.id,
             title: visibleTitle(target),
-            status: await childStatusOf(target),
+            status: activity?.status ?? "idle",
+            ...(activity && !input.peer ? { activity } : {}),
             rendered: rendered || "[no readable entries yet]",
           };
+        },
+        async liveSubagents() {
+          return liveSubagentsNote(
+            await openChildren(deps, binding, await deps.sessions.childrenOf(binding.session.id)),
+            visibleTitle,
+          );
         },
         async search(input) {
           const caller = await currentCaller();
@@ -1102,14 +1112,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const recent = visible
             .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
             .slice(0, SESSION_LIST_LIMIT);
-          const sessions: SessionSummary[] = [];
-          for (const session of recent)
-            sessions.push({
-              sessionId: session.id,
-              title: session.title?.trim() || "Untitled",
-              status: await statusOf(session),
-              current: session.id === binding.session.id,
-            });
+          const active = await deps.runs.activeForThreads(recent.map((session) => session.threadRef));
+          const sessions: SessionSummary[] = recent.map((session) => ({
+            sessionId: session.id,
+            title: session.title?.trim() || "Untitled",
+            status: runState(active.get(session.threadRef)),
+            current: session.id === binding.session.id,
+          }));
           return { ok: true, sessions };
         },
         async start(input) {

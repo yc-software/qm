@@ -3315,8 +3315,14 @@ test("subagents open forwards isolation and reports where the child works", asyn
       ok: true,
       mode: "children",
       children: [
-        { sessionId: "child", title: "child", status: "idle", isolation: placement },
-        { sessionId: "other", title: "other", status: "idle" },
+        {
+          sessionId: "child",
+          title: "child",
+          status: "idle",
+          activity: { status: "idle", unread: 0 },
+          isolation: placement,
+        },
+        { sessionId: "other", title: "other", status: "idle", activity: { status: "idle", unread: 0 } },
       ],
     }),
   };
@@ -3894,6 +3900,82 @@ test("thrown execution errors leave pending child messages for the next delivere
     assert.match(JSON.stringify(await call(tool, input)), /Important child finding/);
     assert.equal(pending, false);
   }
+});
+
+test("subagents read renders each child's liveness compactly", async () => {
+  const tc = fakeToolContext();
+  tc.sessionSyscalls = {
+    open: async () => ({ ok: false, message: "unused" }),
+    write: async () => ({ ok: false, message: "unused" }),
+    read: async (input) =>
+      input.target
+        ? {
+            ok: true,
+            mode: "transcript",
+            sessionId: "s1",
+            title: "builder",
+            status: "idle",
+            activity: { status: "idle", outcome: "final_answer", unread: 0 },
+            rendered: "AgentMessage#4 done",
+          }
+        : {
+            ok: true,
+            mode: "children",
+            children: [
+              {
+                sessionId: "s1",
+                title: "builder",
+                activity: {
+                  status: "running",
+                  stepAgoMs: 42_000,
+                  tool: "execute",
+                  purpose: "Running\n  tests",
+                  outcome: "final_answer",
+
+                  unread: 1,
+                },
+                lastSaid: "on it",
+              },
+              {
+                sessionId: "s2",
+                title: "fresh",
+                activity: { status: "running", startedAgoMs: 5_000, unread: 0 },
+              },
+              {
+                sessionId: "s3",
+                title: "reviewer",
+                activity: {
+                  status: "idle",
+                  stepAgoMs: 7_200_000,
+                  tool: "files",
+                  outcome: "errored",
+
+                  unread: 0,
+                },
+              },
+              {
+                sessionId: "s4",
+                title: "quiet",
+                activity: { status: "idle", stepAgoMs: 5_000, tool: "", unread: 2 },
+              },
+            ],
+          },
+  };
+  const subagents = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents");
+  assert.ok(subagents);
+  assert.equal(
+    textOut(await call(subagents, { action: "read" })),
+    [
+      "- builder (s1) — running; last step execute 42s ago; working on: Running tests; 1 message it has not read yet — last said: on it",
+      "- fresh (s2) — running; started 5s ago, no tool step yet",
+      "- reviewer (s3) — idle; last turn errored; last step files 2h ago",
+      "- quiet (s4) — idle; last step 5s ago; 2 messages it has not read yet",
+    ].join("\n"),
+  );
+  assert.equal(
+    textOut(await call(subagents, { action: "read", target: "builder" })),
+    '"builder" — idle; last turn final_answer\nAgentMessage#4 done',
+  );
 });
 
 test("subagents and sessions are separate tools with one noun each", async () => {

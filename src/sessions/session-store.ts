@@ -217,6 +217,12 @@ export interface ParticipantPage {
   next: { activity: number; id: string } | null;
 }
 
+export interface ToolStep {
+  tool: string;
+  at: number;
+  purpose?: string;
+}
+
 export interface SessionDescendant {
   id: string;
   rootId: string;
@@ -429,7 +435,7 @@ export interface SessionStore {
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getItem(sessionId: string, seq: number): Promise<Item | undefined>;
   latestItemSeq(sessionId: string): Promise<number>;
-  latestToolPurposes(turnIds: readonly string[]): Promise<Map<string, string>>;
+  latestToolSteps(turnIds: readonly string[]): Promise<Map<string, ToolStep>>;
   goals(sessionIds: readonly string[]): Promise<Map<string, GoalRecord>>;
   setGoal(writer: SessionWriter, goal: GoalRecord, notices?: readonly NewItem[]): Promise<void>;
 

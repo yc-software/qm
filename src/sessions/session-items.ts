@@ -70,7 +70,7 @@ export function createSessionItems(deps: {
   | "append"
   | "appendMany"
   | "countItemsBefore"
-  | "latestToolPurposes"
+  | "latestToolSteps"
   | "latestItemSeq"
   | "goals"
   | "setGoal"
@@ -187,16 +187,24 @@ export function createSessionItems(deps: {
       return Number(rows[0]?.n ?? 0);
     },
 
-    async latestToolPurposes(turnIds) {
+    async latestToolSteps(turnIds) {
       if (!turnIds.length) return new Map();
       const rows = await q(
-        `SELECT DISTINCT ON (i.turn_id) i.turn_id::text AS turn_id, btrim(i.body->>'purpose') AS purpose FROM items i
-          WHERE i.tenant_id = ${TENANT} AND i.turn_id = ANY($1::uuid[]) AND i.kind = 'ToolCall'
-            AND btrim(i.body->>'purpose') <> ''
-          ORDER BY i.turn_id, i.seq DESC`,
-        [turnIds.map((id) => id.toLowerCase())],
+        `SELECT t.id::text AS turn_id, s.tool, ${msOf("s.created_at")} AS at, p.purpose
+           FROM unnest($1::uuid[]) AS t(id)
+           CROSS JOIN LATERAL (SELECT tool, created_at FROM items WHERE tenant_id = ${TENANT} AND turn_id = t.id
+                                 AND kind IN ('ToolCall', 'ToolResult') ORDER BY seq DESC LIMIT 1) s
+           LEFT JOIN LATERAL (SELECT btrim(body->>'purpose') AS purpose FROM items WHERE tenant_id = ${TENANT}
+                                AND turn_id = t.id AND kind = 'ToolCall' AND btrim(body->>'purpose') <> ''
+                              ORDER BY seq DESC LIMIT 1) p ON true`,
+        [[...new Set(turnIds.map((id) => id.toLowerCase()))]],
       );
-      return new Map(rows.map((r) => [r.turn_id as string, r.purpose as string]));
+      return new Map(
+        rows.map((r) => [
+          String(r.turn_id),
+          { tool: String(r.tool ?? ""), at: Number(r.at), ...(r.purpose ? { purpose: String(r.purpose) } : {}) },
+        ]),
+      );
     },
 
     async latestItemSeq(sessionId): Promise<number> {

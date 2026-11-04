@@ -25,6 +25,7 @@ import {
   forModelContext,
   overBudgetFraction,
   planCompaction,
+  compactedSinceLastTurn,
 } from "../src/agent/context-compaction.ts";
 import { countTokens } from "../src/util/tokens.ts";
 import type { Agent, CompactInput } from "../src/agent/agent.ts";
@@ -374,6 +375,24 @@ test("planCompaction chains a prior summary into the batch instead of accumulati
   assert.ok(
     plan.toSummarize.some((e) => contextSummary(e)),
     "the prior summary is folded into the new batch",
+  );
+});
+
+test("compactedSinceLastTurn holds from a new summary until the next turn's message", () => {
+  const summary = (seq: number) => mkItem(seq, { kind: "ContextCompaction", throughSeq: 1, text: "prior" });
+  const agent = (seq: number) => mkItem(seq, { kind: "AgentMessage", text: `reply ${seq}` });
+  assert.equal(compactedSinceLastTurn([mkItem(0), agent(1)]), false, "no summary, no compaction");
+  assert.equal(compactedSinceLastTurn([mkItem(2), agent(3), summary(4)]), true, "summary after the last turn");
+  assert.equal(compactedSinceLastTurn([summary(4), mkItem(5), agent(6)]), false, "a turn has run since");
+  assert.equal(
+    compactedSinceLastTurn([summary(4), mkItem(5, { kind: "UserMessage", text: "aside", body: { overheard: true } })]),
+    true,
+    "an overheard message is not a turn",
+  );
+  assert.equal(
+    compactedSinceLastTurn([mkItem(2), summary(4), mkItem(5, { kind: "SteeringMessage", text: "also check X" })]),
+    true,
+    "a steering message mid-turn is not a new turn",
   );
 });
 

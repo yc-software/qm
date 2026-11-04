@@ -117,7 +117,7 @@ import type {
   RuntimeChoice,
   SessionRoute,
 } from "../agent/agent.ts";
-import { forModelContext, forSearchView } from "../agent/context-compaction.ts";
+import { compactedSinceLastTurn, forModelContext, forSearchView } from "../agent/context-compaction.ts";
 import {
   quarantineReleaseKey,
   securityScreenChunks,
@@ -2483,6 +2483,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             `[orchestrator] trigger delivery has no surface tools (missing deliveries store?) — reply would be lost session=${session.id}`,
           );
 
+        const turnSessionSyscalls = sessionSyscalls?.forTurn({
+          session,
+          scopeId: scopeId as ScopeId,
+          orgScopeId: resolution.orgScopeId,
+          liveTurn,
+          request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
+          switchedRuntime: () => switchedRuntime,
+        });
+        const liveNote = async () =>
+          (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
         const baseTools = createToolContext({
           desktopClientId: desktopClientForTurn(input),
           sandbox: deps.sandbox,
@@ -2555,18 +2565,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(humanInput && !external ? { humanTurn: true } : {}),
           ...(deps.toolOutput ? { toolOutput: deps.toolOutput, sessionId: session.id } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
-          ...(sessionSyscalls
-            ? {
-                sessionSyscalls: sessionSyscalls.forTurn({
-                  session,
-                  scopeId: scopeId as ScopeId,
-                  orgScopeId: resolution.orgScopeId,
-                  liveTurn,
-                  request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
-                  switchedRuntime: () => switchedRuntime,
-                }),
-              }
-            : {}),
+          ...(turnSessionSyscalls ? { sessionSyscalls: turnSessionSyscalls } : {}),
           ...(strictReadOnly ? {} : { attach: attachStaging.attach }),
           memory: context.memory,
           memoryCaptureMetadata: () => ({ sessionId: session.id, inheritedFacts: captureDependencies() }),
@@ -2913,6 +2912,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           unscreenedNote,
           input.conversationHeader?.trim(),
           ...turnEvents,
+          sessionTurn || automatedTurn || compactedSinceLastTurn(history) ? await liveNote() : "",
           deps.keychain
             ? await askResolutionEvents(
                 scopeAskList,
@@ -3594,8 +3594,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               );
             contextRecovered ||= recovery;
             turnAbort.signal.throwIfAborted();
+            const note = recovery && !sessionTurn && !automatedTurn ? await liveNote() : "";
             segment = await runAgentSegment(
               runtimeSwitchNote("choice" in segment.runtimeHandoff ? segment.runtimeHandoff.choice : undefined) +
+                (note && `\n${note}\n`) +
                 (recovery && !resumedHistory.some((item) => isUserItem(item) && (item.text ?? "").startsWith(baseText))
                   ? `\nCurrent request:\n${baseText}`
                   : ""),

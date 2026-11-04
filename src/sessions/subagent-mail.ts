@@ -19,11 +19,11 @@ import {
   PARENT_INTERRUPT,
   requiresDelegation,
   runStopped,
-  snippet,
   sparesDescendants,
   storedContext,
   treeSessions,
 } from "./session-syscalls.ts";
+import { snippet } from "../util/text.ts";
 
 const MAIL_ERROR_CAP = 1_000;
 const COMPLETION_WAKE =
@@ -487,7 +487,7 @@ function turnText(items: readonly Item[], shared: (seq: number) => boolean, run:
   return undefined;
 }
 
-function mailOf(
+export function mailOf(
   run: Run,
   failed: boolean,
   said: string | undefined,
