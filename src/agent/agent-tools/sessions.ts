@@ -135,7 +135,7 @@ export function sessionTools(kit: ToolKit) {
           callId,
           { tool: "subagents", action: "open", sessionId: result.sessionId, title: result.title },
           text(
-            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use subagents wait before your final answer if you need its result."} ${result.liveRunsRemaining} of its run slots remain.`,
+            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use subagents wait before your final answer if you need its result."}`,
           ),
         );
       }
