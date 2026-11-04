@@ -505,6 +505,10 @@ export function createConfigStore(
           for (const r of await baseModelStore.all()) baseModels.set(r.scopeId, r);
           await Promise.all(allSettings.map((setting) => setting.hydrate()));
         })();
+        const hydrating = state.hydrated;
+        hydrating.catch(() => {
+          if (state.hydrated === hydrating) state.hydrated = undefined;
+        });
       }
       return state.hydrated;
     },

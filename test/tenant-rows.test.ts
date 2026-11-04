@@ -1,6 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { configureTenantCaches } from "../src/api/tenant-ingress.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { hostRequest } from "./support/host-request.ts";
 import {
@@ -144,5 +145,15 @@ describe("routes that resolve their tenant from a stored row", { skip }, () => {
     assert.equal((await hostRequest(`${multi.base}/`, "shop-a.apps.example.test")).status, 503);
     assert.equal((await hostRequest(`${multi.base}/`, "missing.apps.example.test")).status, 404);
     assert.equal((await hostRequest(`${multi.base}/`, "both.apps.example.test")).status, 404);
+  });
+});
+
+describe("tenant cache loads", { skip }, () => {
+  it("answer 503 for a request whose tenant's caches failed to load", async (t) => {
+    configureTenantCaches(() => Promise.reject(new Error("connection reset")));
+    t.after(() => configureTenantCaches(undefined));
+    t.mock.method(console, "error", () => undefined);
+    const res = await signed(multi, "a.example.test", "GET", "/v1/sessions");
+    assert.equal(res.status, 503);
   });
 });

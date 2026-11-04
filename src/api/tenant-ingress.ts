@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { reportFailureAs } from "../util/errors.ts";
 import { verifyCapabilityToken, type VerifiedCapability } from "../auth/capability-token.ts";
-import { isTenantId, withTenant } from "../tenants/context.ts";
+import { isTenantId, TenantUnavailable, withTenant } from "../tenants/context.ts";
 import { tenantSettings } from "../tenants/settings.ts";
 import { requestHost, type RowTable, type Tenancy } from "../tenants/tenancy.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
@@ -58,7 +58,10 @@ export function configureTenantCaches(load: (() => Promise<void>) | undefined): 
 export function bindTenant(tenant: string, next: () => Promise<void> | void): Promise<void> {
   return withTenant(tenant, async () => {
     await tenantSettings();
-    await loadTenantCaches?.().catch(reportFailureAs("tenants: load tenant caches", undefined));
+    await loadTenantCaches?.().catch((error: unknown) => {
+      reportFailureAs("tenants: load tenant caches", undefined)(error);
+      throw new TenantUnavailable("this tenant's settings could not be loaded; retry shortly");
+    });
     await next();
   });
 }
