@@ -15,7 +15,7 @@ test("the standalone CLI and core agree on runtime-enforced core secret names", 
   assert.deepEqual([...runtime].sort(), [...cli].filter((name) => name !== "PUBLIC_API_URL").sort());
 });
 
-test("background ownership requires strong control credentials only for configured deployments", () => {
+test("a deployment id requires strong control credentials only for configured deployments", () => {
   assert.deepEqual(validateCoreSecretEnv({}), []);
   for (const secret of [undefined, "", " ".repeat(32), "short", "separate-control-secret-value-0000000000\n"]) {
     assert.deepEqual(

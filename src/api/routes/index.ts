@@ -2,7 +2,6 @@ import { SPEND_EXPORT_AUD } from "../../auth/capability-token.ts";
 import { browserModelRoutes } from "./browser-model.ts";
 import { sandboxModelRoutes } from "./sandbox-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
-import { backgroundWorkRoutes } from "./background-work.ts";
 import { composioRoutes } from "./composio.ts";
 import { composioTwitterMediaRoutes } from "./composio-twitter-media.ts";
 import { loopIngressRoutes, loopIngressRawRoutes } from "./loop-ingress.ts";
@@ -101,7 +100,6 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...swarmRoutes,
   ...searchRoutes,
   ...deploymentLayerRoutes,
-  ...backgroundWorkRoutes,
   ...deploymentLiveSmokeRoutes,
   ...turnRoutes,
   ...runEventRoutes,

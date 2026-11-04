@@ -120,7 +120,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     name: "DEPLOYMENT_CONTROL_SECRET",
     service: "core",
     required: { when: { kind: "background-work-control" } },
-    description: "Deployment ownership credential held only by core and the privileged deployment operator.",
+    description: "Deployment control credential held only by core and the privileged deployment operator.",
     generate: MINT_LOCALLY,
   },
   {
