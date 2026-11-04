@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 
-test("`node src/index.ts` (relative entry, like Docker) binds the port and serves /healthz", async () => {
+test("`node src/index.ts` (relative entry, like Docker) binds the port, serves /healthz, and exits cleanly on SIGTERM", async () => {
   const PORT = "18097";
   const child = spawn(process.execPath, ["src/index.ts"], {
     cwd: process.cwd(),
@@ -24,6 +25,11 @@ test("`node src/index.ts` (relative entry, like Docker) binds the port and serve
       }
     }
     assert.ok(ok, "portal entry should bind the port and answer /healthz");
+    const exited = once(child, "exit");
+    const signalled = Date.now();
+    child.kill("SIGTERM");
+    assert.deepEqual(await exited, [0, null]);
+    assert.ok(Date.now() - signalled < 6_000, "portal should exit within seconds of SIGTERM");
   } finally {
     child.kill("SIGKILL");
   }

@@ -73,7 +73,16 @@ for _ in {1..30}; do
       status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/idp/.well-known/jwks.json")"
       [[ "$status" != 200 ]]
     fi
-    echo "ok: $service production image serves its combined routes"
+    started="$(date +%s)"
+    docker stop -t 30 "$container" >/dev/null
+    stopped="$(($(date +%s) - started))"
+    exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$container")"
+    if [[ "$exit_code" != 0 || "$stopped" -ge 10 ]]; then
+      docker logs "$container" >&2 || true
+      echo "$service production image took ${stopped}s to stop and exited $exit_code" >&2
+      exit 1
+    fi
+    echo "ok: $service production image serves its combined routes and stops cleanly in ${stopped}s"
     exit 0
   fi
   [[ "$(docker inspect -f '{{.State.Running}}' "$container")" == true ]] || break
