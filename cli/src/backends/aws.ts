@@ -1484,11 +1484,21 @@ function onlyNewTasksServe(
   deploymentId: string,
   desiredCount: number,
 ): boolean {
-  let tasks: EcsTaskState[];
-  let healthyTargets: Array<Set<string | undefined>>;
+  if ((state.deployments ?? []).some((item) => item.id !== deploymentId && (item.runningCount ?? 0) > 0)) return false;
   try {
-    tasks = serviceTaskInventory(config, workload);
-    healthyTargets = (state.loadBalancers ?? []).map(
+    const tasks = serviceTaskInventory(config, workload);
+    const current = tasks.filter((task) => task.startedBy === deploymentId);
+    const ready = current.filter(
+      (task) => task.lastStatus === "RUNNING" && task.desiredStatus === "RUNNING" && healthyTask(workload, task),
+    );
+    if (
+      ready.length < desiredCount ||
+      !tasks.every(
+        (task) => current.includes(task) || task.lastStatus === "DEPROVISIONING" || task.lastStatus === "STOPPED",
+      )
+    )
+      return false;
+    const healthyTargets = (state.loadBalancers ?? []).map(
       ({ targetGroupArn }) =>
         new Set(
           targetGroupArn
@@ -1498,27 +1508,18 @@ function onlyNewTasksServe(
             : [],
         ),
     );
+    return (
+      ready.filter((task) => {
+        const addresses = (task.containers ?? []).flatMap((container) =>
+          (container.networkInterfaces ?? []).map((network) => network.privateIpv4Address),
+        );
+        return healthyTargets.every((healthy) => addresses.some((address) => healthy.has(address)));
+      }).length >= desiredCount
+    );
   } catch (error) {
     note(`${errMessage(error)}; waiting for ECS to finish the rollout`);
     return false;
   }
-  const current = tasks.filter((task) => task.startedBy === deploymentId);
-  return (
-    tasks.every(
-      (task) => current.includes(task) || task.lastStatus === "DEPROVISIONING" || task.lastStatus === "STOPPED",
-    ) &&
-    current.filter((task) => {
-      const addresses = (task.containers ?? []).flatMap((container) =>
-        (container.networkInterfaces ?? []).map((network) => network.privateIpv4Address),
-      );
-      return (
-        task.lastStatus === "RUNNING" &&
-        task.desiredStatus === "RUNNING" &&
-        healthyTask(workload, task) &&
-        healthyTargets.every((healthy) => addresses.some((address) => healthy.has(address)))
-      );
-    }).length >= desiredCount
-  );
 }
 
 interface RolloutTarget {

@@ -355,6 +355,8 @@ else if (a.includes("ecs describe-services")) {
   const blocked = s.blockDisabledDrain && names.some((name) => s.definitions[s.services[name]?.taskDefinition]?.containerDefinitions?.some((container) => container.name === "core" && container.environment?.some((entry) => entry.name === "BACKGROUND_WORK_ENABLED" && entry.value === "0")));
   const draining = (s.drainPolls || 0) > 0 || blocked || (${JSON.stringify(Boolean(opts.rollingTasks))} && s.updated);
   if (s.drainPolls > 0) { s.drainPolls--; save(); }
+  const retiringRunning = ${JSON.stringify(Boolean(opts.rollingTasks))} && s.updated ? (s.retiringPolls > 0 && (${JSON.stringify(opts.rollingTasks?.retiring ?? 2)} > 1) ? 1 : 0) : 1;
+  if (${JSON.stringify(Boolean(opts.rollingTasks))} && s.updated && s.retiringPolls > 0) { s.retiringPolls--; save(); }
   const transientFailedTaskPolls = ${JSON.stringify(opts.transientFailedTaskPolls ?? 0)};
   let transientlyFailing = false;
   if (transientFailedTaskPolls && s.updated) {
@@ -385,7 +387,7 @@ else if (a.includes("ecs describe-services")) {
     const deployments = draining
       ? [
           { id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "IN_PROGRESS", runningCount: service.desiredCount, failedTasks: 1 },
-          { id: "old", status: "ACTIVE", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: 1, failedTasks: 0 },
+          { id: "old", status: "ACTIVE", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: retiringRunning, failedTasks: 0 },
         ]
       : (${JSON.stringify(opts.rolloutFailed ?? false)} || s.failedTaskDefinition === service.taskDefinition)
         ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "FAILED", runningCount: 0, failedTasks: 1 }]
@@ -432,7 +434,6 @@ else if (${JSON.stringify(Boolean(opts.rollingTasks))} && s.updated && a.include
 else if (${JSON.stringify(Boolean(opts.rollingTasks))} && s.updated && a.includes("ecs describe-tasks")) {
   const rolling = ${JSON.stringify(opts.rollingTasks ?? {})};
   const requested = args.slice(args.indexOf("--tasks") + 1).filter(arg => arg.startsWith("arn:"));
-  if (requested.some(arn => arn.includes("/retiring-")) && s.retiringPolls > 0) { s.retiringPolls--; save(); }
   console.log(JSON.stringify({ tasks: requested.map(taskArn => {
     const service = s.services[taskArn.split("/").at(-2)];
     const [kind, index] = taskArn.split("/").at(-1).split("-");
