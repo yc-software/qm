@@ -6,6 +6,7 @@ import { withTenant } from "./tenant.ts";
 export interface HostTenant {
   tenant?: string;
   multi: boolean;
+  sole?: boolean;
 }
 
 export type HostTenantLookup = (host: string) => Promise<HostTenant>;
@@ -23,8 +24,12 @@ export function coreHostTenants(core: string, secret: string | undefined): HostT
       signal: AbortSignal.timeout(5_000),
     }).catch(() => undefined);
     if (r?.status !== 200) return { multi: false };
-    const body = (await r.json()) as { tenant?: unknown; multi?: unknown };
-    const found = { ...(typeof body.tenant === "string" ? { tenant: body.tenant } : {}), multi: body.multi === true };
+    const body = (await r.json()) as { tenant?: unknown; multi?: unknown; sole?: unknown };
+    const found = {
+      ...(typeof body.tenant === "string" ? { tenant: body.tenant } : {}),
+      multi: body.multi === true,
+      sole: body.sole === true,
+    };
     cache.set(host, found);
     return found;
   };

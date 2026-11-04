@@ -66,7 +66,7 @@ describe("operator routes", { skip }, () => {
     );
     assert.equal(unsigned.status, 401);
     const lookup = await signed(multi, "core.internal", "GET", "/v1/operator/hosts/a.example.test");
-    assert.deepEqual(JSON.parse(lookup.text), { tenant: a, multi: true });
+    assert.deepEqual(JSON.parse(lookup.text), { tenant: a, multi: true, sole: false });
     assert.equal((await signed(multi, "core.internal", "GET", "/v1/operator/tenants/not-a-uuid/hosts")).status, 400);
     assert.equal(
       (await signed(multi, "core.internal", "GET", `/v1/operator/tenants/${randomUUID()}/hosts`)).status,
