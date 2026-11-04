@@ -1269,3 +1269,26 @@ test("under external Slack isolation, a source naming the external account canno
     await built.runtime.stop();
   }
 });
+
+test("a judge call that throws is recorded in the admin error log instead of vanishing", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const container = "C-judge-outage";
+    await built.app.setChannelPolicy(container, "!judge-outage", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "540.1", authorId: "U1", text: "anyone around?", createdAt: 1 },
+    ]);
+
+    const rows = await judged(built.ambientJudgments!, container);
+    assert.equal(rows[0]!.decision, "ignore");
+    await built.errors.flush();
+    const errors = await built.errors.list({ scopeId: `channel:${container}` });
+    assert.deepEqual(
+      errors.map((e) => [e.category, e.code, e.message]),
+      [["ambient", "judge_failed", "mock judge outage"]],
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
