@@ -322,7 +322,7 @@ import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
 import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts";
-import { createAgent, agentConfigOptions } from "./agent/agent-run.ts";
+import { createAgent, agentConfigOptions, configDefaultModelId } from "./agent/agent-run.ts";
 import { withResolvedRuntime, resolveRuntimeChoice } from "./agent/runtime-choice.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Agent, RuntimeChoice, SessionRoute } from "./agent/agent.ts";
@@ -1489,19 +1489,19 @@ export function buildApp(
           ? { ...directProviderAvailability, modelIds: new Set(Object.keys(gatewayTransport.models)) }
           : undefined),
     );
-  const agentOptions = agentConfigOptions(config);
+  const configDefault = configDefaultModelId(config);
   const modelRoutes = createModelRoutes({
-    baseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
-    ...(agentOptions.defaultModelId ? { defaultModelId: agentOptions.defaultModelId } : {}),
-    providerKeys: resolveCompanyProviderKeys,
-    ...(gatewayTransport ? { gateway: gatewayTransport } : {}),
+    resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
+    ...(configDefault ? { defaultModelId: configDefault } : {}),
+    resolveProviderKeys: resolveCompanyProviderKeys,
+    ...(gatewayTransport ? { modelGateway: gatewayTransport } : {}),
     ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
-    fallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
+    resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
   });
   const baseAgent =
     overrides.agent ??
     createAgent({
-      ...agentOptions,
+      ...agentConfigOptions(config),
       routes: modelRoutes,
       signals: runSignals,
     });

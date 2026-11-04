@@ -54,30 +54,24 @@ function tenantProviderKeys(keys: ProviderKeys): ProviderKeys {
 }
 
 export interface ModelRouteOptions {
-  /** The org's base model id (unvalidated); `defaultModelId` and then the built-in default back it. */
-  baseModelId?: () => string | undefined;
+  modelId?: string;
   defaultModelId?: string;
-  /** Static company keys; tenant env keys override them, `providerKeys()` overrides both. */
-  staticKeys?: ProviderKeys;
-  providerKeys?: () => Promise<ProviderKeys>;
-  gateway?: ModelGatewayTransportConfig;
+  resolveBaseModelId?: () => string | undefined;
+  resolveFallbackRuntime?: () => RuntimeChoice | undefined;
   companyModelId?: (id: string) => string;
-  fallbackRuntime?: () => RuntimeChoice | undefined;
+  apiKey?: string;
+  openaiApiKey?: string;
+  openrouterApiKey?: string;
+  modelGateway?: ModelGatewayTransportConfig;
+  resolveProviderKeys?: () => Promise<ProviderKeys>;
 }
 
-/**
- * The one place that turns a role into a model, keys, gateway and billed account.
- * `session` serves a session's own runtime and keys, `utility` the org's auxiliary
- * model on company keys, `fallback` the org's configured fallback runtime only.
- */
 export interface ModelRoutes {
   readonly gateway?: ModelGatewayTransportConfig;
   baseModelId(): string;
   utilityModelId(override?: string): string;
-  /** The id actually served for `id` on company keys or on the given personal keys. */
   servedId(id: string, personalKeys?: ProviderKeys): string;
   route(modelId: string, personalKeys?: ProviderKeys): Promise<ModelRoute>;
-  /** The route if something can pay for it (gateway or a key for its provider). */
   servable(route: ModelRoute): ModelRoute | undefined;
   session(session: { runtime?: { modelId?: string }; providerKeys?: ProviderKeys }): Promise<ModelRoute>;
   utility(modelId?: string): Promise<ModelRoute | undefined>;
@@ -88,10 +82,17 @@ export interface ModelRoutes {
 }
 
 export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
-  const baseModelId = () => resolveConfiguredModelId(opts.baseModelId?.(), opts.defaultModelId);
+  const baseModelId = () => resolveConfiguredModelId(opts.resolveBaseModelId?.() ?? opts.modelId, opts.defaultModelId);
+  const staticKeys: ProviderKeys = opts.resolveProviderKeys
+    ? {}
+    : {
+        ...(opts.apiKey ? { anthropic: opts.apiKey } : {}),
+        ...(opts.openaiApiKey ? { openai: opts.openaiApiKey } : {}),
+        ...(opts.openrouterApiKey ? { openrouter: opts.openrouterApiKey } : {}),
+      };
   const companyKeys = async (): Promise<ProviderKeys> => ({
-    ...tenantProviderKeys(opts.staticKeys ?? {}),
-    ...(await opts.providerKeys?.()),
+    ...tenantProviderKeys(staticKeys),
+    ...(await opts.resolveProviderKeys?.()),
   });
   const companyServedId = (id: string) => (opts.companyModelId ? opts.companyModelId(id) : id);
   const servedId = (id: string, personalKeys?: ProviderKeys) =>
@@ -100,7 +101,7 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
     const modelId = personalKeys ? personalModelId(requestedId, personalKeys) : requestedId;
     const model = getRequiredModel(personalKeys ? modelId : companyServedId(modelId), !personalKeys);
     const keys = personalKeys ?? (await companyKeys());
-    const gateway = personalKeys ? undefined : opts.gateway;
+    const gateway = personalKeys ? undefined : opts.modelGateway;
     return {
       modelId,
       model,
@@ -113,7 +114,7 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
     r.billing === "model_gateway" || r.keys[String(r.model.provider)] ? r : undefined;
   const utilityModelId = (override?: string) => override ?? auxiliaryModelFor(baseModelId());
   return {
-    ...(opts.gateway ? { gateway: opts.gateway } : {}),
+    ...(opts.modelGateway ? { gateway: opts.modelGateway } : {}),
     baseModelId,
     utilityModelId,
     servedId,
@@ -122,7 +123,7 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
     session: (session) => route(session.runtime?.modelId ?? baseModelId(), session.providerKeys),
     utility: async (modelId) => servable(await route(utilityModelId(modelId))),
     async fallback(fromModelIds, providerKeys) {
-      const runtime = opts.fallbackRuntime?.();
+      const runtime = opts.resolveFallbackRuntime?.();
       if (!runtime) return undefined;
       const served = servedId(runtime.modelId, providerKeys);
       if (fromModelIds.has(runtime.modelId) || fromModelIds.has(served) || !resolveModel(served, !providerKeys))

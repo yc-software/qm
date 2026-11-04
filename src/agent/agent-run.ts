@@ -72,7 +72,13 @@ import {
   type ModelGatewayTransportConfig,
   type ModelRequestPurpose,
 } from "../model/provider-endpoints.ts";
-import { createModelRoutes, routeLabel, type ModelRoute, type ModelRoutes } from "../model/model-route.ts";
+import {
+  createModelRoutes,
+  routeLabel,
+  type ModelRoute,
+  type ModelRouteOptions,
+  type ModelRoutes,
+} from "../model/model-route.ts";
 import {
   type Agent,
   type CompactInput,
@@ -128,21 +134,10 @@ import {
 } from "./goal.ts";
 
 export interface AgentOptions {
-  modelId?: string;
-  defaultModelId?: string;
-  resolveBaseModelId?: () => string | undefined;
-  resolveFallbackRuntime?: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
-  companyModelId?: (id: string) => string;
+  routes?: ModelRoutes;
   detectModelId?: string;
   titleModelId?: string;
   judgeModelId?: string;
-  apiKey?: string;
-  openaiApiKey?: string;
-  openrouterApiKey?: string;
-  modelGateway?: ModelGatewayTransportConfig;
-  resolveProviderKeys?: () => Promise<ProviderKeys>;
-  /** Shared route resolver; when set it replaces the model/key/gateway/fallback options above. */
-  routes?: ModelRoutes;
   tempDirPrefix?: string;
   captureRequests?: boolean;
   controlTools?: boolean;
@@ -155,18 +150,28 @@ export interface AgentOptions {
   signals?: RunSignalStore;
 }
 
-export function agentConfigOptions(config: Config): AgentOptions {
-  const defaultModelId =
-    configuredModel(config) ?? (config.modelProvider ? defaultModel(undefined, baseModelProviders(config)) : undefined);
+export function configDefaultModelId(config: Config): string | undefined {
+  return (
+    configuredModel(config) ?? (config.modelProvider ? defaultModel(undefined, baseModelProviders(config)) : undefined)
+  );
+}
+
+export function configRouteOptions(config: Config): ModelRouteOptions {
+  const defaultModelId = configDefaultModelId(config);
   return {
     ...(defaultModelId ? { defaultModelId } : {}),
-    ...(config.detectModelId ? { detectModelId: config.detectModelId } : {}),
-    ...(config.titleModelId ? { titleModelId: config.titleModelId } : {}),
-    ...(config.judgeModelId ? { judgeModelId: config.judgeModelId } : {}),
     ...(config.anthropicApiKey ? { apiKey: config.anthropicApiKey } : {}),
     ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
     ...(config.openrouterApiKey ? { openrouterApiKey: config.openrouterApiKey } : {}),
     ...(config.modelGateway ? { modelGateway: config.modelGateway } : {}),
+  };
+}
+
+export function agentConfigOptions(config: Config): AgentOptions {
+  return {
+    ...(config.detectModelId ? { detectModelId: config.detectModelId } : {}),
+    ...(config.titleModelId ? { titleModelId: config.titleModelId } : {}),
+    ...(config.judgeModelId ? { judgeModelId: config.judgeModelId } : {}),
     captureRequests: config.captureLlmRequests,
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,
@@ -829,23 +834,7 @@ export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: str
 }
 
 export function createAgent(opts?: AgentOptions): Agent {
-  const routes =
-    opts?.routes ??
-    createModelRoutes({
-      baseModelId: () => opts?.resolveBaseModelId?.() ?? opts?.modelId,
-      ...(opts?.defaultModelId ? { defaultModelId: opts.defaultModelId } : {}),
-      staticKeys: opts?.resolveProviderKeys
-        ? {}
-        : {
-            ...(opts?.apiKey ? { anthropic: opts.apiKey } : {}),
-            ...(opts?.openaiApiKey ? { openai: opts.openaiApiKey } : {}),
-            ...(opts?.openrouterApiKey ? { openrouter: opts.openrouterApiKey } : {}),
-          },
-      ...(opts?.resolveProviderKeys ? { providerKeys: opts.resolveProviderKeys } : {}),
-      ...(opts?.modelGateway ? { gateway: opts.modelGateway } : {}),
-      ...(opts?.companyModelId ? { companyModelId: opts.companyModelId } : {}),
-      ...(opts?.resolveFallbackRuntime ? { fallbackRuntime: opts.resolveFallbackRuntime } : {}),
-    });
+  const routes = opts?.routes ?? createModelRoutes();
   const baseModelId = routes.baseModelId;
   const servable = routes.servable;
   const sessionRoute = routes.session;
