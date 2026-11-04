@@ -33,7 +33,10 @@ after(async () => {
   await new Promise<void>((resolve) => collector.close(() => resolve()));
 });
 
-function anthropicStream(block: Record<string, unknown>, delta: Record<string, unknown>, stopReason: string): string {
+function anthropicStream(
+  blocks: Array<[Record<string, unknown>, Record<string, unknown>]>,
+  stopReason: string,
+): string {
   return [
     {
       type: "message_start",
@@ -47,9 +50,11 @@ function anthropicStream(block: Record<string, unknown>, delta: Record<string, u
         usage: { input_tokens: 5, output_tokens: 0 },
       },
     },
-    { type: "content_block_start", index: 0, content_block: block },
-    { type: "content_block_delta", index: 0, delta },
-    { type: "content_block_stop", index: 0 },
+    ...blocks.flatMap(([block, delta], index) => [
+      { type: "content_block_start", index, content_block: block },
+      { type: "content_block_delta", index, delta },
+      { type: "content_block_stop", index },
+    ]),
     { type: "message_delta", delta: { stop_reason: stopReason }, usage: { output_tokens: 3 } },
     { type: "message_stop" },
   ]
@@ -66,11 +71,21 @@ test("a Pi tool step is traced as model requests, first tokens, and step gaps ar
     res.end(
       ++requests === 1
         ? anthropicStream(
-            { type: "tool_use", id: "read-memory", name: "memory", input: {} },
-            { type: "input_json_delta", partial_json: JSON.stringify({ action: "read" }) },
+            ["read-memory", "read-memory-again"].map((id) => [
+              { type: "tool_use", id, name: "memory", input: {} },
+              { type: "input_json_delta", partial_json: JSON.stringify({ action: "read" }) },
+            ]),
             "tool_use",
           )
-        : anthropicStream({ type: "text", text: "" }, { type: "text_delta", text: "done" }, "end_turn"),
+        : anthropicStream(
+            [
+              [
+                { type: "text", text: "" },
+                { type: "text_delta", text: "done" },
+              ],
+            ],
+            "end_turn",
+          ),
     );
   });
   await new Promise<void>((resolve) => model.listen(0, "127.0.0.1", resolve));
@@ -85,6 +100,7 @@ test("a Pi tool step is traced as model requests, first tokens, and step gaps ar
   const agent = createAgent({ apiKey: "sk-test" });
   t.after(() => agent.close?.());
   let seq = 0;
+  let reads = 0;
   const result = await traceQueued(undefined, "run", { "qm.origin": "human" }, () =>
     agent.runTurn({
       session: { id: "traced-tool-step" } as AgentTurnInput["session"],
@@ -93,6 +109,10 @@ test("a Pi tool step is traced as model requests, first tokens, and step gaps ar
       history: [],
       tools: {
         memoryRead: async () => {
+          if (++reads === 2) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            throw new Error("memory unavailable");
+          }
           await new Promise((resolve) => setTimeout(resolve, 40));
           return "saved facts";
         },
@@ -118,6 +138,7 @@ test("a Pi tool step is traced as model requests, first tokens, and step gaps ar
     parent_span_id: string;
     start_timestamp: number;
     timestamp: number;
+    data?: Record<string, unknown>;
   }> = run.spans;
   const byOp = (op: string) =>
     spans.filter((span) => span.op === op).sort((a, b) => a.start_timestamp - b.start_timestamp);
@@ -125,25 +146,27 @@ test("a Pi tool step is traced as model requests, first tokens, and step gaps ar
   assert.ok(firstToken && nextFirstToken, "each model request has a first-token span");
   assert.equal(extraFirstTokens.length, 0);
   assert.equal(byOp("http.client").length, 2, "each model request has an HTTP span");
-  const gaps = byOp("step.gap");
-  assert.ok(gaps.length >= 1, "the tool step has gap spans");
-  const [tool, ...extraTools] = byOp("step.tool");
-  assert.ok(tool);
-  assert.equal(extraTools.length, 0);
-  assert.equal(tool.description, "memory");
-  assert.ok(tool.timestamp - tool.start_timestamp >= 0.035, "the tool span covers the tool's own work");
-  for (const gap of gaps) {
-    assert.notEqual(tool.parent_span_id, gap.span_id, "the tool does not run inside a gap");
+  const tools = byOp("step.tool");
+  assert.equal(tools.length, 2, "each parallel tool call has its own span");
+  assert.ok(tools.every((tool) => tool.description === "memory"));
+  const toolsStart = Math.min(...tools.map((tool) => tool.start_timestamp));
+  const toolsEnd = Math.max(...tools.map((tool) => tool.timestamp));
+  assert.ok(toolsEnd - toolsStart >= 0.035, "the tool spans cover the tools' own work");
+  const [before, after, ...extraGaps] = byOp("step.gap");
+  assert.ok(before && after, "the step has a gap before its tools and one after them");
+  assert.equal(extraGaps.length, 0, "parallel tools, one failing, share one gap on each side");
+  for (const gap of [before, after]) {
     assert.ok(
-      gap.timestamp <= tool.start_timestamp + 0.001 || gap.start_timestamp >= tool.timestamp - 0.001,
-      "no gap overlaps the tool's execution",
+      tools.every((tool) => tool.parent_span_id !== gap.span_id),
+      "no tool runs inside a gap",
     );
-    assert.ok(gap.start_timestamp >= firstToken.timestamp, "gaps open after the first response streamed");
-    assert.ok(gap.timestamp <= nextFirstToken.start_timestamp + 0.001, "gaps close by the next model request");
+    assert.equal(gap.data?.["qm.step"], 1, "both gaps belong to the first model request's step");
   }
-  const after = gaps.at(-1)!;
-  assert.ok(after.start_timestamp >= tool.timestamp - 0.001, "a gap covers the time after the tool returns");
-  assert.ok(after.timestamp >= nextFirstToken.start_timestamp - 0.001, "that gap runs up to the next model request");
+  assert.ok(before.start_timestamp >= firstToken.timestamp, "the first gap opens after the reply streamed");
+  assert.ok(before.timestamp <= toolsStart + 0.001, "the first gap closes when the tools start");
+  assert.ok(after.start_timestamp >= toolsEnd - 0.001, "the second gap opens when the last tool returns");
+  assert.ok(after.timestamp <= nextFirstToken.start_timestamp + 0.001, "it closes at the next model request");
+  assert.ok(after.timestamp >= nextFirstToken.start_timestamp - 0.001);
 });
 
 test("a human web turn persists its entries inside step.persist spans of the run", async () => {

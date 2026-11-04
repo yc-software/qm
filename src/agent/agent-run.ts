@@ -59,6 +59,7 @@ import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core
 import { providerTurnError } from "../model/provider-error.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
+import { endToolStep } from "./agent-tools/wrappers.ts";
 import {
   DEFAULT_AGENT_MODEL_ID,
   auxiliaryModelFor,
@@ -992,9 +993,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         agent.onPayload = async (payload, model) => {
           ref.modelCalls = (ref.modelCalls ?? 0) + 1;
           ref.onModelRequest?.();
-          ref.toolStep = false;
-          ref.stepPhase?.end();
-          ref.stepPhase = undefined;
+          endToolStep(ref);
           ref.firstTokenPhase?.end();
           ref.firstTokenPhase = startPhase("model.first_token");
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
@@ -1204,6 +1203,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         ).agent?.subscribe?.((event) => {
           const e = event as { type?: string; message?: unknown };
           if (e.type === "agent_start" && toolAbort.signal.aborted) entry.agentSession.agent.abort();
+          if (e.type === "agent_end") endToolStep(entry.ref);
           if (e.type === "message_end") noteDocumentRejection(e.message);
           return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
         });
@@ -1238,8 +1238,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             entry.ref.firstTokenPhase = undefined;
             if ((event.message as AssistantMessage).stopReason === "toolUse") {
               entry.ref.toolStep = true;
-              entry.ref.stepPhase?.end();
-              entry.ref.stepPhase = startPhase("step.gap");
+              entry.ref.stepPhase = startPhase("step.gap", { "qm.step": entry.ref.modelCalls ?? 0 });
             }
           }
         });
@@ -1581,9 +1580,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           if (pendingSteers.length) entry.agentSession.clearQueue();
           unsubscribeMessageEnd?.();
           unsubscribe?.();
-          entry.ref.toolStep = false;
-          entry.ref.stepPhase?.end();
-          entry.ref.stepPhase = undefined;
+          endToolStep(entry.ref);
           entry.ref.firstTokenPhase?.end();
           entry.ref.firstTokenPhase = undefined;
           steps.settleResults();

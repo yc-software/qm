@@ -30,6 +30,7 @@ const KEPT_TRACE_DATA = new Set([
   "messaging.message.receive.latency",
   "qm.surface",
   "qm.origin",
+  "qm.step",
   "qm.facts",
   "qm.recalled",
   "qm.skills",
@@ -316,22 +317,19 @@ export type Phase = Sentry.Span;
 export function tracePhase<T>(
   op: string,
   work: () => Promise<T>,
-  opts: { counts?: (result: T) => Record<string, number>; name?: string; parent?: Phase } = {},
+  opts: { counts?: (result: T) => Record<string, number>; name?: string } = {},
 ): Promise<T> {
-  if (!client || !tracing || !(opts.parent ?? client.getActiveSpan())) return work();
-  return client.startSpan(
-    { op, name: opts.name ?? op, onlyIfParent: true, ...(opts.parent ? { parentSpan: opts.parent } : {}) },
-    async (span) => {
-      const result = await work();
-      if (opts.counts) span.setAttributes(opts.counts(result));
-      return result;
-    },
-  );
+  if (!client || !tracing || !client.getActiveSpan()) return work();
+  return client.startSpan({ op, name: opts.name ?? op, onlyIfParent: true }, async (span) => {
+    const result = await work();
+    if (opts.counts) span.setAttributes(opts.counts(result));
+    return result;
+  });
 }
 
-export function startPhase(op: string): Phase | undefined {
+export function startPhase(op: string, attributes?: Record<string, number>): Phase | undefined {
   if (!client || !tracing || !client.getActiveSpan()) return undefined;
-  return client.startInactiveSpan({ op, name: op, onlyIfParent: true });
+  return client.startInactiveSpan({ op, name: op, onlyIfParent: true, ...(attributes ? { attributes } : {}) });
 }
 
 export interface DispatchTrace {

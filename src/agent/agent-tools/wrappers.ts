@@ -193,6 +193,12 @@ export function withToolApprovalGate(
   } as ToolDefinition;
 }
 
+export function endToolStep(ref: ToolContextRef): void {
+  ref.toolStep = false;
+  ref.stepPhase?.end();
+  ref.stepPhase = undefined;
+}
+
 export function withToolSpan(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
   return {
     ...tool,
@@ -206,7 +212,8 @@ export function withToolSpan(tool: ToolDefinition, ref: ToolContextRef): ToolDef
         return await tracePhase("step.tool", () => tool.execute(...args), { name: tool.name });
       } finally {
         ref.toolsRunning -= 1;
-        if (!ref.toolsRunning && ref.toolStep && !ref.stepPhase) ref.stepPhase = startPhase("step.gap");
+        if (!ref.toolsRunning && ref.toolStep && !ref.stepPhase)
+          ref.stepPhase = startPhase("step.gap", { "qm.step": ref.modelCalls ?? 0 });
       }
     },
   } as ToolDefinition;
