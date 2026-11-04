@@ -1,9 +1,14 @@
 import type { Surface, SurfacePromptHints } from "./contract.ts";
 
-export type SurfaceToolPrompt = Pick<Surface, "label"> & Pick<SurfacePromptHints, "mentionSyntax">;
+export type SurfaceToolPrompt = Pick<Surface, "label"> &
+  Pick<SurfacePromptHints, "mentionSyntax"> & { textOnly?: boolean };
 
 export function surfaceToolPrompt(surface: Surface): SurfaceToolPrompt {
-  return { label: surface.label, mentionSyntax: surface.promptHints.mentionSyntax };
+  return {
+    label: surface.label,
+    mentionSyntax: surface.promptHints.mentionSyntax,
+    ...(surface.capabilities.textOnly ? { textOnly: true } : {}),
+  };
 }
 
 export interface SurfaceRegistry {
