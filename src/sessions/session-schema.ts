@@ -3,6 +3,7 @@ import {
   TENANCY,
   TENANT_HOSTS,
   TENANT_HOSTS_SEARCH_PATH,
+  TENANT_ROW_SECURITY,
   tenantPolicies,
   tenantTables,
 } from "../tenants/migrations.ts";
@@ -507,4 +508,5 @@ export const SESSION_MIGRATIONS = [
   SESSION_TABLES,
   TENANT_HOSTS,
   TENANT_HOSTS_SEARCH_PATH,
+  TENANT_ROW_SECURITY,
 ];

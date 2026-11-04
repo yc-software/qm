@@ -202,3 +202,28 @@ BEGIN
 END $hosts_path$`,
   ],
 };
+
+export const TENANT_ROW_SECURITY: PgMigrationDefinition = {
+  id: "0001-tenancy/tenant-row-security",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE tenants ENABLE ROW LEVEL SECURITY`,
+    `CREATE POLICY tenant_isolation ON tenants FOR SELECT USING (id = qm_bound_tenant())`,
+    `ALTER TABLE tenant_hosts ENABLE ROW LEVEL SECURITY`,
+    `CREATE POLICY tenant_isolation ON tenant_hosts FOR SELECT USING (tenant_id = qm_bound_tenant())`,
+    `DO $tenant_writes$
+DECLARE
+  grant_row record;
+BEGIN
+  FOR grant_row IN
+    SELECT DISTINCT g.grantee, g.table_name FROM information_schema.role_table_grants g
+      JOIN pg_class c ON c.oid = to_regclass(g.table_name)
+     WHERE g.table_schema = current_schema() AND g.table_name IN ('tenants', 'tenant_hosts')
+       AND g.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')
+       AND g.grantee <> pg_get_userbyid(c.relowner)
+  LOOP
+    EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON %I FROM %I', grant_row.table_name, grant_row.grantee);
+  END LOOP;
+END $tenant_writes$`,
+  ],
+};

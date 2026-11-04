@@ -17,8 +17,8 @@ import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 
 const UNTENANTED: Record<string, string> = {
   qm_schema_migrations: "records which migrations the whole database has applied",
-  tenants: "is the tenant registry itself",
-  tenant_hosts: "maps hostnames to tenants before any tenant is bound",
+  tenants: "is the tenant registry, keyed by the tenant id itself and read only through its own policy",
+  tenant_hosts: "maps globally unique hostnames to tenants before any tenant is bound",
   qm_tenant: "names the install's own tenant, one row per database",
   qm_settings: "holds install-level settings the process reads, no tenant data",
   source_auth_replay: "holds random replay nonces for signed internal calls",
@@ -153,6 +153,36 @@ describe("tenant tables", () => {
     assert.equal(await withTenant(tenantB, () => appMap.get("only-a")), null);
     await withTenant(tenantB, () => appMap.delete("same-id"));
     assert.deepEqual(await withTenant(tenantA, () => appMap.get("same-id")), { who: "a" });
+  });
+
+  it("hides other tenants' tenant and host rows from the app login and denies it writes", async () => {
+    await owner.q("INSERT INTO tenant_hosts(host, tenant_id) VALUES ('a.example.test', $1), ('b.example.test', $2)", [
+      tenantA,
+      tenantB,
+    ]);
+    const asA = <T>(fn: () => Promise<T>) => withTenant(tenantA, fn);
+    assert.deepEqual(await asA(() => app.q("SELECT id::text AS id FROM tenants")), [{ id: tenantA }]);
+    assert.deepEqual(await asA(() => app.q("SELECT host FROM tenant_hosts")), [{ host: "a.example.test" }]);
+    await assert.rejects(
+      asA(() => app.q("INSERT INTO tenants(id) VALUES ($1)", [randomUUID()])),
+      /row-level security|permission denied/,
+    );
+    await assert.rejects(
+      asA(() => app.q("INSERT INTO tenant_hosts(host, tenant_id) VALUES ('c.example.test', $1)", [tenantA])),
+      /row-level security|permission denied/,
+    );
+    const changed = await Promise.all([
+      asA(() => app.query("UPDATE tenants SET settings = '{}'::jsonb WHERE id = $1", [tenantB]).catch(() => null)),
+      asA(() => app.query("DELETE FROM tenant_hosts WHERE host = 'b.example.test'").catch(() => null)),
+      asA(() =>
+        app.query("UPDATE tenant_hosts SET tenant_id = $1 WHERE host = 'b.example.test'", [tenantA]).catch(() => null),
+      ),
+    ]);
+    assert.ok(changed.every((result) => result === null || result.rowCount === 0));
+    assert.deepEqual(
+      await owner.q("SELECT tenant_id::text AS tenant FROM tenant_hosts WHERE host = 'b.example.test'"),
+      [{ tenant: tenantB }],
+    );
   });
 
   it("keeps two tenants' typed rows apart and rejects writes into another tenant", async () => {

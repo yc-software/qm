@@ -19,6 +19,7 @@ CREATE ROLE qm_app LOGIN PASSWORD '<secret>' NOSUPERUSER NOBYPASSRLS NOCREATEDB 
 GRANT CONNECT ON DATABASE <database> TO qm_app;
 GRANT USAGE ON SCHEMA public TO qm_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO qm_app;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON tenants, tenant_hosts FROM qm_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO qm_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE <owner> IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO qm_app;
@@ -26,4 +27,4 @@ ALTER DEFAULT PRIVILEGES FOR ROLE <owner> IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO qm_app;
 ```
 
-Run migrations as the owner before starting core under `qm_app`. Core under `qm_app` checks that every migration it knows has been applied and refuses to start otherwise; it never runs DDL. Background work that claims rows across tenants reads through the owner login (`DATABASE_OWNER_URL`) and binds each row's tenant before acting on it.
+`tenants` and `tenant_hosts` carry row level security too: `qm_app` sees only its bound tenant's row and hosts, and cannot write either table. Operator changes to tenants, hosts and settings go through the owner login. Run migrations as the owner before starting core under `qm_app`. Core under `qm_app` checks that every migration it knows has been applied and refuses to start otherwise; it never runs DDL. Background work that claims rows across tenants reads through the owner login (`DATABASE_OWNER_URL`) and binds each row's tenant before acting on it.
