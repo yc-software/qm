@@ -1069,14 +1069,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               swallowAs("orchestrator: configured connector providers", []),
             )
           : [];
+      const orgServiceCreds =
+        !strictReadOnly && deps.serviceCreds
+          ? await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)
+          : [];
       const appConnections =
-        !external && !strictReadOnly && deps.serviceCreds
-          ? (
-              await deps.serviceCreds
-                .listServiceCredentials(resolution.orgScopeId)
-                .catch(swallowAs("orchestrator: app connection credentials", []))
-            ).some((cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret)
-          : false;
+        !external && orgServiceCreds.some((cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret);
       const carriedSkillScreens = new Map<string, Promise<boolean>>();
       const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
         const current = await tracePhase("turn.skills", () => context.listSkills(sources), { counts: countSkills });
@@ -1503,14 +1501,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
         return granted;
       };
-      let serviceCredRecords: PublicServiceCredential[] = [];
+      const serviceCredRecords: PublicServiceCredential[] = orgServiceCreds.filter((record) =>
+        serviceAllowed(record.slug),
+      );
       let grantedCredSlugs = new Set<string>();
-      if (!strictReadOnly && deps.serviceCreds) {
-        serviceCredRecords = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
-          serviceAllowed(record.slug),
-        );
-        if (serviceCredRecords.length > 0) grantedCredSlugs = await grantedServiceCredSlugs(serviceCredRecords);
-      }
+      if (serviceCredRecords.length > 0) grantedCredSlugs = await grantedServiceCredSlugs(serviceCredRecords);
       const authorizeServiceCredential = async (slug: string): Promise<void> => {
         if (!serviceAllowed(slug)) throw new Error("Service is not approved for external Slack.");
         if ((await aclGrantedServiceCredSlugs()).has(slug)) return;
@@ -2115,7 +2110,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         )
           systemPrompt +=
-            "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. Apps with their own skill (Gmail, Google Calendar, Tasks, Drive, Docs, Sheets, Slides, Dropbox, Linear, Zoom) work over these connections too; prefer that skill for them. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
+            "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. Apps that have their own skill work over these connections too; prefer that skill. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
         if (actorIsOrgAdmin) {
           systemPrompt +=
             "\n\n## Acting for an org admin\n" +

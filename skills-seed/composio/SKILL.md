@@ -1,6 +1,6 @@
 ---
 name: composio
-description: Show the app connection picker or setup widget when users ask to connect apps, reopen setup, or need an app that isn't connected yet. Use QM’s authenticated backend for app discovery, consent, and execution without exposing project keys. Gmail, Google Calendar/Tasks/Drive/Docs/Sheets/Slides, Dropbox, Linear and Zoom are connected here but used through their own skills.
+description: Show the app connection picker or setup widget when users ask to connect apps, reopen setup, or need an app that isn't connected yet. Use QM’s authenticated backend for app discovery, consent, and execution without exposing project keys.
 ---
 
 # Composio
