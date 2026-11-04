@@ -1,18 +1,19 @@
 import type { App } from "../../api/app-types.ts";
-import type { DeliveryStore } from "../../delivery/delivery-store.ts";
+import { refusedStatus, type Send } from "../../delivery/relay.ts";
 import type { Delivery } from "../../types.ts";
-import { errMessage } from "../../util/errors.ts";
 import {
-  partnerChatContainer,
   partnerChatMessageId,
   partnerChatRef,
   partnerChatTs,
   parsePartnerChatRef,
-  partnerChatToken,
+  signPartnerChatPost,
+  ACCOUNT_HEADER,
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
 } from "./protocol.ts";
 
-const CLAIM_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+export const PARTNER_CHAT_CLAIM_MS = 4 * REQUEST_TIMEOUT_MS;
 const MESSAGE_ID = /^\d+$/;
 const SELF_AUTHOR = "self";
 
@@ -26,10 +27,6 @@ class PartnerChatHttpError extends Error {
 
 class UnsupportedDelivery extends Error {}
 
-const permanent = (e: unknown): boolean =>
-  e instanceof UnsupportedDelivery ||
-  (e instanceof PartnerChatHttpError && e.status >= 400 && e.status < 500 && ![401, 403, 408, 429].includes(e.status));
-
 function parseJson(text: string): Record<string, unknown> {
   try {
     const parsed: unknown = JSON.parse(text);
@@ -39,15 +36,13 @@ function parseJson(text: string): Record<string, unknown> {
   }
 }
 
-export function createPartnerChatDeliveries(deps: {
+export function partnerChatSender(deps: {
   url: string;
   secret: string;
-  deliveries: Pick<DeliveryStore, "claimPending" | "ack" | "fail">;
   app: Pick<App, "ingestSurfaceEvents">;
-  serialize: <T>(fn: () => Promise<T>) => Promise<T>;
   fetch?: typeof fetch;
   now?: () => number;
-}) {
+}): Send {
   const endpoint = `${deps.url.replace(/\/+$/, "")}/agent_app/messages`;
   const send = deps.fetch ?? fetch;
   const now = deps.now ?? Date.now;
@@ -70,11 +65,14 @@ export function createPartnerChatDeliveries(deps: {
       ...(thread ? { thread_id: thread } : {}),
       body,
     });
+    const timestamp = String(Math.floor(now() / 1000));
     const res = await send(endpoint, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${partnerChatToken(deps.secret, ref.account)}`,
+        [ACCOUNT_HEADER]: ref.account,
+        [TIMESTAMP_HEADER]: timestamp,
+        [SIGNATURE_HEADER]: signPartnerChatPost(deps.secret, timestamp, ref.account, payload),
       },
       body: payload,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -111,40 +109,13 @@ export function createPartnerChatDeliveries(deps: {
     );
   }
 
-  let draining: Promise<void> | null = null;
-  let again = false;
-  async function drainOnce(): Promise<void> {
-    const claimedAt = now();
-    const held = new Set<string>();
-    for (const d of await deps.deliveries.claimPending("partner-chat", CLAIM_MS)) {
-      if (now() - claimedAt > CLAIM_MS - REQUEST_TIMEOUT_MS) return;
-      const chat = partnerChatContainer(d.destination.target);
-      if (held.has(chat)) continue;
-      try {
-        await deliver(d);
-        await deps.deliveries.ack(d.id, now());
-      } catch (e) {
-        console.error(`[partner-chat] delivery ${d.id} failed: ${errMessage(e)}`);
-        if (permanent(e)) await deps.deliveries.fail(d.id, errMessage(e), now());
-        else held.add(chat);
-      }
+  return async (d) => {
+    try {
+      await deliver(d);
+    } catch (e) {
+      if (e instanceof UnsupportedDelivery) return { refused: e.message };
+      if (e instanceof PartnerChatHttpError && refusedStatus(e.status)) return { refused: e.message };
+      throw e;
     }
-  }
-  function drain(): Promise<void> {
-    if (draining) {
-      again = true;
-      return draining;
-    }
-    draining = (async () => {
-      do {
-        again = false;
-        await deps.serialize(drainOnce);
-      } while (again);
-    })().finally(() => {
-      draining = null;
-    });
-    return draining;
-  }
-
-  return { drain };
+  };
 }

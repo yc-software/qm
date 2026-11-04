@@ -388,7 +388,7 @@ import { createSurfaceRegistry } from "./surfaces/registry.ts";
 import { createSlackSurface } from "./surfaces/slack/adapter.ts";
 import { createPartnerChatSurface } from "./surfaces/partner-chat/adapter.ts";
 import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
-import { createPartnerChatDeliveries } from "./surfaces/partner-chat/outbound.ts";
+import { PARTNER_CHAT_CLAIM_MS, partnerChatSender } from "./surfaces/partner-chat/outbound.ts";
 import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
@@ -2466,24 +2466,11 @@ export function buildApp(
           unansweredReply: partnerChatNotices.unanswered,
         })
       : null;
-  const partnerChatOutbound = config.partnerChat
-    ? createPartnerChatDeliveries({
-        url: config.partnerChat.url,
-        secret: config.partnerChat.secret,
-        deliveries,
-        app,
-        serialize: (fn) => advisoryLock.withLock("partner-chat-deliveries", fn),
-      })
-    : null;
-  if (partnerChatOutbound)
-    deliveries.onEnqueue((type) => {
-      if (type === "partner-chat")
-        void partnerChatOutbound.drain().catch(reportFailureAs("partner-chat: drain deliveries", undefined));
-    });
-  const partnerChatDeliverySweeper = partnerChatOutbound
-    ? createSweeper(() => partnerChatOutbound.drain(), 15_000, {
-        label: "partner-chat-deliveries",
-        immediate: true,
+  const partnerChatDelivery = config.partnerChat
+    ? createDeliveryRelay(deliveries, {
+        type: "partner-chat",
+        send: partnerChatSender({ url: config.partnerChat.url, secret: config.partnerChat.secret, app }),
+        claimMs: PARTNER_CHAT_CLAIM_MS,
       })
     : null;
   const webhookDelivery = createDeliveryRelay(deliveries, {
@@ -2890,7 +2877,7 @@ export function buildApp(
       sessionReturnSweeper.start();
       runResultSweeper.start();
       approvalDeliverySweeper.start();
-      partnerChatDeliverySweeper?.start();
+      partnerChatDelivery?.start();
       webhookDelivery.start();
     };
     if (backgroundStopping)
@@ -2925,7 +2912,7 @@ export function buildApp(
       sessionReturnSweeper.stop(),
       runResultSweeper.stop(),
       approvalDeliverySweeper.stop(),
-      partnerChatDeliverySweeper?.stop(),
+      partnerChatDelivery?.stop(),
       preemptionSweeper.stop(),
       worker.stopClaims(),
     ];

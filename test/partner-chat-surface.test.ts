@@ -11,8 +11,10 @@ import { join } from "node:path";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { IngestEvent } from "../src/surface-cache/types.ts";
 import { partnerChatPrincipal, createPartnerChatSurface } from "../src/surfaces/partner-chat/adapter.ts";
-import { createPartnerChatDeliveries } from "../src/surfaces/partner-chat/outbound.ts";
-import { partnerChatToken, signPartnerChat } from "../src/surfaces/partner-chat/protocol.ts";
+import { PARTNER_CHAT_CLAIM_MS, partnerChatSender } from "../src/surfaces/partner-chat/outbound.ts";
+import { signPartnerChat, signPartnerChatPost } from "../src/surfaces/partner-chat/protocol.ts";
+import { createDeliveryRelay } from "../src/delivery/relay.ts";
+import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
 import { buildApp } from "./support/build-app.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -28,7 +30,7 @@ const PROVENANCE = { trigger: "cron", surface: "partner-chat", fireKey: "f", sou
 interface Received {
   path: string;
   body: Record<string, unknown>;
-  authorization: string;
+  signed: boolean;
 }
 
 async function fakePartnerChat(status = 200) {
@@ -43,7 +45,12 @@ async function fakePartnerChat(status = 200) {
       received.push({
         path: req.url ?? "",
         body,
-        authorization: String(req.headers.authorization),
+        signed:
+          req.headers["x-agent-app-account"] === "7001" &&
+          req.headers.authorization === undefined &&
+          req.headers["x-agent-app-signature"] ===
+            signPartnerChatPost(SECRET, String(req.headers["x-agent-app-request-timestamp"]), "7001", raw) &&
+          Math.abs(Date.now() / 1000 - Number(req.headers["x-agent-app-request-timestamp"])) <= 300,
       });
       const id = String(++next);
       if (status === 200) messages.set(id, { chat_id: body.chat_id, thread_id: body.thread_id, body: body.body });
@@ -157,7 +164,7 @@ test("an @-mention starts a turn whose reply lands in the chat once, even when t
       partnerChat.shown().map((m) => [m.chat_id, m.thread_id, m.body]),
       [["88", "1002", "on it"]],
     );
-    assert.ok(partnerChat.received.every((r) => r.authorization === `Bearer ${partnerChatToken(SECRET, "7001")}`));
+    assert.ok(partnerChat.received.every((r) => r.signed));
     const session = await built.sessions.getByThread(`${CONTAINER}:1002`);
     assert.equal(session?.surface, "partner-chat");
   } finally {
@@ -286,23 +293,31 @@ test("partner-chat conversation reads are answered from the mirror", async () =>
 });
 
 function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: IngestEvent[] = []) {
-  let serialized = 0;
-  const outbound = createPartnerChatDeliveries({
+  const send = partnerChatSender({
     url,
     secret: SECRET,
-    deliveries,
     app: { ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }) },
-    serialize: async (fn) => {
-      serialized += 1;
-      return fn();
-    },
   });
-  return { outbound, deliveries, mirrored, serialized: () => serialized };
+  return { deliveries, mirrored, settled: (until: () => Promise<boolean>) => relayUntil(deliveries, send, until) };
+}
+
+async function relayUntil(
+  deliveries: DeliveryStore,
+  send: ReturnType<typeof partnerChatSender>,
+  until: () => Promise<boolean>,
+): Promise<void> {
+  const relay = createDeliveryRelay(deliveries, { type: "partner-chat", send, claimMs: PARTNER_CHAT_CLAIM_MS });
+  relay.start();
+  try {
+    await settle(until);
+  } finally {
+    await relay.stop();
+  }
 }
 
 test("partner-chat deliveries are signed posts mirrored as the agent's own, and edits are refused", async () => {
   const partnerChat = await fakePartnerChat();
-  const { outbound, deliveries, mirrored, serialized } = outboundFor(`${partnerChat.url}/`);
+  const { deliveries, mirrored, settled } = outboundFor(`${partnerChat.url}/`);
   try {
     const surface = createPartnerChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } });
     await surface.post(
@@ -332,13 +347,9 @@ test("partner-chat deliveries are signed posts mirrored as the agent's own, and 
         idempotencyKey: "explicit-edit",
       }),
     ]);
-    await outbound.drain();
+    await settled(async () => (await deliveries.pending("partner-chat")).length === 0);
     assert.deepEqual(
-      partnerChat.received.map((r) => [
-        r.path,
-        r.body,
-        r.authorization === `Bearer ${partnerChatToken(SECRET, "7001")}`,
-      ]),
+      partnerChat.received.map((r) => [r.path, r.body, r.signed]),
       [
         [
           "/agent_app/messages",
@@ -365,7 +376,6 @@ test("partner-chat deliveries are signed posts mirrored as the agent's own, and 
         ["43", null, "Here is the full answer", true],
       ],
     );
-    assert.ok(serialized() > 0);
     assert.equal((await deliveries.pending("partner-chat")).length, 0);
   } finally {
     await partnerChat.close();
@@ -379,14 +389,14 @@ test("partner-chat rejections fail the delivery with the chat's reason while aut
     [503, null],
   ] as const) {
     const partnerChat = await fakePartnerChat(status);
-    const { outbound, deliveries } = outboundFor(partnerChat.url);
+    const { deliveries, settled } = outboundFor(partnerChat.url);
     try {
       const d = await deliveries.enqueue({
         destination: { type: "partner-chat", target: CONTAINER },
         text: "hi",
         idempotencyKey: `k-${status}`,
       });
-      await outbound.drain();
+      await settled(async () => partnerChat.received.length > 0);
       const after = await deliveries.get(d.id);
       assert.equal(after?.failedReason ?? null, failedReason, String(status));
       assert.equal(after?.deliveredAt, null);
@@ -800,10 +810,10 @@ test("a thread under one of the agent's older posts is still recognised as engag
   }
 });
 
-test("partner-chat signatures and bearer tokens follow the agent-app scheme", () => {
+test("partner-chat event and post signatures follow the agent-app scheme", () => {
   const hmac = (data: string) => createHmac("sha256", SECRET).update(data).digest("hex");
   assert.equal(signPartnerChat(SECRET, "1793649600", "{}"), `v0=${hmac("v0:1793649600:{}")}`);
-  assert.equal(partnerChatToken(SECRET, "7001"), `7001.${hmac("agent-app-token:7001")}`);
+  assert.equal(signPartnerChatPost(SECRET, "1793649600", "7001", "{}"), `v0=${hmac("v0:1793649600:7001:{}")}`);
 });
 
 test("a run-end notice lost before its enqueue is recovered by the run-result sweep, once", async () => {
@@ -844,15 +854,13 @@ test("a run-end notice lost before its enqueue is recovered by the run-result sw
   );
 });
 
-test("a retryable failure holds back later posts in that chat only", async () => {
+test("a retryable failure holds back later posts to the same chat target only", async () => {
   const deliveries = createDeliveryStore();
   const sent: string[] = [];
-  const outbound = createPartnerChatDeliveries({
+  const send = partnerChatSender({
     url: "https://chat.example",
     secret: SECRET,
-    deliveries,
     app: { ingestSurfaceEvents: async () => ({ upserted: 0 }) },
-    serialize: (fn) => fn(),
     fetch: async (_url, init) => {
       const body = JSON.parse(String(init?.body)) as { chat_id: string; body: string };
       sent.push(body.body);
@@ -871,8 +879,8 @@ test("a retryable failure holds back later posts in that chat only", async () =>
       text,
       idempotencyKey: text,
     });
-  await outbound.drain();
-  assert.deepEqual(sent, ["first in 88", "only in 99"]);
+  await relayUntil(deliveries, send, async () => sent.length >= 2);
+  assert.deepEqual(sent.toSorted(), ["first in 88", "only in 99"]);
   assert.deepEqual(
     (await deliveries.pending("partner-chat")).map((d) => d.text),
     ["first in 88", "second in 88"],

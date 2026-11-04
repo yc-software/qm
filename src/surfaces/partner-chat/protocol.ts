@@ -42,13 +42,14 @@ export interface PartnerChatRef {
 
 export const TIMESTAMP_HEADER = "x-agent-app-request-timestamp";
 export const SIGNATURE_HEADER = "x-agent-app-signature";
+export const ACCOUNT_HEADER = "x-agent-app-account";
 
 export function signPartnerChat(secret: string, timestamp: string, rawBody: string): string {
   return `v0=${hmacHex(secret, `v0:${timestamp}:${rawBody}`)}`;
 }
 
-export function partnerChatToken(secret: string, account: string): string {
-  return `${account}.${hmacHex(secret, `agent-app-token:${account}`)}`;
+export function signPartnerChatPost(secret: string, timestamp: string, account: string, rawBody: string): string {
+  return signPartnerChat(secret, timestamp, `${account}:${rawBody}`);
 }
 
 export function verifyPartnerChat(
