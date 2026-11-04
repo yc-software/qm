@@ -847,8 +847,7 @@ test("a child stopped on its own mails its partial output and wakes its top-leve
       ...(stopReason ? { stopReason } : {}),
     });
     await r.runs.complete(parent.run.id, parent.leaseToken, { status: "ok", reply: "delegated" });
-    const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
-    assert.equal(await deliverSubagentMail(deps, run), true);
+    await deliverSubagentMail({ ...r, maxAttempts: 3, delegationEnabled: async () => true }, run);
     const [mail] = await r.mailbox.pending(r.room.id);
     assert.match(mail!.text, /kind="stopped"/);
     assert.ok(mail!.text.includes(`Your subagent session "tracer" was stopped${stopReason ? ` ${stopReason}` : ""}.`));
@@ -904,8 +903,10 @@ test("a failed child's mail carries the failure reason and the last thing it sai
   await r.runs.noteTurnUserSeq(retry.id, asked.seq);
   await r.sessions.append(writer, { kind: "AgentMessage", variant: "narration", text: "patched two of the files" });
   await r.runs.fail(retry.id, claim!.leaseToken!, "provider returned 500", { retry: false });
-  const deps = { ...r, maxAttempts: 3, delegationEnabled: async () => true };
-  assert.equal(await deliverSubagentMail(deps, (await r.runs.get(retry.id))!), true);
+  await deliverSubagentMail(
+    { ...r, maxAttempts: 3, delegationEnabled: async () => true },
+    (await r.runs.get(retry.id))!,
+  );
   const [mail] = await r.mailbox.pending(r.room.id);
   assert.match(mail!.text, /kind="errored"/);
   assert.ok(
@@ -2189,7 +2190,7 @@ test("stopping an idle coordinator cancels running and queued descendants and bl
     ),
     true,
   );
-  assert.equal((await r.mailbox.pending(r.room.id)).length, 0);
+  assert.match((await r.mailbox.pending(r.room.id))[0]!.text, /late result/);
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 });
 
@@ -2454,7 +2455,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   assert.equal(started.length, 3);
 });
 
-test("stopping a session tree tells every stopped run who stopped it", async () => {
+test("stopping a session tree tells its root who stopped it and its descendants that their parent was stopped", async () => {
   const sent: Array<{ runId: string; signal: unknown }> = [];
   const root = { id: "root", scopeId: "personal:a", threadRef: "web:root" } as unknown as Session;
   const child = { id: "child", scopeId: "personal:a", threadRef: "agent:main:subagent:child" } as unknown as Session;
@@ -2482,7 +2483,7 @@ test("stopping a session tree tells every stopped run who stopped it", async () 
     sent.map((s) => s.signal),
     [
       { kind: "abort", reason: "by the parent agent" },
-      { kind: "abort", reason: "by the parent agent" },
+      { kind: "abort", reason: ANCESTOR_STOP },
     ],
   );
 });
