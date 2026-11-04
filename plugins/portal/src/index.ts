@@ -17,7 +17,7 @@ import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
 import { createCanonicalResolver } from "./canonical.ts";
-import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
+import { createTrustedEntry, tenantTrustedConfig, trustedEntryConfig } from "./trusted-entry.ts";
 import { answerPreflight, parseAllowedOrigins, prepareCors } from "./cors.ts";
 import {
   deriveKey,
@@ -249,11 +249,7 @@ if (
     PORTAL_IDENTITY_SECRET === CORE_SIGNING_SECRET)
 )
   throw new Error("Trusted administrator provisioning requires trusted OIDC and a distinct portal identity secret");
-const trustedEntry = trustedOidc
-  ? createTrustedEntry(trustedOidc, SESSION_SECRET ?? DEV_SECRET, (key, expiresAt) =>
-      claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), key, expiresAt),
-    )
-  : null;
+const trustedEntries = new LRUCache<string, ReturnType<typeof createTrustedEntry>>({ max: 256 });
 const IMPERSONATE_TTL_S = Number(process.env.PORTAL_IMPERSONATE_TTL_S ?? 3600);
 
 const TMP_TTL_S = 600;
@@ -1554,8 +1550,23 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
   res.end();
 }
 
+async function tenantTrustedEntry() {
+  const oidc = tenantTrustedConfig(process.env, PUBLIC_URL, await tenantSignIn());
+  if (!oidc) return null;
+  const key = JSON.stringify(oidc);
+  const cached = trustedEntries.get(key);
+  if (cached) return { oidc, entry: cached };
+  const entry = createTrustedEntry(oidc, SESSION_SECRET ?? DEV_SECRET, (claimKey, expiresAt) =>
+    claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), claimKey, expiresAt),
+  );
+  trustedEntries.set(key, entry);
+  return { oidc, entry };
+}
+
 async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!trustedEntry) return json(res, 404, { error: "not_found" });
+  const trusted = await tenantTrustedEntry();
+  if (!trusted) return json(res, 404, { error: "not_found" });
+  const { oidc: trustedConfig, entry: trustedEntry } = trusted;
   const cookieName = "portal_trusted_tmp";
   const path = "/auth/trusted";
   if (url.pathname === `${path}/login`) {
@@ -1564,7 +1575,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
       openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo ??
       null;
     const existing = currentSession(req);
-    const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.issuer).digest("hex")}:`;
+    const trustedPrefix = `oidc:${createHash("sha256").update(trustedConfig.issuer).digest("hex")}:`;
     if (existing && !existing.anon && !existing.appOnly && existing.sub.startsWith(trustedPrefix)) {
       res.writeHead(302, {
         location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN),
@@ -1588,7 +1599,7 @@ async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL):
           signingSecret: CORE_SIGNING_SECRET!,
           identitySecret: PORTAL_IDENTITY_SECRET!,
           org: ORG,
-          issuer: trustedOidc!.issuer,
+          issuer: trustedConfig.issuer,
         },
         identity.subject,
       );

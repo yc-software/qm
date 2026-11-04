@@ -14,6 +14,9 @@ export interface TenantSignIn {
   allowedEmails?: string[];
   oidcClient?: TenantOidcClient;
   clientSecret?: string;
+  trustedOidc?: string;
+  trustedClientSecret?: string;
+  publicUrl?: string;
 }
 
 export type TenantSignInLookup = () => Promise<TenantSignIn>;
@@ -38,10 +41,16 @@ export function parseTenantSignIn(body: unknown): TenantSignIn {
     : undefined;
   const oidcClient = oidcClientOf(Reflect.get(body, "oidcClient"));
   const clientSecret = text(Reflect.get(body, "clientSecret"));
+  const trustedOidc = text(Reflect.get(body, "trustedOidc"));
+  const trustedClientSecret = text(Reflect.get(body, "trustedClientSecret"));
+  const publicUrl = text(Reflect.get(body, "publicUrl"));
   return {
     ...(allowedEmails ? { allowedEmails } : {}),
     ...(oidcClient ? { oidcClient } : {}),
     ...(clientSecret ? { clientSecret } : {}),
+    ...(trustedOidc ? { trustedOidc } : {}),
+    ...(trustedClientSecret ? { trustedClientSecret } : {}),
+    ...(publicUrl ? { publicUrl } : {}),
   };
 }
 

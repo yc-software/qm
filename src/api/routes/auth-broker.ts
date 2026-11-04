@@ -91,10 +91,16 @@ async function signInSettings(ctx: ApiCtx): Promise<void> {
   const settings = await tenantSettings();
   const allowedEmails = tenantAllowedEmails();
   const clientSecret = tenantEnv("AUTH_CLIENT_SECRET");
+  const trustedOidc = tenantEnv("PORTAL_TRUSTED_OIDC");
+  const trustedClientSecret = tenantEnv("PORTAL_TRUSTED_OIDC_CLIENT_SECRET");
+  const publicUrl = tenantEnv("AWS_PUBLIC_ORIGIN_URL") ?? tenantEnv("PUBLIC_API_URL");
   return sendJson(ctx.res, 200, {
     ...(allowedEmails ? { allowedEmails } : {}),
     ...(settings.oidcClient ? { oidcClient: settings.oidcClient } : {}),
     ...(clientSecret ? { clientSecret } : {}),
+    ...(trustedOidc ? { trustedOidc } : {}),
+    ...(trustedClientSecret ? { trustedClientSecret } : {}),
+    ...(publicUrl ? { publicUrl } : {}),
   });
 }
 
