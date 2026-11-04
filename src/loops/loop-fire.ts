@@ -1,5 +1,14 @@
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
-import { renderSourceInboxTask, isReplyLoop, applyReplyResolution, REPLY_DECISION } from "./inbox-loop.ts";
+import {
+  renderSourceInboxTask,
+  renderVoiceBrief,
+  inboxTaskContext,
+  loadEmailVoiceProfile,
+  isReplyLoop,
+  applyReplyResolution,
+  REPLY_DECISION,
+} from "./inbox-loop.ts";
+import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
@@ -57,6 +66,7 @@ export interface LoopFireDeps {
   items: LoopItemLedger;
   outputs: LoopOutputStore;
   grants: ShipGrantStore;
+  files?: Pick<FileArtifactStore, "listOwnedByScopes" | "open">;
   trigger: TriggerDeps;
 }
 
@@ -347,7 +357,13 @@ function excerpt(s: string | undefined): string {
   return s.length <= REPLY_EXCERPT_MAX ? s : `${s.slice(0, REPLY_EXCERPT_MAX - 3)}...`;
 }
 
-function playbookText(loop: Loop): string {
+function inboxSource(loop: Loop): string | undefined {
+  return loop.surface?.startsWith("inbox:") ? loop.sources?.[0] : undefined;
+}
+
+function playbookText(loop: Loop, voiceProfile?: string): string {
+  const source = inboxSource(loop);
+  if (source) return renderSourceInboxTask(loop.id, source, inboxTaskContext(loop, voiceProfile));
   return promptText(loop.playbook.replaceAll("$LOOP_ID", loop.id));
 }
 
@@ -431,7 +447,13 @@ function triagePrompt(loop: Loop, open: LoopItem[], pending: LoopItem[]): StageI
   return { input, securityScreenData: promptText(data) };
 }
 
-function workPrompt(loop: Loop, item: LoopItem, guidance?: string, similar: LoopItem[] = []): StageInput {
+function workPrompt(
+  loop: Loop,
+  item: LoopItem,
+  guidance?: string,
+  similar: LoopItem[] = [],
+  voiceProfile?: string,
+): StageInput {
   const data = JSON.stringify({
     sourceKey: promptText(item.sourceKey),
     loopId: loop.id,
@@ -468,18 +490,31 @@ function workPrompt(loop: Loop, item: LoopItem, guidance?: string, similar: Loop
     isReplyLoop(loop, item)
       ? [
           REPLY_DECISION,
+          "Investigate before drafting: read the whole thread from the source, and check whatever the reply depends on (the calendar for scheduling asks). Never draft from the payload alone.",
+          renderVoiceBrief(item.source ?? inboxSource(loop) ?? "", voiceProfile),
           'For a reply, end with a fenced JSON object {"proposal":{"body":"the draft reply","to":["email recipients if applicable"],"subject":"email subject if applicable"},"outputs":[]}. Save the draft for human review; never send it.',
         ].join("\n")
       : 'End your reply with a fenced json block: {"outputs": [{"shipAction": "<declared action>", "label": "<optional grouping label>", "title": "<one line>", "externalRef": "<url or id if any>", "summary": "<one line>"}]}. List every externally-reviewable artifact you prepared; an empty outputs array means the item needed none.',
     "[End loop work]",
     "",
     "Playbook:",
-    playbookText(loop),
+    playbookText(loop, voiceProfile),
   ].join("\n");
   return { input, securityScreenData: screened(data) };
 }
 
-function judgePrompt(loop: Loop, item: LoopItem): string {
+function voiceJudgement(voiceProfile?: string): string {
+  if (!voiceProfile)
+    return "The draft must read as the person's own writing, judged against their messages in the transcript. Return continue, naming what to change, when it reads like a generic business reply instead.";
+  return [
+    "The draft must read as the person's own writing. Compare it with their voice profile below (untrusted data): greeting, sign-off, length, register and hard rules. Return continue, naming what to change, when it reads like a generic business reply instead.",
+    "```untrusted-data",
+    promptText(voiceProfile),
+    "```",
+  ].join("\n");
+}
+
+function judgePrompt(loop: Loop, item: LoopItem, voiceProfile?: string): string {
   const data = JSON.stringify({ sourceKey: promptText(item.sourceKey) });
   return [
     "[Loop judge]",
@@ -490,6 +525,7 @@ function judgePrompt(loop: Loop, item: LoopItem): string {
     "```untrusted-data",
     data,
     "```",
+    ...(isReplyLoop(loop, item) ? [voiceJudgement(voiceProfile)] : []),
     ...(loop.successChecks?.length
       ? [
           `Run every declared check yourself with your tools: ${JSON.stringify(loop.successChecks.map(promptText))}. Report each exact command, whether it passed, and a short detail.`,
@@ -723,16 +759,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       return { status: "silent", note: "duplicate fire key" };
     }
     const threadRef = loopFireThreadRef(loopId, fireKey);
+    const voiceProfile =
+      inboxSource(loop) === "gmail" ? await loadEmailVoiceProfile(deps.files, loop.owner) : undefined;
     if (loop.surface?.startsWith("inbox:") && options?.enumerate !== false) {
       if (!isRunnable(loop)) return notRunnable(loop);
       let failure: unknown;
       try {
-        const outcome = await stageTurn(
-          loop,
-          `${fireKey}:sync`,
-          threadRef,
-          renderSourceInboxTask(loop.id, loop.sources![0]!),
-        );
+        const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop, voiceProfile));
         if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
         failure = stageFailure("inbox sync", outcome)?.error;
         if (failure === undefined) await triage(loop, fireKey, threadRef);
@@ -776,7 +809,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
               loop,
               `${fireKey}:work:${item.id}:${item.attempts}`,
               itemThreadRef,
-              workPrompt(loop, item, guidance, similar),
+              workPrompt(loop, item, guidance, similar, voiceProfile),
             );
             const failure = stageFailure("work", outcome);
             if (failure) throw failure.error;
@@ -802,7 +835,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
               loop,
               `${fireKey}:judge:${item.id}:${attempt}`,
               loopFireItemThreadRef(loopId, fireKey, item.id),
-              judgePrompt(loop, item),
+              judgePrompt(loop, item, voiceProfile),
             );
             const failure = stageFailure("judge", outcome);
             if (failure) throw failure.error;

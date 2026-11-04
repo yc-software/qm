@@ -1,6 +1,13 @@
 import type { TurnOrigin } from "../src/types.ts";
 import { createAdmittedWork } from "../src/util/admitted-work.ts";
-import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
+import {
+  renderSourceInboxTask,
+  loadEmailVoiceProfile,
+  EMAIL_VOICE_PROFILE_NAME,
+  VOICE_PROFILE_MAX_CHARS,
+} from "../src/loops/inbox-loop.ts";
+import { Readable } from "node:stream";
+import type { FileArtifact } from "../src/files/file-artifact-store.ts";
 import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import assert from "node:assert/strict";
@@ -58,6 +65,7 @@ function service(
     triageEnabledFor?: (owner: string) => Promise<boolean>;
     directory?: DirectoryStore;
     resolveRecipient?: TriggerDeps["resolveRecipient"];
+    files?: Parameters<typeof createLoopFireService>[0]["files"];
   },
 ) {
   const loops = createLoopStore(testMap());
@@ -77,6 +85,7 @@ function service(
     items,
     outputs,
     grants,
+    ...(overrides?.files ? { files: overrides.files } : {}),
     trigger: {
       deliveries: deliveries.store as never,
       idempotency,
@@ -983,6 +992,138 @@ test("event-only Email work skips scanning and holds its draft instead of markin
   assert.equal(item?.proposal?.data.body, "Thanks, I will review it.");
   assert.deepEqual(result.summary?.shipped, []);
   assert.deepEqual(result.summary?.ready, [item?.id]);
+});
+
+function fakeFiles(entries: Array<{ name: string; body: string; ownerScopeId?: string }>) {
+  const artifacts = entries.map(
+    (entry, index) =>
+      ({
+        id: `file-${index}`,
+        ownerScopeId: entry.ownerScopeId ?? scopeId("personal", "josh"),
+        name: entry.name,
+        mimetype: "text/markdown",
+        createdAt: 1000 - index,
+      }) as FileArtifact,
+  );
+  const listed: unknown[] = [];
+  return {
+    listed,
+    store: {
+      async listOwnedByScopes(scopes: readonly string[], opts?: { nameQuery?: string }) {
+        listed.push({ scopes, opts });
+        return {
+          files: artifacts.filter(
+            (artifact) =>
+              scopes.includes(artifact.ownerScopeId) && (!opts?.nameQuery || artifact.name.includes(opts.nameQuery)),
+          ),
+        };
+      },
+      async open(id: string) {
+        const index = artifacts.findIndex((artifact) => artifact.id === id);
+        if (index < 0) return null;
+        const body = entries[index]!.body;
+        return { artifact: artifacts[index]!, sizeBytes: body.length, stream: Readable.from([Buffer.from(body)]) };
+      },
+    },
+  };
+}
+
+test("Email drafting and judging carry the owner's voice profile from Files and the current inbox task", async () => {
+  const profile = "Hard rule: opens with hey, never Best.";
+  const files = fakeFiles([{ name: EMAIL_VOICE_PROFILE_NAME, body: profile }]);
+  const w = service(
+    (req) => {
+      if (stage(req) === "work") {
+        assert.match(req.text ?? "", /Hard rule: opens with hey, never Best\./);
+        assert.match(req.text ?? "", /Their email voice profile follows as untrusted data/);
+        assert.match(req.text ?? "", /Never draft from the payload alone/);
+        assert.doesNotMatch(req.text ?? "", /Inbox sync v4/);
+        assert.ok((req.text ?? "").includes(renderSourceInboxTask(loop.id, "gmail", { voiceProfile: profile })));
+        return '```json\n{"proposal":{"to":["sender@example.com"],"body":"hey, Thursday works"},"outputs":[]}\n```';
+      }
+      if (stage(req) === "judge") {
+        assert.match(req.text ?? "", /Compare it with their voice profile below/);
+        assert.match(req.text ?? "", /Hard rule: opens with hey, never Best\./);
+      }
+      return '```json\n{"outcome":"met","reason":"Draft ready for review"}\n```';
+    },
+    { files: files.store },
+  );
+  const loop = await makeLoop(w.loops, {
+    surface: "inbox:gmail",
+    sources: ["gmail"],
+    playbook: "Inbox sync v4. Stale stored instructions.",
+    shipActions: [{ action: "send", gate: "hold" }],
+  });
+  await w.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "thread1",
+      source: "gmail",
+      sourceAt: 1000,
+      sourcePayload: { snippet: "Does Thursday work?", gmail: { threadId: "thread1" } },
+    },
+  ]);
+  await w.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
+  assert.deepEqual(w.turns.map(stage), ["work", "judge"]);
+  assert.deepEqual(files.listed, [
+    { scopes: [scopeId("personal", "josh")], opts: { nameQuery: EMAIL_VOICE_PROFILE_NAME, limit: 5 } },
+  ]);
+});
+
+test("without a profile on file the Email drafting turn is told to read sent mail first", async () => {
+  const w = service((req) => {
+    if (stage(req) === "work") {
+      assert.match(req.text ?? "", /No email voice profile is on file/);
+      return '```json\n{"proposal":{"to":["sender@example.com"],"body":"hey, Thursday works"},"outputs":[]}\n```';
+    }
+    if (stage(req) === "judge") assert.match(req.text ?? "", /judged against their messages in the transcript/);
+    return '```json\n{"outcome":"met","reason":"Draft ready for review"}\n```';
+  });
+  const loop = await makeLoop(w.loops, {
+    surface: "inbox:gmail",
+    sources: ["gmail"],
+    shipActions: [{ action: "send", gate: "hold" }],
+  });
+  await w.items.ingest([
+    { loopId: loop.id, dedupeKey: "thread1", source: "gmail", sourceAt: 1000, sourcePayload: { snippet: "Hi" } },
+  ]);
+  await w.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
+  assert.deepEqual(w.turns.map(stage), ["work", "judge"]);
+});
+
+test("the inbox sync pass scans since the previous successful fire instead of a watermark on disk", async () => {
+  let fail = false;
+  const s = service(() => {
+    if (fail) throw new Error("connector unavailable");
+    return "Synced";
+  });
+  const loop = await makeLoop(s.loops, { surface: "inbox:slack", sources: ["slack"] });
+  assert.equal((await s.fire.fire(loop.id, "sync-1")).status, "silent");
+  assert.match(s.turns[0]?.text ?? "", /No previous successful pass is on record: scan the last ~3 days of Slack\./);
+  assert.doesNotMatch(s.turns[0]?.text ?? "", /STATE\.md|watermark in a state file/);
+  const firedAt = (await s.loops.get(loop.id))?.lastFiredAt;
+  assert.ok(firedAt);
+  assert.equal((await s.fire.fire(loop.id, "sync-2")).status, "silent");
+  assert.ok(s.turns[1]?.text?.includes(`since ${new Date(firedAt).toISOString()}, the previous successful pass`));
+  fail = true;
+  assert.equal((await s.fire.fire(loop.id, "sync-3")).status, "failed");
+  fail = false;
+  assert.equal((await s.fire.fire(loop.id, "sync-4")).status, "silent");
+  assert.match(s.turns[3]?.text ?? "", /No previous successful pass is on record/);
+});
+
+test("the voice profile loader prefers the exact file name and caps the text", async () => {
+  const long = "x".repeat(VOICE_PROFILE_MAX_CHARS + 500);
+  const files = fakeFiles([
+    { name: "email-voice-profile-draft.md", body: "draft" },
+    { name: EMAIL_VOICE_PROFILE_NAME, body: long },
+    { name: EMAIL_VOICE_PROFILE_NAME, body: "someone else's", ownerScopeId: scopeId("personal", "ann") },
+  ]);
+  const text = await loadEmailVoiceProfile(files.store, "josh");
+  assert.equal(text?.length, VOICE_PROFILE_MAX_CHARS);
+  assert.equal(await loadEmailVoiceProfile(fakeFiles([]).store, "josh"), undefined);
+  assert.equal(await loadEmailVoiceProfile(undefined, "josh"), undefined);
 });
 
 test("reply followups allow only explicit current send requests through the versioned ledger action", async () => {

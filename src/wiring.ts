@@ -2541,6 +2541,7 @@ export function buildApp(
     items: loopItems,
     outputs: loopOutputs,
     grants: loopGrants,
+    files,
     trigger: {
       deliveries,
       idempotency,
