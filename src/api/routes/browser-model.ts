@@ -58,7 +58,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
     });
     if (
       personal
-        ? personal.authLabel === "claude-oauth-pi"
+        ? personal.subscription === "anthropic"
         : deps.companySubscriptionAuth === "anthropic" && route.model.provider === "anthropic"
     )
       return sendJson(res, 422, {

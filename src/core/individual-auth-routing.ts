@@ -82,22 +82,25 @@ export async function loadPersonalModelAuth(
   actorId: string,
   account: string,
   requestedModel: string | undefined,
-): Promise<{ keys: ProviderKeys; modelId: string | undefined; authLabel: string } | undefined> {
+): Promise<{ keys: ProviderKeys; modelId: string | undefined; subscription?: "anthropic" | "openai" } | undefined> {
   const [anthCred, oaiCred] = await Promise.all([
     account === "openai" ? null : credentials.get(actorId, "anthropic"),
     account === "anthropic" ? null : credentials.get(actorId, "openai"),
   ]);
   const routing = resolveIndividualAuthRouting(anthCred ?? null, oaiCred ?? null, requestedModel);
-  if (routing?.kind === "apikey")
-    return { keys: { [routing.provider]: routing.apiKey }, modelId: routing.model, authLabel: "api-key" };
+  if (routing?.kind === "apikey") return { keys: { [routing.provider]: routing.apiKey }, modelId: routing.model };
   if (routing?.kind !== "oauth") return undefined;
   const derived = await credentials.derivedOAuth(actorId, routing.provider);
   if (!derived) return undefined;
   return routing.provider === "anthropic"
-    ? { keys: { anthropic: derived.accessToken }, modelId: routing.model, authLabel: "claude-oauth-pi" }
+    ? {
+        keys: { anthropic: derived.accessToken },
+        modelId: routing.model,
+        subscription: "anthropic",
+      }
     : {
         keys: { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken },
         modelId: routing.model,
-        authLabel: "codex-oauth-pi",
+        subscription: "openai",
       };
 }

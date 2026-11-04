@@ -1539,10 +1539,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
           );
         return {
-          userProviderKeys: personal.keys as ProviderKeys | undefined,
+          userProviderKeys: personal.keys,
           userModelOverride: personal.modelId,
           personalAuth: true,
-          authLabel: personal.authLabel,
+          authLabel: personal.subscription ? `${personal.subscription}-subscription` : "api-key",
           account,
         };
       };

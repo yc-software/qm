@@ -7,6 +7,7 @@ import { createServer } from "../src/api/server.ts";
 import { BROWSER_MODEL_AUD, mintCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { stopAtEnd } from "./support/build-app.ts";
+import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
 
 type Upstream = { host: string; headers: Headers; body: Record<string, unknown> };
 
@@ -31,8 +32,12 @@ function anthropicToolResult(input: Record<string, unknown>): Response {
   ]);
 }
 
-async function browserEndpoint(t: TestContext, respond: (upstream: Upstream) => Response) {
-  const config = testConfig({ signingSecret: "ingress-secret".repeat(3) });
+async function browserEndpoint(
+  t: TestContext,
+  respond: (upstream: Upstream) => Response,
+  overrides: Parameters<typeof testConfig>[0] = {},
+) {
+  const config = testConfig({ signingSecret: "ingress-secret".repeat(3), ...overrides });
   const built = stopAtEnd(buildApp(config));
   const server = createServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -145,4 +150,50 @@ test("a failed browser request names the model and the account it billed", async
   assert.match(error, /Claude Opus 5 \(billed to the person's own account\) could not complete the browser request/);
   assert.match(error, /slow down/);
   assert.ok(!error.includes("personal-claude-key"));
+});
+
+const chatgptToken = `header.${Buffer.from(
+  JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "account" } }),
+).toString("base64url")}.sig`;
+
+const rejected = () =>
+  new Response(JSON.stringify({ error: { message: "subscription test stop" } }), {
+    status: 400,
+    headers: { "content-type": "application/json" },
+  });
+
+test("a ChatGPT login serves the browser on the person's subscription", async (t) => {
+  const { built, calls, post } = await browserEndpoint(t, rejected);
+  await built.userModelCredentials.setOAuth("U1", "openai", {
+    accessToken: chatgptToken,
+    expiresAt: Date.now() + 3600_000,
+  });
+  await built.config.setPersonalModelAuth("U1", true, "openai");
+  const response = await post(
+    { browserAccount: "openai", browserModel: "codex/gpt-6.1-sol" },
+    { ...structuredRequest, model: "codex/gpt-6.1-sol" },
+  );
+  assert.equal(response.status, 502);
+  assert.match(await response.text(), /billed to the person's own account/);
+  assert.equal(calls[0]?.host, "chatgpt.com");
+  assert.equal(calls[0]?.headers.get("authorization"), `Bearer ${chatgptToken}`);
+});
+
+test("a company ChatGPT subscription serves company browsing without an API-key fallback", async (t) => {
+  const { built, calls, post } = await browserEndpoint(t, rejected, {
+    codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL,
+    openaiApiKey: "must-not-fallback",
+  });
+  await saveCompanyChatGPTLogin(built.keychain, {
+    auth_mode: "chatgpt",
+    tokens: { access_token: chatgptToken, refresh_token: "company-refresh", id_token: chatgptToken },
+  });
+  const response = await post(
+    { browserAccount: "company", browserModel: "gpt-5.6-sol" },
+    { ...structuredRequest, model: "gpt-5.6-sol" },
+  );
+  assert.equal(response.status, 502);
+  assert.match(await response.text(), /billed to the organization's own provider key/);
+  assert.equal(calls[0]?.host, "chatgpt.com");
+  assert.equal(calls[0]?.headers.get("authorization"), `Bearer ${chatgptToken}`);
 });
