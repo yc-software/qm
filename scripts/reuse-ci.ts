@@ -49,11 +49,6 @@ async function passed(api: Api, run: any, names: string[]) {
   return jobs.jobs;
 }
 
-async function stillPassed(api: Api, run: any) {
-  const fresh = await api(`actions/runs/${run.id}`);
-  return success(fresh) && fresh.run_attempt === run.run_attempt && fresh.head_sha === run.head_sha;
-}
-
 export async function mergeQueueCi(api: Api, repository: string, release: string) {
   sha(release);
   const page = await api(`actions/workflows/cicd.yml/runs?event=merge_group&head_sha=${release}&per_page=100`);
@@ -63,7 +58,7 @@ export async function mergeQueueCi(api: Api, repository: string, release: string
   )[0];
   if (
     !run ||
-    !success(run) ||
+    (run.status === "completed" && run.conclusion !== "success") ||
     run.event !== "merge_group" ||
     run.path !== workflow ||
     run.head_sha !== release ||
@@ -75,8 +70,13 @@ export async function mergeQueueCi(api: Api, repository: string, release: string
     run.run_attempt < 1
   )
     return;
-  if (!(await passed(api, run, CI_JOBS)) || !(await stillPassed(api, run))) return;
+  if (!(await passed(api, run, CI_JOBS))) return;
   return { sha: release, ci: { runId: run.id, attempt: run.run_attempt } };
+}
+
+export function queuedPull(ref: string) {
+  const match = ref.match(/^refs\/heads\/gh-readonly-queue\/main\/pr-(\d+)-[a-f0-9]{40}$/);
+  return match ? Number(match[1]) : undefined;
 }
 
 export async function reusableCi(
@@ -84,11 +84,11 @@ export async function reusableCi(
   log: (id: number) => Promise<string>,
   repository: string,
   release: string,
-  number: number,
+  number: number | undefined,
   now = Date.now(),
 ) {
   sha(release);
-  if (!Number.isSafeInteger(number)) return;
+  if (number === undefined) return;
   const commit = await api(`commits/${release}`);
   if (commit.parents.length !== 1) return;
   const base = commit.parents[0].sha;
@@ -159,7 +159,8 @@ export async function reusableCi(
     !Number.isSafeInteger(scan.run_attempt)
   )
     return;
-  if (!(await stillPassed(api, run))) return;
+  const fresh = await api(`actions/runs/${run.id}`);
+  if (!success(fresh) || fresh.run_attempt !== run.run_attempt || fresh.head_sha !== run.head_sha) return;
   return {
     sha: release,
     tree: tested.commit.tree.sha,
@@ -221,7 +222,7 @@ async function main() {
         },
         GITHUB_REPOSITORY,
         GITHUB_SHA,
-        Number(GITHUB_REF.match(/^refs\/heads\/gh-readonly-queue\/main\/pr-(\d+)-[a-f0-9]{40}$/)?.[1]),
+        queuedPull(GITHUB_REF),
       );
   } catch (error) {
     console.log(`No reusable CI proof: ${error instanceof Error ? error.message : String(error)}`);

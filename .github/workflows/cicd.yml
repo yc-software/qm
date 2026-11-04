@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: cicd-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 jobs:
   reuse:
@@ -34,7 +34,7 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version-file: .node-version
-      - name: Verify exact successful PR tree
+      - name: Verify the exact tested tree
         id: proof
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -46,7 +46,7 @@ jobs:
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -91,7 +91,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -160,7 +160,7 @@ jobs:
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -257,7 +257,7 @@ jobs:
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -308,7 +308,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -346,7 +346,7 @@ jobs:
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -380,7 +380,7 @@ jobs:
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -408,7 +408,7 @@ jobs:
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
-      - name: Reuse the exact successful PR tree
+      - name: Reuse the exact tested tree
         if: needs.reuse.outputs.reusable == 'true'
         run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd

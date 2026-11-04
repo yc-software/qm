@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { CI_JOBS, mergeQueueCi, readReceipt, reusableCi } from "../scripts/reuse-ci.ts";
+import { CI_JOBS, mergeQueueCi, queuedPull, readReceipt, reusableCi } from "../scripts/reuse-ci.ts";
 
 const repository = "example/qm";
 const release = "a".repeat(40),
@@ -114,6 +114,12 @@ test("changed bases, trees, workflow, producer identity, attempts and missing ga
     },
     (f: any) => {
       f.pull.state = "closed";
+    },
+    (f: any) => {
+      f.jobs.splice(
+        f.jobs.findIndex((job: any) => job.name === "Co-author trailers"),
+        1,
+      );
     },
     (f: any) => {
       f.pull.head.repo.full_name = "fork/qm";
@@ -291,7 +297,6 @@ function mergeGroup() {
       workflow_runs: [run],
     },
     [`actions/runs/40/attempts/1/jobs?per_page=100`]: { total_count: jobs.length, jobs },
-    [`actions/runs/40`]: structuredClone(run),
   };
   return {
     data,
@@ -313,6 +318,30 @@ test("a main push reuses the merge group run that tested its exact commit", asyn
   assert.deepEqual(await mergeGroup().resolve(), { sha: release, ci: { runId: 40, attempt: 1 } });
 });
 
+test("a main push reuses a merge group run still settling once every quality job has passed", async () => {
+  const f = mergeGroup();
+  f.run.status = "in_progress";
+  delete (f.run as any).conclusion;
+  assert.deepEqual(await f.resolve(), { sha: release, ci: { runId: 40, attempt: 1 } });
+});
+
+test("a merge group without a queued PR runs full checks", async () => {
+  const api = async (path: string) => assert.fail(path);
+  assert.equal(await reusableCi(api, api, repository, release, undefined, now), undefined);
+});
+
+test("only a queue ref for main names the queued PR", () => {
+  assert.equal(queuedPull(`refs/heads/gh-readonly-queue/main/pr-7-${base}`), 7);
+  for (const ref of [
+    `refs/heads/gh-readonly-queue/other/pr-7-${base}`,
+    `refs/heads/gh-readonly-queue/main/pr-7-${base.slice(1)}`,
+    `refs/heads/gh-readonly-queue/main/pr--${base}`,
+    "refs/heads/main",
+    `refs/pull/7/merge`,
+  ])
+    assert.equal(queuedPull(ref), undefined, ref);
+});
+
 test("a main push without a green merge group run of its exact commit runs full checks", async () => {
   for (const change of [
     (f: any) => {
@@ -322,9 +351,6 @@ test("a main push without a green merge group run of its exact commit runs full 
       f.run.conclusion = "failure";
     },
     (f: any) => {
-      f.run.status = "in_progress";
-    },
-    (f: any) => {
       f.run.event = "pull_request";
     },
     (f: any) => {
@@ -332,6 +358,7 @@ test("a main push without a green merge group run of its exact commit runs full 
     },
     (f: any) => {
       f.run.head_sha = head;
+      for (const job of f.jobs) job.head_sha = head;
     },
     (f: any) => {
       f.run.head_branch = `gh-readonly-queue/other/pr-7-${base}`;
@@ -369,10 +396,7 @@ test("a main push without a green merge group run of its exact commit runs full 
       f.jobs.push(f.jobs[0]);
     },
     (f: any) => {
-      f.data["actions/runs/40"].run_attempt++;
-    },
-    (f: any) => {
-      f.data["actions/runs/40"].status = "in_progress";
+      f.jobs[0].status = "in_progress";
     },
   ]) {
     const f = mergeGroup();
