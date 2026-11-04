@@ -18,7 +18,7 @@ test("listed sessions leave out spawn metadata; scopes count only sessions with 
   await assertLeanListing(createPostgresSessionStore(testDatabaseUrl()), "mem");
 });
 
-test("participantScopes leaves out sessions whose content predates the participant", async () => {
+test("participantScopes counts sessions whose content predates the participant", async () => {
   await assertLateJoinerScopes(createPostgresSessionStore(testDatabaseUrl()), "mem");
 });
 

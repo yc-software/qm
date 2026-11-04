@@ -14,11 +14,11 @@ import { computeUsers } from "../src/admin/users.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
-test("computeUsers dedupes participants, credits in-window turns, and joins admin status", () => {
+test("computeUsers dedupes participants, credits their turns, and joins admin status", () => {
   const participants = [
-    { sessionId: "s1", principalId: "U1", validFrom: 100, validTo: null, validFromSeq: null, validToSeq: null },
-    { sessionId: "s2", principalId: "U1", validFrom: 200, validTo: null, validFromSeq: null, validToSeq: null },
-    { sessionId: "s1", principalId: "U2", validFrom: 100, validTo: null, validFromSeq: null, validToSeq: null },
+    { sessionId: "s1", principalId: "U1" },
+    { sessionId: "s2", principalId: "U1" },
+    { sessionId: "s1", principalId: "U2" },
   ];
   const turns = [
     { principalId: "U1", sessionId: "s1", day: 0, turns: 2, firstAt: 150, lastAt: 160 },
@@ -37,16 +37,14 @@ test("computeUsers dedupes participants, credits in-window turns, and joins admi
   assert.equal(rows[0]!.principalId, "U2");
 });
 
-test("computeUsers sums a window's turn rollup and takes its latest timestamp", () => {
+test("computeUsers sums a participant's turn rollup and takes its latest timestamp", () => {
   const rows = computeUsers({
-    participants: [
-      { sessionId: "s1", principalId: "U1", validFrom: 100, validTo: 200, validFromSeq: null, validToSeq: null },
-    ],
+    participants: [{ sessionId: "s1", principalId: "U1" }],
     turns: [{ principalId: "U1", sessionId: "s1", day: 0, turns: 2, firstAt: 100, lastAt: 199 }],
     grants: [],
   });
   assert.equal(rows.length, 1);
-  assert.equal(rows[0]!.turnCount, 2, "the window's two in-window turns");
+  assert.equal(rows[0]!.turnCount, 2, "the participant's two turns");
   assert.equal(rows[0]!.lastSeenAt, 199);
 });
 

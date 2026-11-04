@@ -1,5 +1,4 @@
 import { isAgentReply, type Item, proseText } from "./items.ts";
-import { commonEntrySeqs } from "./transcript-source.ts";
 import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
@@ -296,6 +295,7 @@ export interface SessionSyscallDeps {
     | "updateTitle"
     | "latestItemSeq"
     | "visibleItems"
+    | "participantsOf"
     | "getForParticipant"
   >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw">;
@@ -599,13 +599,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         const audience = binding.request.conversation.audience.length
           ? binding.request.conversation.audience
           : [binding.request.actor];
-        const views = await Promise.all(
-          [...new Set([binding.request.actor.id, ...audience.map((p) => p.id)])].map((id) =>
-            deps.sessions.visibleItems(target.id, id),
-          ),
-        );
-        const allowed = commonEntrySeqs(views);
-        return (views[0] ?? []).filter((item) => allowed.has(item.seq));
+        const members = await deps.sessions.participantsOf(target.id);
+        if (!audience.every((p) => members.includes(p.id))) return [];
+        return deps.sessions.visibleItems(target.id, binding.request.actor.id);
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {

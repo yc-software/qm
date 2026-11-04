@@ -351,11 +351,7 @@ export interface App {
     goal?: GoalView;
     runtime?: TurnRuntime;
   } | null>;
-  canViewSessionSnapshot(
-    sessionId: string,
-    principalId: string,
-    visibility: { minSeq: number; maxSeq: number; minCreatedAt: number; maxCreatedAt: number },
-  ): Promise<boolean>;
+  canViewSessionSnapshot(sessionId: string, principalId: string): Promise<boolean>;
   getSessionItemForViewer(sessionId: string, principalId: string, seq: number): Promise<{ item: Item } | null>;
   pinConversationItem(
     threadRef: string,

@@ -64,7 +64,7 @@ test("session lists check each project once per request and observe membership c
         "group",
         projectScopeId(project.id),
       );
-      await built.sessions.addParticipant(session.id, "member", undefined, { includeHistory: true });
+      await built.sessions.addParticipant(session.id, "member");
       await built.sessions.updateTitle(session.id, `History ${i}`);
     }
     const get = built.projects.get.bind(built.projects);
@@ -657,7 +657,6 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   await built.identity.reactivate("member");
   assert.equal((await turn("owner", "web:owner:first", "after-reactivation")).status, "ok");
   const reactivatedRequest = (await built.sessions.listLlmRequests(first.id)).at(-1)!;
-  assert.doesNotMatch(JSON.stringify(reactivatedRequest.promptEnvelope), /inactive-gap-secret/);
   assert.match(JSON.stringify(reactivatedRequest.promptEnvelope), /after-reactivation/);
   await built.identity.deactivate("owner");
   assert.deepEqual(await built.app.listProjects("member"), []);
@@ -668,12 +667,12 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
   const addParticipant = built.sessions.addParticipant.bind(built.sessions);
   let failReconcile = true;
-  built.sessions.addParticipant = async (sessionId, principalId, title, opts) => {
+  built.sessions.addParticipant = async (sessionId, principalId, title) => {
     if (principalId === "outsider" && failReconcile) {
       failReconcile = false;
       throw new Error("injected participant failure");
     }
-    return addParticipant(sessionId, principalId, title, opts);
+    return addParticipant(sessionId, principalId, title);
   };
   await assert.rejects(built.app.addProjectMember(project.id, "owner", "outsider"), /injected participant failure/);
   assert.ok((await built.projects.get(project.id))?.memberIds.includes("outsider"));
@@ -701,19 +700,14 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(await built.app.getSessionForViewer(first.id, "member"), null);
   assert.equal((await turn("member", "web:owner:first")).status, "refused");
   assert.equal(await built.app.pendingApprovalForThread(removableApprovalThread), null);
-  const closed = (await built.sessions.listParticipants()).filter(
-    (window) => window.principalId === "member" && projectSessions.some((session) => session.id === window.sessionId),
-  );
-  assert.equal(closed.length, projectSessions.length);
-  assert.ok(closed.every((window) => window.validTo !== null));
-  const closedAt = Math.max(...closed.map((window) => window.validTo!));
+  const memberRows = async () =>
+    (await built.sessions.listParticipants()).filter(
+      (p) => p.principalId === "member" && projectSessions.some((session) => session.id === p.sessionId),
+    );
+  assert.equal((await memberRows()).length, 0);
 
   assert.equal((await built.app.addProjectMember(project.id, "owner", "member")).status, "ok");
-  const reopened = (await built.sessions.listParticipants()).filter(
-    (window) => window.principalId === "member" && projectSessions.some((session) => session.id === window.sessionId),
-  );
-  assert.ok(closedAt > 0);
-  assert.ok(reopened.every((window) => window.validTo === null && window.validFrom === 0));
+  assert.equal((await memberRows()).length, projectSessions.length);
   assert.equal((await turn("member", removableApprovalThread, "continue after rejoining")).status, "ok");
 
   const queued = await built.app.turn({
