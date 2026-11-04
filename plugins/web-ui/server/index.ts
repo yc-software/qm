@@ -39,6 +39,7 @@ import {
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { boundTenant, withTenant } from "../../chassis/src/tenant.ts";
 import { coreHostTenants, inHostTenant, requestHostname } from "../../chassis/src/host-tenant.ts";
+import { verifiedForwardedHost } from "../../chassis/src/forwarded-host.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
@@ -3646,6 +3647,15 @@ function inRequestTenant(
 }
 
 const STATIC_ASSET = /^\/assets\/[a-zA-Z0-9_.-]+$/;
+const EXTERNAL_SHARE = /^\/share\/external\/[a-f0-9-]{36}(?:\/files\/[a-f0-9-]{36})?$/;
+
+// An external share has no sign-in, and the portal reaches this service on its own internal
+// host. Its tenant comes only from the visitor's host as signed by the portal, so a share
+// link from one tenant is never served on another tenant's host.
+function shareHost(req: IncomingMessage): string | undefined {
+  if (req.method !== "GET" || !EXTERNAL_SHARE.test((req.url ?? "").split("?")[0] ?? "")) return undefined;
+  return verifiedForwardedHost(req, CORE_SIGNING_SECRET);
+}
 
 export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
@@ -3658,6 +3668,17 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
     const file = join(DIST, assetPath);
     if (!existsSync(file) || !statSync(file).isFile()) return void json(res, 404, { error: "not_found" });
     return serveStatic(res, assetPath);
+  }
+  const forwarded = shareHost(req);
+  if (forwarded !== undefined) {
+    return inHostTenant(
+      () => hostTenants(forwarded),
+      req,
+      res,
+      async () => {
+        await portalTokenStore.run(undefined, () => routeRequest(req, res));
+      },
+    );
   }
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;

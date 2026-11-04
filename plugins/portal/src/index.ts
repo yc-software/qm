@@ -1,4 +1,5 @@
-import { coreHostTenants, inHostTenant, type HostTenant } from "../../chassis/src/host-tenant.ts";
+import { coreHostTenants, inHostTenant, requestHostname, type HostTenant } from "../../chassis/src/host-tenant.ts";
+import { signedForwardedHost } from "../../chassis/src/forwarded-host.ts";
 import { coreTenantSignIn } from "../../chassis/src/tenant-sign-in.ts";
 import {
   DESKTOP_LAUNCH_SCRIPT,
@@ -1312,11 +1313,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (!DEPLOYMENTS_ENABLED && (seg === "d" || seg === "deployments")) return json(res, 404, { error: "not_found" });
   const isDeployment = DEPLOYMENTS_ENABLED && (seg === "d" || seg === "deployments");
 
-  if (
-    method === "GET" &&
-    (/^\/share\/external\/[a-f0-9-]{36}(?:\/files\/[a-f0-9-]{36})?$/.test(pathname) ||
-      /^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname))
-  ) {
+  if (method === "GET" && /^\/share\/external\/[a-f0-9-]{36}(?:\/files\/[a-f0-9-]{36})?$/.test(pathname)) {
+    // The web UI resolves an external share's tenant from the visitor's host, which it only
+    // trusts with this signature; the share itself carries no sign-in.
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: WEB_UI_UPSTREAM, path: pathname, search: url.search },
+      ["accept", "accept-encoding"],
+      signedForwardedHost(CORE_SIGNING_SECRET, requestHostname(req), "GET", `${pathname}${url.search}`),
+    );
+  }
+
+  if (method === "GET" && /^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname)) {
     return proxyToUpstream(req, res, { baseUrl: WEB_UI_UPSTREAM, path: pathname, search: url.search }, [
       "accept",
       "accept-encoding",
