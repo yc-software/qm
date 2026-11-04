@@ -2999,8 +2999,6 @@ export function buildApp(
     deploymentLayerReady,
     deploymentLayerRefresh,
     ownSharedState: async () => {
-      const backfilledFires = await crons.backfillFires();
-      if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
       ownsSharedState = true;
       await deploymentLayerStore.hydrate().catch((error: unknown) => {
         ownsSharedState = false;
