@@ -1,5 +1,4 @@
 import { TENANT_HEADER } from "../../../plugins/chassis/src/source-auth-sign.ts";
-import { withTenant } from "../../tenants/context.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
@@ -32,7 +31,7 @@ import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
-import { withRowTenant } from "../tenant-ingress.ts";
+import { bindTenant, withRowTenant } from "../tenant-ingress.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
   if (port === undefined) return {};
@@ -1230,7 +1229,7 @@ async function runGitHttpBackend(input: {
 async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
   const token = ctx.secret ? gitTokenFrom(ctx) : null;
   const access = ctx.secret && token ? await verifyDeployGitAccess(ctx.secret, token) : null;
-  return access?.tenant ? withTenant(access.tenant, () => serveGit(ctx, access)) : serveGit(ctx, access);
+  return access?.tenant ? bindTenant(access.tenant, () => serveGit(ctx, access)) : serveGit(ctx, access);
 }
 
 async function serveGit(ctx: BaseCtx, access: Awaited<ReturnType<typeof verifyDeployGitAccess>>): Promise<void> {

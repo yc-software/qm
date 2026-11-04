@@ -133,11 +133,11 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
         await claimAcrossTenants(
           db,
           `WITH due AS (
-               SELECT id FROM file_uploads
+               SELECT tenant_id, id FROM file_uploads
                WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
                ORDER BY next_attempt_at, expires_at, id FOR UPDATE SKIP LOCKED LIMIT 100
              ) UPDATE file_uploads SET next_attempt_at=$1+60000 FROM due
-               WHERE file_uploads.id=due.id RETURNING file_uploads.*`,
+               WHERE file_uploads.tenant_id=due.tenant_id AND file_uploads.id=due.id RETURNING file_uploads.*`,
           [now],
         )
       ).rows.map(decode);

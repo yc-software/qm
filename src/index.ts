@@ -10,8 +10,9 @@ import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
-import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
+import { createSlackRuntimeReconciler, createTenantSlackRuntimes } from "./surfaces/slack-runtime.ts";
 import { useOwnerDatabase } from "./tenants/owner-pool.ts";
+import { withoutTenant } from "./tenants/context.ts";
 import { createPgPool, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { watchTenants } from "./tenants/work-tenant.ts";
 
@@ -40,7 +41,9 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
       appId: process.env.QM_SLACK_APP_ID ?? "",
       store: built.slackInstallation,
       reconcile:
-        config.backgroundWorkEnabled || config.backgroundDeploymentId ? () => slackRuntime.reconcile() : undefined,
+        config.backgroundWorkEnabled || config.backgroundDeploymentId
+          ? () => withoutTenant(() => slackRuntime.reconcile())
+          : undefined,
     })
   : undefined;
 const server = createServer(built.app, {
@@ -48,9 +51,7 @@ const server = createServer(built.app, {
   managedSlack,
 });
 
-await built.config.hydrate?.();
-await built.refreshCustomProviders();
-await built.identity.refresh();
+await built.loadTenants();
 await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();
@@ -94,9 +95,10 @@ if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
   console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 }
 
-const slackRuntime = createSlackRuntimeReconciler({
+const slackRuntime = createTenantSlackRuntimes({
+  tenants: built.listTenants,
   startPaused: Boolean(config.backgroundDeploymentId),
-  load: async () => {
+  load: async (tenant) => {
     const status = await built.slackInstallation.status();
     const stored = await built.slackInstallation.get();
     if (stored) {
@@ -111,10 +113,12 @@ const slackRuntime = createSlackRuntimeReconciler({
         stored.installId && managedSlack ? (staging) => managedSlack.receiver(stored.installId!, staging) : undefined,
       );
       if (dynamic && stored.installId) dynamic.installationId = stored.installId;
+      if (dynamic) dynamic.tenantId = tenant.id;
       return dynamic ? { version: stored.version, config: dynamic } : null;
     }
     if (status.managed) return null;
-    if (slackConfig) return { version: "environment", config: slackConfig };
+    if (slackConfig && tenant.install)
+      return { version: "environment", config: { ...slackConfig, tenantId: tenant.id } };
     return null;
   },
   startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),

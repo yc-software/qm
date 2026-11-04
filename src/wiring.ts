@@ -78,10 +78,12 @@ import {
   baseModelProviders,
   companySubscriptionAuth,
   configuredModel,
+  orgId,
   providerKeysPresent,
   type Config,
 } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
+import { createTenantLoader, registerTenants, withInstallTenant } from "./tenants/context.ts";
 import { enabledSandboxBackends } from "./sandbox/sandbox-settings.ts";
 import {
   actorAssertionActive,
@@ -155,12 +157,13 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { forEachTenant, inTenantOf } from "./tenants/claim.ts";
+import { forEachTenant, inInstallTenant, inTenantOf, listTenants, type TenantRow } from "./tenants/claim.ts";
 import { withoutTenant, withTenant } from "./tenants/context.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { ownerPgPool } from "./tenants/owner-pool.ts";
 import { createTenancy, type Tenancy } from "./tenants/tenancy.ts";
 import { configureTenantSettings } from "./tenants/settings.ts";
+import { configureTenantCaches } from "./api/tenant-ingress.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
@@ -446,6 +449,7 @@ export interface BuiltApp {
   backgroundOwnership?: BackgroundOwnershipControl;
   rewriteSurfaceOrigins: () => Promise<void>;
   forEachTenant: (fn: () => Promise<unknown>) => Promise<void>;
+  listTenants: () => Promise<TenantRow[]>;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   deploymentLayer: DeploymentLayerRuntime;
@@ -453,6 +457,7 @@ export interface BuiltApp {
   deploymentLayerStore: DeploymentLayerStore;
   deploymentLayerReady: Promise<unknown>;
   deploymentLayerRefresh: Sweeper;
+  loadTenants: () => Promise<void>;
   sessions: SessionStore;
   runs: RunStore;
   signals: RunSignalStore;
@@ -635,7 +640,6 @@ export function buildApp(
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
-  void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
     ...configStoreMaps(artifactMap),
@@ -643,7 +647,6 @@ export function buildApp(
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills", ["scopeId"]),
     advisoryLock,
@@ -652,7 +655,7 @@ export function buildApp(
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
   const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
-  const teams = createPostgresTeamStore(databaseUrl, featureFlags, scopeId("org", config.orgId));
+  const teams = createPostgresTeamStore(databaseUrl, featureFlags, () => scopeId("org", orgId()));
   const decisions = createPostgresDecisionStore(databaseUrl);
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
@@ -693,10 +696,18 @@ export function buildApp(
         }
       : {}),
   });
-  const deploymentLayerReady = deploymentLayerStore.hydrate();
-  const deploymentLayerRefresh = createUntrackedSweeper(() => deploymentLayerStore.hydrate(), 30_000, {
-    label: "deployment layer refresh",
-  });
+  const installTenant = pgArtifactMap.pool
+    .pool()
+    .then(() => ownerPgPool(pgArtifactMap.pool).q("SELECT qm_tenant_id()::text AS id"))
+    .then((rows) => String(rows[0]?.id));
+  const deploymentLayerReady = installTenant.then((tenant) => withTenant(tenant, () => deploymentLayerStore.hydrate()));
+  const deploymentLayerRefresh = createUntrackedSweeper(
+    () => withInstallTenant(() => deploymentLayerStore.hydrate()),
+    30_000,
+    {
+      label: "deployment layer refresh",
+    },
+  );
   let skillsReady: Promise<void>;
   if (config.seedSkills) {
     const installCatalogs = async (): Promise<void> => {
@@ -1301,6 +1312,7 @@ export function buildApp(
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
   const tenancy = createTenancy(pgArtifactMap.pool, ownerPgPool(pgArtifactMap.pool));
   configureTenantSettings(tenancy.settings);
+  configureTenantCaches(() => tenantLoader.load());
   const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
 
   const sessions: SessionStore = createPostgresSessionStore(databaseUrl);
@@ -1339,6 +1351,11 @@ export function buildApp(
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
+  const tenantLoader = createTenantLoader([
+    () => configStore.hydrate?.() ?? Promise.resolve(),
+    refreshCustomProviders,
+    () => identity.refresh(),
+  ]);
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
     await refreshCustomProviders();
@@ -1424,9 +1441,11 @@ export function buildApp(
     const subscription = codexSubscriptionModelId(id);
     return resolveModel(subscription) ? subscription : id;
   };
-  const runtimeOrgScope = scopeId("org", config.orgId);
+  const runtimeOrgScope = () => scopeId("org", orgId());
   const orgBaseModelId = (): string | undefined =>
-    configStore.getRuntimeSelection(runtimeOrgScope)?.modelId ?? configStore.getBaseModel(runtimeOrgScope) ?? undefined;
+    configStore.getRuntimeSelection(runtimeOrgScope())?.modelId ??
+    configStore.getBaseModel(runtimeOrgScope()) ??
+    undefined;
   const deploymentDefaultModel = () =>
     defaultModel(
       configuredModel(config),
@@ -1459,7 +1478,7 @@ export function buildApp(
         ...(config.modelGateway ? { gateway: config.modelGateway } : {}),
         credential: async (slug) => {
           const rec = keychain
-            ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug))
+            ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", orgId()), slug))
             : null;
           return rec ? { host: rec.host, enabled: rec.enabled, headers: credentialRequestHeaders(rec) } : null;
         },
@@ -1476,8 +1495,8 @@ export function buildApp(
   const resolveRequestedRuntime = (route: SessionRoute, requested: SessionRoute["runtime"]) =>
     resolveRuntimeChoice(
       configStore,
-      runtimeOrgScope,
-      route.scopeLabel ?? runtimeOrgScope,
+      runtimeOrgScope(),
+      route.scopeLabel ?? runtimeOrgScope(),
       fallback,
       requested,
       hydrateModelCatalog,
@@ -1603,7 +1622,7 @@ export function buildApp(
           },
         })
       : undefined;
-  const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
+  const productAnalytics = createProductAnalytics(orgId, config.productAnalytics);
   runs.onTerminal((run) => void productAnalytics.responseFinished(run));
 
   let processes: ProcessRegistry | undefined;
@@ -1830,7 +1849,7 @@ export function buildApp(
     ...(deployGitSecret && deployGitBase
       ? {
           deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
-            const orgScope = scopeId("org", config.orgId);
+            const orgScope = scopeId("org", orgId());
             const credentials = await deploymentCredentialSlugs(
               await serviceCreds.listServiceCredentials(orgScope),
               orgScope,
@@ -2056,7 +2075,7 @@ export function buildApp(
       if (Object.keys(requested).length === 0) {
         await resolveRuntimeChoice(
           configStore,
-          runtimeOrgScope,
+          runtimeOrgScope(),
           scope,
           fallback,
           requested,
@@ -2188,7 +2207,7 @@ export function buildApp(
               {
                 serviceCredential: async (slug) => {
                   const record = nonDeploymentCredential(
-                    await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug),
+                    await serviceCreds.getServiceCredentialSecret(scopeId("org", orgId()), slug),
                   );
                   return record && record.delivery !== "env" ? record : undefined;
                 },
@@ -2690,9 +2709,13 @@ export function buildApp(
     currentScopeMembers,
     resolveRecipient,
   });
+  const ownershipStore = createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership"));
   const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
     ? {
-        store: createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership")),
+        store: {
+          get: () => inInstallTenant(pgArtifactMap.pool, () => ownershipStore.get()),
+          set: (change) => inInstallTenant(pgArtifactMap.pool, () => ownershipStore.set(change)),
+        },
         instanceId: randomUUID(),
         deploymentId: config.backgroundDeploymentId,
         active: () => backgroundActive(),
@@ -2976,8 +2999,19 @@ export function buildApp(
     brokeredTools,
     deploymentLayerReady,
     deploymentLayerRefresh,
+    loadTenants: async () => {
+      const install = await installTenant;
+      const rows = await ownerPgPool(pgArtifactMap.pool).q("SELECT id::text AS id FROM tenants ORDER BY id");
+      const tenants = rows.map((row) => String(row.id));
+      registerTenants(install, tenants.length === 1 ? tenants[0] : undefined);
+      for (const tenant of tenants)
+        await withTenant(tenant, () => tenantLoader.load()).catch(
+          reportFailureAs("startup: load tenant caches", undefined),
+        );
+    },
     rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(ownerPgPool(pgArtifactMap.pool)),
     forEachTenant: (fn) => forEachTenant(pgArtifactMap.pool, fn),
+    listTenants: () => listTenants(pgArtifactMap.pool),
     sessions,
     runs,
     signals: runSignals,

@@ -98,14 +98,14 @@ const LEGACY_FIRE_MAINTENANCE = {
       IF to_regclass('cron_fire_log') IS NOT NULL THEN
         LOCK TABLE cron_fire_log IN SHARE ROW EXCLUSIVE MODE;
         INSERT INTO cron_fires (tenant_id, ${FIRE_COLUMNS})
-        SELECT qm_tenant_id(), ${LEGACY_FIRE_FIELDS} FROM cron_fire_log source
+        SELECT qm_bound_tenant(), ${LEGACY_FIRE_FIELDS} FROM cron_fire_log source
         ${LEGACY_FIRE_UPSERT};
       END IF;
     END $body$`,
     `CREATE OR REPLACE FUNCTION qm_sync_legacy_cron_fire() RETURNS trigger LANGUAGE plpgsql AS $body$
       BEGIN
         INSERT INTO cron_fires (tenant_id, ${FIRE_COLUMNS})
-        SELECT qm_tenant_id(), ${LEGACY_FIRE_FIELDS} FROM (SELECT NEW.*) source
+        SELECT qm_bound_tenant(), ${LEGACY_FIRE_FIELDS} FROM (SELECT NEW.*) source
         ${LEGACY_FIRE_UPSERT};
         RETURN NEW;
       END

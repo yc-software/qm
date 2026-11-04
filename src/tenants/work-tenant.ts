@@ -1,9 +1,10 @@
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { boundTenant, noteTenants, soleTenantNow } from "./context.ts";
+import { boundTenant, registerTenants } from "./context.ts";
 
 const TENANT_RECHECK_MS = 5_000;
 
 let checked: { at: number; done: Promise<void> } | undefined;
+let sole: string | undefined;
 
 const missingTable = (error: unknown): boolean =>
   typeof error === "object" && error !== null && "code" in error && error.code === "42P01";
@@ -18,7 +19,9 @@ async function readTenants(pg: Pick<PgPool, "q">): Promise<void> {
   ]);
   const idOf = (rows: Record<string, unknown>[]): string | undefined =>
     rows[0]?.id == null ? undefined : String(rows[0].id);
-  noteTenants({ sole: idOf(soleRows), install: idOf(installRows) });
+  sole = idOf(soleRows);
+  const install = idOf(installRows);
+  if (install !== undefined) registerTenants(install, sole);
 }
 
 export function refreshTenants(pg: Pick<PgPool, "q">): Promise<void> {
@@ -43,7 +46,7 @@ export async function workTenant(pg: Pick<PgPool, "q">): Promise<string> {
   if (bound !== undefined) return bound;
   if (!checked || Date.now() - checked.at > TENANT_RECHECK_MS) void refreshTenants(pg).catch(() => undefined);
   await checked?.done;
-  const tenant = soleTenantNow();
+  const tenant = sole;
   if (tenant === undefined) throw new Error("No tenant is bound to this work");
   return tenant;
 }

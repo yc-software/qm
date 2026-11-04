@@ -19,6 +19,7 @@ export interface SlackPluginConfig {
   externalAccess?: ExternalSlackAccess;
   historyLimit?: number;
   installationId?: string;
+  tenantId?: string;
   sharedServiceUrl?: string;
   receiverFactory?: (staging?: EnvelopeStaging) => Receiver;
   botToken: string;

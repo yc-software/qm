@@ -73,7 +73,7 @@ const onTeam = (team: TurnTeam, principalId: string) => keysOf(principalId).some
 export function createPostgresTeamStore(
   connectionString: string,
   flags: Pick<FeatureFlagStore, "enabled">,
-  orgScope: ScopeId,
+  orgScope: () => ScopeId,
 ): TeamStore {
   const { q, pool } = createPgPool(connectionString, [
     ...TENANCY,
@@ -96,7 +96,7 @@ export function createPostgresTeamStore(
       },
     ),
   ]);
-  const enabled = () => flags.enabled("team_scopes", orgScope);
+  const enabled = () => flags.enabled("team_scopes", orgScope());
   return {
     async list() {
       if (!(await enabled())) return [];

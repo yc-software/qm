@@ -83,6 +83,11 @@ export function loadedTenantSettings(): TenantSettings {
   return (tenant && loaded.get(tenant)) || {};
 }
 
+export function tenantSettingsLoaded(): boolean {
+  const tenant = boundTenant();
+  return !tenant || !loader || loaded.has(tenant);
+}
+
 export async function tenantSetting<K extends keyof TenantSettings>(key: K): Promise<TenantSettings[K]> {
   return (await tenantSettings())[key];
 }
