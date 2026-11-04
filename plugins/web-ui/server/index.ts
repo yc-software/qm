@@ -40,7 +40,7 @@ import {
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { boundTenant, withTenant } from "../../chassis/src/tenant.ts";
 import { coreHostTenants, inHostTenant, requestHostname } from "../../chassis/src/host-tenant.ts";
-import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
+import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 
@@ -92,11 +92,14 @@ async function hasInboxLoopPreview(user: string): Promise<boolean> {
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist-web");
 
-const brandingCache = createBrandingCache(async () => {
+const brandingCache = createBrandingCache<OrgBranding & { welcomeCohort?: string }>(async () => {
   const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
   if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
-  const b = (JSON.parse(r.text) as { branding?: Record<string, unknown> }).branding;
+  const surface = JSON.parse(r.text) as { branding?: Record<string, unknown>; welcomeCohort?: unknown };
+  const b = surface.branding;
+  const cohort = typeof surface.welcomeCohort === "string" ? surface.welcomeCohort.trim().slice(0, 40) : "";
   return {
+    ...(cohort ? { welcomeCohort: cohort } : {}),
     ...(typeof b?.orgName === "string" ? { orgName: b.orgName } : {}),
     ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
     ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
@@ -1490,6 +1493,7 @@ const apiRoutes: readonly WebRoute[] = [
         if (isLoopsUser(user)) permissions.push("loops");
         if (isInboxUser(user)) permissions.push("inbox");
       }
+      const cohort = companyBranding.welcomeCohort || welcomeCohort;
       return json(res, 200, {
         user,
         org: ORG,
@@ -1505,7 +1509,7 @@ const apiRoutes: readonly WebRoute[] = [
           ) ?? false,
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         displayName: resolveIdentity(req)?.name ?? null,
-        ...(welcomeCohort ? { welcomeCohort } : {}),
+        ...(cohort ? { welcomeCohort: cohort } : {}),
         ...(activityConfig ? { suggestedActivitiesGeneration: true } : {}),
         ...(suggestedActivities.length && !activityConfig ? { suggestedActivities } : {}),
         permissions,
