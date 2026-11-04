@@ -125,7 +125,21 @@ export async function startQm(
     }),
   );
 
-  if (config.backgroundWorkEnabled) await built.ownSharedState();
+  const slackRuntimes = [slackRuntime, ...slackAccountRuntimes];
+  built.runtime.start({
+    resume() {
+      built.scheduler.start(1000);
+      for (const runtime of slackRuntimes) runtime.start();
+    },
+    async standDown() {
+      const stopped = await Promise.allSettled([
+        built.scheduler.stopClaims(),
+        ...slackRuntimes.map((runtime) => runtime.stop()),
+      ]);
+      const failures = stopped.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+      if (failures.length) throw new AggregateError(failures, "background stand-down failed");
+    },
+  });
 
   return {
     built,

@@ -19,6 +19,8 @@ const turn = (threadRef: string): OrchestratorInput => ({
   text: "x",
 });
 
+const live = { slack: 0, maxSlack: 0, cron: 0, maxCron: 0 };
+
 function bootBuild(url: string, deploymentKey: string, startedAt: number) {
   const { runs } = createPostgresRunStore(url);
   const handled: string[] = [];
@@ -31,9 +33,11 @@ function bootBuild(url: string, deploymentKey: string, startedAt: number) {
     startPlugin: async () => {
       slack.connected = true;
       slack.connects++;
+      live.maxSlack = Math.max(live.maxSlack, ++live.slack);
       return {
         stop: async () => {
           slack.connected = false;
+          live.slack--;
         },
       };
     },
@@ -59,9 +63,11 @@ function bootBuild(url: string, deploymentKey: string, startedAt: number) {
     resume() {
       cron.running = true;
       cron.starts++;
+      live.maxCron = Math.max(live.maxCron, ++live.cron);
       slackRuntime.start();
     },
     async standDown() {
+      if (cron.running) live.cron--;
       cron.running = false;
       await slackRuntime.stop();
     },
@@ -72,9 +78,11 @@ function bootBuild(url: string, deploymentKey: string, startedAt: number) {
     cron,
     slack,
     async stop() {
+      if (cron.running) live.cron--;
+      cron.running = false;
+      await slackRuntime.stop();
       await drain.stop();
       await worker.stop();
-      await slackRuntime.stop();
     },
   };
 }
@@ -115,6 +123,8 @@ test("starting a newer build stands the older one down; stopping it brings the o
     const third = (await a.runs.enqueue({ sessionId: "s3", request: turn("t3"), maxAttempts: 3 })).run;
     assert.equal((await a.runs.waitFor(third.id, 15_000)).status, "done");
     assert.deepEqual(a.handled, ["t1", "t3"]);
+    assert.equal(live.maxSlack, 1, "the two builds never held Slack connections at the same time");
+    assert.equal(live.maxCron, 1, "the two builds never ran cron schedulers at the same time");
   } finally {
     await a.stop();
   }
@@ -125,7 +135,7 @@ test("a stand-down that fails while the newer build disappears is settled before
   const calls: string[] = [];
   let failNext = false;
   const drain = createDrainController({
-    registry: { beat: async () => superseded, retire: async () => {} },
+    registry: { beat: async () => ({ superseded, olderRunning: false }), retire: async () => {} },
     sweepMs: 10,
   });
   drain.start({
@@ -143,5 +153,106 @@ test("a stand-down that fails while the newer build disappears is settled before
   superseded = true;
   await settle(async () => calls.length === 4);
   assert.deepEqual(calls, ["resume", "standDown", "standDown", "resume"]);
+  await drain.stop();
+});
+
+test("a newer build waits for the older one to stand down before it resumes anything", async () => {
+  let olderRunning = true;
+  const calls: string[] = [];
+  const drain = createDrainController({
+    registry: { beat: async () => ({ superseded: false, olderRunning }), retire: async () => {} },
+    sweepMs: 10,
+  });
+  drain.start({ resume: () => calls.push("resume"), standDown: async () => void calls.push("standDown") });
+  await settle(async () => calls.length === 1);
+  assert.equal(drain.canClaim(), false, "no run claims while the older build still runs background work");
+  olderRunning = false;
+  await settle(async () => calls.includes("resume"));
+  assert.equal(drain.canClaim(), true);
+  olderRunning = true;
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(calls, ["standDown", "resume"], "a running build never stands down for an older one");
+  await drain.stop();
+});
+
+test("a build records itself running before it resumes, and backs off if another build got there first", async () => {
+  const calls: string[] = [];
+  let rival = false;
+  const drain = createDrainController({
+    registry: {
+      beat: async (running) => {
+        calls.push(`beat:${running}`);
+        return { superseded: false, olderRunning: running && rival };
+      },
+      retire: async () => void calls.push("retire"),
+    },
+    sweepMs: 10,
+  });
+  rival = true;
+  drain.start({ resume: () => calls.push("resume"), standDown: async () => void calls.push("standDown") });
+  await settle(async () => calls.filter((call) => call === "beat:true").length >= 2);
+  assert.ok(!calls.includes("resume"), "an older build that started first keeps background work");
+  assert.equal(drain.canClaim(), false);
+  rival = false;
+  await settle(async () => calls.includes("resume"));
+  assert.equal(calls[calls.indexOf("resume") - 1], "beat:true", "the running flag is written before resuming");
+  await drain.stop();
+  assert.deepEqual(calls.slice(-2), ["standDown", "retire"], "stopping stands down before the heartbeat is retired");
+});
+
+test("a build waiting for an older one rechecks quickly instead of on the regular sweep", async () => {
+  let rival = true;
+  let resumed = false;
+  const drain = createDrainController({
+    registry: {
+      beat: async () => ({ superseded: false, olderRunning: rival }),
+      retire: async () => {},
+    },
+    sweepMs: 60_000,
+    waitingSweepMs: 10,
+  });
+  drain.start({ resume: () => (resumed = true), standDown: async () => {} });
+  await settle(async () => !drain.canClaim());
+  rival = false;
+  await settle(async () => resumed && drain.canClaim());
+  assert.ok(resumed && drain.canClaim(), "the waiting build resumed on the short interval");
+  await drain.stop();
+});
+
+test("a build keeps its running heartbeat fresh while a slow stand-down is still in progress", async () => {
+  const beats: boolean[] = [];
+  let newer = false;
+  let finishStandDown!: () => void;
+  const drain = createDrainController({
+    registry: {
+      beat: async (running) => {
+        beats.push(running);
+        return { superseded: newer, olderRunning: false };
+      },
+      retire: async () => {},
+    },
+    sweepMs: 10,
+  });
+  let standingDown = false;
+  drain.start({
+    resume: () => {},
+    standDown: () => {
+      if (!newer) return Promise.resolve();
+      standingDown = true;
+      return new Promise<void>((resolve) => (finishStandDown = resolve));
+    },
+  });
+  await settle(async () => beats.includes(true));
+  newer = true;
+  await settle(async () => standingDown);
+  const during = beats.length;
+  await settle(async () => beats.length >= during + 3);
+  assert.ok(beats.length >= during + 3, "heartbeats continue during a slow stand-down");
+  assert.ok(
+    beats.slice(during).every((running) => running),
+    "heartbeats keep reporting running until the stand-down finishes",
+  );
+  finishStandDown();
+  await settle(async () => beats.at(-1) === false);
   await drain.stop();
 });

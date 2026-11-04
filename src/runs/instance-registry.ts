@@ -1,14 +1,19 @@
 import type { PgPool } from "../persistence/pg-pool.ts";
 
+interface Heartbeat {
+  superseded: boolean;
+  olderRunning: boolean;
+}
+
 export interface InstanceRegistry {
-  beat(): Promise<boolean>;
+  beat(running: boolean): Promise<Heartbeat>;
   retire(): Promise<void>;
 }
 
 const INSTANCE_LIVENESS_MS = 30_000;
 
 export function createNoopInstanceRegistry(): InstanceRegistry {
-  return { beat: async () => false, retire: async () => {} };
+  return { beat: async () => ({ superseded: false, olderRunning: false }), retire: async () => {} };
 }
 
 export function createPostgresInstanceRegistry(
@@ -27,11 +32,16 @@ export function createPostgresInstanceRegistry(
            )`,
     ],
   };
+  const runningColumn = {
+    id: "runs/instance-heartbeats/0002",
+    statements: [`ALTER TABLE instance_heartbeats ADD COLUMN IF NOT EXISTS running BOOLEAN NOT NULL DEFAULT false`],
+  };
   pg.registerMigration(migration);
+  pg.registerMigration(runningColumn);
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
-      readyP = pg.migrate(migration).catch((e: unknown) => {
+      readyP = pg.migrate(migration, runningColumn).catch((e: unknown) => {
         readyP = null;
         throw e;
       });
@@ -40,13 +50,15 @@ export function createPostgresInstanceRegistry(
   }
 
   return {
-    async beat(): Promise<boolean> {
+    async beat(running: boolean): Promise<Heartbeat> {
       await ready();
+      const signal = AbortSignal.timeout(Math.max(1_000, Math.floor(livenessMs / 3)));
       await pg.query(
-        `INSERT INTO instance_heartbeats(instance_id, build_sha, started_at, beat_at)
-           VALUES ($1, $2, $3, now())
-         ON CONFLICT (instance_id) DO UPDATE SET beat_at = now()`,
-        [opts.instanceId, opts.deploymentKey, String(opts.startedAt)],
+        `INSERT INTO instance_heartbeats(instance_id, build_sha, started_at, beat_at, running)
+           VALUES ($1, $2, $3, now(), $4)
+         ON CONFLICT (instance_id) DO UPDATE SET beat_at = now(), running = $4`,
+        [opts.instanceId, opts.deploymentKey, String(opts.startedAt), running],
+        { signal },
       );
       await pg.query(
         `DELETE FROM instance_heartbeats stale
@@ -55,24 +67,30 @@ export function createPostgresInstanceRegistry(
              WHERE recent.build_sha = stale.build_sha AND recent.beat_at > now() - interval '1 hour'
           )`,
         [],
+        { signal },
       );
-      const { rowCount } = await pg.query(
+      const { rows } = await pg.query(
         `WITH deployments AS (
-           SELECT build_sha, min(started_at) AS started_at, max(beat_at) AS beat_at
+           SELECT build_sha, min(started_at) AS started_at, max(beat_at) AS beat_at,
+                  bool_or(running AND beat_at > now() - ($2 || ' milliseconds')::interval) AS running
              FROM instance_heartbeats GROUP BY build_sha
          )
-         SELECT 1 FROM deployments other JOIN deployments own ON own.build_sha = $1
-          WHERE other.build_sha <> $1 AND other.started_at > own.started_at
-            AND other.beat_at > now() - ($2 || ' milliseconds')::interval
-          LIMIT 1`,
+         SELECT coalesce(bool_or(other.started_at > own.started_at
+                                 AND other.beat_at > now() - ($2 || ' milliseconds')::interval), false) AS superseded,
+                coalesce(bool_or(other.started_at < own.started_at AND other.running), false) AS older_running
+           FROM deployments other JOIN deployments own ON own.build_sha = $1
+          WHERE other.build_sha <> $1`,
         [opts.deploymentKey, String(livenessMs)],
+        { signal },
       );
-      return rowCount > 0;
+      const row = rows[0] as { superseded: boolean; older_running: boolean } | undefined;
+      return { superseded: row?.superseded ?? false, olderRunning: row?.older_running ?? false };
     },
     async retire(): Promise<void> {
       if (!readyP) return;
       await pg.query(
-        `UPDATE instance_heartbeats SET beat_at = now() - ($2 || ' milliseconds')::interval WHERE instance_id = $1`,
+        `UPDATE instance_heartbeats SET beat_at = now() - ($2 || ' milliseconds')::interval, running = false
+          WHERE instance_id = $1`,
         [opts.instanceId, String(livenessMs)],
       );
     },
