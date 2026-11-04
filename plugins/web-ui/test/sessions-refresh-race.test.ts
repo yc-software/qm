@@ -384,7 +384,6 @@ test("marking the open chat read during the first list load does not leave the s
   try {
     const { refreshSessions, renderList, sessionsState, sessionsReady } = await vite.ssrLoadModule("/src/sessions.ts");
     const boot = refreshSessions({ showLoading: true });
-    // The reloaded chat's own row lands first and the sidebar marks it read.
     sessionsState.openingKey = "cur";
     sessionsState.list = [current];
     renderList();
