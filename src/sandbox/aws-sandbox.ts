@@ -4,6 +4,7 @@ import { orgId as configOrgId } from "../config.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { inTenantOf } from "../tenants/claim.ts";
+import { tenantScopedId } from "../tenants/context.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { scopeStorageKey } from "../../cli/src/scope-storage-key.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
@@ -134,7 +135,7 @@ export function createAwsSandbox(opts: AwsSandboxOptions): Sandbox {
     onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
   }
 
-  const s3KeyFor = (scope: string): string => `${s3Prefix}/${scopeStorageKey(scope)}.tar`;
+  const s3KeyFor = (scope: string): string => `${s3Prefix}/${scopeStorageKey(tenantScopedId(scope))}.tar`;
 
   const client = createMicrovmClient(api, {
     agentPort,

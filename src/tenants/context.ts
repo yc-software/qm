@@ -1,4 +1,5 @@
 import { boundTenant, isTenantId, pinTenant, withoutTenant, withTenant } from "../../plugins/chassis/src/tenant.ts";
+import { hashId } from "../util/crypto.ts";
 
 export { boundTenant, isTenantId, pinTenant, withoutTenant, withTenant };
 
@@ -46,6 +47,12 @@ export function soleTenantNow(): string | undefined {
 
 export function installTenantNow(): string | undefined {
   return settled?.install;
+}
+
+export function tenantScopedId(id: string): string {
+  const tenant = boundTenant();
+  const install = installTenantNow();
+  return tenant === undefined || install === undefined || tenant === install ? id : `t-${hashId([tenant], 10)}:${id}`;
 }
 
 export function unboundTenantAllowed(): boolean {
