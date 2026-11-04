@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { RELEASED_SESSION_MIGRATIONS } from "./support/tenant-seed.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the base schema tests";
@@ -24,6 +25,21 @@ async function migrate(url: string): Promise<void> {
   const runs = createPostgresRunStore(url);
   try {
     await migrateRegisteredPgSchemas(url);
+  } finally {
+    await runs.close();
+  }
+}
+
+const RELEASED = new Set([...RELEASED_SESSION_MIGRATIONS.map(({ id }) => id), "runs/store/0011-base-schema"]);
+
+async function migrateReleased(url: string, admin: pg.Pool): Promise<void> {
+  createPostgresSessionStore(url);
+  const runs = createPostgresRunStore(url);
+  try {
+    await applyPgMigrations(
+      admin,
+      registeredPgMigrations(url).filter(({ id }) => RELEASED.has(id)),
+    );
   } finally {
     await runs.close();
   }
@@ -67,7 +83,7 @@ test("a fully migrated database skips the base schema and drops only the retired
       ON session_llm_requests(session_id, created_at) WHERE usage_json IS NOT NULL`);
     await admin.query("CREATE TABLE qm_tenant(id UUID PRIMARY KEY)");
     await admin.query("CREATE FUNCTION safe_json(t text) RETURNS json LANGUAGE sql AS 'SELECT t::json'");
-    await migrate(url);
+    await migrateReleased(url, admin);
     const columns = await admin.query(
       "SELECT column_name FROM information_schema.columns WHERE table_name = 'items' ORDER BY ordinal_position",
     );
