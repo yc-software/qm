@@ -1330,6 +1330,7 @@ test("the assistant's own reply after the last judged message reaches the next j
       "the assistant's own reply is never judged as a new message",
     );
     const hold = rows.find((r: any) => r.prompt?.includes("hold off on Example Co"))!;
+    assert.ok(hold.prompt!.includes("EARLIER CONTEXT") && hold.prompt!.includes("NEW MESSAGES"));
     const earlier = hold.prompt!.slice(hold.prompt!.indexOf("EARLIER CONTEXT"), hold.prompt!.indexOf("NEW MESSAGES"));
     assert.match(earlier, /Alice: let's back Example Co\nqm \(you\): Want me to draft the memo for Example Co\?/);
     assert.match(newSection(hold.prompt!), /\[12\.0\] Alice: hold off on Example Co/);
