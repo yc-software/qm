@@ -117,6 +117,26 @@ function sanitizedTurnRequest(
 ): { request: TurnRequest } | { error: string } {
   const removed = removedOriginFieldsSchema.safeParse(body);
   if (!removed.success) return { error: zodMessage("body", removed.error) };
+  if (body.deliveryWebhook !== undefined) {
+    const parsed = z
+      .object({
+        binding: z.uuid(),
+        url: z
+          .url({ protocol: /^https?$/ })
+          .refine((u) => u.startsWith("https:") || ["localhost", "127.0.0.1", "[::1]"].includes(new URL(u).hostname)),
+      })
+      .strict()
+      .safeParse(body.deliveryWebhook);
+    if (
+      !parsed.success ||
+      body.surfaceTools ||
+      body.surface !== "web" ||
+      body.conversation.kind !== "dm" ||
+      body.deliveryCandidates?.length ||
+      body.deliveryTarget !== body.conversation.threadRef
+    )
+      return { error: "invalid delivery webhook" };
+  }
   const {
     surfaceOrigin: _surfaceOrigin,
     slackSource: _slackSource,

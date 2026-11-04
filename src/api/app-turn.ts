@@ -355,6 +355,8 @@ export function createTurnMethods(
           ? { delegatingRunId: approvedRequest.delegatingRunId }
           : {}),
         ...(req.deliveryTarget ? { deliveryTarget: req.deliveryTarget } : {}),
+        ...(req.deliveryWebhook ? { deliveryWebhook: req.deliveryWebhook } : {}),
+        ...(req.idempotencyKey ? { idempotencyKey: req.idempotencyKey } : {}),
         ...(req.deliveryCandidates?.length ? { deliveryCandidates: req.deliveryCandidates } : {}),
         actor,
         conversation,
@@ -564,9 +566,12 @@ export function createTurnMethods(
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
       if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
       if (spineRouted) deps.engaged?.engage(conversation.threadRef);
-      if (deduped && run.result && isTerminal(run.status)) return withAdminLink(run.result);
-      if (req.async) return { status: "queued", runId: run.id };
-      return awaitRun(run.id);
+      const terminalResult = deduped && isTerminal(run.status) ? run.result : null;
+      if (req.async && !terminalResult) return { status: "queued", runId: run.id };
+      const result = terminalResult ? await withAdminLink(terminalResult) : await awaitRun(run.id);
+      return req.origin?.kind === "automation" && req.origin.destination?.type === "webhook"
+        ? { ...result, runId: run.id }
+        : result;
     },
 
     subscribeSessionStates(cb, opts) {
