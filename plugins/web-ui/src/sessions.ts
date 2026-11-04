@@ -1936,7 +1936,13 @@ async function runSessionsRefresh(
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
     if (patchEpoch !== sessionPatchEpoch) {
       listDiscards++;
-      return false;
+      if (opts.patchEpoch !== undefined) return false;
+      // A row patch (e.g. marking the open chat read) started while this read
+      // was in flight. Read again once patches settle instead of leaving the
+      // sidebar holding only the rows opened so far.
+      await Promise.all(sessionPatchTails.values());
+      if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
+      return await runSessionsRefresh(opts, newerRun);
     }
     const last = page.sessions[page.sessions.length - 1];
     const list = mergeFirstPage(
