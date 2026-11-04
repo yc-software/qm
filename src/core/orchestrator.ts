@@ -2313,11 +2313,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : undefined;
 
         const monitorBroker =
-          deps.monitors && deps.processes && supportsProcessSessions(deps.sandbox)
+          deps.monitors && deps.processes && readOutputTail
             ? createMonitorBroker({
                 store: deps.monitors,
                 registry: deps.processes,
-                readOutputTail: readOutputTail!,
+                readOutputTail,
                 scopeId: memoryScopeId,
                 owner: actor.id,
                 ownerScopeId: scopeId,
