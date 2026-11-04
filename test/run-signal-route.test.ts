@@ -672,7 +672,7 @@ test("run control follows current shared membership while public history require
     }
     assert.ok(
       await built.app.getSessionForViewer(session.id, "shared-member"),
-      "history remains readable through the participant window",
+      "history remains readable to a current participant",
     );
     assert.equal(await built.app.getRun(run.id, "shared-member"), null);
     assert.deepEqual(await built.app.signalRun(run.id, { kind: "abort" }, "shared-member"), {

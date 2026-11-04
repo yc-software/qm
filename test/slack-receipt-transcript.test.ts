@@ -65,17 +65,14 @@ for (const backend of ["memory", "postgres"] as const) {
         [middle.seq],
       );
       assert.equal(previous.earlier, 0);
-      assert.deepEqual(
-        (await source.forViewer(session.id, "alice")).items.map((e) => e.seq),
-        [receipt.seq, middle.seq],
-      );
+      assert.deepEqual((await source.forViewer(session.id, "alice")).items, []);
       assert.deepEqual(
         forModelContext(await history(sessions, session.id)).map((e) => e.seq),
         [middle.seq, event.seq],
       );
       assert.deepEqual(
         (await source.forViewer(session.id, "bob")).items.map((e) => e.seq),
-        [event.seq],
+        [middle.seq, event.seq],
       );
     },
   );
