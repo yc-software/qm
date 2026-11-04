@@ -257,6 +257,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "Transaction-mode PgBouncer URL using the direct database's company credentials and database name.",
   },
   {
+    name: "DATABASE_OWNER_URL",
+    service: "core",
+    required: false,
+    description:
+      "Postgres connection string for the table owner, used by background claims across tenants and operator writes when DATABASE_URL is a restricted app login.",
+  },
+  {
     name: "DATABASE_POOL_CA_CERT",
     service: "core",
     required: false,
