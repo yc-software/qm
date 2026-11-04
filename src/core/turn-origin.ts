@@ -45,3 +45,15 @@ export function boundWebhook(
   if (!request.approval && request.deliveryTarget !== destination.target) return undefined;
   return { webhook: destination.webhook, target: destination.target };
 }
+
+export function introducesPerson(
+  origin: TurnOrigin,
+  input: Pick<TurnRequest, "sessionSenderId" | "delegatingRunId" | "surfaceOrigin" | "botActor">,
+): boolean {
+  return (
+    (isPersonAuthored(origin.kind) || spokenByPerson(origin)) &&
+    !input.botActor &&
+    !isSessionTurn(input) &&
+    input.surfaceOrigin?.audience !== "external"
+  );
+}

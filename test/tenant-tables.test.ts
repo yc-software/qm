@@ -88,7 +88,7 @@ describe("tenant tables", () => {
     createPostgresEgressAuditSink(databaseUrl);
     createPostgresErrorLog(databaseUrl);
     owner = createPgPool(databaseUrl);
-    await createPostgresInstanceRegistry(owner, { instanceId: "i", buildSha: "b", startedAt: 0 }).beat();
+    await createPostgresInstanceRegistry(owner, { instanceId: "i", deploymentKey: "b", startedAt: 0 }).beat(false);
     await migrateRegisteredPgSchemas(databaseUrl);
     await createPostgresMap<{ n: number }>(owner, "tenant_probe").get("none");
     await createPostgresMap<{ who: string }>(owner, "tenant_probe_pair").get("none");

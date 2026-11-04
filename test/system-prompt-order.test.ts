@@ -16,6 +16,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
+import { createModelRoutes } from "../src/model/model-route.ts";
 import { anthropicStream, contextHeaders, recordRequests } from "./support/gateway-stream.ts";
 import { settle } from "./support/settle.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
@@ -852,14 +853,16 @@ test("carried skill and steer screens tell the model gateway which session they 
   await skills.publish(skill.id);
   const agent = createMockAgent();
   agent.screenSecurity = createAgent({
+    routes: createModelRoutes({
+      modelGateway: {
+        url: "https://gateway.test",
+        apiKey: "k",
+        apiKeyHeader: "api-key",
+        models: { "claude-haiku-4-5": "m" },
+        actorKey: "test-actor-key",
+      },
+    }),
     detectModelId: "claude-haiku-4-5",
-    modelGateway: {
-      url: "https://gateway.test",
-      apiKey: "k",
-      apiKeyHeader: "api-key",
-      models: { "claude-haiku-4-5": "m" },
-      actorKey: "test-actor-key",
-    },
   }).screenSecurity;
   const { orchestrator, config, sessions } = buildOrchestrator({
     skills,
@@ -932,15 +935,17 @@ test("a steer delivered by notification is screened in the context of the turn i
   const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const { orchestrator } = buildOrchestrator({
     agent: createAgent({
-      defaultModelId: "claude-haiku-4-5",
+      routes: createModelRoutes({
+        defaultModelId: "claude-haiku-4-5",
+        modelGateway: {
+          url: "https://gateway.test",
+          apiKey: "k",
+          apiKeyHeader: "api-key",
+          models: { "claude-haiku-4-5": "m" },
+          actorKey: "test-actor-key",
+        },
+      }),
       detectModelId: "claude-haiku-4-5",
-      modelGateway: {
-        url: "https://gateway.test",
-        apiKey: "k",
-        apiKeyHeader: "api-key",
-        models: { "claude-haiku-4-5": "m" },
-        actorKey: "test-actor-key",
-      },
       signals,
     }),
   });

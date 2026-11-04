@@ -206,6 +206,13 @@ export function planCompaction(
   return { toSummarize, kept: afterSummary.slice(overflowCount) };
 }
 
+export function compactedSinceLastTurn(history: readonly Item[]): boolean {
+  const summary = history.findLast((item) => contextSummary(item));
+  if (!summary) return false;
+  const lastTurn = history.findLast((item) => item.kind === "UserMessage" && !isOverheard(item));
+  return !lastTurn || lastTurn.seq < summary.seq;
+}
+
 export function compactionThroughSeq(items: Item[]): number {
   return items.reduce((max, entry) => {
     const summary = contextSummary(entry);

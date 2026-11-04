@@ -1,4 +1,3 @@
-import { tenantEnv } from "../tenants/settings.ts";
 import {
   applyFastSpeed,
   buildModelRuntime,
@@ -37,9 +36,8 @@ import {
   type ToolResultMessage,
   type Usage,
 } from "@earendil-works/pi-ai";
-import { baseModelProviders, configuredModel, CONFIG_DEFAULTS, type Config } from "../config.ts";
+import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 
-type LegacyThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 const TURN_EFFORT_LEVELS = new Set<string>([
   "off",
   "minimal",
@@ -53,7 +51,7 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "default",
   "adaptive",
 ]);
-import type { ConversationTurn } from "../types.ts";
+import type { ConversationTurn, StopScope } from "../types.ts";
 import { isAgentReply, isUserItem, type Item } from "../sessions/items.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
@@ -61,15 +59,10 @@ import { providerTurnError } from "../model/provider-error.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
 import {
-  DEFAULT_AGENT_MODEL_ID,
-  auxiliaryModelFor,
-  defaultModel,
   defaultInteractiveThinkingLevel,
   modelSupportsAdaptiveThinking,
   modelSupportsProviderDefault,
-  personalModelId,
   resolveModel,
-  getRequiredModel,
   contextTokenBudgetForModel,
   modelHasPrices,
 } from "../model/pi-models.ts";
@@ -78,7 +71,7 @@ import {
   type ModelGatewayTransportConfig,
   type ModelRequestPurpose,
 } from "../model/provider-endpoints.ts";
-import { modelBilling, routeLabel, type ModelRoute } from "../model/model-route.ts";
+import { createModelRoutes, routeLabel, type ModelRoute, type ModelRoutes } from "../model/model-route.ts";
 import {
   type Agent,
   type CompactInput,
@@ -89,7 +82,6 @@ import {
   type AgentTurnResult,
   REPLY_CHECK_LIMITS,
   replyCheckPrompt,
-  type RuntimeChoice,
 } from "./agent.ts";
 import {
   coreToolOptions,
@@ -135,19 +127,10 @@ import {
 } from "./goal.ts";
 
 export interface AgentOptions {
-  modelId?: string;
-  defaultModelId?: string;
-  resolveBaseModelId?: () => string | undefined;
-  resolveFallbackRuntime?: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
-  companyModelId?: (id: string) => string;
+  routes?: ModelRoutes;
   detectModelId?: string;
   titleModelId?: string;
   judgeModelId?: string;
-  apiKey?: string;
-  openaiApiKey?: string;
-  openrouterApiKey?: string;
-  modelGateway?: ModelGatewayTransportConfig;
-  resolveProviderKeys?: () => Promise<ProviderKeys>;
   tempDirPrefix?: string;
   captureRequests?: boolean;
   controlTools?: boolean;
@@ -161,17 +144,10 @@ export interface AgentOptions {
 }
 
 export function agentConfigOptions(config: Config): AgentOptions {
-  const defaultModelId =
-    configuredModel(config) ?? (config.modelProvider ? defaultModel(undefined, baseModelProviders(config)) : undefined);
   return {
-    ...(defaultModelId ? { defaultModelId } : {}),
     ...(config.detectModelId ? { detectModelId: config.detectModelId } : {}),
     ...(config.titleModelId ? { titleModelId: config.titleModelId } : {}),
     ...(config.judgeModelId ? { judgeModelId: config.judgeModelId } : {}),
-    ...(config.anthropicApiKey ? { apiKey: config.anthropicApiKey } : {}),
-    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
-    ...(config.openrouterApiKey ? { openrouterApiKey: config.openrouterApiKey } : {}),
-    ...(config.modelGateway ? { modelGateway: config.modelGateway } : {}),
     captureRequests: config.captureLlmRequests,
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,
@@ -319,7 +295,7 @@ export function renderDetectPrompt(detect: DetectInput): string {
   return parts.join("\n\n");
 }
 
-export const TITLE_GENERATION_PROMPT = [
+const TITLE_GENERATION_PROMPT = [
   "You write a short title for a chat conversation — the label shown in the sidebar.",
   "Given the transcript, output ONLY the title: 2–6 words, sentence case.",
   'Phrase it as the action taken, imperative mood: "Turn qm-launch-post orange", "Fix hover gap',
@@ -392,7 +368,6 @@ interface TurnSession {
   agentSession: AgentSession;
   ref: ToolContextRef & { effortLevel?: string };
   composedPromptTokens: number;
-  cwd: string;
   agentDir: string;
   ephemeralCwd?: string;
 }
@@ -420,25 +395,6 @@ interface IsolatedResources {
   cwd: string;
   agentDir: string;
   ephemeralCwd?: string;
-}
-
-type PiPayloadHook = (payload: unknown, model: unknown) => unknown | Promise<unknown>;
-type PiResponseHook = (
-  response: { status: number; headers: Record<string, string> },
-  model: unknown,
-) => void | Promise<void>;
-type PiTransformContextHook = (messages: unknown, signal?: unknown) => unknown | Promise<unknown>;
-type PiPrepareNextTurnHook = (signal?: unknown) => unknown | Promise<unknown>;
-interface PiAgentWithPayloadHook {
-  onPayload?: PiPayloadHook;
-  onResponse?: PiResponseHook;
-  transformContext?: PiTransformContextHook;
-  prepareNextTurn?: PiPrepareNextTurnHook;
-  afterToolCall?: (
-    info: unknown,
-    signal?: unknown,
-  ) => Promise<{ terminate?: boolean } | undefined> | { terminate?: boolean } | undefined;
-  subscribe?(listener: (event: unknown) => Promise<void> | void): () => void;
 }
 
 export function continuableContext<M extends { role?: unknown }>(messages: readonly M[]): M[] | null {
@@ -746,7 +702,7 @@ export async function oneShot(
     signal?: AbortSignal;
     modelGateway?: ModelGatewayTransportConfig;
     purpose?: ModelRequestPurpose;
-    thinkingLevel?: LegacyThinkingLevel;
+    thinkingLevel?: ModelThinkingLevel;
     recordLlmRequest?: (rec: TurnLlmRequestRecord) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
@@ -819,15 +775,6 @@ async function recordOneShotCall(
   }
 }
 
-export function resolveConfiguredModelId(configured: string | undefined, defaultModelId?: string): string {
-  for (const candidate of [configured, defaultModelId]) {
-    if (!candidate) continue;
-    if (resolveModel(candidate)) return candidate;
-    swallow("pi: configured model id not in registry, falling back to default", new Error(candidate));
-  }
-  return DEFAULT_AGENT_MODEL_ID;
-}
-
 export function applyTurnEffort(session: AgentSession, level?: string): void {
   if (!level || !TURN_EFFORT_LEVELS.has(level)) return;
   if (level === "adaptive" || level === "default") {
@@ -862,63 +809,14 @@ export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: str
   return payload;
 }
 
-function tenantProviderKeys(keys: ProviderKeys): ProviderKeys {
-  const anthropic = tenantEnv("ANTHROPIC_API_KEY") ?? keys.anthropic;
-  const openrouter = tenantEnv("OPENROUTER_API_KEY") ?? keys.openrouter;
-  return { ...keys, ...(anthropic ? { anthropic } : {}), ...(openrouter ? { openrouter } : {}) };
-}
-
 export function createAgent(opts?: AgentOptions): Agent {
-  const baseModelId = (): string =>
-    resolveConfiguredModelId(opts?.resolveBaseModelId?.() ?? opts?.modelId, opts?.defaultModelId);
+  const routes = opts?.routes ?? createModelRoutes();
+  const baseModelId = routes.baseModelId;
+  const servable = routes.servable;
+  const sessionRoute = routes.session;
+  const utilityRoute = routes.utility;
+  const fallbackRoute = routes.fallback;
   const tempDirPrefix = opts?.tempDirPrefix ?? "pi";
-  const configuredProviderKeys: ProviderKeys = opts?.resolveProviderKeys
-    ? {}
-    : {
-        ...(opts?.apiKey ? { anthropic: opts.apiKey } : {}),
-        ...(opts?.openaiApiKey ? { openai: opts.openaiApiKey } : {}),
-        ...(opts?.openrouterApiKey ? { openrouter: opts.openrouterApiKey } : {}),
-      };
-  const resolveProviderKeys = async (): Promise<ProviderKeys> => ({
-    ...tenantProviderKeys(configuredProviderKeys),
-    ...(await opts?.resolveProviderKeys?.()),
-  });
-  const modelGateway = opts?.modelGateway;
-  const companyServedId = (id: string) => (opts?.companyModelId ? opts.companyModelId(id) : id);
-  const requiredModel = (id: string, company = true) => getRequiredModel(company ? companyServedId(id) : id, company);
-  const servedId = (id: string, personalKeys?: ProviderKeys) =>
-    personalKeys ? personalModelId(id, personalKeys) : companyServedId(id);
-  const routeFor = async (requestedId: string, personalKeys?: ProviderKeys): Promise<ModelRoute> => {
-    const modelId = personalKeys ? personalModelId(requestedId, personalKeys) : requestedId;
-    const model = requiredModel(modelId, !personalKeys);
-    const keys = personalKeys ?? (await resolveProviderKeys());
-    const gateway = personalKeys ? undefined : modelGateway;
-    return {
-      modelId,
-      model,
-      keys,
-      ...(gateway ? { gateway } : {}),
-      billing: modelBilling(!!modelGatewayRequest(gateway, model), !!personalKeys),
-    };
-  };
-  const servable = (route: ModelRoute): ModelRoute | undefined =>
-    route.billing === "model_gateway" || route.keys[String(route.model.provider)] ? route : undefined;
-  const sessionRoute = (session: Pick<CompactInput, "runtime" | "providerKeys">) =>
-    routeFor(session.runtime?.modelId ?? baseModelId(), session.providerKeys);
-  const utilityRoute = async (modelId?: string) =>
-    servable(await routeFor(modelId ?? auxiliaryModelFor(baseModelId())));
-  const fallbackRoute = async (
-    fromModelIds: ReadonlySet<string>,
-    providerKeys?: ProviderKeys,
-  ): Promise<(ModelRoute & { runtime: RuntimeChoice }) | undefined> => {
-    const runtime = opts?.resolveFallbackRuntime?.();
-    if (!runtime) return undefined;
-    const served = servedId(runtime.modelId, providerKeys);
-    if (fromModelIds.has(runtime.modelId) || fromModelIds.has(served) || !resolveModel(served, !providerKeys))
-      return undefined;
-    const route = servable(await routeFor(runtime.modelId, providerKeys));
-    return route && { ...route, runtime };
-  };
   const captureRequests = opts?.captureRequests ?? true;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
@@ -993,9 +891,8 @@ export function createAgent(opts?: AgentOptions): Agent {
     }
 
     {
-      const agent = (session as unknown as { agent?: PiAgentWithPayloadHook }).agent;
+      const agent = session.agent;
       if (agent) {
-        const prior = agent.onPayload;
         agent.onPayload = async (payload, model) => {
           ref.modelCalls = (ref.modelCalls ?? 0) + 1;
           ref.onModelRequest?.();
@@ -1005,10 +902,9 @@ export function createAgent(opts?: AgentOptions): Agent {
           ref.firstTokenPhase = startPhase("model.first_token");
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
           applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
-          const result = prior ? await prior(payload, model) : payload;
-          const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(result ?? payload, model) : undefined;
+          const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(payload, model) : undefined;
           let finalPayload = await withDocumentInputs(
-            result ?? payload,
+            payload,
             model as DocumentModel,
             ref.documents ?? [],
             ref.abortSignal,
@@ -1026,16 +922,10 @@ export function createAgent(opts?: AgentOptions): Agent {
           } catch (e) {
             swallow("pi: request byte budget", e);
           }
-          if (capturedPayload) {
-            try {
-              ref.llmCapture?.push(capturedPayload);
-            } catch (e) {
-              swallow("pi: llm request capture", e);
-            }
-          }
+          if (capturedPayload) ref.llmCapture?.push(capturedPayload);
           return finalPayload;
         };
-        agent.afterToolCall = pauseStampAfterToolCall(ref, agent.afterToolCall);
+        agent.afterToolCall = pauseStampAfterToolCall(ref);
       }
     }
 
@@ -1043,7 +933,6 @@ export function createAgent(opts?: AgentOptions): Agent {
       agentSession: session,
       ref,
       composedPromptTokens: countTokens(systemPrompt),
-      cwd,
       agentDir,
       ...(ephemeralCwd ? { ephemeralCwd } : {}),
     };
@@ -1205,9 +1094,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           await thinkTail;
           if (persistError) throw persistError;
         };
-        const unsubscribeMessageEnd = (
-          entry.agentSession as unknown as { agent?: PiAgentWithPayloadHook }
-        ).agent?.subscribe?.((event) => {
+        const unsubscribeMessageEnd = entry.agentSession.agent.subscribe((event) => {
           const e = event as { type?: string; message?: unknown };
           if (e.type === "agent_start" && toolAbort.signal.aborted) entry.agentSession.agent.abort();
           if (e.type === "message_end") noteDocumentRejection(e.message);
@@ -1278,6 +1165,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         };
         let userAborted = false;
         let abortReason: string | undefined;
+        let abortScope: StopScope | undefined;
         let recoveryDead = false;
         entry.ref.abortSignal = toolAbort.signal;
         const onCancel = (): void => {
@@ -1336,9 +1224,10 @@ export function createAgent(opts?: AgentOptions): Agent {
                     }
                     return false;
                   },
-                  onAbort: async (reason) => {
+                  onAbort: async ({ reason, scope }) => {
                     userAborted = true;
                     abortReason ??= reason;
+                    abortScope ??= scope;
                     toolAbort.abort();
                     entry.agentSession.clearQueue();
                     await entry.agentSession.abort();
@@ -1658,7 +1547,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             userAborted ? abortReason : "because the run was cancelled",
             steps.closing(reply),
           );
-          return result(reply, { stopped: true });
+          return result(reply, { stopped: true, ...(abortScope ? { stopScope: abortScope } : {}) });
         }
 
         await settleGoal(false);

@@ -465,11 +465,6 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(result.note ? { message: result.note } : {}),
       });
     },
-    readMembers: async () => {
-      const roster = (conversation.publishMembers ?? conversation.audience).filter((p) => p.type === "internal");
-      if (!roster.length) return { ok: true, members: [] };
-      return { ok: true, members: roster.map((p) => ({ displayName: p.displayName ?? p.id })) };
-    },
     getStandingOrder: async () => {
       if (!deps.channelPolicy) return { ok: false, message: "standing orders aren't available on this turn" };
       if (conversation.kind === "dm" || !conversation.channelRef)

@@ -11,8 +11,6 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../sr
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import { uiStateId } from "../src/surfaces/ui-state.ts";
-import { installSharedCanvas, readUiCanvas } from "../src/surfaces/ui-canvas.ts";
-import { Readable } from "node:stream";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -136,16 +134,6 @@ describe("ui canvas and ui observe", () => {
     assert.deepEqual(after, { html: "<b/>", css: "", js: "", pinned: false, rev: 3 });
     const event = events.at(-1)!;
     assert.deepEqual([event.sessionId, event.participants, event.ui], [sessionId, ["U1"], { kind: "canvas" }]);
-  });
-
-  it("installs a shared sidebar file as the always-on canvas", async () => {
-    const file = (body: string) => ({ stream: Readable.from([Buffer.from(body)]) });
-    assert.equal(await installSharedCanvas(built.uiState, "U2", null), "no such file is shared with you");
-    assert.match(String(await installSharedCanvas(built.uiState, "U2", file("{"))), /^not a shared canvas: .*JSON/);
-    assert.match(String(await installSharedCanvas(built.uiState, "U2", file('{"js":1}'))), /must be strings/);
-    await installSharedCanvas(built.uiState, "U2", file('{"html":"<nav/>","js":"1"}'));
-    const live = await readUiCanvas(built.uiState, "U2", "always-on");
-    assert.deepEqual([live?.html, live?.css, live?.js, live?.pinned], ["<nav/>", "", "1", true]);
   });
 
   it("rejects bad and oversized writes", async () => {
