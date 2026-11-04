@@ -62,10 +62,7 @@ after(async () => {
   await owner?.end();
 });
 
-async function seen(
-  headers: Record<string, string>,
-  route: Pick<Route, "auth" | "tenant"> = { auth: "source" },
-) {
+async function seen(headers: Record<string, string>, route: Pick<Route, "auth" | "tenant"> = { auth: "source" }) {
   const req = new IncomingMessage(new Socket());
   req.headers = headers;
   const res = new ServerResponse(req);
