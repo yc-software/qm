@@ -17,13 +17,7 @@ import {
 } from "../wake/route-incoming.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
-import {
-  RETIRED_ORIGIN_KEYS,
-  desktopClientForTurn,
-  isPersonAuthored,
-  isSessionTurn,
-  spokenByPerson,
-} from "../core/turn-origin.ts";
+import { desktopClientForTurn, isPersonAuthored, isSessionTurn, spokenByPerson } from "../core/turn-origin.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
@@ -200,15 +194,6 @@ export function createTurnMethods(
       let privateRequest = req.privateSessionMessage ? req : undefined;
       if (approvedRequest?.privateSessionMessage) privateRequest = approvedRequest;
       const storedApproval = privateRequest && privateRequest === approvedRequest ? privateRequest : undefined;
-      if (
-        (!req.origin && RETIRED_ORIGIN_KEYS.some((key) => key in req)) ||
-        (storedApproval && !storedApproval.origin)
-      ) {
-        console.warn(
-          `[turn] refused a request with retired origin fields and no origin thread=${req.conversation.threadRef}${storedApproval ? ` approval=${req.approval?.requestId}` : ""}${replay ? ` signal=${replay.signalDedupKey}` : ""}`,
-        );
-        return { status: "refused", reason: "turn request carries retired origin fields but no origin" };
-      }
       const origin: TurnOrigin = storedApproval?.origin ?? req.origin ?? { kind: "direct" };
       const sessionTurn =
         (req.spawned && isSessionTurn(req)) ||
