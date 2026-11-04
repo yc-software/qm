@@ -329,15 +329,29 @@ const SESSION_FACTS: PgMigrationDefinition = {
 };
 
 const SESSION_FACTS_COPY: PgMigrationDefinition = {
-  id: "sessions/store/0053-session-facts-copy",
+  id: "sessions/store/0054-session-facts-copy",
   autocommit: true,
   statements: [
+    `CREATE OR REPLACE FUNCTION qm_session_fact_json(raw TEXT) RETURNS JSONB LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $fact_json$
+DECLARE
+  stripped TEXT;
+BEGIN
+  IF raw IS NULL OR strpos(raw, '\\u') = 0 OR pg_input_is_valid(raw, 'jsonb') THEN
+    RETURN raw::jsonb;
+  END IF;
+  stripped := regexp_replace(raw, '(?<!\\\\)((?:\\\\\\\\)*)\\\\u0000', '\\1', 'g');
+  IF pg_input_is_valid(stripped, 'jsonb') THEN
+    RETURN stripped::jsonb;
+  END IF;
+  RETURN NULL;
+END $fact_json$`,
     `CREATE OR REPLACE PROCEDURE qm_copy_session_facts() LANGUAGE plpgsql AS $session_facts$
 DECLARE
   after_id TEXT := '';
   page TEXT[];
 BEGIN
-  IF to_regclass('runs') IS NULL THEN
+  IF to_regclass('runs') IS NULL
+    OR EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id = 'sessions/store/0053-session-facts-copy') THEN
     RETURN;
   END IF;
   LOOP
@@ -374,18 +388,19 @@ BEGIN
       END AS context
     FROM sessions x
     LEFT JOIN LATERAL (
-      SELECT request::jsonb->'slackSource' AS value FROM runs
-      WHERE session_id = x.thread_ref AND COALESCE(request::jsonb->'slackSource', 'null') <> 'null'
+      SELECT qm_session_fact_json(request)->'slackSource' AS value FROM runs
+      WHERE session_id = x.thread_ref AND COALESCE(qm_session_fact_json(request)->'slackSource', 'null') <> 'null'
       ORDER BY created_at DESC, seq DESC LIMIT 1
     ) binding ON x.surface = 'slack'
     LEFT JOIN LATERAL (
-      SELECT result::jsonb->'runtime' AS value FROM runs
-      WHERE session_id = x.thread_ref AND COALESCE(result::jsonb->'runtime', 'null') <> 'null'
+      SELECT qm_session_fact_json(result)->'runtime' AS value FROM runs
+      WHERE session_id = x.thread_ref AND COALESCE(qm_session_fact_json(result)->'runtime', 'null') <> 'null'
       ORDER BY created_at DESC, seq DESC LIMIT 1
     ) label ON true
     LEFT JOIN LATERAL (
-      SELECT request FROM (SELECT request::jsonb AS request, created_at, seq FROM runs WHERE session_id = x.thread_ref) owned
-      WHERE COALESCE(request->>'privateSessionMessage', 'false') <> 'true'
+      SELECT request FROM (SELECT qm_session_fact_json(request) AS request, created_at, seq FROM runs WHERE session_id = x.thread_ref) owned
+      WHERE request IS NOT NULL
+        AND COALESCE(request->>'privateSessionMessage', 'false') <> 'true'
         AND COALESCE(request->>'sessionSenderId', '') = ''
         AND COALESCE(request->>'delegatingRunId', '') = ''
         AND COALESCE(request->'swarm', 'null') IN ('null', 'false')
@@ -401,6 +416,7 @@ BEGIN
 END $session_facts$`,
     `CALL qm_copy_session_facts()`,
     `DROP PROCEDURE qm_copy_session_facts()`,
+    `DROP FUNCTION qm_session_fact_json(TEXT)`,
   ],
 };
 

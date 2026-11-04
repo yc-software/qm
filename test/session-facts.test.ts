@@ -145,3 +145,71 @@ test("the session facts migration copies each conversation's facts from its late
   assert.equal(untouched.surfaceBinding ?? untouched.runtime ?? untouched.spawnMeta, undefined);
   await runtime.close?.();
 });
+
+test("the session facts copy gets past run JSON that jsonb refuses", async () => {
+  const url = testDatabaseUrl();
+  const sessions = createPostgresSessionStore(url);
+  const runtime = createPostgresRunStore(url);
+  const { runs } = runtime;
+  const finish = async (threadRef: string, input: OrchestratorInput) => {
+    const { run } = await runs.enqueue({ sessionId: threadRef, request: input });
+    const lease = (await runs.claimById(run.id, "w", 60_000))!.leaseToken!;
+    await runs.complete(run.id, lease, { status: "ok", reply: "ok", runtime: { modelId: "m1" } });
+    return run.id;
+  };
+  const nul = await sessions.getOrCreateByThread("slack:dm:nul", "dm", scope, undefined, "slack");
+  const nulTurn = request(nul.threadRef, {
+    ...previousRelease,
+    text: "Markets error: \u0015\u0000\u0000",
+    deliveryTarget: "D1\u0000",
+    model: "m\\u0000",
+  });
+  const nulRun = await finish(nul.threadRef, nulTurn);
+  const odd = await sessions.getOrCreateByThread("web:U1:surrogate", "dm", scope, undefined, "web");
+  const earlier = request(odd.threadRef, { surface: "web", timezone: "America/New_York" });
+  await finish(odd.threadRef, earlier);
+  const surrogateRun = await finish(
+    odd.threadRef,
+    request(odd.threadRef, { surface: "web", timezone: "UTC", text: "half \ud800" }),
+  );
+
+  const raw = new pg.Pool({ connectionString: url, max: 1 });
+  const copy = async (ledger: string[] = []) => {
+    await raw.query(
+      "ALTER TABLE sessions DROP COLUMN slack_binding, DROP COLUMN runtime; UPDATE sessions SET spawn_meta = NULL; DELETE FROM qm_schema_migrations WHERE id LIKE 'sessions/store/005_-session-facts%'",
+    );
+    for (const id of ledger) await raw.query("INSERT INTO qm_schema_migrations(id, checksum) VALUES ($1, 'x')", [id]);
+    await applyPgMigrations(
+      raw,
+      SESSION_MIGRATIONS.filter((m) => m.id.includes("-session-facts")).map(definePgMigration),
+    );
+  };
+  try {
+    await raw.query("UPDATE runs SET request = $2 WHERE id = $1", [nulRun, JSON.stringify(nulTurn)]);
+    await raw.query("UPDATE runs SET request = $2 WHERE id = $1", [
+      surrogateRun,
+      JSON.stringify(request(odd.threadRef, { surface: "web", timezone: "UTC", text: "half \ud800" })),
+    ]);
+    await copy();
+    const bindings = await raw.query<{ slack_binding: unknown }>("SELECT slack_binding FROM sessions WHERE id = $1", [
+      nul.id,
+    ]);
+    assert.deepEqual(bindings.rows[0]?.slack_binding, slackSource);
+    const copied = (await sessions.get(nul.id))!;
+    assert.deepEqual(
+      copied.spawnMeta,
+      sessionContextOf({ ...nulTurn, deliveryTarget: "D1" }),
+      "escaped NULs are dropped and an escaped backslash before u0000 is kept",
+    );
+    assert.deepEqual(copied.runtime, { modelId: "m1" });
+    const skipped = (await sessions.get(odd.id))!;
+    assert.deepEqual(skipped.spawnMeta, sessionContextOf(earlier), "a run jsonb still refuses is passed over");
+    assert.deepEqual(skipped.runtime, { modelId: "m1" });
+
+    await copy(["sessions/store/0053-session-facts-copy"]);
+    assert.equal((await sessions.get(nul.id))?.spawnMeta, undefined, "a database that ran 0053 is not copied again");
+  } finally {
+    await raw.end();
+    await runtime.close?.();
+  }
+});
