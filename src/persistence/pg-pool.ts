@@ -55,6 +55,7 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     }),
   );
   sharedPools.set(key, { pool, users: 1 });
+  poolUrls.set(pool, connectionString);
   return pool;
 }
 
@@ -124,15 +125,24 @@ export interface PgPool {
 
 type PgSetting = readonly [name: string, value: string];
 
-function tenantSettings(tenant = boundTenant()): PgSetting[] {
-  assertTenancyAllowed();
+let ownerDatabase: string | undefined;
+const poolUrls = new WeakMap<Pool, string>();
+
+export function setOwnerDatabase(connectionString: string | undefined): void {
+  ownerDatabase = connectionString;
+}
+
+function tenantSettings(connectionString: string | undefined): PgSetting[] {
+  if (connectionString === undefined || connectionString !== ownerDatabase) assertTenancyAllowed();
+  const tenant = boundTenant();
   return tenant === undefined ? [] : [["qm.tenant_id", tenant]];
 }
 
-function querySettings(timeoutMs: number | undefined): PgSetting[] {
-  if (timeoutMs === undefined) return tenantSettings();
+function querySettings(connectionString: string, timeoutMs: number | undefined): PgSetting[] {
+  const settings = tenantSettings(connectionString);
+  if (timeoutMs === undefined) return settings;
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error("Query timeout must be a positive finite number");
-  return [...tenantSettings(), ["statement_timeout", String(Math.round(timeoutMs))]];
+  return [...settings, ["statement_timeout", String(Math.round(timeoutMs))]];
 }
 
 function settingsQuery(settings: readonly PgSetting[]): { text: string; values: string[] } {
@@ -196,8 +206,8 @@ async function rollbackOrReport(client: PoolClient, context: string): Promise<Er
   }
 }
 
-async function beginTransaction(client: PoolClient): Promise<void> {
-  const settings = tenantSettings();
+async function beginTransaction(pool: Pool, client: PoolClient): Promise<void> {
+  const settings = tenantSettings(poolUrls.get(pool));
   await client.query("BEGIN");
   if (settings.length) await client.query(settingsQuery(settings));
 }
@@ -210,7 +220,7 @@ async function runPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promi
   const client = await pool.connect();
   let rollbackError: Error | undefined;
   try {
-    await beginTransaction(client);
+    await beginTransaction(pool, client);
     const result = await fn(client);
     await client.query("COMMIT");
     return result;
@@ -546,7 +556,7 @@ export function createPgPool(
     params: unknown[] = [],
     { signal, timeoutMs }: PgQueryOptions = {},
   ): Promise<{ rows: Rows; rowCount: number }> {
-    const settings = querySettings(timeoutMs);
+    const settings = querySettings(connectionString, timeoutMs);
     const p = await pool();
     if (!signal && !settings.length) {
       const res = await p.query(text, params);

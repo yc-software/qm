@@ -1,4 +1,4 @@
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, setOwnerDatabase, type PgPool } from "../persistence/pg-pool.ts";
 
 let ownerUrl: string | undefined;
 let ownerPool: PgPool | undefined;
@@ -9,6 +9,7 @@ export function useOwnerDatabase(url: string | undefined): void {
   void ownerPool?.close();
   ownerUrl = next;
   ownerPool = undefined;
+  setOwnerDatabase(next);
 }
 
 export function ownerPgPool(pg: PgPool): PgPool {

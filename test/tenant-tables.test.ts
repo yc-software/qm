@@ -12,6 +12,7 @@ import { createPgPool, migrateRegisteredPgSchemas, type PgPool } from "../src/pe
 import { createPostgresBudgetTracker } from "../src/ratelimit/postgres-budget.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
 import { installTenantNow, soleTenantNow, TenantUnavailable, withTenant } from "../src/tenants/context.ts";
+import { useOwnerDatabase } from "../src/tenants/owner-pool.ts";
 import { refreshTenants, workTenant } from "../src/tenants/work-tenant.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 
@@ -69,9 +70,11 @@ describe("tenant tables", () => {
   const tenantA = randomUUID();
   const tenantB = randomUUID();
   let install = "";
+  let ownerUrl = "";
 
   before(async () => {
     const databaseUrl = testMigratedDatabaseUrl();
+    ownerUrl = databaseUrl;
     createPostgresVectorStore(databaseUrl);
     createPostgresAppPageViewLog(databaseUrl);
     createPostgresFileUploadStore(databaseUrl);
@@ -151,6 +154,16 @@ describe("tenant tables", () => {
       TenantUnavailable,
     );
     await assert.rejects(owner.q("SELECT 1 AS one"), TenantUnavailable);
+    useOwnerDatabase(ownerUrl);
+    try {
+      assert.deepEqual(await withTenant(install, () => owner.q("SELECT 1 AS one")), [{ one: 1 }]);
+      await assert.rejects(
+        withTenant(install, () => app.q("SELECT 1 AS one")),
+        TenantUnavailable,
+      );
+    } finally {
+      useOwnerDatabase(undefined);
+    }
     await refreshTenants(app);
     assert.deepEqual(await owner.q("SELECT 1 AS one"), [{ one: 1 }]);
   });
