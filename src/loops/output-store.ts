@@ -85,8 +85,12 @@ export function unresolvedOutput(output: LoopOutput): boolean {
   return output.state === "ready" || output.state === "shipping" || output.state === "unconfirmed";
 }
 
+function shipClaimExpired(output: LoopOutput, now: number): boolean {
+  return output.state === "shipping" && (output.claimedAt ?? 0) + SHIP_LEASE_MS <= now;
+}
+
 function supersedable(output: LoopOutput, now: number): boolean {
-  if (output.state === "shipping") return (output.claimedAt ?? 0) + SHIP_LEASE_MS <= now;
+  if (output.state === "shipping") return shipClaimExpired(output, now);
   return output.state === "staged" || unresolvedOutput(output);
 }
 
@@ -220,9 +224,7 @@ export function createLoopOutputStore(
     async claimShipping(id, claimedAt = Date.now()) {
       return applyIf(
         id,
-        (output) =>
-          output.state === "ready" ||
-          (output.state === "shipping" && (output.claimedAt ?? 0) + SHIP_LEASE_MS <= claimedAt),
+        (output) => output.state === "ready" || shipClaimExpired(output, claimedAt),
         (output) => ({ ...output, state: "shipping", claimedAt, claimToken: randomUUID(), updatedAt: claimedAt }),
       );
     },

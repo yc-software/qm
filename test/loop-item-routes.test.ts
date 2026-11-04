@@ -463,7 +463,7 @@ test("dismiss, reopen and the actioned end-state", async () => {
   assert.equal(again.status, 409);
 });
 
-test("dismiss closes the item's open outputs but not a live ship, waits out a decision in progress, and reopen leaves them closed", async () => {
+test("dismiss closes the item's open outputs but not a ship still in flight, waits out a decision in progress, and reopen leaves them closed", async () => {
   const w = world();
   const { loop, item } = await seed(w);
   const capture = async (attemptId: string) => {
@@ -492,6 +492,9 @@ test("dismiss closes the item's open outputs but not a live ship, waits out a de
   const shipping = await capture("run-4");
   await w.loops.outputs.promoteAttempt(item.id, "run-4");
   await w.loops.outputs.claimShipping(shipping);
+  const abandoned = await capture("run-5");
+  await w.loops.outputs.promoteAttempt(item.id, "run-5");
+  await w.loops.outputs.claimShipping(abandoned, Date.now() - 11 * 60_000);
 
   const decision = await w.loops.items.acquireDecision(item.id);
   const busy = await call(w, { method: "POST", path, body: { kind: "dismiss" } });
@@ -505,6 +508,7 @@ test("dismiss closes the item's open outputs but not a live ship, waits out a de
     [ready]: "superseded",
     [unconfirmed]: "superseded",
     [shipping]: "shipping",
+    [abandoned]: "superseded",
   };
   assert.deepEqual(await states(), closed);
 
