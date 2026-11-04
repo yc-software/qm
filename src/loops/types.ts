@@ -66,7 +66,7 @@ export interface Loop extends TriggerBase {
   healthReason?: string;
   throttle?: boolean;
   cronId?: string;
-  lastOkFireAt?: number;
+  lastScanAt?: number;
   consecutiveFailedFires?: number;
   quarantineClearedBy?: string;
   quarantineClearedAt?: number;

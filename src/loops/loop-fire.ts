@@ -706,7 +706,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
 
   async function recordFailedFire(loopId: string, failure: unknown): Promise<LoopFireResult> {
     const transient = isTransientFailure(failure);
-    await deps.loops.recordFireOutcome(loopId, transient ? "transient" : "failed", Date.now());
+    await deps.loops.recordFireOutcome(loopId, transient ? "transient" : "failed");
     await applyGovernor(loopId, transient ? { transientFailure: errMessage(failure) } : undefined);
     return { status: "failed", note: errMessage(failure) };
   }
@@ -758,7 +758,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         failure = error;
       }
       if (failure === undefined) {
-        await deps.loops.recordFireOutcome(loopId, "ok", firedAt);
+        await deps.loops.recordScan(loopId, firedAt);
+        await deps.loops.recordFireOutcome(loopId, "ok");
         await applyGovernor(loopId);
         return { status: "silent" };
       }

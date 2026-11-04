@@ -5,8 +5,7 @@ import type { LoopStore } from "./loop-store.ts";
 import { adapterForItem } from "./sources/index.ts";
 import { EVENT_TEXT_CHARS, type LatestEvent } from "./ingress.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
-import { readTextPrefix } from "../files/read-text-prefix.ts";
-import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
+import { text } from "node:stream/consumers";
 import { promptText } from "../util/text.ts";
 
 export const INBOX_SYNC_DEFAULT_EVERY_MS = 15 * 60 * 1000;
@@ -101,11 +100,7 @@ export async function ensureDefaultInboxLoops(store: LoopStore, owner: string): 
       (loop) => loop.ownerScopeId === scopeId("personal", owner) && loop.surface === `inbox:${source}`,
     );
     if (existing) {
-      loops.push(
-        existing.playbook === INBOX_PLAYBOOK
-          ? existing
-          : ((await store.update(existing.id, { playbookEdit: { playbook: INBOX_PLAYBOOK, by: owner } })) ?? existing),
-      );
+      loops.push(existing);
       continue;
     }
     const { loop } = await store.create({
@@ -134,22 +129,27 @@ export async function loadInboxVoiceProfile(
   loop: Loop,
 ): Promise<string | undefined> {
   if (inboxSource(loop) !== "gmail") return undefined;
-  const page = await files.listOwnedByScopes([scopeId("personal", loop.owner)], {
-    nameQuery: EMAIL_VOICE_PROFILE_NAME,
-  });
-  const artifact = page.files.find((file) => file.name === EMAIL_VOICE_PROFILE_NAME);
-  if (!artifact) return undefined;
-  const opened = await files.open(artifact.id);
-  if (!opened) return undefined;
-  const { text, truncated } = await readTextPrefix(opened.stream, MAX_SCREEN_CHARS);
-  const body = text.trim();
-  if (!body) return undefined;
-  return truncated ? `${body.toWellFormed()}\n…[truncated]` : body;
+  const scopes = [scopeId("personal", loop.owner)];
+  let cursor: string | undefined;
+  do {
+    const page = await files.listOwnedByScopes(scopes, {
+      nameQuery: EMAIL_VOICE_PROFILE_NAME,
+      ...(cursor ? { cursor } : {}),
+    });
+    const artifact = page.files.find((file) => file.name === EMAIL_VOICE_PROFILE_NAME);
+    if (artifact) {
+      const opened = await files.open(artifact.id);
+      if (!opened) return undefined;
+      return (await text(opened.stream)).trim() || undefined;
+    }
+    cursor = page.nextCursor;
+  } while (cursor);
+  return undefined;
 }
 
 export function inboxTaskContext(loop: Loop, voiceProfile?: string): InboxTaskContext {
   return {
-    ...(loop.lastOkFireAt ? { since: loop.lastOkFireAt } : {}),
+    ...(loop.lastScanAt ? { since: loop.lastScanAt } : {}),
     ...(voiceProfile ? { voiceProfile } : {}),
   };
 }

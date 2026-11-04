@@ -121,7 +121,6 @@ export async function runLoopFire(
   effects: LoopRunnerEffects,
   grants: ShipGrant[] = [],
 ): Promise<FireSummary> {
-  const firedAt = Date.now();
   const summary = emptySummary(loop, isRunnable(loop));
   if (!summary.ran) return summary;
   const effectiveMaxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
@@ -132,7 +131,7 @@ export async function runLoopFire(
   );
   if (budget.full) {
     summary.throttled = budget.reason();
-    await stores.loops.recordFireOutcome(loop.id, "ok", firedAt);
+    await stores.loops.recordFireOutcome(loop.id, "ok");
     return summary;
   }
 
@@ -303,6 +302,6 @@ export async function runLoopFire(
   for (const worker of workers) if (worker.status === "rejected") throw worker.reason;
   if (capped && !drained) summary.throttled ??= budget.reason();
 
-  await stores.loops.recordFireOutcome(loop.id, fireOutcome(summary), firedAt);
+  await stores.loops.recordFireOutcome(loop.id, fireOutcome(summary));
   return summary;
 }
