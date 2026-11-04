@@ -1,4 +1,3 @@
-import { createBackgroundController } from "./runs/background-controller.ts";
 import { createManagedSlack } from "./surfaces/slack-managed.ts";
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
@@ -33,7 +32,7 @@ export async function startQm(
     : undefined;
   await built.tenancy.refreshSettings();
   const tenantSettings = built.tenancy.keepSettingsFresh();
-  if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) await built.ownSharedState();
+  if (config.backgroundWorkEnabled) await built.ownSharedState();
   const slackConfig = slackPluginConfigFromEnv(env);
   let slackEnvironmentState: "absent" | "configured" | "partial" =
     env.SLACK_BOT_TOKEN || env.SLACK_APP_TOKEN ? "partial" : "absent";
@@ -44,10 +43,7 @@ export async function startQm(
         token: env.QM_SLACK_SERVICE_TOKEN ?? "",
         appId: env.QM_SLACK_APP_ID ?? "",
         store: built.slackInstallation,
-        reconcile:
-          config.backgroundWorkEnabled || config.backgroundDeploymentId
-            ? () => withoutTenant(() => slackRuntime.reconcile())
-            : undefined,
+        reconcile: config.backgroundWorkEnabled ? () => withoutTenant(() => slackRuntime.reconcile()) : undefined,
       })
     : undefined;
   const server = createServer(built.app, {
@@ -60,7 +56,6 @@ export async function startQm(
   built.deploymentLayerRefresh.start();
   server.listen(config.port);
   await once(server, "listening");
-  built.runtime.start();
 
   console.log(
     `[qm] listening on :${config.port} (org=${config.orgId}, ` +
@@ -93,15 +88,12 @@ export async function startQm(
     });
   }
 
-  if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
-    built.scheduler.start(1000);
-  } else if (!config.backgroundDeploymentId) {
+  if (!config.backgroundWorkEnabled)
     console.log("[qm] background work disabled; scheduler and runtime loops will not start");
-  }
 
   const slackRuntime = createTenantSlackRuntimes({
     tenants: built.listTenants,
-    startPaused: Boolean(config.backgroundDeploymentId),
+    startPaused: true,
     load: async (tenant) => {
       const status = await built.slackInstallation.status();
       const stored = await built.slackInstallation.get();
@@ -123,73 +115,17 @@ export async function startQm(
     startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
     onError: reportFailureAs("slack plugin reconciliation", undefined),
   });
-  if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) slackRuntime.start();
 
   const slackAccountRuntimes = slackAccountConfigsFromEnv(env).map((account) =>
     createSlackRuntimeReconciler({
-      startPaused: Boolean(config.backgroundDeploymentId),
+      startPaused: true,
       load: () => Promise.resolve({ version: `environment:${account.accountId}`, config: account }),
       startPlugin: (desired) => withInstallTenant(() => startSlackPlugin(desired, built.slackCore)),
       onError: reportFailureAs("slack account reconciliation", undefined, `account=${account.accountId}`),
     }),
   );
-  if (config.backgroundWorkEnabled && !config.backgroundDeploymentId)
-    for (const runtime of slackAccountRuntimes) runtime.start();
 
-  let backgroundController: ReturnType<typeof createBackgroundController> | undefined;
-  if (built.backgroundOwnership) {
-    let periodicStop: Promise<void> = Promise.resolve();
-    let activationEpoch = 0;
-    let sharedStateOwned = false;
-    const stopPeriodic = () => {
-      activationEpoch++;
-      periodicStop = built.scheduler.stopClaims();
-      void periodicStop.catch((error) => console.error("[qm] periodic background stop failed:", errMessage(error)));
-      void built.runtime
-        .stopBackgroundClaims()
-        .catch((error) => console.error("[qm] background claim stop failed:", errMessage(error)));
-      for (const runtime of [slackRuntime, ...slackAccountRuntimes])
-        void runtime.stop().catch((error) => console.error("[qm] Slack background stop failed:", errMessage(error)));
-    };
-    backgroundController = createBackgroundController({
-      store: built.backgroundOwnership.store,
-      deploymentId: built.backgroundOwnership.deploymentId,
-      async start(signal) {
-        const epoch = ++activationEpoch;
-        if (signal.aborted) return;
-        if (!sharedStateOwned) {
-          await built.ownSharedState();
-          sharedStateOwned = true;
-          if (signal.aborted || epoch !== activationEpoch) return;
-        }
-        built.runtime.startBackground();
-        await periodicStop;
-        if (signal.aborted || epoch !== activationEpoch) return;
-        built.scheduler.start(1000);
-        await built.scheduler.ready();
-        if (signal.aborted || epoch !== activationEpoch) return;
-        for (const runtime of [slackRuntime, ...slackAccountRuntimes]) {
-          if (signal.aborted) return;
-          runtime.start();
-          await runtime.reconcile();
-        }
-      },
-      fence: stopPeriodic,
-      async relinquish() {
-        await Promise.all([
-          built.runtime.stopBackgroundClaims(),
-          built.scheduler.stopClaims(),
-          ...[slackRuntime, ...slackAccountRuntimes].map((runtime) => runtime.stop()),
-        ]);
-      },
-      async drained() {
-        await Promise.all([built.runtime.backgroundDrained(), built.scheduler.drained(), periodicStop]);
-      },
-      onError: reportFailureAs("background ownership", undefined),
-    });
-    built.runtime.setBackgroundAdmission(backgroundController.canClaim, backgroundController.active);
-    backgroundController.start();
-  }
+  if (config.backgroundWorkEnabled) await built.ownSharedState();
 
   return {
     built,
@@ -203,7 +139,6 @@ export async function startQm(
       built.deploymentLayerRefresh.stop();
       server.close();
       server.closeIdleConnections();
-      await backgroundController?.stop();
       await built.runtime.stop();
       stopTenantWatch?.();
       await tenantSettings.stop();

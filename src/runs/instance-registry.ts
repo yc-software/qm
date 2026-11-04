@@ -2,17 +2,18 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 
 export interface InstanceRegistry {
   beat(): Promise<boolean>;
+  retire(): Promise<void>;
 }
 
 const INSTANCE_LIVENESS_MS = 30_000;
 
 export function createNoopInstanceRegistry(): InstanceRegistry {
-  return { beat: async () => false };
+  return { beat: async () => false, retire: async () => {} };
 }
 
 export function createPostgresInstanceRegistry(
   pg: PgPool,
-  opts: { instanceId: string; buildSha: string; startedAt: number; livenessMs?: number },
+  opts: { instanceId: string; deploymentKey: string; startedAt: number; livenessMs?: number },
 ): InstanceRegistry {
   const livenessMs = opts.livenessMs ?? INSTANCE_LIVENESS_MS;
   const migration = {
@@ -45,17 +46,35 @@ export function createPostgresInstanceRegistry(
         `INSERT INTO instance_heartbeats(instance_id, build_sha, started_at, beat_at)
            VALUES ($1, $2, $3, now())
          ON CONFLICT (instance_id) DO UPDATE SET beat_at = now()`,
-        [opts.instanceId, opts.buildSha, String(opts.startedAt)],
+        [opts.instanceId, opts.deploymentKey, String(opts.startedAt)],
       );
-      await pg.query(`DELETE FROM instance_heartbeats WHERE beat_at < now() - interval '1 hour'`, []);
+      await pg.query(
+        `DELETE FROM instance_heartbeats stale
+          WHERE NOT EXISTS (
+            SELECT 1 FROM instance_heartbeats recent
+             WHERE recent.build_sha = stale.build_sha AND recent.beat_at > now() - interval '1 hour'
+          )`,
+        [],
+      );
       const { rowCount } = await pg.query(
-        `SELECT 1 FROM instance_heartbeats
-          WHERE build_sha <> $1 AND started_at > $2
-            AND beat_at > now() - ($3 || ' milliseconds')::interval
+        `WITH deployments AS (
+           SELECT build_sha, min(started_at) AS started_at, max(beat_at) AS beat_at
+             FROM instance_heartbeats GROUP BY build_sha
+         )
+         SELECT 1 FROM deployments other JOIN deployments own ON own.build_sha = $1
+          WHERE other.build_sha <> $1 AND other.started_at > own.started_at
+            AND other.beat_at > now() - ($2 || ' milliseconds')::interval
           LIMIT 1`,
-        [opts.buildSha, String(opts.startedAt), String(livenessMs)],
+        [opts.deploymentKey, String(livenessMs)],
       );
       return rowCount > 0;
+    },
+    async retire(): Promise<void> {
+      if (!readyP) return;
+      await pg.query(
+        `UPDATE instance_heartbeats SET beat_at = now() - ($2 || ' milliseconds')::interval WHERE instance_id = $1`,
+        [opts.instanceId, String(livenessMs)],
+      );
     },
   };
 }
