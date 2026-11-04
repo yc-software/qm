@@ -376,7 +376,7 @@ BEGIN
     LEFT JOIN LATERAL (
       SELECT request->'slackSource' AS value FROM (
         SELECT CASE WHEN pg_input_is_valid(request, 'jsonb') THEN request::jsonb END AS request, created_at, seq
-        FROM runs WHERE session_id = x.thread_ref OFFSET 0
+        FROM runs WHERE session_id = x.thread_ref
       ) parsed
       WHERE COALESCE(request->'slackSource', 'null') <> 'null'
       ORDER BY created_at DESC, seq DESC LIMIT 1
@@ -384,7 +384,7 @@ BEGIN
     LEFT JOIN LATERAL (
       SELECT result->'runtime' AS value FROM (
         SELECT CASE WHEN pg_input_is_valid(result, 'jsonb') THEN result::jsonb END AS result, created_at, seq
-        FROM runs WHERE session_id = x.thread_ref OFFSET 0
+        FROM runs WHERE session_id = x.thread_ref
       ) parsed
       WHERE COALESCE(result->'runtime', 'null') <> 'null'
       ORDER BY created_at DESC, seq DESC LIMIT 1
@@ -392,7 +392,7 @@ BEGIN
     LEFT JOIN LATERAL (
       SELECT request FROM (
         SELECT CASE WHEN pg_input_is_valid(request, 'jsonb') THEN request::jsonb END AS request, created_at, seq
-        FROM runs WHERE session_id = x.thread_ref OFFSET 0
+        FROM runs WHERE session_id = x.thread_ref
       ) owned
       WHERE request IS NOT NULL
         AND COALESCE(request->>'privateSessionMessage', 'false') <> 'true'
