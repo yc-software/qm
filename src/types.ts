@@ -462,7 +462,7 @@ export interface TurnRuntime {
   change?: { rule: string } | { agent: "task" | "scope" };
 }
 
-export type StopScope = "run" | "tree" | "ancestor";
+export type StopScope = "run" | "session" | "tree" | "ancestor";
 
 export interface TurnResult {
   status: "ok" | "refused" | "failed" | "pending_approval" | "queued" | "silent" | "react";
