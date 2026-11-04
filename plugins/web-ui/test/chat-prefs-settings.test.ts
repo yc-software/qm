@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 
 test("chat preference rows persist to per-user ui-state", async (t) => {
   const dom = new JSDOM('<!doctype html><div id="app"></div>', { url: "http://localhost/settings" });
@@ -49,10 +49,8 @@ test("chat preference rows persist to per-user ui-state", async (t) => {
     descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
-  const vite = await createServer({
+  const vite = await testViteServer({
     root: fileURLToPath(new URL("..", import.meta.url)),
-    server: { middlewareMode: true, hmr: false },
-    appType: "custom",
     plugins: [
       {
         name: "settings-shell-boundary",
