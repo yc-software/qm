@@ -123,6 +123,7 @@ function sanitizedTurnRequest(
     externalSlack: _externalSlack,
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
+    cronScript: _cronScript,
     redeliveryKey: _redeliveryKey,
     ...safeBody
   } = body;

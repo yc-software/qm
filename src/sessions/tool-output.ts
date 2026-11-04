@@ -48,20 +48,36 @@ export function parkedOutputKey(path: string): ParkedOutputKey | null {
   return name && !name.includes("/") ? { digest: md5Hex(name), callId: name } : null;
 }
 
-export function cutToolOutput(
+export function cutToInline(
   text: string,
   inlineTokens: number,
-  callId: string,
+  where = "",
 ): { text: string; shownChars: number } | null {
   if (inlineTokens <= 0) return null;
   const budget = inlineTokens * CHARS_PER_TOKEN;
   if (text.length <= budget) return null;
   const head = headSlice(text, Math.floor(budget / 2));
   const tail = tailSlice(text, Math.floor(budget / 2));
-  const marker =
-    `\n…[output cut: showing the first ${head.length} and last ${tail.length} of ${text.length} chars. ` +
-    `The full output is in ${TOOL_OUTPUT_PATH}${DIGEST_DIR}${md5Hex(callId)}; reading it with the files tool copies it onto the computer (kept 30 days)]…\n`;
+  const marker = `\n…[output cut: showing the first ${head.length} and last ${tail.length} of ${text.length} chars.${where}]…\n`;
   return { text: head + marker + tail, shownChars: head.length + tail.length };
+}
+
+export function cutToolOutput(
+  text: string,
+  inlineTokens: number,
+  callId: string,
+): { text: string; shownChars: number } | null {
+  return cutToInline(
+    text,
+    inlineTokens,
+    ` The full output is in ${TOOL_OUTPUT_PATH}${DIGEST_DIR}${md5Hex(callId)}; reading it with the files tool copies it onto the computer (kept 30 days)`,
+  );
+}
+
+export async function inlineTokensOf(store: Pick<ToolOutputStore, "inlineTokens"> | undefined): Promise<number> {
+  return store
+    ? store.inlineTokens().catch(swallowAs("tool output: inline cap", DEFAULT_INLINE_TOKENS))
+    : DEFAULT_INLINE_TOKENS;
 }
 
 export async function parkIfOverCap(
@@ -69,7 +85,7 @@ export async function parkIfOverCap(
   text: string,
   callId: string,
 ): Promise<{ text: string; output: ToolOutputRef } | null> {
-  const inlineTokens = await store.inlineTokens().catch(swallowAs("tool output: inline cap", DEFAULT_INLINE_TOKENS));
+  const inlineTokens = await inlineTokensOf(store);
   const cut = cutToolOutput(text, inlineTokens, callId);
   if (!cut) return null;
   const blob = await store.save(text).catch(swallowAs("tool output: park full text", null));

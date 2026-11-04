@@ -1654,15 +1654,16 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { req, res, user } = c;
       const id = c.params.id!;
-      const p = await readJson<{ name?: unknown }>(req, res);
+      const p = await readJson<{ name?: unknown; icon?: unknown }>(req, res);
       if (!p) return;
       const name = typeof p.name === "string" ? p.name.trim().slice(0, 200) : "";
-      if (!name) return json(res, 400, { error: "bad_request", message: "name required" });
+      const hasIcon = Object.hasOwn(p, "icon");
+      if (!name && !hasIcon) return json(res, 400, { error: "bad_request", message: "name or icon required" });
       return relayCore(
         res,
         "PATCH",
         `/v1/projects/${encodeURIComponent(id)}`,
-        JSON.stringify({ principalId: user, name }),
+        JSON.stringify({ principalId: user, ...(name ? { name } : {}), ...(hasIcon ? { icon: p.icon } : {}) }),
       );
     },
   },
@@ -1786,6 +1787,11 @@ const apiRoutes: readonly WebRoute[] = [
       const { res } = c;
       return relayCore(res, "GET", "/v1/surface-config");
     },
+  },
+  {
+    method: "GET",
+    path: "/api/custom-emoji",
+    handle: async (c) => relayCore(c.res, "GET", "/v1/custom-emoji"),
   },
   {
     method: "GET",

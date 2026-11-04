@@ -29,6 +29,7 @@ interface CronLike {
   destination?: { type: string; target: string };
   lastFireNote?: { text: string; at: number; by?: string };
   unattendedGrants?: string[];
+  script?: { command: string };
 }
 
 function fmtCronLine(c: CronLike, preview = false): string {
@@ -49,7 +50,8 @@ function fmtCronLine(c: CronLike, preview = false): string {
     ? `\n    runtime: ${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
     : "";
   const grants = c.unattendedGrants?.length ? `\n    unattended grants: ${c.unattendedGrants.join(", ")}` : "";
-  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${grants}${note}`;
+  const script = c.script && !preview ? `\n    script: ${c.script.command}` : "";
+  return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${grants}${script}${note}`;
 }
 
 function fmtCronCreated(r: {
@@ -93,6 +95,8 @@ export function cronTools(kit: ToolKit) {
       'create: always set `title`, a distinctive 2-5 word label for what the cron is FOR (e.g. "Gmail unread digest"), never the command or a generic word. ' +
       "Give either `task` (a prompt re-evaluated at each fire) or `text` (exact words to relay). " +
       "When a task runs a script, first run that exact command once end to end, including what it posts or writes, without marking the work done by other means, so the first fire is not its first real run. " +
+      "`script` hands a task cron's routine work to a command run first at each fire: exit 0 means it handled the fire and no agent turn runs; exit 1 wakes the agent with its output. " +
+      "Setting a script runs it once for real right away, and it is refused unless that run exits 0 or 1. " +
       "`schedule`: {cron,timezone} for anything tied to a time of day or calendar (IANA timezone: the user's local one unless they name another; omit for this turn's), {everyMs} for sub-day polling only (first run one interval from now), or {firstFireAt} (epoch ms, one-shot; Date.now() means now). Never compute future epochs for calendar times.\n" +
       "DELIVERY: by default a cron posts back to this conversation; keep that for watches and follow-ups on work started here, and don't pick a DM just because this is one. " +
       'Otherwise set `recipient` (teammate → DM), `channel`, `participants` (member ids → an existing group DM; reach it once first), or `destinationKey` (from the "Where scheduled tasks post" menu); ' +
@@ -195,6 +199,21 @@ export function cronTools(kit: ToolKit) {
             "create/patch: read-only admin grants for unattended fires (org admins only; the cron must live in and deliver to their own DM); admin unattended_grants lists which read needs which. patch replaces; [] removes.",
         }),
       ),
+      script: Type.Optional(
+        Type.Union(
+          [
+            Type.Null(),
+            Type.Object({
+              command: Type.String({ description: "Shell command run on the cron owner's computer." }),
+              credentials: Type.Optional(
+                Type.Array(Type.String(), { description: "Credential handles the command needs, as for execute." }),
+              ),
+              sandboxId: Type.Optional(Type.String({ description: "Run on this computer instead of the default." })),
+            }),
+          ],
+          { description: "create/patch: the task cron's script (patch replaces; null removes)." },
+        ),
+      ),
       enabled: Type.Optional(Type.Boolean({ description: "patch: false pauses, true resumes." })),
       archived: Type.Optional(Type.Boolean({ description: "patch: true archives the cron." })),
       limit: Type.Optional(
@@ -248,6 +267,7 @@ export function cronTools(kit: ToolKit) {
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
             ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
+            ...(params.script ? { script: params.script } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) {
@@ -350,6 +370,7 @@ export function cronTools(kit: ToolKit) {
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
             ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
+            ...(params.script !== undefined ? { script: params.script } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);

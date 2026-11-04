@@ -97,6 +97,7 @@ export function createSessionMethods(
   | "addProjectMember"
   | "removeProjectMember"
   | "renameProject"
+  | "setProjectIcon"
   | "setProjectSlackChannel"
   | "listScopeResources"
   | "managesScope"
@@ -911,6 +912,31 @@ export function createSessionMethods(
             at: Date.now(),
             principalId,
             action: "project.rename",
+            resource: project.id,
+            scopeLabel: projectScopeId(project.id),
+          });
+      });
+      if (result.status === "ok") {
+        return { ...result, project: await projectView(result.project) };
+      }
+      return result;
+    },
+
+    async setProjectIcon(id, principalId, icon) {
+      if (!deps.projects) return { status: "not_found" };
+      if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
+      const existing = await deps.projects.get(id);
+      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (icon?.kind === "custom") {
+        const catalog = await deps.config.getSlackEmojiCatalogDurable(scopeId("org", orgIdOf()));
+        if (!catalog?.emoji[icon.name]) return { status: "invalid_icon" };
+      }
+      const result = await deps.projects.setIcon(id, principalId, icon, async ({ project, changed }) => {
+        if (changed)
+          deps.auditLog.record({
+            at: Date.now(),
+            principalId,
+            action: "project.icon",
             resource: project.id,
             scopeLabel: projectScopeId(project.id),
           });

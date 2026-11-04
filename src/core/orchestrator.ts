@@ -6,6 +6,7 @@ import { SIDE_CHAT_GUIDANCE, sideChatContext } from "./side-chat-context.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { SECURITY_FLAGGED, SECURITY_TOOL_RESULT_QUARANTINE, type AuditEvent } from "../audit/audit-log.ts";
 import { createAdminCall } from "../tools/admin.ts";
+import { createSelfApiCall } from "../tools/self-api.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
@@ -145,6 +146,7 @@ import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { collectBlob } from "../persistence/blob-transfer.ts";
 import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
+import { runCronScript } from "../cron/script.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
 import type { FileArtifact } from "../files/file-artifact-store.ts";
 import { artifactImageLoader } from "../agent/replay-images.ts";
@@ -2149,7 +2151,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             "Core will deliver your final reply after you finish. Do not call Slack, email, chat, or other send APIs to deliver it yourself; put the exact message to send in your final reply.";
         }
         if (automatedTurn && input.surface && isPollSurface(input.surface)) {
-          systemPrompt += `\n\nThis turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call \`finish_silently\` to end the turn without sending anything — silence is the success case for a poll, so don't post a summary or a "nothing to report" note just to fill the silence.`;
+          systemPrompt += `\n\nThis turn was fired by a scheduled trigger, not a person typing. If there's nothing new worth reporting, call \`finish_silently\` to end the turn without sending anything.`;
         }
         if (!external && deps.directory && conversation.kind !== "dm") {
           rosterMembers = await (async () => {
@@ -2568,6 +2570,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(deps.control && controlClaims ? { control: deps.control, controlClaims } : {}),
           ...(deps.apiBaseUrl && connectorEnv.AGENT_API_TOKEN
             ? {
+                ...(securityPolicy.posture !== "strict"
+                  ? { selfApi: createSelfApiCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN) }
+                  : {}),
                 admin: {
                   call: createAdminCall(deps.apiBaseUrl, connectorEnv.AGENT_API_TOKEN),
                   operationsAvailable:
@@ -2621,6 +2626,24 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
 
         const tools = external ? externalTools(baseTools, accessResource) : baseTools;
+        const cronScript =
+          input.cronScript && input.surface === "cron" && !input.sessionSenderId && !isRetry
+            ? await runCronScript(
+                input.cronScript,
+                {
+                  execute: (command, opts) => tools.execute(command, opts),
+                  screening: securityPolicy.screening,
+                  classify: classifyAs(
+                    { sessionId: session.id, hook: "tool_response", request: input.text, surface: "cron_script" },
+                    recordScreenRequest,
+                  ),
+                  ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
+                },
+                turnAbort.signal,
+              )
+            : undefined;
+        if (cronScript) audit({ action: "cron.script", resource: conversation.threadRef, detail: cronScript.audit });
+        if (cronScript?.handled) return { status: "silent", sessionId: session.id, scriptVerdict: cronScript.verdict };
 
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(input.attachments, (await turnWindow()).items);
@@ -2966,6 +2989,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         } else if (overtakenTurn) {
           turnInput = `[system] This turn paused while another turn ran in this conversation. Continue this turn's original task from its recorded work without repeating completed actions, and follow any instruction given since that changes or cancels it. Original task: ${baseText}`;
         }
+        if (cronScript?.escalation) turnInput = `${turnInput}\n\n${cronScript.escalation}`;
         const isPollFire = automatedTurn && !!input.surface && isPollSurface(input.surface);
         const sessionUsedTools = visibleHistory.some(
           (e) => e.kind === "ToolCall" && !(e.tool === "skill" || (e.tool === "skills" && e.body.action === "read")),
@@ -3825,6 +3849,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
+        if (cronScript) finalResult = { ...finalResult, scriptVerdict: cronScript.verdict };
         if (turnRuntime) await deps.sessions.setRuntime(session.id, turnRuntime);
         await fallbackTitleWrite;
 

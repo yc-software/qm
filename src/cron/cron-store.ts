@@ -1,6 +1,6 @@
 import { inTenantOf, type Claimed } from "../tenants/claim.ts";
 import type { Destination } from "../types.ts";
-import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule } from "../triggers/types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, CronScript } from "../triggers/types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { type BeginFireResult, type CronFireRecord, type CronFireStore } from "./fire-store.ts";
 import {
@@ -25,6 +25,7 @@ export interface CreateCronInput extends CreateTriggerInput {
   unattendedGrants?: string[];
   loopId?: string;
   sessionRef?: string;
+  script?: CronScript;
 }
 
 export interface CronPatch {
@@ -38,6 +39,7 @@ export interface CronPatch {
   destination?: Destination;
   unattendedGrants?: string[];
   sessionRef?: string | null;
+  script?: CronScript | null;
 }
 
 export const DEFAULT_FIRE_RUNNING_STALE_MS = 24 * 60 * 60 * 1000;
@@ -119,6 +121,7 @@ export function createCronStore(
         contentPart(title),
         ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
         ...(input.runtime ? [contentPart(input.runtime)] : []),
+        ...(input.script ? [contentPart(input.script)] : []),
       ]);
       return createDeduped(backing, contentId, (id) => ({
         ...buildTriggerBase(input, id, now),
@@ -132,6 +135,7 @@ export function createCronStore(
         ...(input.loopId ? { loopId: input.loopId } : {}),
         ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
         ...(input.runtime ? { runtime: input.runtime } : {}),
+        ...(input.script ? { script: input.script } : {}),
       }));
     },
     get: (id) => backing.get(id),
@@ -161,6 +165,7 @@ export function createCronStore(
       if (patch.archived === true) fields.enabled = false;
       if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
       if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
+      if (patch.script !== undefined) fields.script = patch.script ?? undefined;
       return backing.merge(id, fields);
     },
     delete: (id) => backing.delete(id),
