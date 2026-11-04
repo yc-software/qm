@@ -54,6 +54,8 @@ export interface ToolContextRef {
   }>;
   modelCalls?: number;
   stepPhase?: Phase;
+  toolStep?: boolean;
+  toolsRunning?: number;
   firstTokenPhase?: Phase;
   onModelRequest?: () => void;
   fast?: boolean;

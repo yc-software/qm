@@ -57,7 +57,7 @@ function anthropicStream(block: Record<string, unknown>, delta: Record<string, u
     .join("");
 }
 
-test("a Pi tool step is traced as model requests, first tokens, and a step gap that holds the named tool", async (t) => {
+test("a Pi tool step is traced as model requests, first tokens, and step gaps around the named tool", async (t) => {
   let requests = 0;
   const model = createServer(async (req, res) => {
     await new Promise((resolve) => req.resume().on("end", resolve));
@@ -125,18 +125,25 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
   assert.ok(firstToken && nextFirstToken, "each model request has a first-token span");
   assert.equal(extraFirstTokens.length, 0);
   assert.equal(byOp("http.client").length, 2, "each model request has an HTTP span");
-  const [gap, ...extraGaps] = byOp("step.gap");
-  assert.ok(gap, "the tool step has a gap span");
-  assert.equal(extraGaps.length, 0, "the final answer opens no gap");
+  const gaps = byOp("step.gap");
+  assert.ok(gaps.length >= 1, "the tool step has gap spans");
   const [tool, ...extraTools] = byOp("step.tool");
   assert.ok(tool);
   assert.equal(extraTools.length, 0);
   assert.equal(tool.description, "memory");
-  assert.equal(tool.parent_span_id, gap.span_id, "the tool runs inside its step's gap");
   assert.ok(tool.timestamp - tool.start_timestamp >= 0.035, "the tool span covers the tool's own work");
-  assert.ok(gap.start_timestamp >= firstToken.timestamp, "the gap opens after the first response streamed");
-  assert.ok(gap.timestamp <= nextFirstToken.start_timestamp + 0.001, "the gap closes at the next model request");
-  assert.ok(tool.start_timestamp >= gap.start_timestamp && tool.timestamp <= gap.timestamp);
+  for (const gap of gaps) {
+    assert.notEqual(tool.parent_span_id, gap.span_id, "the tool does not run inside a gap");
+    assert.ok(
+      gap.timestamp <= tool.start_timestamp + 0.001 || gap.start_timestamp >= tool.timestamp - 0.001,
+      "no gap overlaps the tool's execution",
+    );
+    assert.ok(gap.start_timestamp >= firstToken.timestamp, "gaps open after the first response streamed");
+    assert.ok(gap.timestamp <= nextFirstToken.start_timestamp + 0.001, "gaps close by the next model request");
+  }
+  const after = gaps.at(-1)!;
+  assert.ok(after.start_timestamp >= tool.timestamp - 0.001, "a gap covers the time after the tool returns");
+  assert.ok(after.timestamp >= nextFirstToken.start_timestamp - 0.001, "that gap runs up to the next model request");
 });
 
 test("a human web turn persists its entries inside step.persist spans of the run", async () => {

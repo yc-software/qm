@@ -2,7 +2,7 @@ import { toolCallApprovalKey } from "../../core/approval-id.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
+import { startPhase, tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../../util/errors.ts";
 import { redactCommand } from "../../sandbox/exec-process-session.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
@@ -196,8 +196,19 @@ export function withToolApprovalGate(
 export function withToolSpan(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
   return {
     ...tool,
-    execute: (...args: Parameters<ToolDefinition["execute"]>) =>
-      tracePhase("step.tool", () => tool.execute(...args), { name: tool.name, parent: ref.stepPhase }),
+    async execute(...args: Parameters<ToolDefinition["execute"]>) {
+      if (!ref.toolsRunning) {
+        ref.stepPhase?.end();
+        ref.stepPhase = undefined;
+      }
+      ref.toolsRunning = (ref.toolsRunning ?? 0) + 1;
+      try {
+        return await tracePhase("step.tool", () => tool.execute(...args), { name: tool.name });
+      } finally {
+        ref.toolsRunning -= 1;
+        if (!ref.toolsRunning && ref.toolStep && !ref.stepPhase) ref.stepPhase = startPhase("step.gap");
+      }
+    },
   } as ToolDefinition;
 }
 

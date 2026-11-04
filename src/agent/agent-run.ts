@@ -992,6 +992,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         agent.onPayload = async (payload, model) => {
           ref.modelCalls = (ref.modelCalls ?? 0) + 1;
           ref.onModelRequest?.();
+          ref.toolStep = false;
           ref.stepPhase?.end();
           ref.stepPhase = undefined;
           ref.firstTokenPhase?.end();
@@ -1235,8 +1236,11 @@ export function createAgent(opts?: AgentOptions): Agent {
             callUsage.push(usage);
             entry.ref.firstTokenPhase?.end();
             entry.ref.firstTokenPhase = undefined;
-            if ((event.message as AssistantMessage).stopReason === "toolUse")
+            if ((event.message as AssistantMessage).stopReason === "toolUse") {
+              entry.ref.toolStep = true;
+              entry.ref.stepPhase?.end();
               entry.ref.stepPhase = startPhase("step.gap");
+            }
           }
         });
         const drainCaptured = async (): Promise<void> => {
@@ -1577,6 +1581,7 @@ export function createAgent(opts?: AgentOptions): Agent {
           if (pendingSteers.length) entry.agentSession.clearQueue();
           unsubscribeMessageEnd?.();
           unsubscribe?.();
+          entry.ref.toolStep = false;
           entry.ref.stepPhase?.end();
           entry.ref.stepPhase = undefined;
           entry.ref.firstTokenPhase?.end();
