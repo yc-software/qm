@@ -5,6 +5,8 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import pg from "pg";
 import { withRequestTenant } from "../src/api/tenant-ingress.ts";
+import { apiRoutes } from "../src/api/routes/index.ts";
+import type { Route } from "../src/api/routes/route.ts";
 import { CAPABILITY_HEADER } from "../src/api/contract.ts";
 import { CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { createPgPool, type PgPool } from "../src/persistence/pg-pool.ts";
@@ -62,7 +64,7 @@ after(async () => {
 
 async function seen(
   headers: Record<string, string>,
-  route: { auth: "source" | "public"; tenant?: "none" } = { auth: "source" },
+  route: Pick<Route, "auth" | "tenant"> = { auth: "source" },
 ) {
   const req = new IncomingMessage(new Socket());
   req.headers = headers;
@@ -111,6 +113,13 @@ describe("host routing", { skip }, () => {
     assert.equal(await seen({ host: "10.0.0.7:8080" }, { auth: "public", tenant: "none" }), "unbound");
     const tokenB = await withTenant(b, () => mintCapabilityToken(claims, SECRET));
     assert.deepEqual(await seen({ host: "core.internal", [CAPABILITY_HEADER]: tokenB }), [2]);
+  });
+
+  it("lets the web UI's signed cross-tenant delivery poll through the core's unmapped service host", async () => {
+    const poll = apiRoutes.find((route) => "path" in route && route.path === "/v1/deliveries/across-tenants");
+    assert.ok(poll);
+    assert.equal(await seen({ host: "core.internal:8080" }, poll), "unbound");
+    assert.equal(await seen({ host: "core.internal:8080" }), 421);
   });
 
   it("refuses a deleted tenant's host, even with a live tenant's credential, until the host is mapped again", async () => {
