@@ -2,53 +2,27 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { claimAcrossTenants } from "../tenants/claim.ts";
 import type { Session, SessionType, ScopeId } from "../types.ts";
 import type {
   NewSessionPin,
   SessionPin,
-  EntrySearchHit,
   DistinctScope,
   SessionDescendant,
-  LlmRequestRecord,
-  NewLlmRequest,
   SessionOrigin,
   SessionRef,
   SessionStore,
   StoreOptions,
 } from "./session-store.ts";
-import { tsPrefixQuery } from "./entry-search.ts";
 import { ancestry, SESSION_MIGRATIONS } from "./session-schema.ts";
 import { createSessionSpend } from "./session-spend.ts";
+import { createLlmCaptures } from "./llm-captures.ts";
+import { createSessionSearch } from "./session-search.ts";
 import { createSessionItems, lockSession } from "./session-items.ts";
 import { createSessionAdminReads } from "./session-admin-reads.ts";
 import { createSessionParticipants, participantSessionsSql } from "./session-participants.ts";
-import { LIST_COLUMNS, OWN_CHAT, rowToParticipantSession, rowToSession } from "./session-rows.ts";
-import { cronIdOf, promptEnvelopeBody, sessionOrigin } from "./session-store.ts";
-import { msOf, SEARCHABLE_ITEM, searchTypeExpr, USER_KINDS, TENANT } from "./items.ts";
-
-const LLM_CAPTURE_PURGE_BATCH = 100;
-const ENVELOPE_TOUCH_MS = 24 * 60 * 60_000;
-
-function rowToLlmRequest(r: Record<string, unknown>): LlmRequestRecord {
-  return {
-    id: r.id as string,
-    sessionId: r.session_id as string,
-    turnSeq: r.turn_seq == null ? null : Number(r.turn_seq),
-    step: Number(r.step),
-    model: r.model as string,
-    scopeLabel: r.scope_label as ScopeId,
-    createdAt: Number(r.created_at),
-    promptHash: r.prompt_hash == null ? null : (r.prompt_hash as string),
-    ...(r.prompt_body != null ? { promptEnvelope: JSON.parse(r.prompt_body as string) } : {}),
-    truncated: Boolean(r.truncated),
-    usage: r.usage_json != null ? (JSON.parse(r.usage_json as string) as LlmRequestRecord["usage"]) : null,
-    transport:
-      r.transport_json != null ? (JSON.parse(r.transport_json as string) as LlmRequestRecord["transport"]) : null,
-  };
-}
-
-const SEARCH_TIMEOUT_MS = 10_000;
+import { LIST_COLUMNS, rowToParticipantSession, rowToSession } from "./session-rows.ts";
+import { cronIdOf, sessionOrigin } from "./session-store.ts";
+import { TENANT } from "./items.ts";
 
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
@@ -206,94 +180,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map(rowToSession);
     },
 
-    async recordLlmRequest(sessionId, rec: NewLlmRequest): Promise<LlmRequestRecord> {
-      const envelope = promptEnvelopeBody(rec.promptEnvelope);
-      if (envelope) {
-        await q(
-          `INSERT INTO llm_prompt_envelopes(hash, body, created_at) VALUES ($1,$2,$3)
-           ON CONFLICT (tenant_id, hash) DO UPDATE SET created_at = EXCLUDED.created_at
-            WHERE llm_prompt_envelopes.created_at < EXCLUDED.created_at - ${ENVELOPE_TOUCH_MS}`,
-          [envelope.hash, envelope.body, now()],
-        );
-      }
-      const full: LlmRequestRecord = {
-        id: randomUUID(),
-        sessionId,
-        turnSeq: rec.turnSeq,
-        step: rec.step,
-        model: rec.model,
-        scopeLabel: rec.scopeLabel as ScopeId,
-        createdAt: now(),
-        promptHash: envelope?.hash ?? null,
-        ...(rec.promptEnvelope !== undefined ? { promptEnvelope: rec.promptEnvelope } : {}),
-        truncated: rec.truncated ?? false,
-        usage: rec.usage ?? null,
-        transport: rec.transport ?? null,
-      };
-      await q(
-        "INSERT INTO session_llm_requests(id, session_id, turn_seq, step, model, scope_label, prompt_hash, truncated, created_at, usage_json, transport_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-        [
-          full.id,
-          full.sessionId,
-          full.turnSeq,
-          full.step,
-          full.model,
-          full.scopeLabel,
-          full.promptHash,
-          full.truncated,
-          full.createdAt,
-          full.usage ? JSON.stringify(full.usage) : null,
-          full.transport ? JSON.stringify(full.transport) : null,
-        ],
-      );
-      return full;
-    },
-
-    async listLlmRequests(sessionId, opts): Promise<LlmRequestRecord[]> {
-      const cols = opts?.omitRequest
-        ? "r.id, r.session_id, r.turn_seq, r.step, r.model, r.scope_label, r.created_at, r.truncated, r.prompt_hash, r.usage_json, r.transport_json"
-        : "r.*, e.body AS prompt_body";
-      const from = opts?.omitRequest
-        ? "session_llm_requests r"
-        : "session_llm_requests r LEFT JOIN llm_prompt_envelopes e ON e.hash = r.prompt_hash";
-      const conds = ["r.session_id = $1"];
-      const args: unknown[] = [sessionId];
-      const turnSeqs = opts?.turnSeqs;
-      if (turnSeqs) {
-        args.push(turnSeqs);
-        conds.push(
-          opts?.orphans
-            ? `(r.turn_seq = ANY($${args.length}) OR r.turn_seq IS NULL)`
-            : `r.turn_seq = ANY($${args.length})`,
-        );
-      } else if (opts?.orphans) {
-        conds.push("r.turn_seq IS NULL");
-      }
-      const rows = await q(
-        `SELECT ${cols} FROM ${from} WHERE ${conds.join(" AND ")} ORDER BY r.created_at ASC, r.step ASC`,
-        args,
-      );
-      return rows.map(rowToLlmRequest);
-    },
-
-    async purgeLlmCaptures(cutoff, opts) {
-      const deadline = opts?.deadline ?? Infinity;
-      let envelopes = 0;
-      while (Date.now() < deadline && !opts?.stop?.()) {
-        const deleted = await claimAcrossTenants(
-          db,
-          `DELETE FROM llm_prompt_envelopes
-            WHERE (tenant_id, hash) IN (SELECT tenant_id, hash FROM llm_prompt_envelopes WHERE created_at < $1
-                            ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED)
-              AND created_at < $1`,
-          [cutoff, LLM_CAPTURE_PURGE_BATCH],
-        );
-        envelopes += deleted.rowCount;
-        if (deleted.rowCount < LLM_CAPTURE_PURGE_BATCH) break;
-      }
-      return envelopes;
-    },
-
     async deleteSession(sessionId): Promise<void> {
       await withPgTransaction(await pool(), async (client) => {
         await lockSession(client, sessionId);
@@ -397,59 +283,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return res.length > 0;
     },
 
-    async searchSessionTitles(principalId, query, limit = 20): Promise<Session[]> {
-      const needle = query.trim();
-      if (needle.length < 2) return [];
-      const like = `%${needle.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-      const rows = await q(
-        participantSessionsSql(` AND ${OWN_CHAT("s")} AND COALESCE(p.title, s.title) ILIKE $2`) +
-          " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $3",
-        [principalId, like, Math.max(1, Math.min(Math.floor(limit), 100))],
-        { timeoutMs: SEARCH_TIMEOUT_MS },
-      );
-      return rows.map(rowToParticipantSession);
-    },
-
-    async searchEntries(principalId, query, limit = 40): Promise<EntrySearchHit[]> {
-      const ts = tsPrefixQuery(query);
-      if (!ts) return [];
-      const rows = await q(
-        `SELECT i.session_id, i.seq, ${searchTypeExpr("i")} AS type,
-                CASE WHEN i.kind IN ${USER_KINDS} AND jsonb_typeof(i.body -> 'name') = 'string'
-                     THEN i.body ->> 'name' END AS author,
-                i.text, ${msOf("i.created_at")} AS created_at,
-                s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
-           FROM items i
-           JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $1
-           JOIN sessions s ON s.id = i.session_id AND ${OWN_CHAT("s")}
-          WHERE i.tenant_id = ${TENANT} AND i.search @@ to_tsquery('simple', $2)
-            AND ${SEARCHABLE_ITEM("i")}
-          ORDER BY i.created_at DESC, i.session_id, i.seq DESC
-          LIMIT $3`,
-        [principalId, ts, Math.max(1, Math.min(limit, 200))],
-        { timeoutMs: SEARCH_TIMEOUT_MS },
-      );
-      return rows.flatMap((r) => {
-        const text = (r.text as string | null) ?? "";
-        if (!text.trim()) return [];
-        return [
-          {
-            sessionId: r.session_id as string,
-            scopeId: r.scope_id as ScopeId,
-            ...(r.title != null ? { title: r.title as string } : {}),
-            ...(r.channel_name ? { channelName: r.channel_name as string } : {}),
-            ...(r.surface ? { surface: r.surface as string } : {}),
-            ...(r.archived ? { archived: true } : {}),
-            seq: Number(r.seq),
-            type: r.type as EntrySearchHit["type"],
-            ...(r.author ? { author: r.author as string } : {}),
-            text,
-            createdAt: Number(r.created_at),
-          },
-        ];
-      });
-    },
-
     async listByScope(scope): Promise<Session[]> {
       const rows = await q("SELECT * FROM sessions WHERE scope_id = $1 ORDER BY created_at DESC, id DESC", [scope]);
       return rows.map(rowToSession);
@@ -482,6 +315,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       }));
     },
 
+    ...createSessionSearch(q),
+    ...createLlmCaptures({ db, now }),
     ...createSessionItems({ db, now }),
     ...createSessionParticipants(q),
     ...createSessionAdminReads(q),

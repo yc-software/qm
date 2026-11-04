@@ -26,11 +26,6 @@ import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-re
 import { createProductAnalytics } from "./util/product-analytics.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
-import {
-  createBackgroundOwnershipStore,
-  type BackgroundOwnershipControl,
-  type BackgroundOwnership,
-} from "./runs/background-ownership.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
@@ -161,7 +156,7 @@ import { createPostgresDirectoryStore } from "./directory/postgres-directory-sto
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
-import { forEachTenant, inInstallTenant, inTenantOf, listTenants, type TenantRow } from "./tenants/claim.ts";
+import { forEachTenant, inTenantOf, listTenants, type TenantRow } from "./tenants/claim.ts";
 import { withoutTenant, withTenant } from "./tenants/context.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { ownerPgPool } from "./tenants/owner-pool.ts";
@@ -346,7 +341,7 @@ import {
   createPostgresInstanceRegistry,
   type InstanceRegistry,
 } from "./runs/instance-registry.ts";
-import { createDrainController, type DrainController } from "./runs/drain.ts";
+import { createDrainController, type BackgroundServices, type DrainController } from "./runs/drain.ts";
 import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
 import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
@@ -419,12 +414,7 @@ import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partn
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
-  start(): void;
-  startBackground(): void;
-  stopBackgroundClaims(): Promise<void>;
-  setBackgroundAdmission(canClaim: () => boolean, active: () => boolean): void;
-  stopBackground(): Promise<void>;
-  backgroundDrained(): Promise<void>;
+  start(services?: BackgroundServices): void;
   stop(): Promise<void>;
   releaseInFlightRuns(): Promise<void>;
 }
@@ -467,9 +457,9 @@ export function stopWithBackstop(
 
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
-  backgroundOwnership?: BackgroundOwnershipControl;
   forEachTenant: (fn: () => Promise<unknown>) => Promise<void>;
   listTenants: () => Promise<TenantRow[]>;
+  drain: DrainController;
   ownSharedState: () => Promise<void>;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
@@ -573,13 +563,10 @@ export function buildApp(
     modelCredentialFetch?: typeof fetch;
     modelVerificationProbe?: typeof probeModel;
     agent?: Agent;
+    canClaimRuns?: () => boolean;
   } = {},
 ): BuiltApp {
-  let backgroundAdmission = () => !config.backgroundDeploymentId;
-  let backgroundActive = () => false;
-  const admittedWork = createAdmittedWork({
-    canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
-  });
+  const admittedWork = createAdmittedWork();
   let turnWaitShutdown = new AbortController();
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
@@ -970,14 +957,12 @@ export function buildApp(
         ...(managedAgents.template ? { template: managedAgents.template } : {}),
         ...(managedAgents.sizeSlug ? { sizeSlug: managedAgents.sizeSlug } : {}),
         ...(managedAgents.idleTimeoutSec ? { idleTimeoutSec: managedAgents.idleTimeoutSec } : {}),
-        ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
       }),
       ...(managedAgents.namePrefix ? { namePrefix: managedAgents.namePrefix } : {}),
       ...(managedAgents.defaultTimeoutSec ? { defaultTimeoutSec: managedAgents.defaultTimeoutSec } : {}),
       ...(managedAgents.snapshotIntervalSec !== undefined
         ? { snapshotIntervalMs: managedAgents.snapshotIntervalSec * 1000 }
         : {}),
-      ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
       extraTools: [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
       credentialPaths: deploymentLayer.credentialPaths,
       layerToolFiles: () => deploymentLayer.installFiles,
@@ -2699,7 +2684,6 @@ export function buildApp(
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
     deleteCron: (id) => app.deleteCron(id),
-    requireQueueStart: Boolean(config.backgroundDeploymentId),
     advisoryLock,
     crons,
     deliveries,
@@ -2775,28 +2759,17 @@ export function buildApp(
     currentScopeMembers,
     resolveRecipient,
   });
-  const ownershipStore = createBackgroundOwnershipStore(artifactMap<BackgroundOwnership>("background_ownership"));
-  const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
-    ? {
-        store: {
-          get: () => inInstallTenant(pgArtifactMap.pool, () => ownershipStore.get()),
-          set: (change) => inInstallTenant(pgArtifactMap.pool, () => ownershipStore.set(change)),
-        },
-        instanceId: randomUUID(),
-        deploymentId: config.backgroundDeploymentId,
-        active: () => backgroundActive(),
-      }
-    : undefined;
+  const deploymentKey = config.backgroundDeploymentId ?? config.buildSha;
   const instanceRegistry: InstanceRegistry =
-    pgArtifactMap && !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled
+    pgArtifactMap && deploymentKey && config.backgroundWorkEnabled
       ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
           instanceId: randomUUID(),
-          buildSha: config.buildSha,
+          deploymentKey,
           startedAt: Date.now(),
         })
       : createNoopInstanceRegistry();
   const drain: DrainController = createDrainController({ registry: instanceRegistry });
-  const canClaimRuns = () => backgroundAdmission() && drain.canClaim();
+  const canClaimRuns = () => drain.canClaim() && (overrides.canClaimRuns?.() ?? true);
   const worker = createWorker({
     admittedWork,
     runs,
@@ -2913,7 +2886,6 @@ export function buildApp(
     if (backgroundRunning) return;
     backgroundRunning = true;
     admittedWork.resume();
-    drain.start();
     const generation = ++backgroundGeneration;
     worker.start();
     preemptionSweeper.start();
@@ -3004,34 +2976,22 @@ export function buildApp(
     return releasing;
   }
   const runtime: Runtime = {
-    start() {
+    start(services = { resume() {}, standDown: async () => {} }) {
       if (turnWaitShutdown.signal.aborted) turnWaitShutdown = new AbortController();
       releasing = null;
       flyTunnel?.monitor();
-      drain.start();
       renderBasePreparing = new AbortController();
       void renderBase
         ?.prepare(renderBasePreparing.signal)
         .catch(reportFailureAs("render-base: prepare the golden snapshot", undefined));
-      if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
-    },
-    startBackground,
-    setBackgroundAdmission(canClaim, active) {
-      backgroundAdmission = canClaim;
-      backgroundActive = active;
-    },
-    async stopBackgroundClaims() {
-      void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
-      await Promise.all([backgroundClaimsStopping, worker.stopClaims()]);
-    },
-    stopBackground,
-    async backgroundDrained() {
-      await backgroundStopping;
-      await Promise.all([admittedWork.drained(), worker.drained()]);
+      if (!config.backgroundWorkEnabled) return;
+      startBackground();
+      drain.start(services);
     },
     releaseInFlightRuns,
     async stop() {
       renderBasePreparing?.abort();
+      const draining = drain.stop();
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
@@ -3040,7 +3000,7 @@ export function buildApp(
         worker.stop(config.shutdownDrainMs),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await releaseInFlightRuns();
-      await drain.stop();
+      await draining;
       stopStreamSync();
       await Promise.all(
         [
@@ -3172,10 +3132,8 @@ export function buildApp(
     ...(ambientJudgments ? { ambientJudgments } : {}),
     ...(ackEmojiPicks ? { ackEmojiPicks } : {}),
     channelPolicy,
-    ...(config.suggestedActivitiesEnabled && (config.backgroundWorkEnabled || config.backgroundDeploymentId)
-      ? { suggestedActivities }
-      : {}),
-    ...(backgroundOwnership ? { backgroundOwnership } : {}),
+    ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
+    drain,
     uiState,
     sessionShares: artifactMap<SessionShare>("session_shares"),
     sessionShareBytes:
@@ -3206,11 +3164,14 @@ export function serverDeps(
     resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,
     checkReadiness: built.checkReadiness,
-    ...(built.backgroundOwnership
+    ...(config.backgroundDeploymentId && config.backgroundWorkEnabled
       ? {
-          backgroundOwnership: built.backgroundOwnership,
           deploymentControlSecret: config.deploymentControlSecret,
-          deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
+          deploymentLiveSmoke: {
+            deploymentId: config.backgroundDeploymentId,
+            superseded: () => !built.drain.canClaim(),
+            run: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
+          },
         }
       : {}),
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,
