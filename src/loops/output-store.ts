@@ -94,7 +94,9 @@ export function createLoopOutputStore(
     (await backing.all()).filter((output) => output.loopId === loopId);
 
   const byItem = async (itemId: string): Promise<LoopOutput[]> =>
-    (await backing.all()).filter((output) => output.itemId === itemId);
+    (await backing.select({ where: { field: "itemId", anyOfFold: [itemId] } })).filter(
+      (output) => output.itemId === itemId,
+    );
   const byAttempt = async (itemId: string, attemptId: string): Promise<LoopOutput[]> =>
     (await backing.all()).filter((output) => output.itemId === itemId && output.attemptId === attemptId);
   const atomicUpdate = backing.update.bind(backing);
