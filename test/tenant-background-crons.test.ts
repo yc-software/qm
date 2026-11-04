@@ -17,12 +17,13 @@ import { createLoopIngress, type IngressDelivery, type LoopIngress } from "../sr
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
+import { createApprovalStore } from "../src/slack/approval-store.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { TENANCY } from "../src/tenants/migrations.ts";
 import { useOwnerDatabase } from "../src/tenants/owner-pool.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
-import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { scopeId, type PendingApprovalRecord, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { Cron, Monitor } from "../src/triggers/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { settle } from "./support/settle.ts";
@@ -338,6 +339,54 @@ test("loop ingress maintenance renews, processes and prunes each tenant's source
     );
   } finally {
     await maps.pool.close();
+    await admin.end();
+  }
+});
+
+function approval(threadRef: string): PendingApprovalRecord {
+  return {
+    sessionId: threadRef,
+    command: "publish",
+    createdAt: 1,
+    request: {
+      surface: "slack",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef },
+      text: "publish report",
+    },
+    kind: "input",
+    grantModes: { session: false, always: false },
+  };
+}
+
+test("approval redelivery enqueues each tenant's pending approval under that tenant", { skip }, async () => {
+  const { url, admin } = await twoTenants();
+  const ownerMaps = createPostgresMapFactory(url);
+  const ownerApprovals = ownerMaps.map<PendingApprovalRecord>("pending_approvals");
+  for (const [tenant, suffix] of PAIRS)
+    await withTenant(tenant, () => ownerApprovals.put(`ap-${suffix}`, approval(`dm:${suffix}`)));
+  const login = await restrictedLogin(admin, url);
+  useOwnerDatabase(url);
+  const appMaps = createPostgresMapFactory(login.url);
+  try {
+    const enqueued: Array<[string | undefined, string | undefined]> = [];
+    const store = createDeliveryStore();
+    const approvals = createApprovalStore(appMaps.map<PendingApprovalRecord>("pending_approvals"), {
+      enqueue: async (delivery) => {
+        enqueued.push([delivery.destination.commandApprovalId, boundTenant()]);
+        return store.enqueue(delivery);
+      },
+    });
+    await approvals.deliverPending();
+    assert.deepEqual(enqueued.sort(), [
+      ["ap-a", A],
+      ["ap-b", B],
+    ]);
+  } finally {
+    useOwnerDatabase(undefined);
+    await appMaps.pool.close();
+    await ownerMaps.pool.close();
+    await login.drop();
     await admin.end();
   }
 });

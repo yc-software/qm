@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { reportFailureAs } from "../util/errors.ts";
 import { verifyCapabilityToken, type VerifiedCapability } from "../auth/capability-token.ts";
 import { isTenantId, withTenant } from "../tenants/context.ts";
 import { tenantSettings } from "../tenants/settings.ts";
@@ -48,9 +49,16 @@ async function claimedTenant(
   return claims.tenant ? { tenant: claims.tenant } : {};
 }
 
-function bindTenant(tenant: string, next: () => Promise<void> | void): Promise<void> {
+let loadTenantCaches: (() => Promise<void>) | undefined;
+
+export function configureTenantCaches(load: (() => Promise<void>) | undefined): void {
+  loadTenantCaches = load;
+}
+
+export function bindTenant(tenant: string, next: () => Promise<void> | void): Promise<void> {
   return withTenant(tenant, async () => {
     await tenantSettings();
+    await loadTenantCaches?.().catch(reportFailureAs("tenants: load tenant caches", undefined));
     await next();
   });
 }

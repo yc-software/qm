@@ -43,6 +43,7 @@ export interface DeliveryStore {
     shadow?: boolean;
   }): Promise<Delivery>;
   pending(type: string): Promise<Delivery[]>;
+  pendingAcrossTenants(type: string): Promise<Delivery[]>;
   claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
@@ -116,6 +117,9 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       byKey.set(delivery.idempotencyKey, delivery.id);
       if (!delivery.shadow) for (const l of enqueueListeners) l();
       return delivery;
+    },
+    async pendingAcrossTenants(type) {
+      return this.pending(type);
     },
     async pending(type) {
       return [...deliveries.values()].filter(

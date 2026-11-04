@@ -169,7 +169,7 @@ const RUN_STALL_BUDGET_MS = 300_000;
 
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
   const lease = deps.leaderLease;
-  const orgScope: ScopeId = scopeId("org", configOrgId());
+  const orgScope = (): ScopeId => scopeId("org", configOrgId());
 
   return {
     decideDeploymentAccess: (value, actor, approve) =>
@@ -191,21 +191,21 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         }
       : {}),
     async externalSlackParticipants() {
-      return (await deps.config.getExternalSlackParticipantsDurable(orgScope)) === true;
+      return (await deps.config.getExternalSlackParticipantsDurable(orgScope())) === true;
     },
 
     async ackEmojiOverride() {
-      return await deps.config.getAckEmojiDurable(orgScope);
+      return await deps.config.getAckEmojiDurable(orgScope());
     },
 
     async publishEmojiCatalog(emoji) {
-      await deps.config.setSlackEmojiCatalog(orgScope, emoji);
+      await deps.config.setSlackEmojiCatalog(orgScope(), emoji);
     },
 
     async surfaceHeaderFacts(scope) {
       const [choice, branding] = await Promise.all([
-        resolveRuntimeChoice(deps.config, orgScope, scope, deps.runtimeFallback),
-        resolveBranding(deps.config, orgScope, deps.brandingDefault),
+        resolveRuntimeChoice(deps.config, orgScope(), scope, deps.runtimeFallback),
+        resolveBranding(deps.config, orgScope(), deps.brandingDefault),
       ]);
       return {
         ...(branding.selfLabel ? { agentLabel: branding.selfLabel } : {}),

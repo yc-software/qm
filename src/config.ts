@@ -1,4 +1,6 @@
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
+import { cacheTenant, isInstallTenant } from "./tenants/context.ts";
+import { loadedTenantSettings, tenantSettingsLoaded } from "./tenants/settings.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
@@ -203,8 +205,16 @@ export function companySubscriptionAuth(config: Config): ModelProvider | undefin
 
 const DEFAULT_ORG_ID = "default-org";
 
+export function tenantOrgId(fallback: string): string {
+  const configured = loadedTenantSettings().orgId;
+  if (configured) return configured;
+  if (isInstallTenant()) return fallback;
+  if (!tenantSettingsLoaded()) throw new Error("This tenant's settings are not loaded for this work");
+  return cacheTenant();
+}
+
 export function orgId(): string {
-  return process.env.ORG_ID ?? DEFAULT_ORG_ID;
+  return tenantOrgId(process.env.ORG_ID ?? DEFAULT_ORG_ID);
 }
 
 export function orgScope(): string {

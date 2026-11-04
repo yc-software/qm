@@ -1,4 +1,4 @@
-import { withoutTenant } from "./tenant.ts";
+import { boundTenant } from "./tenant.ts";
 export interface OrgBranding {
   orgName?: string;
   accent?: string;
@@ -17,44 +17,58 @@ export interface BrandingCache {
   refreshNow(): Promise<void>;
 }
 
-export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): BrandingCache {
-  let value: OrgBranding = {};
-  let warmed = false;
-  let nextAt = 0;
-  let inflight: Promise<void> | null = null;
+interface BrandingState {
+  value: OrgBranding;
+  warmed: boolean;
+  nextAt: number;
+  inflight: Promise<void> | null;
+}
 
-  const kick = (): void => {
-    if (inflight || Date.now() < nextAt) return;
-    inflight = (async () => {
+export function createBrandingCache(fetchBranding: () => Promise<OrgBranding>): BrandingCache {
+  const states = new Map<string, BrandingState>();
+  const state = (): BrandingState => {
+    const key = boundTenant() ?? "";
+    const existing = states.get(key);
+    if (existing) return existing;
+    const fresh: BrandingState = { value: {}, warmed: false, nextAt: 0, inflight: null };
+    states.set(key, fresh);
+    return fresh;
+  };
+
+  const kick = (current: BrandingState): void => {
+    if (current.inflight || Date.now() < current.nextAt) return;
+    current.inflight = (async () => {
       try {
-        value = await withoutTenant(fetchBranding);
-        if (process.env.BRANDING_DEBUG) console.error("[branding] fetched:", JSON.stringify(value));
-        warmed = true;
-        nextAt = Date.now() + REFRESH_MS;
+        current.value = await fetchBranding();
+        if (process.env.BRANDING_DEBUG) console.error("[branding] fetched:", JSON.stringify(current.value));
+        current.warmed = true;
+        current.nextAt = Date.now() + REFRESH_MS;
       } catch (err) {
         if (process.env.BRANDING_DEBUG) console.error("[branding] fetch failed:", String(err));
-        nextAt = Date.now() + RETRY_MS;
+        current.nextAt = Date.now() + RETRY_MS;
       } finally {
-        inflight = null;
+        current.inflight = null;
       }
     })();
   };
-  setTimeout(kick, 0);
+  setTimeout(() => kick(state()), 0);
 
   return {
-    current: () => value,
+    current: () => state().value,
     async forRender(): Promise<OrgBranding> {
-      kick();
-      if (!warmed && inflight) {
-        await Promise.race([inflight, new Promise((r) => setTimeout(r, FIRST_RENDER_WAIT_MS))]);
+      const current = state();
+      kick(current);
+      if (!current.warmed && current.inflight) {
+        await Promise.race([current.inflight, new Promise((r) => setTimeout(r, FIRST_RENDER_WAIT_MS))]);
       }
-      return value;
+      return current.value;
     },
     async refreshNow(): Promise<void> {
-      if (inflight) await inflight;
-      nextAt = 0;
-      kick();
-      if (inflight) await inflight;
+      const current = state();
+      if (current.inflight) await current.inflight;
+      current.nextAt = 0;
+      kick(current);
+      if (current.inflight) await current.inflight;
     },
   };
 }
