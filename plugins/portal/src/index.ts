@@ -464,10 +464,11 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
   };
 }
 
-const hostTenantOf = new WeakMap<IncomingMessage, HostTenant>();
+const hostTenantOf = new WeakMap<IncomingMessage, HostTenant & { host: string }>();
 
 function tenantHostOf(req: IncomingMessage): string | undefined {
-  return hostTenantOf.get(req)?.multi && boundTenant() ? req.headers.host?.toLowerCase() : undefined;
+  const found = hostTenantOf.get(req);
+  return found?.multi && boundTenant() ? found.host : undefined;
 }
 
 function sessionTenantClaim(): { t?: string } {
@@ -974,7 +975,7 @@ const server = createServer((req, res) => {
   });
   const lookup = async (host: string): Promise<HostTenant> => {
     const found = await hostTenants(host);
-    hostTenantOf.set(req, found);
+    hostTenantOf.set(req, { ...found, host });
     return found;
   };
   const served = isAppHost(req) ? handle(req, res) : inHostTenant(lookup, req, res, () => handle(req, res));
