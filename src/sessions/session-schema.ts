@@ -412,6 +412,11 @@ END $session_facts$`,
   ],
 };
 
+const MESSAGE_SEARCH_DIRECT_INSERT: PgMigrationDefinition = {
+  id: "sessions/store/0055-message-search-direct-insert",
+  statements: [`SET LOCAL lock_timeout = '5s'`, `ALTER INDEX IF EXISTS items_message_search SET (fastupdate = off)`],
+};
+
 export const SESSION_MIGRATIONS = [
   TENANCY_BASE,
   SESSION_SCHEMA,
@@ -421,4 +426,5 @@ export const SESSION_MIGRATIONS = [
   SPEND_RECOVERY_INDEX,
   SESSION_FACTS,
   SESSION_FACTS_COPY,
+  MESSAGE_SEARCH_DIRECT_INSERT,
 ];

@@ -1276,6 +1276,19 @@ test("pg sessions table indexes scoped activity pages", { skip }, async () => {
   }
 });
 
+test("pg message search index takes inserts directly instead of through a pending list", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  await s.scanAll();
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  try {
+    const result = await raw.query("SELECT reloptions FROM pg_class WHERE relname = 'items_message_search'");
+    assert.deepEqual(result.rows[0]?.reloptions, ["fastupdate=off"]);
+  } finally {
+    await raw.end();
+  }
+});
+
 test("pg append debounces last_activity by 60s but keeps counters exact", { skip }, async () => {
   const nowRef = { v: 20_000_000_000 };
   const t0 = nowRef.v;
