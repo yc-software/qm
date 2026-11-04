@@ -13,6 +13,7 @@ const b = randomUUID();
 const hosts: Record<string, { tenant: string; multi: boolean; sole: boolean }> = {
   "a.example.test": { tenant: a, multi: true, sole: false },
   "b.example.test": { tenant: b, multi: true, sole: false },
+  "notes.apps.b.example.test": { tenant: a, multi: true, sole: false },
 };
 const coreSeen: Array<{ host?: string; appHost?: string; path?: string }> = [];
 const upstream = createServer((req, res) => {
@@ -137,4 +138,11 @@ test("tenant app hosts parse into the app and the tenant host, nothing looser", 
   assert.equal(parseTenantAppHost("notes.apps.localhost", "apps"), undefined);
   assert.equal(tenantAppsSubdomain(" Apps "), "apps");
   assert.throws(() => tenantAppsSubdomain("apps.x"));
+});
+
+test("a host that is one tenant's web host and another tenant's app host is refused, never served as either", async () => {
+  const before = coreSeen.length;
+  const res = await send("notes.apps.b.example.test", "/");
+  assert.equal(res.status, 404);
+  assert.equal(coreSeen.slice(before).filter((c) => c.appHost || c.path === "/").length, 0, "nothing proxied");
 });

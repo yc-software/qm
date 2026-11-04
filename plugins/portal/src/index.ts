@@ -1025,7 +1025,18 @@ async function serveTenantHost(
   lookup: (host: string) => Promise<HostTenant>,
 ): Promise<void> {
   const appHost = host && TENANT_APPS_SUBDOMAIN ? parseTenantAppHost(host, TENANT_APPS_SUBDOMAIN) : undefined;
-  if (appHost && !(await lookup(host!)).tenant) {
+  if (appHost) {
+    const owner = (await lookup(appHost.tenantHost)).tenant;
+    const self = (await lookup(host!)).tenant;
+    // One host that is both a tenant's web host and an app host of another tenant is ambiguous:
+    // serving it either way lets one tenant's address stand in for the other's. Refuse it.
+    if (self && owner) {
+      console.error("[portal] host %s is a tenant web host and an app host of another tenant; refused", host);
+      req.resume();
+      return json(res, 404, { error: "not_found" });
+    }
+  }
+  if (appHost && !hostTenantOf.get(req)?.tenant) {
     if (!(await lookup(appHost.tenantHost)).tenant) {
       req.resume();
       return json(res, 404, { error: "not_found" });
