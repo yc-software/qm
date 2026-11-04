@@ -799,6 +799,11 @@ export function serviceSecretValue(
   return value;
 }
 
+export interface SecretValues {
+  values: ReadonlyMap<string, string>;
+  source: "complete" | "partial";
+}
+
 function requiresOtherEmailTransport(config: QmConfig, condition: SecretCondition): boolean {
   if (condition.kind === "all")
     return condition.conditions.some((nested) => requiresOtherEmailTransport(config, nested));

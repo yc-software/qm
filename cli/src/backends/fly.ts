@@ -1516,7 +1516,7 @@ export async function flyDoctor(config: QmConfig, configDir: string, envFile?: s
   const localSecrets = localDoctorSecrets(configDir, envFile);
   verifyLocalFlyTokens(config, localSecrets);
   note("Live credential checks use local values; Fly does not expose stored secret values.");
-  await doctorCommon(config, localSecrets, { configDir, allowMissingValues: true });
+  await doctorCommon(config, { values: localSecrets, source: "partial" }, { configDir, allowMissingValues: true });
 }
 
 export function verifyLocalFlyTokens(config: QmConfig, secrets: ReadonlyMap<string, string>): void {

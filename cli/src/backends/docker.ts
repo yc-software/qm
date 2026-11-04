@@ -612,7 +612,7 @@ export async function dockerDoctor(config: QmConfig, configDir: string, envFile?
   const missing = missingRequiredOperatorSecrets(config, values);
   if (missing.length) throw new CliError(`required secrets are missing or placeholders: ${missing.join(", ")}`);
   step("required operator secret values: ok");
-  await doctorCommon(config, values, { configDir });
+  await doctorCommon(config, { values, source: "complete" }, { configDir });
 }
 
 export async function dockerUp(
