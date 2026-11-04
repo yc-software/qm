@@ -14,7 +14,7 @@ export async function openRuntime(
   validate: (choice: OpenRuntime) => Promise<void>,
   defaultModel: () => Promise<string | undefined>,
 ): Promise<OpenRuntime> {
-  if (!input.model && parent.model && parent.model !== (await defaultModel())) {
+  if (!input.model && parent.model && parent.model !== (await defaultModel().catch(() => undefined))) {
     const inherited = {
       model: parent.model,
       thinkingLevel: input.thinkingLevel ?? parent.thinkingLevel,

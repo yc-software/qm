@@ -8,6 +8,7 @@ import { stopAtEnd } from "./support/build-app.ts";
 import { scopeId, type Principal } from "../src/types.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { SessionSyscallBinding } from "../src/sessions/session-syscalls.ts";
+import { openRuntime } from "../src/sessions/subagent-runtime.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 const scope = scopeId("personal", "U1");
@@ -142,4 +143,16 @@ test("a parent that switched back to its default leaves the child on the subagen
     thinkingLevel: undefined,
     fastMode: undefined,
   });
+});
+
+test("a parent that left a default which no longer resolves still passes its runtime on", async () => {
+  const inherited = await openRuntime(
+    { task: "draft one article" },
+    { model: "gpt-6.1-sol", thinkingLevel: "high" },
+    async () => {},
+    async () => {
+      throw new Error("stored default is unavailable");
+    },
+  );
+  assert.deepEqual(inherited, { model: "gpt-6.1-sol", thinkingLevel: "high", fastMode: undefined });
 });
