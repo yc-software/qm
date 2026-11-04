@@ -434,7 +434,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       return block("strict-verdict", verdict?.reason);
     },
 
-    async regenerateTitle(sessionId, principalId) {
+    async regenerateTitle(sessionId, principalId, personal) {
       const session = await deps.sessions.get(sessionId);
       if (!session) return null;
       Object.assign(currentModelRequestContext(), {
@@ -451,9 +451,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         session.id,
         session.scopeId,
         transcript,
+        personal ? principalId : undefined,
         fallbackEntry ? visibleTitleEntryText(fallbackEntry) : undefined,
       );
-      return { title: title ?? session.title ?? null };
+      return { title: title ?? (personal ? null : (session.title ?? null)) };
     },
 
     async handleTurn(input: OrchestratorInput): Promise<TurnResult> {

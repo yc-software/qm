@@ -1051,8 +1051,14 @@ export function createSessionMethods(
     },
 
     async regenerateTitle(sessionId, principalId) {
-      if (!(await sessionForViewer(sessionId, principalId))) return null;
-      return deps.orchestrator.regenerateTitle(sessionId, principalId);
+      const session = await sessionForViewer(sessionId, principalId);
+      if (!session) return null;
+      const parsed = parseScopeId(session.scopeId);
+      return deps.orchestrator.regenerateTitle(
+        sessionId,
+        principalId,
+        parsed.kind === "group" && projectIdFromGroupRef(parsed.ref) !== null,
+      );
     },
 
     async forkSession(sessionId, principalId, opts) {
