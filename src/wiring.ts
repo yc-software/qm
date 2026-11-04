@@ -2954,7 +2954,6 @@ export function buildApp(
     ownSharedState: async () => {
       ownsSharedState = true;
       await rewriteSurfaceOrigins(pgArtifactMap.pool);
-      await sandboxResources.initialize();
       const backfilledFires = await crons.backfillFires();
       if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
       await Promise.all([
