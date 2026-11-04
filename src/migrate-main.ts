@@ -1,9 +1,19 @@
 import { loadConfig } from "./config.ts";
 import { createPostgresAppPageViewLog } from "./deploy/page-views.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
-import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { createPostgresVectorStore } from "./memory/postgres-vector-store.ts";
+import { createPgPool, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { buildApp } from "./wiring.ts";
+
+async function vectorExtensionAvailable(databaseUrl: string): Promise<boolean> {
+  const pool = createPgPool(databaseUrl);
+  try {
+    return (await pool.q("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")).length > 0;
+  } finally {
+    await pool.close();
+  }
+}
 
 const config = loadConfig();
 const built = buildApp(config);
@@ -12,6 +22,7 @@ try {
     createPostgresFileUploadStore(config.databaseUrl);
     createPostgresAppPageViewLog(config.databaseUrl);
     createPostgresBudgetTracker(config.databaseUrl);
+    if (await vectorExtensionAvailable(config.databaseUrl)) createPostgresVectorStore(config.databaseUrl);
   }
   await migrateRegisteredPgSchemas(config.databaseUrl);
   await built.rewriteSurfaceOrigins();
