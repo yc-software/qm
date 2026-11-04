@@ -93,7 +93,7 @@ import {
   type CoreSession,
   type UiStateRecord,
 } from "./core-bridge";
-import { isDesktopEmbed, isPhone, onPhoneChange } from "./viewport";
+import { isCompactLayout, onPhoneChange } from "./viewport";
 
 export const splitState = {
   active: false,
@@ -439,7 +439,7 @@ export function exitSplitIfActive(): void {
 function adoptPersisted(raw: unknown): void {
   if (!raw || typeof raw !== "object") return;
 
-  if (isPhone() || isDesktopEmbed()) {
+  if (isCompactLayout()) {
     if (typeof (raw as { updatedAt?: unknown }).updatedAt === "number")
       persistedUpdatedAt = (raw as { updatedAt: number }).updatedAt;
     pendingSeed = null;
@@ -503,7 +503,7 @@ export function restoredCanvasNeedsSessionList(): boolean {
 }
 
 export function mountRestoredCanvas(restoreOnly = false): boolean {
-  if (isPhone() || isDesktopEmbed() || (restoreOnly && !splitState.active)) return false;
+  if (isCompactLayout() || (restoreOnly && !splitState.active)) return false;
   splitState.active = true;
   if (!ensureCanvas() || !dockApi) return false;
   if (dockApi.panels.length === 0) addPane({});
