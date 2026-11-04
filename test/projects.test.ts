@@ -366,6 +366,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.ok(projectRoutes.every((route) => route.auth === "either"));
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-lean-")) });
   const built = buildApp(config);
+  await built.loadTenants();
   const server = createInsecureTestServer(built.app, {});
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -1175,6 +1176,7 @@ test("a project can add a signed-in principal on a deployment whose directory is
 
 test("Slack-linked project turns use the inherited channel roster", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "projects-linked-roster-")) }));
+  await built.loadTenants();
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "chan-pal", displayName: "Channel Pal", type: "internal" },
