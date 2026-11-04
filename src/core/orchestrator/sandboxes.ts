@@ -47,7 +47,7 @@ interface Release {
   handle: SandboxHandle;
   scoped: boolean;
   unchanged: boolean;
-  ephemeral?: [string, Slot];
+  ephemeral: [string, Slot] | undefined;
 }
 
 export interface TurnSandboxContext {
@@ -100,8 +100,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const open = (
     key: string,
     create: (slot: Slot) => Promise<SandboxHandle>,
-    policy?: string,
-    ephemeral = false,
+    { policy, ephemeral = false }: { policy?: string; ephemeral?: boolean } = {},
   ): Promise<SandboxHandle> => {
     const slot = pool.get(key) ?? { opening: null, pending: false, ready: null, ephemeral, handles: [] };
     pool.set(key, slot);
@@ -358,7 +357,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         if (!crossScope) await prepareTurnFiles(handle);
         return handle;
       },
-      policy,
+      { policy },
     );
   };
 
@@ -382,8 +381,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           throw error;
         }
       },
-      undefined,
-      true,
+      { ephemeral: true },
     );
   };
   const clearTurnFiles = (handle: SandboxHandle): Promise<void> =>
@@ -490,7 +488,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           handle: seen?.scoped ? seen.handle : handle,
           scoped: scoped || !!seen?.scoped,
           unchanged: (seen?.unchanged ?? true) && scoped && !scopedUsed,
-          ...(slot.ephemeral || seen?.ephemeral ? { ephemeral: seen?.ephemeral ?? [key, slot] } : {}),
+          ephemeral: slot.ephemeral ? [key, slot] : seen?.ephemeral,
         });
       }
     let live: Promise<Set<string | undefined>> | undefined;
