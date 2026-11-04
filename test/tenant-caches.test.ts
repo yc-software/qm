@@ -29,7 +29,11 @@ import { createSpendLimits } from "../src/ratelimit/spend-limits.ts";
 import { createBrandingCache } from "../plugins/chassis/src/branding.ts";
 import { createAdminGrantStore, type AdminGrant } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
-import type { SpendRow } from "../src/sessions/session-store.ts";
+import type { ScopeActivity, SessionStore, SpendRow } from "../src/sessions/session-store.ts";
+import { selectableModelCatalog } from "../src/model/model-catalog.ts";
+import { scopeActivity } from "../src/api/routes/admin/scope-activity.ts";
+import { setMentionIndex, toSlackMrkdwn } from "../src/slack/mrkdwn.ts";
+import { botIdentityArgs, setDefaultBotIdentity } from "../src/slack/delivery.ts";
 
 const noLock: AdvisoryLock = {
   withLock: (_key, fn) => fn(),
@@ -282,6 +286,78 @@ test("spend totals are cached per tenant", async () => {
   assert.equal((await withTenant(A, () => limits.status(org)))?.over, "daily");
   assert.equal((await withTenant(B, () => limits.status(org)))?.over, null);
   assert.deepEqual(reports, [A, B]);
+});
+
+test("each tenant's model catalog lists only its own custom models", async () => {
+  const tenants = [randomUUID(), randomUUID()];
+  for (const tenant of tenants)
+    withTenant(tenant, () =>
+      setCustomProviders([
+        {
+          id: `p${tenant.slice(0, 8)}`,
+          name: tenant,
+          protocol: "openai",
+          baseUrl: "https://custom.example/v1",
+          models: [{ id: `model-${tenant}` }],
+        },
+      ]),
+    );
+  const fetcher = (async () => Response.json({ data: [] })) as unknown as typeof fetch;
+  const customIds = (models: Array<{ id: string }>) => models.map((m) => m.id).filter((id) => id.startsWith("custom/"));
+  const catalogs = () =>
+    Promise.all(tenants.map((tenant) => withTenant(tenant, () => selectableModelCatalog(fetcher))));
+  for (const run of [await catalogs(), await catalogs()])
+    assert.deepEqual(
+      run.map(customIds),
+      tenants.map((tenant) => [`custom/p${tenant.slice(0, 8)}/model-${tenant}`]),
+    );
+  for (const tenant of tenants) withTenant(tenant, () => setCustomProviders([]));
+});
+
+test("admin scope activity counts are kept per tenant", async () => {
+  const activity = (scope: string): ScopeActivity => ({
+    scopeId: scopeId("org", scope),
+    conversations: 1,
+    crons: 0,
+    background: 0,
+    lastActivity: 0,
+  });
+  const store = {
+    scopeActivity: async () => [activity(boundTenant() === A ? "a" : "b")],
+  } as unknown as SessionStore;
+  const scopes = (tenant: string) => withTenant(tenant, () => [...(scopeActivity(store)?.byScope.keys() ?? [])]);
+  scopes(A);
+  scopes(B);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(scopes(A), [scopeId("org", "a")]);
+  assert.deepEqual(scopes(B), [scopeId("org", "b")]);
+});
+
+test("Slack mention names and bot identity stay with their tenant", () => {
+  withTenant(A, () => {
+    setMentionIndex(new Map([["alice", "UA"]]));
+    setDefaultBotIdentity({ username: "Bot A" });
+  });
+  withTenant(B, () => {
+    setMentionIndex(new Map([["alice", "UB"]]));
+    setDefaultBotIdentity({ username: "Bot B" });
+  });
+  assert.equal(
+    withTenant(A, () => toSlackMrkdwn("hi @alice")),
+    "hi <@UA>",
+  );
+  assert.equal(
+    withTenant(B, () => toSlackMrkdwn("hi @alice")),
+    "hi <@UB>",
+  );
+  assert.deepEqual(
+    withTenant(A, () => botIdentityArgs()),
+    { username: "Bot A" },
+  );
+  assert.deepEqual(
+    withTenant(B, () => botIdentityArgs()),
+    { username: "Bot B" },
+  );
 });
 
 test("surface branding is fetched and cached per tenant", async () => {
