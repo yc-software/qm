@@ -146,6 +146,14 @@ export function createPartnerChatInbound(deps: {
         audience: humans,
       },
       deliveryTarget: replyTarget,
+      ...(replyTarget !== container
+        ? {
+            deliveryCandidates: [
+              { target: replyTarget, label: "this thread" },
+              { target: container, label: chat.name ? `${chat.name} (the whole chat)` : "the whole chat" },
+            ],
+          }
+        : {}),
       text: message.body,
       origin: { kind: "human", messageTs: ts },
       async: true,

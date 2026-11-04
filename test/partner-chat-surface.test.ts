@@ -231,11 +231,16 @@ test("a post into another message's thread keeps the chat id", async () => {
   }
 });
 
-test("a cron created in a partner chat posts into that chat when it fires", async () => {
+test("a turn in a partner-chat thread may schedule into the thread or the whole chat, and a whole-chat cron posts at top level", async () => {
   const { built, partnerChat, deliver } = await partnerChatApp();
   try {
     await deliver(event({ body: "!post sure", mentions: true, eventId: "ev-c", messageId: "1030" }));
     await settle(async () => partnerChat.received.some((r) => r.body.body === "sure"));
+    const [run] = await built.runs.list({ threadRef: `${CONTAINER}:1030` });
+    assert.deepEqual(run?.request.deliveryCandidates, [
+      { target: `${CONTAINER}:1030`, label: "this thread" },
+      { target: CONTAINER, label: "Launch crew (the whole chat)" },
+    ]);
     const cron = await built.crons.create({
       schedule: { everyMs: 60_000 },
       message: "standup time",
@@ -246,7 +251,9 @@ test("a cron created in a partner chat posts into that chat when it fires", asyn
     });
     await runNowSettled(built.scheduler, cron.id);
     await settle(async () => partnerChat.received.some((r) => r.body.body === "standup time"));
-    assert.equal(partnerChat.received.find((r) => r.body.body === "standup time")?.body.chat_id, "88");
+    const fired = partnerChat.received.find((r) => r.body.body === "standup time")?.body;
+    assert.equal(fired?.chat_id, "88");
+    assert.equal(fired?.thread_id, undefined);
   } finally {
     await partnerChat.close();
   }
