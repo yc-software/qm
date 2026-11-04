@@ -21,6 +21,7 @@ import {
   normalizeSlackApiUrl,
   slackAccountConfigsFromEnv,
   slackPluginConfigFromEnv,
+  storedSlackEnv,
 } from "./config.ts";
 import { createTurnFlow } from "./turn-flow.ts";
 import { createActorGate, createDenyResponder } from "./allow-from.ts";
@@ -42,7 +43,7 @@ const { App } = bolt;
 
 export type { SlackCoreClient };
 export type { SlackPluginConfig };
-export { normalizeSlackApiUrl, slackAccountConfigsFromEnv, slackPluginConfigFromEnv };
+export { normalizeSlackApiUrl, slackAccountConfigsFromEnv, slackPluginConfigFromEnv, storedSlackEnv };
 
 const slackAccountClients = new Map<
   string,
