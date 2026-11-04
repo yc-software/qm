@@ -30,10 +30,11 @@ export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
       const row = await backing.get(id);
       return row?.recipientId === recipientId && !row.consumed;
     },
-    async wakesFor(recipientId: string): Promise<SessionMessage[]> {
+    async wakesFor(...recipientIds: string[]): Promise<SessionMessage[]> {
+      const recipients = new Set(recipientIds);
       const rows = await backing.select({ where: { field: "wake", anyOfFold: ["true"] } });
       return rows
-        .filter((row) => row.recipientId === recipientId && !row.consumed)
+        .filter((row) => recipients.has(row.recipientId) && !row.consumed)
         .sort((a, b) => a.createdAt - b.createdAt);
     },
     async awaitingWake(afterId?: string): Promise<SessionMessage[]> {

@@ -226,6 +226,7 @@ const detachedAgents = new WeakSet<Agent>();
 interface SubagentStop {
   state: "stopping" | "failed";
   run: number | undefined;
+  error?: string;
 }
 const SUBAGENT_STOP_LABEL = { idle: "Stop", stopping: "Stopping…", failed: "Couldn't stop" };
 interface SettledRowKey {
@@ -2768,8 +2769,12 @@ export function createChatSurface(
       if ((await stopThreadRun(threadRef)) === "ended" && subagentUi.stops.get(id) === stop)
         subagentUi.stops.delete(id);
       refreshTree(rootId);
-    } catch {
-      if (subagentUi.stops.get(id) === stop) stop.state = "failed";
+    } catch (err) {
+      swallow("web-ui: subagent stop", err);
+      if (subagentUi.stops.get(id) === stop) {
+        stop.state = "failed";
+        stop.error = errMessage(err, "Could not stop the subagent.");
+      }
     }
     drawActiveChat();
   }
@@ -2784,10 +2789,11 @@ export function createChatSurface(
 
   function subagentStopTpl(rootId: string, row: SubagentRow): TemplateResult | typeof nothing {
     if (row.state !== "working") return nothing;
-    const stop = subagentUi.stops.get(row.session.id)?.state;
+    const { state: stop, error } = subagentUi.stops.get(row.session.id) ?? {};
     return html`<button
       type="button"
       class="subagent-row-action"
+      title=${error ?? nothing}
       ?disabled=${stop === "stopping"}
       @click=${() => void stopSubagent(rootId, row)}
     >

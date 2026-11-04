@@ -144,6 +144,8 @@ test("a failed row Stop says so in place and lets the person retry", async () =>
     present(stopFor("Schema lane")).click();
     await until(() => stopFor("Schema lane")?.textContent?.trim() === "Couldn't stop");
     assert.equal(present(stopFor("Schema lane")).disabled, false);
+    assert.notEqual(present(stopFor("Schema lane")).title, "");
+    assert.equal(present(stopFor("Backfill lane")).title, "");
     assert.equal(present(stopFor("Backfill lane")).textContent?.trim(), "Stop");
     fixture.failSignal = false;
     present(stopFor("Schema lane")).click();

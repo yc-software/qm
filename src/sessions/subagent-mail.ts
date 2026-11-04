@@ -466,8 +466,8 @@ export async function settleTreeWakes(
   root: Session,
 ): Promise<void> {
   const tree = (await treeSessions(deps.sessions, root)).filter((session) => session.scopeId === root.scopeId);
-  for (const session of tree)
-    for (const message of await deps.mailbox.wakesFor(session.id)) await deps.mailbox.settle(session.id, message.id);
+  for (const message of await deps.mailbox.wakesFor(...tree.map((session) => session.id)))
+    await deps.mailbox.settle(message.recipientId, message.id);
   const threadRefs = tree.map((session) => session.threadRef);
   for (const run of await deps.runs.pendingReturns(Number.MAX_SAFE_INTEGER, "", threadRefs))
     await returnSubagentRun(deps, run, true).catch(swallowAs("sessions: settle tree return", undefined));
