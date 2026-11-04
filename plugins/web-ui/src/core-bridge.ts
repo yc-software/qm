@@ -1474,8 +1474,18 @@ async function followRun(
   }
 }
 
-export async function stopRunTree(runId: string): Promise<void> {
-  await api(runPath(runId, "/signal"), { method: "POST", body: JSON.stringify({ kind: "abort", tree: true }) });
+export async function stopThreadRun(threadRef: string): Promise<void> {
+  const { runId } = await activeRunForThread(threadRef);
+  if (!runId) return;
+  try {
+    await api(runPath(runId, "/signal"), {
+      method: "POST",
+      signal: AbortSignal.timeout(RUN_REQUEST_TIMEOUT_MS),
+      body: JSON.stringify({ kind: "abort" }),
+    });
+  } catch (err) {
+    if (!(err instanceof ApiError && (err.status === 409 || err.status === 404))) throw err;
+  }
 }
 
 function runPath(runId: string, suffix: string): string {
