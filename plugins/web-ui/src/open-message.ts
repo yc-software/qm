@@ -45,7 +45,7 @@ export async function openSessionAtMessage(
   if (focused.state.sessionId === sessionId && host?.isConnected) {
     if (seq === null) return true;
     if (
-      host.querySelector(`[data-entry-seqs~="${seq}"]`) ||
+      host.querySelector(`.message-row[data-entry-seqs~="${seq}"]`) ||
       focused.state.inheritedMessages.some((m) => messageEntrySeqs(m).includes(seq))
     ) {
       focused.revealEntry(seq);
