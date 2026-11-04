@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
 const SECRET = "host-tenant-binding-test";
@@ -91,4 +94,26 @@ test("a host with no live tenant is refused", async () => {
   const gone = await call("gone.example", "/api/sessions");
   assert.equal(gone.status, 421);
   assert.equal(JSON.parse(gone.body).error, "unknown_host");
+});
+
+test("hashed static assets are served for a host with no tenant, other paths are still refused", async () => {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "dist-web", "assets");
+  const name = `host-tenant-asset-${process.pid}.js`;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, name), "export const ok = 1;\n");
+  try {
+    const asset = await call("web-ui.internal", `/assets/${name}`);
+    assert.equal(asset.status, 200);
+    assert.match(asset.body, /export const ok = 1;/);
+    for (const missing of ["/assets/foo", "/assets/missing.js"]) {
+      const absent = await call("web-ui.internal", missing);
+      assert.equal(absent.status, 404);
+      assert.doesNotMatch(absent.body, /<html/i);
+    }
+    const page = await call("web-ui.internal", "/api/sessions");
+    assert.equal(page.status, 421);
+    assert.equal(JSON.parse(page.body).error, "unknown_host");
+  } finally {
+    rmSync(join(dir, name), { force: true });
+  }
 });
