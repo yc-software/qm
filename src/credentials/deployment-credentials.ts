@@ -13,7 +13,7 @@ import {
   type ServiceCredentialStore,
 } from "./keychain.ts";
 import type { ScopeId } from "../types.ts";
-import { boundTenant } from "../tenants/context.ts";
+import { boundTenant, isInstallTenant } from "../tenants/context.ts";
 import { loadedTenantSettings } from "../tenants/settings.ts";
 
 export interface DeploymentBrokerCredential {
@@ -130,7 +130,10 @@ export function tenantBrokerCredentials(
   return () => {
     const tenant = boundTenant();
     const env = tenant ? loadedTenantSettings().env : undefined;
-    if (!tenant || !env?.BROKER_CREDENTIALS?.trim()) return deployment;
+    if (!tenant) return deployment;
+    // The deployment-wide set belongs to the install tenant's org only. Any other tenant
+    // without its own BROKER_CREDENTIALS gets none, never the deployment's secrets.
+    if (!env?.BROKER_CREDENTIALS?.trim()) return isInstallTenant() ? deployment : [];
     const current = tenantBrokerEnv(env);
     const cached = parsed.get(tenant);
     if (cached?.env === current) return cached.credentials;

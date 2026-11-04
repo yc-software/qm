@@ -8,12 +8,13 @@ import {
   withDeploymentCredentials,
 } from "../src/credentials/deployment-credentials.ts";
 import type { ServiceCredentialStore } from "../src/credentials/keychain.ts";
-import { boundTenant, withTenant } from "../src/tenants/context.ts";
+import { boundTenant, registerTenants, withTenant } from "../src/tenants/context.ts";
 import { replaceLoadedTenantSettings, type TenantSettings } from "../src/tenants/settings.ts";
 import { scopeId } from "../src/types.ts";
 
 const a = randomUUID();
 const b = randomUUID();
+registerTenants(a, undefined);
 const search = (host: string) => [{ slug: "search", host, secretEnv: "BROKER_SECRET_SEARCH" }];
 const tenant = (org: string, host: string, secret: string): TenantSettings => ({
   orgId: org,
@@ -82,12 +83,39 @@ describe("org-shared broker credentials per tenant", () => {
     assert.equal((await read())?.secret, "key-a2");
   });
 
-  it("keeps the deployment set without a tenant or without the tenant's own BROKER_CREDENTIALS", async () => {
+  it("keeps the deployment set without a tenant or for the install tenant without its own BROKER_CREDENTIALS", async () => {
     replaceLoadedTenantSettings(new Map([[a, { orgId: "install-org", env: {} }]]));
     const unbound = await store.getServiceCredentialSecret(scopeId("org", "install-org"), "search");
     assert.equal(unbound?.secret, "deployment-key");
     const plain = await withTenant(a, () => store.getServiceCredentialSecret(scopeId("org", "install-org"), "search"));
     assert.equal(plain?.secret, "deployment-key");
+  });
+
+  it("never serves the deployment set to a tenant other than the install tenant", async () => {
+    replaceLoadedTenantSettings(
+      new Map([
+        [a, { orgId: "install-org", env: {} }],
+        [b, { orgId: "org-b", env: {} }],
+      ]),
+    );
+    assert.equal(await withTenant(b, () => store.getServiceCredentialSecret(scopeId("org", "org-b"), "search")), null);
+    assert.equal(
+      await withTenant(b, () => store.getServiceCredentialSecret(scopeId("org", "install-org"), "search")),
+      null,
+    );
+    assert.deepEqual(await withTenant(b, () => store.listServiceCredentials(scopeId("org", "org-b"))), []);
+    await withTenant(b, () =>
+      store.setServiceCredential(scopeId("org", "org-b"), {
+        slug: "search",
+        name: "x",
+        host: "h.example",
+        secret: "s",
+      }),
+    );
+    const install = await withTenant(a, () =>
+      store.getServiceCredentialSecret(scopeId("org", "install-org"), "search"),
+    );
+    assert.equal(install?.secret, "deployment-key");
   });
 
   it("ignores a tenant's malformed BROKER_CREDENTIALS without echoing its secrets", async () => {
