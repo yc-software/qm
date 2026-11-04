@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { perTenant } from "../tenants/context.ts";
+import { createTenantListeners, perTenant } from "../tenants/context.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
@@ -21,7 +21,6 @@ import {
   type PublicConnectorClient,
   type DecryptedConnectorClient,
 } from "../connectors/connector-client-store.ts";
-import { errMessage } from "../util/errors.ts";
 
 export interface PersistedSoul {
   scopeId: ScopeId;
@@ -334,26 +333,10 @@ export function createConfigStore(
     browseModels: field("browseModels", "modelId"),
   } satisfies Partial<Record<SettingKey, unknown>>;
   const allSettings = Object.values(settings);
-  const channelHeaderPinListeners = new Set<(id: ScopeId) => void>();
-  const noteChannelHeaderPinChanged = (id: ScopeId): void => {
-    for (const listener of channelHeaderPinListeners) {
-      try {
-        listener(id);
-      } catch (e) {
-        console.error("[config] channel-header-pin listener failed:", errMessage(e));
-      }
-    }
-  };
-  const runtimeSelectionListeners = new Set<(id: ScopeId) => void>();
-  const noteRuntimeSelectionChanged = (id: ScopeId): void => {
-    for (const listener of runtimeSelectionListeners) {
-      try {
-        listener(id);
-      } catch (e) {
-        console.error("[config] runtime-selection listener failed:", errMessage(e));
-      }
-    }
-  };
+  const channelHeaderPinListeners = createTenantListeners<[ScopeId]>("config channel-header-pin");
+  const noteChannelHeaderPinChanged = channelHeaderPinListeners.emit;
+  const runtimeSelectionListeners = createTenantListeners<[ScopeId]>("config runtime-selection");
+  const noteRuntimeSelectionChanged = runtimeSelectionListeners.emit;
   const connectorClients = opts.connectorClients;
   const connectorKey = deriveConnectorKey(opts.connectorSecretKey ?? randomBytes(32), "connector-clients");
   const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;

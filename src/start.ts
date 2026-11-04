@@ -16,7 +16,7 @@ import {
 } from "./slack/index.ts";
 import { createSlackRuntimeReconciler, createTenantSlackRuntimes } from "./surfaces/slack-runtime.ts";
 import { useOwnerDatabase } from "./tenants/owner-pool.ts";
-import { withoutTenant } from "./tenants/context.ts";
+import { withInstallTenant, withoutTenant } from "./tenants/context.ts";
 import { createPgPool, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 import { watchTenants } from "./tenants/work-tenant.ts";
 
@@ -132,7 +132,7 @@ export async function startQm(
     createSlackRuntimeReconciler({
       startPaused: Boolean(config.backgroundDeploymentId),
       load: () => Promise.resolve({ version: `environment:${account.accountId}`, config: account }),
-      startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
+      startPlugin: (desired) => withInstallTenant(() => startSlackPlugin(desired, built.slackCore)),
       onError: reportFailureAs("slack account reconciliation", undefined, `account=${account.accountId}`),
     }),
   );

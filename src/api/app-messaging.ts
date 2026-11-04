@@ -5,6 +5,7 @@ import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from 
 import type { Destination } from "../types.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import { createTenantListeners } from "../tenants/context.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -128,7 +129,7 @@ export function createMessagingMethods(
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests;
-  const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
+  const contextRequestListeners = createTenantListeners<[SurfaceContextRequest]>("context request");
   const contextRequestTokens = new Map<string, string>();
   // Principals identity knows about that the Slack directory never sees: the email
   // allow-list, invited external users, and anyone who has signed in. On a Slack-less
@@ -390,12 +391,11 @@ export function createMessagingMethods(
         );
         return request;
       }
-      for (const l of contextRequestListeners) l(viewerToken ? { ...request, query } : request);
+      contextRequestListeners.emit(viewerToken ? { ...request, query } : request);
       return request;
     },
     onContextRequestCreated(listener) {
-      contextRequestListeners.add(listener);
-      return () => contextRequestListeners.delete(listener);
+      return contextRequestListeners.add(listener);
     },
     getContextRequest(id) {
       return contextRequests.get(id);

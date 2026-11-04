@@ -1,6 +1,8 @@
 import { boundTenant, isTenantId, pinTenant, withoutTenant, withTenant } from "../../plugins/chassis/src/tenant.ts";
 import { hashId } from "../util/crypto.ts";
 
+import { swallow } from "../util/errors.ts";
+
 export { boundTenant, isTenantId, pinTenant, withoutTenant, withTenant };
 
 export function tenantClaim(): { tenant?: string } {
@@ -87,6 +89,33 @@ export function perTenant<V>(create: () => V): () => V {
     const value = create();
     values.set(id, value);
     return value;
+  };
+}
+
+export interface TenantListeners<A extends unknown[]> {
+  add(listener: (...args: A) => void): () => void;
+  emit(...args: A): void;
+}
+
+export function createTenantListeners<A extends unknown[]>(label: string): TenantListeners<A> {
+  const entries = new Set<{ listener: (...args: A) => void; tenant: string | undefined }>();
+  return {
+    add(listener) {
+      const entry = { listener, tenant: boundTenant() };
+      entries.add(entry);
+      return () => entries.delete(entry);
+    },
+    emit(...args) {
+      const at = boundTenant() ?? soleTenantNow();
+      for (const { listener, tenant } of entries) {
+        if (tenant !== undefined && tenant !== at && (at !== undefined || !unboundTenantAllowed())) continue;
+        try {
+          listener(...args);
+        } catch (e) {
+          swallow(`${label} listener`, e);
+        }
+      }
+    },
   };
 }
 

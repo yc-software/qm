@@ -5,6 +5,7 @@ import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } fr
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type ClaimOptions, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { TENANCY, tenantTables } from "../tenants/migrations.ts";
+import { createTenantListeners } from "../tenants/context.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
 function rowToDelivery(r: Record<string, unknown>): Delivery {
@@ -96,7 +97,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
   ]);
   const { q, query } = db;
 
-  const enqueueListeners = new Set<(type: string) => void>();
+  const enqueueListeners = createTenantListeners<[string]>("delivery enqueue");
 
   async function expireOveraged(pg: PgPool): Promise<void> {
     const rows = await pg.q(
@@ -181,7 +182,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         ],
       );
       if (inserted[0]) {
-        if (input.shadow !== true) for (const l of enqueueListeners) l(input.destination.type);
+        if (input.shadow !== true) enqueueListeners.emit(input.destination.type);
         return rowToDelivery(inserted[0]);
       }
       const existing = await q("SELECT * FROM deliveries WHERE idempotency_key = $1", [input.idempotencyKey]);
@@ -303,8 +304,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       return rows.map(rowToDelivery).reverse();
     },
     onEnqueue(listener) {
-      enqueueListeners.add(listener);
-      return () => enqueueListeners.delete(listener);
+      return enqueueListeners.add(listener);
     },
   };
 }
