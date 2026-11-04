@@ -155,7 +155,7 @@ function itemContextFences(item: LoopItem): string[] {
   return ["```untrusted-data", itemSource(item), "```", "```untrusted-data", promptText(review), "```"];
 }
 
-function followUpPrompt(loop: Loop, item: LoopItem, message: string): StageInput {
+function followUpPrompt(loop: Loop, item: LoopItem, message: string, voiceProfile?: string): StageInput {
   const input = [
     "[Loop item chat]",
     `A person is talking to you about ONE held item of the loop "${promptText(loop.name)}". Answer them directly and briefly.`,
@@ -176,12 +176,18 @@ function followUpPrompt(loop: Loop, item: LoopItem, message: string): StageInput
     "[End loop item chat]",
     "",
     "Playbook:",
-    playbookText(loop),
+    playbookText(loop, voiceProfile),
   ].join("\n");
   return { input, securityScreenData: itemSource(item) };
 }
 
-function itemActionPrompt(loop: Loop, item: LoopItem, kind: string, args: Record<string, unknown>): StageInput {
+function itemActionPrompt(
+  loop: Loop,
+  item: LoopItem,
+  kind: string,
+  args: Record<string, unknown>,
+  voiceProfile?: string,
+): StageInput {
   const input = [
     "[Loop item action]",
     `A person approved the action "${promptText(kind)}" on ONE held item of the loop "${promptText(loop.name)}". Execute EXACTLY that action, nothing else.`,
@@ -194,7 +200,7 @@ function itemActionPrompt(loop: Loop, item: LoopItem, kind: string, args: Record
     "[End loop item action]",
     "",
     "Playbook:",
-    playbookText(loop),
+    playbookText(loop, voiceProfile),
   ].join("\n");
   return { input, securityScreenData: itemSource(item) };
 }
@@ -1006,7 +1012,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     await deps.items.appendThread(item.id, [{ role: "human", text: message, actorId }]);
     const asked = { ...item, thread: (await deps.items.get(item.id))?.thread ?? item.thread };
     const fireKey = `loop:${loop.id}:item:${item.id}:followup:${Date.now()}`;
-    const turn = await itemTurn(loop, asked, followUpPrompt(loop, asked, message), fireKey, actorId, options);
+    const prompt = followUpPrompt(loop, asked, message, await loadInboxVoiceProfile(deps.files, loop));
+    const turn = await itemTurn(loop, asked, prompt, fireKey, actorId, options);
     if (!turn.ok) {
       await deps.items.appendThread(item.id, [
         { role: "system", text: `The agent could not answer: ${turn.userNote ?? "the turn did not run"}` },
@@ -1039,7 +1046,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     actorId: string,
   ): Promise<ItemTurnResult> {
     const fireKey = `loop:${loop.id}:item:${item.id}:action:${kind}:${Date.now()}`;
-    return itemTurn(loop, item, itemActionPrompt(loop, item, kind, args), fireKey, actorId);
+    const prompt = itemActionPrompt(loop, item, kind, args, await loadInboxVoiceProfile(deps.files, loop));
+    return itemTurn(loop, item, prompt, fireKey, actorId);
   }
 
   return {

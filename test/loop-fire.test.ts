@@ -1059,6 +1059,11 @@ test("Email drafting turns carry the owner's voice profile from Files instead of
   await w.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
   assert.deepEqual(w.turns.map(stage), ["work", "judge"]);
   assert.equal(files.opened, 1);
+  const held = (await w.items.byLoop(loop.id))[0]!;
+  await w.fire.followUp(loop, held, "make it shorter", loop.owner);
+  const chat = w.turns.at(-1)?.text ?? "";
+  assert.equal(chat.split(profile).length, 2);
+  assert.doesNotMatch(chat, /No email voice profile is on file/);
 });
 
 test("a Slack loop never reads the email voice profile", async () => {
