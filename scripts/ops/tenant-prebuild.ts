@@ -67,24 +67,14 @@ export async function prebuildLegacyKeys(
   migrations: readonly PgMigration[],
   { dryRun = false }: { dryRun?: boolean } = {},
 ): Promise<void> {
-  if (!dryRun) {
-    const { rows } = await client.query<{ acquired: boolean }>(
-      "SELECT pg_try_advisory_lock(hashtext('qm:schema-migrations')) AS acquired",
-    );
-    if (!rows[0]?.acquired) throw new Error("schema migrations are running; retry after they complete");
-  }
-  try {
-    if (!dryRun) await client.query("SET statement_timeout = 0");
-    for (const { table, name, statement } of legacyKeys(migrations)) {
-      if (!(await client.query("SELECT to_regclass($1) IS NOT NULL AS exists", [table])).rows[0]?.exists) {
-        log({ step: "index", table, name, skipped: "missing table" });
-        continue;
-      }
-      if (dryRun) log({ step: "index", table, dryRun, existing: await indexState(client, name), statement });
-      else await timed({ step: "index", table, statement }, () => buildConcurrentIndex(client, statement));
+  if (!dryRun) await client.query("SET statement_timeout = 0");
+  for (const { table, name, statement } of legacyKeys(migrations)) {
+    if (!(await client.query("SELECT to_regclass($1) IS NOT NULL AS exists", [table])).rows[0]?.exists) {
+      log({ step: "index", table, name, skipped: "missing table" });
+      continue;
     }
-  } finally {
-    if (!dryRun) await client.query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))");
+    if (dryRun) log({ step: "index", table, dryRun, existing: await indexState(client, name), statement });
+    else await timed({ step: "index", table, statement }, () => buildConcurrentIndex(client, statement));
   }
 }
 
