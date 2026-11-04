@@ -105,6 +105,11 @@ test("hashed static assets are served for a host with no tenant, other paths are
     const asset = await call("web-ui.internal", `/assets/${name}`);
     assert.equal(asset.status, 200);
     assert.match(asset.body, /export const ok = 1;/);
+    for (const missing of ["/assets/foo", "/assets/missing.js"]) {
+      const absent = await call("web-ui.internal", missing);
+      assert.equal(absent.status, 404);
+      assert.doesNotMatch(absent.body, /<html/i);
+    }
     const page = await call("web-ui.internal", "/api/sessions");
     assert.equal(page.status, 421);
     assert.equal(JSON.parse(page.body).error, "unknown_host");
