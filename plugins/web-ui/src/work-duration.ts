@@ -3,8 +3,6 @@ import type { GoalStripState } from "./goal-strip.ts";
 import { workPausedForApproval, type WorkBlock } from "./core-bridge.ts";
 import { activityCreatedAt } from "./items.ts";
 
-/** When the work began: the run's start, else its earliest activity; null
- * while neither is known (e.g. the run is still queued). */
 export function workStart(work: WorkBlock): number | null {
   const times = work.activity.map(activityCreatedAt).filter((t) => typeof t === "number" && t > 0);
   return work.startedAt ?? (times.length ? Math.min(...times) : null);

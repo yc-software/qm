@@ -14,7 +14,6 @@ class LiveWorkDuration extends AsyncDirective {
 
   render(work: WorkBlock) {
     this.work = work;
-    // With no known start, a count would restart from zero on every redraw.
     if (workStart(work) == null) {
       this.disconnected();
       return "";
