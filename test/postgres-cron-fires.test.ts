@@ -129,7 +129,6 @@ test("pg cron_fires: the cron store writes the table only and reads back through
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
   await store.beginFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" });
   await store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok" });
-  assert.equal((await store.get(cron.id))?.fireLog, undefined, "the legacy json fireLog is no longer written");
   const { runs, total } = await store.listFires(cron.id);
   assert.equal(total, 1);
   assert.equal(runs[0]!.status, "ok");

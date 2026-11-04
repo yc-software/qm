@@ -240,7 +240,6 @@ test("recordFire appends compact durable fire log entries and replaces duplicate
   );
   assert.equal(runs[1]?.threadRef, "cron:c:fire:2b");
   assert.equal(runs[1]?.reply, "second updated");
-  assert.equal((await store.get(cron.id))?.fireLog, undefined, "the legacy json fireLog is never written");
 });
 
 test("markFired does not clobber a concurrent setEnabled(false) (field-level update)", async () => {
@@ -691,7 +690,6 @@ test("the fire table is the journal of record — a write failure surfaces inste
     store.recordFire(cron.id, { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "ok" }),
     /table down/,
   );
-  assert.equal((await store.get(cron.id))!.fireLog, undefined, "and nothing falls back to the json key");
 });
 
 test("a deferred cron is not due until its deferral passes, and firing clears the deferral", async () => {
