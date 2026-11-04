@@ -74,7 +74,7 @@ test("the session is named after the scope so an operator can find it", async ()
 
 test("teardown captures a provider checkpoint before pausing", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
-  sandbox = make({ store });
+  sandbox = make({ snapshots: undefined, store });
   const h = await sandbox.provision(scope);
   await sandbox.run(h, "echo hi > kept.txt");
   await sandbox.teardown(h);
@@ -94,6 +94,7 @@ test("restart rolls a paused session back to its checkpoint without resuming the
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
   const restored: string[] = [];
   sandbox = make({
+    snapshots: undefined,
     store,
     onError: (e: { code: string }) => {
       if (e.code === "checkpoint_restored") restored.push(e.code);
@@ -124,7 +125,7 @@ test("restart rolls a paused session back to its checkpoint without resuming the
 
 test("restart drops a warm guest's port-forward before rolling back", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
-  sandbox = make({ store });
+  sandbox = make({ snapshots: undefined, store });
   const h = await sandbox.provision(scope);
   await sandbox.teardown(h, { keepWarm: true });
   const disconnects = fake.guestDisconnects().length;
@@ -135,6 +136,7 @@ test("restart drops a warm guest's port-forward before rolling back", async () =
 });
 
 test("restart without a checkpoint does not call rollback", async () => {
+  sandbox = make({ snapshots: undefined });
   await sandbox.provision(scope);
   await assert.rejects(() => sandbox.restartComputer!(scope), /no checkpoint to restore/);
   assert.equal(fake.rollbackCalls().length, 0);
@@ -142,7 +144,7 @@ test("restart without a checkpoint does not call rollback", async () => {
 
 test("a failed rollback keeps the stored sandbox and the same session", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
-  sandbox = make({ store });
+  sandbox = make({ snapshots: undefined, store });
   const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   const before = await store.get(scope);
@@ -157,7 +159,7 @@ test("a failed rollback keeps the stored sandbox and the same session", async ()
 
 test("a checkpoint failure is recorded and the session still pauses", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
-  sandbox = make({ store });
+  sandbox = make({ snapshots: undefined, store });
   const h = await sandbox.provision(scope);
   fake.failNextCheckpoint(scopeName());
   await sandbox.teardown(h);
@@ -169,6 +171,7 @@ test("a checkpoint failure is recorded and the session still pauses", async () =
 });
 
 test("checkpoint capture is throttled across a pause and resume", async () => {
+  sandbox = make({ snapshots: undefined });
   const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   const again = await sandbox.provision(scope);
@@ -178,7 +181,7 @@ test("checkpoint capture is throttled across a pause and resume", async () => {
 
 test("a newer checkpoint replaces the previous one", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
-  sandbox = make({ store, snapshotIntervalMs: -1 });
+  sandbox = make({ snapshots: undefined, store, snapshotIntervalMs: -1 });
   const h = await sandbox.provision(scope);
   await sandbox.teardown(h);
   const first = (await store.get(scope))?.checkpointId;
@@ -194,7 +197,7 @@ test("a newer checkpoint replaces the previous one", async () => {
 
 test("a failed checkpoint delete is remembered and retried without another capture", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
-  const fast = make({ store, snapshotIntervalMs: -1 });
+  const fast = make({ snapshots: undefined, store, snapshotIntervalMs: -1 });
   const h = await fast.provision(scope);
   await fast.teardown(h);
   const first = (await store.get(scope))?.checkpointId;
@@ -205,7 +208,7 @@ test("a failed checkpoint delete is remembered and retried without another captu
   assert.deepEqual((await store.get(scope))?.pendingCheckpointDeletes, [first]);
   assert.deepEqual(fake.deletedCheckpoints(), []);
 
-  const slow = make({ store });
+  const slow = make({ snapshots: undefined, store });
   const resumed = await slow.provision(scope);
   const captures = fake.checkpointCalls().length;
   await slow.teardown(resumed, { homeUnchanged: true });
@@ -214,7 +217,36 @@ test("a failed checkpoint delete is remembered and retried without another captu
   assert.deepEqual((await store.get(scope))?.pendingCheckpointDeletes ?? [], []);
 });
 
-test("a failed home snapshot retries without recapturing the checkpoint", async () => {
+test("with a home backup store, teardown backs up the home and takes no checkpoint", async () => {
+  const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
+  sandbox = make({ store });
+  const h = await sandbox.provision(scope);
+  await sandbox.run(h, "echo hi > ~/kept.txt");
+  await sandbox.teardown(h);
+  assert.equal(fake.checkpointCalls().length, 0);
+  assert.equal((await store.get(scope))?.homeDirty, false);
+  assert.equal(fake.pauseCalls().length, 1);
+});
+
+test("with a home backup store, restart backs up the home and replaces the session", async () => {
+  const store: DurableMap<StoredManagedAgentsSandbox> = testMap<StoredManagedAgentsSandbox>();
+  sandbox = make({ store });
+  const h = await sandbox.provision(scope);
+  await sandbox.run(h, "echo before > ~/kept.txt");
+  await sandbox.teardown(h, { keepWarm: true });
+  await sandbox.run(h, "echo after > ~/kept.txt");
+  const before = await store.get(scope);
+  await sandbox.restartComputer!(scope);
+  assert.equal(fake.rollbackCalls().length, 0);
+  assert.equal((await store.get(scope))?.checkpointId, undefined);
+  const again = await sandbox.provision(scope);
+  assert.equal(fake.createdCount(scopeName()), 2);
+  assert.notEqual((await store.get(scope))?.sessionId, before?.sessionId);
+  assert.equal(again.coldStart, false);
+  assert.equal((await sandbox.run(again, "cat ~/kept.txt")).stdout.trim(), "after");
+});
+
+test("a failed home snapshot retries on the next teardown", async () => {
   const uploads: number[] = [];
   const snapshots: HomeSnapshotStore = {
     open: async () => null,
@@ -229,7 +261,7 @@ test("a failed home snapshot retries without recapturing the checkpoint", async 
   await sandbox.teardown(h);
   const again = await sandbox.provision(scope);
   await sandbox.teardown(again);
-  assert.equal(fake.checkpointCalls().length, 1);
+  assert.equal(fake.checkpointCalls().length, 0);
   assert.equal(uploads.length, 2);
 });
 

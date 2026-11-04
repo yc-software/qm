@@ -508,6 +508,28 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
       return provisionQueue(scopeId, async () => {
         const stored = await store.get(scopeId);
         if (!stored?.sessionId) throw new Error("do-managed-agents restart: no sandbox provisioned yet");
+        if (homeSnapshots) {
+          let session = sessionByName.get(name);
+          if (!session) {
+            try {
+              session = await client.connect(stored.sessionId);
+            } catch (e) {
+              if (!(e instanceof ManagedAgentsSandboxGoneError)) throw e;
+            }
+          }
+          if (session) {
+            await snapshotHome(scopeId, session);
+            await session.kill();
+          }
+          sessionByName.delete(name);
+          await store.merge(scopeId, {
+            checkpointId: undefined,
+            checkpointAtMs: undefined,
+            checkpointError: undefined,
+            preservationError: undefined,
+          });
+          return;
+        }
         const checkpointId = stored.checkpointId;
         if (!checkpointId) throw new Error("do-managed-agents restart: no checkpoint to restore");
         const cached = sessionByName.get(name);
@@ -617,7 +639,10 @@ export function createManagedAgentsSandbox(opts: ManagedAgentsSandboxOptions): S
     if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
     await retryPendingCheckpointDeletes(scope, session);
     const homeDirty = stored?.homeDirty;
-    if (snapshotDue({ lastSnapshotMs: stored?.checkpointAtMs, homeDirty }, tdOpts, snapshotIntervalMs)) {
+    if (
+      !homeSnapshots &&
+      snapshotDue({ lastSnapshotMs: stored?.checkpointAtMs, homeDirty }, tdOpts, snapshotIntervalMs)
+    ) {
       try {
         await captureCheckpoint(scope, session);
       } catch (e) {
