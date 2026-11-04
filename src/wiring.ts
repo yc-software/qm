@@ -1629,9 +1629,7 @@ export function buildApp(
           sandboxes: sandboxResources,
           lock: advisoryLock,
           signals: runSignals,
-          enabled: (actorId) => featureFlags.enabled("swarms", scopeId("personal", actorId)),
           authorize: async (claims) => {
-            if (!(await featureFlags.enabled("swarms", scopeId("personal", claims.actorId)))) return false;
             await identity.refresh();
             return (
               identity.isInternal(identity.classify(claims.actorId)) &&
@@ -2075,9 +2073,6 @@ export function buildApp(
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     delegationEnabled,
-    enabled: async (actorId) =>
-      (await featureFlags.enabled("persistent_subagents", scopeId("personal", actorId))) ||
-      (await delegationEnabled(actorId)),
     sessions,
     runs,
     signals: runSignals,

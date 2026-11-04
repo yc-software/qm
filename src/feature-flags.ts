@@ -8,11 +8,6 @@ export const FEATURES = {
     personalOnly: true,
     hint: "Enables app text comments and annotation tools for the selected people. Applies on the next app page load; app management permission is still required.",
   },
-  persistent_subagents: {
-    label: "Persistent subagents",
-    personalOnly: true,
-    hint: "Persistent subagents are available for personal scopes only.",
-  },
   responsive_spine: { label: "Responsive spine (delegation)", personalOnly: true },
   inbox_loops: { label: "Inbox Loops" },
   slack_loading_indicator: {
@@ -21,7 +16,6 @@ export const FEATURES = {
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
-  swarms: { label: "Swarms", personalOnly: true },
   team_scopes: { label: "Team scopes" },
   ui_canvas: {
     label: "UI canvas and UI state (agent code runs in the page)",
