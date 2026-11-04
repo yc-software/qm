@@ -3,7 +3,6 @@ export const PHONE_MAX_WIDTH = 860;
 let query: MediaQueryList | undefined;
 const phoneQuery = () => (query ??= window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH}px)`));
 
-// The app-edit chat docked beside an app on a desktop is narrow but is not a phone: keep the desktop layout there.
 export const isDesktopEmbed = (): boolean => document.documentElement.classList.contains("desktop-embed");
 
 export function markDesktopEmbed(embedded: boolean): void {
