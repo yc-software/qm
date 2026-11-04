@@ -1331,7 +1331,7 @@ for (const surface of ["slack", "web"] as const) {
   });
 }
 
-test("completed children do not fill a working parent's run slots and consumed returns settle", async () => {
+test("completed children leave only the working parent in flight and consumed returns settle", async () => {
   const r = await rig();
   const parent = await r.runs.enqueue({
     sessionId: r.room.threadRef,
