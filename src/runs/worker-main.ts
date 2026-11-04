@@ -15,7 +15,7 @@ if (config.databaseUrl)
   await watchTenants(createPgPool(config.databaseUrl), reportFailureAs("tenant watch", undefined));
 await built.tenancy.refreshSettings();
 built.tenancy.keepSettingsFresh();
-await built.sandboxResources.initialize();
+if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) await built.ownSharedState();
 await built.loadTenants();
 const { runtime } = built;
 runtime.start();

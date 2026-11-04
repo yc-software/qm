@@ -14,6 +14,7 @@ const RELEASED_SESSION_MIGRATION_IDS = new Set([
   "sessions/store/0051-spend-recovery-index",
   "sessions/store/0052-session-facts",
   "sessions/store/0054-session-facts-copy",
+  "sessions/store/0055-participant-membership",
 ]);
 
 export const RELEASED_SESSION_MIGRATIONS = SESSION_MIGRATIONS.filter(({ id }) =>

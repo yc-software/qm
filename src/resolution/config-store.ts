@@ -119,8 +119,6 @@ export interface ScopedConfigStore {
   setApprovalGrantModes(id: ScopeId, modes: ApprovalGrantModes): Promise<void>;
   getEgress(id: ScopeId): EgressPolicy | null;
   setEgress(id: ScopeId, policy: EgressPolicy): Promise<void>;
-  getUnfulfilledInsights(id: ScopeId): boolean;
-  setUnfulfilledInsights(id: ScopeId, on: boolean): Promise<void>;
   getExternalSlackParticipants(id: ScopeId): boolean;
   setExternalSlackParticipants(id: ScopeId, on: boolean): Promise<void>;
   getExternalSlackParticipantsDurable(id: ScopeId): Promise<boolean>;
@@ -169,8 +167,6 @@ export interface ScopedConfigStore {
   setSpendLimit(id: ScopeId, limit: SpendLimit | null): Promise<void>;
   getBrowseMaxSteps(id: ScopeId): number | null;
   setBrowseMaxSteps(id: ScopeId, steps: number | null): Promise<void>;
-  getBrowseModel(id: ScopeId): string | null;
-  setBrowseModel(id: ScopeId, modelId: string | null): Promise<void>;
   getEmbeddingModelDurable(): Promise<string | null>;
   setEmbeddingModel(modelId: string | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
@@ -190,7 +186,6 @@ export interface ConfigStoreMaps {
   sharingPostures?: DurableMap<PersistedSharingPosture>;
   approvalGrantModes?: DurableMap<PersistedApprovalGrantModes>;
   egressPolicies?: DurableMap<PersistedEgressPolicy>;
-  unfulfilledInsights?: DurableMap<PersistedScopedFlag>;
   externalSlackParticipants?: DurableMap<PersistedScopedFlag>;
   channelHeaderPin?: DurableMap<PersistedScopedFlag>;
   baseModels?: DurableMap<PersistedBaseModel>;
@@ -203,7 +198,6 @@ export interface ConfigStoreMaps {
   branding?: DurableMap<ScopedRow<"branding", OrgBranding>>;
   browseMaxSteps?: DurableMap<ScopedRow<"steps", number>>;
   spendLimits?: DurableMap<ScopedRow<"limit", SpendLimit>>;
-  browseModels?: DurableMap<ScopedRow<"modelId", string>>;
   deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
 }
 
@@ -216,7 +210,6 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   sharingPostures: "sharing_postures",
   approvalGrantModes: "approval_grant_modes",
   egressPolicies: "egress_policies",
-  unfulfilledInsights: "unfulfilled_insights_flag",
   externalSlackParticipants: "external_slack_participants_flag",
   channelHeaderPin: "channel_header_pin_flag",
   baseModels: "base_model_configs",
@@ -229,7 +222,6 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   branding: "branding_configs",
   browseMaxSteps: "browse_max_steps_configs",
   spendLimits: "spend_limit_configs",
-  browseModels: "browse_model_configs",
   deploymentIdentity: "deployment_identity",
 };
 
@@ -319,7 +311,6 @@ export function createConfigStore(
     sharingPostures: field("sharingPostures", "posture"),
     approvalGrantModes: field("approvalGrantModes", "modes"),
     egressPolicies: field("egressPolicies", "policy"),
-    unfulfilledInsights: field("unfulfilledInsights", "on"),
     externalSlackParticipants: field("externalSlackParticipants", "on"),
     channelHeaderPin: field("channelHeaderPin", "on"),
     orgAmbient: field("orgAmbient", "on", true),
@@ -330,7 +321,6 @@ export function createConfigStore(
     branding: field("branding", "branding"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
     spendLimits: field("spendLimits", "limit"),
-    browseModels: field("browseModels", "modelId"),
   } satisfies Partial<Record<SettingKey, unknown>>;
   const allSettings = Object.values(settings);
   const channelHeaderPinListeners = createTenantListeners<[ScopeId]>("config channel-header-pin");
@@ -628,9 +618,6 @@ export function createConfigStore(
       settings.approvalGrantModes.set(id, { session: !!modes.session, always: !!modes.always }),
     getEgress: (id) => settings.egressPolicies.get(id) ?? (id === org() ? orgDefaultEgress : null),
     setEgress: (id, policy) => settings.egressPolicies.set(id, policy),
-    getUnfulfilledInsights: (id) =>
-      (settings.unfulfilledInsights.get(org()) ?? false) || (settings.unfulfilledInsights.get(id) ?? false),
-    setUnfulfilledInsights: (id, on) => settings.unfulfilledInsights.set(id, on),
     getExternalSlackParticipants: (id) =>
       (settings.externalSlackParticipants.get(org()) ?? false) || (settings.externalSlackParticipants.get(id) ?? false),
     setExternalSlackParticipants: (id, on) => settings.externalSlackParticipants.set(id, on),
@@ -747,8 +734,6 @@ export function createConfigStore(
     setSpendLimit: (id, limit) => settings.spendLimits.set(id, limit),
     getBrowseMaxSteps: (id) => settings.browseMaxSteps.get(id) ?? null,
     setBrowseMaxSteps: (id, steps) => settings.browseMaxSteps.set(id, steps),
-    getBrowseModel: (id) => settings.browseModels.get(id) ?? null,
-    setBrowseModel: (id, modelId) => settings.browseModels.set(id, modelId),
     getEmbeddingModelDurable: async () => (await baseModelStore.get(org()))?.embeddingModelId ?? null,
     setEmbeddingModel: async (modelId) => {
       await writeQueue(`model:${org()}`, async () => {

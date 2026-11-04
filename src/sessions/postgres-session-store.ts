@@ -23,7 +23,7 @@ import type {
   SessionWriter,
   LlmRequestRecord,
   NewLlmRequest,
-  ParticipantWindow,
+  Participant,
   SessionOrigin,
   SessionOriginFilter,
   SessionPage,
@@ -139,17 +139,6 @@ function rowToLlmRequest(r: Record<string, unknown>): LlmRequestRecord {
   };
 }
 
-function rowToParticipantWindow(r: Record<string, unknown>): ParticipantWindow {
-  return {
-    sessionId: r.session_id as string,
-    principalId: r.principal_id as string,
-    validFrom: Number(r.valid_from),
-    validTo: r.valid_to == null ? null : Number(r.valid_to),
-    validFromSeq: r.valid_from_seq == null ? null : Number(r.valid_from_seq),
-    validToSeq: r.valid_to_seq == null ? null : Number(r.valid_to_seq),
-  };
-}
-
 function rowToItem(r: Record<string, unknown>): Item {
   return {
     sessionId: r.session_id as string,
@@ -207,25 +196,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const userTurn = (col: string): string =>
     `${col}.kind IN ${USER_KINDS} AND NOT (${col}.body @> '{"overheard":true}')`;
   const lastActivityExpr = (col: string): string => `COALESCE(${col}.last_activity, ${col}.created_at)`;
-  const participantWindowBounds = (entry: string, participant: string, item = true) => {
-    const at = (ms: string): string => (item ? tsOf(ms) : ms);
-    return [
-      [
-        `(${participant}.valid_from_seq IS NOT NULL AND ${entry}.seq >= ${participant}.valid_from_seq)`,
-        `(${participant}.valid_from_seq IS NULL AND ${entry}.created_at >= ${at(`${participant}.valid_from`)})`,
-      ],
-      [
-        `(${participant}.valid_to_seq IS NOT NULL AND ${entry}.seq < ${participant}.valid_to_seq)`,
-        `(${participant}.valid_to_seq IS NULL AND ${participant}.valid_to IS NOT NULL AND ${entry}.created_at < ${at(`${participant}.valid_to`)})`,
-        `(${participant}.valid_to_seq IS NULL AND ${participant}.valid_to IS NULL)`,
-      ],
-    ] as const;
-  };
-  const withinParticipantWindow = (entry: string, participant: string, item = true): string =>
-    participantWindowBounds(entry, participant, item)
-      .map((bounds) => `(${bounds.join(" OR ")})`)
-      .join(" AND ");
-  function transcriptItemPredicate(alias: string, participant?: string): string {
+  function transcriptItemPredicate(alias: string): string {
     const receipt = (item: string): string => `COALESCE(${item}.body @> '{"slackReplyReceipt":true}'::jsonb, false)`;
     return `NOT (
       ${alias}.kind = 'UserMessage' AND ${receipt(alias)}
@@ -234,21 +205,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         WHERE received.tenant_id = ${alias}.tenant_id AND received.session_id = ${alias}.session_id
           AND received.kind = 'UserMessage' AND received.external_id = ${alias}.external_id
           AND NOT ${receipt("received")}
-          ${participant ? `AND ${withinParticipantWindow("received", participant)}` : ""}
       )
     )`;
   }
-  const [fromBounds, toBounds] = participantWindowBounds("x", "p");
-  const participantPresenceSql = fromBounds
-    .flatMap((from) =>
-      toBounds.map(
-        (to) => `SELECT 1 FROM items x WHERE x.tenant_id = ${TENANT} AND x.session_id = s.id AND ${from} AND ${to}`,
-      ),
-    )
-    .join(" UNION ALL ");
-  const SEES_ITEMS = `CASE WHEN p.valid_to IS NULL AND p.valid_to_seq IS NULL AND p.valid_from_seq IS NOT NULL
-         THEN COALESCE(s.messages, 0) > p.valid_from_seq
-         ELSE EXISTS (${participantPresenceSql}) END`;
+  const SEES_ITEMS = "COALESCE(s.messages, 0) > 0";
   const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR ${SEES_ITEMS})`;
   const participantSessionsSql = (extraWhere: string, columns = "s.*"): string =>
     `SELECT ${columns}, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
@@ -703,7 +663,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           : await q(
               `SELECT count(*)::int AS n FROM items i
                  JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $3
-                WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq < $2 AND ${transcriptItemPredicate("i", "p")} AND ${withinParticipantWindow("i", "p")}`,
+                WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq < $2 AND ${transcriptItemPredicate("i")}`,
               [sessionId, beforeSeq, principalId],
             );
       return Number(rows[0]?.n ?? 0);
@@ -918,41 +878,16 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return envelopes;
     },
 
-    async addParticipant(sessionId, principalId, title, opts): Promise<void> {
-      const includeHistory = opts?.includeHistory === true;
+    async addParticipant(sessionId, principalId, title): Promise<void> {
       await q(
-        `WITH boundary AS (
-           SELECT CASE WHEN $5 THEN 0
-                       ELSE GREATEST(COALESCE(MAX(seq) + 1, 0),
-                                     COALESCE((SELECT messages FROM sessions WHERE id = $1), 0)) END AS seq
-             FROM items WHERE tenant_id = ${TENANT} AND session_id = $1
-         )
-         INSERT INTO participants(session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq, title)
-         SELECT $1,$2,$3,NULL,boundary.seq,NULL,$4 FROM boundary
-         ON CONFLICT (tenant_id, session_id, principal_id) DO UPDATE
-           SET valid_from = CASE
-                 WHEN $5 THEN 0
-                 WHEN participants.valid_to IS NULL THEN participants.valid_from
-                 ELSE EXCLUDED.valid_from END,
-               valid_to = NULL,
-               valid_from_seq = CASE
-                 WHEN $5 THEN 0
-                 WHEN participants.valid_to IS NULL THEN participants.valid_from_seq
-                 ELSE EXCLUDED.valid_from_seq END,
-               valid_to_seq = NULL,
-               title = COALESCE(EXCLUDED.title, participants.title)
-           WHERE participants.valid_to IS NOT NULL
-              OR EXCLUDED.title IS NOT NULL
-              OR ($5 AND (participants.valid_from_seq IS DISTINCT FROM 0 OR participants.valid_from <> 0))`,
-        [sessionId, principalId, includeHistory ? 0 : now(), title ?? null, includeHistory],
+        `INSERT INTO participants(session_id, principal_id, title) VALUES ($1, $2, $3)
+         ON CONFLICT (tenant_id, session_id, principal_id) DO UPDATE SET title = EXCLUDED.title WHERE EXCLUDED.title IS NOT NULL`,
+        [sessionId, principalId, title ?? null],
       );
     },
 
     async removeParticipant(sessionId, principalId): Promise<void> {
-      await q(
-        `UPDATE participants SET valid_to = $3, valid_to_seq = (SELECT COALESCE(MAX(seq) + 1, 0) FROM items WHERE tenant_id = ${TENANT} AND session_id = $1) WHERE session_id = $1 AND principal_id = $2 AND valid_to IS NULL`,
-        [sessionId, principalId, now()],
-      );
+      await q("DELETE FROM participants WHERE session_id = $1 AND principal_id = $2", [sessionId, principalId]);
     },
 
     async deleteSession(sessionId): Promise<void> {
@@ -1116,11 +1051,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const params: unknown[] = [sessionId, principalId, opts?.sinceSeq ?? 0];
       let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM}
            JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $2
-          WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $3
-            AND ${withinParticipantWindow("i", "p")}`;
+          WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $3`;
       if (opts?.messagesOnly)
         sql += " AND i.kind IN ('UserMessage', 'SteeringMessage', 'AgentMessage') AND i.variant IS NULL";
-      if (opts?.transcript) sql += ` AND ${transcriptItemPredicate("i", "p")}`;
+      if (opts?.transcript) sql += ` AND ${transcriptItemPredicate("i")}`;
       if (opts?.beforeSeq !== undefined) {
         params.push(opts.beforeSeq);
         sql += ` AND i.seq < $${params.length}`;
@@ -1160,7 +1094,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            JOIN sessions s ON s.id = i.session_id AND ${OWN_CHAT("s")}
           WHERE i.tenant_id = ${TENANT} AND i.search @@ to_tsquery('simple', $2)
             AND ${SEARCHABLE_ITEM("i")}
-            AND ${withinParticipantWindow("i", "p")}
           ORDER BY i.created_at DESC, i.session_id, i.seq DESC
           LIMIT $3`,
         [principalId, ts, Math.max(1, Math.min(limit, 200))],
@@ -1307,7 +1240,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            FROM participants p
            JOIN items e ON e.tenant_id = ${TENANT} AND e.session_id = p.session_id
           WHERE ${userTurn("e")}
-            AND ${withinParticipantWindow("e", "p")}
           GROUP BY p.principal_id, e.session_id, day`,
       );
       return rows.map((r) => ({
@@ -1354,24 +1286,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       for (const row of dirty.rows) await inTenantOf(rowTenant(row).tenantId, refreshTenantSpend);
     },
 
-    async listParticipants(): Promise<ParticipantWindow[]> {
-      const rows = await q(
-        "SELECT session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq FROM participants",
-      );
-      return rows.map(rowToParticipantWindow);
+    async listParticipants(): Promise<Participant[]> {
+      const rows = await q("SELECT session_id, principal_id FROM participants");
+      return rows.map((r) => ({ sessionId: r.session_id as string, principalId: r.principal_id as string }));
     },
 
     async distinctParticipants(): Promise<string[]> {
       const rows = await q("SELECT DISTINCT principal_id FROM participants");
       return rows.map((r) => r.principal_id as string);
-    },
-
-    async participantWindowsOf(sessionId): Promise<ParticipantWindow[]> {
-      const rows = await q(
-        "SELECT session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq FROM participants WHERE session_id = $1",
-        [sessionId],
-      );
-      return rows.map(rowToParticipantWindow);
     },
 
     async participantsOf(sessionId): Promise<string[]> {

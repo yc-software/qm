@@ -504,6 +504,15 @@ const SESSION_TABLES = tenantTables(
   },
 );
 
+const PARTICIPANT_MEMBERSHIP: PgMigrationDefinition = {
+  id: "sessions/store/0055-participant-membership",
+  statements: [
+    `SET LOCAL lock_timeout = '5s'`,
+    `ALTER TABLE participants ALTER COLUMN valid_from SET DEFAULT 0, ALTER COLUMN valid_from_seq SET DEFAULT 0`,
+    `DELETE FROM participants WHERE valid_to IS NOT NULL OR valid_to_seq IS NOT NULL`,
+  ],
+};
+
 export const SESSION_MIGRATIONS = [
   ...TENANCY,
   SESSION_SCHEMA,
@@ -519,4 +528,5 @@ export const SESSION_MIGRATIONS = [
   TENANT_HOSTS_SEARCH_PATH,
   TENANT_ROW_SECURITY,
   RETIRED_TENANT_HOSTS,
+  PARTICIPANT_MEMBERSHIP,
 ];
