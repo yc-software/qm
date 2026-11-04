@@ -193,8 +193,21 @@ export function withToolApprovalGate(
   } as ToolDefinition;
 }
 
+export function startToolStep(ref: ToolContextRef): void {
+  ref.toolStep = true;
+  openGap(ref);
+}
+
 export function endToolStep(ref: ToolContextRef): void {
   ref.toolStep = false;
+  closeGap(ref);
+}
+
+function openGap(ref: ToolContextRef): void {
+  ref.stepPhase ??= startPhase("step.gap", { "qm.step": ref.modelCalls ?? 0 });
+}
+
+function closeGap(ref: ToolContextRef): void {
   ref.stepPhase?.end();
   ref.stepPhase = undefined;
 }
@@ -203,17 +216,13 @@ export function withToolSpan(tool: ToolDefinition, ref: ToolContextRef): ToolDef
   return {
     ...tool,
     async execute(...args: Parameters<ToolDefinition["execute"]>) {
-      if (!ref.toolsRunning) {
-        ref.stepPhase?.end();
-        ref.stepPhase = undefined;
-      }
+      if (!ref.toolsRunning) closeGap(ref);
       ref.toolsRunning = (ref.toolsRunning ?? 0) + 1;
       try {
         return await tracePhase("step.tool", () => tool.execute(...args), { name: tool.name });
       } finally {
         ref.toolsRunning -= 1;
-        if (!ref.toolsRunning && ref.toolStep && !ref.stepPhase)
-          ref.stepPhase = startPhase("step.gap", { "qm.step": ref.modelCalls ?? 0 });
+        if (!ref.toolsRunning && ref.toolStep) openGap(ref);
       }
     },
   } as ToolDefinition;

@@ -59,7 +59,7 @@ import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core
 import { providerTurnError } from "../model/provider-error.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
-import { endToolStep } from "./agent-tools/wrappers.ts";
+import { endToolStep, startToolStep } from "./agent-tools/wrappers.ts";
 import {
   DEFAULT_AGENT_MODEL_ID,
   auxiliaryModelFor,
@@ -1236,10 +1236,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             callUsage.push(usage);
             entry.ref.firstTokenPhase?.end();
             entry.ref.firstTokenPhase = undefined;
-            if ((event.message as AssistantMessage).stopReason === "toolUse") {
-              entry.ref.toolStep = true;
-              entry.ref.stepPhase = startPhase("step.gap", { "qm.step": entry.ref.modelCalls ?? 0 });
-            }
+            if ((event.message as AssistantMessage).stopReason === "toolUse") startToolStep(entry.ref);
           }
         });
         const drainCaptured = async (): Promise<void> => {
