@@ -21,6 +21,7 @@ function answer(req: IncomingMessage): unknown {
   }
   if (path === "/v1/sessions") return { sessions: [{ title: `recent of ${String(tenant)}` }] };
   if (path === "/v1/directory/meta") return { workspaceUrl: `https://${String(tenant)}.slack.example` };
+  if (path === "/v1/surface-config") return tenant === TENANT_A ? { welcomeCohort: "S26" } : {};
   return {};
 }
 
@@ -35,6 +36,7 @@ process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).p
 process.env.CORE_SIGNING_SECRET = SECRET;
 process.env.PORTAL_IDENTITY_SECRET = SECRET;
 process.env.WEB_UI_PRINCIPALS = "alice";
+process.env.WEB_UI_WELCOME_COHORT = "F26";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
@@ -111,4 +113,11 @@ test("hashed static assets are served for a host with no tenant, other paths are
   } finally {
     rmSync(join(dir, name), { force: true });
   }
+});
+
+test("the welcome cohort comes from the tenant's settings, falling back to the deployment's", async () => {
+  const a = await call("a.example", "/me");
+  const b = await call("b.example", "/me");
+  assert.equal(JSON.parse(a.body).welcomeCohort, "S26");
+  assert.equal(JSON.parse(b.body).welcomeCohort, "F26");
 });
