@@ -1,4 +1,5 @@
 import { coreHostTenants, inHostTenant, type HostTenant } from "../../chassis/src/host-tenant.ts";
+import { TENANT_HEADER } from "../../chassis/src/source-auth-sign.ts";
 import { coreTenantSignIn } from "../../chassis/src/tenant-sign-in.ts";
 import {
   DESKTOP_LAUNCH_SCRIPT,
@@ -830,6 +831,26 @@ function hasAgentCapability(req: IncomingMessage): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+const SANDBOX_MODEL_PATH = "/v1/sandbox-model/";
+const FORWARD_SANDBOX_MODEL_HEADERS = [
+  ...FORWARD_AGENT_API_HEADERS,
+  "authorization",
+  "x-api-key",
+  "anthropic-version",
+  "anthropic-beta",
+];
+
+function hasBearerOrApiKey(req: IncomingMessage): boolean {
+  const apiKey = req.headers["x-api-key"];
+  return (typeof apiKey === "string" && apiKey.length > 0) || /^Bearer\s+\S+$/i.test(req.headers.authorization ?? "");
+}
+
+function isAgentApiRequest(req: IncomingMessage): boolean {
+  const pathname = new URL(req.url ?? "/", "http://portal.local").pathname;
+  if (!pathname.startsWith("/v1/")) return false;
+  return hasAgentCapability(req) || (pathname.startsWith(SANDBOX_MODEL_PATH) && hasBearerOrApiKey(req));
+}
+
 function isDeploymentLayerPassthrough(method: string, pathname: string): boolean {
   return (method === "GET" || method === "PUT") && pathname === "/v1/deployment-layer";
 }
@@ -979,7 +1000,22 @@ const server = createServer((req, res) => {
     hostTenantOf.set(req, { ...found, host });
     return found;
   };
-  const served = isAppHost(req) ? handle(req, res) : inHostTenant(lookup, req, res, () => handle(req, res));
+  const agentApi = isAgentApiRequest(req);
+  // An agent call on a host with no tenant goes straight to core, which checks the capability
+  // itself. It never runs the rest of handle() without a tenant bound.
+  const onUnknownHost = () => {
+    const found = hostTenantOf.get(req);
+    return found?.multi === true && !found.tenant;
+  };
+  const served = isAppHost(req)
+    ? handle(req, res)
+    : inHostTenant(
+        lookup,
+        req,
+        res,
+        () => (agentApi && onUnknownHost() ? proxyAgentApi(req, res) : handle(req, res)),
+        !agentApi,
+      );
   void served.catch((err: unknown) => {
     errorLogged = true;
     reportBackendError(err);
@@ -988,6 +1024,28 @@ const server = createServer((req, res) => {
     else res.end();
   });
 });
+
+function illegalPath(rawPath: string, pathname: string): boolean {
+  return /%2f|%5c|%2e%2e|\\|\x00/i.test(rawPath) || rawPath.includes("//") || pathname.includes("/..");
+}
+
+async function proxyAgentApi(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const url = new URL(req.url ?? "/", "http://portal.local");
+  const tenant = boundTenant();
+  res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
+  res.setHeader("referrer-policy", "no-referrer");
+  res.setHeader("x-content-type-options", "nosniff");
+  res.setHeader("x-frame-options", "DENY");
+  if (illegalPath((req.url ?? "").split("?")[0] ?? "", url.pathname))
+    return json(res, 400, { error: "bad_request", message: "illegal path" });
+  return proxyToUpstream(
+    req,
+    res,
+    { baseUrl: CORE, path: url.pathname, search: url.search },
+    url.pathname.startsWith(SANDBOX_MODEL_PATH) ? FORWARD_SANDBOX_MODEL_HEADERS : FORWARD_AGENT_API_HEADERS,
+    tenant ? { [TENANT_HEADER]: tenant } : {},
+  );
+}
 
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const method = req.method ?? "GET";
@@ -1190,7 +1248,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   const rawPath = rawTarget.split("?")[0] ?? "";
-  if (/%2f|%5c|%2e%2e|\\|\x00/i.test(rawPath) || rawPath.includes("//") || pathname.includes("/..")) {
+  if (illegalPath(rawPath, pathname)) {
     return json(res, 400, { error: "bad_request", message: "illegal path" });
   }
 
@@ -1293,9 +1351,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     );
   }
 
-  if (pathname.startsWith("/v1/") && hasAgentCapability(req)) {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, FORWARD_AGENT_API_HEADERS);
-  }
+  if (isAgentApiRequest(req)) return proxyAgentApi(req, res);
 
   if (pathname === "/v1" || pathname.startsWith("/v1/")) return json(res, 404, { error: "not_found" });
 
