@@ -649,9 +649,18 @@ test("an event for a message the agent posted is dropped even before the post is
     await settle(async () => (await rows()).length === 1);
     const early = event({ body: "not yet recorded", eventId: "ev-early", messageId: "1199", bot: true, appPost: true });
     assert.deepEqual(await deliver(early), { status: 200, body: { ok: true, ignored: "own_message" } });
+    const earlyEdit = event({
+      body: "edited early",
+      eventId: "ev-early-edit",
+      messageId: "1199",
+      bot: true,
+      appPost: true,
+    });
+    earlyEdit.type = "message.updated";
+    assert.deepEqual(await deliver(earlyEdit), { status: 200, body: { ok: true, ignored: "own_message" } });
     assert.equal(
       (await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true })).some(
-        (m) => m.text === "not yet recorded",
+        (m) => m.text === "not yet recorded" || m.text === "edited early",
       ),
       false,
     );
