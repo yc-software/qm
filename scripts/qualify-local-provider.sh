@@ -51,7 +51,7 @@ until docker exec "$database" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&
 done
 socket_group="$(node -e 'console.log(require("node:fs").statSync("/var/run/docker.sock").gid)')"
 printf 'core=%s\nsource=%s\nlocal=%s\n' "$core_image" "$source_sha" "$local_image"
-docker run --rm --name "$container" --network "$network" --group-add "$socket_group" \
+docker run -d --name "$container" --network "$network" --group-add "$socket_group" \
   --add-host host.docker.internal:host-gateway \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$PWD/test/live-slack/local-provider.ts:/app/test/live-slack/local-provider.ts:ro" \
@@ -62,4 +62,11 @@ docker run --rm --name "$container" --network "$network" --group-add "$socket_gr
   -e "DATABASE_URL=postgres://postgres:$database_password@$database:5432/qm" -e "CONNECTOR_SECRET_KEY=$connector_secret_key" \
   -e "LOCAL_SANDBOX_IMAGE=$local_image" -e LOCAL_SANDBOX_CPUS=2 -e LOCAL_SANDBOX_MEMORY_MB=2048 \
   -e PI_MODEL=claude-haiku-4-5 \
-  "$core_image" node test/live-slack/local-provider.ts
+  "$core_image" node test/live-slack/local-provider.ts >/dev/null
+if ! status="$(timeout 8m docker wait "$container")"; then
+  docker logs --tail 100 "$container" || true
+  echo "the candidate core did not finish local qualification within 8 minutes" >&2
+  exit 1
+fi
+docker logs "$container"
+exit "$status"
