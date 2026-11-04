@@ -20,6 +20,7 @@ import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../uti
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { FLUSH_MS, traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
+import { isSessionTurn } from "../core/turn-origin.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
@@ -50,25 +51,26 @@ export async function processRun(
   return traceQueued(
     trace,
     "run",
-    {
-      "messaging.system": "qm",
-      "messaging.destination.name": "runs",
-      "messaging.message.id": run.id,
-      "messaging.message.retry.count": Math.max(0, run.attempts - 1),
-      "messaging.message.receive.latency":
-        run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
-      "qm.surface": request.surface,
-      "qm.origin": "origin" in request ? request.origin.kind : undefined,
-      "qm.spawn": request.swarm
-        ? "swarm"
-        : request.delegatingRunId || request.sessionSenderId
-          ? "delegated"
-          : undefined,
-      "qm.parent_run": request.delegatingRunId,
-    },
+    runTraceAttributes(run),
     () => attemptRun(deps, { ...run, request }, opts),
     (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
   );
+}
+
+export function runTraceAttributes(run: Run): Record<string, string | number | undefined> {
+  const request = run.request;
+  return {
+    "messaging.system": "qm",
+    "messaging.destination.name": "runs",
+    "messaging.message.id": run.id,
+    "messaging.message.retry.count": Math.max(0, run.attempts - 1),
+    "messaging.message.receive.latency":
+      run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
+    "qm.surface": request.surface,
+    "qm.origin": "origin" in request ? request.origin.kind : undefined,
+    "qm.spawn": request.swarm ? "swarm" : isSessionTurn(request) ? "delegated" : undefined,
+    "qm.parent_run": request.delegatingRunId,
+  };
 }
 
 async function attemptRun(

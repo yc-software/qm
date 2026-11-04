@@ -195,7 +195,7 @@ function internalTraceTargets(env: NodeJS.ProcessEnv): RegExp[] {
 
 function sampler(rate: number) {
   return ({ attributes, inheritOrSampleWith }: SamplingContext): number =>
-    attributes?.["qm.origin"] === "human" ? 1 : inheritOrSampleWith(rate);
+    attributes?.["qm.origin"] === "human" && !attributes["qm.spawn"] ? 1 : inheritOrSampleWith(rate);
 }
 
 export function initializeErrorReporting(
