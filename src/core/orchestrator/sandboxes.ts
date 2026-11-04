@@ -3,7 +3,12 @@ import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
 import { personalScope } from "../../types.ts";
 import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
-import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
+import {
+  removeDirAndList,
+  type SandboxHandle,
+  supportsProcessSessions,
+  SandboxProvisionCleanupError,
+} from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
   type SandboxAccessPlan,
@@ -64,7 +69,7 @@ export interface TurnSandboxContext {
   turnFilesDir: string;
   connectorEnv: Record<string, string>;
   egressTokenForTurn: string | undefined;
-  egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
+  egressTokenForPolicy: (policy: Resolution["egress"]) => Promise<string | undefined>;
   openResourceAccess?: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
 }
@@ -160,6 +165,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       return run?.status === "running" && !leaseLapsed(run, Date.now());
     });
   };
+  const finishProcess = (handle: SandboxHandle, processId: string): Promise<void> =>
+    finishProcessCredentials(
+      { sandbox: deps.sandbox, processes: deps.processes!, ...(deps.keychain ? { keychain: deps.keychain } : {}) },
+      handle,
+      processId,
+    );
   const provision = (eager = false): Promise<SandboxHandle> => {
     if (!eager) scopedUsed = true;
     return (
@@ -182,17 +193,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     await prepareTurnFiles(handle);
     if (deps.processes && supportsProcessSessions(deps.sandbox)) {
       try {
-        await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, (exited, processId) =>
-          finishProcessCredentials(
-            {
-              sandbox: deps.sandbox,
-              processes: deps.processes!,
-              ...(deps.keychain ? { keychain: deps.keychain } : {}),
-            },
-            exited,
-            processId,
-          ),
-        );
+        await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, finishProcess);
       } catch (err) {
         deps.errors?.record(
           {
@@ -342,9 +343,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return open(
       key,
       async (slot) => {
-        if (crossScope && egressTokenForTurn && !egressTokenForPolicy)
-          throw new Error("target sandbox egress authorization unavailable");
-        const egressToken = crossScope ? await egressTokenForPolicy?.(egress) : egressTokenForTurn;
+        const egressToken = crossScope ? await egressTokenForPolicy(egress) : egressTokenForTurn;
         const handle = await deps.sandbox.provision(crossScope ? resource.ownerScopeId : writableScopeId, {
           sandboxId: resource.id,
           ...(!crossScope ? { env: connectorEnv } : {}),
@@ -407,14 +406,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   const clearStaleTurnFiles = async (handle: SandboxHandle): Promise<void> => {
     const cutoff = Date.now() - TURN_FILES_MAX_AGE_MS;
-    const paths = deps.sandbox.removeDirAndList
-      ? await deps.sandbox.removeDirAndList(handle, turnSessionDir, TURN_FILES_DIR)
-      : await (async () => {
-          await deps.sandbox.removeDir(handle, turnSessionDir);
-          return deps.sandbox
-            .listDir(handle, TURN_FILES_DIR)
-            .catch(swallowAs("orchestrator: list stale turn files", [] as string[]));
-        })();
+    const paths = await removeDirAndList(deps.sandbox, handle, turnSessionDir, TURN_FILES_DIR);
     const stale = new Set<string>();
     for (const path of paths) {
       const parts = path.split("/");
@@ -518,6 +510,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     provisionResource,
     useSkill,
     reclaimBox,
+    finishProcess,
     invalidateProvision: () => {
       const slot = pool.get(SCOPED);
       if (slot) {

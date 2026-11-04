@@ -102,6 +102,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
     turnSessionDir: "turn/s",
     turnFilesDir: "turn/s/t",
     connectorEnv: {},
+    egressTokenForPolicy: async () => undefined,
     openResourceAccess: true,
     visibleSkillsForTurn: async () => [],
   } as unknown as TurnSandboxContext);
