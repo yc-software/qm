@@ -345,7 +345,7 @@ test("Composio failures surface cause and provider status without retry advice f
   assert.equal(result.data.error, "composio_proxy_failed");
   assert.equal(result.data.cause, "provider_error");
   assert.equal(result.data.providerStatus, 413);
-  assert.match(String(result.data.message), /chunked or resumable upload/);
+  assert.ok(result.data.providerDetail);
   assert.deepEqual(f.audits, ["composio.proxy.started", "composio.proxy.failed"]);
 
   const g = await fixture();

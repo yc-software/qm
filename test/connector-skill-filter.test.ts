@@ -34,22 +34,22 @@ test("provider skills are visible only for connectors configured by the admin", 
     skill("zoom"),
   ];
   assert.deepEqual(
-    filterConnectorSkills(all, []).map((entry) => entry.skill?.manifest.name),
+    filterConnectorSkills(all, [], false).map((entry) => entry.skill?.manifest.name),
     ["memory"],
   );
   assert.deepEqual(
-    filterConnectorSkills(all, ["google", "linear"]).map((entry) => entry.skill?.manifest.name),
+    filterConnectorSkills(all, ["google", "linear"], false).map((entry) => entry.skill?.manifest.name),
     ["memory", "google-workspace", "linear"],
   );
   assert.deepEqual(
-    filterConnectorSkills(all, ["slack"]).map((entry) => entry.skill?.manifest.name),
+    filterConnectorSkills(all, ["slack"], false).map((entry) => entry.skill?.manifest.name),
     ["memory", "slack-drafts"],
   );
 });
 
 test("the credential-backed Composio skill needs no dedicated OAuth configuration", () => {
   assert.deepEqual(
-    filterConnectorSkills([skill("composio"), skill("google-workspace")], []).map(
+    filterConnectorSkills([skill("composio"), skill("google-workspace")], [], false).map(
       (entry) => entry.skill?.manifest.name,
     ),
     ["composio"],

@@ -1,6 +1,7 @@
 import {
   ACCOUNT_ID,
   ComposioHttpError,
+  EXECUTE_TIMEOUT_MS,
   activeRun,
   composioUserIds,
   credential,
@@ -31,7 +32,6 @@ const BLOCKED_HEADERS = new Set([
   "x-api-key",
 ]);
 const PASSED_HEADERS = ["location", "retry-after", "etag", "content-disposition"];
-const PROXY_TIMEOUT_MS = 90_000;
 const COMPOSIO_REQUEST_LIMIT_BYTES = 4_500_000;
 
 function toolkitsFor(url: URL): string[] {
@@ -193,7 +193,7 @@ async function relay(ctx: ApiCtx, accountId: string, result: Record<string, unkn
     const headersDeadline = new AbortController();
     const timer = setTimeout(
       () => headersDeadline.abort(new DOMException("File download did not start in time", "TimeoutError")),
-      PROXY_TIMEOUT_MS,
+      EXECUTE_TIMEOUT_MS,
     );
     const file = await (ctx.deps.composioFetch ?? fetch)(location.href, {
       redirect: "error",
@@ -265,7 +265,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
           : {}),
         ...payload,
       },
-      PROXY_TIMEOUT_MS,
+      EXECUTE_TIMEOUT_MS,
     );
     await relay(ctx, account, result);
     audit(ctx.deps, {
@@ -292,10 +292,12 @@ async function proxy(ctx: ApiCtx): Promise<void> {
     if (providerStatus === 413)
       message =
         "The request body is too large for one call (about 3 MB of file data). Use the provider's chunked or resumable upload. Do not automatically retry a write.";
+    const providerDetail = error instanceof ComposioHttpError ? mask(redactSecrets(error.message)).slice(0, 300) : "";
     return sendJson(ctx.res, 502, {
       error: "composio_proxy_failed",
       cause: executeFailureCause(error, timedOut),
       ...(providerStatus ? { providerStatus } : {}),
+      ...(providerDetail ? { providerDetail } : {}),
       message,
     });
   }

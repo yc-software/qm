@@ -57,7 +57,7 @@ const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
 export function filterConnectorSkills(
   resolved: SkillResolution[],
   availableProviders: readonly string[],
-  appConnections = false,
+  appConnections: boolean,
 ): SkillResolution[] {
   const available = new Set(availableProviders);
   return resolved.filter((entry) => {

@@ -148,7 +148,7 @@ export function executeFailureCause(error: unknown, timedOut: boolean): string {
   return error instanceof ComposioHttpError ? "provider_error" : "unavailable";
 }
 
-const EXECUTE_TIMEOUT_MS = 90_000;
+export const EXECUTE_TIMEOUT_MS = 90_000;
 
 export async function request(
   ctx: ApiCtx,
