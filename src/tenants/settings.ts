@@ -46,8 +46,10 @@ function isTenantEnvName(name: string): name is TenantEnvName {
   return tenantEnvNames.has(name) || BROKER_SECRET_ENV.test(name);
 }
 
+const envName = z.string().max(64);
+
 const tenantSettingsFields = {
-  env: z.record(z.string().max(64), text),
+  env: z.record(envName, text),
   modelGatewayKey: text,
   oidcClient: z.object({ issuer: z.url(), clientId: text, clientSecret: text }).strict(),
   slackBridgeToken: text,
@@ -83,7 +85,7 @@ export function readTenantSettings(value: unknown, tenant: string): TenantSettin
       const env: Record<string, string> = {};
       for (const [name, entry] of Object.entries(raw)) {
         const parsed = text.safeParse(entry);
-        if (isTenantEnvName(name) && parsed.success) env[name] = parsed.data;
+        if (envName.safeParse(name).success && isTenantEnvName(name) && parsed.success) env[name] = parsed.data;
         else warnIgnoredSetting(tenant, `env.${name}`);
       }
       settings.env = env;
