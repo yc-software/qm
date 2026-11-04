@@ -26,6 +26,7 @@ const eventSchema = z.object({
     user,
     body: z.string(),
     mentions_agent: z.boolean().default(false),
+    app_post: z.boolean().default(false),
     created_at: z.iso.datetime({ offset: true }),
   }),
 });

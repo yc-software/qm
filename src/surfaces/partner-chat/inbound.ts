@@ -83,13 +83,15 @@ export function createPartnerChatInbound(deps: {
     const author = bot ? partnerChatPrincipal(listed, false) : humans[members.indexOf(listed)]!;
     const thread = event.thread_id ?? undefined;
     const container = partnerChatRef({ account: event.account, kind: chat.kind, chat: chat.id });
-    const own = bot ? await findMessage(cache, container, message.id, { self: true, includeDeleted: true }) : undefined;
-    if (own && event.type === "message.created") {
+    if (message.app_post && event.type === "message.created") {
       console.log(
         `[partner-chat] ignoring chat ${chat.id} message ${message.id}: it echoes one of the agent's own posts`,
       );
       return { status: 200, body: { ok: true, ignored: "own_message" } };
     }
+    const own = message.app_post
+      ? await findMessage(cache, container, message.id, { self: true, includeDeleted: true })
+      : undefined;
     const ts = own?.ts ?? partnerChatTs(message.created_at, message.id);
     const addressed =
       event.type === "message.created" &&
@@ -107,7 +109,7 @@ export function createPartnerChatInbound(deps: {
           authorId: own?.authorId ?? author.externalId,
           ...(!own && author.displayName ? { authorName: author.displayName } : {}),
           text: message.body,
-          ...(own ? { self: true, handled: true } : {}),
+          ...(message.app_post ? { self: true, handled: true } : {}),
           ...(bot ? { bot: true } : {}),
           ...(message.mentions_agent ? { mentionsSelf: true } : {}),
           ...(addressed ? { handled: true } : {}),

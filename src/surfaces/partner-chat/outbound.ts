@@ -1,10 +1,8 @@
 import type { App } from "../../api/app-types.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
-import type { SurfaceCache } from "../../surface-cache/surface-cache.ts";
 import type { Delivery } from "../../types.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
-  findMessage,
   partnerChatContainer,
   partnerChatMessageId,
   partnerChatRef,
@@ -46,7 +44,6 @@ export function createPartnerChatDeliveries(deps: {
   secret: string;
   deliveries: Pick<DeliveryStore, "claimPending" | "ack" | "fail">;
   app: Pick<App, "ingestSurfaceEvents">;
-  surfaceCache: Pick<SurfaceCache, "readMessages">;
   serialize: <T>(fn: () => Promise<T>) => Promise<T>;
   fetch?: typeof fetch;
   now?: () => number;
@@ -95,14 +92,12 @@ export function createPartnerChatDeliveries(deps: {
       return;
     }
     const at = now();
-    const container = partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat });
-    const echoed = await findMessage(deps.surfaceCache, container, String(messageId), { includeDeleted: true });
     await deps.app.ingestSurfaceEvents(
       [
         {
           surface: "partner-chat",
-          container,
-          ts: echoed?.ts ?? partnerChatTs(new Date(at).toISOString(), String(messageId)),
+          container: partnerChatRef({ account: ref.account, kind: ref.kind, chat: ref.chat }),
+          ts: partnerChatTs(new Date(at).toISOString(), String(messageId)),
           sub: thread ?? null,
           authorId: SELF_AUTHOR,
           text: body,

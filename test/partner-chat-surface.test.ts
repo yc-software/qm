@@ -65,6 +65,7 @@ function event(
     messageId?: string;
     thread?: string;
     bot?: boolean;
+    appPost?: boolean;
   } = {},
 ) {
   return {
@@ -89,6 +90,7 @@ function event(
         : { id: "5", email: "ada@example.com", name: "Ada Lovelace" },
       body: overrides.body ?? "hello there",
       mentions_agent: overrides.mentions ?? false,
+      ...(overrides.appPost ? { app_post: true } : {}),
       created_at: "2026-11-02T20:00:00Z",
     },
   };
@@ -283,19 +285,13 @@ test("partner-chat conversation reads are answered from the mirror", async () =>
   }
 });
 
-function outboundFor(
-  url: string,
-  deliveries = createDeliveryStore(),
-  mirrored: IngestEvent[] = [],
-  stored: Array<{ ts: string }> = [],
-) {
+function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: IngestEvent[] = []) {
   let serialized = 0;
   const outbound = createPartnerChatDeliveries({
     url,
     secret: SECRET,
     deliveries,
     app: { ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }) },
-    surfaceCache: { readMessages: async () => stored as never },
     serialize: async (fn) => {
       serialized += 1;
       return fn();
@@ -640,7 +636,7 @@ test("a partner-chat history read returns a long message whole", async () => {
   }
 });
 
-test("a bot message echoing one of the agent's own posts is dropped, while its edits and deletes apply to the stored post", async () => {
+test("an event for a message the agent posted is dropped even before the post is recorded, while its edits and deletes apply to the stored post", async () => {
   const { built, partnerChat, deliver } = await partnerChatApp();
   try {
     await deliver(event({ body: "!post on the record", mentions: true, eventId: "ev-own", messageId: "1095" }));
@@ -651,7 +647,22 @@ test("a bot message echoing one of the agent's own posts is dropped, while its e
         .readMessages(CONTAINER, { surface: "partner-chat", noFallback: true })
         .then((all) => all.filter((m) => m.text === "on the record").map((m) => [Boolean(m.self), Boolean(m.bot)]));
     await settle(async () => (await rows()).length === 1);
-    const echo = event({ body: "on the record", eventId: "ev-echo", messageId: posted.id, thread: "1095", bot: true });
+    const early = event({ body: "not yet recorded", eventId: "ev-early", messageId: "1199", bot: true, appPost: true });
+    assert.deepEqual(await deliver(early), { status: 200, body: { ok: true, ignored: "own_message" } });
+    assert.equal(
+      (await built.surfaceCache.readMessages(CONTAINER, { surface: "partner-chat", noFallback: true })).some(
+        (m) => m.text === "not yet recorded",
+      ),
+      false,
+    );
+    const echo = event({
+      body: "on the record",
+      eventId: "ev-echo",
+      messageId: posted.id,
+      thread: "1095",
+      bot: true,
+      appPost: true,
+    });
     assert.deepEqual(await deliver(echo), { status: 200, body: { ok: true, ignored: "own_message" } });
     assert.deepEqual(await rows(), [[true, true]]);
     const own = () =>
@@ -668,11 +679,19 @@ test("a bot message echoing one of the agent's own posts is dropped, while its e
       messageId: posted.id,
       thread: "1095",
       bot: true,
+      appPost: true,
     });
     updated.type = "message.updated";
     assert.deepEqual(await deliver(updated), { status: 200, body: { ok: true } });
     assert.deepEqual(await own(), [["on the record, revised", true, true, false]]);
-    const deleted = event({ body: "", eventId: "ev-echo-delete", messageId: posted.id, thread: "1095", bot: true });
+    const deleted = event({
+      body: "",
+      eventId: "ev-echo-delete",
+      messageId: posted.id,
+      thread: "1095",
+      bot: true,
+      appPost: true,
+    });
     deleted.type = "message.deleted";
     assert.deepEqual(await deliver(deleted), { status: 200, body: { ok: true } });
     assert.deepEqual(
@@ -685,6 +704,7 @@ test("a bot message echoing one of the agent's own posts is dropped, while its e
       messageId: posted.id,
       thread: "1095",
       bot: true,
+      appPost: true,
     });
     late.type = "message.updated";
     assert.deepEqual(await deliver(late), { status: 200, body: { ok: true } });
@@ -823,7 +843,6 @@ test("a retryable failure holds back later posts in that chat only", async () =>
     secret: SECRET,
     deliveries,
     app: { ingestSurfaceEvents: async () => ({ upserted: 0 }) },
-    surfaceCache: { readMessages: async () => [] },
     serialize: (fn) => fn(),
     fetch: async (_url, init) => {
       const body = JSON.parse(String(init?.body)) as { chat_id: string; body: string };
@@ -849,24 +868,4 @@ test("a retryable failure holds back later posts in that chat only", async () =>
     (await deliveries.pending("partner-chat")).map((d) => d.text),
     ["first in 88", "second in 88"],
   );
-});
-
-test("an echo of the agent's post that arrives before the post returns becomes the agent's own row", async () => {
-  const partnerChat = await fakePartnerChat();
-  const echo = { ts: "1793649601.00000000000000000043" };
-  const { outbound, deliveries, mirrored } = outboundFor(partnerChat.url, undefined, [], [echo]);
-  try {
-    await deliveries.enqueue({
-      destination: { type: "partner-chat", target: CONTAINER },
-      text: "posted",
-      idempotencyKey: "echo-race",
-    });
-    await outbound.drain();
-    assert.deepEqual(
-      mirrored.map((m) => [m.ts, m.self, m.text]),
-      [[echo.ts, true, "posted"]],
-    );
-  } finally {
-    await partnerChat.close();
-  }
 });
