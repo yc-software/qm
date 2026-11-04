@@ -124,20 +124,21 @@ export function createTenancy(pool: PgPool, owner: PgPool = pool): Tenancy {
     },
     async updateSettings(tenant, patch) {
       if (!(await knownTenant(tenant))) return { ok: false, error: "unknown_tenant" };
-      const stored = (await owner.q("SELECT settings FROM tenants WHERE id = $1", [tenant]))[0]?.settings;
-      const merged: Record<string, unknown> = typeof stored === "object" && stored !== null ? { ...stored } : {};
-      const changes: Record<string, unknown> = {};
+      const current = readTenantSettings(
+        (await owner.q("SELECT settings FROM tenants WHERE id = $1", [tenant]))[0]?.settings,
+        tenant,
+      );
+      const merged: Record<string, unknown> = { ...current };
       for (const [key, value] of Object.entries(patch)) {
         if (value === null) delete merged[key];
-        else changes[key] = value;
+        else merged[key] = value;
       }
-      const parsed = tenantSettingsSchema.safeParse(changes);
+      const parsed = tenantSettingsSchema.safeParse(merged);
       if (!parsed.success)
         return { ok: false, error: "invalid_settings", message: parsed.error.issues[0]?.message ?? "" };
-      Object.assign(merged, parsed.data);
-      await owner.q("UPDATE tenants SET settings = $2 WHERE id = $1", [tenant, JSON.stringify(merged)]);
+      await owner.q("UPDATE tenants SET settings = $2 WHERE id = $1", [tenant, JSON.stringify(parsed.data)]);
       settingsCache.delete(tenant);
-      return { ok: true, keys: Object.keys(readTenantSettings(merged, tenant)).sort() };
+      return { ok: true, keys: Object.keys(parsed.data).sort() };
     },
     async rowTenant(table, id) {
       const rows = await owner.q(`SELECT tenant_id::text AS tenant FROM ${table} WHERE id = $1 LIMIT 2`, [id]);
