@@ -111,8 +111,8 @@ test("a queue outrunning the work stage asks to throttle", async () => {
 
 test("unconfirmed undeclared outputs quarantine the loop", async () => {
   const configured = await loop();
-  const items = createLoopItemLedger(testMap());
   const outputs = createLoopOutputStore(testMap());
+  const items = createLoopItemLedger(testMap(), outputs);
   const { item } = await items.enqueue({ loopId: configured.id, sourceKey: "pending" });
   const output = await outputs.capture({
     loopId: configured.id,

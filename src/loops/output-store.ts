@@ -85,6 +85,15 @@ export function unresolvedOutput(output: LoopOutput): boolean {
   return output.state === "ready" || output.state === "shipping" || output.state === "unconfirmed";
 }
 
+function shipClaimExpired(output: LoopOutput, now: number): boolean {
+  return output.state === "shipping" && (output.claimedAt ?? 0) + SHIP_LEASE_MS <= now;
+}
+
+function supersedable(output: LoopOutput, now: number): boolean {
+  if (output.state === "shipping") return shipClaimExpired(output, now);
+  return output.state === "staged" || unresolvedOutput(output);
+}
+
 export function createLoopOutputStore(
   backing: DurableMap<LoopOutput>,
   onEvent?: (output: LoopOutput) => void,
@@ -92,8 +101,12 @@ export function createLoopOutputStore(
   const forLoop = async (loopId: string): Promise<LoopOutput[]> =>
     (await backing.all()).filter((output) => output.loopId === loopId);
 
+  const byItem = async (itemId: string): Promise<LoopOutput[]> =>
+    (await backing.select({ where: { field: "itemId", anyOfFold: [itemId] } })).filter(
+      (output) => output.itemId === itemId,
+    );
   const byAttempt = async (itemId: string, attemptId: string): Promise<LoopOutput[]> =>
-    (await backing.all()).filter((output) => output.itemId === itemId && output.attemptId === attemptId);
+    (await byItem(itemId)).filter((output) => output.attemptId === attemptId);
   const atomicUpdate = backing.update.bind(backing);
   const update = async (id: string, change: (output: LoopOutput) => LoopOutput): Promise<LoopOutput | null> => {
     const output = await atomicUpdate(id, change);
@@ -161,9 +174,7 @@ export function createLoopOutputStore(
     },
     get: (id) => backing.get(id),
     byLoop: forLoop,
-    async byItem(itemId) {
-      return (await backing.all()).filter((output) => output.itemId === itemId);
-    },
+    byItem,
     async awaitingReview(loopId) {
       return (await forLoop(loopId))
         .filter((output) => output.state === "ready")
@@ -198,15 +209,12 @@ export function createLoopOutputStore(
     },
     async supersedeActiveSiblings(itemId, exceptOutputId) {
       const superseded: LoopOutput[] = [];
-      for (const output of (await backing.all()).filter(
-        (candidate) =>
-          candidate.itemId === itemId &&
-          candidate.id !== exceptOutputId &&
-          (candidate.state === "staged" || unresolvedOutput(candidate)),
+      for (const output of (await byItem(itemId)).filter(
+        (candidate) => candidate.id !== exceptOutputId && supersedable(candidate, Date.now()),
       )) {
         const after = await applyIf(
           output.id,
-          (current) => current.state === "staged" || unresolvedOutput(current),
+          (current) => supersedable(current, Date.now()),
           (current, now) => ({ ...current, state: "superseded", updatedAt: now }),
         );
         if (after) superseded.push(after);
@@ -216,9 +224,7 @@ export function createLoopOutputStore(
     async claimShipping(id, claimedAt = Date.now()) {
       return applyIf(
         id,
-        (output) =>
-          output.state === "ready" ||
-          (output.state === "shipping" && (output.claimedAt ?? 0) + SHIP_LEASE_MS <= claimedAt),
+        (output) => output.state === "ready" || shipClaimExpired(output, claimedAt),
         (output) => ({ ...output, state: "shipping", claimedAt, claimToken: randomUUID(), updatedAt: claimedAt }),
       );
     },

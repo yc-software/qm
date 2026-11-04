@@ -317,6 +317,7 @@ test("loop ingress maintenance renews, processes and prunes each tenant's source
         await deliveries.put(`old-${owner}`, finishedDelivery(owner));
       });
     const checked = new Set<string>();
+    const outputs = createLoopOutputStore(maps.map("loop_outputs"));
     const ingress = createLoopIngress({
       enabledFor: async (owner) => {
         checked.add(`${owner}:${boundTenant()}`);
@@ -325,8 +326,8 @@ test("loop ingress maintenance renews, processes and prunes each tenant's source
       sources,
       deliveries,
       loops: createLoopStore(maps.map("loops")),
-      items: createLoopItemLedger(maps.map("loop_items")),
-      outputs: createLoopOutputStore(maps.map("loop_outputs")),
+      items: createLoopItemLedger(maps.map("loop_items"), outputs),
+      outputs,
       fire: { fire: async (): Promise<{ status: TurnResult["status"] }> => ({ status: "ok" }) },
       lock: createNoopAdvisoryLock(),
     });

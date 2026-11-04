@@ -12,8 +12,7 @@ export type LedgerEventOp =
   | "ready"
   | "shipped"
   | "returned"
-  | "parked"
-  | "skipped";
+  | "parked";
 
 export interface LedgerEvent {
   loopId: string;

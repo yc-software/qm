@@ -26,7 +26,10 @@ test(
         playbook: "Review",
         successCondition: "Reviewed",
       });
-      const items = createLoopItemLedger(testMap(), undefined, { lock, accepts: async () => true });
+      const items = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()), undefined, {
+        lock,
+        accepts: async () => true,
+      });
       let worked = false;
       const ingress = createLoopIngress({
         enabledFor: async () => true,

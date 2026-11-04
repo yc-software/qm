@@ -11,6 +11,7 @@ import type {
 } from "./types.ts";
 import { isResolved } from "./ledger-view.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import type { LoopOutputStore } from "./output-store.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -99,7 +100,6 @@ export interface LoopItemLedger {
   markShipped(id: string, claimToken?: string): Promise<LoopItem | null>;
   returnToWork(id: string, guidance: string, claimToken?: string): Promise<LoopItem | null>;
   park(id: string, reason: string, claimToken?: string): Promise<LoopItem | null>;
-  skip(id: string, reason: string): Promise<LoopItem | null>;
   stats(loopId: string, now: number, held?: ReadonlySet<string>): Promise<LoopQueueStats>;
   deleteByLoop(loopId: string): Promise<void>;
 }
@@ -210,6 +210,7 @@ function mergeIngest(item: LoopItem, entry: IngestEntryInput, now: number): Loop
 
 export function createLoopItemLedger(
   backing: DurableMap<LoopItem>,
+  outputs: Pick<LoopOutputStore, "supersedeActiveSiblings">,
   onEvent?: (event: LedgerEvent) => void,
   coordination?: {
     lock: import("../persistence/advisory-lock.ts").AdvisoryLock;
@@ -447,8 +448,10 @@ export function createLoopItemLedger(
           ...(input.result !== undefined ? { actionResult: input.result } : {}),
         };
       });
-      if (applied) emit(after, "action");
-      return applied ? after : null;
+      if (!applied) return null;
+      emit(after, "action");
+      await outputs.supersedeActiveSiblings(id, "");
+      return after;
     },
     async reopen(id, opts) {
       let applied = false;
@@ -615,20 +618,6 @@ export function createLoopItemLedger(
         }),
         claimToken,
         "parked",
-      ),
-    skip: (id, reason) =>
-      transition(
-        id,
-        new Set(["queued", "in_progress"]),
-        (item, now) => ({
-          ...item,
-          status: "skipped",
-          parkedReason: reason,
-          claimedAt: undefined,
-          updatedAt: now,
-        }),
-        undefined,
-        "skipped",
       ),
     async stats(loopId, now, held) {
       const items = (await forLoop(loopId)).filter((item) => !held?.has(item.id));
