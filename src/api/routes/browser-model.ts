@@ -56,6 +56,15 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
       runtime: { modelId: capability.browserModel },
       ...(personal ? { providerKeys: personal.keys } : {}),
     });
+    if (
+      personal
+        ? personal.authLabel === "claude-oauth-pi"
+        : deps.companySubscriptionAuth === "anthropic" && route.model.provider === "anthropic"
+    )
+      return sendJson(res, 422, {
+        error:
+          "Claude subscription access does not support the browser agent. Choose company access, ChatGPT, or a Claude API key in Settings.",
+      });
     if (!deps.modelRoutes.servable(route))
       return sendJson(res, 503, { error: `${routeLabel(route)} has no credential` });
     sendJson(

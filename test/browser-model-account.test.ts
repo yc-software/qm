@@ -95,7 +95,7 @@ const structuredRequest = {
   },
 };
 
-test("browser requests run on the person's own Claude key or subscription, as their session does", async (t) => {
+test("browser requests run on the person's own Claude key, as their session does", async (t) => {
   const { built, calls, post } = await browserEndpoint(t, () => anthropicToolResult({ done: true }));
   await built.config.setPersonalModelAuth("U1", true, "anthropic");
   const claims = { browserAccount: "anthropic" as const, browserModel: "claude-opus-5" };
@@ -119,13 +119,13 @@ test("browser requests run on the person's own Claude key or subscription, as th
     expiresAt: Date.now() + 3600_000,
   });
   const subscribed = await post(claims, structuredRequest);
-  assert.equal(subscribed.status, 200, await subscribed.clone().text());
-  assert.equal(calls[1]?.host, "api.anthropic.com");
-  assert.equal(calls[1]?.headers.get("authorization"), "Bearer sk-ant-oat01-subscription");
+  assert.equal(subscribed.status, 422);
+  assert.match(await subscribed.text(), /Claude subscription/);
+  assert.equal(calls.length, 1);
 
   await built.userModelCredentials.delete("U1", "anthropic");
   assert.equal((await post(claims, structuredRequest)).status, 409);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 1);
 });
 
 test("a failed browser request names the model and the account it billed", async (t) => {
