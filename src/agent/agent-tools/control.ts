@@ -327,16 +327,13 @@ export function controlPlaneTools(kit: ToolKit) {
     deploy: "App ID or handle.",
     cron: "Artifact ID.",
   };
-  function sharingTool(type: "file" | "skill" | "deploy" | "cron", move = false): ToolDefinition {
+  function sharingTool(type: "file" | "skill" | "deploy" | "cron"): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
-    const action = move ? "move" : "share";
+    const action = "share";
     let description = "Grant access to an artifact you own; grantees cannot reshare.";
     if (type === "file")
       description = "Share a Files record by ID (upload a sandbox path with POST /v1/files/uploads first).";
-    if (move)
-      description =
-        "Move to another context; moving an app transfers ownership; shares survive. Moving a skill to the org needs an org admin on a user-started turn.";
-    else if (type === "deploy")
+    if (type === "deploy")
       description =
         "Change access to an app you own: `public`, or toScope/email for signed-in access (external emails view-only).";
     return defineTool({
@@ -346,7 +343,7 @@ export function controlPlaneTools(kit: ToolKit) {
       parameters: Type.Object({
         id: Type.String({ description: ARTIFACT_ID_DESCRIPTIONS[type] }),
         toScope:
-          type === "deploy" && !move
+          type === "deploy"
             ? Type.Optional(
                 Type.String({
                   description: '"org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
@@ -355,7 +352,7 @@ export function controlPlaneTools(kit: ToolKit) {
             : Type.String({
                 description: '"org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
               }),
-        ...(type === "deploy" && !move
+        ...(type === "deploy"
           ? {
               email: Type.Optional(
                 Type.String({
@@ -374,15 +371,11 @@ export function controlPlaneTools(kit: ToolKit) {
               ),
             }
           : {}),
-        ...(!move
-          ? {
-              permission: Type.Optional(
-                Type.Union([Type.Literal("read"), Type.Literal("write")], {
-                  description: "read (default) or write (manage).",
-                }),
-              ),
-            }
-          : {}),
+        permission: Type.Optional(
+          Type.Union([Type.Literal("read"), Type.Literal("write")], {
+            description: "read (default) or write (manage).",
+          }),
+        ),
       }),
       async execute(callId, args) {
         const params = args as {
@@ -397,7 +390,7 @@ export function controlPlaneTools(kit: ToolKit) {
         if (!tc) return text("[error] no active tool context");
         const id = params.id;
         await recordCall(callId, { tool, action, type, id });
-        if (type === "deploy" && !move && params.public !== undefined) {
+        if (type === "deploy" && params.public !== undefined) {
           if (params.toScope !== undefined || params.email !== undefined)
             return recordResult(
               callId,
@@ -425,7 +418,6 @@ export function controlPlaneTools(kit: ToolKit) {
           ...(params.toScope ? splitToScope(params.toScope) : {}),
           ...(params.email !== undefined ? { email: params.email } : {}),
           ...(params.permission !== undefined ? { permission: params.permission } : {}),
-          ...(move ? { move: true } : {}),
           ...(params.notify !== undefined ? { notify: params.notify } : {}),
         });
         if (isUnavailable(r)) return unavailable(callId, tool);
@@ -446,7 +438,7 @@ export function controlPlaneTools(kit: ToolKit) {
           callId,
           { tool, action, verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
           text(
-            `${r.verb === "move" ? "Moved" : "Shared"} ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
+            `Shared ${r.type} ${r.id} → ${r.target.label}${r.verb === "share" ? ` (${r.permission})` : ""}.${invitationNote}`,
           ),
         );
       },
