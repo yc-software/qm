@@ -1198,11 +1198,14 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     (pathname === "/v1/slack/managed/installation" && (method === "POST" || method === "DELETE")) ||
     (pathname === "/v1/slack/managed/events" && method === "POST")
   ) {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, ["authorization", "content-type"]);
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "", forwardHost: true }, [
+      "authorization",
+      "content-type",
+    ]);
   }
 
   if (pathname === "/v1/surfaces/partner-chat/events" && method === "POST") {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "" }, [
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: "", forwardHost: true }, [
       "content-type",
       "content-length",
       "x-agent-app-request-timestamp",
