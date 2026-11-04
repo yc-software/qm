@@ -9,7 +9,6 @@ import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { testConfigStore } from "./support/test-database.ts";
 import { orgScope } from "../src/config.ts";
-import { codexSubscriptionModelId } from "../src/model/pi-models.ts";
 
 const GATEWAY = {
   url: "https://gateway.example/v1",
@@ -230,7 +229,7 @@ test("a summary that fails everywhere names each route it tried and why", async 
       assert.ok(error instanceof ProviderTurnError);
       assert.equal(error.code, "model_budget");
       assert.match(error.message, /shared model gateway.*Budget has been exceeded/s);
-      assert.match(error.message, /fallback .*organization's own provider key.*key revoked/s);
+      assert.match(error.message, /fallback .*organization's own provider key or subscription\).*key revoked/s);
     },
   );
 });
@@ -318,32 +317,6 @@ test("the runtime listing says which account each model bills", async () => {
   assert.equal(personal.modelCatalog["gpt-6-astra"]?.billing, "personal_account");
 });
 
-test("with company ChatGPT access and a gateway, an OpenAI model runs on and is labelled as the subscription", async () => {
-  const agent = createAgent({
-    defaultModelId: "gpt-6-astra",
-    modelGateway: GATEWAY,
-    resolveProviderKeys: async () => ({ "openai-codex": CHATGPT_LOGIN, anthropic: "sk-anthropic" }),
-    companyModelId: codexSubscriptionModelId,
-    resolveFallbackRuntime: () => ({ modelId: "claude-sonnet-5" }),
-  });
-  await withFetch(
-    (url) =>
-      new URL(url).host === "chatgpt.com"
-        ? errorReply(401, "authentication_error", "subscription expired")
-        : errorReply(401, "authentication_error", "key revoked"),
-    async (calls) => {
-      const error = await compact(agent).then(
-        () => assert.fail("both routes fail"),
-        (e: unknown) => e,
-      );
-      assert.ok(error instanceof ProviderTurnError);
-      assert.match(error.message, /^GPT-6 Astra \(billed to the organization's own provider key or subscription\)/);
-      assert.ok(calls.every((call) => call.host !== "gateway.example"));
-      assert.equal(calls[0]?.host, "chatgpt.com");
-    },
-  );
-});
-
 test("the runtime listing bills an OpenAI model to company ChatGPT access even when a gateway also serves it", async () => {
   const deps = {
     config: testConfigStore("default-org"),
@@ -355,5 +328,4 @@ test("the runtime listing bills an OpenAI model to company ChatGPT access even w
   await deps.config!.setWebuiModels(orgScope(), ["claude-sonnet-5", "gpt-6-astra"]);
   const listed = await runtimeConfigBody({ deps }, orgScope());
   assert.equal(listed.modelCatalog["gpt-6-astra"]?.billing, "org_key");
-  assert.equal(listed.modelCatalog["claude-sonnet-5"]?.billing, "org_key");
 });

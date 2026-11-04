@@ -1485,9 +1485,7 @@ export function buildApp(
     ...(configDefault ? { defaultModelId: configDefault } : {}),
     resolveProviderKeys: resolveCompanyProviderKeys,
     ...(gatewayTransport ? { modelGateway: gatewayTransport } : {}),
-    ...(directProviderAvailability.codexOAuth
-      ? { companyModelId: (id: string) => companyModelId(id, directProviderAvailability) }
-      : {}),
+    companyModelId: (id: string) => companyModelId(id, directProviderAvailability),
     resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
   });
   const baseAgent =
