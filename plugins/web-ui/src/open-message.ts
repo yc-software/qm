@@ -1,3 +1,4 @@
+import { swallowAs } from "../../chassis/src/errors";
 import {
   fetchTranscript,
   TAIL_TURNS,
@@ -10,7 +11,6 @@ import { focusedPaneConversation } from "./split";
 import { loadMessageTranscript, messageEntrySeqs } from "./message-link.ts";
 import { openSession, revealSessionSurface, sessionsState } from "./sessions";
 
-/** Switch to `linked` (adding it to the sidebar list if absent) and, given a seq, scroll to and highlight that entry. */
 export async function showLinkedSession(
   linked: CoreSession,
   transcript?: Promise<TranscriptPage | null>,
@@ -28,18 +28,12 @@ export async function showLinkedSession(
     });
 }
 
-/**
- * Open a session at one of its messages: reveal it in place when the session is already on screen, otherwise load
- * a transcript window reaching back to `seq` before switching. Resolves false when the session couldn't be found.
- */
 export async function openSessionAtMessage(
   sessionId: string,
   seq: number | null,
   findSession?: () => Promise<CoreSession | null>,
   historyMode: "push" | "replace" = "replace",
 ): Promise<boolean> {
-  // Reveal in place only when the entry is already rendered in the focused chat; an older entry, or a chat sitting in
-  // an unfocused split pane, goes through a full open so the history is paged back and the pane is activated.
   const focused = focusedPaneConversation() ?? mainConversation();
   const host = focused.state.host;
   if (focused.state.sessionId === sessionId && host?.isConnected) {
@@ -53,7 +47,7 @@ export async function openSessionAtMessage(
     }
   }
   const transcript = loadMessageTranscript((window) => fetchTranscript(sessionId, window), seq, TAIL_TURNS).catch(
-    () => null,
+    swallowAs("web-ui: open session at message", null),
   );
   const linked =
     sessionsState.list.find((s) => s.id === sessionId) ??
