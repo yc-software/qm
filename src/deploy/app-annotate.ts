@@ -59,7 +59,11 @@ export const ANNOTATE_JS = String.raw`
     e.preventDefault(); setAnnotating(!annotating);
   };
   window.addEventListener("keydown", annotationShortcut);
-  window.addEventListener("qm:shell-bare", () => { if (annotating) setAnnotating(false); });
+  window.addEventListener("qm:shell-bare", () => {
+    annotating = false; annotationChatOpen = false;
+    annotationToggle.dataset.on = "0"; annotationToggle.setAttribute("aria-pressed", "false");
+    if (annotationReady) postAnnotationToggle();
+  });
   const bindAnnotationShortcut = () => {
     try { app.contentWindow.addEventListener("keydown", annotationShortcut); } catch {}
   };
@@ -104,7 +108,7 @@ export const ANNOTATE_JS = String.raw`
     return { text, files };
   };
   const drainAnnotations = async () => {
-    if (draining || !snapshots.size) return;
+    if (draining || !snapshots.size || document.body.classList.contains("leaving")) return;
     draining = true;
     clearTimeout(retryTimer);
     try {
