@@ -11,7 +11,8 @@ import type { SessionStore } from "./session-store.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { swallowAs } from "../util/errors.ts";
-import { proseText } from "./items.ts";
+import { type Item, proseText } from "./items.ts";
+import { commonEntrySeqs } from "./transcript-source.ts";
 import {
   ANCESTOR_STOP,
   assertAudienceCompatible,
@@ -47,7 +48,7 @@ export function renderSubagentMail(input: {
     refused: "was refused",
     stopped: "was stopped",
   };
-  const stopReason = input.kind === "stopped" && input.stopReason ? ` ${input.stopReason}` : "";
+  const stopReason = input.stopReason ? ` ${input.stopReason}` : "";
   return [
     `<wake reason="subagent" name="${xmlAttrEscape(input.title)}" sessionId="${input.sessionId}" kind="${input.kind}" at="${new Date().toISOString()}">`,
     `  <why>Your subagent session "${xmlEscape(input.title)}" ${why[input.kind]}${xmlEscape(stopReason)}.</why>`,
@@ -303,35 +304,34 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const title = child.title?.trim() || child.id;
   const result = run.result;
   const failed = run.status === "failed" || result?.status === "failed";
-  const said = result?.stopped || failed ? await turnText(deps, child, run) : undefined;
-  const { kind, body } = mailOf(run, failed, said?.text);
+  const ending = failed ? "failed" : "completed";
+  const wake = {
+    dedupKey: `subagent-return:${run.id}`,
+    text: COMPLETION_WAKE,
+    displayText: `Delegated task ${result?.stopped ? "stopped" : ending}`,
+  };
+  const turn = await parentTurn(deps, child, parent, run.request, wake.text, wake.displayText);
+  const { meta, prepared } = turn;
+  const outputSeq = result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? result?.sourceUserSeq;
+  const quotes = result?.stopped === true || failed;
+  const readers = [...new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])];
+  const views =
+    quotes || (outputSeq !== undefined && outputSeq !== null)
+      ? await Promise.all(readers.map((id) => deps.sessions.visibleItems(child.id, id)))
+      : [];
+  const shared = commonEntrySeqs(views);
+  if (outputSeq !== undefined && outputSeq !== null && !shared.has(outputSeq))
+    throw new Error("the current parent audience cannot read this child result");
+  const { kind, body } = mailOf(run, failed, quotes ? turnText(views[0] ?? [], shared, run) : undefined);
   const text = renderSubagentMail({
     title,
     sessionId: child.id,
     kind,
     body:
       body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
-    ...(result?.stopReason ? { stopReason: result.stopReason } : {}),
+    ...(result?.stopped && result.stopReason ? { stopReason: result.stopReason } : {}),
   });
-  const turn = await parentTurn(
-    deps,
-    child,
-    parent,
-    run.request,
-    text,
-    `[subagent ${title}: ${kind.replace("_", " ")}]`,
-  );
-  const { meta, prepared } = turn;
-  const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
-  const shownSeqs = [outputSeq, said?.seq].filter((seq) => seq !== undefined && seq !== null);
-  if (shownSeqs.length) {
-    for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
-      const visible = new Set((await deps.sessions.visibleItems(child.id, id)).map((item) => item.seq));
-      if (!shownSeqs.every((seq) => visible.has(seq)))
-        throw new Error("the current parent audience cannot read this child result");
-    }
-  }
-  if (result?.attachments?.length && deps.deliveries) {
+  if (result?.attachments?.length && deps.deliveries && !result.stopped) {
     const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);
     const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
     const destination =
@@ -358,11 +358,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     text,
     ...(outputSeq !== undefined && outputSeq !== null ? { sourceEntrySeq: outputSeq } : {}),
   };
-  const wake = {
-    dedupKey: `subagent-return:${run.id}`,
-    text: COMPLETION_WAKE,
-    displayText: "Delegated task completed",
-  };
   const wakes =
     !stopped ||
     (stopped === "self" &&
@@ -372,19 +367,16 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   return (await mailParent(deps, child, parent, turn, mail, wakes ? wake : undefined)) === "settled";
 }
 
-async function turnText(
-  deps: Pick<SubagentMailDeps, "sessions">,
-  child: Session,
-  run: Run,
-): Promise<{ seq: number; text: string } | undefined> {
+function turnText(items: readonly Item[], shared: ReadonlySet<number>, run: Run): string | undefined {
   const since = run.turnUserSeq ?? run.result?.sourceUserSeq;
   if (since === undefined || since === null) return undefined;
   const turnId = run.id.toLowerCase();
-  const items = await deps.sessions.visibleItems(child.id, run.request.actor.id, { sinceSeq: since });
   for (const item of items.toReversed()) {
-    if (item.turnId !== turnId || item.kind !== "AgentMessage" || item.variant === "files_delivered") continue;
+    if (item.seq < since) return undefined;
+    if (!shared.has(item.seq) || item.turnId !== turnId) continue;
+    if (item.kind !== "AgentMessage" || item.variant === "files_delivered") continue;
     const text = proseText(item)?.trim();
-    if (text) return { seq: item.seq, text };
+    if (text) return text;
   }
   return undefined;
 }

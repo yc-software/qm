@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { wireRunResultDeliveries, runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
@@ -853,8 +854,8 @@ test("a child stopped on its own mails its partial output and wakes its top-leve
     assert.ok(mail!.text.includes(`Your subagent session "tracer" was stopped${stopReason ? ` ${stopReason}` : ""}.`));
     assert.match(mail!.text, /<content>found 2 of 3 call sites so far<\/content>/);
     assert.deepEqual(
-      (await r.runs.inFlightForThread(r.room.threadRef)).map((wake) => wake.dedupKey),
-      [`subagent-return:${run.id}`],
+      (await r.runs.inFlightForThread(r.room.threadRef)).map((wake) => [wake.dedupKey, wake.request.displayText]),
+      [[`subagent-return:${run.id}`, "Delegated task stopped"]],
     );
   }
 });
@@ -915,7 +916,62 @@ test("a failed child's mail carries the failure reason and the last thing it sai
     ),
   );
   assert.doesNotMatch(mail!.text, /an older turn's reply/);
-  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 1);
+  assert.deepEqual(
+    (await r.runs.inFlightForThread(r.room.threadRef)).map((wake) => wake.request.displayText),
+    ["Delegated task failed"],
+  );
+});
+
+test("stopped mail quotes only its own run's text that the whole parent audience can see, and forwards no files", async () => {
+  const r = await rig();
+  const other: Principal = { id: "U2", type: "internal", displayName: "Blair" };
+  const both: Conversation = { ...conversation, audience: [actor, other] };
+  await recordContext(r.sessions, r.room, { actor, conversation: both, surface: "slack", deliveryTarget: "D1" });
+  await r.sessions.addParticipant(r.room.id, other.id);
+  const { run: origin } = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    request: {
+      actor,
+      conversation: both,
+      surface: "slack",
+      deliveryTarget: "D1",
+      origin: { kind: "human" },
+      text: "go",
+    },
+  });
+  await r.runs.claimById(origin.id, "worker", 60_000);
+  const opened = await createSessionSyscalls({ ...r, maxAttempts: 3 })
+    .forTurn({ session: r.room, scopeId: scope, request: { ...origin.request, runId: origin.id } })
+    .open({ task: "summarize", name: "summarizer" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
+  const writer = { sessionId: child.id, turnId: queued.id };
+  const asked = await r.sessions.append(writer, { kind: "UserMessage", text: "summarize" });
+  await r.runs.noteTurnUserSeq(queued.id, asked.seq);
+  await r.sessions.append(writer, { kind: "AgentMessage", variant: "narration", text: "seen by both" });
+  await r.sessions.append(writer, { kind: "AgentMessage", variant: "narration", text: "hidden from Blair" });
+  await r.runs.complete(queued.id, claimed!.leaseToken!, {
+    status: "ok",
+    reply: "hidden from Blair",
+    stopped: true,
+    stopReason: "by user",
+    attachments: [{ name: "chart.png", blobId: "chart", mimetype: "image/png", sizeBytes: 1 }],
+  });
+  await r.sessions.append({ sessionId: child.id, turnId: randomUUID() }, { kind: "AgentMessage", text: "next turn" });
+  const sessions = {
+    ...r.sessions,
+    visibleItems: async (...args: Parameters<SessionStore["visibleItems"]>) =>
+      (await r.sessions.visibleItems(...args)).filter(
+        (item) => args[1] !== other.id || item.text !== "hidden from Blair",
+      ),
+  };
+  const deliveries = createDeliveryStore();
+  await deliverSubagentMail({ ...r, sessions, deliveries, maxAttempts: 3 }, (await r.runs.get(queued.id))!);
+  const [mail] = await r.mailbox.pending(r.room.id);
+  assert.match(mail!.text, /<content>seen by both<\/content>/);
+  assert.deepEqual(await deliveries.pending("slack"), []);
 });
 
 test("a detached child sends no mail; any in-scope session can still be read", async () => {
