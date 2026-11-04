@@ -19,7 +19,7 @@ function header(headers: VerifierInput["headers"], name: string): string | undef
   return Array.isArray(v) ? v[0] : v;
 }
 
-function hmacHex(secret: string, body: string): string {
+export function hmacHex(secret: string, body: string): string {
   return createHmac("sha256", secret).update(body).digest("hex");
 }
 

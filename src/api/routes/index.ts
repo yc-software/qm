@@ -40,6 +40,7 @@ import { contextPolicyRoutes } from "./context-policy.ts";
 import { deploymentLayerRoutes } from "./deployment-layer.ts";
 import { egressAuditRoutes } from "./egress-audit.ts";
 import { slackEventRawRoutes } from "./slack-events.ts";
+import { partnerChatEventRawRoutes } from "./partner-chat-events.ts";
 import { authBrokerRoutes } from "./auth-broker.ts";
 import { inboxRoutes } from "./inbox.ts";
 import { loopItemRoutes } from "./loop-items.ts";
@@ -81,6 +82,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
     },
   },
   ...slackEventRawRoutes,
+  ...partnerChatEventRawRoutes,
   { method: "GET", path: "/v1/spend/export", auth: { aud: SPEND_EXPORT_AUD, bearer: true }, handle: spendExport },
   { match: (_m, p) => p.startsWith(GIT_HTTP_BROKER_PREFIX), auth: { aud: "credential-broker" }, handle: brokerGitHttp },
   ...connectorRawRoutes,

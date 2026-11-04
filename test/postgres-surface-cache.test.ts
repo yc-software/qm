@@ -475,3 +475,32 @@ test("pg channel guidance edits compare the stored text atomically across connec
     await Promise.all([left.close(), right.close()]);
   }
 });
+
+test("pg surface-cache: a ts suffix read finds only that message in the keyed container", { skip }, async () => {
+  const cache = createPostgresSurfaceCache(URL!);
+  try {
+    const at = (s: number, id: number) => `${s}.${String(id).padStart(20, "0")}`;
+    await cache.ingest([
+      { surface: "partner-chat", container: "pc:1", ts: at(100, 7), text: "seven", self: true },
+      { surface: "partner-chat", container: "pc:1", ts: at(100, 17), text: "seventeen" },
+      { surface: "partner-chat", container: "pc:1", ts: at(200, 70), text: "seventy" },
+      { surface: "partner-chat", container: "pc:2", ts: at(300, 7), text: "other chat" },
+    ]);
+    const find = (suffix: string, self?: boolean) =>
+      cache
+        .readMessages("pc:1", {
+          surface: "partner-chat",
+          tsSuffix: suffix,
+          ...(self === undefined ? {} : { self }),
+          noFallback: true,
+        })
+        .then((rows) => rows.map((m) => m.text));
+    assert.deepEqual(await find(`.${"7".padStart(20, "0")}`), ["seven"]);
+    assert.deepEqual(await find(`.${"17".padStart(20, "0")}`, false), ["seventeen"]);
+    assert.deepEqual(await find(`.${"17".padStart(20, "0")}`, true), []);
+    assert.deepEqual(await find(`.${"5".padStart(20, "0")}`), []);
+    await assert.rejects(() => find(""), RangeError);
+  } finally {
+    await cache.close();
+  }
+});
