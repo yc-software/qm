@@ -1292,3 +1292,50 @@ test("a judge call that throws is recorded in the admin error log instead of van
     await built.runtime.stop();
   }
 });
+
+test("the assistant's own reply after the last judged message reaches the next judge as context, never as a trigger", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const container = "C-own-reply";
+    await built.app.setChannelPolicy(container, "watch this channel", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "10.0", authorId: "U1", authorName: "Alice", text: "let's back Example Co", createdAt: 1 },
+    ]);
+    await built.app.judgeAmbientContainer("slack", container);
+    await built.app.ingestSurfaceEvents([
+      {
+        container,
+        ts: "11.0",
+        authorId: "UBOT",
+        authorName: "qm",
+        self: true,
+        bot: true,
+        text: "Want me to draft the memo for Example Co?",
+        createdAt: 2,
+      },
+    ]);
+    assert.deepEqual(await built.app.judgeAmbientContainer("slack", container), { act: false });
+    await built.app.ingestSurfaceEvents([
+      { container, ts: "12.0", authorId: "U1", authorName: "Alice", text: "hold off on Example Co", createdAt: 3 },
+    ]);
+    await built.app.judgeAmbientContainer("slack", container);
+
+    const rows = await judged(built.ambientJudgments!, container, (rows) =>
+      rows.some((r: any) => r.prompt?.includes("hold off on Example Co")),
+    );
+    const newSection = (prompt: string) => prompt.slice(prompt.indexOf("NEW MESSAGES"));
+    assert.ok(
+      rows.every((r: any) => !newSection(r.prompt ?? "").includes("draft the memo")),
+      "the assistant's own reply is never judged as a new message",
+    );
+    const hold = rows.find((r: any) => r.prompt?.includes("hold off on Example Co"))!;
+    const earlier = hold.prompt!.slice(hold.prompt!.indexOf("EARLIER CONTEXT"), hold.prompt!.indexOf("NEW MESSAGES"));
+    assert.match(earlier, /Alice: let's back Example Co\nqm \(you\): Want me to draft the memo for Example Co\?/);
+    assert.match(newSection(hold.prompt!), /\[12\.0\] Alice: hold off on Example Co/);
+    assert.equal(hold.tsFrom, "12.0");
+    assert.equal(hold.tsTo, "12.0");
+  } finally {
+    await built.runtime.stop();
+  }
+});
