@@ -51,6 +51,10 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   fifty importers is not a small change. The reviewer, not the author, has the last word on
   depth: a modest pass that spots risk it wasn't scoped for escalates on its own initiative
   rather than staying in its lane. Resolve what they find before merging.
+- **Land PRs through the merge queue.** When a PR's checks and reviews pass,
+  `gh pr merge <number>` queues it rather than merging it. The queue runs CI on the
+  exact commit that will land, reusing the PR's run when `main` has not moved, and
+  `main`'s own CI then reuses the queue's run. Never bypass the queue with `--admin`.
 - **Run independent Wall of shame reviews in parallel for every PR.** First triage with
   one fast, cheap model, the latest Haiku: give it the diff and every lens in the current
   [Wall of shame](./docs/SPEC.md#wall-of-shame), and have it mark each lens relevant or

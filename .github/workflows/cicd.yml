@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -18,7 +19,7 @@ jobs:
     name: Resolve exact tested tree
     timeout-minutes: 3
     continue-on-error: true
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: read
