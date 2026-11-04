@@ -14,7 +14,7 @@ export const CI_JOBS = [
   "Auth plugin",
   "Portal plugin",
 ];
-const PR_JOBS = [...CI_JOBS, "Co-author trailers", "Certify tested tree"];
+export const PR_JOBS = [...CI_JOBS, "Co-author trailers", "Certify tested tree"];
 const success = (item: any) => item?.status === "completed" && item.conclusion === "success";
 const sha = (value: unknown) => assert.match(String(value), /^[a-f0-9]{40}$/);
 const workflow = ".github/workflows/cicd.yml";

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { CI_JOBS, mergeQueueCi, queuedPull, readReceipt, reusableCi } from "../scripts/reuse-ci.ts";
+import { CI_JOBS, PR_JOBS, mergeQueueCi, queuedPull, readReceipt, reusableCi } from "../scripts/reuse-ci.ts";
 
 const repository = "example/qm";
 const release = "a".repeat(40),
@@ -42,7 +42,7 @@ function fixture() {
     path: "dynamic/github-code-scanning/codeql",
     repository: { full_name: repository },
   };
-  const jobs = [...CI_JOBS, "Co-author trailers", "Certify tested tree"].map((name, index) => ({
+  const jobs = PR_JOBS.map((name, index) => ({
     ...success,
     id: index + 100,
     name,
