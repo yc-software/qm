@@ -18,6 +18,7 @@ export interface OidcConfig {
   expectedTeamId?: string;
   prompt?: string;
   hostedDomain?: string;
+  tenantHost?: string;
 }
 
 const GOOGLE_ISSUER = "https://accounts.google.com";
@@ -70,6 +71,7 @@ export async function exchangeCode(
       "content-type": "application/x-www-form-urlencoded",
       authorization: `Basic ${basic}`,
       accept: "application/json",
+      ...tenantHeader(cfg),
     },
     body: body.toString(),
   });
@@ -87,7 +89,7 @@ export async function fetchUserinfo(
   fetchImpl: FetchLike = fetch,
 ): Promise<Record<string, unknown>> {
   const r = await fetchImpl(cfg.userinfoEndpoint, {
-    headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
+    headers: { authorization: `Bearer ${accessToken}`, accept: "application/json", ...tenantHeader(cfg) },
   });
   const json = await readJson(r, "userinfo");
   if (!r.ok) throw new Error(`userinfo failed: HTTP ${r.status}`);
@@ -189,24 +191,29 @@ async function readJson(r: Response, what: string): Promise<Record<string, unkno
   }
 }
 
-function rebased(endpoint: string, from: string, to: string): string {
-  return endpoint.startsWith(`${from}/`) ? `${to}${endpoint.slice(from.length)}` : endpoint;
+function tenantHeader(cfg: OidcConfig): Record<string, string> {
+  return cfg.tenantHost ? { "x-forwarded-host": cfg.tenantHost } : {};
 }
 
-export function tenantOidc(base: OidcConfig, signIn: TenantSignIn): OidcConfig {
+function onHost(url: string, from: string, to: string): string {
+  return url === from || url.startsWith(`${from}/`) ? `${to}${url.slice(from.length)}` : url;
+}
+
+export function tenantOidc(base: OidcConfig, signIn: TenantSignIn, tenantHost: string | undefined): OidcConfig {
   const client = signIn.oidcClient;
-  if (!client) return base;
-  const from = base.issuer.replace(/\/$/, "");
-  const to = client.issuer.replace(/\/$/, "");
+  if (!client && !tenantHost) return base;
+  const from = new URL(base.redirectUri).origin;
+  const to = tenantHost ? `${new URL(from).protocol}//${tenantHost}` : from;
   return {
     ...base,
-    issuer: client.issuer,
-    clientId: client.clientId,
-    clientSecret: client.clientSecret,
-    authEndpoint: rebased(base.authEndpoint, from, to),
-    tokenEndpoint: rebased(base.tokenEndpoint, from, to),
-    userinfoEndpoint: rebased(base.userinfoEndpoint, from, to),
-    jwksUri: rebased(base.jwksUri, from, to),
+    ...(client ? { clientId: client.clientId, clientSecret: client.clientSecret } : {}),
+    issuer: onHost(base.issuer, from, to),
+    authEndpoint: onHost(base.authEndpoint, from, to),
+    tokenEndpoint: onHost(base.tokenEndpoint, from, to),
+    userinfoEndpoint: onHost(base.userinfoEndpoint, from, to),
+    jwksUri: onHost(base.jwksUri, from, to),
+    redirectUri: onHost(base.redirectUri, from, to),
+    ...(tenantHost ? { tenantHost } : {}),
   };
 }
 

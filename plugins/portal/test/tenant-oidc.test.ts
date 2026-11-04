@@ -27,18 +27,26 @@ const tenantB = {
 
 const person = (email: string) => ({ sub: email, claims: {}, userinfo: { email, email_verified: true } });
 
-test("each tenant signs in with its own OIDC client", () => {
-  const a = tenantOidc(base, tenantA);
-  const b = tenantOidc(base, tenantB);
+test("each tenant signs in on its own host with its own OIDC client", () => {
+  const local = { ...base, tokenEndpoint: "http://127.0.0.1:8099/token" };
+  const a = tenantOidc(local, tenantA, "a.example");
+  const b = tenantOidc(local, tenantB, "b.example");
   assert.deepEqual(
-    [a.clientId, a.issuer, a.tokenEndpoint],
-    ["client-a", "https://a.example/auth", "https://a.example/auth/token"],
+    [a.clientId, a.issuer, a.authEndpoint, a.redirectUri, a.tokenEndpoint, a.tenantHost],
+    [
+      "client-a",
+      "https://a.example/auth",
+      "https://a.example/auth/authorize",
+      "https://a.example/auth/callback",
+      "http://127.0.0.1:8099/token",
+      "a.example",
+    ],
   );
   assert.deepEqual(
     [b.clientId, b.issuer, b.jwksUri],
     ["client-b", "https://b.example/auth", "https://b.example/auth/jwks"],
   );
-  assert.equal(tenantOidc(base, {}), base);
+  assert.equal(tenantOidc(base, {}, undefined), base);
 });
 
 test("a person allowed only in tenant A is refused by tenant B", async () => {

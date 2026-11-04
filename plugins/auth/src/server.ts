@@ -10,6 +10,8 @@ import { verifyPassword } from "./password.ts";
 import { claimOnce, withinRateLimit, ClaimStoreUnavailableError, type ClaimStore } from "../../chassis/src/claims.ts";
 import { coreEmailAllowed } from "../../chassis/src/external-members.ts";
 import type { TenantSignIn, TenantSignInLookup } from "../../chassis/src/tenant-sign-in.ts";
+import { hostnameOf, type HostTenantLookup } from "../../chassis/src/host-tenant.ts";
+import { boundTenant } from "../../chassis/src/tenant.ts";
 import { mintIdToken, pkceMatches, safeEqual, subjectFor, TokenSigner, type AuthRequest } from "./tokens.ts";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
 import type { Mailer } from "../../chassis/src/resend.ts";
@@ -118,12 +120,31 @@ type AuthHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
 const MAX_TENANT_HANDLERS = 256;
 
-function tenantAuthConfig(cfg: AuthConfig, signIn: TenantSignIn): AuthConfig {
+function forwardedHost(req: IncomingMessage): string | undefined {
+  const raw = req.headers["x-forwarded-host"];
+  return typeof raw === "string" && raw.trim() ? raw.trim().toLowerCase() : undefined;
+}
+
+export function brokerHostTenants(
+  lookup: HostTenantLookup | undefined,
+  req: IncomingMessage,
+): HostTenantLookup | undefined {
+  const forwarded = forwardedHost(req);
+  return lookup && ((host) => lookup(forwarded ? hostnameOf(forwarded) : host));
+}
+
+function onHost(url: string, host: string): string {
+  const u = new URL(url);
+  return `${u.protocol}//${host}${url.slice(u.origin.length)}`;
+}
+
+function tenantAuthConfig(cfg: AuthConfig, signIn: TenantSignIn, host: string | undefined): AuthConfig {
   const clientId = signIn.oidcClient?.clientId;
   const clientSecret = signIn.oidcClient?.clientSecret ?? signIn.clientSecret;
-  if (!signIn.allowedEmails && !clientId && !clientSecret) return cfg;
+  if (!signIn.allowedEmails && !clientId && !clientSecret && !host) return cfg;
   return {
     ...cfg,
+    ...(host ? { issuer: onHost(cfg.issuer, host), redirectUri: onHost(cfg.redirectUri, host) } : {}),
     ...(signIn.allowedEmails ? { allowedEmails: signIn.allowedEmails, allowedEmailDomain: undefined } : {}),
     ...(clientId ? { clientId } : {}),
     ...(clientSecret ? { clientSecret } : {}),
@@ -137,9 +158,10 @@ export function createAuthHandler(deps: AuthDeps): AuthHandler {
   const built = new Map<string, AuthHandler>();
   return async (req, res) => {
     const signIn = await lookup();
-    const cfg = tenantAuthConfig(deps.cfg, signIn);
+    const host = boundTenant() ? forwardedHost(req) : undefined;
+    const cfg = tenantAuthConfig(deps.cfg, signIn, host);
     if (cfg === deps.cfg) return base(req, res);
-    const key = JSON.stringify(signIn);
+    const key = JSON.stringify([signIn, host]);
     let handler = built.get(key);
     if (!handler) {
       if (built.size >= MAX_TENANT_HANDLERS) built.clear();

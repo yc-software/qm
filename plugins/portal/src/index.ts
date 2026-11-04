@@ -466,6 +466,10 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
 
 const hostTenantOf = new WeakMap<IncomingMessage, HostTenant>();
 
+function tenantHostOf(req: IncomingMessage): string | undefined {
+  return hostTenantOf.get(req)?.multi && boundTenant() ? req.headers.host?.toLowerCase() : undefined;
+}
+
 function sessionTenantClaim(): { t?: string } {
   const tenant = boundTenant();
   return tenant === undefined ? {} : { t: tenant };
@@ -1107,6 +1111,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (brokerPath) {
     if (method !== "GET" && !sameOriginRequest(req))
       return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
+    const tenantHost = tenantHostOf(req);
     return proxyToUpstream(
       req,
       res,
@@ -1114,6 +1119,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       FORWARD_BROKER_HEADERS,
       {
         "x-qm-client-ip": clientIpOf(req),
+        ...(tenantHost ? { "x-forwarded-host": tenantHost } : {}),
         cookie: (req.headers.cookie ?? "")
           .split(";")
           .map((part) => part.trim())
@@ -1708,7 +1714,7 @@ async function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): P
   setSession(res, [
     setCookie("portal_oidc_tmp", seal(tmp, tmpKey), { path: "/auth", maxAge: TMP_TTL_S, secure: SECURE_COOKIES }),
   ]);
-  const oidc = tenantOidc(OIDC, await tenantSignIn());
+  const oidc = tenantOidc(OIDC, await tenantSignIn(), tenantHostOf(req));
   res.writeHead(302, { location: buildAuthorizeUrl(oidc, { state, nonce, challenge }), "cache-control": "no-store" });
   res.end();
 }
@@ -1732,7 +1738,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
   let name = "";
   try {
     const signIn = await tenantSignIn();
-    const oidc = tenantOidc(OIDC, signIn);
+    const oidc = tenantOidc(OIDC, signIn, tenantHostOf(req));
     const { accessToken, idToken } = await exchangeCode(oidc, { code, codeVerifier: tmp.pkceVerifier });
     const claims = await verifyIdToken(oidc, idToken, tmp.nonce);
     if (oidc.expectedTeamId) {
