@@ -4,6 +4,7 @@ import type { ProviderKeys } from "./model-runtime.ts";
 import {
   auxiliaryModelFor,
   DEFAULT_AGENT_MODEL_ID,
+  defaultModel,
   getRequiredModel,
   modelDisplayName,
   personalModelId,
@@ -11,6 +12,7 @@ import {
 } from "./pi-models.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import { tenantEnv } from "../tenants/settings.ts";
+import { baseModelProviders, configuredModel, type Config } from "../config.ts";
 import { swallow } from "../util/errors.ts";
 
 export type ModelBilling = "model_gateway" | "org_key" | "personal_account";
@@ -64,6 +66,18 @@ export interface ModelRouteOptions {
   openrouterApiKey?: string;
   modelGateway?: ModelGatewayTransportConfig;
   resolveProviderKeys?: () => Promise<ProviderKeys>;
+}
+
+export function configRouteOptions(config: Config): ModelRouteOptions {
+  const defaultModelId =
+    configuredModel(config) ?? (config.modelProvider ? defaultModel(undefined, baseModelProviders(config)) : undefined);
+  return {
+    ...(defaultModelId ? { defaultModelId } : {}),
+    ...(config.anthropicApiKey ? { apiKey: config.anthropicApiKey } : {}),
+    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
+    ...(config.openrouterApiKey ? { openrouterApiKey: config.openrouterApiKey } : {}),
+    ...(config.modelGateway ? { modelGateway: config.modelGateway } : {}),
+  };
 }
 
 export interface ModelRoutes {

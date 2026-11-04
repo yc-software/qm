@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { loadConfig } from "../src/config.ts";
-import { createAgent, agentConfigOptions, configRouteOptions } from "../src/agent/agent-run.ts";
-import { createModelRoutes } from "../src/model/model-route.ts";
+import { createAgent, agentConfigOptions } from "../src/agent/agent-run.ts";
+import { configRouteOptions, createModelRoutes } from "../src/model/model-route.ts";
 import { codexSubscriptionModelId } from "../src/model/pi-models.ts";
 
 const subscriptionToken = `e30.${Buffer.from(

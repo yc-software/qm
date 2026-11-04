@@ -53,7 +53,7 @@ import {
   wakeForUnreadMail,
 } from "./sessions/subagent-mail.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
-import { createModelRoutes } from "./model/model-route.ts";
+import { configRouteOptions, createModelRoutes } from "./model/model-route.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
@@ -322,7 +322,7 @@ import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
 import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts";
-import { createAgent, agentConfigOptions, configDefaultModelId } from "./agent/agent-run.ts";
+import { createAgent, agentConfigOptions } from "./agent/agent-run.ts";
 import { withResolvedRuntime, resolveRuntimeChoice } from "./agent/runtime-choice.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Agent, RuntimeChoice, SessionRoute } from "./agent/agent.ts";
@@ -1489,7 +1489,7 @@ export function buildApp(
           ? { ...directProviderAvailability, modelIds: new Set(Object.keys(gatewayTransport.models)) }
           : undefined),
     );
-  const configDefault = configDefaultModelId(config);
+  const configDefault = configRouteOptions(config).defaultModelId;
   const modelRoutes = createModelRoutes({
     resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
     ...(configDefault ? { defaultModelId: configDefault } : {}),

@@ -36,7 +36,7 @@ import {
   type ToolResultMessage,
   type Usage,
 } from "@earendil-works/pi-ai";
-import { baseModelProviders, configuredModel, CONFIG_DEFAULTS, type Config } from "../config.ts";
+import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 
 const TURN_EFFORT_LEVELS = new Set<string>([
   "off",
@@ -59,7 +59,6 @@ import { providerTurnError } from "../model/provider-error.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
 import {
-  defaultModel,
   defaultInteractiveThinkingLevel,
   modelSupportsAdaptiveThinking,
   modelSupportsProviderDefault,
@@ -72,13 +71,7 @@ import {
   type ModelGatewayTransportConfig,
   type ModelRequestPurpose,
 } from "../model/provider-endpoints.ts";
-import {
-  createModelRoutes,
-  routeLabel,
-  type ModelRoute,
-  type ModelRouteOptions,
-  type ModelRoutes,
-} from "../model/model-route.ts";
+import { createModelRoutes, routeLabel, type ModelRoute, type ModelRoutes } from "../model/model-route.ts";
 import {
   type Agent,
   type CompactInput,
@@ -148,23 +141,6 @@ export interface AgentOptions {
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
   signals?: RunSignalStore;
-}
-
-export function configDefaultModelId(config: Config): string | undefined {
-  return (
-    configuredModel(config) ?? (config.modelProvider ? defaultModel(undefined, baseModelProviders(config)) : undefined)
-  );
-}
-
-export function configRouteOptions(config: Config): ModelRouteOptions {
-  const defaultModelId = configDefaultModelId(config);
-  return {
-    ...(defaultModelId ? { defaultModelId } : {}),
-    ...(config.anthropicApiKey ? { apiKey: config.anthropicApiKey } : {}),
-    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
-    ...(config.openrouterApiKey ? { openrouterApiKey: config.openrouterApiKey } : {}),
-    ...(config.modelGateway ? { modelGateway: config.modelGateway } : {}),
-  };
 }
 
 export function agentConfigOptions(config: Config): AgentOptions {
