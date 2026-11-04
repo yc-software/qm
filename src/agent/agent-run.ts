@@ -1,4 +1,3 @@
-import { tenantEnv } from "../tenants/settings.ts";
 import {
   applyFastSpeed,
   buildModelRuntime,
@@ -60,15 +59,11 @@ import { providerTurnError } from "../model/provider-error.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
 import {
-  DEFAULT_AGENT_MODEL_ID,
-  auxiliaryModelFor,
   defaultModel,
   defaultInteractiveThinkingLevel,
   modelSupportsAdaptiveThinking,
   modelSupportsProviderDefault,
-  personalModelId,
   resolveModel,
-  getRequiredModel,
   contextTokenBudgetForModel,
   modelHasPrices,
 } from "../model/pi-models.ts";
@@ -77,7 +72,7 @@ import {
   type ModelGatewayTransportConfig,
   type ModelRequestPurpose,
 } from "../model/provider-endpoints.ts";
-import { modelBilling, routeLabel, type ModelRoute } from "../model/model-route.ts";
+import { createModelRoutes, routeLabel, type ModelRoute, type ModelRoutes } from "../model/model-route.ts";
 import {
   type Agent,
   type CompactInput,
@@ -88,7 +83,6 @@ import {
   type AgentTurnResult,
   REPLY_CHECK_LIMITS,
   replyCheckPrompt,
-  type RuntimeChoice,
 } from "./agent.ts";
 import {
   coreToolOptions,
@@ -147,6 +141,8 @@ export interface AgentOptions {
   openrouterApiKey?: string;
   modelGateway?: ModelGatewayTransportConfig;
   resolveProviderKeys?: () => Promise<ProviderKeys>;
+  /** Shared route resolver; when set it replaces the model/key/gateway/fallback options above. */
+  routes?: ModelRoutes;
   tempDirPrefix?: string;
   captureRequests?: boolean;
   controlTools?: boolean;
@@ -798,15 +794,6 @@ async function recordOneShotCall(
   }
 }
 
-export function resolveConfiguredModelId(configured: string | undefined, defaultModelId?: string): string {
-  for (const candidate of [configured, defaultModelId]) {
-    if (!candidate) continue;
-    if (resolveModel(candidate)) return candidate;
-    swallow("pi: configured model id not in registry, falling back to default", new Error(candidate));
-  }
-  return DEFAULT_AGENT_MODEL_ID;
-}
-
 export function applyTurnEffort(session: AgentSession, level?: string): void {
   if (!level || !TURN_EFFORT_LEVELS.has(level)) return;
   if (level === "adaptive" || level === "default") {
@@ -841,63 +828,30 @@ export function applyReasoningMode<T>(payload: T, model: Model<Api>, level?: str
   return payload;
 }
 
-function tenantProviderKeys(keys: ProviderKeys): ProviderKeys {
-  const anthropic = tenantEnv("ANTHROPIC_API_KEY") ?? keys.anthropic;
-  const openrouter = tenantEnv("OPENROUTER_API_KEY") ?? keys.openrouter;
-  return { ...keys, ...(anthropic ? { anthropic } : {}), ...(openrouter ? { openrouter } : {}) };
-}
-
 export function createAgent(opts?: AgentOptions): Agent {
-  const baseModelId = (): string =>
-    resolveConfiguredModelId(opts?.resolveBaseModelId?.() ?? opts?.modelId, opts?.defaultModelId);
+  const routes =
+    opts?.routes ??
+    createModelRoutes({
+      baseModelId: () => opts?.resolveBaseModelId?.() ?? opts?.modelId,
+      ...(opts?.defaultModelId ? { defaultModelId: opts.defaultModelId } : {}),
+      staticKeys: opts?.resolveProviderKeys
+        ? {}
+        : {
+            ...(opts?.apiKey ? { anthropic: opts.apiKey } : {}),
+            ...(opts?.openaiApiKey ? { openai: opts.openaiApiKey } : {}),
+            ...(opts?.openrouterApiKey ? { openrouter: opts.openrouterApiKey } : {}),
+          },
+      ...(opts?.resolveProviderKeys ? { providerKeys: opts.resolveProviderKeys } : {}),
+      ...(opts?.modelGateway ? { gateway: opts.modelGateway } : {}),
+      ...(opts?.companyModelId ? { companyModelId: opts.companyModelId } : {}),
+      ...(opts?.resolveFallbackRuntime ? { fallbackRuntime: opts.resolveFallbackRuntime } : {}),
+    });
+  const baseModelId = routes.baseModelId;
+  const servable = routes.servable;
+  const sessionRoute = routes.session;
+  const utilityRoute = routes.utility;
+  const fallbackRoute = routes.fallback;
   const tempDirPrefix = opts?.tempDirPrefix ?? "pi";
-  const configuredProviderKeys: ProviderKeys = opts?.resolveProviderKeys
-    ? {}
-    : {
-        ...(opts?.apiKey ? { anthropic: opts.apiKey } : {}),
-        ...(opts?.openaiApiKey ? { openai: opts.openaiApiKey } : {}),
-        ...(opts?.openrouterApiKey ? { openrouter: opts.openrouterApiKey } : {}),
-      };
-  const resolveProviderKeys = async (): Promise<ProviderKeys> => ({
-    ...tenantProviderKeys(configuredProviderKeys),
-    ...(await opts?.resolveProviderKeys?.()),
-  });
-  const modelGateway = opts?.modelGateway;
-  const companyServedId = (id: string) => (opts?.companyModelId ? opts.companyModelId(id) : id);
-  const requiredModel = (id: string, company = true) => getRequiredModel(company ? companyServedId(id) : id, company);
-  const servedId = (id: string, personalKeys?: ProviderKeys) =>
-    personalKeys ? personalModelId(id, personalKeys) : companyServedId(id);
-  const routeFor = async (requestedId: string, personalKeys?: ProviderKeys): Promise<ModelRoute> => {
-    const modelId = personalKeys ? personalModelId(requestedId, personalKeys) : requestedId;
-    const model = requiredModel(modelId, !personalKeys);
-    const keys = personalKeys ?? (await resolveProviderKeys());
-    const gateway = personalKeys ? undefined : modelGateway;
-    return {
-      modelId,
-      model,
-      keys,
-      ...(gateway ? { gateway } : {}),
-      billing: modelBilling(!!modelGatewayRequest(gateway, model), !!personalKeys),
-    };
-  };
-  const servable = (route: ModelRoute): ModelRoute | undefined =>
-    route.billing === "model_gateway" || route.keys[String(route.model.provider)] ? route : undefined;
-  const sessionRoute = (session: Pick<CompactInput, "runtime" | "providerKeys">) =>
-    routeFor(session.runtime?.modelId ?? baseModelId(), session.providerKeys);
-  const utilityRoute = async (modelId?: string) =>
-    servable(await routeFor(modelId ?? auxiliaryModelFor(baseModelId())));
-  const fallbackRoute = async (
-    fromModelIds: ReadonlySet<string>,
-    providerKeys?: ProviderKeys,
-  ): Promise<(ModelRoute & { runtime: RuntimeChoice }) | undefined> => {
-    const runtime = opts?.resolveFallbackRuntime?.();
-    if (!runtime) return undefined;
-    const served = servedId(runtime.modelId, providerKeys);
-    if (fromModelIds.has(runtime.modelId) || fromModelIds.has(served) || !resolveModel(served, !providerKeys))
-      return undefined;
-    const route = servable(await routeFor(runtime.modelId, providerKeys));
-    return route && { ...route, runtime };
-  };
   const captureRequests = opts?.captureRequests ?? true;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;

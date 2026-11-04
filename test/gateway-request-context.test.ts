@@ -239,8 +239,8 @@ async function gatewayApp(
     titleModelId: "claude-haiku-4-5",
     detectModelId: "claude-haiku-4-5",
     judgeModelId: "claude-haiku-4-5",
-    modelGateway: { ...gateway, url },
     ...overrides,
+    modelGateway: { ...(overrides.modelGateway ?? gateway), url },
   });
   const sent = (purpose: string, sessionId?: string) =>
     seen.find(
@@ -417,4 +417,32 @@ test("debounced memory capture keeps the context of the turn it came from, even 
       "x-qm-origin": "conversation",
       "x-qm-purpose": "memory_capture",
     });
+});
+
+test("decision rules on the gateway carry the same keyed actor as the turn they judge", async (t) => {
+  const { actorKey: _actorKey, ...envGateway } = gateway;
+  const { built, sent } = await gatewayApp(t, { modelGateway: envGateway });
+  const by = { actorId: "admin@example.com" };
+  await built.decisions!.saveProvider({ id: "gw", protocol: "chat-completions" }, by);
+  await built.decisions!.saveRule(
+    {
+      id: "router",
+      hook: "turn_start",
+      question: "Is this a hard task?",
+      options: { keep: { description: "ordinary", action: "keep" } },
+      model: { provider: "gw", model: "example/decision-model" },
+      mode: "observe",
+      onError: "keep",
+    },
+    by,
+  );
+  await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "dm:U1:decision" },
+    text: "plan the migration",
+  });
+  await settle(async () => !!sent("decision"));
+  assert.equal(sent("decision")!["x-qm-actor"], pseudonym("U1"));
+  assert.equal(sent("decision")!["x-qm-actor"], sent("turn")!["x-qm-actor"]);
 });

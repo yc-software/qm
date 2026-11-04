@@ -15,12 +15,12 @@ import {
   piTurnError,
   refusalFallbackNote,
   renderDetectPrompt,
-  resolveConfiguredModelId,
   seedRawMessagesIntoSession,
   toPiMessage,
 } from "../src/agent/agent-run.ts";
 import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel } from "../src/model/pi-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
+import { resolveConfiguredModelId } from "../src/model/model-route.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { storedItem } from "../src/sessions/items.ts";
 import type { DetectInput, TurnLlmRequestRecord } from "../src/agent/agent.ts";
