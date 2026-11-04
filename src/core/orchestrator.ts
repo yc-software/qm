@@ -2031,7 +2031,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     body: { securityReleaseRequestId: input.approval!.requestId },
                   }),
                 );
-              await deps.agent.resetSession?.(session.id);
             }
             const decisionEntry = await withManagedRosterVersion(() =>
               deps.sessions.append(writer, {
@@ -2314,11 +2313,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : undefined;
 
         const monitorBroker =
-          deps.monitors && deps.processes && supportsProcessSessions(deps.sandbox)
+          deps.monitors && deps.processes && readOutputTail
             ? createMonitorBroker({
                 store: deps.monitors,
                 registry: deps.processes,
-                readOutputTail: readOutputTail ?? (async () => ({ outputTail: "" })),
+                readOutputTail,
                 scopeId: memoryScopeId,
                 owner: actor.id,
                 ownerScopeId: scopeId,
@@ -3587,7 +3586,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const recovery = "context" in segment.runtimeHandoff;
             if ("choice" in segment.runtimeHandoff) {
               await adoptRuntime(segment.runtimeHandoff.choice, segment.runtimeHandoff.lifetime);
-              await deps.agent.resetSession?.(session.id);
             }
             let resumedHistory = filterHistory(forModelContext((await historyWindow()).items));
             if (recovery)

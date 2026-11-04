@@ -83,10 +83,6 @@ test("a squatted shared cwd falls back to a per-turn cwd that is removed afterwa
   rmSync(stableCwd(prefix), { force: true });
 });
 
-test("the agent exposes no session-reset hook after removing session state", () => {
-  assert.equal(createAgent().resetSession, undefined);
-});
-
 function ackStream(text: string): Response {
   const events = [
     {

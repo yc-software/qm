@@ -32,7 +32,6 @@ export interface SandboxAccessPlan {
   readonly egress: EgressPolicy;
   readonly commandPolicy: CommandPolicy | null;
   readonly credentialScopeId?: ScopeId;
-  readonly env?: Readonly<Record<string, string>>;
 }
 
 export interface SandboxDefault {
