@@ -20,7 +20,16 @@ export function createSlackRuntimeReconciler<Config>(opts: {
   intervalMs?: number;
   startPaused?: boolean;
   onError?: (error: unknown) => void;
+  retryBackoff?: { baseMs: number; maxMs: number };
+  now?: () => number;
+  random?: () => number;
 }) {
+  const backoff = opts.retryBackoff ?? { baseMs: 30_000, maxMs: 10 * 60_000 };
+  const now = opts.now ?? Date.now;
+  const random = opts.random ?? Math.random;
+  // A configuration that failed to start waits out a jittered, doubling delay before the next
+  // attempt, so a broken workspace stops re-running its Slack startup calls every few seconds.
+  let failed: { version: string; delayMs: number; retryAt: number } | null = null;
   let active: { plugin: { stop(): Promise<void> }; version: string; config: Config } | null = null;
   let timer: NodeJS.Timeout | null = null;
   let inFlight: Promise<void> | null = null;
@@ -43,6 +52,7 @@ export function createSlackRuntimeReconciler<Config>(opts: {
       return;
     }
     if (desired.version === active?.version) return;
+    if (failed?.version === desired.version && now() < failed.retryAt) return;
     const previous = active;
     if (previous) {
       await previous.plugin.stop();
@@ -52,7 +62,11 @@ export function createSlackRuntimeReconciler<Config>(opts: {
     try {
       const plugin = await opts.startPlugin(desired.config);
       active = { plugin, version: desired.version, config: desired.config };
+      failed = null;
     } catch (error) {
+      const delayMs =
+        failed?.version === desired.version ? Math.min(failed.delayMs * 2, backoff.maxMs) : backoff.baseMs;
+      failed = { version: desired.version, delayMs, retryAt: now() + delayMs * (0.5 + random() / 2) };
       if (error instanceof SlackPluginStartCleanupError) {
         pendingCleanup = error.cleanup;
         throw error;
