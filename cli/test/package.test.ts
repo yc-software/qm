@@ -165,8 +165,24 @@ test(
 
       assert.ok(existsSync(join(deployment, "deployment.md")));
       assert.ok(existsSync(join(deployment, ".codex", "skills", "deploy-qm", "SKILL.md")));
-      for (const provider of ["fly", "aws", "slack"]) {
-        assert.ok(existsSync(join(deployment, ".codex", "skills", "deploy-qm", "references", `${provider}.md`)));
+      for (const provider of ["fly", "aws", "render", "porter", "slack", "email"]) {
+        assert.equal(
+          readFileSync(join(deployment, ".codex", "skills", "deploy-qm", "references", `${provider}.md`), "utf8"),
+          readFileSync(
+            join(
+              deployment,
+              "node_modules",
+              "@yc-software",
+              "qm",
+              "templates",
+              "deployment",
+              "references",
+              `${provider}.md`,
+            ),
+            "utf8",
+          ),
+          `the installed CLI copies the ${provider} reference into the deployment skill`,
+        );
       }
       assert.equal(statSync(join(deployment, ".env")).mode & 0o777, 0o600);
       assert.doesNotMatch(

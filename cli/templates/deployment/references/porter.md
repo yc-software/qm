@@ -2,8 +2,15 @@
 
 Use this after the choices and billing confirmation in `deployment.md`. Porter
 has no `qm` CLI target: `setup`, `plan`, and `up` do not drive it. The flow is
-the Porter CLI plus the repo's `porter/apps/` templates, with `docs/porter.md`
-as the reference for every failure mode named below.
+the Porter CLI plus the upstream [app templates][porter-apps], with the
+[Porter deployment reference][porter-docs] covering the failure modes below.
+`qm init` does not copy those upstream files into a deployment repository.
+Read the reference online and download the app templates into a local
+`porter/apps/` directory. Their `build` blocks require the full QM source tree,
+including `deploy/*/Dockerfile`. In a package deployment, replace each `build`
+block with an `image: {repository, tag}` block for the corresponding published
+QM service image before applying it. Pin all service images to the same published
+commit with Porter support; see [Hosting the qm surfaces][porter-surfaces].
 
 ## Preflight
 
@@ -42,7 +49,7 @@ operator the exact URL and wait:
    provisioning anything the operator will later need to remove.
 3. **Cluster contract.** Create the cluster with the sandbox load balancer,
    `sandboxesEnabled`, and the apps root domain already in the creation
-   contract (`docs/porter.md` → "Giving published apps stable hostnames").
+   contract ([Giving published apps stable hostnames][porter-hostnames]).
    Attaching them after creation is the wedged-cluster path.
 
 ## Provision Postgres before first boot
@@ -82,8 +89,14 @@ Push images only to repositories that already exist — ECR does not create
 them on push. In the v2 app YAML, `env` belongs at the app level; nested
 under a service it is silently dropped. Apply runs once per app file, twice
 overall — assigned hostnames land on the second pass. Then hand-wire the six
-service URLs per the table in `docs/porter.md` ("Hosting the qm surfaces"),
+service URLs per the table in [Hosting the qm surfaces][porter-surfaces],
 push secrets as Porter env groups, and verify by signing in as the
 administrator and opening the Admin tab. Published-app serving needs nothing further: apps are reachable
 signed-in at `/d/<app>/`; setting `DEPLOY_APPS_DOMAIN` upgrades them to
-per-app subdomains (`docs/porter.md`, onboarding checklist).
+per-app subdomains ([Onboarding checklist][porter-onboarding]).
+
+[porter-apps]: https://github.com/yc-software/qm/tree/main/porter/apps
+[porter-docs]: https://github.com/yc-software/qm/blob/main/docs/porter.md
+[porter-hostnames]: https://github.com/yc-software/qm/blob/main/docs/porter.md#giving-published-apps-stable-hostnames
+[porter-surfaces]: https://github.com/yc-software/qm/blob/main/docs/porter.md#hosting-the-qm-surfaces
+[porter-onboarding]: https://github.com/yc-software/qm/blob/main/docs/porter.md#onboarding-checklist

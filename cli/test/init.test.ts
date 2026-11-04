@@ -570,8 +570,12 @@ test("the scaffold is an npm-backed deployment repository with no CI coupling an
     assert.equal(packageJson.scripts?.check, "qm check");
     assert.ok(existsSync(join(dir, "deployment.md")));
     assert.ok(existsSync(join(dir, ".codex", "skills", "deploy-qm", "SKILL.md")));
-    for (const provider of ["fly", "aws", "slack", "email"]) {
-      assert.ok(existsSync(join(dir, ".codex", "skills", "deploy-qm", "references", `${provider}.md`)));
+    for (const provider of ["fly", "aws", "render", "porter", "slack", "email"]) {
+      assert.equal(
+        readFileSync(join(dir, ".codex", "skills", "deploy-qm", "references", `${provider}.md`), "utf8"),
+        readFileSync(new URL(`../templates/deployment/references/${provider}.md`, import.meta.url), "utf8"),
+        `init copies the ${provider} reference into the deployment skill`,
+      );
     }
     assert.match(readFileSync(join(dir, ".gitignore"), "utf8"), /^node_modules\/$/m);
     assert.match(readFileSync(join(dir, "AGENTS.md"), "utf8"), /package\.json.*pins the exact CLI version/s);
