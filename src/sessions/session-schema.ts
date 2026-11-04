@@ -337,8 +337,7 @@ DECLARE
   after_id TEXT := '';
   page TEXT[];
 BEGIN
-  IF to_regclass('runs') IS NULL
-    OR EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id = 'sessions/store/0053-session-facts-copy') THEN
+  IF to_regclass('runs') IS NULL THEN
     RETURN;
   END IF;
   LOOP
@@ -377,7 +376,7 @@ BEGIN
     LEFT JOIN LATERAL (
       SELECT request->'slackSource' AS value FROM (
         SELECT CASE WHEN pg_input_is_valid(request, 'jsonb') THEN request::jsonb END AS request, created_at, seq
-        FROM runs WHERE session_id = x.thread_ref
+        FROM runs WHERE session_id = x.thread_ref OFFSET 0
       ) parsed
       WHERE COALESCE(request->'slackSource', 'null') <> 'null'
       ORDER BY created_at DESC, seq DESC LIMIT 1
@@ -385,7 +384,7 @@ BEGIN
     LEFT JOIN LATERAL (
       SELECT result->'runtime' AS value FROM (
         SELECT CASE WHEN pg_input_is_valid(result, 'jsonb') THEN result::jsonb END AS result, created_at, seq
-        FROM runs WHERE session_id = x.thread_ref
+        FROM runs WHERE session_id = x.thread_ref OFFSET 0
       ) parsed
       WHERE COALESCE(result->'runtime', 'null') <> 'null'
       ORDER BY created_at DESC, seq DESC LIMIT 1
@@ -393,7 +392,7 @@ BEGIN
     LEFT JOIN LATERAL (
       SELECT request FROM (
         SELECT CASE WHEN pg_input_is_valid(request, 'jsonb') THEN request::jsonb END AS request, created_at, seq
-        FROM runs WHERE session_id = x.thread_ref
+        FROM runs WHERE session_id = x.thread_ref OFFSET 0
       ) owned
       WHERE request IS NOT NULL
         AND COALESCE(request->>'privateSessionMessage', 'false') <> 'true'

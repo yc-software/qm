@@ -164,8 +164,6 @@ test("the session facts migration reads past runs whose stored JSON Postgres can
 
   const raw = new pg.Pool({ connectionString: url, max: 1 });
   const facts = SESSION_MIGRATIONS.filter((m) => m.id.includes("-session-facts")).map(definePgMigration);
-  const runtimeOf = async () =>
-    (await raw.query<{ runtime: unknown }>("SELECT runtime FROM sessions WHERE id = $1", [slack.id])).rows[0]?.runtime;
   try {
     await raw.query(
       `UPDATE runs SET request = replace(request, '"text":"hi"', '"text":"hi\\u0000"'),
@@ -188,14 +186,6 @@ test("the session facts migration reads past runs whose stored JSON Postgres can
       sessionContextOf(readable),
       "context comes from the newest readable owning turn",
     );
-
-    await raw.query("UPDATE sessions SET runtime = NULL WHERE id = $1", [slack.id]);
-    await raw.query("DELETE FROM qm_schema_migrations WHERE id = $1", [facts.at(-1)!.id]);
-    await raw.query(
-      "INSERT INTO qm_schema_migrations(id, checksum) VALUES ('sessions/store/0053-session-facts-copy', 'x')",
-    );
-    await applyPgMigrations(raw, facts);
-    assert.equal(await runtimeOf(), null, "a database that already ran the first copy is not copied again");
   } finally {
     await raw.end();
   }
