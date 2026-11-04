@@ -118,13 +118,14 @@ class ReviewBudget {
 
 async function openOutputs(loopId: string, stores: LoopStores): Promise<LoopOutput[]> {
   const items = new Map((await stores.items.byLoop(loopId)).map((item) => [item.id, item]));
-  const open: LoopOutput[] = [];
-  for (const output of (await stores.outputs.byLoop(loopId)).filter(unresolvedOutput)) {
+  const open = (await stores.outputs.byLoop(loopId)).filter(unresolvedOutput);
+  const settled = (output: LoopOutput) => {
     const item = items.get(output.itemId);
-    if (item && !isResolved(item)) open.push(output);
-    else await stores.outputs.supersedeActiveSiblings(output.itemId, "");
-  }
-  return open;
+    return !item || isResolved(item);
+  };
+  for (const itemId of new Set(open.filter(settled).map((output) => output.itemId)))
+    await stores.outputs.supersedeActiveSiblings(itemId, "");
+  return open.filter((output) => !settled(output));
 }
 
 export async function runLoopFire(

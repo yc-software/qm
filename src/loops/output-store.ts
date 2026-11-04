@@ -85,6 +85,11 @@ export function unresolvedOutput(output: LoopOutput): boolean {
   return output.state === "ready" || output.state === "shipping" || output.state === "unconfirmed";
 }
 
+function supersedable(output: LoopOutput, now: number): boolean {
+  if (output.state === "shipping") return (output.claimedAt ?? 0) + SHIP_LEASE_MS <= now;
+  return output.state === "staged" || unresolvedOutput(output);
+}
+
 export function createLoopOutputStore(
   backing: DurableMap<LoopOutput>,
   onEvent?: (output: LoopOutput) => void,
@@ -201,11 +206,11 @@ export function createLoopOutputStore(
     async supersedeActiveSiblings(itemId, exceptOutputId) {
       const superseded: LoopOutput[] = [];
       for (const output of (await byItem(itemId)).filter(
-        (candidate) => candidate.id !== exceptOutputId && (candidate.state === "staged" || unresolvedOutput(candidate)),
+        (candidate) => candidate.id !== exceptOutputId && supersedable(candidate, Date.now()),
       )) {
         const after = await applyIf(
           output.id,
-          (current) => current.state === "staged" || unresolvedOutput(current),
+          (current) => supersedable(current, Date.now()),
           (current, now) => ({ ...current, state: "superseded", updatedAt: now }),
         );
         if (after) superseded.push(after);
