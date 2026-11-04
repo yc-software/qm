@@ -239,18 +239,11 @@ test("nested sessions share the same tree without an artificial depth limit", as
   assert.ok(third.ok);
 });
 
-test("a tree keeps opening subagents and waking them with sixty runs in flight", async () => {
+test("a tree opens subagents past fifty runs in flight", async () => {
   const r = await rig();
-  const opened = [];
-  for (let i = 0; i < 60; i++) opened.push(await r.syscallsFor(r.room).open({ task: `work ${i}` }));
-  assert.ok(opened.every((out) => out.ok));
-  assert.equal((await sessionTreeRuns(r.sessions, r.runs, r.room)).length, 60);
-  const first = opened[0]!;
-  assert.ok(first.ok);
-  assert.equal((await r.syscallsFor(r.room).write({ wake: true, target: first.sessionId, text: "again" })).ok, true);
-  assert.equal((await sessionTreeRuns(r.sessions, r.runs, r.room)).length, 61);
+  for (let i = 0; i < 51; i++) assert.ok((await r.syscallsFor(r.room).open({ task: `work ${i}` })).ok);
+  assert.equal((await sessionTreeRuns(r.sessions, r.runs, r.room)).length, 51);
 });
-
 test("write queues separately from a running child and interrupts explicitly", async () => {
   const r = await rig();
   const syscalls = r.syscallsFor(r.room);

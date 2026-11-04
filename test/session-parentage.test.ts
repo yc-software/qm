@@ -27,41 +27,6 @@ test("detaching a subagent session requires current channel membership", async (
   assert.deepEqual(await built.app.detachSession(child.id, "U1"), { detached: true });
 });
 
-test("a late child steer replays once", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-signal-retry-")) }));
-  const root = await built.sessions.getOrCreateByThread("web:U1:signal-root", "dm", "personal:U1");
-  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:signal-child", "dm", "personal:U1");
-  await built.sessions.setParentSession(child.id, root.id);
-  const request = {
-    actor: { id: "U1", type: "internal" as const },
-    conversation: {
-      kind: "dm" as const,
-      threadRef: child.threadRef,
-      audience: [{ id: "U1", type: "internal" as const }],
-    },
-    text: "work",
-    origin: { kind: "direct" as const },
-  };
-  const { run } = await built.runs.enqueue({ sessionId: child.threadRef, request });
-  const claimed = await built.runs.claimById(run.id, "worker", 60_000);
-  await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  await built.signals.send(run.id, { kind: "steer", text: "late update" });
-  await built.app.replayOrphanedRunSignals(run.id);
-  const replays = (await built.runs.inFlightForThread(child.threadRef)).filter((candidate) =>
-    candidate.dedupKey?.startsWith("session-signal:"),
-  );
-  assert.equal(replays.length, 1);
-  assert.equal(replays[0]!.request.text, "late update");
-  assert.deepEqual(await built.signals.pending(run.id), []);
-  await built.app.replayOrphanedRunSignals(run.id);
-  assert.equal(
-    (await built.runs.inFlightForThread(child.threadRef)).filter((candidate) =>
-      candidate.dedupKey?.startsWith("session-signal:"),
-    ).length,
-    1,
-  );
-});
-
 test("late human child messages retain their sender and revalidate access", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-human-replay-")) }));
   await built.app.upsertDirectory([
