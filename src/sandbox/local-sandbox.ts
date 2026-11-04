@@ -14,6 +14,7 @@ import { dockerContainerNetworks, ensureDockerNetwork, spawnDockerExec, type Doc
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { shortHash } from "../util/crypto.ts";
+import { tenantScopedId } from "../tenants/context.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
 import type {
@@ -79,7 +80,8 @@ export const localNetworkName = (containerName: string): string =>
   `qm-net-${containerName.replace(/^qm-(sbx|scratch)-/, "")}`;
 const localScratchName = (key: string): string => `qm-scratch-${localSlug(key)}`;
 
-function localSlug(id: string): string {
+function localSlug(scopeId: string): string {
+  const id = tenantScopedId(scopeId);
   const cleaned = id
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")

@@ -3,7 +3,6 @@ import type { ClientToolDeclaration, SurfaceBriefing, TurnOrigin, TurnRequest } 
 import { promptText } from "../../util/text.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
-import { RETIRED_ORIGIN_KEYS } from "../../core/turn-origin.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -102,21 +101,13 @@ function zodMessage(field: string, error: z.ZodError): string {
   return `${[field, ...issue.path.map(String)].join(".")}: ${issue.message}`;
 }
 
-const removedOriginFieldsSchema = z.object(
-  Object.fromEntries(RETIRED_ORIGIN_KEYS.map((field) => [field, z.never().optional()])),
-);
-
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
   if (origin?.kind !== "automation") return origin;
   const { useOwnerKeychain: _internalOnly, ...safe } = origin;
   return safe;
 }
 
-function sanitizedTurnRequest(
-  body: TurnRequest & { slackSource?: unknown; externalSlack?: unknown },
-): { request: TurnRequest } | { error: string } {
-  const removed = removedOriginFieldsSchema.safeParse(body);
-  if (!removed.success) return { error: zodMessage("body", removed.error) };
+function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
   if (body.deliveryWebhook !== undefined) {
     const parsed = z
       .object({
@@ -139,8 +130,6 @@ function sanitizedTurnRequest(
   }
   const {
     surfaceOrigin: _surfaceOrigin,
-    slackSource: _slackSource,
-    externalSlack: _externalSlack,
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
     cronScript: _cronScript,
@@ -238,6 +227,7 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
   const text = isObj(body) && typeof body.text === "string" ? body.text : undefined;
   const queuedRunId = isObj(body) && typeof body.queuedRunId === "string" ? body.queuedRunId : undefined;
   const ts = isObj(body) && typeof body.ts === "string" && body.ts ? body.ts : undefined;
+  const tree = kind === "abort" && isObj(body) && body.tree === true;
   let request: TurnRequest | undefined;
   if (isObj(body) && body.request !== undefined) {
     if (!isTurnRequest(body.request)) {
@@ -258,6 +248,7 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
       ...(ts ? { ts } : {}),
       ...(request ? { request } : {}),
       ...(queuedRunId ? { queuedRunId } : {}),
+      ...(tree ? { tree } : {}),
     },
     actor?.p,
   );
@@ -316,6 +307,13 @@ async function listDeliveries(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { deliveries: await app.pendingDeliveries(type, claimMs) });
 }
 
+async function listDeliveriesAcrossTenants(ctx: ApiCtx): Promise<void> {
+  const { res, app, url } = ctx;
+  return sendJson(res, 200, {
+    deliveries: await app.pendingDeliveriesAcrossTenants(url.searchParams.get("type") ?? ""),
+  });
+}
+
 async function ackDelivery(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
@@ -355,6 +353,13 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/runs/:id", actor: "person", auth: "source", handle: getRun },
   { method: "GET", path: "/v1/runs", actor: "person", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
+  {
+    method: "GET",
+    path: "/v1/deliveries/across-tenants",
+    auth: "source",
+    tenant: "none",
+    handle: listDeliveriesAcrossTenants,
+  },
   { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
   { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },
 ];

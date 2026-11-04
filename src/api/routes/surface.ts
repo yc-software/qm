@@ -345,11 +345,13 @@ async function listFiles(ctx: ApiCtx): Promise<void> {
   const limitRaw = url.searchParams.get("limit");
   const cursor = url.searchParams.get("cursor");
   const scope = url.searchParams.get("scope");
+  const nameQuery = (url.searchParams.get("q") ?? "").trim();
   const page = await app.listFilesForViewer(
     viewer,
     {
       ...(limitRaw ? { limit: Number(limitRaw) } : {}),
       ...(cursor ? { cursor } : {}),
+      ...(nameQuery ? { nameQuery } : {}),
     },
     scope ? (scope as ScopeId) : undefined,
   );

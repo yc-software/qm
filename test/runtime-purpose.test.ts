@@ -133,7 +133,7 @@ test("configured purpose fails closed for unapproved or incompatible merged choi
   );
 });
 
-test("runtime get and inherit use job execution defaults, and handoffs survive retries", async () => {
+test("runtime get uses job execution defaults, and handoffs survive retries", async () => {
   const config = await setup();
   await config.setPurposeRuntime("cron", category);
   const service = createRuntimeService(
@@ -147,19 +147,6 @@ test("runtime get and inherit use job execution defaults, and handoffs survive r
   const get = await service(claims, fallback, { action: "get" }, undefined, false, undefined, true, "cron", explicit);
   assert.ok(get.ok);
   assert.deepEqual(get.effective, { ...category, ...explicit });
-  const inherit = await service(
-    claims,
-    fallback,
-    { action: "inherit" },
-    undefined,
-    false,
-    undefined,
-    true,
-    "cron",
-    explicit,
-  );
-  assert.ok(inherit.ok);
-  assert.deepEqual(inherit.handoff, { choice: { ...category, ...explicit }, lifetime: "task" });
   const handoff = await service(
     claims,
     { ...category, ...explicit },
@@ -194,29 +181,7 @@ test("runtime get and inherit use job execution defaults, and handoffs survive r
   assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, "cron"), category);
 });
 
-test("scope inheritance in a human child continuation retains its configured purpose", async () => {
-  const config = await setup();
-  await config.setPurposeRuntime("subagent", category);
-  const service = createRuntimeService(
-    { config, baseModelDefault: fallback.modelId },
-    { authorizesCapabilityScope: async () => true },
-  );
-  const result = await service(
-    { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000, liveActor: true },
-    category,
-    { action: "inherit", lifetime: "scope" },
-    undefined,
-    false,
-    undefined,
-    false,
-    "subagent",
-  );
-  assert.ok(result.ok);
-  assert.deepEqual(result.handoff, { choice: category, lifetime: "scope" });
-  assert.equal(await config.getRuntimeSelectionDurable(SCOPE), null);
-});
-
-test("configured categories remain selectable outside the conversation picker without weakening explicit restrictions", async () => {
+test("explicit choices outside the conversation picker stay restricted for configured categories", async () => {
   const config = await setup();
   await config.setPurposeRuntime("cron", category);
   await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
@@ -225,9 +190,6 @@ test("configured categories remain selectable outside the conversation picker wi
     { authorizesCapabilityScope: async () => true },
   );
   const claims = { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000, triggered: true } as const;
-  const result = await service(claims, category, { action: "inherit" }, undefined, false, undefined, true);
-  assert.ok(result.ok);
-  assert.deepEqual(result.handoff, { choice: category, lifetime: "task" });
   const denied = await service(
     claims,
     category,
@@ -236,42 +198,6 @@ test("configured categories remain selectable outside the conversation picker wi
     false,
     undefined,
     true,
-  );
-  assert.equal(denied.ok, false);
-  config.getWebuiModelsDurable = async () => [];
-  assert.equal((await service(claims, category, { action: "inherit" }, undefined, false, undefined, true)).ok, false);
-});
-
-test("personal-account human child inheritance recognizes a configured purpose outside the chat picker", async () => {
-  const config = await setup();
-  await config.setPurposeRuntime("subagent", category);
-  await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
-  const service = createRuntimeService(
-    { config, baseModelDefault: fallback.modelId },
-    { authorizesCapabilityScope: async () => true },
-  );
-  const claims = { actorId: "alice", scopeId: SCOPE, exp: Date.now() + 60_000, liveActor: true } as const;
-  const result = await service(
-    claims,
-    category,
-    { action: "inherit" },
-    async () => null,
-    true,
-    undefined,
-    false,
-    "subagent",
-  );
-  assert.ok(result.ok);
-  assert.deepEqual(result.handoff, { choice: category, lifetime: "task" });
-  const denied = await service(
-    claims,
-    category,
-    { action: "inherit" },
-    async () => "account denied",
-    true,
-    undefined,
-    false,
-    "subagent",
   );
   assert.equal(denied.ok, false);
 });

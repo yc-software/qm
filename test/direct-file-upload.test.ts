@@ -26,6 +26,10 @@ function fixture() {
       row.state = to;
       return true;
     },
+    async completingUploadId(id) {
+      const row = rows.get(id);
+      return row?.state === "completing" ? row.uploadId : null;
+    },
     async touch(id, at) {
       const row = rows.get(id);
       if (row?.state !== "pending") return false;

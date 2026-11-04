@@ -732,7 +732,7 @@ a.chat-row-open {
 .session-row.menu-open .unread-dot {
   visibility: hidden;
 }
-.session-row.unread .session {
+:where(.session-row.unread) .session {
   padding-right: 11px;
 }
 .working-mark {
@@ -2364,7 +2364,7 @@ qm-markdown .tok-in {
 .composer-image > span {
   display: none;
 }
-.composer-image:has(.composer-image-open[hidden]) > span {
+.composer-image-open[hidden] ~ span {
   display: block;
   padding: 6px 28px 6px 0;
 }
@@ -3595,7 +3595,7 @@ qm-markdown .tok-in {
   }
 }
 @media (max-width: 860px) {
-  .suggested-activities {
+  :where(html:not(.desktop-embed)) .suggested-activities {
     padding: 0 2px;
     margin-top: 12px;
   }
@@ -3713,9 +3713,6 @@ qm-markdown .tok-in {
   padding-left: calc(var(--subagent-depth, 0) * 14px);
   border-radius: 8px;
 }
-.subagent-row.peeking {
-  background: color-mix(in srgb, var(--muted-foreground) 8%, transparent);
-}
 .subagent-row-head {
   appearance: none;
   display: flex;
@@ -3780,33 +3777,6 @@ qm-markdown .tok-in {
   font: inherit;
   font-size: 12px;
   cursor: pointer;
-}
-.subagent-peek {
-  flex: 1 0 100%;
-  min-width: 0;
-  margin: 0;
-  padding: 2px 8px 6px 26px;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
-}
-.subagent-peek-line {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  min-width: 0;
-}
-.subagent-peek-line > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.subagent-peek-line.tool {
-  font-family: var(--font-mono);
-  font-size: 11px;
 }
 
 .bg-panel {
@@ -5563,19 +5533,19 @@ a.connector-widget:focus-visible {
 }
 
 @media (max-width: 860px) {
-  .layout {
+  :where(html:not(.desktop-embed)) .layout {
     position: relative;
     --rail-w: calc(max(8px, env(safe-area-inset-left)) + 52px);
   }
-  .sidebar {
+  :where(html:not(.desktop-embed)) .sidebar {
     padding-top: calc(10px + var(--surface-safe-top));
     padding-bottom: calc(10px + env(safe-area-inset-bottom));
     padding-left: max(8px, env(safe-area-inset-left));
   }
-  .sidebar-resize-handle {
+  :where(html:not(.desktop-embed)) .sidebar-resize-handle {
     display: none;
   }
-  .sidebar-scrim {
+  :where(html:not(.desktop-embed)) .sidebar-scrim {
     position: absolute;
     inset: 0;
     z-index: 9;
@@ -5587,76 +5557,76 @@ a.connector-widget:focus-visible {
     transition: opacity 0.26s ease;
     opacity: 1;
   }
-  .sidebar .icon-btn,
-  .session-menu-btn,
-  .recent-project-new-chat {
+  :where(html:not(.desktop-embed)) .sidebar .icon-btn,
+  :where(html:not(.desktop-embed)) .session-menu-btn,
+  :where(html:not(.desktop-embed)) .recent-project-new-chat {
     width: 44px;
     height: 44px;
   }
-  .navrow,
-  .browse-tile,
-  .recent-project-toggle,
-  .session,
-  .settings-choice-option,
-  .session-menu-option,
-  .archived-toggle {
+  :where(html:not(.desktop-embed)) .navrow,
+  :where(html:not(.desktop-embed)) .browse-tile,
+  :where(html:not(.desktop-embed)) .recent-project-toggle,
+  :where(html:not(.desktop-embed)) .session,
+  :where(html:not(.desktop-embed)) .settings-choice-option,
+  :where(html:not(.desktop-embed)) .session-menu-option,
+  :where(html:not(.desktop-embed)) .archived-toggle {
     min-height: 44px;
   }
-  .session-menu {
+  :where(html:not(.desktop-embed)) .session-menu {
     right: 0;
     margin-top: -22px;
   }
-  .recent-project-head .session-menu {
+  :where(html:not(.desktop-embed)) .recent-project-head .session-menu {
     width: 44px;
     height: 44px;
     margin-top: 0;
   }
-  .chat-topbar {
+  :where(html:not(.desktop-embed)) .chat-topbar {
     padding: var(--surface-safe-top) max(10px, env(safe-area-inset-right)) 0 max(10px, env(safe-area-inset-left));
     height: calc(52px + var(--surface-safe-top));
     padding-left: calc(max(4px, env(safe-area-inset-left)) + 48px);
     padding-right: max(6px, env(safe-area-inset-right));
     gap: 6px;
   }
-  .session-tool span {
+  :where(html:not(.desktop-embed)) .session-tool span {
     display: none;
   }
-  .session-crumb,
-  .session-crumb-sep {
+  :where(html:not(.desktop-embed)) .session-crumb,
+  :where(html:not(.desktop-embed)) .session-crumb-sep {
     display: none;
   }
-  .message-stack {
+  :where(html:not(.desktop-embed)) .message-stack {
     gap: 6px;
   }
-  .pane {
+  :where(html:not(.desktop-embed)) .pane {
     padding: calc(50px + var(--surface-safe-top)) max(14px, env(safe-area-inset-right))
       calc(40px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
   }
-  .composer-approval .approval-actions {
+  :where(html:not(.desktop-embed)) .composer-approval .approval-actions {
     justify-content: flex-start;
   }
-  .composer-toolbar {
+  :where(html:not(.desktop-embed)) .composer-toolbar {
     align-items: flex-end;
   }
-  .composer-left,
-  .composer-right {
+  :where(html:not(.desktop-embed)) .composer-left,
+  :where(html:not(.desktop-embed)) .composer-right {
     gap: 4px;
   }
-  .menu-button {
+  :where(html:not(.desktop-embed)) .menu-button {
     max-width: min(44vw, 190px);
   }
-  .composer-toolbar .icon-btn,
-  .composer-toolbar .menu-button,
-  .composer-toolbar .send-btn {
+  :where(html:not(.desktop-embed)) .composer-toolbar .icon-btn,
+  :where(html:not(.desktop-embed)) .composer-toolbar .menu-button,
+  :where(html:not(.desktop-embed)) .composer-toolbar .send-btn {
     min-height: 44px;
   }
-  .composer-toolbar .icon-btn,
-  .composer-toolbar .send-btn {
+  :where(html:not(.desktop-embed)) .composer-toolbar .icon-btn,
+  :where(html:not(.desktop-embed)) .composer-toolbar .send-btn {
     width: 44px;
     height: 44px;
   }
-  .list-page-action,
-  .pane .btn {
+  :where(html:not(.desktop-embed)) .list-page-action,
+  :where(html:not(.desktop-embed)) .pane .btn {
     min-height: 44px;
   }
 }
@@ -8007,21 +7977,15 @@ h3.ambient-field-label {
     transition: opacity 0.16s ease;
   }
 
-  .dockview-theme-qm
-    .dv-tabs-and-actions-container:not(.dv-single-tab):is(
-      :hover,
-      :has(:focus-visible, [aria-expanded="true"], .split-tab-menu)
-    )
-    .split-pane-actions {
+  .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab):is(:hover, :focus-within) .split-pane-actions,
+  .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-pane-actions.menu-open {
     opacity: 1;
     pointer-events: auto;
   }
 
   .split-canvas:not(.single-pane)
-    .dv-tabs-and-actions-container.dv-single-tab:not(:hover):not(
-      :has(:focus-visible, [aria-expanded="true"], .split-tab-menu)
-    )
-    .split-pane-actions
+    .dv-tabs-and-actions-container.dv-single-tab:not(:hover, :focus-within)
+    .split-pane-actions:not(.menu-open)
     > :not(.split-group-close) {
     display: none;
   }
@@ -10576,18 +10540,18 @@ h3.ambient-field-label {
 }
 
 @media (max-width: 860px) {
-  html,
-  body {
+  html:where(:not(.desktop-embed)),
+  :where(html:not(.desktop-embed)) body {
     overscroll-behavior: none;
     -webkit-text-size-adjust: 100%;
   }
-  body {
+  :where(html:not(.desktop-embed)) body {
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
   }
 
-  .sidebar,
-  .layout.sidebar-closed .sidebar {
+  :where(html:not(.desktop-embed)) .sidebar,
+  :where(html:not(.desktop-embed)) .layout.sidebar-closed .sidebar {
     position: absolute;
     inset: 0 auto 0 0;
     width: min(320px, 86vw);
@@ -10599,32 +10563,32 @@ h3.ambient-field-label {
       visibility 0s linear 0.26s;
     border-right: 1px solid var(--border);
   }
-  .layout.sidebar-closed .sidebar {
+  :where(html:not(.desktop-embed)) .layout.sidebar-closed .sidebar {
     transform: translateX(-106%);
     visibility: hidden;
   }
-  .layout:not(.sidebar-closed) .sidebar {
+  :where(html:not(.desktop-embed)) .layout:not(.sidebar-closed) .sidebar {
     transition-delay: 0s;
   }
-  .layout.sidebar-closed .sidebar-scrim {
+  :where(html:not(.desktop-embed)) .layout.sidebar-closed .sidebar-scrim {
     display: block;
     opacity: 0;
     pointer-events: none;
   }
-  .sidebar-collapse-toggle {
+  :where(html:not(.desktop-embed)) .sidebar-collapse-toggle {
     width: 44px;
     height: 44px;
   }
-  .sidebar .navrow,
-  .sidebar .session {
+  :where(html:not(.desktop-embed)) .sidebar .navrow,
+  :where(html:not(.desktop-embed)) .sidebar .session {
     font-size: 15px;
   }
-  .sidebar-footer .icon-btn.subtle {
+  :where(html:not(.desktop-embed)) .sidebar-footer .icon-btn.subtle {
     width: 44px;
     height: 44px;
   }
 
-  .mobile-menu-btn {
+  :where(html:not(.desktop-embed)) .mobile-menu-btn {
     display: inline-flex;
     position: absolute;
     z-index: 6;
@@ -10635,24 +10599,24 @@ h3.ambient-field-label {
     border-radius: 12px;
     color: var(--foreground);
   }
-  .layout:not(.sidebar-closed) .mobile-menu-btn {
+  :where(html:not(.desktop-embed)) .layout:not(.sidebar-closed) .mobile-menu-btn {
     visibility: hidden;
   }
 
-  .session-topbar .session-heading {
+  :where(html:not(.desktop-embed)) .session-topbar .session-heading {
     justify-content: center;
     text-align: center;
     font-size: 15px;
     font-weight: 550;
   }
-  .session-tools {
+  :where(html:not(.desktop-embed)) .session-tools {
     display: none;
   }
-  .session-tools-more {
+  :where(html:not(.desktop-embed)) .session-tools-more {
     display: flex;
     flex: none;
   }
-  .session-tools-more-btn {
+  :where(html:not(.desktop-embed)) .session-tools-more-btn {
     width: 44px;
     height: 44px;
     max-width: none;
@@ -10660,84 +10624,88 @@ h3.ambient-field-label {
     justify-content: center;
     color: var(--foreground);
   }
-  .chat-topbar .topbar-actions .icon-btn {
+  :where(html:not(.desktop-embed)) .chat-topbar .topbar-actions .icon-btn {
     width: 44px;
     height: 44px;
   }
 
-  .pane > .pane-head:first-child,
-  .pane > .inbox-item-head:first-child {
+  :where(html:not(.desktop-embed)) .pane > .pane-head:first-child,
+  :where(html:not(.desktop-embed)) .pane > .inbox-item-head:first-child {
     min-height: 44px;
     padding-left: 48px;
     margin-top: -44px;
     margin-bottom: 10px;
   }
-  .list-page-head {
+  :where(html:not(.desktop-embed)) .list-page-head {
     grid-template-rows: minmax(44px, auto);
   }
-  .pane > .list-page-head:first-child,
-  .project-grid-content > .list-page-head:first-child,
-  .pane:not(.scoped-view) > .kc-page-content > .list-page-head:first-child {
+  :where(html:not(.desktop-embed)) .pane > .list-page-head:first-child,
+  :where(html:not(.desktop-embed)) .project-grid-content > .list-page-head:first-child,
+  :where(html:not(.desktop-embed)) .pane:not(.scoped-view) > .kc-page-content > .list-page-head:first-child {
     margin-top: -44px;
   }
-  .pane > .list-page-head:first-child > :first-child,
-  .project-grid-content > .list-page-head:first-child > :first-child,
-  .pane:not(.scoped-view) > .kc-page-content > .list-page-head:first-child > :first-child {
+  :where(html:not(.desktop-embed)) .pane > .list-page-head:first-child > :first-child,
+  :where(html:not(.desktop-embed)) .project-grid-content > .list-page-head:first-child > :first-child,
+  :where(html:not(.desktop-embed))
+    .pane:not(.scoped-view)
+    > .kc-page-content
+    > .list-page-head:first-child
+    > :first-child {
     padding-left: 48px;
   }
-  .pane-title {
+  :where(html:not(.desktop-embed)) .pane-title {
     font-size: 20px;
     line-height: 1.2;
   }
-  .pane-head-actions .menu-button,
-  .list-page-actions .menu-button {
+  :where(html:not(.desktop-embed)) .pane-head-actions .menu-button,
+  :where(html:not(.desktop-embed)) .list-page-actions .menu-button {
     height: 40px;
   }
-  .pane input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
-  .pane select,
-  .pane textarea,
-  .list-search,
-  .list-search input {
+  :where(html:not(.desktop-embed)) .pane input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  :where(html:not(.desktop-embed)) .pane select,
+  :where(html:not(.desktop-embed)) .pane textarea,
+  :where(html:not(.desktop-embed)) .list-search,
+  :where(html:not(.desktop-embed)) .list-search input {
     font-size: 16px;
   }
-  .list-search {
+  :where(html:not(.desktop-embed)) .list-search {
     height: 46px;
     border-radius: 12px;
   }
-  .pane select {
+  :where(html:not(.desktop-embed)) .pane select {
     min-height: 40px;
     border-radius: 10px;
   }
 
-  .chat-scroll {
+  :where(html:not(.desktop-embed)) .chat-scroll {
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
     padding-right: max(var(--chat-pad), env(safe-area-inset-right));
     padding-left: max(var(--chat-pad), env(safe-area-inset-left));
   }
-  .message-meta {
+  :where(html:not(.desktop-embed)) .message-meta {
     gap: 2px;
     height: 34px;
   }
-  .assistant-body,
-  .user-bubble {
+  :where(html:not(.desktop-embed)) .assistant-body,
+  :where(html:not(.desktop-embed)) .user-bubble {
     font-size: 16px;
     line-height: 1.55;
   }
-  .assistant-body :is(markdown-block, qm-markdown) pre code,
-  .user-bubble :is(markdown-block, qm-markdown) pre code {
+  :where(html:not(.desktop-embed)) .assistant-body :is(markdown-block, qm-markdown) pre code,
+  :where(html:not(.desktop-embed)) .user-bubble :is(markdown-block, qm-markdown) pre code {
     font-size: 13.5px;
   }
-  .assistant-body :is(markdown-block, qm-markdown) pre,
-  .user-bubble :is(markdown-block, qm-markdown) pre {
+  :where(html:not(.desktop-embed)) .assistant-body :is(markdown-block, qm-markdown) pre,
+  :where(html:not(.desktop-embed)) .user-bubble :is(markdown-block, qm-markdown) pre {
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-x: contain;
   }
-  .message-bubble {
+  :where(html:not(.desktop-embed)) .message-bubble {
     max-width: 86%;
   }
 
-  .composer-wrap {
+  :where(html:not(.desktop-embed)) .composer-wrap {
     --composer-font-size: 16px;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -10751,10 +10719,10 @@ h3.ambient-field-label {
     padding: var(--composer-pad-block) var(--composer-pad-end) var(--composer-pad-block) var(--composer-pad-inline);
     border-radius: 20px;
   }
-  .composer-wrap > * {
+  :where(html:not(.desktop-embed)) .composer-wrap > * {
     grid-column: 1 / -1;
   }
-  .composer-input {
+  :where(html:not(.desktop-embed)) .composer-input {
     grid-column: 1;
     min-width: 0;
     line-height: 1.4;
@@ -10762,51 +10730,51 @@ h3.ambient-field-label {
     max-height: 32vh;
     padding: 12px 10px 6px;
   }
-  .composer-input::placeholder {
+  :where(html:not(.desktop-embed)) .composer-input::placeholder {
     white-space: nowrap;
   }
-  .composer-wrap .composer-toolbar {
+  :where(html:not(.desktop-embed)) .composer-wrap .composer-toolbar {
     grid-column: 2;
     flex-wrap: nowrap;
     gap: 6px;
   }
-  .composer-wrap .composer-left,
-  .composer-wrap .composer-right {
+  :where(html:not(.desktop-embed)) .composer-wrap .composer-left,
+  :where(html:not(.desktop-embed)) .composer-wrap .composer-right {
     width: auto;
     flex-wrap: nowrap;
   }
-  .composer-wrap .composer-right {
+  :where(html:not(.desktop-embed)) .composer-wrap .composer-right {
     margin-left: auto;
   }
-  .inbox-chat-composer .composer-wrap .composer-input,
-  .inbox-chat-composer .composer-wrap .composer-toolbar {
+  :where(html:not(.desktop-embed)) .inbox-chat-composer .composer-wrap .composer-input,
+  :where(html:not(.desktop-embed)) .inbox-chat-composer .composer-wrap .composer-toolbar {
     grid-column: 1 / -1;
   }
-  .composer-toolbar .stop-btn {
+  :where(html:not(.desktop-embed)) .composer-toolbar .stop-btn {
     width: 44px;
     height: 44px;
   }
-  .composer-toolbar .send-btn {
+  :where(html:not(.desktop-embed)) .composer-toolbar .send-btn {
     width: 44px;
     height: 44px;
     border-radius: 50%;
   }
-  .composer-wrap .loadout-button .menu-label,
-  .composer-wrap .loadout-button .menu-suffix {
+  :where(html:not(.desktop-embed)) .composer-wrap .loadout-button .menu-label,
+  :where(html:not(.desktop-embed)) .composer-wrap .loadout-button .menu-suffix {
     display: none;
   }
-  .composer-wrap .composer-toolbar .menu-button.loadout-button {
+  :where(html:not(.desktop-embed)) .composer-wrap .composer-toolbar .menu-button.loadout-button {
     width: 44px;
     padding: 0;
     justify-content: center;
   }
-  .live-work-line {
+  :where(html:not(.desktop-embed)) .live-work-line {
     min-height: 40px;
   }
 
-  .menu-popover,
-  .session-menu-popover,
-  .user-menu-popover {
+  :where(html:not(.desktop-embed)) .menu-popover,
+  :where(html:not(.desktop-embed)) .session-menu-popover,
+  :where(html:not(.desktop-embed)) .user-menu-popover {
     position: fixed !important;
     inset: auto 0 0 0 !important;
     width: auto !important;
@@ -10824,8 +10792,8 @@ h3.ambient-field-label {
     animation: sheet-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
     overflow-y: auto;
   }
-  .menu-popover::after,
-  .session-menu-popover::after {
+  :where(html:not(.desktop-embed)) .menu-popover::after,
+  :where(html:not(.desktop-embed)) .session-menu-popover::after {
     content: "";
     position: absolute;
     top: 7px;
@@ -10836,30 +10804,30 @@ h3.ambient-field-label {
     background: color-mix(in srgb, var(--muted-foreground) 45%, transparent);
     transform: translateX(-50%);
   }
-  .menu-popover[hidden] {
+  :where(html:not(.desktop-embed)) .menu-popover[hidden] {
     display: none !important;
   }
-  .menu-option,
-  .session-menu-option {
+  :where(html:not(.desktop-embed)) .menu-option,
+  :where(html:not(.desktop-embed)) .session-menu-option {
     min-height: 48px;
     padding-inline: 12px;
     font-size: 16px;
     border-radius: 12px;
   }
-  .menu-option svg:first-child {
+  :where(html:not(.desktop-embed)) .menu-option svg:first-child {
     flex: none;
     margin-right: 10px;
   }
-  .chat-topbar:has(.menu-popover:not([hidden])) {
+  :where(html:not(.desktop-embed)) .chat-topbar:has(.menu-popover:not([hidden])) {
     z-index: 60;
   }
-  .session-tools-more .menu-option {
+  :where(html:not(.desktop-embed)) .session-tools-more .menu-option {
     align-items: center;
   }
-  .session-tools-more .menu-option-copy {
+  :where(html:not(.desktop-embed)) .session-tools-more .menu-option-copy {
     flex: 1;
   }
-  .menu-title {
+  :where(html:not(.desktop-embed)) .menu-title {
     padding: 10px 12px 6px;
     font-size: 13px;
     font-weight: 600;
@@ -10870,47 +10838,47 @@ h3.ambient-field-label {
 }
 
 @media (max-width: 860px) {
-  .custom-chat-shell.empty-chat {
+  :where(html:not(.desktop-embed)) .custom-chat-shell.empty-chat {
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
-  .empty-chat .chat-scroll {
+  :where(html:not(.desktop-embed)) .empty-chat .chat-scroll {
     display: flex;
     flex-direction: column;
     justify-content: center;
   }
-  .empty-chat .chat-cta {
+  :where(html:not(.desktop-embed)) .empty-chat .chat-cta {
     margin-bottom: 0;
   }
 
-  .sidebar .session-share-btn,
-  .sidebar .session-archive-btn {
+  :where(html:not(.desktop-embed)) .sidebar .session-share-btn,
+  :where(html:not(.desktop-embed)) .sidebar .session-archive-btn {
     display: none;
   }
-  .session,
-  .session-row:hover .session,
-  .session-row:focus-within .session,
-  .session-row.menu-open .session {
+  :where(html:not(.desktop-embed)) .session,
+  :where(html:not(.desktop-embed)) .session-row:hover .session,
+  :where(html:not(.desktop-embed)) .session-row:focus-within .session,
+  :where(html:not(.desktop-embed)) .session-row.menu-open .session {
     padding-right: 48px;
   }
-  .user-pill {
+  :where(html:not(.desktop-embed)) .user-pill {
     min-height: 44px;
   }
 }
 
 @media (max-width: 860px) {
-  .file-chip {
+  :where(html:not(.desktop-embed)) .file-chip {
     min-height: 44px;
     font-size: 15px;
   }
-  .file-chip-download {
+  :where(html:not(.desktop-embed)) .file-chip-download {
     min-width: 44px;
     min-height: 44px;
   }
 }
 
 @media (max-width: 860px) {
-  .field-select > select,
-  .field-select.compact > select {
+  :where(html:not(.desktop-embed)) .field-select > select,
+  :where(html:not(.desktop-embed)) .field-select.compact > select {
     min-height: 42px;
     font-size: 15px;
     border-radius: 10px;
@@ -10918,21 +10886,21 @@ h3.ambient-field-label {
 }
 
 @media (max-width: 860px) {
-  .chip-x {
+  :where(html:not(.desktop-embed)) .chip-x {
     width: 32px;
     height: 32px;
     margin: -7px -8px -7px 0;
   }
-  .bg-activity-strip {
+  :where(html:not(.desktop-embed)) .bg-activity-strip {
     min-height: 36px;
     padding: 4px 6px;
     border-radius: 10px;
     font-size: var(--composer-font-size, 13px);
   }
-  :root {
+  :root:where(:not(.desktop-embed)) {
     --meta-lane: 34px;
   }
-  .msg-copy {
+  :where(html:not(.desktop-embed)) .msg-copy {
     width: 38px;
     height: 34px;
     border-radius: 8px;
@@ -10940,11 +10908,11 @@ h3.ambient-field-label {
 }
 
 @media (max-width: 860px) {
-  .session-menu-colors {
+  :where(html:not(.desktop-embed)) .session-menu-colors {
     gap: 10px;
     padding: 8px 12px 4px;
   }
-  .color-swatch {
+  :where(html:not(.desktop-embed)) .color-swatch {
     width: 32px;
     height: 32px;
   }
@@ -10954,17 +10922,17 @@ h3.ambient-field-label {
   display: none;
 }
 @media (max-width: 860px) {
-  .slash-option {
+  :where(html:not(.desktop-embed)) .slash-option {
     min-height: 44px;
     font-size: 15px;
   }
 
-  .chat-search-overlay {
+  :where(html:not(.desktop-embed)) .chat-search-overlay {
     padding: 0;
     align-items: stretch;
     background: var(--background);
   }
-  .chat-search-palette {
+  :where(html:not(.desktop-embed)) .chat-search-palette {
     width: 100%;
     min-height: 100%;
     max-height: 100%;
@@ -10972,19 +10940,19 @@ h3.ambient-field-label {
     border-radius: 0;
     padding-top: var(--surface-safe-top);
   }
-  .chat-search-inputrow {
+  :where(html:not(.desktop-embed)) .chat-search-inputrow {
     padding: 8px 12px 8px 16px;
   }
-  .chat-search-input {
+  :where(html:not(.desktop-embed)) .chat-search-input {
     font-size: 16px;
     min-height: 44px;
   }
-  .chat-search-inputrow .chat-search-kbd,
-  .chat-search-foot,
-  .chat-search-ask .chat-search-kbd {
+  :where(html:not(.desktop-embed)) .chat-search-inputrow .chat-search-kbd,
+  :where(html:not(.desktop-embed)) .chat-search-foot,
+  :where(html:not(.desktop-embed)) .chat-search-ask .chat-search-kbd {
     display: none;
   }
-  .chat-search-cancel {
+  :where(html:not(.desktop-embed)) .chat-search-cancel {
     display: inline-flex;
     align-items: center;
     min-height: 44px;
@@ -10995,34 +10963,34 @@ h3.ambient-field-label {
     font: inherit;
     font-size: 16px;
   }
-  .chat-search-row {
+  :where(html:not(.desktop-embed)) .chat-search-row {
     min-height: 52px;
   }
 
-  .navrow,
-  .session,
-  .btn,
-  .icon-btn,
-  .menu-option,
-  .session-menu-option,
-  .message-meta,
-  .chat-topbar {
+  :where(html:not(.desktop-embed)) .navrow,
+  :where(html:not(.desktop-embed)) .session,
+  :where(html:not(.desktop-embed)) .btn,
+  :where(html:not(.desktop-embed)) .icon-btn,
+  :where(html:not(.desktop-embed)) .menu-option,
+  :where(html:not(.desktop-embed)) .session-menu-option,
+  :where(html:not(.desktop-embed)) .message-meta,
+  :where(html:not(.desktop-embed)) .chat-topbar {
     -webkit-user-select: none;
     user-select: none;
   }
 }
 
 @media (max-width: 860px) and (max-height: 520px) {
-  .sidebar {
+  :where(html:not(.desktop-embed)) .sidebar {
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
-  .sidebar > .brand,
-  .sidebar > #sidebar-top,
-  .sidebar > #sidebar-footer {
+  :where(html:not(.desktop-embed)) .sidebar > .brand,
+  :where(html:not(.desktop-embed)) .sidebar > #sidebar-top,
+  :where(html:not(.desktop-embed)) .sidebar > #sidebar-footer {
     flex: none;
   }
-  .sidebar .list {
+  :where(html:not(.desktop-embed)) .sidebar .list {
     flex: none;
     min-height: 120px;
     overflow: visible;
@@ -11030,33 +10998,33 @@ h3.ambient-field-label {
 }
 
 @media (max-width: 860px) {
-  .composer-approval .approval-btn {
+  :where(html:not(.desktop-embed)) .composer-approval .approval-btn {
     min-height: 44px;
   }
 }
 
 @media (max-width: 860px) {
-  .pane .session-topbar {
+  :where(html:not(.desktop-embed)) .pane .session-topbar {
     margin: calc(-50px - var(--surface-safe-top)) calc(-1 * max(14px, env(safe-area-inset-right))) 12px
       calc(-1 * max(14px, env(safe-area-inset-left)));
     top: calc(-50px - var(--surface-safe-top));
   }
 
-  .pane > .context-back:first-child,
-  .pane > :first-child > .context-back:first-child {
+  :where(html:not(.desktop-embed)) .pane > .context-back:first-child,
+  :where(html:not(.desktop-embed)) .pane > :first-child > .context-back:first-child {
     margin-left: 48px;
     margin-top: -44px;
   }
-  .pane button.btn,
-  .pane a.btn {
+  :where(html:not(.desktop-embed)) .pane button.btn,
+  :where(html:not(.desktop-embed)) .pane a.btn {
     min-height: 44px;
   }
-  .context-back {
+  :where(html:not(.desktop-embed)) .context-back {
     min-height: 44px;
     font-size: 15px;
     margin-bottom: 6px;
   }
-  .context-resource-link {
+  :where(html:not(.desktop-embed)) .context-resource-link {
     display: inline-flex;
     align-items: center;
     min-height: 40px;
@@ -11065,31 +11033,31 @@ h3.ambient-field-label {
 }
 
 @media (max-width: 860px) {
-  .resource-pane {
+  :where(html:not(.desktop-embed)) .resource-pane {
     padding: calc(50px + var(--surface-safe-top)) max(14px, env(safe-area-inset-right))
       calc(32px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
   }
-  .resource-pane > :first-child > .context-back:first-child {
+  :where(html:not(.desktop-embed)) .resource-pane > :first-child > .context-back:first-child {
     margin-left: 48px;
     margin-top: -44px;
   }
-  .resource-pane button.btn,
-  .resource-pane a.btn,
-  .resource-form button.btn {
+  :where(html:not(.desktop-embed)) .resource-pane button.btn,
+  :where(html:not(.desktop-embed)) .resource-pane a.btn,
+  :where(html:not(.desktop-embed)) .resource-form button.btn {
     min-height: 44px;
   }
-  .resource-form input:not([type="checkbox"]):not([type="radio"]),
-  .resource-form select,
-  .resource-form textarea {
+  :where(html:not(.desktop-embed)) .resource-form input:not([type="checkbox"]):not([type="radio"]),
+  :where(html:not(.desktop-embed)) .resource-form select,
+  :where(html:not(.desktop-embed)) .resource-form textarea {
     font-size: 16px;
   }
-  .resource-heading {
+  :where(html:not(.desktop-embed)) .resource-heading {
     flex-wrap: wrap;
   }
 }
 
 @media (max-width: 860px) {
-  .pane .context-detail > .context-back:first-child {
+  :where(html:not(.desktop-embed)) .pane .context-detail > .context-back:first-child {
     margin-left: 48px;
     margin-top: -44px;
   }
@@ -11284,21 +11252,21 @@ h3.ambient-field-label {
 }
 
 @media (max-width: 860px), (hover: none) and (pointer: coarse) {
-  .layout {
+  :where(html:not(.desktop-embed)) .layout {
     position: fixed;
     inset: 0 0 auto;
     height: var(--vvh, 100dvh);
     transform: translateY(var(--vv-top, 0px));
   }
-  .layout.bannered {
+  :where(html:not(.desktop-embed)) .layout.bannered {
     height: calc(var(--vvh, 100dvh) - 38px - env(safe-area-inset-top));
   }
-  .top-banner,
-  .impersonation-banner {
+  :where(html:not(.desktop-embed)) .top-banner,
+  :where(html:not(.desktop-embed)) .impersonation-banner {
     transform: translateY(var(--vv-top, 0px));
   }
-  .composer-input,
-  .live-work-line {
+  :where(html:not(.desktop-embed)) .composer-input,
+  :where(html:not(.desktop-embed)) .live-work-line {
     font-size: max(16px, var(--composer-font-size, 16px));
   }
 }

@@ -3,7 +3,8 @@ import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
-import { createPostgresSessionStore, rowToSession } from "../src/sessions/postgres-session-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { rowToSession } from "../src/sessions/session-rows.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { scopeId, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
@@ -11,6 +12,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
+import { seedInstallTenant } from "./support/tenant-seed.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres store tests";
@@ -80,77 +82,6 @@ test("pg session store: fork provenance survives a store restart", { skip }, asy
 
 test("pg session store: getForParticipant returns exactly the row listByParticipant returns", { skip }, async () => {
   await assertParticipantSessionParity(createPostgresSessionStore(URL!), `pg-parity-${randomUUID()}`);
-});
-
-test("pg participant presence checks seek into the visible history window", { skip }, async (t) => {
-  const store = createPostgresSessionStore(URL!);
-  const owner = `window-${randomUUID()}`;
-  const session = await store.getOrCreateByThread(owner, "channel", scopeId("channel", owner));
-  const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
-  try {
-    await raw.query(
-      `INSERT INTO items(tenant_id, session_id, seq, kind, body, created_at)
-       SELECT qm_tenant_id(), $1, n, 'UserMessage', '{"text":"window fixture"}', to_timestamp(n * 10 / 1000.0)
-         FROM generate_series(0, 3999) n`,
-      [session.id],
-    );
-    await raw.query("ANALYZE items");
-    await store.addParticipant(session.id, owner);
-    const captured: { text: string; values: unknown[] }[] = [];
-    const execute = pg.Client.prototype.query;
-    t.mock.method(pg.Client.prototype, "query", function (this: InstanceType<typeof pg.Client>, ...args: unknown[]) {
-      const config = args[0] as { text?: string; values?: unknown[] } | string;
-      const text = typeof config === "string" ? config : config.text;
-      if (text?.includes("AS has_entries")) {
-        captured.push({ text, values: typeof config === "string" ? (args[1] as unknown[]) : (config.values ?? []) });
-      }
-      return Reflect.apply(execute, this, args);
-    });
-    await store.listByParticipant(owner);
-    await store.getForParticipant(session.id, owner);
-    t.mock.restoreAll();
-    assert.equal(captured.length, 2);
-
-    const windows = [
-      { fromSeq: 4000, toSeq: null, from: 0, to: null, visible: [] },
-      { fromSeq: 0, toSeq: 1, from: 40000, to: 40000, visible: [0] },
-      { fromSeq: null, toSeq: null, from: 40000, to: null, visible: [] },
-      { fromSeq: null, toSeq: null, from: 0, to: 10, visible: [0] },
-      { fromSeq: 3998, toSeq: null, from: 40000, to: 39990, visible: [3998] },
-      { fromSeq: null, toSeq: 2, from: 10, to: 0, visible: [1] },
-      { fromSeq: 2, toSeq: 2, from: 0, to: null, visible: [] },
-    ];
-    type Plan = { "Relation Name"?: string; "Rows Removed by Filter"?: number; Plans?: Plan[] };
-    const rejectedEntries = (plan: Plan): number =>
-      (plan["Relation Name"] === "items" ? (plan["Rows Removed by Filter"] ?? 0) : 0) +
-      (plan.Plans ?? []).reduce((sum, child) => sum + rejectedEntries(child), 0);
-    for (const window of windows) {
-      await raw.query(
-        `UPDATE participants SET valid_from_seq=$3, valid_to_seq=$4, valid_from=$5, valid_to=$6
-          WHERE session_id=$1 AND principal_id=$2`,
-        [session.id, owner, window.fromSeq, window.toSeq, window.from, window.to],
-      );
-      assert.deepEqual(
-        (await store.visibleItems(session.id, owner)).map((entry) => entry.seq),
-        window.visible,
-      );
-      assert.equal((await store.listByParticipant(owner))[0]!.hasEntries, window.visible.length > 0);
-      assert.equal((await store.getForParticipant(session.id, owner))!.hasEntries, window.visible.length > 0);
-      if (window.fromSeq === null ? window.toSeq !== null : window.toSeq === null && window.to !== null) continue;
-      for (const query of captured) {
-        const result = await raw.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${query.text}`, query.values);
-        const rejected = rejectedEntries(result.rows[0]["QUERY PLAN"][0].Plan);
-        assert.ok(
-          rejected < 32,
-          `presence check rejected ${rejected} historical entries for ${JSON.stringify(window)}`,
-        );
-      }
-    }
-  } finally {
-    t.mock.restoreAll();
-    await raw.end();
-  }
 });
 
 test("pg participant activity uses the latest user entry, including overheard entries", { skip }, async () => {
@@ -347,6 +278,7 @@ test(
     await admin.query(`CREATE SCHEMA ${schema}`);
     const url = new globalThis.URL(URL!);
     url.searchParams.set("options", `-c search_path=${schema}`);
+    await seedInstallTenant(url.toString());
     const day = 86_400_000;
     const base = Date.UTC(2025, 5, 1);
     let clock = base + 3 * day;
@@ -589,9 +521,8 @@ test("pg spend ancestry only visits sessions with usage inside the requested ran
   }
 });
 
-test("pg session store: one-per-thread, monotonic log, visibility window", { skip }, async () => {
-  let now = Date.now();
-  const s = createPostgresSessionStore(URL!, { now: () => now });
+test("pg session store: one-per-thread, monotonic log, membership visibility", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "U1");
 
   const a = await s.getOrCreateByThread("t1", "dm", scope);
@@ -658,43 +589,32 @@ test("pg session store: one-per-thread, monotonic log, visibility window", { ski
   assert.equal(await s.getItem(a.id, 99), undefined, "a missing seq is undefined");
   assert.equal(await s.getItem("nope", 0), undefined, "an unknown session is undefined");
 
-  now += 70;
+  assert.equal((await s.visibleItems(a.id, "U1")).length, 0, "a non-participant sees nothing");
   await s.addParticipant(a.id, "U1");
-  assert.equal((await s.visibleItems(a.id, "U1")).length, 0, "a late joiner sees none of the pre-tenure backlog");
-  await s.append(writer, { kind: "UserMessage", text: "after-join" });
-  const seen = await s.visibleItems(a.id, "U1");
   assert.deepEqual(
-    seen.map((e) => e.text),
-    ["after-join"],
-    "only entries from the member's tenure are visible",
+    (await s.visibleItems(a.id, "U1")).map((e) => e.text),
+    ["hi", "yo"],
+    "a late joiner sees the earlier history",
   );
   assert.equal((await s.listByParticipant("U1")).find((x) => x.id === a.id)?.hasEntries, true);
   assert.equal(
-    (await s.scanAll()).some((x) => x.id === a.id),
+    (await s.listByScope(a.scopeId)).some((x) => x.id === a.id),
     true,
   );
 
   assert.equal((await s.getByThread("t1"))?.id, a.id);
   assert.equal(await s.getByThread("never-written"), null, "missing thread → null, no session created");
 
-  now += 5;
   await s.removeParticipant(a.id, "U1");
-  await s.addParticipant(a.id, "U1");
+  assert.deepEqual(await s.visibleItems(a.id, "U1"), [], "a removed participant sees nothing");
   assert.equal(
-    (await s.listByParticipant("U1")).find((x) => x.id === a.id)?.hasEntries,
+    (await s.listByParticipant("U1")).some((x) => x.id === a.id),
     false,
-    "old entries fall outside the new tenure",
-  );
-  now += 5;
-  await s.append(writer, { kind: "UserMessage", text: "re-joined" });
-  assert.equal(
-    (await s.listByParticipant("U1")).find((x) => x.id === a.id)?.hasEntries,
-    true,
-    "an entry inside the new tenure counts",
+    "a removed participant loses the sidebar entry",
   );
 });
 
-test("pg latestItemSeq and participant windows round-trip", { skip }, async () => {
+test("pg latestItemSeq and participants round-trip", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "proj-reads");
   const session = await s.getOrCreateByThread("pg-projection-reads", "dm", scope);
@@ -705,43 +625,11 @@ test("pg latestItemSeq and participant windows round-trip", { skip }, async () =
   await s.append(writer, { kind: "AgentMessage", text: "two" });
   assert.equal(await s.latestItemSeq(session.id), 1);
 
-  await s.addParticipant(session.id, "proj-reads", undefined, { includeHistory: true });
+  await s.addParticipant(session.id, "proj-reads");
   await s.addParticipant(session.id, "late-joiner");
-  const windows = await s.participantWindowsOf(session.id);
-  const byPrincipal = Object.fromEntries(windows.map((w) => [w.principalId, w]));
-  assert.equal(byPrincipal["proj-reads"]!.validFromSeq, 0);
-  assert.equal(byPrincipal["proj-reads"]!.validToSeq, null);
-  assert.equal(byPrincipal["late-joiner"]!.validFromSeq, 2);
-  const listed = (await s.listParticipants()).filter((w) => w.sessionId === session.id);
-  assert.deepEqual(
-    listed.map((w) => [w.principalId, w.validFromSeq, w.validToSeq]).sort(),
-    windows.map((w) => [w.principalId, w.validFromSeq, w.validToSeq]).sort(),
-  );
-});
-
-test("pg participant tenure remains exact when every event shares a timestamp", { skip }, async () => {
-  const at = Date.now() + 1_000_000;
-  const s = createPostgresSessionStore(URL!, { now: () => at });
-  const scope = scopeId("personal", "SAME-TICK");
-  const session = await s.getOrCreateByThread("same-tick-window", "dm", scope);
-  const writer = { sessionId: session.id };
-  await s.append(writer, { kind: "UserMessage", text: "before" });
-  await s.addParticipant(session.id, "SAME-TICK");
-  assert.deepEqual(await s.visibleItems(session.id, "SAME-TICK"), []);
-  await s.append(writer, { kind: "UserMessage", text: "during" });
-  assert.deepEqual(
-    (await s.visibleItems(session.id, "SAME-TICK")).map((entry) => entry.seq),
-    [1],
-  );
-  await s.removeParticipant(session.id, "SAME-TICK");
-  await s.append(writer, { kind: "UserMessage", text: "gap" });
-  await s.addParticipant(session.id, "SAME-TICK");
-  assert.deepEqual(await s.visibleItems(session.id, "SAME-TICK"), []);
-  await s.append(writer, { kind: "UserMessage", text: "after" });
-  assert.deepEqual(
-    (await s.visibleItems(session.id, "SAME-TICK")).map((entry) => entry.seq),
-    [3],
-  );
+  const listed = (await s.listParticipants()).filter((p) => p.sessionId === session.id);
+  assert.deepEqual(listed.map((p) => p.principalId).sort(), ["late-joiner", "proj-reads"]);
+  assert.deepEqual((await s.participantsOf(session.id)).sort(), ["late-joiner", "proj-reads"]);
 });
 
 test("pg deleteSession: hard-removes the session and its rows, leaves others", { skip }, async () => {
@@ -1248,7 +1136,7 @@ test("pg scopeSessionSummaries: the listing plan is an index walk with no per-ro
 
 test("pg sessions table indexes scoped activity pages", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
-  await s.scanAll();
+  await s.countSessions();
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
   try {
@@ -1369,7 +1257,7 @@ test("pg scopeHasSessions + listByScope answer scope questions without a table s
 
 test("no plpgsql exception handler is marked parallel-safe anywhere in the schema", { skip }, async () => {
   const seed = createPostgresSessionStore(URL!);
-  await seed.scanAll();
+  await seed.countSessions();
   const pg = (await import("pg")).default;
   const raw = new pg.Pool({ connectionString: URL });
   try {
@@ -1407,47 +1295,33 @@ test("pg attributedTurns: covering join credits only user entries, per principal
   );
 });
 
-test(
-  "pg attributedTurns: the SQL covering join applies each window's [valid_from, valid_to) half-open",
-  { skip },
-  async () => {
-    const nowRef = { v: 20_000_000_000 };
-    const s = createPostgresSessionStore(URL!, { now: () => nowRef.v });
-    const scope = scopeId("channel", "cov");
-    const t0 = nowRef.v;
-    const sess = await s.getOrCreateByThread("covA", "channel", scope);
-    await s.addParticipant(sess.id, "COV1");
-    const writer = { sessionId: sess.id };
-    nowRef.v = t0 + 1000;
-    const early = await s.append(writer, { kind: "UserMessage", text: "early" });
-    nowRef.v = t0 + 2000;
-    await s.addParticipant(sess.id, "COV2");
-    nowRef.v = t0 + 3000;
-    const mid = await s.append(writer, { kind: "UserMessage", text: "both" });
-    nowRef.v = t0 + 4000;
-    await s.removeParticipant(sess.id, "COV2");
-    nowRef.v = t0 + 5000;
-    const late = await s.append(writer, { kind: "UserMessage", text: "late" });
+test("pg attributedTurns credits current participants with the session's user turns", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("channel", "cov");
+  const sess = await s.getOrCreateByThread("covA", "channel", scope);
+  await s.addParticipant(sess.id, "COV1");
+  const writer = { sessionId: sess.id };
+  const early = await s.append(writer, { kind: "UserMessage", text: "early" });
+  await s.addParticipant(sess.id, "COV2");
+  await s.addParticipant(sess.id, "COV3");
+  const late = await s.append(writer, { kind: "UserMessage", text: "late" });
+  await s.removeParticipant(sess.id, "COV3");
 
-    const rows = await s.attributedTurns();
-    const c1 = rows.filter((r) => r.principalId === "COV1" && r.sessionId === sess.id);
-    const c2 = rows.filter((r) => r.principalId === "COV2" && r.sessionId === sess.id);
+  const rows = (await s.attributedTurns()).filter((r) => r.sessionId === sess.id);
+  for (const principalId of ["COV1", "COV2"]) {
+    const mine = rows.filter((r) => r.principalId === principalId);
     assert.equal(
-      c1.reduce((n, r) => n + r.turns, 0),
-      3,
-      "the open-ended window gets all three turns",
+      mine.reduce((n, r) => n + r.turns, 0),
+      2,
     );
-    assert.equal(c1[0]!.firstAt, early.createdAt);
-    assert.equal(c1[0]!.lastAt, late.createdAt);
-    assert.equal(
-      c2.reduce((n, r) => n + r.turns, 0),
-      1,
-      "the closed window gets only the turn inside [valid_from, valid_to)",
-    );
-    assert.equal(c2[0]!.firstAt, mid.createdAt);
-    assert.equal(c2[0]!.lastAt, mid.createdAt);
-  },
-);
+    assert.equal(mine[0]!.firstAt, early.createdAt);
+    assert.equal(mine[0]!.lastAt, late.createdAt);
+  }
+  assert.equal(
+    rows.some((r) => r.principalId === "COV3"),
+    false,
+  );
+});
 
 test(
   "pg overheard catch-up entries are excluded from turns/preview/retention (jsonb payload filter)",
@@ -2112,7 +1986,7 @@ test(
     await s.getOrCreateByThread("btr-c", "dm", uma);
     await s.updateTitle(a.id, "board deck");
 
-    const all = await s.scanAll();
+    const all = (await Promise.all((await s.distinctScopes()).map((d) => s.listByScope(d.scopeId)))).flat();
     const byRefExpected = new Map(all.map((x) => [x.threadRef, x]));
     const refs = await s.sessionsByThreadRefs(["btr-a", "btr-c", "btr-missing"]);
     assert.deepEqual(refs.map((r) => r.threadRef).sort(), ["btr-a", "btr-c"], "only existing refs returned");
@@ -2125,11 +1999,15 @@ test(
 
     const distinct = new Map((await s.distinctScopes()).map((d) => [d.scopeId, d.channelName]));
     const scopesFromAll = new Set(all.map((x) => x.scopeId));
-    assert.deepEqual([...distinct.keys()].sort(), [...scopesFromAll].sort(), "same distinct scope set as scanAll");
+    assert.deepEqual(
+      [...distinct.keys()].sort(),
+      [...scopesFromAll].sort(),
+      "same distinct scope set as the per-scope listings",
+    );
     assert.equal(distinct.get(eng), "eng", "a non-null channel name wins for the scope");
     assert.equal(distinct.get(uma), undefined, "no channel name for a personal scope");
 
-    assert.equal(await s.countSessions(), all.length, "same total as scanAll");
+    assert.equal(await s.countSessions(), all.length, "same total as the per-scope listings");
     await s.addParticipant(a.id, "UMA");
     await s.addParticipant(a.id, "UBOB");
     await s.removeParticipant(a.id, "UBOB");
@@ -2137,12 +2015,12 @@ test(
     assert.deepEqual(
       (await s.distinctParticipants()).sort(),
       [...principalsFromAll].sort(),
-      "same principal set as listParticipants, removed participants included",
+      "same principal set as listParticipants",
     );
   },
 );
 
-test("pg participant view: pin/color are per-participant, survive re-add, and clear", { skip }, async () => {
+test("pg participant view: pin/color are per-participant and clear", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("channel", "CPIN");
   const sess = await s.getOrCreateByThread("pv-pin", "channel", scope);
@@ -2156,12 +2034,6 @@ test("pg participant view: pin/color are per-participant, survive re-add, and cl
   const u2 = (await s.listByParticipant("U2")).find((x) => x.id === sess.id)!;
   assert.ok(!u2.pinned, "one participant's pin never pins the thread for another");
   assert.equal(u2.color ?? null, null);
-
-  await s.removeParticipant(sess.id, "U1");
-  await s.addParticipant(sess.id, "U1");
-  const readded = (await s.listByParticipant("U1")).find((x) => x.id === sess.id)!;
-  assert.equal(readded.pinned, true, "pin survives re-add");
-  assert.equal(readded.color, "#3b82f6", "color survives re-add");
 
   await s.updateParticipantView(sess.id, "U1", { pinned: false, color: null });
   const cleared = (await s.listByParticipant("U1")).find((x) => x.id === sess.id)!;
@@ -2201,11 +2073,11 @@ test("pg conversation pins: add, list, remove, and delete with the session", { s
   assert.equal((await s.listPins(sess.id)).length, 0, "pins go with the session");
 });
 
-test("pg search: full-text over entries with prefix match, window ACL, and type filter", { skip }, async () => {
+test("pg search: full-text over entries with prefix match, membership ACL, and type filter", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "USRCH");
   const sess = await s.getOrCreateByThread("srch-1", "dm", scope);
-  await s.addParticipant(sess.id, "USRCH", undefined, { includeHistory: true });
+  await s.addParticipant(sess.id, "USRCH");
 
   const writer = { sessionId: sess.id };
   await s.append(writer, { kind: "UserMessage", text: "can you refresh the memo board data?", body: { name: "josh" } });
@@ -2216,7 +2088,6 @@ test("pg search: full-text over entries with prefix match, window ACL, and type 
     callId: "noise",
     body: { text: "memo board tool noise" },
   });
-  // A latecomer joins without history, then one more message lands.
   await s.addParticipant(sess.id, "ULATE");
   await s.append(writer, { kind: "UserMessage", text: "memo board postscript" });
 
@@ -2225,9 +2096,7 @@ test("pg search: full-text over entries with prefix match, window ACL, and type 
   assert.equal(hits[0]!.text, "memo board postscript", "newest first");
   assert.equal(hits[2]!.author, "josh", "user hits carry the author");
 
-  const late = await s.searchEntries("ULATE", "memo");
-  assert.equal(late.length, 1, "a latecomer only searches inside their window");
-  assert.equal(late[0]!.text, "memo board postscript");
+  assert.equal((await s.searchEntries("ULATE", "memo")).length, 3, "a latecomer searches the whole conversation");
 
   assert.deepEqual(await s.searchEntries("UNONE", "memo"), [], "a non-participant sees nothing");
   assert.deepEqual(await s.searchEntries("USRCH", "  !!  "), [], "an unusable query is empty, not an error");
@@ -2239,7 +2108,7 @@ test("pg search: own chats and side chats only, no subagents or automations", { 
   const scope = scopeId("personal", "UOWN");
   const write = async (threadRef: string, text: string, surface?: string): Promise<string> => {
     const sess = await s.getOrCreateByThread(threadRef, "dm", scope, undefined, surface);
-    await s.addParticipant(sess.id, "UOWN", undefined, { includeHistory: true });
+    await s.addParticipant(sess.id, "UOWN");
     const writer = { sessionId: sess.id };
     await s.append(writer, { kind: "UserMessage", text });
     await s.updateTitle(sess.id, "Ownchat harbor");
@@ -2266,42 +2135,36 @@ test("pg search: own chats and side chats only, no subagents or automations", { 
   );
 });
 
-test("pg search: participation windows filter global matches before the result limit", { skip }, async () => {
+test("pg search: membership filters global matches before the result limit", { skip }, async () => {
   let at = Date.now();
   const s = createPostgresSessionStore(URL!, { now: () => at });
-  const scope = scopeId("personal", "SEARCH-WINDOW");
-  const session = await s.getOrCreateByThread("search-window-limit", "dm", scope);
+  const scope = scopeId("personal", "SEARCH-MEMBER");
+  const session = await s.getOrCreateByThread("search-member-limit", "dm", scope);
   const writer = { sessionId: session.id };
-  const append = async (text: string) => {
-    at += 1;
-    return s.append(writer, { kind: "UserMessage", text });
-  };
-  await append("limitwindow before joining");
-  await s.addParticipant(session.id, "SEARCH-WINDOW");
-  const visible = await append("limitwindow visible");
-  await s.removeParticipant(session.id, "SEARCH-WINDOW");
-  await append("limitwindow after leaving");
+  at += 1;
+  const visible = await s.append(writer, { kind: "UserMessage", text: "limitmember visible" });
+  await s.addParticipant(session.id, "SEARCH-MEMBER");
 
   const hidden = await s.getOrCreateByThread("search-hidden-limit", "dm", scope);
-  const hiddenWriter = { sessionId: hidden.id };
   at += 1;
-  await s.append(hiddenWriter, { kind: "UserMessage", text: "limitwindow inaccessible session" });
+  await s.append({ sessionId: hidden.id }, { kind: "UserMessage", text: "limitmember inaccessible session" });
 
   for (const limit of [1, 200]) {
-    const hits = await s.searchEntries("SEARCH-WINDOW", "limitwindow", limit);
+    const hits = await s.searchEntries("SEARCH-MEMBER", "limitmember", limit);
     assert.deepEqual(
       hits.map((hit) => [hit.sessionId, hit.seq]),
       [[session.id, visible.seq]],
     );
   }
-  assert.deepEqual(await s.searchEntries("SEARCH-OUTSIDER", "limitwindow", 1), []);
+  await s.removeParticipant(session.id, "SEARCH-MEMBER");
+  assert.deepEqual(await s.searchEntries("SEARCH-MEMBER", "limitmember", 1), []);
 });
 
 test("pg search: message writes populate the index and tool results stay unfindable", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "UIDX");
   const sess = await s.getOrCreateByThread("srch-idx-1", "dm", scope);
-  await s.addParticipant(sess.id, "UIDX", undefined, { includeHistory: true });
+  await s.addParticipant(sess.id, "UIDX");
   const writer = { sessionId: sess.id };
   await s.append(writer, { kind: "UserMessage", text: "please rotate the deploy key", body: { name: "alex" } });
   await s.append(writer, {
@@ -2324,9 +2187,11 @@ test("pg search: message writes populate the index and tool results stay unfinda
 
   await s.addParticipant(sess.id, "ULATE2");
   await s.append(writer, { kind: "UserMessage", text: "deploy key postscript" });
-  const late = await s.searchEntries("ULATE2", "deploy key");
-  assert.equal(late.length, 1, "a latecomer only searches messages inside their window");
-  assert.equal(late[0]!.text, "deploy key postscript");
+  assert.equal(
+    (await s.searchEntries("ULATE2", "deploy key")).length,
+    4,
+    "a latecomer searches the whole conversation",
+  );
 
   await s.append(writer, { kind: "UserMessage", text: "nul\u0000riddled deploy key", body: { name: "e\u0000ve" } });
   const nulHits = await s.searchEntries("UIDX", "nulriddled");
@@ -2399,7 +2264,7 @@ test("pg search: globally limits indexed hits across sessions", { skip }, async 
   const expected: Array<{ sessionId: string; seq: number }> = [];
   for (let i = 0; i < 3; i++) {
     const session = await store.getOrCreateByThread(`search-global-limit-${i}`, "dm", scope);
-    await store.addParticipant(session.id, "ULIMITSEARCH", undefined, { includeHistory: true });
+    await store.addParticipant(session.id, "ULIMITSEARCH");
     const writer = { sessionId: session.id };
     for (let j = 0; j < 4; j++) {
       const entry = await store.append(writer, { kind: "UserMessage", text: "document limit" });
@@ -2422,7 +2287,7 @@ test(
   async () => {
     const store = createPostgresSessionStore(URL!);
     const session = await store.getOrCreateByThread("search-atomic", "dm", scopeId("personal", "UATOMIC"));
-    await store.addParticipant(session.id, "UATOMIC", undefined, { includeHistory: true });
+    await store.addParticipant(session.id, "UATOMIC");
     const pg = (await import("pg")).default;
     const pool = new pg.Pool({ connectionString: URL });
     const writer = { sessionId: session.id };
@@ -2635,26 +2500,8 @@ test("pg session lists leave out spawn metadata and group scopes per participant
   await assertLeanListing(createPostgresSessionStore(URL!), "pg-lean");
 });
 
-test("pg participantScopes leaves out sessions whose content predates the participant", { skip }, async () => {
+test("pg participantScopes counts sessions whose content predates the participant", { skip }, async () => {
   await assertLateJoinerScopes(createPostgresSessionStore(URL!), "pg-late");
-});
-
-test("pg late joiners start after any stored sequence gap", { skip }, async () => {
-  const store = createPostgresSessionStore(URL!);
-  const scope = scopeId("channel", "gap-C1");
-  const session = await store.getOrCreateByThread("slack:gap-C1:1", "channel", scope, "eng");
-  await store.addParticipant(session.id, "gap-early");
-  const writer = { sessionId: session.id };
-  await store.append(writer, { kind: "UserMessage", text: "before" });
-  const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: URL });
-  await pool.query("UPDATE sessions SET messages = messages + 3 WHERE id = $1", [session.id]);
-  await pool.end();
-  await store.addParticipant(session.id, "gap-late");
-  assert.equal((await store.getForParticipant(session.id, "gap-late"))?.hasEntries, false);
-  assert.deepEqual(await store.participantScopes("gap-late"), [
-    { scopeId: scope, channelName: "eng", sessionCount: 0, lastActivityAt: null },
-  ]);
 });
 
 test("pg LLM capture retention drops old prompt envelopes and keeps request rows", { skip }, async () => {

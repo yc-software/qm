@@ -2,7 +2,7 @@ import type { RuntimeChoice } from "./agent.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 
 export interface RuntimeRequest {
-  action: "get" | "set" | "inherit";
+  action: "get" | "set";
   model?: string;
   effort?: string;
   fastMode?: boolean;

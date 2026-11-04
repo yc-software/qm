@@ -6,7 +6,6 @@ import { once } from "node:events";
 import { join } from "node:path";
 import {
   createSdkManagedAgentsClient,
-  managedAgentsEgressAllow,
   managedAgentsManifest,
   managedAgentsSessionState,
   ManagedAgentsSandboxGoneError,
@@ -69,19 +68,17 @@ test("the manifest omits the template so Managed Agents lands a bare session on 
   assert.doesNotMatch(yaml, /^template:/m);
 });
 
-test("the manifest carries size, idle timeout and the egress allowlist only when configured", () => {
+test("the manifest carries size and idle timeout only when configured", () => {
   const bare = managedAgentsManifest({ name: "n", template: "base" });
-  assert.doesNotMatch(bare, /size:|idle_timeout:|egress:/);
+  assert.doesNotMatch(bare, /size:|idle_timeout:/);
   const full = managedAgentsManifest({
     name: "n",
     template: "base",
     sizeSlug: "mv-2vcpu-4gb",
     idleTimeoutSec: 600,
-    egressAllow: ["proxy.example.com"],
   });
   assert.match(full, /^size: "mv-2vcpu-4gb"$/m);
   assert.match(full, /^idle_timeout: "600s"$/m);
-  assert.match(full, /^ {2}- "proxy\.example\.com"$/m);
 });
 
 test("the vendored proto is the client subset and carries nothing provider-internal", () => {
@@ -294,8 +291,4 @@ test("session status wire values map onto backend states", () => {
   assert.equal(managedAgentsSessionState("SESSION_STATUS_READY"), "ready");
   assert.equal(managedAgentsSessionState("SESSION_STATUS_PAUSED"), "paused");
   assert.equal(managedAgentsSessionState("nonsense"), "unspecified");
-});
-
-test("the egress allowlist carries just the proxy host", () => {
-  assert.deepEqual(managedAgentsEgressAllow("https://egress.example.com:443/path"), ["egress.example.com"]);
 });

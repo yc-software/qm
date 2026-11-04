@@ -6,7 +6,6 @@ import {
   MAX_STAGE_BLOB_BYTES,
 } from "../../persistence/blob-transfer.ts";
 import { CAPABILITY_HEADER } from "../contract.ts";
-import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { extendBodyDeadline, headerValue, pipeToResponse, sendJson, verifyOrReject } from "../http.ts";
 
 const STAGE_UPLOAD_DEADLINE_MS = 1_800_000;
@@ -48,7 +47,7 @@ async function authorizeBlob(ctx: BaseCtx, dir: BlobDir, blobId: string | null):
       res,
       secret,
       auth,
-      canonicalPayload(method, pathname + url.search, tail),
+      { method, path: pathname + url.search, body: tail },
       false,
       ctx.allowUnsignedSourceAuth,
     ))

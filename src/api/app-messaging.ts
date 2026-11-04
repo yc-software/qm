@@ -5,6 +5,7 @@ import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from 
 import type { Destination } from "../types.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import { createTenantListeners } from "../tenants/context.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -83,8 +84,10 @@ export function createMessagingMethods(
   | "setWebhookEnabled"
   | "updateWebhook"
   | "pendingDeliveries"
+  | "pendingDeliveriesAcrossTenants"
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
+  | "surfaceMirrored"
   | "searchSurface"
   | "readSurfaceMessages"
   | "activeSurfaceThreads"
@@ -126,7 +129,7 @@ export function createMessagingMethods(
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests;
-  const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
+  const contextRequestListeners = createTenantListeners<[SurfaceContextRequest]>("context request");
   const contextRequestTokens = new Map<string, string>();
   // Principals identity knows about that the Slack directory never sees: the email
   // allow-list, invited external users, and anyone who has signed in. On a Slack-less
@@ -311,11 +314,17 @@ export function createMessagingMethods(
     updateWebhook(id, patch) {
       return deps.webhooks.update(id, patch);
     },
+    pendingDeliveriesAcrossTenants(type) {
+      return deps.deliveries.pendingAcrossTenants(type);
+    },
     pendingDeliveries(type, claimMs) {
       return claimMs && claimMs > 0 ? deps.deliveries.claimPending(type, claimMs) : deps.deliveries.pending(type);
     },
     async enqueueDelivery(input) {
       await deps.deliveries.enqueue(input);
+    },
+    surfaceMirrored(kind) {
+      return deps.surfaces.get(kind)?.capabilities.mirrored === true;
     },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
@@ -382,12 +391,11 @@ export function createMessagingMethods(
         );
         return request;
       }
-      for (const l of contextRequestListeners) l(viewerToken ? { ...request, query } : request);
+      contextRequestListeners.emit(viewerToken ? { ...request, query } : request);
       return request;
     },
     onContextRequestCreated(listener) {
-      contextRequestListeners.add(listener);
-      return () => contextRequestListeners.delete(listener);
+      return contextRequestListeners.add(listener);
     },
     getContextRequest(id) {
       return contextRequests.get(id);

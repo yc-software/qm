@@ -2,7 +2,7 @@ import { isSessionTurn } from "../core/turn-origin.ts";
 import type { Run } from "../runs/run-store.ts";
 
 export function createProductAnalytics(
-  companyId: string,
+  company: () => string,
   config: { apiKey?: string; host?: string } = {},
   send: typeof fetch = fetch,
 ): {
@@ -15,12 +15,14 @@ export function createProductAnalytics(
   async function capture(
     event: string,
     principal: string,
-    insertId: string,
+    insertId: (companyId: string) => string,
     properties: Record<string, string> = {},
   ): Promise<void> {
-    if (!apiKey || !companyId || !principal || inFlight >= 16) return;
+    if (!apiKey || !principal || inFlight >= 16) return;
     inFlight++;
     try {
+      const companyId = company();
+      if (!companyId) return;
       const response = await send(`${host}/i/v0/e/`, {
         method: "POST",
         redirect: "error",
@@ -34,7 +36,7 @@ export function createProductAnalytics(
             distinct_id: JSON.stringify([companyId, principal]),
             company_id: companyId,
             $groups: { company: companyId },
-            $insert_id: insertId,
+            $insert_id: insertId(companyId),
             $geoip_disable: true,
             surface: "core",
             ...properties,
@@ -50,7 +52,7 @@ export function createProductAnalytics(
   }
   return {
     appPublished: (principal, deploymentId, version) =>
-      capture("app_published", principal, `${deploymentId}:${version}:app_published`),
+      capture("app_published", principal, () => `${deploymentId}:${version}:app_published`),
     async responseFinished(run) {
       if (
         run.request.origin.kind !== "human" ||
@@ -67,7 +69,7 @@ export function createProductAnalytics(
       if (run.status === "failed" || status === "failed") event = "response_failed";
       else if (status === "ok" || status === "silent" || status === "react") event = "response_completed";
       if (!event) return;
-      await capture(event, run.request.actor.id, `${companyId}:${run.id}:${event}`, {
+      await capture(event, run.request.actor.id, (companyId) => `${companyId}:${run.id}:${event}`, {
         surface: run.request.surface === "web" || run.request.surface === "slack" ? run.request.surface : "core",
         completion_boundary: "run",
         result_status: status ?? "failed",

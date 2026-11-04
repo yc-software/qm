@@ -254,26 +254,6 @@ export function workspaceTools(kit: ToolKit) {
     },
   });
 
-  const installCanvas = defineTool({
-    name: "install_canvas",
-    label: "install_canvas",
-    description:
-      "Replace this person's always-on canvas with a shared one (a Files record); asks them to approve first.",
-    parameters: Type.Object({ id: Type.String({ description: "Files ID of the canvas." }) }),
-    async execute(callId, params) {
-      const tc = ref.current;
-      if (!tc?.installSharedCanvas) return text("[error] installing a shared canvas isn't available on this turn");
-      await recordCall(callId, { tool: "files", action: "install_canvas", id: params.id });
-      const error = await tc.installSharedCanvas(params.id);
-      return recordResult(
-        callId,
-        { tool: "files", action: "install_canvas", id: params.id, ...(error ? { error } : {}) },
-        text(error ? `[error] ${error}` : "Installed the shared canvas as their always-on canvas."),
-        Boolean(error),
-      );
-    },
-  });
-
   const write = defineTool({
     name: "write",
     label: "write",
@@ -408,5 +388,5 @@ export function workspaceTools(kit: ToolKit) {
     },
   });
 
-  return { discoverSkills, skill, saveSkill, editSkill, read, installCanvas, write, publish };
+  return { discoverSkills, skill, saveSkill, editSkill, read, write, publish };
 }

@@ -4,11 +4,12 @@ import { waitForNoRunningRun, type Run, type RunStore } from "../runs/run-store.
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
 import { boundWebhook, isSessionTurn } from "../core/turn-origin.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
-import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
+import { standaloneFailureText, unfinishedTurnText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import { inTenantOf } from "../tenants/claim.ts";
 
 export interface RunResultDelivery {
   destination: Destination;
@@ -32,7 +33,9 @@ export function replyEditNote(retracted: readonly string[] | undefined): string 
   return retracted?.length ? `Edited after a reply check: ${[...new Set(retracted)].join(", ")}` : undefined;
 }
 
-export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
+export type RunNotice = (run: Run) => string | undefined;
+
+export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: RunNotice): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
   const origin = run.request.origin;
   const surfaceOrigin = run.request.surfaceOrigin;
@@ -73,6 +76,8 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       ? { sourceAssistantEntrySeq: run.result.sourceAssistantEntrySeq }
       : {}),
   });
+  const noticeText = notice?.(run);
+  if (noticeText) return { destination, text: noticeText, provenance, idempotencyKey };
   if (
     webhook &&
     run.request.idempotencyKey &&
@@ -94,7 +99,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
     const clause = userFacingFailureClause(run.result ?? { status: "failed" });
     const adminUrl = run.result?.sessionId ? adminUrlFor?.(run.result.sessionId) : undefined;
     const detail = adminUrl ? ` — full error: ${adminUrl}` : "";
-    return { destination, text: `⚠️ I couldn't finish that turn: ${clause}${detail}`, provenance, idempotencyKey };
+    return { destination, text: unfinishedTurnText(`${clause}${detail}`), provenance, idempotencyKey };
   }
   if (run.result?.status === "ok" && (run.result.reply || run.result.attachments?.length)) {
     const editNote = replyEditNote(run.result.retracted);
@@ -154,6 +159,7 @@ export function wireRunResultDeliveries(
   deliveries: Pick<DeliveryStore, "enqueue" | "existingKeys">,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
+  notice?: RunNotice,
 ): RunResultRecovery {
   const recover = async (run: Run): Promise<boolean> => {
     if (sessions) {
@@ -161,7 +167,7 @@ export function wireRunResultDeliveries(
         reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
       );
     }
-    const delivery = runResultDelivery(run, adminUrlFor);
+    const delivery = runResultDelivery(run, adminUrlFor, notice);
     if (!delivery) return false;
     await deliveries.enqueue(delivery);
     return true;
@@ -176,11 +182,15 @@ export function wireRunResultDeliveries(
       let recovered = 0;
       for (;;) {
         const batch = await runs.terminalFinished(cursor, before, RUN_RESULT_SWEEP_PAGE);
-        const existing = await deliveries.existingKeys(batch.map((run) => `run:${run.id}`));
-        for (const run of batch) {
-          if (existing.has(`run:${run.id}`) || !(await recover(run))) continue;
-          console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueued its recovery delivery`);
-          recovered += 1;
+        for (const [tenantId, tenantRuns] of Map.groupBy(batch, (run) => run.tenantId)) {
+          await inTenantOf(tenantId, async () => {
+            const existing = await deliveries.existingKeys(tenantRuns.map((run) => `run:${run.id}`));
+            for (const run of tenantRuns) {
+              if (existing.has(`run:${run.id}`) || !(await recover(run))) continue;
+              console.error(`[delivery] terminal run ${run.id} had no outbox row — enqueued its recovery delivery`);
+              recovered += 1;
+            }
+          });
         }
         const last = batch.at(-1);
         if (!last || batch.length < RUN_RESULT_SWEEP_PAGE) return recovered;

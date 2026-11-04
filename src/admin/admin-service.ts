@@ -4,6 +4,7 @@ import type { Principal, ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import type { AdminGrant, AdminGrantStore, AdminRole } from "./admin-grant-store.ts";
 import { personKey, samePerson } from "../directory/person.ts";
+import type { UserStore } from "../identity/user-store.ts";
 
 export type { AdminGrant } from "./admin-grant-store.ts";
 
@@ -31,6 +32,7 @@ export function adminStatusFromGrants(grants: readonly AdminGrant[], principalId
 }
 
 export interface AdminService {
+  users: UserStore;
   resolveActor(header: string | undefined): Principal | null;
   canAdminister(principal: Principal, target: ScopeId): Promise<boolean>;
   adminStatusOf(principal: Principal): Promise<AdminStatus>;
@@ -59,10 +61,11 @@ export function parseAdminGrants(raw: string | undefined, orgId: string): AdminG
 export interface AdminServiceOptions {
   now?: () => number;
   trustedOidcAdminIssuer?: string;
+  users: UserStore;
 }
 
-export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOptions = {}): AdminService {
-  const orgId = configOrgId();
+export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOptions): AdminService {
+  const orgId = configOrgId;
   const now = opts.now ?? (() => Date.now());
 
   async function isOrgAdmin(actor: Principal): Promise<boolean> {
@@ -70,13 +73,14 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
   }
 
   return {
+    users: opts.users,
     resolveActor(header) {
       if (!header) return null;
       const at = header.lastIndexOf("@");
       if (at <= 0 || at === header.length - 1) return null;
       const id = header.slice(0, at);
       const org = header.slice(at + 1);
-      if (org !== orgId) return null;
+      if (org !== orgId()) return null;
       return { id, type: "internal" };
     },
     async canAdminister(principal, _target) {
@@ -96,10 +100,11 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       const grant: AdminGrant = {
         principalId,
         role: "org_admin",
-        scopeId: scopeId("org", orgId),
+        scopeId: scopeId("org", orgId()),
         grantedBy: `trusted-oidc:${issuer}`,
         createdAt: now(),
       };
+      await opts.users.record({ id: principalId, source: "admin", at: grant.createdAt ?? Date.now() });
       const created = await grants.addIfAbsent(grant);
       return { grant, created };
     },
@@ -115,10 +120,11 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
         throw new AdminError(400, "role must be org_admin");
       }
       const parsed = parseScopeId(input.scopeId);
-      if (parsed.kind !== "org" || parsed.ref !== orgId) {
-        throw new AdminError(400, `org_admin scope must be org:${orgId}`);
+      if (parsed.kind !== "org" || parsed.ref !== orgId()) {
+        throw new AdminError(400, `org_admin scope must be org:${orgId()}`);
       }
       const grant: AdminGrant = { principalId, scopeId: input.scopeId, role, grantedBy: actor.id, createdAt: now() };
+      await opts.users.record({ id: principalId, source: "admin", at: grant.createdAt ?? Date.now() });
       await grants.add(grant);
       return grant;
     },

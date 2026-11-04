@@ -60,6 +60,7 @@ export function handbackStop(shutdown: AbortSignal): RunStop {
 
 export interface Run {
   id: string;
+  tenantId?: string;
   sessionId: string;
   status: RunStatus;
   request: OrchestratorInput;
@@ -140,7 +141,8 @@ export interface RunStore {
   noteTurnUserSeq(runId: string, seq: number): Promise<boolean>;
 
   activeForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
-  pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
+  lastFinishedForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
+  pendingReturns(limit?: number, afterId?: string, threadRefs?: readonly string[]): Promise<Run[]>;
   terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;
   deferReturn(runId: string, delayMs: number): Promise<void>;

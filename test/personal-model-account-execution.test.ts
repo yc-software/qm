@@ -139,7 +139,11 @@ test("personal web selections reject wrong providers, policy exclusions and disc
       async: true,
       model,
     });
-  for (const model of ["claude-sonnet-5", "unknown"]) assert.equal((await submit(model)).status, "refused");
+  for (const model of ["claude-sonnet-5", "unknown"])
+    assert.deepEqual(await submit(model), {
+      status: "refused",
+      reason: "Your connected AI account cannot serve this model.",
+    });
   await built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
   assert.equal((await submit("gpt-5.6-terra")).status, "refused");
   await built.userModelCredentials.delete("U1", "openai");
@@ -219,10 +223,10 @@ test("a company ChatGPT login feeds pi's subscription provider while personal Ch
     auth_mode: "chatgpt",
     tokens: { access_token: companyToken, refresh_token: "r" },
   });
-  assert.deepEqual(await piOptions?.resolveProviderKeys?.(), { "openai-codex": companyToken });
-  assert.equal(piOptions?.companyModelId?.("gpt-5.6-sol"), "codex/gpt-5.6-sol");
-  assert.equal(piOptions?.companyModelId?.("gpt-6-astra-ultrafast"), "gpt-6-astra-ultrafast");
-  assert.equal(piOptions?.companyModelId?.("claude-opus-5"), "claude-opus-5");
+  assert.equal((await piOptions!.routes!.route("gpt-5.6-sol")).keys["openai-codex"], companyToken);
+  assert.equal(piOptions?.routes?.servedId("gpt-5.6-sol"), "codex/gpt-5.6-sol");
+  assert.equal(piOptions?.routes?.servedId("gpt-6-astra-ultrafast"), "gpt-6-astra-ultrafast");
+  assert.equal(piOptions?.routes?.servedId("claude-opus-5"), "claude-opus-5");
   await built.userModelCredentials.setOAuth("U1", "openai", {
     accessToken: "personal-oauth",
     expiresAt: Date.now() + 3_600_000,

@@ -1,15 +1,8 @@
+import { perTenant } from "../tenants/context.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
-
-export interface PrincipalLink {
-  principalId: string;
-  canonicalId: string;
-  evidence: string;
-  linkedBy: string;
-  createdAt: number;
-}
+import type { UserLink, UserLinkStore } from "./user-store.ts";
 
 interface PrincipalLinkInput {
   principalId: unknown;
@@ -27,9 +20,9 @@ export class PrincipalLinkError extends Error {
 }
 
 export interface PrincipalLinkService extends PrincipalLinkResolver {
-  list(): Promise<PrincipalLink[]>;
-  link(input: PrincipalLinkInput): Promise<PrincipalLink>;
-  unlink(principalId: string): Promise<PrincipalLink | null>;
+  list(): Promise<UserLink[]>;
+  link(input: PrincipalLinkInput): Promise<UserLink>;
+  unlink(principalId: string): Promise<UserLink | null>;
   refresh(force?: boolean): Promise<void>;
 }
 
@@ -41,11 +34,15 @@ function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;
 }
 
-export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, lock: AdvisoryLock): PrincipalLinkService {
-  const byAlias = new Map<string, PrincipalLink>();
-  const byCanonical = new Map<string, PrincipalLink[]>();
+export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryLock): PrincipalLinkService {
+  const links = perTenant(() => ({
+    byAlias: new Map<string, UserLink>(),
+    byCanonical: new Map<string, UserLink[]>(),
+    refresh: createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.links())),
+  }));
 
-  function index(rows: PrincipalLink[]): void {
+  function index(rows: UserLink[]): void {
+    const { byAlias, byCanonical } = links();
     byAlias.clear();
     byCanonical.clear();
     for (const row of rows) {
@@ -57,19 +54,19 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
     }
   }
 
-  const refresh = createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.all()));
+  const refresh = (force?: boolean): Promise<void> => links().refresh(force);
 
   return {
     canonical(key) {
-      return byAlias.get(key)?.canonicalId;
+      return links().byAlias.get(key)?.canonicalId;
     },
     aliases(key) {
-      return (byCanonical.get(key) ?? []).map((row) => row.principalId);
+      return (links().byCanonical.get(key) ?? []).map((row) => row.principalId);
     },
     refresh,
     async list() {
       await refresh(true);
-      return [...byAlias.values()].sort(
+      return [...links().byAlias.values()].sort(
         (a, b) => a.createdAt - b.createdAt || a.principalId.localeCompare(b.principalId),
       );
     },
@@ -89,25 +86,25 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
         const canonicalKey = foldPrincipalId(canonicalId);
         if (aliasKey === canonicalKey) throw new PrincipalLinkError(400, "a principal cannot be linked to itself");
         await refresh(true);
-        const existing = byAlias.get(aliasKey);
+        const existing = links().byAlias.get(aliasKey);
         if (existing) {
           if (foldPrincipalId(existing.canonicalId) === canonicalKey) return existing;
           throw new PrincipalLinkError(409, `${principalId} is already linked to ${existing.canonicalId}`);
         }
-        const canonicalIsAlias = byAlias.get(canonicalKey);
+        const canonicalIsAlias = links().byAlias.get(canonicalKey);
         if (canonicalIsAlias)
           throw new PrincipalLinkError(
             400,
             `${canonicalId} is itself linked to ${canonicalIsAlias.canonicalId}; link to that principal instead`,
           );
-        if (byCanonical.has(aliasKey))
+        if (links().byCanonical.has(aliasKey))
           throw new PrincipalLinkError(
             400,
             `${principalId} is the canonical principal of other links; unlink those first`,
           );
-        const stored = await store.putIfAbsent(aliasKey, {
-          principalId,
-          canonicalId,
+        const stored = await store.link({
+          principalId: aliasKey,
+          canonicalId: canonicalKey,
           evidence,
           linkedBy: input.linkedBy,
           createdAt: Date.now(),
@@ -120,7 +117,7 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
     },
     async unlink(principalId) {
       return lock.withLock("principal-links", async () => {
-        const row = await store.take(foldPrincipalId(principalId));
+        const row = await store.unlink(foldPrincipalId(principalId));
         await refresh(true);
         return row;
       });

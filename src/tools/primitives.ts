@@ -19,7 +19,8 @@ import { type TurnContext } from "../resolution/turn-context.ts";
 import { canReadNotebook, readNotebook, searchNotebooks } from "../memory/cross-scope.ts";
 import type { SandboxAccessPlan, SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
 import { posix } from "node:path";
-import { workspacePathOf } from "../sandbox/exec-file-ops.ts";
+import { posixJoin, workspacePathOf } from "../sandbox/exec-file-ops.ts";
+import { shq } from "../util/shell.ts";
 import { DROPPED_PROXY_ENV } from "../sandbox/sandbox-env.ts";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
@@ -195,7 +196,6 @@ export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number
 export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) => Promise<AttachResult>;
 
 export interface ToolContext extends SurfaceToolDeps {
-  installSharedCanvas?: (fileId: string) => Promise<string | null>;
   admin?: AdminToolAccess;
   selfApi?: SelfApiCall;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
@@ -417,12 +417,6 @@ export interface SurfaceSearchResult {
   message?: string;
 }
 
-interface SurfaceMembersResult {
-  ok: boolean;
-  members?: Array<{ displayName: string }>;
-  message?: string;
-}
-
 type SurfaceStandingOrderResult =
   | { ok: true; orders: string; bots?: Record<string, BotPolicy>; ambientEnabled?: boolean }
   | { ok: false; message: string };
@@ -446,7 +440,6 @@ export interface SurfaceToolDeps {
   readThread(opts?: { limit?: number }): Promise<SurfaceReadResult>;
   whatsNew(opts?: { since?: string }): Promise<SurfaceWhatsNewResult>;
   search(query: string, opts?: SurfaceSearchToolOpts): Promise<SurfaceSearchResult>;
-  readMembers(): Promise<SurfaceMembersResult>;
   getStandingOrder(): Promise<SurfaceStandingOrderResult>;
   setStandingOrder(
     orders: string | undefined,
@@ -471,7 +464,6 @@ export interface ToolContextDeps {
   desktopClientId?: string;
   admin?: AdminToolAccess;
   selfApi?: SelfApiCall;
-  installSharedCanvas?: (fileId: string) => Promise<string | null>;
   sandbox: Sandbox;
   commandCredentials?: readonly CommandCredential[];
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
@@ -483,6 +475,8 @@ export interface ToolContextDeps {
     authorize?: (access: SandboxAccessPlan) => void,
   ) => Promise<SandboxHandle>;
   accessSandboxResource?: (id: string) => Promise<SandboxAccessPlan>;
+  boundSandboxId?: string;
+  workdir?: string;
   listSkills?: (source?: string) => Promise<SkillResolution[]>;
   useSkill?: (name: string, path: string, sandboxId?: string, source?: string) => Promise<SkillResult>;
   writableScopeId: ScopeId;
@@ -546,6 +540,8 @@ const scratchOnlyHandles = (credentials: readonly CommandCredential[]): string =
     .join(", ");
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
+  const inWorkdir = (handle: SandboxHandle, command: string): string =>
+    deps.workdir ? `cd ${shq(posixJoin(handle.rootDir, deps.workdir))} || exit 1\n${command}` : command;
   const { writableScopeId } = deps;
   const memory =
     deps.context?.memory ??
@@ -725,7 +721,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   return {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.selfApi ? { selfApi: deps.selfApi } : {}),
-    ...(deps.installSharedCanvas ? { installSharedCanvas: deps.installSharedCanvas } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
       ? {
@@ -768,7 +763,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           },
         }
       : {}),
-    async computerStatus(sandboxId?: string): Promise<ComputerStatus> {
+    async computerStatus(requested?: string): Promise<ComputerStatus> {
+      const sandboxId = requested ?? deps.boundSandboxId;
       const probe = async (status: ComputerStatus, provision: () => Promise<SandboxHandle>) => {
         if (!status.provisioned || status.lifecycleState === "paused") return status;
         try {
@@ -794,7 +790,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       }
       return probe(await deps.sandbox.computerStatus(writableScopeId), deps.provision);
     },
-    async restartComputer(sandboxId?: string): Promise<void> {
+    async restartComputer(requested?: string): Promise<void> {
+      const sandboxId = requested ?? deps.boundSandboxId;
       if (sandboxId !== undefined) {
         const resources = deps.sandboxResources;
         if (!resources) throw new Error("sandbox inventory unavailable");
@@ -829,6 +826,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const scratchReroute = Boolean(scratchOnly) && !scratch;
       const executionPolicy = deps.commandPolicy;
       let handle;
+      let script = command;
       if (execOpts?.sandboxId !== undefined && !scratchOnly) {
         if (!deps.sandboxResources || !deps.provisionResource) throw new Error("sandbox inventory unavailable");
         const access = await accessSandbox(execOpts.sandboxId);
@@ -840,7 +838,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       } else {
         authorizeExecution(command, undefined, executionPolicy());
         if (scratch || scratchOnly) handle = await deps.provisionScratch!();
-        else handle = await deps.provision();
+        else {
+          handle = await deps.provision();
+          script = inWorkdir(handle, command);
+        }
       }
       const resolvedMs = execOpts?.timeoutSeconds != null ? execOpts.timeoutSeconds * 1000 : deps.execTimeoutMs;
       const timeoutMs =
@@ -869,7 +870,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           const secretEnv = executionSecretEnv(commandHandle.env, secretValues);
           const mask = createExactSecretValueMasker(Object.values(secretEnv));
           try {
-            const result = await deps.sandbox.run(commandHandle, command, opts);
+            const result = await deps.sandbox.run(commandHandle, script, opts);
             return { ...result, stdout: mask(result.stdout), stderr: mask(result.stderr) };
           } catch (error) {
             const message = errMessage(error);
@@ -1174,6 +1175,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         throw new Error(`background jobs here cannot use ${scratchOnly}; run the command in the foreground`);
       const policy = deps.commandPolicy;
       let handle: SandboxHandle;
+      let script = command;
       if (scratchOnly) {
         authorizeExecution(command, undefined, policy());
         handle = await deps.provisionJobComputer!();
@@ -1188,6 +1190,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       } else {
         authorizeExecution(command, undefined, policy());
         handle = await deps.provision();
+        script = inWorkdir(handle, command);
       }
       const staged = requested.length ? await stageCredentials(requested, handle, "background") : undefined;
       const release = async () => {
@@ -1208,7 +1211,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       }
       const started = await deps.backgroundBroker!.start(
         handle,
-        command,
+        script,
         opts.purpose,
         opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
         credentials,
@@ -1291,7 +1294,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     readThread: (opts) => surfaceOp((s) => s.readThread(opts)),
     whatsNew: (opts) => surfaceOp((s) => s.whatsNew(opts)),
     search: (query, opts) => surfaceOp((s) => s.search(query, opts)),
-    readMembers: () => surfaceOp((s) => s.readMembers()),
     getStandingOrder: () => surfaceOp((s) => s.getStandingOrder()),
     setStandingOrder: (orders, bots, ambientEnabled, expectedOrders) =>
       surfaceOp((s) => s.setStandingOrder(orders, bots, ambientEnabled, expectedOrders)),
