@@ -80,7 +80,7 @@ interface ParentWake {
   displayText: string;
 }
 
-type ParentMail = Pick<SessionMessage, "id" | "text" | "sourceEntrySeq" | "wake">;
+type ParentMail = Pick<SessionMessage, "id" | "text" | "sourceEntrySeq" | "wake" | "senderRunId" | "delegatingRunId">;
 
 const messageWake = (id: string): ParentWake => ({
   dedupKey: `subagent-followup:${id}`,
@@ -234,28 +234,49 @@ export async function wakeOwnParent(
   )
     return undefined;
   const turn = await parentTurn(deps, sender, parent, source, mail.text, MESSAGE_DISPLAY);
-  const wake = {
-    ...(source.runId ? { runId: source.runId } : {}),
+  const marked: ParentMail = {
+    ...mail,
+    wake: true,
+    ...(source.runId ? { senderRunId: source.runId } : {}),
     ...(source.delegatingRunId ? { delegatingRunId: source.delegatingRunId } : {}),
   };
-  return mailParent(deps, sender, parent, turn, { ...mail, wake }, messageWake(mail.id));
+  return mailParent(deps, sender, parent, turn, marked, messageWake(mail.id));
 }
 
+type UnreadMailDeps = ParentMailDeps & {
+  sessions: Pick<SessionStore, "get" | "getByThread">;
+  signals: Pick<RunSignalStore, "pending">;
+  advisoryLock: AdvisoryLock;
+};
+
 export async function wakeForUnreadMail(
-  deps: ParentMailDeps & {
-    sessions: Pick<SessionStore, "get" | "getByThread">;
-    signals: Pick<RunSignalStore, "pending">;
-    advisoryLock: AdvisoryLock;
-  },
+  deps: UnreadMailDeps,
   run: Run,
 ): Promise<"woken" | "busy" | "settled" | undefined> {
-  if (isSubagentThreadRef(run.sessionId) || run.result?.stopped || !deps.runs.get) return undefined;
+  if (isSubagentThreadRef(run.sessionId) || run.result?.stopped) return undefined;
   const parent = await deps.sessions.getByThread(run.sessionId);
-  if (!parent || parent.parentSessionId) return undefined;
+  return parent ? wakeParentForMail(deps, parent) : undefined;
+}
+
+export async function sweepUnreadMailWakes(deps: UnreadMailDeps): Promise<void> {
+  for (let page = await deps.mailbox.awaitingWake(); page.length;) {
+    for (const recipientId of new Set(page.map((message) => message.recipientId))) {
+      const parent = await deps.sessions.get(recipientId);
+      if (parent && !(await deps.runs.inFlightForThread(parent.threadRef)).length)
+        await wakeParentForMail(deps, parent).catch(swallowAs("sessions: recover unread mail wake", undefined));
+    }
+    page = await deps.mailbox.awaitingWake(page.at(-1)?.id);
+  }
+}
+
+async function wakeParentForMail(
+  deps: UnreadMailDeps,
+  parent: Session,
+): Promise<"woken" | "busy" | "settled" | undefined> {
+  if (parent.parentSessionId || !deps.runs.get) return undefined;
   const runs = { get: deps.runs.get };
   for (const message of await deps.mailbox.pending(parent.id)) {
-    const marker = message.wake;
-    if (!marker) continue;
+    if (!message.wake) continue;
     const wake = messageWake(message.id);
     const existing = await deps.runs.getByDedupKey(wake.dedupKey);
     const child = await deps.sessions.get(message.senderId);
@@ -267,11 +288,11 @@ export async function wakeForUnreadMail(
       !isSubagentThreadRef(child.threadRef)
         ? "settled"
         : await deps.advisoryLock.withLock("session-tree-admission", async () => {
-            if (await runStopped(runs, deps.signals, marker.runId ?? marker.delegatingRunId)) return "settled";
+            if (await runStopped(runs, deps.signals, message.senderRunId ?? message.delegatingRunId)) return "settled";
             const source = {
               actor: message.actor,
               conversation: { audience: message.audience },
-              ...(marker.delegatingRunId ? { delegatingRunId: marker.delegatingRunId } : {}),
+              ...(message.delegatingRunId ? { delegatingRunId: message.delegatingRunId } : {}),
             };
             const turn = await parentTurn(deps, child, parent, source, message.text, MESSAGE_DISPLAY).catch(
               swallowAs("sessions: unread mail wake", undefined),

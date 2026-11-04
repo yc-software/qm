@@ -3756,11 +3756,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
 
         let finalResult: TurnResult;
-        const stopReason = result.stopReason ? { stopReason: result.stopReason } : {};
+        const stopScope = result.stopScope ? { stopScope: result.stopScope } : {};
         const sourceUserSeq = turnUserSeq;
         const sourceAssistantEntrySeq = emittedEntries.findLast(isAgentReply)?.seq;
         if (cancelStopped && !result.pendingApprovals?.length) {
-          finalResult = { status: "silent", sessionId: session.id, stopped: true, ...stopReason };
+          finalResult = { status: "silent", sessionId: session.id, stopped: true, ...stopScope };
         } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
@@ -3821,7 +3821,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           finalResult = {
             status: "silent",
             sessionId: session.id,
-            ...(result.stopped ? { stopped: true, ...stopReason } : {}),
+            ...(result.stopped ? { stopped: true, ...stopScope } : {}),
           };
         } else {
           finalResult = {
@@ -3829,7 +3829,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             sessionId: session.id,
             reply,
             ...(result.retracted?.length ? { retracted: result.retracted } : {}),
-            ...(result.stopped ? { stopped: true, ...stopReason } : {}),
+            ...(result.stopped ? { stopped: true, ...stopScope } : {}),
             ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
             ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),
             ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),

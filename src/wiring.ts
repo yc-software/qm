@@ -51,7 +51,7 @@ import {
   sessionTreeWorking,
   stoppableRoot,
 } from "./sessions/session-syscalls.ts";
-import { deliverSubagentMail, wakeForUnreadMail } from "./sessions/subagent-mail.ts";
+import { deliverSubagentMail, sweepUnreadMailWakes, wakeForUnreadMail } from "./sessions/subagent-mail.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
@@ -2017,7 +2017,7 @@ export function buildApp(
     modelCredentialFetch: overrides.modelCredentialFetch,
     refreshModels,
   };
-  const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId"]));
+  const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId", "wake"]));
   const delegationEnabled = (actorId: string) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId));
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
@@ -2453,7 +2453,7 @@ export function buildApp(
     let afterId: string | undefined;
     for (;;) {
       const batch = await runs.pendingReturns(100, afterId);
-      if (!batch.length) return;
+      if (!batch.length) return sweepUnreadMailWakes(subagentMail);
       for (const run of batch) await returnSessionRun(run).catch(swallowAs("sessions: recover return", undefined));
       afterId = batch.at(-1)!.id;
     }

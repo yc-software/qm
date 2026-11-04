@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
-import type { Principal, ScopeId, Session, SpawnMeta, TurnOrigin } from "../types.ts";
+import type { Principal, ScopeId, Session, SpawnMeta, StopScope, TurnOrigin } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
@@ -473,10 +473,10 @@ export const PARENT_INTERRUPT = "by the parent agent";
 async function stopOf(
   signals: Pick<RunSignalStore, "pending">,
   run: Run,
-): Promise<{ reason: string | undefined } | undefined> {
-  if (run.result?.stopped) return { reason: run.result.stopReason };
+): Promise<{ scope: StopScope | undefined } | undefined> {
+  if (run.result?.stopped) return { scope: run.result.stopScope };
   const abort = (await signals.pending(run.id)).find(({ signal }) => signal.kind === "abort");
-  return abort && { reason: abort.signal.reason };
+  return abort && { scope: abort.signal.scope };
 }
 
 export async function runStopped(
@@ -491,7 +491,7 @@ export async function runStopped(
     seen.add(current);
     const run = await runs.get(current);
     const stop = run && (await stopOf(signals, run));
-    if (!run || (stop && (self || stop.reason !== PARENT_INTERRUPT))) return self ? "self" : "ancestor";
+    if (!run || (stop && (self || stop.scope !== "run"))) return self ? "self" : "ancestor";
     current = run.request.delegatingRunId;
   }
   return undefined;
@@ -521,9 +521,13 @@ async function stopSessionRuns(
         text: run.request.text,
         createdAt: run.createdAt,
       });
-    await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
+    await deps.signals.send(run.id, {
+      kind: "abort",
+      ...(reason ? { reason } : {}),
+      ...(interrupt ? { scope: "run" } : {}),
+    });
     const withdrawn =
-      run.status === "pending" && (await deps.runs.withdraw(run.id, { unstartedOnly: reason === PARENT_INTERRUPT }));
+      run.status === "pending" && (await deps.runs.withdraw(run.id, { unstartedOnly: Boolean(interrupt) }));
     stopped.push({ id: run.id, withdrawn: withdrawn && !foreign });
   }
   return stopped;
