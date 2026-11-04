@@ -11,7 +11,7 @@ export interface SessionMessage {
   audience: OrchestratorInput["conversation"]["audience"];
   createdAt: number;
   consumed?: boolean;
-  wake?: { delegatingRunId?: string };
+  wake?: { runId?: string; delegatingRunId?: string };
 }
 
 export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
@@ -22,6 +22,10 @@ export function createSessionMailbox(backing: DurableMap<SessionMessage>) {
     async pending(recipientId: string): Promise<SessionMessage[]> {
       const rows = await backing.select({ where: { field: "recipientId", anyOfFold: [recipientId] } });
       return rows.filter((row) => !row.consumed).sort((a, b) => a.createdAt - b.createdAt);
+    },
+    async settle(recipientId: string, id: string): Promise<void> {
+      const row = await backing.get(id);
+      if (row?.recipientId === recipientId) await backing.merge(id, { wake: undefined });
     },
     async acknowledge(recipientId: string, ids: string[]): Promise<void> {
       for (const id of ids) {

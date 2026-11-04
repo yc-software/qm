@@ -497,16 +497,25 @@ export async function runStopped(
   return undefined;
 }
 
+const interruptible = (run: Run, interrupter: string): boolean =>
+  run.status !== "pending" ||
+  run.attempts > 0 ||
+  run.turnUserSeq !== null ||
+  run.request.sessionSenderId === interrupter;
+
 async function stopSessionRuns(
   deps: { runs: Pick<RunStore, "inFlightForThread" | "withdraw">; signals: Pick<RunSignalStore, "send"> },
   session: Session,
   reason?: string,
-): Promise<string[]> {
-  const stopped: string[] = [];
+  interrupter?: string,
+): Promise<{ id: string; withdrawn: boolean }[]> {
+  const stopped: { id: string; withdrawn: boolean }[] = [];
   for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
+    if (interrupter && !interruptible(run, interrupter)) continue;
     await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
-    if (run.status === "pending") await deps.runs.withdraw(run.id, { unstartedOnly: reason === PARENT_INTERRUPT });
-    stopped.push(run.id);
+    const withdrawn =
+      run.status === "pending" && (await deps.runs.withdraw(run.id, { unstartedOnly: reason === PARENT_INTERRUPT }));
+    stopped.push({ id: run.id, withdrawn });
   }
   return stopped;
 }
@@ -841,7 +850,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!text) {
                 if (!input.interrupt)
                   return { ok: false, message: "send_message requires `text` (or interrupt: true)." };
-                return (await stopSessionRuns(deps, target, PARENT_INTERRUPT)).length
+                return (await stopSessionRuns(deps, target, PARENT_INTERRUPT, binding.session.id)).length
                   ? { ok: true, sessionId: target.id, title, delivered: "interrupted" }
                   : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };
               }
@@ -885,7 +894,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;
-              const replaced = input.interrupt ? inFlight.map((run) => run.id) : [];
+              const replaced = input.interrupt
+                ? inFlight.filter((run) => interruptible(run, binding.session.id)).map((run) => run.id)
+                : [];
               const live = (
                 await sessionTreeRuns(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target))
               ).filter((run) => !replaced.includes(run.id));
@@ -894,7 +905,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ok: false,
                   message: `all ${cap} session run slots are in use; nothing was sent. Retry later, or send with wake:false to leave it in the mailbox.`,
                 };
-              const stopped = input.interrupt ? await stopSessionRuns(deps, target, PARENT_INTERRUPT) : [];
+              const stopped = input.interrupt
+                ? await stopSessionRuns(deps, target, PARENT_INTERRUPT, binding.session.id)
+                : [];
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;
               request.delegatingRunId = binding.request.runId;
@@ -914,7 +927,16 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 })
                 .catch((error: unknown) => {
                   if (!stopped.length) throw error;
-                  throw new Error(`stopped its current run, but the message was not queued: ${errMessage(error)}`);
+                  const withdrawn = stopped.filter((run) => run.withdrawn).length;
+                  const done = [
+                    ...(stopped.length > withdrawn ? ["stopped its current run"] : []),
+                    ...(withdrawn
+                      ? [
+                          `withdrew ${withdrawn === 1 ? "your queued message" : `your ${withdrawn} queued messages`} to it`,
+                        ]
+                      : []),
+                  ].join(" and ");
+                  throw new Error(`${done}, but this message was not queued: ${errMessage(error)}`);
                 });
               if (stopped.length) return { ok: true, sessionId: target.id, title, delivered: "interrupted" };
               return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy };
