@@ -479,6 +479,7 @@ export function createDeploymentLayerStore(opts: {
           }
           if (opts.seedFallback && !seeded) {
             seeded = await opts.seedFallback();
+            if (!seeded) return null;
             let appeared: StoredDeploymentLayer | null = null;
             try {
               appeared = await retrying(() => opts.backing.get(CURRENT));

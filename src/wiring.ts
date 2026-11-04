@@ -706,7 +706,7 @@ export function buildApp(
       });
     }
   };
-  const skillsReady = deploymentLayerReady.then(
+  let skillsReady = deploymentLayerReady.then(
     () => undefined,
     (e) => console.error("[seed] deployment layer not ready:", errMessage(e)),
   );
@@ -2111,7 +2111,7 @@ export function buildApp(
     memoryStrategy,
     skills,
     skillBundles,
-    skillsReady,
+    skillsReady: () => skillsReady,
     errors,
     signals: runSignals,
     turnStream,
@@ -2952,16 +2952,19 @@ export function buildApp(
     deploymentLayerReady,
     deploymentLayerRefresh,
     ownSharedState: async () => {
-      ownsSharedState = true;
       await rewriteSurfaceOrigins(pgArtifactMap.pool);
       const backfilledFires = await crons.backfillFires();
       if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
-      await Promise.all([
-        config.seedSkills
-          ? installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e)))
-          : undefined,
-        deploymentLayerStore.hydrate().catch((e) => console.error("[seed] deployment layer not ready:", errMessage(e))),
-      ]);
+      ownsSharedState = true;
+      await deploymentLayerStore.hydrate().catch((error: unknown) => {
+        ownsSharedState = false;
+        throw error;
+      });
+      if (config.seedSkills)
+        skillsReady = Promise.all([
+          skillsReady,
+          installCatalogs().catch((e) => console.error("[seed] failed to install seed skills:", errMessage(e))),
+        ]).then(() => undefined);
     },
     sessions,
     runs,

@@ -17,7 +17,7 @@ test("a turn submitted to QM booted by startQm completes", async (t) => {
   assert.equal(result.status, "ok", result.reason);
 });
 
-test("only a core that runs background work seeds skills at boot", async () => {
+test("only a core that runs background work seeds skills at boot", async (t) => {
   const skillsSeedDir = mkdtempSync(join(tmpdir(), "start-qm-seed-"));
   mkdirSync(join(skillsSeedDir, "release-skill"));
   writeFileSync(
@@ -25,13 +25,18 @@ test("only a core that runs background work seeds skills at boot", async () => {
     "---\nname: release-skill\ndescription: Shipped by a new release.\n---\nBody.\n",
   );
   const databaseUrl = testMigratedDatabaseUrl();
-  const bootSeeds = async (backgroundWorkEnabled: boolean) => {
-    const config = testConfig({ databaseUrl, allowUnauthenticatedCore: true, skillsSeedDir, backgroundWorkEnabled });
-    const qm = await startQm(config, { agent: createMockAgent() });
-    const names = (await qm.built.skills.list()).map((skill) => skill.manifest.name);
-    await qm.stop();
-    return names.includes("release-skill");
-  };
-  assert.equal(await bootSeeds(false), false);
-  assert.equal(await bootSeeds(true), true);
+  const boot = (backgroundWorkEnabled: boolean) =>
+    startQm(testConfig({ databaseUrl, allowUnauthenticatedCore: true, skillsSeedDir, backgroundWorkEnabled }), {
+      agent: createMockAgent(),
+    });
+  const seeded = async (qm: Awaited<ReturnType<typeof boot>>) =>
+    (await qm.built.skills.list()).some((skill) => skill.manifest.name === "release-skill");
+  const idle = await boot(false);
+  t.after(() => idle.stop());
+  assert.equal(await seeded(idle), false);
+  const owner = await boot(true);
+  t.after(() => owner.stop());
+  const conversation = { kind: "dm" as const, threadRef: "start-qm-seed" };
+  await owner.built.app.turn({ surface: "test", actor: { externalId: "U1" }, conversation, text: "hello" });
+  assert.equal(await seeded(owner), true);
 });
