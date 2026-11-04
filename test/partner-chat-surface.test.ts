@@ -276,13 +276,19 @@ test("partner-chat conversation reads are answered from the mirror", async () =>
   }
 });
 
-function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: IngestEvent[] = []) {
+function outboundFor(
+  url: string,
+  deliveries = createDeliveryStore(),
+  mirrored: IngestEvent[] = [],
+  stored: Array<{ ts: string }> = [],
+) {
   let serialized = 0;
   const outbound = createPartnerChatDeliveries({
     url,
     secret: SECRET,
     deliveries,
     app: { ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }) },
+    surfaceCache: { readMessages: async () => stored as never },
     serialize: async (fn) => {
       serialized += 1;
       return fn();
@@ -810,6 +816,7 @@ test("a retryable failure holds back later posts in that chat only", async () =>
     secret: SECRET,
     deliveries,
     app: { ingestSurfaceEvents: async () => ({ upserted: 0 }) },
+    surfaceCache: { readMessages: async () => [] },
     serialize: (fn) => fn(),
     fetch: async (_url, init) => {
       const body = JSON.parse(String(init?.body)) as { chat_id: string; body: string };
@@ -835,4 +842,24 @@ test("a retryable failure holds back later posts in that chat only", async () =>
     (await deliveries.pending("partner-chat")).map((d) => d.text),
     ["first in 88", "second in 88"],
   );
+});
+
+test("an echo of the agent's post that arrives before the post returns becomes the agent's own row", async () => {
+  const partnerChat = await fakePartnerChat();
+  const echo = { ts: "1793649601.00000000000000000043" };
+  const { outbound, deliveries, mirrored } = outboundFor(partnerChat.url, undefined, [], [echo]);
+  try {
+    await deliveries.enqueue({
+      destination: { type: "partner-chat", target: CONTAINER },
+      text: "posted",
+      idempotencyKey: "echo-race",
+    });
+    await outbound.drain();
+    assert.deepEqual(
+      mirrored.map((m) => [m.ts, m.self, m.text]),
+      [[echo.ts, true, "posted"]],
+    );
+  } finally {
+    await partnerChat.close();
+  }
 });

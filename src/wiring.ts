@@ -2477,6 +2477,7 @@ export function buildApp(
         secret: config.partnerChat.secret,
         deliveries,
         app,
+        surfaceCache,
         serialize: (fn) => advisoryLock.withLock("partner-chat-deliveries", fn),
       })
     : null;
