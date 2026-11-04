@@ -21,8 +21,7 @@ memory or from this conversation's tone. The profile's **Hard rules** and
    never draft from a snippet or excerpt; a question below the fold would go silently
    unanswered. Match the register the profile prescribes for this audience.
 2. Write the body to a file — plain text, one line per paragraph, blank line between.
-   No styled HTML (fonts, colors, buttons). The email access skill handles the format:
-   if its draft tool asks for plain text or HTML, choose HTML with simple `<p>` paragraphs.
+   No styled HTML (fonts, colors, buttons); the email access skill sets the draft's format.
 3. Self-check against the profile before showing anything: opener and sign-off drawn
    from their real ones, sentence rhythm right, no anti-pattern present. If a sentence
    could appear in anyone's email, rewrite it or cut it.

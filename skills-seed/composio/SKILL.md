@@ -76,7 +76,7 @@ Tools don't transfer files: a local filename passed as an argument uploads nothi
 
 ### Gmail
 
-- Create drafts as HTML (`is_html: true`) with plain `<p>` paragraphs and no styling. Gmail hard-wraps plain-text drafts at about 70 characters when they're sent.
+- Create drafts as HTML (`is_html: true`) with plain `<p>` paragraphs and no styling. Plain-text drafts have reached recipients hard-wrapped at about 70 characters.
 - Only the SENT label (`in:sent`) shows what was sent. Draft timestamps are creation times, not send times.
 - If the user states a fact about their own mail that conflicts with your read, re-check before contradicting them, and say exactly what you misread.
 
