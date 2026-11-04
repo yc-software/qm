@@ -55,3 +55,23 @@ test("the credential-backed Composio skill needs no dedicated OAuth configuratio
     ["composio"],
   );
 });
+
+test("app connections make the proxy-capable native skills visible without their own OAuth app", () => {
+  const all = [
+    skill("google-workspace"),
+    skill("google-drive-sheets"),
+    skill("dropbox"),
+    skill("linear"),
+    skill("zoom"),
+    skill("slack-drafts"),
+    skill("email-voice-profile"),
+  ];
+  assert.deepEqual(
+    filterConnectorSkills(all, [], true).map((entry) => entry.skill?.manifest.name),
+    ["google-workspace", "google-drive-sheets", "dropbox", "linear", "zoom"],
+  );
+  assert.deepEqual(
+    filterConnectorSkills(all, [], false).map((entry) => entry.skill?.manifest.name),
+    [],
+  );
+});

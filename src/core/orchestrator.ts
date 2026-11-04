@@ -1069,10 +1069,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               swallowAs("orchestrator: configured connector providers", []),
             )
           : [];
+      const appConnections =
+        !external && !strictReadOnly && deps.serviceCreds
+          ? (
+              await deps.serviceCreds
+                .listServiceCredentials(resolution.orgScopeId)
+                .catch(swallowAs("orchestrator: app connection credentials", []))
+            ).some((cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret)
+          : false;
       const carriedSkillScreens = new Map<string, Promise<boolean>>();
       const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
         const current = await tracePhase("turn.skills", () => context.listSkills(sources), { counts: countSkills });
-        const resolved = filterConnectorSkills(current.skills, configuredProviders);
+        const resolved = filterConnectorSkills(current.skills, configuredProviders, appConnections);
         const allowed: SkillResolution[] = [];
         for (const entry of resolved) {
           const skill = entry.skill;
@@ -1145,7 +1153,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         .sort();
       if (otherSkillSources.length)
         systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
-      const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders);
+      const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
       const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
@@ -2107,7 +2115,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         )
           systemPrompt +=
-            "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
+            "\n\n## Connected app access\nComposio is configured in the backend. Load the composio skill and use /v1/composio through the authenticated agent API. Apps with their own skill (Gmail, Google Calendar, Tasks, Drive, Docs, Sheets, Slides, Dropbox, Linear, Zoom) work over these connections too; prefer that skill for them. No Composio project key is delivered to your computer; the backend checks account ownership and context access.";
         if (actorIsOrgAdmin) {
           systemPrompt +=
             "\n\n## Acting for an org admin\n" +

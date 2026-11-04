@@ -53,14 +53,18 @@ const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
   zoom: "zoom",
 };
 
+const APP_CONNECTION_SKILLS = new Set(["dropbox", "google-drive-sheets", "google-workspace", "linear", "zoom"]);
+
 export function filterConnectorSkills(
   resolved: SkillResolution[],
   availableProviders: readonly string[],
+  appConnections = false,
 ): SkillResolution[] {
   const available = new Set(availableProviders);
   return resolved.filter((entry) => {
-    const provider = entry.skill ? CONNECTOR_SKILL_PROVIDERS[entry.skill.manifest.name] : undefined;
-    return !provider || available.has(provider);
+    const name = entry.skill?.manifest.name ?? "";
+    const provider = CONNECTOR_SKILL_PROVIDERS[name];
+    return !provider || available.has(provider) || (appConnections && APP_CONNECTION_SKILLS.has(name));
   });
 }
 

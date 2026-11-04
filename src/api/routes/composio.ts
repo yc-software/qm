@@ -135,7 +135,7 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
   return { key: record.secret, principal };
 }
 
-class ComposioHttpError extends Error {
+export class ComposioHttpError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
     super(message);
@@ -143,7 +143,7 @@ class ComposioHttpError extends Error {
   }
 }
 
-function executeFailureCause(error: unknown, timedOut: boolean): string {
+export function executeFailureCause(error: unknown, timedOut: boolean): string {
   if (timedOut) return "timeout";
   return error instanceof ComposioHttpError ? "provider_error" : "unavailable";
 }

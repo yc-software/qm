@@ -1,6 +1,6 @@
 ---
 name: dropbox
-description: Browse, search, read, upload, and share the user's Dropbox — including team/shared folders — through per-user OAuth.
+description: Browse, search, read, upload, and share the user's Dropbox — including team/shared folders — through their own Dropbox connection.
 requiredCapabilities:
   - egress:api.dropboxapi.com
   - egress:content.dropboxapi.com
@@ -11,20 +11,39 @@ requiredCapabilities:
 Use this skill when the user asks about their Dropbox files or folders — listing,
 searching, reading/downloading, uploading, or sharing.
 
-This is an OAuth connector. The resolved user's Dropbox token already lives on your
-computer as an environment variable, one per Dropbox API host (the way a logged-in CLI's
-cached credential would):
+## Connection
 
-- `$VAULT_TOKEN_API_DROPBOXAPI_COM` — for `api.dropboxapi.com` (RPC: list, search, share, move, delete)
-- `$VAULT_TOKEN_CONTENT_DROPBOXAPI_COM` — for `content.dropboxapi.com` (download, upload)
+Dropbox reaches you one of two ways; the requests are the same either way.
 
-Both carry the **same** Dropbox token (one OAuth grant spans every host), so if a
-host-specific var is empty, `$VAULT_TOKEN_API_DROPBOXAPI_COM` works as the bearer for any
-Dropbox host. Pass it as `-H "Authorization: Bearer $VAULT_TOKEN_..."` on every call;
-nothing on the network path adds it for you. Never ask the user
-for a token, log it, or use another principal's credential or a service fallback.
+- **Direct token:** `$VAULT_TOKEN_API_DROPBOXAPI_COM` (`api.dropboxapi.com`: list, search,
+  share, move, delete) and `$VAULT_TOKEN_CONTENT_DROPBOXAPI_COM` (`content.dropboxapi.com`:
+  download, upload) carry the same token, so if a host-specific one is empty,
+  `$VAULT_TOKEN_API_DROPBOXAPI_COM` works for any Dropbox host. Pass it as
+  `-H "Authorization: Bearer $VAULT_TOKEN_..."` on every call; nothing on the network path
+  adds it for you. The `curl` examples below use it as written.
+- **App connection:** with no token, the user connects Dropbox as an
+  app instead (composio skill). Send the same request through QM — same method, URL, `query`,
+  headers and JSON `body`, but no Authorization header:
 
-If `$VAULT_TOKEN_API_DROPBOXAPI_COM` is **empty**: per-user connector tokens are injected
+  ```bash
+  curl -sS "$AGENT_API_URL/v1/composio/proxy" -H "X-Agent-Capability: $AGENT_API_TOKEN" \
+    -H 'content-type: application/json' \
+    --data '{"method":"POST","url":"https://api.dropboxapi.com/2/users/get_current_account"}'
+  ```
+
+  The reply is the provider's own status and body, so read it exactly as the direct call's.
+  `409 not_connected` names the app to connect (offer the composio skill's connect option);
+  `409 choose_account` lists connections — ask which, then pass `accountId`. Pass
+  `Dropbox-API-Arg` in `headers`.
+
+  File downloads come back as raw bytes (`-o file` works). For a non-JSON upload body, send
+  `bodyBase64` with a `content-type` header; one request carries about 3 MB of file data,
+  so send larger files with the provider's chunked or resumable upload.
+
+Never ask the user for a token, log it, or use another principal's credential or a service
+fallback.
+
+If `$VAULT_TOKEN_API_DROPBOXAPI_COM` is **empty** and there is no app connection either: per-user connector tokens are injected
 only in a **direct DM** with the user (their personal scope) — in a channel or group
 they're absent by design, even for a fully-connected user. So don't tell a channel user to
 reconnect; ask them to DM you to run this. Only if it's empty inside a DM does it mean they
