@@ -14,11 +14,8 @@ credentials and deployment-specific settings. Workers use the provider of the sc
 retirement. That choice is stored once; later default changes never move workers
 to another provider, and the selected computer's files are never copied.
 
-Swarms are also gated per person by the `swarms` feature flag, off by default.
-Enable it for a person's personal scope (for example `personal:alice@example.com`)
-or the org scope in the admin feature-flag table. Without it the swarm routes refuse
-the caller, `/v1/apis` omits them, and existing swarms owned by that person stop
-reconciling and delivering. `SWARMS_ENABLED=false` remains the deployment kill switch.
+Swarms are available to every internal person; swarm routes refuse external callers
+and members. `SWARMS_ENABLED=false` is the deployment kill switch.
 
 The `swarms` durable-map table has its own registered migration,
 `durable-map/swarms/0001`. Apply registered migrations through the normal QM deploy
