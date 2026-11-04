@@ -114,7 +114,6 @@ const messageWake = (id: string, peer = false): ParentWake => ({
 const topLevel = (session: Session): boolean =>
   !session.parentSessionId && !isSubagentThreadRef(session.threadRef) && !session.threadRef.startsWith("swarm:");
 
-/** A top-level conversation messaging another top-level conversation that shares its context. */
 export const isPeerMessage = (sender: Session, recipient: Session): boolean =>
   sender.id !== recipient.id && sender.scopeId === recipient.scopeId && topLevel(sender) && topLevel(recipient);
 
@@ -170,7 +169,6 @@ async function parentTurn(
 ) {
   if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
-  // A peer wake always runs on the recipient's own stored context, never the sender's.
   const peer = source.peerDepth !== undefined;
   const initiatingRun = peer ? undefined : await delegatingRun(deps.runs, child, source.delegatingRunId);
   const initiatingContext = initiatingRun?.request ?? child.spawnMeta;

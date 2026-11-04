@@ -15,7 +15,6 @@ export interface SessionMessage {
   senderRunId?: string;
   resultOf?: string;
   delegatingRunId?: string;
-  /** Set on a peer conversation's wake: how many peer wakes in a row led to it (loop guard). */
   peerDepth?: number;
 }
 
