@@ -37,6 +37,8 @@ import {
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
 import { bindTenant, withRowTenant } from "../tenant-ingress.ts";
+import { appsDomainOf, isAppLabel, parseTenantAppHost } from "../../deploy/apps-domain.ts";
+import { requestHost } from "../../tenants/tenancy.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
   if (port === undefined) return {};
@@ -97,18 +99,19 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
       }
     }
   }
+  const appsDomain = appsDomainOf(deps);
   if (
-    deps.deployAppsDomain &&
-    deps.deployGateSecret &&
+    appsDomain &&
+    (deps.deployGateSecret || deps.deployAppsTenantSubdomain) &&
     deps.deployAppsSessionSecret &&
     method === "GET" &&
     String(req.headers["sec-fetch-dest"] ?? "") === "document"
   ) {
     const d = await app.getDeployment(id).catch(swallowAs("deployments: load deployment", null));
     const slug = d?.name ?? d?.id;
-    if (d && slug && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) {
+    if (d && slug && isAppLabel(slug)) {
       res.writeHead(302, {
-        location: `https://${slug}.${deps.deployAppsDomain}${subPath}${url.search}`,
+        location: `https://${slug}.${appsDomain}${subPath}${url.search}`,
         "cache-control": "no-store",
       });
       res.end();
@@ -805,8 +808,36 @@ async function fetchDeploymentResponse(
   }
 }
 
+async function proxyTenantAppHost(ctx: BaseCtx, label: string): Promise<boolean> {
+  const { req, res, deps } = ctx;
+  const fromAppHost = req.headers["x-qm-app-host"] === "1";
+  const rawHost = requestHost(req.headers.host);
+  const parsed = parseTenantAppHost(rawHost, label);
+  const notFound = (): true => {
+    sendJson(res, 404, { error: "not_found" });
+    req.resume();
+    return true;
+  };
+  if (!parsed) return fromAppHost ? notFound() : false;
+  if (!deps.tenancy) return fromAppHost ? notFound() : false;
+  // A host mapped to a tenant as its own web host is never an app host.
+  if (!fromAppHost && (await deps.tenancy.hostTenant(rawHost)).tenant) return false;
+  // The tenant comes from the host the app is served under, never from the app row:
+  // an app name only resolves inside the tenant that owns this apps domain.
+  const owner = await deps.tenancy.hostTenant(parsed.tenantHost);
+  if (!owner.tenant) return notFound();
+  const tenant = owner.tenant;
+  await bindTenant(tenant, async () => {
+    if (appsDomainOf(deps) !== `${label}.${parsed.tenantHost}`) return void notFound();
+    await serveAppSubdomain(ctx, rawHost, parsed.app, fromAppHost, `https://${parsed.tenantHost}`);
+  });
+  return true;
+}
+
 export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   const { req, res, deps } = ctx;
+  if (deps.deployAppsTenantSubdomain && !deps.deployAppsDomain)
+    return proxyTenantAppHost(ctx, deps.deployAppsTenantSubdomain);
   const appsDomain = deps.deployAppsDomain;
   const gateSecret = deps.deployGateSecret;
   const fromAppHost = req.headers["x-qm-app-host"] === "1";
@@ -828,12 +859,18 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     return true;
   }
   await withRowTenant(req, res, deps.tenancy, { table: "deployments", id: slug }, () =>
-    serveAppSubdomain(ctx, rawHost, slug, fromAppHost),
+    serveAppSubdomain(ctx, rawHost, slug, fromAppHost, deps.deployAppsLoginUrl),
   );
   return true;
 }
 
-async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fromAppHost: boolean): Promise<void> {
+async function serveAppSubdomain(
+  ctx: BaseCtx,
+  rawHost: string,
+  slug: string,
+  fromAppHost: boolean,
+  loginUrl: string | undefined,
+): Promise<void> {
   const { req, res, app, deps, url, pathname } = ctx;
   if (!["GET", "HEAD", "OPTIONS"].includes(ctx.method)) {
     const origin = req.headers.origin;
@@ -866,7 +903,6 @@ async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fr
     : false;
   const isPublic = deployment?.public === true && externalAllowed;
   const sessionSecret = deps.deployAppsSessionSecret;
-  const loginUrl = deps.deployAppsLoginUrl;
   const wantsHtml = ctx.method === "GET" && String(req.headers.accept ?? "").includes("text/html");
   const viewerTenant = appViewerTenant();
   let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret, viewerTenant) : null;

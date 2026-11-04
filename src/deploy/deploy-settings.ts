@@ -6,6 +6,7 @@ import { commitShaSchema } from "../util/ids.ts";
 export interface DeploySettings {
   deployProvider: "docker" | "aws" | "fly" | "porter" | "e2b" | "render";
   deployAppsDomain?: string;
+  deployAppsTenantSubdomain?: string;
   deployAppsSessionSecret?: string;
   deployAppsLoginUrl?: string;
   deployAppsLoginPath?: "/auth/login" | "/auth/trusted/login";
@@ -212,6 +213,22 @@ function deployAppsDomainEnv(env: NodeJS.ProcessEnv, deployProvider: string): st
   return env.AWS_DEPLOY_APPS_DOMAIN;
 }
 
+function deployAppsTenantSubdomainEnv(env: NodeJS.ProcessEnv): string | undefined {
+  const raw = env.DEPLOY_APPS_TENANT_SUBDOMAIN?.trim().toLowerCase();
+  if (!raw) return undefined;
+  if (!new RegExp(`^${HOSTNAME_LABEL}$`).test(raw)) {
+    throw new Error(
+      `DEPLOY_APPS_TENANT_SUBDOMAIN (${raw}) must be one DNS label, like apps — each tenant then serves apps at <app>.${raw}.<tenant host>.`,
+    );
+  }
+  if (env.DEPLOY_APPS_DOMAIN?.trim() || env.AWS_DEPLOY_APPS_DOMAIN?.trim()) {
+    throw new Error(
+      "DEPLOY_APPS_TENANT_SUBDOMAIN gives every tenant its own apps domain, so it cannot be combined with one deployment-wide DEPLOY_APPS_DOMAIN or AWS_DEPLOY_APPS_DOMAIN — unset one of them.",
+    );
+  }
+  return raw;
+}
+
 function awsDeployEnv(env: NodeJS.ProcessEnv): AwsDeployEnv {
   const csv = (s: string | undefined): string[] | undefined =>
     s
@@ -283,6 +300,7 @@ function flyDeployEnv(env: NodeJS.ProcessEnv): FlyDeployEnv {
 
 export function deploySettings(env: NodeJS.ProcessEnv, publicUrl: string | undefined): DeploySettings {
   const deployAppsDomain = deployAppsDomainEnv(env, env.DEPLOY_PROVIDER ?? "docker");
+  const deployAppsTenantSubdomain = deployAppsTenantSubdomainEnv(env);
   if (env.DEPLOY_PROVIDER === "porter" && !env.PORTER_DEPLOY_APPS_DOMAIN && !env.DEPLOY_APPS_DOMAIN) {
     console.warn(
       "[config] DEPLOY_PROVIDER=porter without an apps domain — published apps are reachable signed-in at /d/<app>/ only; set DEPLOY_APPS_DOMAIN to a domain you control to serve each app on its own subdomain.",
@@ -320,6 +338,7 @@ export function deploySettings(env: NodeJS.ProcessEnv, publicUrl: string | undef
         : {}),
     },
     ...(deployAppsDomain ? { deployAppsDomain } : {}),
+    ...(deployAppsTenantSubdomain ? { deployAppsTenantSubdomain } : {}),
     flyDeploy: flyDeployEnv(env),
   };
 }

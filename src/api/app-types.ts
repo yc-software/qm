@@ -692,6 +692,7 @@ export interface AppDeps {
   projects?: ProjectStore;
   deploy: DeployService;
   deployAppsDomain?: string;
+  deployAppsTenantSubdomain?: string;
   deploymentGitPrincipals?: DeploymentGitPrincipals;
   deploymentLayer?: DeploymentLayerRuntime;
   files: FileArtifactStore;
