@@ -1,3 +1,4 @@
+import { APP_CONNECTION_SKILLS } from "../../connectors/app-connection-apps.ts";
 import type {
   CandidateDestination,
   CommandApprovalGrant,
@@ -52,8 +53,6 @@ const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
   x: "x",
   zoom: "zoom",
 };
-
-const APP_CONNECTION_SKILLS = new Set(["dropbox", "google-drive-sheets", "google-workspace", "linear", "zoom"]);
 
 export function filterConnectorSkills(
   resolved: SkillResolution[],

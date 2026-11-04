@@ -26,10 +26,8 @@ Linear's API is GraphQL at `https://api.linear.app/graphql`, reached one of two 
     --data '{"method":"POST","url":"https://api.linear.app/graphql","body":{"query":"{ viewer { name email } }"}}'
   ```
 
-  The reply is the provider's own status and body, so read it exactly as the direct call's.
-  `409 not_connected` names the app to connect (offer the composio skill's connect option);
-  `409 choose_account` lists connections — ask which, then pass `accountId`. The GraphQL
-  `{"query":…}` object goes in `body`.
+  The reply is the provider's own status and body; the composio skill's "Raw requests"
+  section covers `409` answers, choosing an account, and file bodies. The GraphQL `{"query":…}` object goes in `body`.
 
 Do not ask the user for a token, log it, or use another principal's credential. With no
 connection, or a 401/400 (`authentication`) from the API, tell the user they need to connect

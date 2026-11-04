@@ -12,27 +12,12 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { sendJson } from "../http.ts";
+import { APP_CONNECTION_APPS } from "../../connectors/app-connection-apps.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
-
-const PROXY_TOOLKIT_HOSTS: Readonly<Record<string, ReadonlyArray<readonly [host: string, pathPrefix?: string]>>> = {
-  gmail: [["gmail.googleapis.com"]],
-  googlecalendar: [["www.googleapis.com", "/calendar/"]],
-  googletasks: [["www.googleapis.com", "/tasks/"]],
-  googledrive: [
-    ["www.googleapis.com", "/drive/"],
-    ["www.googleapis.com", "/upload/drive/"],
-  ],
-  googledocs: [["docs.googleapis.com"]],
-  googlesheets: [["sheets.googleapis.com"]],
-  googleslides: [["slides.googleapis.com"]],
-  dropbox: [["api.dropboxapi.com"], ["content.dropboxapi.com"]],
-  linear: [["api.linear.app"]],
-  zoom: [["api.zoom.us"]],
-};
 
 const METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 const BLOCKED_HEADERS = new Set([
@@ -50,16 +35,18 @@ const PROXY_TIMEOUT_MS = 90_000;
 const COMPOSIO_REQUEST_LIMIT_BYTES = 4_500_000;
 
 function toolkitsFor(url: URL): string[] {
-  return Object.entries(PROXY_TOOLKIT_HOSTS)
-    .filter(([, routes]) =>
+  return Object.entries(APP_CONNECTION_APPS)
+    .filter(([, { routes }]) =>
       routes.some(([host, prefix]) => url.hostname === host && url.pathname.startsWith(prefix ?? "/")),
     )
     .map(([toolkit]) => toolkit);
 }
 
 function allowedSummary(): string {
-  return Object.entries(PROXY_TOOLKIT_HOSTS)
-    .map(([toolkit, routes]) => `${toolkit}: ${routes.map(([host, prefix]) => `${host}${prefix ?? ""}`).join(", ")}`)
+  return Object.entries(APP_CONNECTION_APPS)
+    .map(
+      ([toolkit, { routes }]) => `${toolkit}: ${routes.map(([host, prefix]) => `${host}${prefix ?? ""}`).join(", ")}`,
+    )
     .join("; ");
 }
 
@@ -139,7 +126,7 @@ async function pickAccount(
   access: { key: string; principal: string },
   input: ProxyInput,
   toolkits: string[],
-): Promise<{ id: string; userId: string } | null> {
+): Promise<string | null> {
   if (input.accountId) {
     const owned = await ownedAccount(ctx, access, input.accountId);
     if (!owned || owned.account.status !== "ACTIVE" || owned.account.is_disabled === true) {
@@ -153,7 +140,7 @@ async function pickAccount(
       });
       return null;
     }
-    return { id: input.accountId, userId: String(owned.account.user_id) };
+    return input.accountId;
   }
   const userIds = composioUserIds(access.principal);
   const query = new URLSearchParams({
@@ -174,7 +161,7 @@ async function pickAccount(
       item.is_disabled !== true &&
       toolkits.includes(String((item.toolkit as { slug?: unknown } | undefined)?.slug)),
   );
-  if (accounts.length === 1) return { id: String(accounts[0]!.id), userId: String(accounts[0]!.user_id) };
+  if (accounts.length === 1) return String(accounts[0]!.id);
   if (accounts.length === 0)
     sendJson(ctx.res, 409, {
       error: "not_connected",
@@ -203,10 +190,15 @@ async function relay(ctx: ApiCtx, accountId: string, result: Record<string, unkn
   if (binary && typeof binary.url === "string") {
     const location = new URL(binary.url);
     if (location.protocol !== "https:" || location.username || location.password) throw new Error("Invalid file URL");
+    const headersDeadline = new AbortController();
+    const timer = setTimeout(
+      () => headersDeadline.abort(new DOMException("File download did not start in time", "TimeoutError")),
+      PROXY_TIMEOUT_MS,
+    );
     const file = await (ctx.deps.composioFetch ?? fetch)(location.href, {
       redirect: "error",
-      signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
-    });
+      signal: headersDeadline.signal,
+    }).finally(() => clearTimeout(timer));
     if (!file.ok || !file.body) throw new Error(`File download failed with status ${file.status}`);
     headers["content-type"] =
       typeof binary.content_type === "string" ? binary.content_type : "application/octet-stream";
@@ -241,13 +233,11 @@ async function proxy(ctx: ApiCtx): Promise<void> {
     });
   const mask = createExactSecretValueMasker([access.key]);
   const resource = `${input.method} ${input.url.hostname}${input.url.pathname}`;
-  let account: { id: string; userId: string } | null = null;
+  let account: string | null = null;
   try {
     account = await pickAccount(ctx, access, input, toolkits);
     if (!account) return;
     if (!(await activeRun(ctx))) return;
-    if (!composioUserIds(access.principal).includes(account.userId))
-      return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     const contentType = input.headers.find((h) => h.name.toLowerCase() === "content-type")?.value;
     const binaryBody =
       input.bodyBase64 ??
@@ -259,7 +249,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
     audit(ctx.deps, {
       principalId: access.principal,
       action: "composio.proxy.started",
-      resource: `${account.id}/${resource}`,
+      resource: `${account}/${resource}`,
       scopeLabel: ctx.capability.scopeId,
     });
     const result = await request(
@@ -267,7 +257,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
       access.key,
       "/tools/execute/proxy",
       {
-        connected_account_id: account.id,
+        connected_account_id: account,
         endpoint: input.url.href,
         method: input.method,
         ...(input.headers.length
@@ -277,11 +267,11 @@ async function proxy(ctx: ApiCtx): Promise<void> {
       },
       PROXY_TIMEOUT_MS,
     );
-    await relay(ctx, account.id, result);
+    await relay(ctx, account, result);
     audit(ctx.deps, {
       principalId: access.principal,
       action: "composio.proxy.completed",
-      resource: `${account.id}/${resource}`,
+      resource: `${account}/${resource}`,
       scopeLabel: ctx.capability.scopeId,
     });
   } catch (error) {
@@ -289,7 +279,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
       audit(ctx.deps, {
         principalId: access.principal,
         action: "composio.proxy.failed",
-        resource: `${account.id}/${resource}`,
+        resource: `${account}/${resource}`,
         scopeLabel: ctx.capability.scopeId,
       });
     reportFailure("composio: proxy", new Error(mask(redactSecrets(errMessage(error)))), resource);

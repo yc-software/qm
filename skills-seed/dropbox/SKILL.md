@@ -31,14 +31,8 @@ Dropbox reaches you one of two ways; the requests are the same either way.
     --data '{"method":"POST","url":"https://api.dropboxapi.com/2/users/get_current_account"}'
   ```
 
-  The reply is the provider's own status and body, so read it exactly as the direct call's.
-  `409 not_connected` names the app to connect (offer the composio skill's connect option);
-  `409 choose_account` lists connections — ask which, then pass `accountId`. Pass
-  `Dropbox-API-Arg` in `headers`.
-
-  File downloads come back as raw bytes (`-o file` works). For a non-JSON upload body, send
-  `bodyBase64` with a `content-type` header; one request carries about 3 MB of file data,
-  so send larger files with the provider's chunked or resumable upload.
+  The reply is the provider's own status and body; the composio skill's "Raw requests"
+  section covers `409` answers, choosing an account, and file bodies. Pass `Dropbox-API-Arg` in `headers`.
 
 Never ask the user for a token, log it, or use another principal's credential or a service
 fallback.

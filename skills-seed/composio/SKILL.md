@@ -19,7 +19,15 @@ Connect them here, then do the work with their skill, which runs over the same c
 | `linear`                                                    | `linear`              |
 | `zoom`                                                      | `zoom`                |
 
-Those skills call `POST /v1/composio/proxy`, which forwards one raw request to the app's own API through the caller's connection. It only reaches those apps' API hosts. Use `execute` below for every other app.
+### Raw requests
+
+Those skills call `POST /v1/composio/proxy`, which forwards one raw request to the app's own API through the caller's connection, and only reaches those apps' API hosts. Use `execute` below for every other app.
+
+- Body: `{"method","url","query"?,"headers"?,"body"?|"bodyBase64"?,"accountId"?}` — the same method, URL, query, headers and JSON body as a direct call, without Authorization.
+- The reply is the provider's own status and body; read it exactly as the direct call's.
+- `409 not_connected` names the app to connect: offer the connect option above. `409 choose_account` lists matching connections: ask which, then pass `accountId`.
+- File downloads come back as raw bytes (`curl -o file`). For a non-JSON upload, send `bodyBase64` with a `content-type` header. One request carries about 3 MB of file data; send larger files with the provider's chunked or resumable upload.
+- `502 composio_proxy_failed` gives `cause` and `providerStatus`; don't automatically retry a write.
 
 ## Show setup in web chat
 

@@ -28,10 +28,9 @@ Google reaches you one of two ways; the requests are the same either way.
     --data '{"method":"GET","url":"https://www.googleapis.com/calendar/v3/users/me/settings/timezone"}'
   ```
 
-  The reply is the provider's own status and body, so read it exactly as the direct call's.
-  `409 not_connected` names the app to connect (offer the composio skill's connect option);
-  `409 choose_account` lists connections — ask which, then pass `accountId`. `gmail.py` picks
-  the route itself (`--account ca_…` before the command selects a connection).
+  The reply is the provider's own status and body; the composio skill's "Raw requests"
+  section covers `409` answers, choosing an account, and file bodies. `gmail.py` picks the route itself
+  (`--account ca_…` before the command selects a connection).
 
 Do not ask the user for a token, log it, or use another principal's. A 401/403 from Google
 means they haven't connected it, or connected before this permission existed — have them
