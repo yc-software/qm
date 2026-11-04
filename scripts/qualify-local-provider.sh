@@ -63,10 +63,8 @@ docker run -d --name "$container" --network "$network" --group-add "$socket_grou
   -e "LOCAL_SANDBOX_IMAGE=$local_image" -e LOCAL_SANDBOX_CPUS=2 -e LOCAL_SANDBOX_MEMORY_MB=2048 \
   -e PI_MODEL=claude-haiku-4-5 \
   "$core_image" node test/live-slack/local-provider.ts >/dev/null
-if ! status="$(timeout 8m docker wait "$container")"; then
-  docker logs --tail 100 "$container" || true
+if ! timeout 8m docker logs -f "$container"; then
   echo "the candidate core did not finish local qualification within 8 minutes" >&2
   exit 1
 fi
-docker logs "$container"
-exit "$status"
+exit "$(docker wait "$container")"
