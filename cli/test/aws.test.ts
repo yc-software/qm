@@ -68,6 +68,7 @@ function fakeAws(
     siblingOwnTarget?: boolean;
     coreHosts?: string[];
     targetGroups?: Partial<Record<"core" | "portal", string>>;
+    statefulTargetHealth?: boolean;
   } = {},
 ): { log: string; restore: () => void } {
   const bin = join(dir, "aws-fake");
@@ -186,7 +187,7 @@ else if (a.includes("elbv2 describe-rules")) {
   if (process.env.AWS_FAKE_EXTRA_RULE === "1") rules.push({ IsDefault: false, Actions: [{ Type: "fixed-response", FixedResponseConfig: { StatusCode: "503" } }], Conditions: [{ Field: "path-pattern", PathPatternConfig: { Values: ["/v1/*"] } }] });
   console.log(JSON.stringify({ Rules: rules }));
 }
-else if (a.includes("elbv2 describe-target-health")) console.log(JSON.stringify({ TargetHealthDescriptions: [{ TargetHealth: { State: process.env.AWS_FAKE_UNHEALTHY_TARGET === "1" ? "unhealthy" : "healthy" } }] }));
+else if (a.includes("elbv2 describe-target-health") && !${JSON.stringify(ingress.statefulTargetHealth ?? false)}) console.log(JSON.stringify({ TargetHealthDescriptions: [{ TargetHealth: { State: process.env.AWS_FAKE_UNHEALTHY_TARGET === "1" ? "unhealthy" : "healthy" } }] }));
 else if (a.includes("secretsmanager describe-secret")) console.log(JSON.stringify({ ARN: "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf", DeletedDate: process.env.AWS_FAKE_SECRET_DELETED || undefined, VersionIdsToStages: { current: ["AWSCURRENT"] } }));
 else {
 ${script}
@@ -250,6 +251,13 @@ function statefulAws(
     failPromotion?: boolean;
     promotionAlreadyCurrent?: boolean;
     drainPolls?: number;
+    rollingTasks?: {
+      retiringPolls: number;
+      retiring?: number;
+      targetHealthPolls?: number;
+      health?: string[];
+      failInventory?: boolean;
+    };
     inactiveDeploymentRunning?: number;
     primaryFailedTasks?: boolean;
     rolloutFailed?: boolean;
@@ -345,8 +353,10 @@ else if (a.includes("ecs describe-services")) {
   const end = Math.min(...[args.indexOf("--output", start), args.indexOf("--region", start)].filter((index) => index >= 0));
   const names = args.slice(start, end);
   const blocked = s.blockDisabledDrain && names.some((name) => s.definitions[s.services[name]?.taskDefinition]?.containerDefinitions?.some((container) => container.name === "core" && container.environment?.some((entry) => entry.name === "BACKGROUND_WORK_ENABLED" && entry.value === "0")));
-  const draining = (s.drainPolls || 0) > 0 || blocked;
+  const draining = (s.drainPolls || 0) > 0 || blocked || (${JSON.stringify(Boolean(opts.rollingTasks))} && s.updated);
   if (s.drainPolls > 0) { s.drainPolls--; save(); }
+  const retiringRunning = ${JSON.stringify(Boolean(opts.rollingTasks))} && s.updated ? (s.retiringPolls > 0 && (${JSON.stringify(opts.rollingTasks?.retiring ?? 2)} > 1) ? 1 : 0) : 1;
+  if (${JSON.stringify(Boolean(opts.rollingTasks))} && s.updated && s.retiringPolls > 0) { s.retiringPolls--; save(); }
   const transientFailedTaskPolls = ${JSON.stringify(opts.transientFailedTaskPolls ?? 0)};
   let transientlyFailing = false;
   if (transientFailedTaskPolls && s.updated) {
@@ -377,7 +387,7 @@ else if (a.includes("ecs describe-services")) {
     const deployments = draining
       ? [
           { id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "IN_PROGRESS", runningCount: service.desiredCount, failedTasks: 1 },
-          { id: "old", status: "ACTIVE", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: 1, failedTasks: 0 },
+          { id: "old", status: "ACTIVE", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: retiringRunning, failedTasks: 0 },
         ]
       : (${JSON.stringify(opts.rolloutFailed ?? false)} || s.failedTaskDefinition === service.taskDefinition)
         ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "FAILED", runningCount: 0, failedTasks: 1 }]
@@ -413,6 +423,31 @@ else if (a.includes("ecs describe-service-revisions")) {
     const service = name ? s.services[name] : undefined;
     return service ? [{ serviceRevisionArn: arn, taskDefinition: arn.endsWith("/previous") ? service.previousTaskDefinition : service.taskDefinition }] : [];
   }) }));
+}
+else if (${JSON.stringify(Boolean(opts.rollingTasks))} && s.updated && a.includes("ecs list-tasks")) {
+  const rolling = ${JSON.stringify(opts.rollingTasks ?? {})};
+  if (rolling.failInventory) { console.error("ListTasksFailure"); process.exit(1); }
+  const name = after("--service-name");
+  const arn = (id) => "arn:aws:ecs:us-west-2:123456789012:task/" + name + "/" + id;
+  console.log(JSON.stringify({ taskArns: after("--desired-status") === "STOPPED" ? Array.from({ length: rolling.retiring ?? 2 }, (_, index) => arn("retiring-" + index)) : Array.from({ length: s.services[name].desiredCount }, (_, index) => arn("current-" + index)) }));
+}
+else if (${JSON.stringify(Boolean(opts.rollingTasks))} && s.updated && a.includes("ecs describe-tasks")) {
+  const rolling = ${JSON.stringify(opts.rollingTasks ?? {})};
+  const requested = args.slice(args.indexOf("--tasks") + 1).filter(arg => arg.startsWith("arn:"));
+  console.log(JSON.stringify({ tasks: requested.map(taskArn => {
+    const service = s.services[taskArn.split("/").at(-2)];
+    const [kind, index] = taskArn.split("/").at(-1).split("-");
+    if (kind === "retiring") return { taskArn, taskDefinitionArn: service.previousTaskDefinition, startedBy: "ecs-svc/retiring", desiredStatus: "STOPPED", healthStatus: "HEALTHY", lastStatus: s.retiringPolls > 0 ? (index === "0" ? "STOPPING" : "RUNNING") : (index === "0" ? "DEPROVISIONING" : "STOPPED") };
+    return { taskArn, taskDefinitionArn: service.taskDefinition, startedBy: service.deploymentId, desiredStatus: "RUNNING", lastStatus: "RUNNING", healthStatus: (rolling.health ?? [])[Number(index)] ?? "HEALTHY", containers: [{ networkInterfaces: [{ privateIpv4Address: "10.0.2." + index }] }] };
+  }), failures: [] }));
+}
+else if (${JSON.stringify(Boolean(opts.rollingTasks))} && a.includes("elbv2 describe-target-health")) {
+  if (!s.updated) console.log(JSON.stringify({ TargetHealthDescriptions: [{ TargetHealth: { State: "healthy" } }] }));
+  else {
+    if (s.targetHealthPolls > 0) { s.targetHealthPolls--; save(); }
+    const service = Object.values(s.services).find(item => item.workload === ${JSON.stringify(frontService)});
+    console.log(JSON.stringify({ TargetHealthDescriptions: Array.from({ length: service.desiredCount }, (_, index) => ({ Target: { Id: "10.0.2." + index, Port: 8080 }, TargetHealth: { State: s.targetHealthPolls > 0 ? "initial" : "healthy" } })) }));
+  }
 }
 else if (a.includes("ecs list-tasks") && s.taskInventory) console.log(JSON.stringify({ taskArns: (s.taskInventory[after("--service-name")] || []).filter(task => task.desiredStatus === after("--desired-status")).map(task => task.taskArn) }));
 else if (a.includes("ecs describe-tasks") && s.taskInventory) {
@@ -454,6 +489,8 @@ else if (a.includes("ecs update-service")) {
   if (s.failNextWebRollout && service.workload === "web-ui") { s.failedTaskDefinition = service.taskDefinition; s.failNextWebRollout = false; }
   s.updated = true;
   s.drainPolls = ${JSON.stringify(opts.drainPolls ?? 0)};
+  s.retiringPolls = ${JSON.stringify(opts.rollingTasks?.retiringPolls ?? 0)};
+  s.targetHealthPolls = ${JSON.stringify(opts.rollingTasks?.targetHealthPolls ?? 0)};
   s.blueGreenPolls = 0;
   if (s.failNextUpdatesAfterMutation > 0 || (${JSON.stringify(opts.failFirstUpdateAfterMutation ?? false)} && !s.failedFirstUpdate)) {
     if (s.failNextUpdatesAfterMutation > 0) s.failNextUpdatesAfterMutation--;
@@ -507,7 +544,12 @@ else if (a.includes("s3api get-object")) {
 else if (a.includes("rds describe-db-instances")) console.log(JSON.stringify({ DBInstances: [{ DBInstanceStatus: process.env.AWS_FAKE_DB_STATUS ?? "available", BackupRetentionPeriod: Number(process.env.AWS_FAKE_DB_RETENTION ?? "7"), ...(process.env.AWS_FAKE_DB_RESTORABLE_AT === "" ? {} : { LatestRestorableTime: process.env.AWS_FAKE_DB_RESTORABLE_AT ?? new Date(Date.now() - 30000).toISOString() }) }] }));
 else console.log("");`,
     frontService,
-    { blueGreen: Boolean(opts.blueGreenBakePolls), coreHosts, targetGroups },
+    {
+      blueGreen: Boolean(opts.blueGreenBakePolls),
+      coreHosts,
+      targetGroups,
+      statefulTargetHealth: Boolean(opts.rollingTasks),
+    },
   );
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     if (init?.method === "PUT") {
@@ -2987,7 +3029,7 @@ test("AWS candidate builds honor their concurrency bound and join failures befor
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
-if (args[0] === "login") process.exit(0);
+if (args[0] === "login" || args[1] === "inspect") process.exit(0);
 const name = args[args.indexOf("-t") + 1].split("/").at(-1).split(":")[0].slice(3);
 const dir = ${JSON.stringify(dir)};
 const events = ${JSON.stringify(events)};
@@ -3065,6 +3107,56 @@ fs.writeFileSync(path.join(dir, "started-" + name), "");
   }
 });
 
+test("AWS source builds reuse a per-repository registry cache when the builder can export one", async () => {
+  for (const driver of ["", "docker", "docker-container"]) {
+    const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-cache-"));
+    const candidatePath = join(dir, "candidate.json");
+    const calls = join(dir, "docker-calls");
+    const fake = statefulAws(dir, config);
+    const docker = join(dir, "docker");
+    writeFileSync(
+      docker,
+      `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[1] === "inspect") console.log("Name:   default\\nDriver: ${driver}\\n");
+else if (args[0] !== "login") require("node:fs").appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+`,
+    );
+    chmodSync(docker, 0o755);
+    const priorPath = process.env.PATH;
+    process.env.PATH = `${dir}:${priorPath}`;
+    try {
+      await awsUp(config, dir, {
+        buildOnly: true,
+        buildFrom: true,
+        imageLabel: "cached-candidate",
+        candidateOut: candidatePath,
+      });
+      const builds = readFileSync(calls, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]);
+      assert.equal(builds.length, runnableServices(config.services).length);
+      for (const args of builds) {
+        const tagged = args[args.indexOf("-t") + 1]!;
+        const ref = `${tagged.slice(0, tagged.lastIndexOf(":"))}:buildcache-${args[args.indexOf("--platform") + 1]!.split("/")[1]}`;
+        if (driver !== "docker-container") assert.ok(!args.includes("--cache-from") && !args.includes("--cache-to"));
+        else {
+          assert.equal(args[args.indexOf("--cache-from") + 1], `type=registry,ref=${ref}`);
+          assert.equal(
+            args[args.indexOf("--cache-to") + 1],
+            `type=registry,ref=${ref},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true`,
+          );
+        }
+      }
+    } finally {
+      process.env.PATH = priorPath;
+      fake.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test("cancelling candidate builds terminates and joins every Docker child without a manifest", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-cancel-"));
   const candidatePath = join(dir, "candidate.json");
@@ -3076,7 +3168,7 @@ test("cancelling candidate builds terminates and joins every Docker child withou
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
-if (args[0] === "login") process.exit(0);
+if (args[0] === "login" || args[1] === "inspect") process.exit(0);
 const name = args[args.indexOf("-t") + 1].split("/").at(-1).split(":")[0].slice(3);
 const dir = ${JSON.stringify(dir)};
 if (name === "core") process.on("SIGTERM", () => {});
@@ -5538,6 +5630,101 @@ test("AWS secrets push defers activation against pre-consolidation images", asyn
   } finally {
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("inactive AWS deploys return once prior tasks have exited, without waiting for ECS to complete the rollout", async () => {
+  const stopping = /core \(prior tasks are still stopping\)/;
+  const scenarios: Array<{
+    name: string;
+    inactive: boolean;
+    rollingTasks: NonNullable<Parameters<typeof statefulAws>[3]>["rollingTasks"];
+    rejects?: RegExp;
+  }> = [
+    { name: "prior tasks exit", inactive: true, rollingTasks: { retiringPolls: 3, targetHealthPolls: 4 } },
+    {
+      name: "prior task still stopping",
+      inactive: true,
+      rollingTasks: { retiringPolls: 1e9, retiring: 1 },
+      rejects: stopping,
+    },
+    {
+      name: "one new task unhealthy",
+      inactive: true,
+      rollingTasks: { retiringPolls: 0, health: ["HEALTHY", "UNHEALTHY"] },
+      rejects: stopping,
+    },
+    {
+      name: "new targets not yet healthy with no prior tasks",
+      inactive: true,
+      rollingTasks: { retiringPolls: 0, retiring: 0, targetHealthPolls: 1e9 },
+      rejects: stopping,
+    },
+    {
+      name: "task inventory unavailable",
+      inactive: true,
+      rollingTasks: { retiringPolls: 0, failInventory: true },
+      rejects: stopping,
+    },
+    { name: "active stack", inactive: false, rollingTasks: { retiringPolls: 0 }, rejects: stopping },
+  ];
+  const priorDeadline = process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
+  try {
+    for (const scenario of scenarios) {
+      process.env.QM_AWS_ROLLOUT_DEADLINE_MS = scenario.rejects ? "800" : "15000";
+      const dir = mkdtempSync(join(tmpdir(), "qm-aws-inactive-exit-"));
+      const candidatePath = join(dir, "candidate.json");
+      writeFileSync(
+        candidatePath,
+        JSON.stringify({
+          contract: 1,
+          accountId: "123456789012",
+          region: "us-west-2",
+          label: "candidate-deadbeef",
+          images: { core: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}` },
+          imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+          architectures: { core: "amd64" },
+        }),
+      );
+      const base = oneServiceConfig();
+      const single = {
+        ...base,
+        aws: { ...base.aws!, services: { core: { ...base.aws!.services.core!, desiredCount: 2 } } },
+      };
+      const fake = statefulAws(dir, single, {}, { rollingTasks: scenario.rollingTasks });
+      const priorAlb = process.env.AWS_FAKE_ALB_DNS;
+      if (scenario.inactive) process.env.AWS_FAKE_ALB_DNS = "192.0.2.1";
+      try {
+        const deploy = awsUp(single, dir, { yes: true, candidate: candidatePath, inactive: scenario.inactive });
+        if (scenario.rejects) {
+          await assert.rejects(deploy, scenario.rejects, scenario.name);
+          continue;
+        }
+        await deploy;
+        const state = JSON.parse(readFileSync(fake.state, "utf8"));
+        assert.equal(state.retiringPolls, 0, scenario.name);
+        assert.equal(state.targetHealthPolls, 0, scenario.name);
+        const service = state.services[single.aws.services.core.ecsService];
+        const manifest = JSON.parse(
+          state.dynamo[`deployment/manifest/${state.dynamo["deployment/current"].manifestId.S}`].manifest.S,
+        );
+        assert.equal(manifest.tasks.core, service.taskDefinition, scenario.name);
+        assert.notEqual(service.taskDefinition, service.previousTaskDefinition, scenario.name);
+        const calls = readFileSync(fake.log, "utf8");
+        assert.ok(
+          calls.lastIndexOf("dynamodb delete-item") > calls.lastIndexOf("dynamodb transact-write-items"),
+          scenario.name,
+        );
+      } finally {
+        if (priorAlb === undefined) delete process.env.AWS_FAKE_ALB_DNS;
+        else process.env.AWS_FAKE_ALB_DNS = priorAlb;
+        fake.restore();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    if (priorDeadline === undefined) delete process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
+    else process.env.QM_AWS_ROLLOUT_DEADLINE_MS = priorDeadline;
   }
 });
 
