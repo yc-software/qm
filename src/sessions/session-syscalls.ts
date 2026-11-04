@@ -18,7 +18,7 @@ import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
-import { wakeOwnParent } from "./subagent-mail.ts";
+import { pendingWork, wakeOwnParent } from "./subagent-mail.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 
@@ -199,10 +199,12 @@ interface SessionReadInput {
   maxChars?: number;
 }
 
+type SessionStatus = "running" | "pending" | "waiting on subagents" | "idle";
+
 interface SessionChildSummary {
   sessionId: string;
   title: string;
-  status: "running" | "pending" | "idle";
+  status: SessionStatus;
   lastSaid?: string;
 }
 
@@ -218,7 +220,7 @@ type SessionStartResult =
 interface SessionSummary {
   sessionId: string;
   title: string;
-  status: "running" | "pending" | "idle";
+  status: SessionStatus;
   current: boolean;
 }
 
@@ -458,7 +460,7 @@ export async function workingSessionThreadRefs(
   return working;
 }
 
-async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Session): Promise<Session[]> {
+export async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Session): Promise<Session[]> {
   const all: Session[] = [root];
   const queue = [root];
   const seen = new Set([root.id]);
@@ -628,10 +630,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         return null;
       }
 
-      async function statusOf(session: Session): Promise<"running" | "pending" | "idle"> {
+      async function statusOf(session: Session): Promise<SessionStatus> {
         const inFlight = await deps.runs.inFlightForThread(session.threadRef);
         if (inFlight.some((r) => r.status === "running")) return "running";
         return inFlight.length ? "pending" : "idle";
+      }
+
+      async function childStatusOf(session: Session): Promise<SessionStatus> {
+        const status = await statusOf(session);
+        return status === "idle" && (await pendingWork(deps, session)) ? "waiting on subagents" : status;
       }
 
       const visibleTitle = (target: Session) => target.title?.trim() || target.id;
@@ -901,7 +908,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!input.wake && !input.interrupt) return leaveMail();
               if (binding.request.privateSessionMessage)
                 return leaveMail("a private turn cannot start work in another session");
-              if (!target.parentSessionId) {
+              if (!target.parentSessionId || (target.id === binding.session.parentSessionId && !input.interrupt)) {
                 if (caller.readOnly) return leaveMail("a read-only subagent cannot start a turn in its parent");
                 const woken = await wakeOwnParent(deps, binding.session.id, target, binding.request, mail).catch(
                   (error: unknown) => ({ failed: errMessage(error) }),
@@ -979,7 +986,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               summaries.push({
                 sessionId: child.id,
                 title: visibleTitle(child),
-                status: await statusOf(child),
+                status: await childStatusOf(child),
                 ...(said ? { lastSaid: snippet(said, 200) } : {}),
               });
             }
@@ -1013,7 +1020,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             mode: "transcript",
             sessionId: target.id,
             title: visibleTitle(target),
-            status: await statusOf(target),
+            status: await childStatusOf(target),
             rendered: rendered || "[no readable entries yet]",
           };
         },
