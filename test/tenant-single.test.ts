@@ -38,6 +38,6 @@ describe("a single-tenant deployment", { skip }, () => {
     assert.equal((await deliver(single, "anything.example.test", "no-such-hook")).status, 404);
     const lookup = await signed(single, "core.internal", "GET", "/v1/operator/hosts/anything.example.test");
     const sole = (await single.owner.query("SELECT id::text FROM tenants")).rows[0].id;
-    assert.deepEqual(JSON.parse(lookup.text), { tenant: sole, multi: false });
+    assert.deepEqual(JSON.parse(lookup.text), { tenant: sole, multi: false, sole: true });
   });
 });
