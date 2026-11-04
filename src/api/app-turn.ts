@@ -1,7 +1,14 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { requestedRuntimeError, userRuntimeConfigBody, validateWebTurnModelOptions } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
-import { isSubagentThreadRef, sessionTreeRuns, stopSessionTree } from "../sessions/session-syscalls.ts";
+import {
+  USER_STOP,
+  USER_STOP_ALL,
+  isSubagentThreadRef,
+  sessionTreeRuns,
+  stopSessionRuns,
+  stopSessionTree,
+} from "../sessions/session-syscalls.ts";
 import { isUserItem } from "../sessions/items.ts";
 import type { Conversation, Principal, TurnOrigin, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
@@ -49,8 +56,6 @@ import { STALE_LEASE_GRACE_MS } from "./app-types.ts";
 const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
-
-const USER_STOP = "by user";
 
 const freshSteerTs = () => `${Date.now()}.${crypto.randomUUID().slice(0, 8)}`;
 
@@ -126,20 +131,26 @@ export function createTurnMethods(
       live.push({ turn: { kind: "descendants", actorIds: descendants.map((run) => run.request.actor.id) } });
     return live;
   }
-  async function stopThreadTree(threadRef: string, run?: Run): Promise<boolean> {
+  async function stopThread(threadRef: string, run: Run | undefined, tree: boolean): Promise<boolean> {
     if (!deps.signals) return false;
-    const signals = deps.signals;
+    const stopDeps = { sessions: deps.sessions, runs: deps.runs, signals: deps.signals };
+    const reason = tree ? USER_STOP_ALL : USER_STOP;
     const stop = async () => {
       const session = await deps.sessions.getByThread(threadRef);
-      if (session) return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session, USER_STOP);
-      if (!run) return false;
-      await signals.send(run.id, { kind: "abort", reason: USER_STOP });
+      if (session && tree) {
+        const stopped = await stopSessionTree(stopDeps, session, reason);
+        await deps.settleTreeWakes?.(session);
+        return stopped;
+      }
+      if (session) return (await stopSessionRuns(stopDeps, session, reason)).length > 0;
+      if (!run || run.status === "done" || run.status === "failed") return false;
+      await stopDeps.signals.send(run.id, { kind: "abort", reason });
       if (run.status === "pending") await deps.runs.withdraw(run.id);
       return true;
     };
     return deps.advisoryLock.withLock("session-tree-admission", stop);
   }
-  const stopRunTree = (run: Run) => stopThreadTree(run.sessionId, run);
+  const stopRun = (run: Run, tree: boolean) => stopThread(run.sessionId, run, tree);
   const methods: ReturnType<typeof createTurnMethods> = {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
       const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length
@@ -492,9 +503,9 @@ export function createTurnMethods(
         if (route.kind === "abort") {
           const stopped = await withCurrentProjectRoster(async () => {
             const own = candidates.find(({ run }) => run?.sessionId === conversation.threadRef)?.run;
-            let any = await stopThreadTree(conversation.threadRef, own);
+            let any = await stopThread(conversation.threadRef, own, true);
             for (const { run } of routes.filter((r) => r.route.kind === "abort"))
-              if (run && run.sessionId !== conversation.threadRef) any = (await stopRunTree(run)) || any;
+              if (run && run.sessionId !== conversation.threadRef) any = (await stopRun(run, true)) || any;
             return any;
           });
           if (stopped === null)
@@ -762,11 +773,11 @@ export function createTurnMethods(
         ? `queued-steer:${run.request.conversation.threadRef}:${signal.queuedRunId}`
         : undefined;
       if (queuedKey && (await deps.signals.runForDedupeKey(queuedKey))) return { accepted: true };
+      if (signal.kind === "abort" && (signal.tree || !isTerminal(run.status)))
+        return (await stopRun(run, signal.tree === true))
+          ? { accepted: true }
+          : { accepted: false, reason: "terminal" };
       if (isTerminal(run.status)) return { accepted: false, reason: "terminal" };
-      if (signal.kind === "abort") {
-        const accepted = await stopRunTree(run);
-        return accepted ? { accepted: true } : { accepted: false, reason: "terminal" };
-      }
       if (signal.kind === "client_result") {
         if (viewer && !samePerson(run.request.actor.id, viewer)) return { accepted: false, reason: "not_found" };
         if (!run.request.clientTools?.length && !run.request.desktopClientId)
@@ -818,7 +829,7 @@ export function createTurnMethods(
       );
       if (route.kind === "abort") {
         if (signal.queuedRunId) await deps.runs.withdraw(signal.queuedRunId);
-        return (await stopRunTree(run)) ? { accepted: true } : { accepted: false, reason: "terminal" };
+        return (await stopRun(run, true)) ? { accepted: true } : { accepted: false, reason: "terminal" };
       }
       if (route.kind === "drop") return { accepted: false, reason: "text_required" };
       if (route.kind === "turn") {

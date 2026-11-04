@@ -54,7 +54,7 @@ import {
   stoppableRoot,
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
-import { deliverSubagentMail, wakeForUnreadMail } from "./sessions/subagent-mail.ts";
+import { deliverSubagentMail, settleTreeWakes, wakeForUnreadMail } from "./sessions/subagent-mail.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
@@ -2245,7 +2245,19 @@ export function buildApp(
   const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
   const providerKeys = directProviderAvailability;
+  const subagentMail = {
+    sessions,
+    runs,
+    maxAttempts,
+    mailbox: sessionMailbox,
+    prepareRequest: prepareSessionRequest,
+    delegationEnabled,
+    deliveries,
+    signals: runSignals,
+    advisoryLock,
+  };
   const app = createApp({
+    settleTreeWakes: (root) => settleTreeWakes(subagentMail, root),
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
@@ -2407,17 +2419,6 @@ export function buildApp(
     })().catch(swallowAs("session-state: terminal emit", undefined));
   });
   let lastSignalPrune = 0;
-  const subagentMail = {
-    sessions,
-    runs,
-    maxAttempts,
-    mailbox: sessionMailbox,
-    prepareRequest: prepareSessionRequest,
-    delegationEnabled,
-    deliveries,
-    signals: runSignals,
-    advisoryLock,
-  };
   const returnSessionRun = (run: Run) =>
     advisoryLock
       .withLock("session-tree-admission", async () => {

@@ -84,6 +84,10 @@ export function ackKey(row: Pick<SubagentRow, "session" | "endedAt">): string {
   return `${row.session.id}@${row.endedAt ?? 0}`;
 }
 
+export function workingSubagents(rows: readonly SubagentRow[]): number {
+  return rows.filter((row) => row.state === "working").length;
+}
+
 export function subagentSummary(rows: readonly SubagentRow[]): string {
   const count = (state: SubagentState) => rows.filter((row) => row.state === state).length;
   const parts: string[] = [];

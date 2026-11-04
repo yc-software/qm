@@ -1107,3 +1107,45 @@ test("subagent orphan replay drops a late client_result instead of starting a tu
   await settleNoReplay(threadRef);
   assert.deepEqual(await built.signals.pending(run.id), [], "the late answer is acknowledged");
 });
+
+test("web proxy: Stop stops only the run's own conversation; tree:true stops its subagents too, even after that run ended", async () => {
+  const alice = { id: "alice", type: "internal" as const };
+  const scope = scopeId("personal", "alice");
+  const parentThread = "web:alice:stop-tree";
+  const childThread = "agent:main:subagent:stop-tree-child";
+  const parent = await built.sessions.getOrCreateByThread(parentThread, "dm", scope, undefined, "web");
+  const child = await built.sessions.getOrCreateByThread(childThread, "dm", scope, undefined, "web");
+  await built.sessions.setParentSession(child.id, parent.id);
+  const running = async (threadRef: string, text: string) => {
+    const { run } = await built.runs.enqueue({
+      sessionId: threadRef,
+      request: {
+        ...request(text, threadRef),
+        surface: "web",
+        actor: alice,
+        conversation: { kind: "dm", threadRef, audience: [alice] },
+      },
+    });
+    const claimed = await built.runs.claimById(run.id, "test-worker", 60_000);
+    return { run, leaseToken: claimed!.leaseToken! };
+  };
+  const lead = await running(parentThread, "lead the work");
+  const lane = await running(childThread, "one lane");
+  const stop = (body: Record<string, unknown>) =>
+    fetch(`${webBase}/api/runs/${lead.run.id}/signal`, asUser("alice", { method: "POST", body: JSON.stringify(body) }));
+  const reasons = async (runId: string) =>
+    (await built.signals.pending(runId)).map(({ signal }) => [signal.kind, signal.reason]);
+
+  assert.equal((await stop({ kind: "abort" })).status, 200);
+  assert.deepEqual(await reasons(lead.run.id), [["abort", "by user"]]);
+  assert.deepEqual(await reasons(lane.run.id), []);
+
+  await built.runs.complete(lead.run.id, lead.leaseToken, { status: "silent", stopped: true, stopReason: "by user" });
+  assert.equal((await stop({ kind: "abort" })).status, 409);
+  assert.deepEqual(await reasons(lane.run.id), []);
+
+  assert.equal((await stop({ kind: "abort", tree: true })).status, 200);
+  assert.deepEqual(await reasons(lane.run.id), [["abort", "by user (subagents too)"]]);
+  await built.runs.complete(lane.run.id, lane.leaseToken, { status: "silent", stopped: true });
+  assert.equal((await stop({ kind: "abort", tree: true })).status, 409);
+});

@@ -208,11 +208,13 @@ import {
   peekLines,
   subagentRows,
   subagentSummary,
+  workingSubagents,
   visibleSubagents,
   type PeekLine,
   type SubagentRow,
 } from "./subagent-activity";
 import { createSwarmStrip } from "./swarm-strip.ts";
+import { createSubagentStopOffer } from "./subagent-stop-offer.ts";
 import { newChatDraftKey, saveDraft, storedDraft } from "./drafts";
 import { createForkOriginController, forkOriginView } from "./fork-origin";
 import { base64ToBytes } from "./paste-text";
@@ -772,11 +774,20 @@ export function createChatSurface(
     if (runSlot.stopGeneration === runSlot.generation) return;
     const agent = chatState.agent;
     const generation = runSlot.generation;
+    const { runId } = runSlot;
+    const rootId = chatState.sessionId;
     requestStop(runSlot);
     drawActiveChat();
     if (!hasLiveRun(runSlot)) return;
     try {
       await signalLiveRun(runSlot, "abort", undefined, { threadRef: chatState.threadRef });
+      if (agent === chatState.agent)
+        stopOffer.offer(
+          rootId,
+          runId,
+          generation,
+          rootId ? workingSubagents(subagentRows(sessionsState.list, rootId)) : 0,
+        );
     } catch (err) {
       if (generation !== runSlot.generation || runSlot.stopGeneration !== generation || agent !== chatState.agent)
         return;
@@ -2732,6 +2743,12 @@ export function createChatSurface(
   }
 
   const swarmUi = createSwarmStrip(() => drawActiveChat());
+  const stopOffer = createSubagentStopOffer(
+    () => drawActiveChat(),
+    (message) => {
+      ctx.composer.state.error = message;
+    },
+  );
   const SUBAGENT_ACK_KEY = "qm.subagentAck";
   const SUBAGENT_POLL_MS = 4000;
   const subagentUi = {
@@ -2941,6 +2958,7 @@ export function createChatSurface(
               </button>`
         }
         ${expanded ? html`<div class="subagent-list ${single ? "single" : "bg-panel"}">${rows.map(subagentRowTpl)}</div>` : nothing}
+        ${stopOffer.view(rootId, runSlot.generation, workingSubagents(rows))}
       </section>
     `;
   }

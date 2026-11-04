@@ -3781,6 +3781,16 @@ qm-markdown .tok-in {
   font-size: 12px;
   cursor: pointer;
 }
+.subagent-stop-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+}
+.subagent-stop-all:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
 .subagent-peek {
   flex: 1 0 100%;
   min-width: 0;

@@ -1474,6 +1474,10 @@ async function followRun(
   }
 }
 
+export async function stopRunTree(runId: string): Promise<void> {
+  await api(runPath(runId, "/signal"), { method: "POST", body: JSON.stringify({ kind: "abort", tree: true }) });
+}
+
 function runPath(runId: string, suffix: string): string {
   return `/api/runs/${encodeURIComponent(runId)}${suffix}`;
 }

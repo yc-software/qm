@@ -462,6 +462,22 @@ END $base_schema$`,
       );
       return rows.map(rowToRun);
     },
+    async pendingReturnsIn(threadRefs) {
+      const { rows } = await q(
+        `SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
+         AND session_id LIKE 'agent:main:subagent:%' AND session_id = ANY($1)
+         UNION
+         SELECT child.* FROM runs wake JOIN runs child
+         ON child.id = substring(wake.idempotency_key FROM length('subagent-return:') + 1)
+         WHERE wake.status = 'pending' AND wake.attempts = 0 AND wake.turn_user_seq IS NULL
+         AND wake.idempotency_key LIKE 'subagent-return:%'
+         AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
+         AND child.session_id = ANY($1)
+         ORDER BY id`,
+        [threadRefs],
+      );
+      return rows.map(rowToRun);
+    },
     async terminalFinished(after, beforeMs, limit) {
       const { rows } = await q(
         `SELECT * FROM runs WHERE status IN ('done','failed') AND finished_at <= $1

@@ -331,7 +331,7 @@ export interface App {
   withdrawRun(runId: string, viewer?: string): Promise<{ withdrawn: boolean; reason?: string }>;
   signalRun(
     runId: string,
-    signal: RunSignal,
+    signal: RunSignal & { tree?: boolean },
     viewer?: string,
   ): Promise<{ accepted: boolean; reason?: string; why?: string; queuedRunId?: string; replayed?: boolean }>;
   replayOrphanedRunSignals(runId: string): Promise<void>;
@@ -664,6 +664,7 @@ export interface AppDeps {
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
   signals?: RunSignalStore;
+  settleTreeWakes?: (root: Session) => Promise<void>;
   modelCredentials?: ModelCredentialStore;
   userModelCredentials?: UserModelCredentialStore;
   mcpServers?: McpServerStore;

@@ -17,7 +17,9 @@ import {
   requiresDelegation,
   runStopped,
   snippet,
+  stopCascades,
   storedContext,
+  treeSessions,
 } from "./session-syscalls.ts";
 
 const MAIL_ERROR_CAP = 1_000;
@@ -249,7 +251,8 @@ export async function wakeForUnreadMail(
   },
   run: Run,
 ): Promise<"woken" | "busy" | "settled" | undefined> {
-  if (isSubagentThreadRef(run.sessionId) || run.result?.stopped || !deps.runs.get) return undefined;
+  if (isSubagentThreadRef(run.sessionId) || !deps.runs.get) return undefined;
+  if (run.result?.stopped && stopCascades(run.result.stopReason)) return undefined;
   const parent = await deps.sessions.getByThread(run.sessionId);
   if (!parent || parent.parentSessionId) return undefined;
   const runs = { get: deps.runs.get };
@@ -284,7 +287,7 @@ export async function wakeForUnreadMail(
   return undefined;
 }
 
-export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<boolean> {
+export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quiet = false): Promise<boolean> {
   if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return true;
   const stopped = run.result?.stopped
     ? "self"
@@ -373,5 +376,21 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     text: COMPLETION_WAKE,
     displayText: "Delegated task completed",
   };
-  return (await mailParent(deps, child, parent, turn, mail, stopped ? undefined : wake)) === "settled";
+  return (await mailParent(deps, child, parent, turn, mail, stopped || quiet ? undefined : wake)) === "settled";
+}
+
+export async function settleTreeWakes(
+  deps: SubagentMailDeps & {
+    sessions: Pick<SessionStore, "childrenOf">;
+    runs: Pick<RunStore, "pendingReturnsIn" | "markReturned">;
+  },
+  root: Session,
+): Promise<void> {
+  const tree = (await treeSessions(deps.sessions, root)).filter((session) => session.scopeId === root.scopeId);
+  for (const session of tree)
+    for (const message of await deps.mailbox.pending(session.id))
+      if (message.wake) await deps.mailbox.settle(session.id, message.id);
+  for (const run of await deps.runs.pendingReturnsIn(tree.map((session) => session.threadRef)))
+    if (await deliverSubagentMail(deps, run, true).catch(swallowAs("sessions: settle tree return", false)))
+      await deps.runs.markReturned(run.id);
 }

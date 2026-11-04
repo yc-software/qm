@@ -451,7 +451,7 @@ export async function workingSessionThreadRefs(
   return working;
 }
 
-async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Session): Promise<Session[]> {
+export async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Session): Promise<Session[]> {
   const all: Session[] = [root];
   const queue = [root];
   const seen = new Set([root.id]);
@@ -469,6 +469,13 @@ async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, root: Se
 }
 
 export const PARENT_INTERRUPT = "by the parent agent";
+export const USER_STOP = "by user";
+export const USER_STOP_ALL = "by user (subagents too)";
+const OWN_RUN_STOPS = new Set<string | undefined>([PARENT_INTERRUPT, USER_STOP]);
+
+export function stopCascades(reason: string | undefined): boolean {
+  return !OWN_RUN_STOPS.has(reason);
+}
 
 async function stopOf(
   signals: Pick<RunSignalStore, "pending">,
@@ -491,7 +498,7 @@ export async function runStopped(
     seen.add(current);
     const run = await runs.get(current);
     const stop = run && (await stopOf(signals, run));
-    if (!run || (stop && (self || stop.reason !== PARENT_INTERRUPT))) return self ? "self" : "ancestor";
+    if (!run || (stop && (self || stopCascades(stop.reason)))) return self ? "self" : "ancestor";
     current = run.request.delegatingRunId;
   }
   return undefined;
@@ -500,7 +507,7 @@ export async function runStopped(
 const unstarted = (run: Run): boolean => run.status === "pending" && run.attempts === 0 && run.turnUserSeq === null;
 const interruptible = (run: Run): boolean => !unstarted(run) || Boolean(run.request.sessionSenderId);
 
-async function stopSessionRuns(
+export async function stopSessionRuns(
   deps: { runs: Pick<RunStore, "inFlightForThread" | "withdraw">; signals: Pick<RunSignalStore, "send"> },
   session: Session,
   reason?: string,
@@ -523,7 +530,7 @@ async function stopSessionRuns(
       });
     await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
     const withdrawn =
-      run.status === "pending" && (await deps.runs.withdraw(run.id, { unstartedOnly: reason === PARENT_INTERRUPT }));
+      run.status === "pending" && (await deps.runs.withdraw(run.id, { unstartedOnly: !stopCascades(reason) }));
     stopped.push({ id: run.id, withdrawn: withdrawn && !foreign });
   }
   return stopped;
