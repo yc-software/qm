@@ -229,7 +229,7 @@ test("a summary that fails everywhere names each route it tried and why", async 
       assert.ok(error instanceof ProviderTurnError);
       assert.equal(error.code, "model_budget");
       assert.match(error.message, /shared model gateway.*Budget has been exceeded/s);
-      assert.match(error.message, /fallback .*organization's own provider key.*key revoked/s);
+      assert.match(error.message, /fallback .*organization's own provider key or subscription\).*key revoked/s);
     },
   );
 });
@@ -315,4 +315,17 @@ test("the runtime listing says which account each model bills", async () => {
   const personal = await runtimeConfigBody({ deps }, orgScope(), async () => null);
   assert.equal(personal.modelCatalog["claude-sonnet-5"]?.billing, "personal_account");
   assert.equal(personal.modelCatalog["gpt-6-astra"]?.billing, "personal_account");
+});
+
+test("the runtime listing bills an OpenAI model to company ChatGPT access even when a gateway also serves it", async () => {
+  const deps = {
+    config: testConfigStore("default-org"),
+    baseModelDefault: "claude-sonnet-5",
+    modelCredentials: {
+      availability: async () => ({ anthropic: true, codexOAuth: true, modelIds: new Set(["gpt-6-astra"]) }),
+    },
+  } as unknown as Parameters<typeof runtimeConfigBody>[0]["deps"];
+  await deps.config!.setWebuiModels(orgScope(), ["claude-sonnet-5", "gpt-6-astra"]);
+  const listed = await runtimeConfigBody({ deps }, orgScope());
+  assert.equal(listed.modelCatalog["gpt-6-astra"]?.billing, "org_key");
 });

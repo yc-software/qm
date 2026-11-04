@@ -377,9 +377,7 @@ import {
 import { createPostgresAckEmojiPickStore, type AckEmojiPickStore } from "./surface-cache/ack-emoji-pick-store.ts";
 import {
   CODEX_SUBSCRIPTION_PROVIDER,
-  codexSubscriptionModelId,
-  isOverlayModel,
-  modelRequestOverrides,
+  companyModelId,
   defaultModel,
   resolveModel,
   modelSupported,
@@ -1468,11 +1466,6 @@ export function buildApp(
     ]);
     return { ...claude, ...metered, ...chatgpt };
   };
-  const companyModelId = (id: string): string => {
-    if (resolveModel(id)?.provider !== "openai" || isOverlayModel(id) || modelRequestOverrides(id)) return id;
-    const subscription = codexSubscriptionModelId(id);
-    return resolveModel(subscription) ? subscription : id;
-  };
   const runtimeOrgScope = () => scopeId("org", orgId());
   const orgBaseModelId = (): string | undefined =>
     configStore.getRuntimeSelection(runtimeOrgScope())?.modelId ??
@@ -1492,7 +1485,7 @@ export function buildApp(
     ...(configDefault ? { defaultModelId: configDefault } : {}),
     resolveProviderKeys: resolveCompanyProviderKeys,
     ...(gatewayTransport ? { modelGateway: gatewayTransport } : {}),
-    ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
+    companyModelId: (id: string) => companyModelId(id, directProviderAvailability),
     resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
   });
   const baseAgent =
