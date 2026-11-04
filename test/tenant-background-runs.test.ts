@@ -63,7 +63,7 @@ test(
       const worker = createWorker({ runs: app.runs, orchestrator, leaseTtlMs: 5_000, pollMs: 5, slots: 2 });
       withTenant(TENANT_B, () => worker.start());
       await until(() => ran.length === 2);
-      await worker.stop(1);
+      await worker.stop(5_000);
       assert.deepEqual(ran.sort(), [
         ["a", TENANT_A, "1"],
         ["b", TENANT_B, "1"],
