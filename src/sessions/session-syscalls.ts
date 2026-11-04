@@ -138,6 +138,9 @@ export function ownsSessionContext(
   );
 }
 
+export const isSidebarSession = (session: Session): boolean =>
+  !session.parentSessionId && !isSubagentThreadRef(session.threadRef) && !session.threadRef.startsWith("swarm:");
+
 export function storedContext(session: Session): SpawnMeta | undefined {
   return (
     session.spawnMeta && {
@@ -658,7 +661,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       function peerRefusal(target: Session): string | null {
         const refusal = sidebarRefusal();
         if (refusal) return refusal;
-        if (target.parentSessionId || isSubagentThreadRef(target.threadRef) || target.threadRef.startsWith("swarm:"))
+        if (!isSidebarSession(target))
           return `"${target.title?.trim() || target.id}" is a subagent, not a session — use the subagents tool for it.`;
         return null;
       }
@@ -1112,12 +1115,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             ? binding.request.conversation.audience
             : [binding.request.actor];
           const candidates = (await conversations.list(binding.request.actor.id)).filter(
-            (s) =>
-              s.scopeId === binding.scopeId &&
-              !s.parentSessionId &&
-              !isSubagentThreadRef(s.threadRef) &&
-              !s.threadRef.startsWith("swarm:") &&
-              !s.archived,
+            (s) => s.scopeId === binding.scopeId && isSidebarSession(s) && !s.archived,
           );
           const visible: Session[] = [];
           for (const session of candidates) {

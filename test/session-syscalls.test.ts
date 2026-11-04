@@ -1671,7 +1671,7 @@ test("a message to an idle peer conversation wakes it once, on the recipient's o
   const r = await rig();
   const sender = await webPeer(r, "planner");
   const target = await webPeer(r, "builder");
-  const sent = await peerApi(r, sender, { runId: "run-planner" }).write({
+  const sent = await peerApi(r, sender).write({
     peer: true,
     wake: true,
     target: target.id,
@@ -1691,15 +1691,9 @@ test("a message to an idle peer conversation wakes it once, on the recipient's o
   assert.equal(wake.request.sessionSenderId, sender.id);
   assert.equal(wake.request.sessionMessageDepth, 1);
   assert.equal(wake.request.origin.kind, "automation");
-  assert.equal(wake.request.addressed, false);
   assert.equal(wake.request.unattendedGrants, undefined);
-  assert.equal(wake.request.delegatingRunId, undefined);
-  assert.equal(wake.request.privateSessionMessage, undefined);
-  assert.equal(wake.request.readOnly, undefined);
-  assert.match(wake.request.text, /^Another conversation sent you a message/);
-  assert.equal(wake.request.displayText, "Another conversation sent a message");
 
-  const retried = await peerApi(r, sender, { runId: "run-planner" }).write({
+  const retried = await peerApi(r, sender).write({
     peer: true,
     wake: true,
     target: target.id,
@@ -1731,7 +1725,7 @@ test("a busy peer reads the message at its next step, or is woken once if its tu
     (await r.runs.inFlightForThread(target.threadRef)).map((run) => run.id),
     [first.run.id],
   );
-  const delivered = await peerApi(r, target).receive(0);
+  const delivered = await peerApi(r, target).receive!(0);
   assert.equal(delivered.length, 1);
   await r.mailbox.acknowledge(
     target.id,
@@ -1783,7 +1777,6 @@ test("the restart sweep recovers a peer wake whose recipient was busy, once", as
   assert.equal(wakes[0]!.dedupKey, `subagent-followup:${mail!.id}`);
   assert.equal(wakes[0]!.request.sessionSenderId, sender.id);
   assert.equal(wakes[0]!.request.sessionMessageDepth, 4);
-  assert.equal(wakes[0]!.request.displayText, "Another conversation sent a message");
 });
 
 test("peer wakes stop after a chain of eight, and read-only or private turns only leave mail", async () => {

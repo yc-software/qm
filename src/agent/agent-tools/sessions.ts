@@ -5,6 +5,26 @@ import { renderSubagentActivity } from "../../sessions/subagent-status.ts";
 import { isolationLabel } from "../../sessions/child-isolation.ts";
 import type { ChildIsolationMode } from "../../types.ts";
 
+function deliveryOutcome(
+  result: { title: string; delivered: string; busy?: boolean; notWoken?: string },
+  withText: boolean,
+): string {
+  const name = `"${result.title}"`;
+  if (result.delivered === "queued_turn")
+    return result.busy
+      ? `Queued for ${name}: it is busy and starts on this when its current turn ends.`
+      : `Woke ${name}; it is working on this now.`;
+  if (result.delivered === "interrupted")
+    return withText
+      ? `Stopped ${name}'s current run; it starts on this message next. Its own subagents keep running.`
+      : `Stopped ${name}'s current run; it is idle until messaged. Its own subagents keep running and wake it when they report back.`;
+  return `Left in ${name}'s mailbox${result.notWoken ? ` without waking it: ${result.notWoken}` : ""}. ${
+    result.busy
+      ? "It has work running or queued and sees this at its next step."
+      : "It is idle and won't see this until something wakes it."
+  }`;
+}
+
 export function sessionTools(kit: ToolKit) {
   const { ref, opts, recordCall, recordResult, recordCoreAuthoredResult } = kit;
   const delegateWork = opts?.delegateWork === true;
@@ -177,20 +197,6 @@ export function sessionTools(kit: ToolKit) {
             true,
           );
         }
-        const name = `"${result.title}"`;
-        let outcome = p.text?.trim()
-          ? `Stopped ${name}'s current run; it starts on this message next. Its own subagents keep running.`
-          : `Stopped ${name}'s current run; it is idle until messaged. Its own subagents keep running and wake it when they report back.`;
-        if (result.delivered === "queued_turn")
-          outcome = result.busy
-            ? `Queued for ${name}: it is busy and starts on this when its current turn ends.`
-            : `Woke ${name}; it is working on this now.`;
-        else if (result.delivered !== "interrupted")
-          outcome = `Left in ${name}'s mailbox${result.notWoken ? ` without waking it: ${result.notWoken}` : ""}. ${
-            result.busy
-              ? "It has work running or queued and sees this at its next step."
-              : "It is idle and won't see this until something wakes it."
-          }`;
         return recordResult(
           callId,
           {
@@ -200,7 +206,7 @@ export function sessionTools(kit: ToolKit) {
             title: result.title,
             delivered: result.delivered,
           },
-          text(outcome),
+          text(deliveryOutcome(result, !!p.text?.trim())),
         );
       }
       const result = await syscalls.read({
@@ -335,17 +341,6 @@ export function sessionTools(kit: ToolKit) {
           text: p.text,
         });
         if (!result.ok) return fail(result.message);
-        const name = `"${result.title}"`;
-        let outcome = `Delivered to ${name}.`;
-        if (result.delivered === "queued_turn") outcome = `Woke ${name}; it is working on this now.`;
-        else if (result.notWoken)
-          outcome = `Left in ${name}'s mailbox without waking it: ${result.notWoken}. ${
-            result.busy
-              ? "It has work running and sees this at its next step."
-              : "It won't see this until something wakes it."
-          }`;
-        else if (result.busy)
-          outcome = `Left in ${name}'s mailbox. It is busy and sees this at its next step; if that turn ends first, this wakes it.`;
         return recordResult(
           callId,
           {
@@ -355,7 +350,7 @@ export function sessionTools(kit: ToolKit) {
             title: result.title,
             delivered: result.delivered,
           },
-          text(outcome),
+          text(deliveryOutcome(result, true)),
         );
       }
       const result = await syscalls.read({

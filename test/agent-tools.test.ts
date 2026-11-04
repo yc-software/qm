@@ -4008,12 +4008,15 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   assert.match(textOut(await call(sessions, { action: "list" })), /peer \(peer\) — idle/);
   assert.match(textOut(await call(sessions, { action: "new", text: "hi", title: "t" })), /Started session "made"/);
   assert.match(textOut(await call(sessions, { action: "fork" })), /Forked this conversation into session "made"/);
-  assert.match(textOut(await call(sessions, { action: "send_message", target: "peer", text: "fyi" })), /queued/);
+  assert.match(
+    textOut(await call(sessions, { action: "send_message", target: "peer", text: "fyi" })),
+    /Left in "peer"'s mailbox/,
+  );
   assert.match(textOut(await call(sessions, { action: "read" })), /requires `target`/);
   assert.deepEqual(starts, [{ fork: false, text: "hi", title: "t" }, { fork: true }]);
   assert.deepEqual(
     writes.map(({ wake, target, text }) => ({ wake, target, text })),
-    [{ wake: undefined, target: "peer", text: "fyi" }],
+    [{ wake: true, target: "peer", text: "fyi" }],
   );
 });
 

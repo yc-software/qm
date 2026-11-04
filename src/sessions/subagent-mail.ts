@@ -15,6 +15,7 @@ import { type Item, proseText } from "./items.ts";
 import {
   ANCESTOR_STOP,
   assertAudienceCompatible,
+  isSidebarSession,
   isSubagentThreadRef,
   PARENT_INTERRUPT,
   requiresDelegation,
@@ -111,11 +112,11 @@ const messageWake = (id: string, peer = false): ParentWake => ({
   displayText: peer ? PEER_DISPLAY : MESSAGE_DISPLAY,
 });
 
-const topLevel = (session: Session): boolean =>
-  !session.parentSessionId && !isSubagentThreadRef(session.threadRef) && !session.threadRef.startsWith("swarm:");
-
 export const isPeerMessage = (sender: Session, recipient: Session): boolean =>
-  sender.id !== recipient.id && sender.scopeId === recipient.scopeId && topLevel(sender) && topLevel(recipient);
+  sender.id !== recipient.id &&
+  sender.scopeId === recipient.scopeId &&
+  isSidebarSession(sender) &&
+  isSidebarSession(recipient);
 
 async function delegatingRun(
   runs: ParentMailDeps["runs"],
@@ -362,7 +363,7 @@ async function wakeParentForMail(
   const runs = { get: deps.runs.get };
   for (const message of await deps.mailbox.wakesFor(parent.id)) {
     const child = await deps.sessions.get(message.senderId);
-    const peer = message.peerDepth !== undefined && !!child && isPeerMessage(child, parent);
+    const peer = !!child && isPeerMessage(child, parent);
     const wake = messageWake(message.id, peer);
     const existing = await deps.runs.getByDedupKey(wake.dedupKey);
     const outcome =
@@ -377,7 +378,7 @@ async function wakeParentForMail(
               actor: message.actor,
               conversation: { audience: message.audience },
               ...(message.delegatingRunId ? { delegatingRunId: message.delegatingRunId } : {}),
-              ...(peer ? { peerDepth: message.peerDepth } : {}),
+              ...(peer ? { peerDepth: message.peerDepth ?? 1 } : {}),
             };
             const turn = await parentTurn(deps, child, parent, source, message.text, wake.displayText).catch(
               swallowAs("sessions: unread mail wake", undefined),
