@@ -1,5 +1,3 @@
-import { boundTenant } from "../../tenants/context.ts";
-import { tenantAllowedEmails, tenantSettings, tenantEnv } from "../../tenants/settings.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { createHash } from "node:crypto";
 import { verifySignedPayload } from "../../auth/signed-token.ts";
@@ -63,11 +61,9 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   await deps.identity.refresh();
   if (deps.identity.deactivationSource(email) === "manual") return sendJson(res, 200, { allowed: false });
   const member = deps.identity.externalMember(email);
-  const tenantList = tenantAllowedEmails();
-  const configured = tenantList
-    ? tenantList.includes(email)
-    : deps.emailAuthPrincipals?.includes(email) ||
-      Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`));
+  const configured =
+    deps.emailAuthPrincipals?.includes(email) ||
+    Boolean(deps.emailAuthDomain && email.endsWith(`@${deps.emailAuthDomain}`));
   const allowed =
     deps.identity.classify(email).type === "internal" && (member ? externalMemberActive(member) : configured);
   if (allowed) return sendJson(res, 200, { allowed: true, expiresAt: member?.expiresAt });
@@ -85,23 +81,6 @@ async function emailAllowed(ctx: ApiCtx): Promise<void> {
   );
   const appOnly = allowedOwners.some(Boolean);
   return sendJson(res, 200, appOnly ? { allowed: true, appOnly: true } : { allowed: false });
-}
-
-async function signInSettings(ctx: ApiCtx): Promise<void> {
-  const settings = await tenantSettings();
-  const allowedEmails = tenantAllowedEmails();
-  const clientSecret = tenantEnv("AUTH_CLIENT_SECRET");
-  const trustedOidc = tenantEnv("PORTAL_TRUSTED_OIDC");
-  const trustedClientSecret = tenantEnv("PORTAL_TRUSTED_OIDC_CLIENT_SECRET");
-  const publicUrl = tenantEnv("AWS_PUBLIC_ORIGIN_URL") ?? tenantEnv("PUBLIC_API_URL");
-  return sendJson(ctx.res, 200, {
-    ...(allowedEmails ? { allowedEmails } : {}),
-    ...(settings.oidcClient ? { oidcClient: settings.oidcClient } : {}),
-    ...(clientSecret ? { clientSecret } : {}),
-    ...(trustedOidc ? { trustedOidc } : {}),
-    ...(trustedClientSecret ? { trustedClientSecret } : {}),
-    ...(publicUrl ? { publicUrl } : {}),
-  });
 }
 
 async function brokerSession(ctx: ApiCtx): Promise<void> {
@@ -154,7 +133,6 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
     !isObj(claims) ||
     claims.purpose !== "trusted-entry-admin" ||
     claims.org !== orgScope() ||
-    claims.tenant !== boundTenant() ||
     typeof claims.issuer !== "string" ||
     typeof claims.subject !== "string" ||
     !claims.subject ||
@@ -244,5 +222,4 @@ export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/auth/broker/sessions/revoke", actor: "person", auth: "source", handle: brokerSession },
   { method: "POST", path: "/v1/auth/broker/claim", actor: "system", auth: "source", handle: claimBrokerNonce },
   { method: "GET", path: "/v1/auth/broker/email-allowed", auth: "source", handle: emailAllowed },
-  { method: "GET", path: "/v1/auth/broker/sign-in-settings", actor: "system", auth: "source", handle: signInSettings },
 ];

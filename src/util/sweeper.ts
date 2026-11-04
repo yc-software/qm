@@ -1,4 +1,3 @@
-import { withoutTenant } from "../tenants/context.ts";
 import { reportFailure, reportFailureAs } from "./errors.ts";
 
 export interface Sweeper {
@@ -17,10 +16,7 @@ export function createSweeper(
   let stopping: Promise<void> | null = null;
   const sweep = (): void => {
     try {
-      const work = Promise.resolve(withoutTenant(fn)).then(
-        () => {},
-        reportFailureAs(`${label}: sweep failed`, undefined),
-      );
+      const work = Promise.resolve(fn()).then(() => {}, reportFailureAs(`${label}: sweep failed`, undefined));
       pending.add(work);
       void work.finally(() => pending.delete(work));
     } catch (e) {

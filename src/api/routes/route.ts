@@ -31,7 +31,7 @@ export interface ApiCtx extends BaseCtx {
   actor?: PortalIdentity | null;
 }
 
-export type RouteAuth = "either" | "source" | "operator" | "public" | { aud: string; bearer?: true };
+export type RouteAuth = "either" | "source" | "public" | { aud: string; bearer?: true };
 
 export type RouteActor = "person" | "system" | `${"query" | "body"}.${string}`;
 
@@ -44,7 +44,6 @@ export interface AdminAccess {
 export type Route<C extends BaseCtx = ApiCtx> = {
   handle: (ctx: C) => void | Promise<void>;
   auth: RouteAuth;
-  tenant?: "none" | "row";
   actor?: RouteActor;
   admin?: AdminAccess;
   allowedInStrict?: true;

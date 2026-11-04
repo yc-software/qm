@@ -3,7 +3,6 @@ import { createPgPool, withPgTransaction, type PgMigrationDefinition } from "../
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
 import { msOf } from "../sessions/items.ts";
-import { TENANCY, tenantPolicies } from "../tenants/migrations.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 
 type UserSource = "turn" | "invite" | "admin";
@@ -47,71 +46,56 @@ export interface UserStore extends UserLinkStore {
 export const fold = (expr: string): string =>
   `CASE WHEN position('@' IN btrim(${expr})) > 0 THEN lower(btrim(${expr})) ELSE btrim(${expr}) END`;
 
-const person = (expr: string, tenant = "qm_bound_tenant()"): string =>
-  `coalesce((SELECT l.user_id FROM user_links l WHERE l.tenant_id = ${tenant} AND l.alias_id = ${expr}), ${expr})`;
+const person = (expr: string): string =>
+  `coalesce((SELECT l.user_id FROM user_links l WHERE l.alias_id = ${expr}), ${expr})`;
 
 const ts = (param: string): string => `to_timestamp(${param}::double precision / 1000)`;
 
 export const USER_MIGRATIONS: PgMigrationDefinition[] = [
-  ...TENANCY,
   {
     id: "users/0001",
     statements: [
       `CREATE TABLE IF NOT EXISTS users(
-        tenant_id     UUID NOT NULL,
-        id            TEXT NOT NULL CHECK (id <> ''),
+        id            TEXT PRIMARY KEY CHECK (id <> ''),
         first_seen_at TIMESTAMPTZ,
         source        TEXT CHECK (source IN ('turn', 'invite', 'admin')),
         offboarded_at TIMESTAMPTZ,
         offboarded_by TEXT,
-        PRIMARY KEY (tenant_id, id),
         CHECK ((first_seen_at IS NULL) = (source IS NULL)),
         CHECK ((offboarded_at IS NULL) = (offboarded_by IS NULL))
       )`,
-      ...tenantPolicies("users"),
       `CREATE TABLE IF NOT EXISTS user_links(
-        tenant_id  UUID NOT NULL,
-        alias_id   TEXT NOT NULL CHECK (alias_id <> ''),
-        user_id    TEXT NOT NULL,
+        alias_id   TEXT PRIMARY KEY CHECK (alias_id <> ''),
+        user_id    TEXT NOT NULL REFERENCES users(id),
         evidence   TEXT NOT NULL,
         linked_by  TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL,
-        PRIMARY KEY (tenant_id, alias_id),
-        FOREIGN KEY (tenant_id, user_id) REFERENCES users(tenant_id, id),
         CHECK (alias_id <> user_id)
       )`,
-      ...tenantPolicies("user_links"),
-      `CREATE INDEX IF NOT EXISTS user_links_user_id ON user_links(tenant_id, user_id)`,
+      `CREATE INDEX IF NOT EXISTS user_links_user_id ON user_links(user_id)`,
     ],
   },
   {
     id: "users/0002-copy-principal-links",
     statements: [
       `DO $$
-       DECLARE skipped bigint; skipped_ids text; tenant text;
+       DECLARE skipped bigint; skipped_ids text;
        BEGIN
          IF to_regclass('principal_links') IS NULL OR to_regclass('users') IS NULL THEN RETURN; END IF;
-         tenant := CASE WHEN EXISTS (SELECT 1 FROM pg_attribute
-                                      WHERE attrelid = 'principal_links'::regclass AND attname = 'tenant_id')
-                        THEN 'tenant_id' ELSE 'qm_tenant_id()' END;
-         EXECUTE format($sql$
-           CREATE TEMP TABLE legacy_links ON COMMIT DROP AS
-           SELECT %s AS tenant_id, id, json FROM principal_links
-         $sql$, tenant);
-         INSERT INTO users(tenant_id, id)
-           SELECT DISTINCT tenant_id, ${fold("json->>'canonicalId'")} FROM legacy_links
+         INSERT INTO users(id)
+           SELECT DISTINCT ${fold("json->>'canonicalId'")} FROM principal_links
           WHERE coalesce(btrim(json->>'canonicalId'), '') <> ''
-         ON CONFLICT (tenant_id, id) DO NOTHING;
-         INSERT INTO user_links(tenant_id, alias_id, user_id, evidence, linked_by, created_at)
-           SELECT tenant_id, ${fold("id")}, ${fold("json->>'canonicalId'")}, coalesce(json->>'evidence', ''),
+         ON CONFLICT (id) DO NOTHING;
+         INSERT INTO user_links(alias_id, user_id, evidence, linked_by, created_at)
+           SELECT ${fold("id")}, ${fold("json->>'canonicalId'")}, coalesce(json->>'evidence', ''),
                   coalesce(json->>'linkedBy', ''), to_timestamp(coalesce((json->>'createdAt')::double precision, 0) / 1000)
-             FROM legacy_links
+             FROM principal_links
             WHERE coalesce(btrim(json->>'canonicalId'), '') <> ''
               AND ${fold("id")} <> ${fold("json->>'canonicalId'")}
-         ON CONFLICT (tenant_id, alias_id) DO NOTHING;
-         SELECT count(*), string_agg(p.id, ', ') INTO skipped, skipped_ids FROM legacy_links p
-          WHERE NOT EXISTS (SELECT 1 FROM user_links l WHERE l.tenant_id = p.tenant_id
-                              AND l.alias_id = ${fold("p.id")} AND l.user_id = ${fold("p.json->>'canonicalId'")});
+         ON CONFLICT (alias_id) DO NOTHING;
+         SELECT count(*), string_agg(p.id, ', ') INTO skipped, skipped_ids FROM principal_links p
+          WHERE NOT EXISTS (SELECT 1 FROM user_links l
+                             WHERE l.alias_id = ${fold("p.id")} AND l.user_id = ${fold("p.json->>'canonicalId'")});
          IF skipped > 0 THEN
            RAISE EXCEPTION 'users/0002: % principal_links rows cannot be copied (empty canonical, self-link or collision): %',
              skipped, skipped_ids;
@@ -130,7 +114,7 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
        BEGIN
          IF to_regclass('users') IS NULL THEN RETURN; END IF;
          CREATE TEMP TABLE turn_authors ON COMMIT DROP AS
-         SELECT e.tenant_id, ${fold("e.author")} AS author, MIN(e.created_at) AS at
+         SELECT ${fold("e.author")} AS author, MIN(e.created_at) AS at
            FROM items e
            JOIN sessions s ON s.id = e.session_id
           WHERE e.author IS NOT NULL AND e.author NOT LIKE 'system:%'
@@ -139,29 +123,28 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
             AND s.origin = 'conversation' AND s.parent_session_id IS NULL
             AND coalesce(s.spawn_meta::jsonb -> 'surfaceOrigin' ->> 'audience', '') <> 'external'
             AND coalesce(s.spawn_meta::jsonb -> 'origin' ->> 'kind', '') <> 'automation'
-          GROUP BY 1, 2;
+          GROUP BY 1;
          IF to_regclass('directory_members') IS NOT NULL THEN
            CREATE TEMP TABLE slack_authors ON COMMIT DROP AS
-           SELECT DISTINCT ON (a.tenant_id, a.author) a.tenant_id, a.author,
-                  ${person(fold("d.principal_id"), "a.tenant_id")} AS user_id
+           SELECT DISTINCT ON (a.author) a.author, ${person(fold("d.principal_id"))} AS user_id
              FROM turn_authors a
-             JOIN directory_members d ON d.tenant_id = a.tenant_id AND d.slack_id = a.author AND d.principal_id <> a.author
-            WHERE NOT EXISTS (SELECT 1 FROM user_links l WHERE l.tenant_id = a.tenant_id AND l.alias_id = a.author)
-              AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.tenant_id = a.tenant_id AND l.user_id = a.author)
-            ORDER BY a.tenant_id, a.author, d.principal_id;
-           INSERT INTO users(tenant_id, id)
-             SELECT DISTINCT tenant_id, user_id FROM slack_authors WHERE user_id <> author
-           ON CONFLICT (tenant_id, id) DO NOTHING;
-           INSERT INTO user_links(tenant_id, alias_id, user_id, evidence, linked_by, created_at)
-             SELECT tenant_id, author, user_id, 'slack directory: slack_id→principal_id', 'migration', now()
+             JOIN directory_members d ON d.slack_id = a.author AND d.principal_id <> a.author
+            WHERE NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = a.author)
+              AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.user_id = a.author)
+            ORDER BY a.author, d.principal_id;
+           INSERT INTO users(id)
+             SELECT DISTINCT user_id FROM slack_authors WHERE user_id <> author
+           ON CONFLICT (id) DO NOTHING;
+           INSERT INTO user_links(alias_id, user_id, evidence, linked_by, created_at)
+             SELECT author, user_id, 'slack directory: slack_id→principal_id', 'migration', now()
                FROM slack_authors WHERE user_id <> author
-           ON CONFLICT (tenant_id, alias_id) DO NOTHING;
+           ON CONFLICT (alias_id) DO NOTHING;
          END IF;
-         INSERT INTO users AS u(tenant_id, id, first_seen_at, source)
-         SELECT a.tenant_id, ${person("a.author", "a.tenant_id")}, MIN(a.at), 'turn'
+         INSERT INTO users AS u(id, first_seen_at, source)
+         SELECT ${person("a.author")}, MIN(a.at), 'turn'
            FROM turn_authors a
-          GROUP BY 1, 2
-         ON CONFLICT (tenant_id, id) DO UPDATE SET first_seen_at = EXCLUDED.first_seen_at, source = EXCLUDED.source
+          GROUP BY 1
+         ON CONFLICT (id) DO UPDATE SET first_seen_at = EXCLUDED.first_seen_at, source = EXCLUDED.source
            WHERE u.first_seen_at IS NULL;
        END $$`,
     ],
@@ -173,22 +156,22 @@ export const USER_MIGRATIONS: PgMigrationDefinition[] = [
        BEGIN
          IF to_regclass('users') IS NULL THEN RETURN; END IF;
          IF to_regclass('admin_grants') IS NOT NULL THEN
-           INSERT INTO users AS u(tenant_id, id, first_seen_at, source)
-           SELECT g.tenant_id, ${person(fold("g.principal_id"), "g.tenant_id")},
+           INSERT INTO users AS u(id, first_seen_at, source)
+           SELECT ${person(fold("g.principal_id"))},
                   MIN(CASE WHEN coalesce(g.created_at, 0) > 0 THEN ${ts("g.created_at")} ELSE now() END), 'admin'
              FROM admin_grants g
-            GROUP BY 1, 2
-           ON CONFLICT (tenant_id, id) DO UPDATE SET first_seen_at = EXCLUDED.first_seen_at, source = EXCLUDED.source
+            GROUP BY 1
+           ON CONFLICT (id) DO UPDATE SET first_seen_at = EXCLUDED.first_seen_at, source = EXCLUDED.source
              WHERE u.first_seen_at IS NULL;
          END IF;
          IF to_regclass('external_members') IS NOT NULL THEN
-           INSERT INTO users AS u(tenant_id, id, first_seen_at, source)
-           SELECT m.tenant_id, ${person(fold("m.json->>'email'"), "m.tenant_id")},
+           INSERT INTO users AS u(id, first_seen_at, source)
+           SELECT ${person(fold("m.json->>'email'"))},
                   MIN(${ts("(m.json->>'createdAt')::bigint")}), 'invite'
              FROM external_members m
             WHERE m.json->>'kind' = 'teammate' AND coalesce(m.json->>'email', '') <> ''
-            GROUP BY 1, 2
-           ON CONFLICT (tenant_id, id) DO UPDATE SET first_seen_at = EXCLUDED.first_seen_at, source = EXCLUDED.source
+            GROUP BY 1
+           ON CONFLICT (id) DO UPDATE SET first_seen_at = EXCLUDED.first_seen_at, source = EXCLUDED.source
              WHERE u.first_seen_at IS NULL;
          END IF;
        END $$`,
@@ -222,7 +205,7 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
   await client.query(`LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`);
   const existing = await client.query(`SELECT ${LINK_COLUMNS} FROM user_links WHERE alias_id = $1`, [link.principalId]);
   if (existing.rows[0]) return toLink(existing.rows[0]);
-  await client.query(`INSERT INTO users(id) VALUES ($1) ON CONFLICT (tenant_id, id) DO NOTHING`, [link.canonicalId]);
+  await client.query(`INSERT INTO users(id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, [link.canonicalId]);
   await client.query(
     `UPDATE users c SET
        first_seen_at = least(c.first_seen_at, a.first_seen_at),
@@ -257,7 +240,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     async record({ id, source, at }) {
       const rows = await q(
         `INSERT INTO users AS u(id, first_seen_at, source) VALUES (${person("$1")}, ${ts("$2")}, $3)
-         ON CONFLICT (tenant_id, id) DO UPDATE SET first_seen_at = EXCLUDED.first_seen_at, source = EXCLUDED.source
+         ON CONFLICT (id) DO UPDATE SET first_seen_at = EXCLUDED.first_seen_at, source = EXCLUDED.source
            WHERE u.first_seen_at IS NULL
          RETURNING id`,
         [foldPrincipalId(id), at, source],
@@ -267,7 +250,7 @@ export function createPostgresUserStore(connectionString: string): UserStore {
     async markOffboarded(id, by) {
       const rows = await q(
         `INSERT INTO users AS u(id, offboarded_at, offboarded_by) VALUES (${person("$1")}, now(), $2)
-         ON CONFLICT (tenant_id, id) DO UPDATE SET offboarded_at = coalesce(u.offboarded_at, EXCLUDED.offboarded_at),
+         ON CONFLICT (id) DO UPDATE SET offboarded_at = coalesce(u.offboarded_at, EXCLUDED.offboarded_at),
            offboarded_by = CASE WHEN u.offboarded_at IS NULL THEN EXCLUDED.offboarded_by ELSE u.offboarded_by END
          RETURNING ${COLUMNS}`,
         [foldPrincipalId(id), by],

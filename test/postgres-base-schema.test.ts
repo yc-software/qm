@@ -3,9 +3,8 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
+import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { RELEASED_SESSION_MIGRATIONS } from "./support/tenant-seed.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the base schema tests";
@@ -25,21 +24,6 @@ async function migrate(url: string): Promise<void> {
   const runs = createPostgresRunStore(url);
   try {
     await migrateRegisteredPgSchemas(url);
-  } finally {
-    await runs.close();
-  }
-}
-
-const RELEASED = new Set([...RELEASED_SESSION_MIGRATIONS.map(({ id }) => id), "runs/store/0011-base-schema"]);
-
-async function migrateReleased(url: string, admin: pg.Pool): Promise<void> {
-  createPostgresSessionStore(url);
-  const runs = createPostgresRunStore(url);
-  try {
-    await applyPgMigrations(
-      admin,
-      registeredPgMigrations(url).filter(({ id }) => RELEASED.has(id)),
-    );
   } finally {
     await runs.close();
   }
@@ -90,7 +74,7 @@ test("a fully migrated database skips the base schema and drops only the retired
     await admin.query(
       `INSERT INTO participants VALUES ('s1', 'member', 5, NULL, 3, NULL), ('s1', 'removed', 5, 9, 3, 7)`,
     );
-    await migrateReleased(url, admin);
+    await migrate(url);
     assert.deepEqual(
       (await admin.query("SELECT principal_id FROM participants")).rows.map((row) => row.principal_id),
       ["member"],

@@ -2,7 +2,6 @@ import "./auto-fake-sprites.ts";
 import type { AddressInfo } from "node:net";
 import { buildApp, serverDeps } from "../../src/wiring.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
-import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { testConfig } from "./test-config.ts";
 
 const config = testConfig({
@@ -13,7 +12,6 @@ const config = testConfig({
   openaiApiKey: "local-test-key",
 });
 const built = buildApp(config, { modelCredentialFetch: async () => Response.json({ data: [] }) });
-await migrateRegisteredPgSchemas(config.databaseUrl);
 const server = createInsecureTestServer(built.app, serverDeps(config, built));
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 process.send?.({ base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` });

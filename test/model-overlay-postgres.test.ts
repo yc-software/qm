@@ -7,7 +7,6 @@ import pg from "pg";
 import { test } from "node:test";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
-import { seedInstallTenant } from "./support/tenant-seed.ts";
 
 const databaseUrl = process.env.MODEL_OVERLAY_TEST_DATABASE_URL;
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -58,7 +57,6 @@ test(
     await pool.query(`CREATE SCHEMA ${schema}`);
     const url = new URL(databaseUrl);
     url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
-    await seedInstallTenant(url.toString());
     const isolatedDatabaseUrl = url.toString();
     const factory = createPostgresMapFactory(isolatedDatabaseUrl);
     const processes: ChildProcess[] = [];

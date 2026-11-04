@@ -11,7 +11,6 @@ import {
   resolveModel,
 } from "./pi-models.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
-import { tenantEnv } from "../tenants/settings.ts";
 import { baseModelProviders, configuredModel, type Config } from "../config.ts";
 import { swallow } from "../util/errors.ts";
 
@@ -47,12 +46,6 @@ export function resolveConfiguredModelId(configured: string | undefined, default
     swallow("pi: configured model id not in registry, falling back to default", new Error(candidate));
   }
   return DEFAULT_AGENT_MODEL_ID;
-}
-
-function tenantProviderKeys(keys: ProviderKeys): ProviderKeys {
-  const anthropic = tenantEnv("ANTHROPIC_API_KEY") ?? keys.anthropic;
-  const openrouter = tenantEnv("OPENROUTER_API_KEY") ?? keys.openrouter;
-  return { ...keys, ...(anthropic ? { anthropic } : {}), ...(openrouter ? { openrouter } : {}) };
 }
 
 export interface ModelRouteOptions {
@@ -105,7 +98,7 @@ export function createModelRoutes(opts: ModelRouteOptions = {}): ModelRoutes {
         ...(opts.openrouterApiKey ? { openrouter: opts.openrouterApiKey } : {}),
       };
   const companyKeys = async (): Promise<ProviderKeys> => ({
-    ...tenantProviderKeys(staticKeys),
+    ...staticKeys,
     ...(await opts.resolveProviderKeys?.()),
   });
   const companyServedId = (id: string) => (opts.companyModelId ? opts.companyModelId(id) : id);

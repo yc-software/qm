@@ -34,19 +34,8 @@ export interface SessionClaims {
   auth?: number;
   anon?: boolean;
   appOnly?: boolean;
-  t?: string;
   iat: number;
   exp: number;
-}
-
-export interface SessionTenant {
-  bound: string | undefined;
-  legacy: boolean;
-}
-
-export function servesTenant(session: SessionClaims, tenant: SessionTenant): boolean {
-  if (session.t === undefined) return tenant.bound === undefined || tenant.legacy;
-  return session.t === tenant.bound;
 }
 
 export interface ImpersonationClaims {
@@ -87,7 +76,6 @@ export function openSession(
   )
     return null;
   if (p.appOnly !== undefined && typeof p.appOnly !== "boolean") return null;
-  if (p.t !== undefined && typeof p.t !== "string") return null;
   if (expectedOrg !== undefined && p.org !== expectedOrg) return null;
   if (now >= p.exp * 1000) return null;
   const authenticatedAt = typeof p.auth === "number" ? p.auth : p.iat;

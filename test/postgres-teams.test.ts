@@ -16,7 +16,7 @@ beforeEach(async () => {
   await p.end();
 });
 
-const store = (on = true) => createPostgresTeamStore(URL!, { enabled: async () => on }, () => org);
+const store = (on = true) => createPostgresTeamStore(URL!, { enabled: async () => on }, org);
 
 test("pg teams: members are rows, edited one at a time, looked up by person", { skip }, async () => {
   const teams = store();

@@ -39,7 +39,6 @@ export interface SkillPackStore {
   create(input: NewSkillPack): Promise<SkillPack>;
   get(id: string): Promise<SkillPack | null>;
   list(): Promise<SkillPack[]>;
-  acrossTenants(): Promise<Array<{ tenantId: string; id: string }>>;
   update(id: string, patch: Partial<Omit<SkillPack, "id" | "createdAt">>): Promise<SkillPack>;
   remove(id: string): Promise<void>;
   recordImport(id: string, result: ImportRecord): Promise<void>;
@@ -56,7 +55,6 @@ export function createSkillPackStore(opts: { backing: DurableMap<SkillPack>; now
     },
     get: (id) => packs.get(id),
     list: () => packs.all(),
-    acrossTenants: async () => (await packs.acrossTenants()).map(({ tenantId, id }) => ({ tenantId, id })),
     async update(id, patch) {
       const merged = await packs.merge(id, patch);
       if (!merged) throw new Error(`unknown skill pack: ${id}`);

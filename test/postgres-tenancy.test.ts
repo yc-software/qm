@@ -4,10 +4,10 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { DIRECTORY_MIGRATIONS } from "../src/directory/postgres-directory-store.ts";
 import { applyPgMigrations, createPgPool, definePgMigration, withPgTransaction } from "../src/persistence/pg-pool.ts";
-import { SESSION_MIGRATIONS } from "../src/sessions/session-schema.ts";
+import { SESSION_MIGRATIONS, TENANT_BACKFILL } from "../src/sessions/session-schema.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
+import { TENANCY_BASE } from "../src/tenants/migrations.ts";
 import { testDatabaseUrl, testMigratedDatabaseUrl } from "./support/test-database.ts";
-import { RELEASED_SESSION_MIGRATIONS } from "./support/tenant-seed.ts";
 
 const skip = process.env.DATABASE_URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy tests";
 
@@ -119,51 +119,41 @@ test("an open transaction refuses work for a different tenant until it has ended
   await withoutTenant(() =>
     withPgTransaction(app, async () => assert.throws(() => withTenant(a, () => 0), /already open/)),
   );
-  for (const fails of [false, true]) {
-    const outcomes: string[] = [];
-    let settled = false;
-    let spawned: Promise<string[]> | undefined;
-    const watch = (resolve: (seen: string[]) => void) => {
-      try {
-        withTenant(b, () => outcomes.push("bound"));
-      } catch {
-        outcomes.push("refused");
-      }
-      if (settled) resolve(outcomes);
-      else setImmediate(watch, resolve);
-    };
-    const transaction = withTenant(a, () =>
+  const outcomes: string[] = [];
+  let settled = false;
+  let spawned: Promise<string[]> | undefined;
+  const watch = (resolve: (seen: string[]) => void) => {
+    try {
+      withTenant(b, () => outcomes.push("bound"));
+    } catch {
+      outcomes.push("refused");
+    }
+    if (settled) resolve(outcomes);
+    else setImmediate(watch, resolve);
+  };
+  await assert.rejects(
+    withTenant(a, () =>
       withPgTransaction(app, async () => {
         spawned = new Promise(watch);
-        if (fails) throw new Error("body failed");
+        throw new Error("body failed");
       }),
-    );
-    try {
-      if (fails) await assert.rejects(transaction, /body failed/);
-      else await transaction;
-    } finally {
-      settled = true;
-    }
-    const seen = await spawned!;
-    assert.equal(seen.pop(), "bound");
-    assert.deepEqual(new Set(seen), new Set(["refused"]));
-  }
+    ),
+    /body failed/,
+  );
+  settled = true;
+  const seen = await spawned!;
+  assert.equal(seen.pop(), "bound");
+  assert.deepEqual(new Set(seen), new Set(["refused"]));
 });
 
-test("upgrading a released single-tenant database keeps its tenant and stamps its rows", { skip }, async () => {
+test("upgrading copies the existing tenant into tenants", { skip }, async () => {
   const pool = new pg.Pool({ connectionString: testDatabaseUrl(), max: 1 });
   try {
-    await pool.query("DELETE FROM tenants");
-    await applyPgMigrations(pool, RELEASED_SESSION_MIGRATIONS.map(definePgMigration));
+    const previous = SESSION_MIGRATIONS.filter((m) => m !== TENANCY_BASE && m !== TENANT_BACKFILL);
+    await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...previous].map(definePgMigration));
     const old = (await pool.query("SELECT qm_tenant_id()::text AS id")).rows[0].id;
-    await pool.query(
-      "INSERT INTO sessions (id, type, scope_id, thread_ref, created_at) VALUES ('s1', 'chat', 'org:o', 's1', 1)",
-    );
     await applyPgMigrations(pool, [...DIRECTORY_MIGRATIONS, ...SESSION_MIGRATIONS].map(definePgMigration));
     assert.deepEqual((await pool.query("SELECT id::text FROM tenants")).rows, [{ id: old }]);
-    assert.deepEqual((await pool.query("SELECT id, tenant_id::text FROM sessions")).rows, [
-      { id: "s1", tenant_id: old },
-    ]);
   } finally {
     await pool.end();
   }

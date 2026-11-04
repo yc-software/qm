@@ -13,7 +13,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
-import { portalSession, type ViewerTenant } from "../src/deploy/viewer-session.ts";
+import { portalSession } from "../src/deploy/viewer-session.ts";
 import { scopeId } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -21,8 +21,6 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-
-const UNTENANTED: ViewerTenant = { bound: undefined, legacy: true };
 
 let externalSharing = true;
 const externalSharingOn = { enabled: async () => externalSharing } as unknown as FeatureFlagStore;
@@ -50,38 +48,34 @@ function mintPortalSession(sub: string, expInSeconds = 3600, secret = SESSION_SE
 
 test("portalSession: verifies, and rejects tampering, expiry, wrong kind, wrong secret", () => {
   const good = mintPortalSession("alice@example.com");
-  assert.deepEqual(portalSession(`portal_session=${good}`, SESSION_SECRET, UNTENANTED), {
+  assert.deepEqual(portalSession(`portal_session=${good}`, SESSION_SECRET), {
     sub: "alice@example.com",
     appOnly: false,
   });
-  assert.deepEqual(portalSession(`other=1; portal_session=${good}; x=2`, SESSION_SECRET, UNTENANTED), {
+  assert.deepEqual(portalSession(`other=1; portal_session=${good}; x=2`, SESSION_SECRET), {
     sub: "alice@example.com",
     appOnly: false,
   });
-  assert.deepEqual(portalSession(`portal_session=${good}x`, SESSION_SECRET, UNTENANTED), null, "tampered signature");
+  assert.deepEqual(portalSession(`portal_session=${good}x`, SESSION_SECRET), null, "tampered signature");
   assert.deepEqual(
-    portalSession(`portal_session=junk; portal_session=${good}`, SESSION_SECRET, UNTENANTED),
+    portalSession(`portal_session=junk; portal_session=${good}`, SESSION_SECRET),
     { sub: "alice@example.com", appOnly: false },
     "an app's junk same-named cookie cannot shadow the real session",
   );
-  assert.deepEqual(portalSession(`portal_session=${good}`, "other-secret", UNTENANTED), null, "wrong secret");
+  assert.deepEqual(portalSession(`portal_session=${good}`, "other-secret"), null, "wrong secret");
   assert.deepEqual(
-    portalSession(`portal_session=${mintPortalSession("alice@example.com", -10)}`, SESSION_SECRET, UNTENANTED),
+    portalSession(`portal_session=${mintPortalSession("alice@example.com", -10)}`, SESSION_SECRET),
     null,
     "expired",
   );
-  assert.deepEqual(portalSession(undefined, SESSION_SECRET, UNTENANTED), null);
-  assert.deepEqual(portalSession("portal_session=", SESSION_SECRET, UNTENANTED), null);
+  assert.deepEqual(portalSession(undefined, SESSION_SECRET), null);
+  assert.deepEqual(portalSession("portal_session=", SESSION_SECRET), null);
   const key = createHmac("sha256", SESSION_SECRET).update("portal.session.v1").digest();
   const body = Buffer.from(
     JSON.stringify({ k: "impersonate", sub: "eve", exp: Math.floor(Date.now() / 1000) + 60 }),
   ).toString("base64url");
   const sig = createHmac("sha256", key).update(body).digest("base64url");
-  assert.deepEqual(
-    portalSession(`portal_session=${body}.${sig}`, SESSION_SECRET, UNTENANTED),
-    null,
-    "non-session claims",
-  );
+  assert.deepEqual(portalSession(`portal_session=${body}.${sig}`, SESSION_SECRET), null, "non-session claims");
 });
 
 test("forwarded app hosts fail closed before core routes when gateway configuration is absent", async () => {
