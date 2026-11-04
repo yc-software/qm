@@ -1,7 +1,7 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { unitVector } from "../model/embeddings.ts";
 import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
-import { claimAcrossTenants, rowTenant } from "../tenants/claim.ts";
+import { forEachTenant, rowTenant } from "../tenants/claim.ts";
 import { tenantTables } from "../tenants/migrations.ts";
 
 export interface MemoryVector {
@@ -37,6 +37,7 @@ export interface MemoryVectorStore {
     afterId?: string,
   ): Promise<Array<{ tenantId?: string; scope: string; factId: string; hash: string; text: string }>>;
   prune(model: string, limit: number, dimensions?: number, signal?: AbortSignal): Promise<number>;
+  eachTenant(fn: () => Promise<unknown>): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -131,8 +132,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       );
     },
     async missing(model, limit, dimensions, signal, afterId) {
-      const { rows } = await claimAcrossTenants(
-        db,
+      const { rows } = await db.query(
         `SELECT f.tenant_id, f.scope_id, f.id, f.text, f.text_hash AS hash
          FROM memory_facts f LEFT JOIN memory_fact_vectors v
            ON v.tenant_id = f.tenant_id AND v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
@@ -152,8 +152,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       }));
     },
     async prune(model, limit, dimensions, signal) {
-      const { rowCount } = await claimAcrossTenants(
-        db,
+      const { rowCount } = await db.query(
         `DELETE FROM memory_fact_vectors v USING (
           SELECT s.tenant_id, s.scope_id, s.model, s.fact_id FROM memory_fact_vectors s
           WHERE s.model <> $1 OR ($3::integer IS NOT NULL AND s.dimensions <> $3) OR NOT EXISTS (
@@ -169,6 +168,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       );
       return rowCount;
     },
+    eachTenant: (fn) => forEachTenant(db, fn),
     close: () => db.close(),
   };
 }

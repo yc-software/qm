@@ -25,6 +25,16 @@ ALTER DEFAULT PRIVILEGES FOR ROLE <owner> IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO qm_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE <owner> IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO qm_app;
+GRANT USAGE ON SCHEMA pgboss TO qm_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA pgboss TO qm_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA pgboss TO qm_app;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA pgboss TO qm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE <owner> IN SCHEMA pgboss
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO qm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE <owner> IN SCHEMA pgboss
+  GRANT USAGE, SELECT ON SEQUENCES TO qm_app;
 ```
+
+The cron queue lives in the `pgboss` schema. `migrate-main` creates that schema and the cron queue as the owner, so run it before granting; core under `qm_app` uses the queue without running pg-boss DDL and refuses to start if the queue is missing.
 
 `tenants` and `tenant_hosts` carry row level security too: `qm_app` sees only its bound tenant's row and hosts, and cannot write either table. Operator changes to tenants, hosts and settings go through the owner login. Run migrations as the owner before starting core under `qm_app`. Core under `qm_app` checks that every migration it knows has been applied and refuses to start otherwise; it never runs DDL. Background work that claims rows across tenants reads through the owner login (`DATABASE_OWNER_URL`) and binds each row's tenant before acting on it.
