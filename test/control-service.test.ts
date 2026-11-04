@@ -775,6 +775,14 @@ test("a cron delivering into a conversation is readable there without its task, 
     status: "ok",
     reply: "posted to the owner's DM before the move",
   });
+  await built.crons.recordFire(id, {
+    fireKey: "f2",
+    threadRef: "slack:G7",
+    firedAt: Date.now() - 500,
+    endedAt: Date.now(),
+    status: "silent",
+    note: "nothing new from the private inbox",
+  });
 
   const listed = await control.listCrons(inGroup("U3"));
   assert.deepEqual(
@@ -784,12 +792,13 @@ test("a cron delivering into a conversation is readable there without its task, 
   const got = await control.getCron(id, inGroup("U3"));
   assert.ok(got.ok);
   assert.equal(got.cron.action, undefined);
+  assert.equal(got.cron.sessionRef, undefined);
   const runs = await control.getCronRuns(id, {}, inGroup("U3"));
   assert.ok(runs.ok);
-  assert.deepEqual(
-    runs.runs.map((r) => [r.status, r.reply]),
-    [["ok", undefined]],
-  );
+  assert.deepEqual(runs.runs.map((r) => [r.status, r.reply, r.note]).toSorted(), [
+    ["ok", undefined, undefined],
+    ["silent", undefined, undefined],
+  ]);
   assert.equal(runs.cron.lastFireNote, undefined);
 
   assert.equal((await control.patchCron(id, { title: "x" }, inGroup("U3"))).ok, false);
