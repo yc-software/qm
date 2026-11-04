@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { Agent, get } from "node:http";
+import { connect, type Socket } from "node:net";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 
@@ -17,6 +18,13 @@ const server = createServer((req, res) => {
     res.write(": open\\n\\n");
     const beat = setInterval(() => res.write(": beat\\n\\n"), 100);
     res.once("close", () => clearInterval(beat));
+    return;
+  }
+  if (req.url === "/firehose") {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const chunk = "data: " + "x".repeat(65536) + "\\n\\n";
+    const pump = setInterval(() => res.write(chunk), 5);
+    res.once("close", () => clearInterval(pump));
     return;
   }
   if (req.url === "/slow") return void setTimeout(() => res.end("slow done"), 1500);
@@ -38,7 +46,8 @@ function start(args: string[], env: NodeJS.ProcessEnv = {}) {
 }
 
 test("SIGTERM ends event streams, finishes in-flight requests, serves until quiet, then exits cleanly", async () => {
-  const server = start(["--input-type=module", "-e", fixture]);
+  const server = start(["--input-type=module", "-e", fixture], { NODE_ENV: "production" });
+  let stalled: Socket | undefined;
   try {
     const deadline = Date.now() + 10_000;
     while (!/port (\d+)/.test(server.stdout()) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
@@ -54,6 +63,12 @@ test("SIGTERM ends event streams, finishes in-flight requests, serves until quie
         res.socket.once("close", () => resolve(Date.now()));
       });
     });
+    const firehose = connect(Number(new URL(base).port), "127.0.0.1", () => {
+      firehose.write("GET /firehose HTTP/1.1\r\nhost: fixture\r\n\r\n");
+      firehose.pause();
+    });
+    stalled = firehose;
+    firehose.on("error", () => {});
     const slow = fetch(`${base}/slow`).then(async (r) => ({
       status: r.status,
       body: await r.text(),
@@ -77,6 +92,29 @@ test("SIGTERM ends event streams, finishes in-flight requests, serves until quie
     assert.ok(at - signalled < 7_000, `exited ${at - signalled} ms after SIGTERM`);
     assert.match(server.stdout(), /\[fixture\] SIGTERM received, draining/);
     await assert.rejects(fetch(`${base}/`));
+  } finally {
+    stalled?.destroy();
+    server.child.kill("SIGKILL");
+  }
+});
+
+test("outside production SIGTERM skips the quiet wait so watch-mode restarts stay fast", async () => {
+  const server = start(["--input-type=module", "-e", fixture], { NODE_ENV: "development" });
+  try {
+    const deadline = Date.now() + 10_000;
+    while (!/port (\d+)/.test(server.stdout()) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    const base = `http://127.0.0.1:${/port (\d+)/.exec(server.stdout())![1]}`;
+    const poller = setInterval(() => void fetch(`${base}/`).catch(() => {}), 200);
+    try {
+      await new Promise((r) => setTimeout(r, 300));
+      const signalled = Date.now();
+      server.child.kill("SIGTERM");
+      const { code, at } = await server.exit;
+      assert.equal(code, 0);
+      assert.ok(at - signalled < 1_500, `exited ${at - signalled} ms after SIGTERM`);
+    } finally {
+      clearInterval(poller);
+    }
   } finally {
     server.child.kill("SIGKILL");
   }

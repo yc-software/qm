@@ -1,7 +1,7 @@
 import type { Server, ServerResponse } from "node:http";
 import { flushErrorReporting } from "./error-reporting.ts";
 
-const QUIET_MS = 3_000;
+const QUIET_MS = process.env.NODE_ENV === "production" ? 3_000 : 0;
 const DEADLINE_MS = 20_000;
 const TICK_MS = 250;
 
@@ -22,13 +22,16 @@ export function drainOnSigterm(server: Server, label: string): void {
     for (const res of open) if (!res.headersSent) res.shouldKeepAlive = false;
     server.closeIdleConnections();
     setTimeout(() => {
-      console.warn(`[${label}] drain overran ${DEADLINE_MS} ms; closing ${open.size} open responses`);
+      console.warn(`[${label}] drain overran ${DEADLINE_MS} ms; closing remaining connections`);
       server.closeAllConnections();
       exit();
     }, DEADLINE_MS).unref();
     const tick = setInterval(() => {
       for (const res of open)
-        if (String(res.getHeader("content-type") ?? "").startsWith("text/event-stream")) res.end();
+        if (!res.writableEnded && String(res.getHeader("content-type") ?? "").startsWith("text/event-stream")) {
+          res.on("error", () => {});
+          res.end();
+        }
       if (Date.now() - lastRequestAt < QUIET_MS) return;
       clearInterval(tick);
       server.close(exit);
