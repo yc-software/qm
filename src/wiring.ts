@@ -1,5 +1,9 @@
 import type { MemoryEmbedder } from "./model/embeddings.ts";
-import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
+import {
+  nonDeploymentCredential,
+  tenantBrokerCredentials,
+  withDeploymentCredentials,
+} from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
@@ -77,6 +81,7 @@ import {
   configuredModel,
   orgId,
   providerKeysPresent,
+  tenantOrgId,
   type Config,
 } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
@@ -162,7 +167,7 @@ import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environ
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { forEachTenant, inTenantOf, listTenants, type TenantRow } from "./tenants/claim.ts";
-import { withoutTenant, withTenant } from "./tenants/context.ts";
+import { boundTenant, withoutTenant, withTenant } from "./tenants/context.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { ownerPgPool } from "./tenants/owner-pool.ts";
 import { createTenancy, type Tenancy } from "./tenants/tenancy.ts";
@@ -1309,8 +1314,8 @@ export function buildApp(
   const keychain: Keychain | undefined = keychainKeyMaterial ? credentialStore : undefined;
   const serviceCreds = withDeploymentCredentials(
     credentialStore,
-    scopeId("org", config.orgId),
-    config.brokerCredentials ?? [],
+    () => scopeId("org", boundTenant() ? tenantOrgId(config.orgId) : config.orgId),
+    tenantBrokerCredentials(config.brokerCredentials ?? []),
   );
   if (config.brokerCredentials?.length) {
     const reserved = new Set(config.brokerCredentials.map((c) => c.slug));
