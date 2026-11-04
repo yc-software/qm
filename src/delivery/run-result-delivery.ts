@@ -2,9 +2,9 @@ import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { waitForNoRunningRun, type Run, type RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import { isSessionTurn } from "../core/turn-origin.ts";
+import { boundWebhook, isSessionTurn } from "../core/turn-origin.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
-import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
+import { standaloneFailureText, unfinishedTurnText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
@@ -32,18 +32,23 @@ export function replyEditNote(retracted: readonly string[] | undefined): string 
   return retracted?.length ? `Edited after a reply check: ${[...new Set(retracted)].join(", ")}` : undefined;
 }
 
-export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
+export type RunNotice = (run: Run) => string | undefined;
+
+export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: RunNotice): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
-  const target = run.request.deliveryTarget;
-  const surface = run.request.surface;
-  if (!target || !surface) return null;
   const origin = run.request.origin;
   const surfaceOrigin = run.request.surfaceOrigin;
+  const bound = boundWebhook(run.request);
+  const webhook = bound?.webhook;
+  const target = bound?.target ?? run.request.deliveryTarget;
+  const surface = run.request.surface;
+  if (!target || !surface) return null;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
   const webTranscript = webTranscriptNote(run, surface, failed);
   const destination: Destination = {
-    type: surface,
+    type: webhook ? "webhook" : surface,
+    ...(webhook ? { webhook } : {}),
     target,
     ...(surfaceOrigin
       ? {
@@ -70,6 +75,15 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       ? { sourceAssistantEntrySeq: run.result.sourceAssistantEntrySeq }
       : {}),
   });
+  const noticeText = notice?.(run);
+  if (noticeText) return { destination, text: noticeText, provenance, idempotencyKey };
+  if (
+    webhook &&
+    run.request.idempotencyKey &&
+    (run.request.approval || (origin.kind === "human" && !isSessionTurn(run.request)))
+  )
+    provenance.sourceRequestId = run.request.idempotencyKey;
+  if (webhook) provenance.sourceRunId = run.id;
   if (
     surface === "slack" &&
     run.result?.status === "refused" &&
@@ -84,7 +98,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
     const clause = userFacingFailureClause(run.result ?? { status: "failed" });
     const adminUrl = run.result?.sessionId ? adminUrlFor?.(run.result.sessionId) : undefined;
     const detail = adminUrl ? ` — full error: ${adminUrl}` : "";
-    return { destination, text: `⚠️ I couldn't finish that turn: ${clause}${detail}`, provenance, idempotencyKey };
+    return { destination, text: unfinishedTurnText(`${clause}${detail}`), provenance, idempotencyKey };
   }
   if (run.result?.status === "ok" && (run.result.reply || run.result.attachments?.length)) {
     const editNote = replyEditNote(run.result.retracted);
@@ -96,6 +110,9 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       idempotencyKey,
     };
   }
+  const nothingToShow = !provenance.sourceRequestId && (run.result?.status === "ok" || run.result?.status === "silent");
+  if (webhook && run.result && !nothingToShow)
+    return { destination, text: standaloneFailureText(run.result) ?? "", provenance, idempotencyKey };
   return null;
 }
 
@@ -141,6 +158,7 @@ export function wireRunResultDeliveries(
   deliveries: Pick<DeliveryStore, "enqueue" | "existingKeys">,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
+  notice?: RunNotice,
 ): RunResultRecovery {
   const recover = async (run: Run): Promise<boolean> => {
     if (sessions) {
@@ -148,7 +166,7 @@ export function wireRunResultDeliveries(
         reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
       );
     }
-    const delivery = runResultDelivery(run, adminUrlFor);
+    const delivery = runResultDelivery(run, adminUrlFor, notice);
     if (!delivery) return false;
     await deliveries.enqueue(delivery);
     return true;

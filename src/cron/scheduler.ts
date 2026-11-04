@@ -154,7 +154,12 @@ function cronMentionRoster(cron: Cron, homeRoster: DirectoryMember[] | undefined
   return internal.map(mentionable).join(", ");
 }
 
-function renderCronFireInput(cron: Cron, mentionRoster?: string, runtimeProblem?: string | null): string {
+function renderCronFireInput(
+  cron: Cron,
+  mentionRoster?: string,
+  runtimeProblem?: string | null,
+  refusedDelivery?: string,
+): string {
   const task = cron.action ?? "";
   if (!task.trim()) return task;
   if (/^!(run|scratch)\s/.test(task.trimStart())) return task;
@@ -178,6 +183,12 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string, runtimeProblem?
       ? [
           `This fire runs on the default model because the cron's own model can't run: ${runtimeProblem}`,
           `Tell the people this cron reports to, unless the fire log shows they already know. If the cron's model looks stale, you can change it (cron tool, action="patch", id="${cron.id}", runtime); it is used again as soon as it can run.`,
+        ]
+      : []),
+    ...(refusedDelivery
+      ? [
+          `The previous fire's output was refused by this cron's destination and not delivered: ${refusedDelivery}`,
+          `Nobody receives this cron's output while that lasts. Unless the task is worth running for its side effects alone, pause it now (cron tool, action="disable", id="${cron.id}") or retarget it, and say why in your note.`,
         ]
       : []),
     ...(mentionRoster
@@ -279,6 +290,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       const runtimeProblem = cron.runtime ? await deps.runtimeError?.(cron.ownerScopeId, cron.runtime) : null;
+      const refusedDelivery =
+        previous && cron.destination
+          ? (await deps.deliveries.listBySourceSession(previous.sessionId ?? "", previous.threadRef))
+              .filter((d) => d.failedReason && d.destination.target === cron.destination!.target)
+              .at(-1)?.failedReason
+          : undefined;
       outcome = await runTrigger(
         {
           deliveries: deps.deliveries,
@@ -292,7 +309,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         },
         {
           ...cronTriggerAuthority(cron),
-          input: (homeRoster) => renderCronFireInput(cron, cronMentionRoster(cron, homeRoster), runtimeProblem),
+          input: (homeRoster) =>
+            renderCronFireInput(cron, cronMentionRoster(cron, homeRoster), runtimeProblem, refusedDelivery),
           fireKey,
           threadRef,
           surface: "cron",

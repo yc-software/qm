@@ -126,6 +126,16 @@ describe("agent files self-API", async () => {
     assert.deepEqual(page.shared, []);
   });
 
+  it("narrows the listing to names matching q", async () => {
+    const res = await get("/v1/files?q=binary", await capFor("U1"));
+    assert.equal(res.status, 200);
+    const page = (await res.json()) as { owned: Array<{ id: string }> };
+    assert.deepEqual(
+      page.owned.map((file) => file.id),
+      [binaryId],
+    );
+  });
+
   it("returns 404 for another principal's file content", async () => {
     const res = await get(`/v1/files/${theirsId}/content`, await capFor("U1"));
     assert.equal(res.status, 404);

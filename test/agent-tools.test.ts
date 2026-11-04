@@ -3087,6 +3087,34 @@ test("surface messages use Markdown and teach only the mention syntax their regi
   }
 });
 
+test("a text-only surface's tool offers only the actions and fields it can carry out", () => {
+  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
+  const base = testSurfaces().get("slack")!;
+  const schemaOf = (textOnly: boolean) => {
+    const registered = { ...base, capabilities: { ...base.capabilities, textOnly } };
+    const tool = createAgentTools(ref, {
+      surfaceTools: true,
+      surfaceName: "chat",
+      surfacePrompt: surfaceToolPrompt(registered),
+    }).find((t) => t.name === "chat")!;
+    const properties = (tool.parameters as { properties: Record<string, { anyOf?: { const: string }[] }> }).properties;
+    return {
+      fields: Object.keys(properties).sort(),
+      actions: properties.action!.anyOf!.map((a) => a.const),
+      text: JSON.stringify({ description: tool.description, properties }),
+    };
+  };
+  const full = schemaOf(false);
+  const textOnly = schemaOf(true);
+  assert.deepEqual(textOnly.actions, ["post", "reach", "read_thread", "whats_new", "search", "read_members"]);
+  assert.deepEqual(
+    full.fields.filter((f) => !textOnly.fields.includes(f)),
+    ["emoji", "files", "ref", "sandbox_id", "source"],
+  );
+  assert.ok(["react", "edit", "delete"].every((a) => full.actions.includes(a)));
+  assert.doesNotMatch(textOnly.text, /react:|react\/edit\/delete:|edit: the new|reacting/);
+});
+
 test("read passes turn cancellation through and cannot record a late success", async () => {
   const controller = new AbortController();
   const started = Promise.withResolvers<void>();
@@ -3265,7 +3293,7 @@ test("subagents open exposes noComputer and preserves the internal restriction",
   tc.sessionSyscalls = {
     open: async (input) => {
       opened.push(input);
-      return { ok: true, sessionId: "child", title: "child", liveRunsRemaining: 9 };
+      return { ok: true, sessionId: "child", title: "child" };
     },
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({ ok: false, message: "unused" }),
@@ -3290,7 +3318,7 @@ test("subagents open schema and dispatch preserve an explicit false fast mode", 
   tc.sessionSyscalls = {
     open: async (input) => {
       assert.equal(input.fastMode, false);
-      return { ok: true, sessionId: "child", title: "child", liveRunsRemaining: 9 };
+      return { ok: true, sessionId: "child", title: "child" };
     },
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({ ok: false, message: "unused" }),

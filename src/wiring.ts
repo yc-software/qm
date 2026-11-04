@@ -48,11 +48,8 @@ import { createRuntimeService } from "./agent/runtime-control.ts";
 import {
   createSessionSyscalls,
   type SessionSyscallsFactory,
-  sessionTreeRoot,
-  sessionTreeRuns,
   sessionTreeWorking,
   stoppableRoot,
-  SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
 import { deliverSubagentMail, wakeForUnreadMail } from "./sessions/subagent-mail.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
@@ -132,7 +129,7 @@ import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
-import { SETTLED_CANDIDATES_MIGRATION, rewriteSurfaceOrigins } from "./surfaces/origin-migration.ts";
+import { RETIRED_ORIGIN_SWEEP_MIGRATION } from "./surfaces/origin-migration.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
@@ -150,6 +147,8 @@ import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
 import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
+import { WEBHOOK_CLAIM_MS, webhookSender } from "./delivery/webhook-delivery.ts";
+import { createDeliveryRelay } from "./delivery/relay.ts";
 import type { DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
@@ -387,6 +386,10 @@ import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
 import { createSurfaceRegistry } from "./surfaces/registry.ts";
 import { createSlackSurface } from "./surfaces/slack/adapter.ts";
+import { createPartnerChatSurface } from "./surfaces/partner-chat/adapter.ts";
+import { createPartnerChatInbound } from "./surfaces/partner-chat/inbound.ts";
+import { PARTNER_CHAT_CLAIM_MS, partnerChatSender } from "./surfaces/partner-chat/outbound.ts";
+import { createPartnerChatNotices, partnerChatRunNotice } from "./surfaces/partner-chat/notices.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -439,7 +442,6 @@ export function stopWithBackstop(
 export interface BuiltApp {
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
-  rewriteSurfaceOrigins: () => Promise<void>;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
   deploymentLayer: DeploymentLayerRuntime;
@@ -481,6 +483,7 @@ export interface BuiltApp {
   scheduler: Scheduler;
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
+  partnerChatEvents?: ServerDeps["partnerChatEvents"];
   loopIngress: LoopIngressService;
   admin: AdminService;
   budget: BudgetTracker | undefined;
@@ -1534,38 +1537,27 @@ export function buildApp(
   const runs: RunStore = {
     ...runStore.runs,
     async enqueue(input) {
-      const enqueue = async () => {
-        const known = await sessions.getByThread(input.sessionId);
-        if (
-          known &&
-          (known.parentSessionId || (await sessions.childrenOf(known.id)).length > 0) &&
-          !(input.dedupKey && (await runStore.runs.getByDedupKey(input.dedupKey))) &&
-          (await sessionTreeRuns(sessions, runStore.runs, await sessionTreeRoot(sessions, known))).length >=
-            SUBAGENT_TREE_RUN_CAP
-        )
-          throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
-        const participants = known ? await sessions.participantsOf(known.id) : [];
-        const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
-        const result = await runStore.runs.enqueue(input);
-        if (result.deduped) return result;
+      const known = await sessions.getByThread(input.sessionId);
+      const participants = known ? await sessions.participantsOf(known.id) : [];
+      const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
+      const result = await runStore.runs.enqueue(input);
+      if (result.deduped) return result;
+      sessionStateBus.emit({
+        threadRef: input.sessionId,
+        ...(known ? { sessionId: known.id } : {}),
+        state: "working",
+        at: result.run.createdAt,
+        participants: participants.length ? participants : [input.request.actor.id],
+      });
+      for (const ancestor of ancestors)
         sessionStateBus.emit({
-          threadRef: input.sessionId,
-          ...(known ? { sessionId: known.id } : {}),
+          threadRef: ancestor.session.threadRef,
+          sessionId: ancestor.session.id,
           state: "working",
           at: result.run.createdAt,
-          participants: participants.length ? participants : [input.request.actor.id],
+          participants: ancestor.participants,
         });
-        for (const ancestor of ancestors)
-          sessionStateBus.emit({
-            threadRef: ancestor.session.threadRef,
-            sessionId: ancestor.session.id,
-            state: "working",
-            at: result.run.createdAt,
-            participants: ancestor.participants,
-          });
-        return result;
-      };
-      return advisoryLock.withLock("session-run-admission", enqueue);
+      return result;
     },
   };
   const swarms =
@@ -1769,6 +1761,15 @@ export function buildApp(
       errors.record({ category: "memory", code: "capture_failed", message: errMessage(e), scopeLabel: scope }, e),
   });
   const directory = createPostgresDirectoryStore(databaseUrl);
+  const vouchedInternalEmail = async (email: string): Promise<boolean> => {
+    await identity.refresh();
+    return (
+      identity.isInternal(identity.classify(email)) &&
+      (config.emailAuthPrincipals?.includes(email) === true ||
+        Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
+        (await directory.get(email))?.type === "internal")
+    );
+  };
   const projects = createProjectStore(artifactMap<Project>("projects"), {
     isActiveMember: (principalId) => identity.isInternal(identity.classify(principalId)),
     advisoryLock,
@@ -1807,16 +1808,9 @@ export function buildApp(
     canReadScope,
     canWriteScope,
     externalSharingAllowed: (ownerScopeId) => externalAppSharingAllowed(featureFlags, ownerScopeId),
-    canManageEmail: async (email) => {
-      await identity.refresh();
-      return (
-        identity.isInternal(identity.classify(email)) &&
-        ((await directory.get(email))?.type === "internal" ||
-          config.emailAuthPrincipals?.includes(email) ||
-          Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
-          identity.externalMember(email) !== undefined)
-      );
-    },
+    canManageEmail: async (email) =>
+      (await vouchedInternalEmail(email)) ||
+      (identity.isInternal(identity.classify(email)) && identity.externalMember(email) !== undefined),
     managesArtifactHome,
     ...(deployGitSecret && deployGitBase
       ? {
@@ -1897,7 +1891,7 @@ export function buildApp(
     },
   };
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
-  pgArtifactMap.pool.registerMigration(SETTLED_CANDIDATES_MIGRATION);
+  pgArtifactMap.pool.registerMigration(RETIRED_ORIGIN_SWEEP_MIGRATION);
   pgArtifactMap.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap.pool.registerMigration({
     id: "durable-map/turn_wall_clock_configs/0002-drop",
@@ -2062,7 +2056,20 @@ export function buildApp(
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
-  const surfaces = createSurfaceRegistry({ surfaces: [createSlackSurface({ deliveries })] });
+  const surfaces = createSurfaceRegistry({
+    surfaces: [
+      createSlackSurface({ deliveries }),
+      ...(config.partnerChat
+        ? [
+            createPartnerChatSurface({
+              deliveries,
+              surfaceCache: { readMessages: (container, opts) => surfaceCache.readMessages(container, opts) },
+              ...(config.partnerChat.label ? { label: config.partnerChat.label } : {}),
+            }),
+          ]
+        : []),
+    ],
+  });
   const orchestratorDeps: OrchestratorDeps = {
     admittedWork,
     installSharedCanvas: async (actorId, fileId, where) => {
@@ -2169,7 +2176,13 @@ export function buildApp(
     ? (sessionId: string): string | undefined =>
         uuidSchema.safeParse(sessionId).success ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
-  const runResultRecovery = wireRunResultDeliveries(runs, deliveries, recoveryAdminUrlFor, sessions);
+  const runResultRecovery = wireRunResultDeliveries(
+    runs,
+    deliveries,
+    recoveryAdminUrlFor,
+    sessions,
+    partnerChatRunNotice,
+  );
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const skillFetcher = createGitFetcher(
     keychain
@@ -2441,6 +2454,29 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
+  const partnerChatNotices = config.partnerChat ? createPartnerChatNotices({ deliveries }) : null;
+  const partnerChatInbound =
+    partnerChatNotices && config.partnerChat
+      ? createPartnerChatInbound({
+          secret: config.partnerChat.secret,
+          app,
+          surfaceCache,
+          isInternalEmail: async (email) => email.includes("@") && (await vouchedInternalEmail(email)),
+          unansweredReply: partnerChatNotices.unanswered,
+        })
+      : null;
+  const partnerChatDelivery = config.partnerChat
+    ? createDeliveryRelay(deliveries, {
+        type: "partner-chat",
+        send: partnerChatSender({ url: config.partnerChat.url, secret: config.partnerChat.secret, app }),
+        claimMs: PARTNER_CHAT_CLAIM_MS,
+      })
+    : null;
+  const webhookDelivery = createDeliveryRelay(deliveries, {
+    type: "webhook",
+    send: webhookSender(config.signingSecret),
+    claimMs: WEBHOOK_CLAIM_MS,
+  });
   const approvalDeliverySweeper = createSweeper(
     () => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending()),
     30_000,
@@ -2549,6 +2585,7 @@ export function buildApp(
     items: loopItems,
     outputs: loopOutputs,
     grants: loopGrants,
+    files,
     trigger: {
       deliveries,
       idempotency,
@@ -2840,6 +2877,8 @@ export function buildApp(
       sessionReturnSweeper.start();
       runResultSweeper.start();
       approvalDeliverySweeper.start();
+      partnerChatDelivery?.start();
+      webhookDelivery.start();
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -2853,6 +2892,7 @@ export function buildApp(
     const monitorStopping = monitorPoller?.stop();
     monitorDrained = monitorStopping ?? Promise.resolve();
     const stopping = [
+      webhookDelivery.stop(),
       reaper.stop(),
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
@@ -2872,6 +2912,7 @@ export function buildApp(
       sessionReturnSweeper.stop(),
       runResultSweeper.stop(),
       approvalDeliverySweeper.stop(),
+      partnerChatDelivery?.stop(),
       preemptionSweeper.stop(),
       worker.stopClaims(),
     ];
@@ -2961,7 +3002,6 @@ export function buildApp(
     brokeredTools,
     deploymentLayerReady,
     deploymentLayerRefresh,
-    rewriteSurfaceOrigins: () => rewriteSurfaceOrigins(pgArtifactMap.pool),
     sessions,
     runs,
     signals: runSignals,
@@ -2997,6 +3037,7 @@ export function buildApp(
     scheduler,
     loops,
     webhookReceiver,
+    ...(partnerChatInbound ? { partnerChatEvents: partnerChatInbound.handle } : {}),
     loopIngress,
     admin,
     errors,
@@ -3143,6 +3184,7 @@ export function serverDeps(
     ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
+    ...(built.partnerChatEvents ? { partnerChatEvents: built.partnerChatEvents } : {}),
     loopIngress: built.loopIngress,
     identity: built.identity,
     principalLinks: built.principalLinks,

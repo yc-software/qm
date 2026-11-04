@@ -77,6 +77,7 @@ export interface ReadMessagesOpts extends SurfaceKey {
   at?: string;
   sub?: string | null;
   timestamps?: string[];
+  tsSuffix?: string;
   oldestFirst?: boolean;
   channelHistory?: boolean;
   limit?: number;
@@ -84,6 +85,7 @@ export interface ReadMessagesOpts extends SurfaceKey {
   before?: string;
   includeDeleted?: boolean;
   noFallback?: boolean;
+  self?: boolean;
 }
 
 interface RevisedSinceOpts extends SurfaceKey {

@@ -368,3 +368,57 @@ test("a message link loads older history and highlights the addressed row", asyn
     await h.close();
   }
 });
+
+async function until(check: () => boolean, label: string): Promise<void> {
+  for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(check(), label);
+}
+
+async function openSearchHit(hit: Record<string, unknown>) {
+  const h = await harness({
+    path: "/",
+    messageLink: true,
+    api: (path) => {
+      if (path.startsWith("/api/resources/search?")) return Response.json({ hits: [], failed: [] });
+      if (!path.startsWith("/api/search?")) return undefined;
+      return Response.json({ hits: [{ sessionId: "sess-deep", snippet: "Linked QA message", createdAt: 1, ...hit }] });
+    },
+  });
+  const booted = h.boot();
+  h.releaseSessions();
+  await booted;
+  h.openChatSearch();
+  const input = document.querySelector<HTMLInputElement>(".chat-search-input")!;
+  input.value = "linked";
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  await until(
+    () => Boolean(document.querySelector(".chat-search-who.user, .chat-search-who.agent")),
+    "the hit is listed",
+  );
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await until(() => h.visibleConversation().state.sessionId === "sess-deep", "the hit's chat opens");
+  return h;
+}
+
+test("opening a search hit loads older history and highlights the matched message", async () => {
+  const h = await openSearchHit({ seq: 10, entryType: "user" });
+  try {
+    await until(() => Boolean(document.querySelector(".linked-message")), "the matched row is highlighted");
+    assert.ok(h.requests.some((p) => p.includes("beforeSeq=80")));
+    assert.equal(document.querySelector(".linked-message")?.getAttribute("data-entry-seqs"), "10");
+    assert.equal(document.querySelector(".linked-message")?.getAttribute("data-scrolled"), "true");
+  } finally {
+    await h.close();
+  }
+});
+
+test("opening a title-only search hit opens the chat at its latest messages", async () => {
+  const h = await openSearchHit({ seq: 0, entryType: "title" });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(!h.requests.some((p) => p.includes("beforeSeq=")));
+    assert.equal(document.querySelector(".linked-message"), null);
+  } finally {
+    await h.close();
+  }
+});

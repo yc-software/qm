@@ -490,6 +490,7 @@ export interface App {
   pendingContextRequests(source: string): Promise<SurfaceContextRequest[]>;
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<boolean>;
   onContextRequestCreated(listener: (request: SurfaceContextRequest) => void): () => void;
+  surfaceMirrored(kind: string): boolean;
   ingestSurfaceEvents(
     events: IngestEvent[],
     surface?: string,

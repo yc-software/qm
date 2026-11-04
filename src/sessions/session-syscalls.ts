@@ -142,6 +142,7 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     conversation: input.conversation,
     actor: input.actor,
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
+    ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
     ...(input.model ? { model: input.model } : {}),
@@ -150,7 +151,6 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
   };
 }
 
-export const SUBAGENT_TREE_RUN_CAP = 50;
 const SESSION_MESSAGE_DEPTH_CAP = 8;
 const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
@@ -169,8 +169,7 @@ interface SessionOpenInput {
   fastMode?: boolean;
 }
 
-type SessionOpenResult =
-  { ok: true; sessionId: string; title: string; liveRunsRemaining: number } | { ok: false; message: string };
+type SessionOpenResult = { ok: true; sessionId: string; title: string } | { ok: false; message: string };
 
 interface SessionWriteInput {
   target: string;
@@ -249,6 +248,7 @@ interface SessionSyscallBinding {
     | "conversation"
     | "actor"
     | "deliveryTarget"
+    | "deliveryWebhook"
     | "timezone"
     | "readOnly"
     | "scopeVersion"
@@ -294,7 +294,6 @@ export interface SessionSyscallDeps {
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw">;
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
-  treeRunCap?: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
   authorize?: (session: Session, actorId: string) => Promise<boolean>;
@@ -376,6 +375,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     surface: meta.surface,
     ...(meta.surfaceOrigin ? { surfaceOrigin: meta.surfaceOrigin } : {}),
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
+    ...(meta.deliveryWebhook ? { deliveryWebhook: meta.deliveryWebhook } : {}),
     ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
     actor: meta.actor,
     conversation: { ...meta.conversation, threadRef: child.threadRef },
@@ -576,7 +576,6 @@ export async function sessionTreeRuns(
 
 export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscallsFactory {
   const lock = deps.advisoryLock;
-  const cap = deps.treeRunCap ?? SUBAGENT_TREE_RUN_CAP;
 
   return {
     rejectMessage: (sessionId, messageId) => deps.mailbox.acknowledge(sessionId, [messageId]),
@@ -719,27 +718,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               }`;
               const fingerprint = hashId([canonicalJson(input)], 40);
               const existing = await deps.sessions.getByThread(threadRef);
-              const root = await sessionTreeRoot(
-                deps.sessions,
-                existing ?? (await deps.sessions.get(binding.session.id))!,
-              );
-              const live = (await sessionTreeRuns(deps.sessions, deps.runs, root)).length;
               if (existing?.spawnMeta?.openFingerprint && existing.spawnMeta.openFingerprint !== fingerprint)
                 throw new Error("the requestId was already used for different work");
               const initialRun = await deps.runs.getByDedupKey(`subagent-open:${threadRef}`);
-              if (existing && initialRun)
-                return {
-                  ok: true,
-                  sessionId: existing.id,
-                  title: visibleTitle(existing),
-                  liveRunsRemaining: Math.max(0, cap - live),
-                };
-              if (live >= cap) {
-                return {
-                  ok: false,
-                  message: `all ${cap} subagent run slots for this conversation are in use — wait for one to finish, read their sessions, or interrupt one you no longer need.`,
-                };
-              }
+              if (existing && initialRun) return { ok: true, sessionId: existing.id, title: visibleTitle(existing) };
               const child = await deps.sessions.getOrCreateByThread(
                 threadRef,
                 binding.session.type,
@@ -786,7 +768,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 request: deps.prepareRequest ? await deps.prepareRequest(request) : request,
                 maxAttempts: deps.maxAttempts,
               });
-              return { ok: true, sessionId: child.id, title, liveRunsRemaining: Math.max(0, cap - live - 1) };
+              return { ok: true, sessionId: child.id, title };
             })
             .catch((error): SessionOpenResult => ({ ok: false, message: errMessage(error) }));
         },
@@ -908,15 +890,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;
-              const replaced = input.interrupt ? inFlight.filter(interruptible).map((run) => run.id) : [];
-              const live = (
-                await sessionTreeRuns(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target))
-              ).filter((run) => !replaced.includes(run.id));
-              if (live.length >= cap)
-                return {
-                  ok: false,
-                  message: `all ${cap} session run slots are in use; nothing was sent. Retry later, or send with wake:false to leave it in the mailbox.`,
-                };
               const stopped = input.interrupt
                 ? await stopSessionRuns(deps, target, PARENT_INTERRUPT, {
                     by: binding.session.id,

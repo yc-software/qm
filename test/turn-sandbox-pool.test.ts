@@ -180,6 +180,14 @@ for (const [kind, { id, open }] of Object.entries(kinds)) {
   });
 }
 
+test("a scratch computer is destroyed at turn end even when its job or another turn would keep a computer warm", async () => {
+  const f = fixture({ holdKeepsWarm: true, live: ["scratch-1", "box-2"] });
+  const scratch = await f.turn.provisionScratch();
+  const box = await f.turn.provision();
+  await f.turn.reclaimBox();
+  assert.deepEqual(f.released(), { [scratch.id]: { destroy: true }, [box.id]: { keepWarm: true } });
+});
+
 test("concurrent opens of one computer share a single provision", async () => {
   const f = fixture();
   const [a, b] = await Promise.all([f.turn.provisionResource("other"), f.turn.provisionResource("other")]);
