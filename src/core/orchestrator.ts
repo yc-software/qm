@@ -12,7 +12,6 @@ import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.
 import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
-import { resolveBrowserModel } from "../model/browser-model.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
@@ -192,8 +191,8 @@ import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
-import { CODEX_SUBSCRIPTION_PROVIDER, personalModelId } from "../model/pi-models.ts";
-import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
+import { personalModelId } from "../model/pi-models.ts";
+import { loadPersonalModelAuth } from "./individual-auth-routing.ts";
 import { createSessionTitles } from "./session-title.ts";
 import {
   MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
@@ -1509,19 +1508,60 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
       }
-      const browserSelection =
-        !strictReadOnly && allInternal
-          ? await resolveBrowserModel({
-              actorId: actor.id,
-              config: deps.config,
-              credentials: deps.userModelCredentials,
-              companyModel: deps.resolveBaseModelId?.(),
-            })
+      const runtimePurpose = turnRuntimePurpose(
+        { surface: input.surface, triggered: automatedTurn },
+        !!session.parentSessionId || !!swarmBinding?.member.parentId,
+      );
+      const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
+      const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
+        const userCredStore = external ? undefined : deps.userModelCredentials;
+        const account = external
+          ? "company"
+          : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
+        if (!userCredStore || !humanInput || account === "company")
+          return {
+            userProviderKeys: undefined,
+            userModelOverride: undefined,
+            personalAuth: false,
+            authLabel: "api-key",
+            account: "company" as const,
+          };
+        const personal = await loadPersonalModelAuth(
+          userCredStore,
+          actor.id,
+          account,
+          account === "personal" || input.surface === "web"
+            ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
+            : (runtime.modelId ?? purposeDefault?.modelId),
+        );
+        if (!personal)
+          throw new NonRetryableTurnError(
+            "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
+          );
+        return {
+          userProviderKeys: personal.keys as ProviderKeys | undefined,
+          userModelOverride: personal.modelId,
+          personalAuth: true,
+          authLabel: personal.authLabel,
+          account,
+        };
+      };
+      const initialRuntimeAuth = loadRuntimeAuth({});
+      const sessionAuth = await initialRuntimeAuth.catch(() => undefined);
+      const sessionModel = sessionAuth?.userModelOverride ?? input.model;
+      const sessionRoute: SessionRoute | undefined = sessionAuth && {
+        ...(sessionModel ? { runtime: { modelId: sessionModel } } : {}),
+        ...(sessionAuth.userProviderKeys ? { providerKeys: sessionAuth.userProviderKeys, runtimePinned: true } : {}),
+        ...(runtimePurpose ? { runtimePurpose } : {}),
+      };
+      const browserModel =
+        !strictReadOnly && allInternal && sessionRoute
+          ? (await deps.resolveSessionRuntime?.({ ...sessionRoute, scopeLabel: scopeId }).catch(() => undefined))
+              ?.modelId
           : undefined;
-      const managedBrowse = browserSelection;
-      if (managedBrowse) {
+      if (browserModel) {
         connectorEnv.BROWSE_LAB_MODEL_PROVIDER = "managed";
-        connectorEnv.BROWSE_LAB_MODEL = browserSelection.model ?? "unavailable";
+        connectorEnv.BROWSE_LAB_MODEL = browserModel;
       }
       let actorIsOrgAdmin = false;
       let orgMemoryWrite: ScopeId | undefined;
@@ -1594,14 +1634,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.capabilitySecret ?? deps.signingSecret,
           deps.capabilityTokenCompression,
         );
-        if (managedBrowse) {
+        if (browserModel) {
           connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}/v1/browser-model`;
           connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
             {
               ...scopeAttestation,
               aud: BROWSER_MODEL_AUD,
-              browserModel: browserSelection.model ?? "unavailable",
-              browserAccount: browserSelection.account,
+              browserModel,
+              browserAccount: sessionAuth?.account ?? "company",
               sessionId: session.id,
               origin,
               exp: Date.now() + CAPABILITY_TTL_MS,
@@ -1617,7 +1657,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             deps.capabilityTokenCompression,
           );
           turnContextBlocks["Model access"] =
-            "## Model access\nAn OpenAI-compatible model gateway is at `$MODEL_GATEWAY_URL` in the sandbox; authenticate with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`. `GET $MODEL_GATEWAY_URL/v1/models` lists the usable models. The token is bound to this turn and expires with it; never send it anywhere but the gateway.";
+            "## Model access\nAn OpenAI-compatible model gateway is at `$MODEL_GATEWAY_URL` in the sandbox; authenticate with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`. `GET $MODEL_GATEWAY_URL/v1/models` lists the usable models. Calls bill the shared model gateway, even when this turn runs on a person's own AI account. The token is bound to this turn and expires with it; never send it anywhere but the gateway.";
         }
         connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
           {
@@ -2714,75 +2754,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           visibleHistory = filterHistory(forModelContext([...rawEntries, ...settled]));
         }
         const resume = reconciled?.resumed ? partial : null;
-        const runtimePurpose = turnRuntimePurpose(
-          { surface: input.surface, triggered: automatedTurn },
-          !!session.parentSessionId || !!swarmBinding?.member.parentId,
-        );
-        const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
         const wantsOrgFastMode =
           typeof input.fastMode !== "boolean" &&
           !purposeDefault &&
           humanInput &&
           (await deps.config?.getInteractiveFastModeDurable());
         const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
-        const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
-          let userProviderKeys: ProviderKeys | undefined;
-          let userModelOverride: string | undefined;
-          let personalAuth = false;
-          let authLabel = "api-key";
-          const userCredStore = external ? undefined : deps.userModelCredentials;
-          const account = external
-            ? "company"
-            : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
-          if (userCredStore && humanInput && account !== "company") {
-            const [anthCred, oaiCred] = await Promise.all([
-              account === "openai" ? null : userCredStore.get(actor.id, "anthropic"),
-              account === "anthropic" ? null : userCredStore.get(actor.id, "openai"),
-            ]);
-            const routing = resolveIndividualAuthRouting(
-              anthCred ?? null,
-              oaiCred ?? null,
-              account === "personal" || input.surface === "web"
-                ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
-                : (runtime.modelId ?? purposeDefault?.modelId),
-            );
-            if (routing?.kind === "apikey") {
-              personalAuth = true;
-              userProviderKeys = { [routing.provider]: routing.apiKey };
-              userModelOverride = routing.model;
-            } else if (routing?.kind === "oauth" && routing.provider === "anthropic" && anthCred?.oauth) {
-              const derived = await userCredStore.derivedOAuth(actor.id, "anthropic");
-              if (derived) {
-                userProviderKeys = { anthropic: derived.accessToken };
-                authLabel = "claude-oauth-pi";
-                personalAuth = true;
-                userModelOverride = routing.model;
-              }
-            } else if (routing?.kind === "oauth" && routing.provider === "openai" && oaiCred?.oauth) {
-              const derived = await userCredStore.derivedOAuth(actor.id, "openai");
-              if (derived) {
-                userProviderKeys = { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken };
-                authLabel = "codex-oauth-pi";
-                personalAuth = true;
-                userModelOverride = routing.model;
-              }
-            }
-            if (!personalAuth) {
-              throw new NonRetryableTurnError(
-                "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
-              );
-            }
-          }
-          return { userProviderKeys, userModelOverride, personalAuth, authLabel };
-        };
-        const initialRuntimeAuth = loadRuntimeAuth({});
-        const sessionAuth = await initialRuntimeAuth.catch(() => undefined);
-        const sessionModel = sessionAuth?.userModelOverride ?? input.model;
-        compactionRoute = sessionAuth && {
-          ...(sessionModel ? { runtime: { modelId: sessionModel } } : {}),
-          ...(sessionAuth.userProviderKeys ? { providerKeys: sessionAuth.userProviderKeys, runtimePinned: true } : {}),
-          ...(runtimePurpose ? { runtimePurpose } : {}),
-        };
+        compactionRoute = sessionRoute;
         const preTurnRoute = compactionRoute;
         const documentBudget = documentTokenBudget(sessionModel);
         const history = !preTurnRoute

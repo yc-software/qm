@@ -78,14 +78,14 @@ import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
 
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
-import { type ProviderKeys } from "../model/model-runtime.ts";
+import type { ModelRoutes } from "../model/model-route.ts";
 
 export interface ServerDeps {
   requestBodyDeadlineMs?: number;
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
   modelGatewayTransport?: ModelGatewayTransportConfig;
-  resolveBrowserCompanyKeys?: (includeSubscription?: boolean) => Promise<ProviderKeys>;
+  modelRoutes?: ModelRoutes;
   slackAccounts?: DurableMap<SlackAccountLink>;
   composioReturns?: DurableMap<ComposioReturn>;
   composioFetch?: typeof fetch;
