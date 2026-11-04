@@ -14,7 +14,11 @@ const { vite, close } = await browserEnv({
 });
 after(close);
 const { render } = await vite.ssrLoadModule("lit");
-const { scopeToolCount, sessionTopbarTpl } = (await vite.ssrLoadModule("/src/session-scope.ts")) as {
+const { expireScopeToolCounts, noteCronList, scopeToolCount, sessionTopbarTpl } = (await vite.ssrLoadModule(
+  "/src/session-scope.ts",
+)) as {
+  expireScopeToolCounts: () => void;
+  noteCronList: (r: { crons?: unknown[]; visible?: unknown[] }) => void;
   scopeToolCount: (tool: SessionTool, scope: string, ready: () => void) => number | null;
   sessionTopbarTpl: (opts: SessionTopbarOpts) => unknown;
 };
@@ -124,4 +128,36 @@ test("zero counts remain hidden in desktop and mobile tools", () => {
   const host = document.createElement("div");
   render(sessionTopbarTpl({ crumb: null, title: "Test", onTool: () => {}, toolCount: () => 0 }), host);
   assert.equal(host.querySelectorAll(".session-tool-count").length, 0);
+});
+
+test("the Crons badge follows the Crons page's list and refetches after a turn ends", async () => {
+  const scope = "personal:badge";
+  const cron = (id: string) => ({ id, ownerScopeId: scope, enabled: true });
+  respond = () => ({ crons: [cron("a"), cron("b")] });
+  await new Promise<void>((resolve) => {
+    assert.equal(scopeToolCount("crons", scope, resolve), null);
+  });
+  assert.equal(
+    scopeToolCount("crons", scope, () => assert.fail("cached")),
+    2,
+  );
+
+  noteCronList({ crons: [cron("a"), cron("b"), cron("c")] });
+  assert.equal(
+    scopeToolCount("crons", scope, () => assert.fail("cached")),
+    3,
+    "a fresh Crons page load updates the badge without waiting out the cache",
+  );
+
+  respond = () => ({ crons: [cron("a"), cron("b"), cron("c"), cron("d")] });
+  expireScopeToolCounts();
+  const before = requests.length;
+  await new Promise<void>((resolve) => {
+    assert.equal(scopeToolCount("crons", scope, resolve), 3, "the old count shows while the refetch runs");
+  });
+  assert.equal(requests.length, before + 1);
+  assert.equal(
+    scopeToolCount("crons", scope, () => assert.fail("cached")),
+    4,
+  );
 });

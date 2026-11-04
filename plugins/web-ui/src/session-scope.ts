@@ -31,18 +31,38 @@ interface CronLite {
 const toolCountCache = new Map<string, { count: number; at: number }>();
 const toolCountInFlight = new Set<string>();
 
+interface CronListLite {
+  crons?: CronLite[];
+  visible?: CronLite[];
+}
+
+function activeCronCount(r: CronListLite, scope: string): number {
+  const seen = new Set<string>();
+  let count = 0;
+  for (const c of [...(r.crons ?? []), ...(r.visible ?? [])]) {
+    if (seen.has(c.id)) continue;
+    seen.add(c.id);
+    if (c.ownerScopeId === scope && c.enabled && !c.archived) count++;
+  }
+  return count;
+}
+
+/** Recount every cached Crons badge from a fresh /api/crons answer, so the
+ * badge and the Crons page never disagree about the same list. */
+export function noteCronList(r: CronListLite): void {
+  const at = Date.now();
+  for (const key of toolCountCache.keys())
+    if (key.startsWith("crons:")) toolCountCache.set(key, { count: activeCronCount(r, key.slice(6)), at });
+}
+
+/** Mark cached badge counts stale (a turn may have created or removed a cron
+ * or app); the next draw refetches while still showing the old number. */
+export function expireScopeToolCounts(): void {
+  for (const hit of toolCountCache.values()) hit.at = 0;
+}
+
 const TOOL_COUNTERS: Partial<Record<SessionTool, (scope: string) => Promise<number>>> = {
-  crons: async (scope) => {
-    const r = await api<{ crons?: CronLite[]; visible?: CronLite[] }>("/api/crons");
-    const seen = new Set<string>();
-    let count = 0;
-    for (const c of [...(r.crons ?? []), ...(r.visible ?? [])]) {
-      if (seen.has(c.id)) continue;
-      seen.add(c.id);
-      if (c.ownerScopeId === scope && c.enabled && !c.archived) count++;
-    }
-    return count;
-  },
+  crons: async (scope) => activeCronCount(await api<CronListLite>("/api/crons"), scope),
   apps: async (scope) => {
     const r = await api<{ deployments?: Array<{ status?: string; ownerScopeId?: string; createdInScope?: string }> }>(
       "/api/deployments",
