@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -126,7 +126,7 @@ test("sandbox isolation reserves a sandbox named by the child's own id; open rep
   assert.deepEqual(replay.isolation, opened.isolation);
   assert.match(
     isolationBrief(opened.isolation) ?? "",
-    new RegExp(`default computer is your own sandbox, ${opened.sessionId}, created the first time`),
+    new RegExp(`default computer is your own sandbox, ${opened.sessionId}: execute, files`),
   );
 });
 
@@ -144,6 +144,7 @@ test("grandchildren default from their parent's placement", async () => {
   const nested = await openChild(rig, worker, { task: "split the module" });
   assert.equal(nested.spawnMeta?.isolation?.mode, "worktree");
   assert.equal(nested.spawnMeta?.isolation?.base, workdir);
+  assert.deepEqual(nested.spawnMeta?.isolation?.baseChain, [{ workdir, branch: worker.spawnMeta?.isolation?.branch }]);
   assert.notEqual(nested.spawnMeta?.isolation?.workdir, workdir);
   const helper = await openChild(rig, worker, { task: "run the linter", isolation: "shared" });
   assert.deepEqual(helper.spawnMeta?.isolation, { ...worker.spawnMeta?.isolation, mode: "shared" });
@@ -157,8 +158,12 @@ test("grandchildren default from their parent's placement", async () => {
 });
 
 function sh(cwd: string, command: string) {
-  const out = spawnSync("sh", ["-c", command], { cwd, encoding: "utf8" });
-  return { stdout: out.stdout, stderr: out.stderr, code: out.status ?? 1, timedOut: false };
+  return new Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean }>((resolve) => {
+    execFile("sh", ["-c", command], { cwd, encoding: "utf8" }, (error, stdout, stderr) => {
+      const code = typeof error?.code === "number" ? error.code : Number(!!error);
+      resolve({ stdout, stderr, code, timedOut: false });
+    });
+  });
 }
 
 function localDisk() {
@@ -461,4 +466,52 @@ test("a child cannot get its own sandbox on a provider that cannot retire comput
   const child = rig.session(childId, { mode: "sandbox", sandboxId: childId });
   await assert.rejects(rig.turn(child).tools.execute("true"), /local computers cannot be retired/);
   await assert.rejects(rig.resources.get(childId), /not found/);
+});
+
+function gitRepo(dir: string, files = 1) {
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
+  mkdirSync(dir, { recursive: true });
+  git(dir, "init", "-q", "-b", "main");
+  for (let i = 0; i < files; i++) writeFileSync(join(dir, `f${i}.txt`), `${i}\n`);
+  git(dir, "add", ".");
+  git(dir, "commit", "-q", "-m", "init");
+  return git;
+}
+
+test("concurrent setups of one directory end with one complete worktree", async () => {
+  const { backend } = localDisk();
+  const handle = await backend.provision("box");
+  const git = gitRepo(join(handle.rootDir, "repo"), 3000);
+  const isolation: ChildIsolation = {
+    mode: "worktree",
+    workdir: "subagents/lead-1",
+    branch: "subagent/lead-1",
+    base: "repo",
+  };
+  await Promise.all([
+    prepareChildWorkdir(backend, handle, isolation),
+    prepareChildWorkdir(backend, handle, { ...isolation, mode: "shared" }),
+    prepareChildWorkdir(backend, handle, { ...isolation, mode: "shared" }),
+  ]);
+  const dir = workdirOf(handle, isolation);
+  assert.equal(git(dir, "rev-parse", "--show-toplevel"), dir);
+  assert.equal(readdirSync(dir).filter((name) => name.startsWith("f")).length, 3000);
+  assert.equal(existsSync(join(handle.rootDir, "subagents", ".lead-1.lock")), false);
+});
+
+test("a worktree grandchild sets up its parent's worktree first when the parent has not yet", async () => {
+  const { backend } = localDisk();
+  const handle = await backend.provision("box");
+  const git = gitRepo(join(handle.rootDir, "repo"));
+  const isolation: ChildIsolation = {
+    mode: "worktree",
+    workdir: "subagents/kid-1",
+    branch: "subagent/kid-1",
+    base: "subagents/lead-1",
+    baseChain: [{ workdir: "subagents/lead-1", branch: "subagent/lead-1", base: "repo" }],
+  };
+  await prepareChildWorkdir(backend, handle, isolation);
+  assert.equal(git(join(handle.rootDir, "subagents/lead-1"), "rev-parse", "--abbrev-ref", "HEAD"), "subagent/lead-1");
+  assert.equal(git(workdirOf(handle, isolation), "rev-parse", "--abbrev-ref", "HEAD"), "subagent/kid-1");
 });

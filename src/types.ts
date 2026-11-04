@@ -86,12 +86,19 @@ export interface SurfaceBriefing {
 
 export type ChildIsolationMode = "shared" | "worktree" | "sandbox";
 
+export interface ChildWorkdir {
+  workdir: string;
+  branch: string;
+  base?: string;
+}
+
 export interface ChildIsolation {
   mode: ChildIsolationMode;
   sandboxId?: string;
   workdir?: string;
   branch?: string;
   base?: string;
+  baseChain?: ChildWorkdir[];
 }
 
 export interface SpawnMeta {

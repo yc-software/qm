@@ -4,12 +4,12 @@ import { shq } from "../util/shell.ts";
 import { posixJoin } from "../sandbox/exec-file-ops.ts";
 import { execFailureDetail, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import { preferredBackend, SandboxAccessError, type SandboxResources } from "../sandbox/sandbox-resources.ts";
-import type { ChildIsolation, ChildIsolationMode, ScopeId, Session } from "../types.ts";
+import type { ChildIsolation, ChildIsolationMode, ChildWorkdir, ScopeId, Session } from "../types.ts";
 
 const WORKDIR_ROOT = "subagents";
 const WORKDIR_TIMEOUT_SEC = 300;
-
-type Workdir = ChildIsolation & { workdir: string; branch: string };
+const LOCK_WAIT_SEC = 240;
+const STALE_LOCK_MIN = 10;
 
 function slug(title: string): string {
   const words = title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
@@ -33,43 +33,64 @@ export function childIsolation(input: {
     return { ...parent, mode };
   }
   const name = `${slug(input.title)}-${hashId([input.childId], 8)}`;
+  const parentWorkdir = parent && ownWorkdir(parent);
+  const baseChain = parentWorkdir ? [...(parent.baseChain ?? []), parentWorkdir] : [];
   return {
     mode,
     ...onSandbox,
     workdir: `${WORKDIR_ROOT}/${name}`,
     branch: `subagent/${name}`,
     ...(parent?.workdir ? { base: parent.workdir } : {}),
+    ...(baseChain.length ? { baseChain } : {}),
   };
 }
 
-function preparesWorkdir(isolation: ChildIsolation | undefined): isolation is Workdir {
-  return !!isolation?.workdir && !!isolation.branch;
+function ownWorkdir(isolation: ChildIsolation): ChildWorkdir | undefined {
+  if (!isolation.workdir || !isolation.branch) return undefined;
+  return { workdir: isolation.workdir, branch: isolation.branch, ...(isolation.base ? { base: isolation.base } : {}) };
 }
 
-function workdirScript(rootDir: string, isolation: Workdir): string {
-  const dir = shq(posixJoin(rootDir, isolation.workdir));
-  const ready = shq(
-    posixJoin(rootDir, posix.join(posix.dirname(isolation.workdir), `.${posix.basename(isolation.workdir)}.ready`)),
-  );
-  const base = posixJoin(rootDir, isolation.base ?? "");
+function workdirStep(rootDir: string, step: ChildWorkdir): string {
+  const sibling = (suffix: string) =>
+    shq(posixJoin(rootDir, posix.join(posix.dirname(step.workdir), `.${posix.basename(step.workdir)}.${suffix}`)));
+  const dir = posixJoin(rootDir, step.workdir);
+  const [ready, lock] = [sibling("ready"), sibling("lock")];
+  const base = posixJoin(rootDir, step.base ?? "");
   const git = `git -C ${shq(base)}`;
-  const branch = shq(isolation.branch);
+  const branch = shq(step.branch);
+  const isWorktree = `[ "$(git -C ${shq(dir)} rev-parse --show-toplevel 2>/dev/null)" = ${shq(dir)} ]`;
   return [
-    `[ -f ${ready} ] && [ -d ${dir} ] && exit 0`,
+    `[ -f ${ready} ] && [ -d ${shq(dir)} ] && exit 0`,
     `mkdir -p ${shq(posixJoin(rootDir, WORKDIR_ROOT))} || exit 1`,
-    `[ -d ${shq(base)} ] || { echo "base directory ${isolation.base ?? "."} does not exist yet" >&2; exit 1; }`,
+    `waited=0; until mkdir ${lock} 2>/dev/null; do`,
+    `  find ${lock} -maxdepth 0 -mmin +${STALE_LOCK_MIN} -exec rmdir {} \\; 2>/dev/null`,
+    `  waited=$((waited + 1)); [ "$waited" -ge ${LOCK_WAIT_SEC} ] && { echo "another setup of ${step.workdir} is still running" >&2; exit 1; }`,
+    `  sleep 1`,
+    `done`,
+    `trap 'rmdir ${lock} 2>/dev/null' EXIT`,
+    `[ -f ${ready} ] && [ -d ${shq(dir)} ] && exit 0`,
+    `[ -d ${shq(base)} ] || { echo "base directory ${step.base ?? "."} does not exist yet" >&2; exit 1; }`,
     `if ${git} rev-parse --is-inside-work-tree >/dev/null 2>&1; then`,
-    `  ${git} worktree remove --force ${dir} >/dev/null 2>&1; rm -rf ${dir}; ${git} worktree prune || exit 1`,
-    ...(isolation.base
+    `  ${git} worktree remove --force ${shq(dir)} >/dev/null 2>&1; rm -rf ${shq(dir)}; ${git} worktree prune || exit 1`,
+    ...(step.base
       ? []
       : [
-          `  exclude=$(${git} rev-parse --path-format=absolute --git-path info/exclude) && { grep -qxF '/${WORKDIR_ROOT}/' "$exclude" 2>/dev/null || echo '/${WORKDIR_ROOT}/' >> "$exclude"; }`,
+          `  info="$(cd ${shq(base)} && cd "$(git rev-parse --git-common-dir)" && pwd)/info" && mkdir -p "$info" && { grep -qxF '/${WORKDIR_ROOT}/' "$info/exclude" 2>/dev/null || echo '/${WORKDIR_ROOT}/' >> "$info/exclude"; }`,
         ]),
-    `  if ${git} show-ref --verify --quiet ${shq(`refs/heads/${isolation.branch}`)}; then ${git} worktree add -q ${dir} ${branch} || exit 1`,
-    `  else ${git} worktree add -q -b ${branch} ${dir} || exit 1; fi`,
-    `else mkdir -p ${dir} || exit 1; fi`,
-    `exec touch ${ready}`,
+    `  if ${git} show-ref --verify --quiet ${shq(`refs/heads/${step.branch}`)}; then ${git} worktree add -q ${shq(dir)} ${branch} || exit 1`,
+    `  else ${git} worktree add -q -b ${branch} ${shq(dir)} || exit 1; fi`,
+    `  ${isWorktree} || { echo "${step.workdir} is not a complete git worktree" >&2; exit 1; }`,
+    `else mkdir -p ${shq(dir)} || exit 1; fi`,
+    `touch ${ready}`,
   ].join("\n");
+}
+
+function workdirScript(rootDir: string, isolation: ChildIsolation): string | undefined {
+  const own = ownWorkdir(isolation);
+  if (!own) return undefined;
+  return [...(isolation.baseChain ?? []), own]
+    .map((step) => `(\n${workdirStep(rootDir, step)}\n) || exit 1`)
+    .join("\n");
 }
 
 export async function prepareChildWorkdir(
@@ -77,10 +98,9 @@ export async function prepareChildWorkdir(
   handle: SandboxHandle,
   isolation: ChildIsolation | undefined,
 ): Promise<void> {
-  if (!preparesWorkdir(isolation)) return;
-  const result = await sandbox.run(handle, workdirScript(handle.rootDir, isolation), {
-    timeoutMs: WORKDIR_TIMEOUT_SEC * 1000,
-  });
+  const script = isolation && workdirScript(handle.rootDir, isolation);
+  if (!script) return;
+  const result = await sandbox.run(handle, script, { timeoutMs: WORKDIR_TIMEOUT_SEC * 1000 });
   if (result.code !== 0)
     throw new Error(
       `could not prepare this subagent's directory ${isolation.workdir}: ${execFailureDetail(result, WORKDIR_TIMEOUT_SEC)}`,
@@ -113,7 +133,7 @@ const DEFAULT_TOOLS = "execute, files, skills and apps use it when sandbox_id is
 export function isolationBrief(isolation: ChildIsolation | undefined): string | undefined {
   if (!isolation) return undefined;
   if (isolation.mode === "sandbox")
-    return `Your default computer is your own sandbox, ${isolation.sandboxId}, created the first time you use it: ${DEFAULT_TOOLS}. Your parent's files are not on it; fetch what you need from git or Files.`;
+    return `Your default computer is your own sandbox, ${isolation.sandboxId}: ${DEFAULT_TOOLS}. Your parent's files are not on it; fetch what you need from git or Files.`;
   const lines = isolation.sandboxId
     ? [`Your default computer is your parent's sandbox, ${isolation.sandboxId}: ${DEFAULT_TOOLS}.`]
     : [];
