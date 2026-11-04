@@ -11,7 +11,6 @@ import {
   type DirectoryMember,
   type DirectoryStore,
 } from "./directory-store.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 import { createDirectorySync } from "./directory-sync.ts";
 
 const PREVIOUS_SCHEMA = "directory/store/0005";
@@ -113,25 +112,15 @@ function channelRow(r: Record<string, unknown>): DirectoryChannel {
 }
 
 export const DIRECTORY_MIGRATIONS = [
-  ...TENANCY,
   {
     id: "directory/store/0006-base-schema",
     expectedChecksum: "e8dcd5c2a3a8fcba7b1c14db1d1aceb57ca7ef6e1c7366ace6df65043f731198",
     statements: [BASE_SCHEMA],
   },
-  ...tenantTables("directory/store/0006-tenants", [
-    { table: "directory_members", primaryKey: "org_id, principal_id" },
-    { table: "directory_channels", primaryKey: "org_id, channel_id" },
-    { table: "directory_channel_members", primaryKey: "org_id, channel_id, principal_id" },
-    { table: "directory_group_members", primaryKey: "org_id, group_id, principal_id" },
-    { table: "directory_groups", primaryKey: "org_id, group_id" },
-    { table: "directory_sync", primaryKey: "org_id" },
-    { table: "directory_meta", primaryKey: "org_id" },
-  ]),
 ];
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
-  const orgId = configOrgId;
+  const orgId = configOrgId();
   const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
 
   async function pick<T>(
@@ -146,12 +135,12 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     if (!qn) return { kind: "none" };
     const from = `FROM ${table} WHERE org_id = $1`;
 
-    const byId = await q(`SELECT ${cols} ${from} AND lower(${idCol}) = $2 LIMIT 1`, [orgId(), qn]);
+    const byId = await q(`SELECT ${cols} ${from} AND lower(${idCol}) = $2 LIMIT 1`, [orgId, qn]);
     if (byId.length) return { kind: "one", item: map(byId[0]!) };
 
     const exact = await q(
       `SELECT ${cols} ${from} AND ${labelLcCol} = $2 ORDER BY ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-      [orgId(), qn],
+      [orgId, qn],
     );
     if (exact.length === 1) return { kind: "one", item: map(exact[0]!) };
     if (exact.length > 1) return { kind: "ambiguous", items: exact.slice(0, MAX_CANDIDATES).map(map) };
@@ -159,12 +148,12 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     const esc = likeEscape(qn);
     let pool2 = await q(
       `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-      [orgId(), `${esc}%`],
+      [orgId, `${esc}%`],
     );
     if (!pool2.length) {
       pool2 = await q(
         `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-        [orgId(), `%${esc}%`],
+        [orgId, `%${esc}%`],
       );
     }
     if (!pool2.length) return { kind: "none" };
@@ -185,7 +174,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
          ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
        WHERE group_row.org_id = $1 AND group_row.group_id = ANY($2::text[]) AND group_row.roster_known = TRUE
        ORDER BY group_row.group_id, roster.principal_id`,
-      [orgId(), [...groupIds]],
+      [orgId, [...groupIds]],
     );
     const incomplete = new Set<string>();
     for (const row of rows) {
@@ -200,7 +189,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
   return {
     ...createDirectorySync({ q, pool, orgId }),
     async meta() {
-      const rows = await q("SELECT workspace_url FROM directory_meta WHERE org_id = $1", [orgId()]);
+      const rows = await q("SELECT workspace_url FROM directory_meta WHERE org_id = $1", [orgId]);
       return { workspaceUrl: (rows[0]?.workspace_url as string | null) ?? null };
     },
 
@@ -210,20 +199,20 @@ export function createPostgresDirectoryStore(connectionString: string): Director
          JOIN directory_channels channel USING (org_id, channel_id)
          WHERE member.org_id = $1 AND member.channel_id = $2 AND member.principal_id = ANY($3::text[])
            AND NOT (channel.is_private AND channel.is_external) LIMIT 1`,
-        [orgId(), channelId, rosterIds(principalId)],
+        [orgId, channelId, rosterIds(principalId)],
       );
       return rows.length > 0;
     },
 
     async channelMemberIds(channelId) {
       const known = await q("SELECT roster_known FROM directory_channels WHERE org_id = $1 AND channel_id = $2", [
-        orgId(),
+        orgId,
         channelId,
       ]);
       if (known[0]?.roster_known !== true) return undefined;
       const rows = await q(
         "SELECT principal_id FROM directory_channel_members WHERE org_id = $1 AND channel_id = $2 ORDER BY principal_id",
-        [orgId(), channelId],
+        [orgId, channelId],
       );
       return rows.map((row) => row.principal_id as string);
     },
@@ -236,7 +225,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
          ) AS member,
          (SELECT is_private FROM directory_channels WHERE org_id = $1 AND channel_id = $2) AS is_private,
          (SELECT roster_known FROM directory_channels WHERE org_id = $1 AND channel_id = $2) AS roster_known`,
-        [orgId(), channelId, rosterIds(principalId)],
+        [orgId, channelId, rosterIds(principalId)],
       );
       const member = rows[0]?.member === true;
       if (rows[0]?.roster_known !== true) return undefined;
@@ -245,7 +234,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
 
     async channelPrivacy(channelId) {
       const rows = await q("SELECT is_private FROM directory_channels WHERE org_id = $1 AND channel_id = $2 LIMIT 1", [
-        orgId(),
+        orgId,
         channelId,
       ]);
       return rows.length > 0 ? (rows[0]!.is_private as boolean) : undefined;
@@ -260,7 +249,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
          GROUP BY group_id
          HAVING string_agg(DISTINCT principal_id, ',' ORDER BY principal_id) = $2
          LIMIT 1`,
-        [orgId(), key],
+        [orgId, key],
       );
       return rows.length ? { kind: "one", groupId: rows[0]!.group_id as string } : { kind: "none" };
     },
@@ -268,7 +257,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     async groupMember(groupId, principalId) {
       const rows = await q(
         "SELECT 1 FROM directory_group_members WHERE org_id = $1 AND group_id = $2 AND principal_id = ANY($3::text[]) LIMIT 1",
-        [orgId(), groupId, rosterIds(principalId)],
+        [orgId, groupId, rosterIds(principalId)],
       );
       return rows.length > 0;
     },
@@ -288,7 +277,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
          EXISTS (
            SELECT 1 FROM directory_sync WHERE org_id = $1 AND groups_hash IS NOT NULL
          ) AS synced`,
-        [orgId(), groupId, rosterIds(principalId)],
+        [orgId, groupId, rosterIds(principalId)],
       );
       if (rows[0]?.member === true) return true;
       if (rows[0]?.listed !== true) return rows[0]?.synced === true ? false : undefined;
@@ -298,7 +287,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     async listGroupsFor(principalId) {
       const rows = await q(
         "SELECT DISTINCT group_id FROM directory_group_members WHERE org_id = $1 AND principal_id = ANY($2::text[]) ORDER BY group_id",
-        [orgId(), rosterIds(principalId)],
+        [orgId, rosterIds(principalId)],
       );
       return rows.map((row) => row.group_id as string);
     },
@@ -315,7 +304,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
            ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
          WHERE channel.org_id = $1 AND channel.channel_id = $2
          ORDER BY roster.principal_id`,
-        [orgId(), id],
+        [orgId, id],
       );
       if (!rows.length || rows[0]?.roster_known !== true || rows[0]?.is_external === true) return undefined;
       if (rows.some((row) => !row.roster_principal_id || !row.principal_id)) return undefined;
@@ -331,20 +320,20 @@ export function createPostgresDirectoryStore(connectionString: string): Director
            SELECT 1 FROM directory_channel_members m
            WHERE m.org_id = c.org_id AND m.channel_id = c.channel_id AND m.principal_id = ANY($2::text[]))))
          ORDER BY name_lc`,
-        [orgId(), rosterIds(principalId)],
+        [orgId, rosterIds(principalId)],
       );
       return rows.map(channelRow);
     },
 
     async list() {
-      const rows = await q(`SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1`, [orgId()]);
+      const rows = await q(`SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1`, [orgId]);
       return rows.map(memberRow);
     },
 
     async listChannels() {
       const rows = await q(
         "SELECT channel_id, name, is_private, is_external FROM directory_channels WHERE org_id = $1",
-        [orgId()],
+        [orgId],
       );
       return rows.map(channelRow);
     },
@@ -355,7 +344,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         `SELECT ${MEMBER_COLS} FROM directory_members
          WHERE org_id = $1 AND (principal_id = $2 OR ($3 AND lower(principal_id) = $4))
          ORDER BY (principal_id = $2) DESC LIMIT 1`,
-        [orgId(), principalId, key.includes("@"), key],
+        [orgId, principalId, key.includes("@"), key],
       );
       return rows.length ? memberRow(rows[0]!) : null;
     },
@@ -364,7 +353,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       const rows = await q(
         `SELECT ${MEMBER_COLS} FROM directory_members
          WHERE org_id = $1 AND (slack_id = $2 OR (slack_id IS NULL AND principal_id = $2)) LIMIT 1`,
-        [orgId(), slackId],
+        [orgId, slackId],
       );
       return rows.length ? memberRow(rows[0]!) : null;
     },
@@ -372,7 +361,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     async resolve(query) {
       const bySlackId = await q(
         `SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1 AND slack_id = $2 LIMIT 1`,
-        [orgId(), query.trim()],
+        [orgId, query.trim()],
       );
       if (bySlackId.length) return { kind: "one", member: memberRow(bySlackId[0]!) };
       const m = await pick(query, "directory_members", "principal_id", "display_name_lc", MEMBER_COLS, memberRow);

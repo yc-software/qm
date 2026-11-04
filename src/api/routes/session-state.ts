@@ -1,6 +1,6 @@
 import type { BaseCtx, Route } from "./route.ts";
+import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { verifyOrReject } from "../http.ts";
-import { boundTenant } from "../../tenants/context.ts";
 
 const HEARTBEAT_MS = 25_000;
 
@@ -12,7 +12,7 @@ async function streamSessionStates(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      { method, path: pathname + url.search, body: "" },
+      canonicalPayload(method, pathname + url.search, ""),
       false,
       ctx.allowUnsignedSourceAuth,
     ))
@@ -26,11 +26,10 @@ async function streamSessionStates(ctx: BaseCtx): Promise<void> {
     connection: "keep-alive",
     "x-accel-buffering": "no",
   });
-  const sole = (await ctx.deps.tenancy?.soleTenant()) ?? undefined;
   res.write(": open\n\n");
   const unsubscribe = app.subscribeSessionStates(
     (event) => {
-      res.write(`event: session_state\ndata: ${JSON.stringify({ ...event, tenantId: boundTenant() ?? sole })}\n\n`);
+      res.write(`event: session_state\ndata: ${JSON.stringify(event)}\n\n`);
     },
     { onResync: () => res.write("event: session_state_resync\ndata: {}\n\n") },
   );
@@ -43,5 +42,5 @@ async function streamSessionStates(ctx: BaseCtx): Promise<void> {
 }
 
 export const sessionStateRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "GET", path: "/v1/session-state/events", auth: "source", tenant: "none", handle: streamSessionStates },
+  { method: "GET", path: "/v1/session-state/events", auth: "source", handle: streamSessionStates },
 ];

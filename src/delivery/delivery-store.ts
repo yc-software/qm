@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
-import { createTenantListeners } from "../tenants/context.ts";
 
 export const DELIVERY_MAX_AGE_MS = 6 * 3_600_000;
 
@@ -34,10 +33,6 @@ export function turnDeliveryProvenance(input: {
   };
 }
 
-export interface ClaimOptions {
-  oldestPerConversation?: boolean;
-}
-
 export interface DeliveryStore {
   enqueue(input: {
     destination: Destination;
@@ -48,9 +43,7 @@ export interface DeliveryStore {
     shadow?: boolean;
   }): Promise<Delivery>;
   pending(type: string): Promise<Delivery[]>;
-  pendingAcrossTenants(type: string): Promise<Delivery[]>;
-  claimPending(type: string, ttlMs: number, opts?: ClaimOptions): Promise<Delivery[]>;
-  claimPendingAcrossTenants(type: string, ttlMs: number, opts?: ClaimOptions): Promise<Delivery[]>;
+  claimPending(type: string, ttlMs: number, opts?: { oldestPerConversation?: boolean }): Promise<Delivery[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
   fail(id: string, reason: string, at: number): Promise<Delivery | null>;
@@ -69,7 +62,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
   const deliveries = new Map<string, Delivery>();
   const byKey = new Map<string, string>();
   const claimedUntil = new Map<string, number>();
-  const enqueueListeners = createTenantListeners<[string]>("delivery enqueue");
+  const enqueueListeners = new Set<(type: string) => void>();
 
   const expireOveraged = (now: number): void => {
     for (const d of deliveries.values()) {
@@ -104,7 +97,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
           claimedUntil.delete(existing.id);
           if (input.shadow) existing.shadow = true;
           else delete existing.shadow;
-          if (!existing.shadow) enqueueListeners.emit(existing.destination.type);
+          if (!existing.shadow) for (const l of enqueueListeners) l(existing.destination.type);
         }
         return existing;
       }
@@ -121,14 +114,8 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       };
       deliveries.set(delivery.id, delivery);
       byKey.set(delivery.idempotencyKey, delivery.id);
-      if (!delivery.shadow) enqueueListeners.emit(delivery.destination.type);
+      if (!delivery.shadow) for (const l of enqueueListeners) l(delivery.destination.type);
       return delivery;
-    },
-    async pendingAcrossTenants(type) {
-      return this.pending(type);
-    },
-    async claimPendingAcrossTenants(type, ttlMs, opts) {
-      return this.claimPending(type, ttlMs, opts);
     },
     async pending(type) {
       return [...deliveries.values()].filter(
@@ -232,7 +219,8 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         .slice(-limit);
     },
     onEnqueue(listener) {
-      return enqueueListeners.add(listener);
+      enqueueListeners.add(listener);
+      return () => enqueueListeners.delete(listener);
     },
   };
 }

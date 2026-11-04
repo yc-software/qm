@@ -1,4 +1,3 @@
-import { TENANT_HEADER } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
@@ -16,6 +15,7 @@ import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
 import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
+import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
@@ -28,15 +28,9 @@ import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
-import {
-  appViewerTenant,
-  FRAME_SESSION_COOKIE,
-  portalSession,
-  portalSessionFrom,
-} from "../../deploy/viewer-session.ts";
+import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
-import { bindTenant, withRowTenant } from "../tenant-ingress.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
   if (port === undefined) return {};
@@ -77,7 +71,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      { method, path: pathname + url.search, body: principal },
+      canonicalPayload(method, pathname + url.search, principal),
       false,
       ctx.allowUnsignedSourceAuth,
     ))
@@ -146,7 +140,7 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
       res,
       secret,
       auth,
-      { method, path: pathname + url.search, body: actorHeader },
+      canonicalPayload(method, pathname + url.search, actorHeader),
       false,
       ctx.allowUnsignedSourceAuth,
     ))
@@ -175,7 +169,6 @@ const GATEWAY_AUTH_HEADERS = [
   "x-as-principal",
   "x-admin-actor",
   "x-agent-capability",
-  TENANT_HEADER,
   PORTAL_IDENTITY_HEADER,
 ];
 
@@ -806,7 +799,7 @@ async function fetchDeploymentResponse(
 }
 
 export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
-  const { req, res, deps } = ctx;
+  const { req, res, app, deps, url, pathname } = ctx;
   const appsDomain = deps.deployAppsDomain;
   const gateSecret = deps.deployGateSecret;
   const fromAppHost = req.headers["x-qm-app-host"] === "1";
@@ -827,20 +820,12 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     sendJson(res, 404, { error: "not_found" });
     return true;
   }
-  await withRowTenant(req, res, deps.tenancy, { table: "deployments", id: slug }, () =>
-    serveAppSubdomain(ctx, rawHost, slug, fromAppHost),
-  );
-  return true;
-}
-
-async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fromAppHost: boolean): Promise<void> {
-  const { req, res, app, deps, url, pathname } = ctx;
   if (!["GET", "HEAD", "OPTIONS"].includes(ctx.method)) {
     const origin = req.headers.origin;
     const site = req.headers["sec-fetch-site"];
     if ((origin !== undefined && origin !== `https://${rawHost}`) || (site !== undefined && site !== "same-origin")) {
       sendJson(res, 403, { error: "forbidden", message: "cross-origin app request refused" });
-      return;
+      return true;
     }
   }
   const safePathname =
@@ -858,7 +843,7 @@ async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fr
   };
   if ((staleAccess || staleOwner) && ctx.method === "GET") {
     cleanUrlRedirect();
-    return;
+    return true;
   }
   const deployment = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));
   const externalAllowed = deployment
@@ -868,20 +853,19 @@ async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fr
   const sessionSecret = deps.deployAppsSessionSecret;
   const loginUrl = deps.deployAppsLoginUrl;
   const wantsHtml = ctx.method === "GET" && String(req.headers.accept ?? "").includes("text/html");
-  const viewerTenant = appViewerTenant();
-  let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret, viewerTenant) : null;
+  let session = sessionSecret ? portalSession(req.headers.cookie, sessionSecret) : null;
   const dest = req.headers["sec-fetch-dest"];
   const site = req.headers["sec-fetch-site"];
   const framed = dest === "iframe" || site === "same-origin";
   const embedAncestors = framed ? (deployment?.embedAncestors ?? []) : [];
   if (!session && sessionSecret && embedAncestors.length) {
-    session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret, viewerTenant);
+    session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret);
   }
   const sub = session?.sub;
   if (embedAncestors.length) res.setHeader("content-security-policy", frameAncestorsDirective(embedAncestors));
   if (!isPublic && (!sessionSecret || !loginUrl)) {
     sendJson(res, 503, { error: "unavailable", message: "sign-in is not configured for deployment subdomains" });
-    return;
+    return true;
   }
   if (!sub && !isPublic) {
     const qs = url.searchParams.toString();
@@ -900,7 +884,7 @@ async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fr
       res.writeHead(302, { location: signIn, "cache-control": "no-store" });
       res.end();
     }
-    return;
+    return true;
   }
   const bareApp = url.searchParams.get("__qm_no_shell") === "1";
   url.searchParams.delete("__qm_no_shell");
@@ -950,7 +934,7 @@ async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fr
       !!sub && (await deps.featureFlags?.enabled("app_annotations", scopeId("personal", sub))) === true;
     if (signInAttempted) {
       cleanUrlRedirect();
-      return;
+      return true;
     }
     if (isShellRequest) {
       if (pathname === "/__claw__/version" && deployment)
@@ -964,7 +948,7 @@ async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fr
         });
         res.end(appAnnotationAsset(kind));
       } else sendJson(res, 404, { error: "not_found" });
-      return;
+      return true;
     }
     recordPageView("signed_in");
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
@@ -977,7 +961,7 @@ async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fr
         path: safePathname + url.search,
       }),
     );
-    return;
+    return true;
   }
   const viewer = sub ?? "";
   const reach =
@@ -1006,7 +990,7 @@ async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fr
     const d = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));
     if (!d) {
       sendJson(res, 404, { error: "not_found" });
-      return;
+      return true;
     }
     // The recipient is the app's owner: the personal home scope if it has one, else whoever created it.
     const [ownerKind, ownerRef] = String(d.ownerScopeId).split(":", 2);
@@ -1029,7 +1013,7 @@ async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fr
     } catch {
       sendJson(res, 502, { error: "delivery_failed", message: "the request could not be delivered — try again later" });
     }
-    return;
+    return true;
   }
   if (reach.status === "denied" && wantsHtml) {
     res.writeHead(403, {
@@ -1038,11 +1022,11 @@ async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fr
       "x-content-type-options": "nosniff",
     });
     res.end(notSharedHtml(viewer));
-    return;
+    return true;
   }
   if (reach.status === "ok" && signInAttempted && ctx.method === "GET") {
     cleanUrlRedirect();
-    return;
+    return true;
   }
   if (reach.status === "ok") {
     let authMode: AppViewAuthMode = "public";
@@ -1053,6 +1037,7 @@ async function serveAppSubdomain(ctx: BaseCtx, rawHost: string, slug: string, fr
   await proxyReach(ctx, reach, pathname, sub && (canManage || authenticatedPermission) ? sub : undefined, {
     frameAncestors: embedAncestors,
   });
+  return true;
 }
 
 function gateCardHtml(title: string, paragraphsHtml: string): string {
@@ -1233,12 +1218,6 @@ async function runGitHttpBackend(input: {
 }
 
 async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
-  const token = ctx.secret ? gitTokenFrom(ctx) : null;
-  const access = ctx.secret && token ? await verifyDeployGitAccess(ctx.secret, token) : null;
-  return access?.tenant ? bindTenant(access.tenant, () => serveGit(ctx, access)) : serveGit(ctx, access);
-}
-
-async function serveGit(ctx: BaseCtx, access: Awaited<ReturnType<typeof verifyDeployGitAccess>>): Promise<void> {
   const parts = deploymentGitParts(ctx.pathname);
   if (!parts) return sendJson(ctx.res, 404, { error: "not_found" });
   const service = gitServiceOf(parts.tail, ctx.url);
@@ -1246,7 +1225,10 @@ async function serveGit(ctx: BaseCtx, access: Awaited<ReturnType<typeof verifyDe
   const isPush = service === "git-receive-pack";
   if (isPush && !ctx.secret)
     return sendJson(ctx.res, 503, { error: "unavailable", message: "deployment git push requires core signing" });
+  let access: Awaited<ReturnType<typeof verifyDeployGitAccess>> = null;
   if (ctx.secret) {
+    const token = gitTokenFrom(ctx);
+    access = token ? await verifyDeployGitAccess(ctx.secret, token) : null;
     if (!access) return rejectGitAuth(ctx.res);
     if (access.deploymentId !== parts.id)
       return sendJson(ctx.res, 403, { error: "forbidden", message: "token is for a different deployment" });

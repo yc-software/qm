@@ -1,9 +1,8 @@
-import { before, test, beforeEach } from "node:test";
+import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { MemoryFactsMissing } from "../src/memory/facts.ts";
 import { scopeId } from "../src/types.ts";
-import { seedReleasedInstall } from "./support/tenant-seed.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres memory tests";
@@ -18,10 +17,6 @@ async function sql(text: string, params: unknown[] = []) {
     await pool.end();
   }
 }
-
-before(async () => {
-  if (URL) await seedReleasedInstall(URL);
-});
 
 beforeEach(async () => {
   if (!URL) return;

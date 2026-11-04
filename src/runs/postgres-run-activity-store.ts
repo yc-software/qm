@@ -1,7 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { Item } from "../sessions/items.ts";
 import { RUN_ACTIVITY_TTL_MS, type RunActivityEntry, type RunActivityStore } from "./run-activity-store.ts";
-import { TENANCY, tenantTables } from "../tenants/migrations.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS run_activity(
@@ -20,11 +19,7 @@ const SCHEMA = [
 const PRUNE_INTERVAL_MS = 60_000;
 
 export function createPostgresRunActivityStore(connectionString: string): RunActivityStore {
-  const pg = createPgPool(connectionString, [
-    ...TENANCY,
-    { id: "runs/activity/0001", statements: SCHEMA },
-    ...tenantTables("runs/activity/0002-tenants", [{ table: "run_activity", primaryKey: "id" }]),
-  ]);
+  const pg = createPgPool(connectionString, [{ id: "runs/activity/0001", statements: SCHEMA }]);
   const q = pg.query;
   let nextPruneAt = Number.NEGATIVE_INFINITY;
 

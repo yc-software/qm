@@ -1,4 +1,3 @@
-import { isInstallTenant, perTenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";
 
 export type AdminRole = "org_admin";
@@ -39,22 +38,20 @@ export function createAdminGrantStore(
   opts: AdminGrantStoreOptions = {},
 ): AdminGrantStore {
   const seeds = opts.seed ?? [];
-  const seeding = perTenant<{ done?: Promise<void> }>(() => ({}));
+  let seededP: Promise<void> | null = null;
   function ensureSeeded(): Promise<void> {
-    const state = seeding();
-    if (!state.done) {
-      const done = (async () => {
-        if (!seeds.length || !isInstallTenant()) return;
+    if (!seededP) {
+      seededP = (async () => {
+        if (!seeds.length) return;
         if ((await persist.all()).length > 0) return;
         await opts.beforeSeed?.(seeds);
         for (const g of seeds) await persist.put({ grantedBy: "system", createdAt: 0, ...g });
       })().catch((e) => {
-        state.done = undefined;
+        seededP = null;
         throw e;
       });
-      state.done = done;
     }
-    return state.done;
+    return seededP;
   }
   return {
     async list() {

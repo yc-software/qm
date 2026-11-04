@@ -1,5 +1,3 @@
-import { withTenant } from "../tenants/context.ts";
-import type { TenantRow } from "../tenants/claim.ts";
 export class SlackPluginStartCleanupError extends AggregateError {
   readonly cleanup: () => Promise<void>;
 
@@ -112,66 +110,6 @@ export function createSlackRuntimeReconciler<Config>(opts: {
         stopping = null;
       });
       return stopping;
-    },
-  };
-}
-
-export interface SlackRuntime {
-  start(): void;
-  reconcile(): Promise<void>;
-  stop(): Promise<void>;
-}
-
-export function createTenantSlackRuntimes<Config>(opts: {
-  tenants: () => Promise<TenantRow[]>;
-  load: (tenant: TenantRow) => Promise<ReloadableSlackConfig<Config> | null>;
-  startPlugin: (config: Config) => Promise<{ stop(): Promise<void> }>;
-  intervalMs?: number;
-  startPaused?: boolean;
-  onError?: (error: unknown) => void;
-}): SlackRuntime {
-  const runtimes = new Map<string, SlackRuntime>();
-  let stopped = opts.startPaused ?? false;
-  let timer: NodeJS.Timeout | null = null;
-  const runtimeFor = (tenant: TenantRow): SlackRuntime => {
-    const existing = runtimes.get(tenant.id);
-    if (existing) return existing;
-    const runtime = createSlackRuntimeReconciler({
-      load: () => withTenant(tenant.id, () => opts.load(tenant)),
-      startPlugin: (config) => withTenant(tenant.id, () => opts.startPlugin(config)),
-      startPaused: true,
-      ...(opts.intervalMs === undefined ? {} : { intervalMs: opts.intervalMs }),
-      ...(opts.onError ? { onError: opts.onError } : {}),
-    });
-    runtimes.set(tenant.id, runtime);
-    return runtime;
-  };
-  const reconcile = async (): Promise<void> => {
-    if (stopped) return;
-    for (const tenant of await opts.tenants()) {
-      if (stopped) return;
-      const runtime = runtimeFor(tenant);
-      runtime.start();
-      await runtime.reconcile().catch((error: unknown) => opts.onError?.(error));
-    }
-  };
-  const tick = (): void => {
-    void reconcile().catch((error: unknown) => opts.onError?.(error));
-  };
-  return {
-    start() {
-      if (timer) return;
-      stopped = false;
-      tick();
-      timer = setInterval(tick, opts.intervalMs ?? 5_000);
-      timer.unref();
-    },
-    reconcile,
-    async stop() {
-      stopped = true;
-      if (timer) clearInterval(timer);
-      timer = null;
-      await Promise.all([...runtimes.values()].map((runtime) => runtime.stop()));
     },
   };
 }

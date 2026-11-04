@@ -1,139 +1,45 @@
-import { boundTenant, isTenantId, pinTenant, withoutTenant, withTenant } from "../../plugins/chassis/src/tenant.ts";
-import { hashId } from "../util/crypto.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { uuidSchema } from "../util/ids.ts";
 
-import { swallow } from "../util/errors.ts";
+const TENANT_ID = uuidSchema.lowercase();
 
-export { boundTenant, isTenantId, pinTenant, withoutTenant, withTenant };
+const binding = new AsyncLocalStorage<string | undefined>();
+const pinned = new AsyncLocalStorage<{ tenant: string | undefined; open: boolean }>();
 
-export function tenantClaim(): { tenant?: string } {
-  const tenant = boundTenant();
-  return tenant === undefined ? {} : { tenant };
+export function isTenantId(value: unknown): value is string {
+  return TENANT_ID.safeParse(value).success;
 }
 
-export function currentTenant(): string {
-  const id = boundTenant();
-  if (id === undefined) throw new Error("No tenant is bound to this work");
-  return id;
+export function withTenant<T>(id: string, fn: () => T): T {
+  if (!isTenantId(id)) throw new Error(`Tenant id must be a lowercase uuid, got ${JSON.stringify(id)}`);
+  return bind(id, fn);
 }
 
-interface SettledTenancy {
-  install: string;
-  sole: string | undefined;
+export function withoutTenant<T>(fn: () => T): T {
+  return bind(undefined, fn);
 }
 
-let settled: SettledTenancy | undefined;
-let refusal: string | undefined;
-
-export class TenantUnavailable extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "TenantUnavailable";
+export async function pinTenant<T>(fn: () => Promise<T>): Promise<T> {
+  const pin = { tenant: binding.getStore(), open: true };
+  try {
+    return await pinned.run(pin, fn);
+  } finally {
+    pin.open = false;
   }
 }
 
-export function refuseTenancy(reason: string | undefined): void {
-  refusal = reason;
+function bind<T>(id: string | undefined, fn: () => T): T {
+  const pin = pinned.getStore();
+  if (pin?.open && pin.tenant !== id) throw new Error("A transaction is already open for another tenant");
+  return binding.run(id, fn);
 }
 
-export function assertTenancyAllowed(): void {
-  if (refusal !== undefined) throw new TenantUnavailable(refusal);
+export function boundTenant(): string | undefined {
+  return binding.getStore();
 }
 
-export function registerTenants(install: string, sole: string | undefined): void {
-  settled = { install, sole };
-}
-
-export function soleTenantNow(): string | undefined {
-  return settled?.sole;
-}
-
-export function installTenantNow(): string | undefined {
-  return settled?.install;
-}
-
-export function tenantScopedId(id: string): string {
-  const tenant = boundTenant();
-  const install = installTenantNow();
-  return tenant === undefined || install === undefined || tenant === install ? id : `t-${hashId([tenant], 10)}:${id}`;
-}
-
-export function unboundTenantAllowed(): boolean {
-  return !settled || soleTenantNow() !== undefined;
-}
-
-export function cacheTenant(): string {
-  const bound = boundTenant();
-  if (bound !== undefined) return bound;
-  const sole = soleTenantNow();
-  if (sole !== undefined) return sole;
-  if (unboundTenantAllowed()) return "";
-  throw new Error("No tenant is bound to this work");
-}
-
-export function withInstallTenant<T>(fn: () => T): T {
-  const install = installTenantNow();
-  return install === undefined ? fn() : withTenant(install, fn);
-}
-
-export function isInstallTenant(): boolean {
-  const install = installTenantNow();
-  return install === undefined || cacheTenant() === install;
-}
-
-export function perTenant<V>(create: () => V): () => V {
-  const values = new Map<string, V>();
-  return () => {
-    const id = cacheTenant();
-    const existing = values.get(id);
-    if (existing !== undefined) return existing;
-    const value = create();
-    values.set(id, value);
-    return value;
-  };
-}
-
-export interface TenantListeners<A extends unknown[]> {
-  add(listener: (...args: A) => void): () => void;
-  emit(...args: A): void;
-}
-
-export function createTenantListeners<A extends unknown[]>(label: string): TenantListeners<A> {
-  const entries = new Set<{ listener: (...args: A) => void; tenant: string | undefined }>();
-  return {
-    add(listener) {
-      const entry = { listener, tenant: boundTenant() };
-      entries.add(entry);
-      return () => entries.delete(entry);
-    },
-    emit(...args) {
-      const at = boundTenant() ?? soleTenantNow();
-      for (const { listener, tenant } of entries) {
-        if (tenant !== undefined && tenant !== at && (at !== undefined || !unboundTenantAllowed())) continue;
-        try {
-          listener(...args);
-        } catch (e) {
-          swallow(`${label} listener`, e);
-        }
-      }
-    },
-  };
-}
-
-export interface TenantLoader {
-  load(): Promise<void>;
-}
-
-export function createTenantLoader(loaders: ReadonlyArray<() => Promise<unknown>>): TenantLoader {
-  const loads = new Map<string, Promise<void>>();
-  return {
-    load() {
-      const id = cacheTenant();
-      const existing = loads.get(id);
-      if (existing) return existing;
-      const run = Promise.all(loaders.map((loader) => loader())).then(() => undefined);
-      loads.set(id, run);
-      run.catch(() => loads.get(id) === run && loads.delete(id));
-      return run;
-    },
-  };
+export function currentTenant(): string {
+  const id = binding.getStore();
+  if (id === undefined) throw new Error("No tenant is bound to this work");
+  return id;
 }

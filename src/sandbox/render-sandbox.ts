@@ -1,6 +1,5 @@
 import { SandboxSnapshotNotFoundError } from "@renderinc/sdk";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { inTenantOf } from "../tenants/claim.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
@@ -592,65 +591,61 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
     },
     async reapDeepIdle(idleMs) {
       let reaped = 0;
-      for (const { tenantId, id: name, value: candidate } of await scratchStore.acrossTenants()) {
+      for (const [name, candidate] of await scratchStore.entries()) {
         if (!candidate.cleanupPending && candidate.expiresAtMs > Date.now()) continue;
-        await inTenantOf(tenantId, () =>
-          tryLock(lifecycleKey(name), async () => {
-            const temporary = await scratchStore.get(name);
-            if (!temporary || (!temporary.cleanupPending && temporary.expiresAtMs > Date.now())) return;
-            await destroyScratch(name);
-            reaped++;
-          }),
-        ).catch((error) => reportError("scratch_cleanup_failed", error));
+        await tryLock(lifecycleKey(name), async () => {
+          const temporary = await scratchStore.get(name);
+          if (!temporary || (!temporary.cleanupPending && temporary.expiresAtMs > Date.now())) return;
+          await destroyScratch(name);
+          reaped++;
+        }).catch((error) => reportError("scratch_cleanup_failed", error));
       }
       const cutoff = Date.now() - Math.min(idleMs > 0 ? idleMs : Infinity, RENDER_IDLE_STOP_MS);
       const stale = (stored: StoredRenderSandbox): boolean => stored.homeDirty !== false && !recentlySaved(stored);
       const due = (stored: StoredRenderSandbox): boolean =>
         !stored.stopped && (stored.expiresAtMs <= Date.now() || stored.lastActivityMs <= cutoff || stale(stored));
-      for (const { tenantId, id: scope } of await cleanupStore.acrossTenants())
-        await inTenantOf(tenantId, () => tryLock(lifecycleKey(nameFor(scope)), () => finishCleanup(scope))).catch(
+      for (const [scope] of await cleanupStore.entries())
+        await tryLock(lifecycleKey(nameFor(scope)), () => finishCleanup(scope)).catch(
           swallowAs(`render-sandbox: finish cleanup of ${scope}`, undefined),
         );
-      for (const { tenantId, id: scope, value: candidate } of await store.acrossTenants()) {
+      for (const [scope, candidate] of await store.entries()) {
         if (!due(candidate) && !candidate.retiredResources?.length) continue;
         const name = nameFor(scope);
-        await inTenantOf(tenantId, () =>
-          tryLock(lifecycleKey(name), async () => {
-            let stored = await store.get(scope);
-            if (stored) stored = await cleanupRetired(scope, stored);
-            if (!stored || !due(stored)) return;
-            const info = await client.get(stored.sandboxId);
-            if (!info || info.status === "terminated" || info.status === "errored") {
-              if (stored.expiresAtMs > Date.now())
-                reportError(
-                  "computer_ended",
-                  new Error(`Render sandbox ${stored.sandboxId} is ${info?.status ?? "missing"}`),
-                  scope,
-                );
+        await tryLock(lifecycleKey(name), async () => {
+          let stored = await store.get(scope);
+          if (stored) stored = await cleanupRetired(scope, stored);
+          if (!stored || !due(stored)) return;
+          const info = await client.get(stored.sandboxId);
+          if (!info || info.status === "terminated" || info.status === "errored") {
+            if (stored.expiresAtMs > Date.now())
+              reportError(
+                "computer_ended",
+                new Error(`Render sandbox ${stored.sandboxId} is ${info?.status ?? "missing"}`),
+                scope,
+              );
+            await store.merge(scope, { stopped: true });
+            return;
+          }
+          if (info.status !== "running") return;
+          const active = await hasLiveProcesses(info.id);
+          if (active && !stale(stored)) return;
+          const current = stored;
+          const stopped =
+            !active &&
+            stored.lastActivityMs <= cutoff &&
+            (await tryUse(name, async () => {
+              if (await hasLiveProcesses(info.id)) return false;
+              await clearCredentials(info.id).catch((error: unknown) =>
+                reportError("credential_clear_failed", error, scope),
+              );
+              await checkpoint(scope, current, false);
+              await client.terminate(info.id);
               await store.merge(scope, { stopped: true });
-              return;
-            }
-            if (info.status !== "running") return;
-            const active = await hasLiveProcesses(info.id);
-            if (active && !stale(stored)) return;
-            const current = stored;
-            const stopped =
-              !active &&
-              stored.lastActivityMs <= cutoff &&
-              (await tryUse(name, async () => {
-                if (await hasLiveProcesses(info.id)) return false;
-                await clearCredentials(info.id).catch((error: unknown) =>
-                  reportError("credential_clear_failed", error, scope),
-                );
-                await checkpoint(scope, current, false);
-                await client.terminate(info.id);
-                await store.merge(scope, { stopped: true });
-                return true;
-              }));
-            if (stopped) reaped++;
-            else await checkpoint(scope, stored, active || undefined);
-          }),
-        ).catch((error) => reportError("idle_checkpoint_failed", error, scope));
+              return true;
+            }));
+          if (stopped) reaped++;
+          else await checkpoint(scope, stored, active || undefined);
+        }).catch((error) => reportError("idle_checkpoint_failed", error, scope));
       }
       return { reaped };
     },

@@ -1,4 +1,3 @@
-import type { Claimed } from "../tenants/claim.ts";
 import type { Destination } from "../types.ts";
 import type {
   Loop,
@@ -64,7 +63,6 @@ export interface LoopStore {
   create(input: CreateLoopInput): Promise<{ loop: Loop; created: boolean }>;
   get(id: string): Promise<Loop | null>;
   list(): Promise<Loop[]>;
-  listAcrossTenants(): Promise<Array<Claimed<Loop>>>;
   byCron(cronId: string): Promise<Loop | null>;
   update(id: string, patch: LoopPatch): Promise<Loop | null>;
   editPlaybook(id: string, edit: PlaybookEdit): Promise<Loop | null>;
@@ -193,8 +191,6 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
-    listAcrossTenants: async () =>
-      (await backing.acrossTenants()).map(({ tenantId, value }) => ({ ...value, tenantId })),
     async byCron(cronId) {
       return (await backing.all()).find((loop) => loop.cronId === cronId) ?? null;
     },

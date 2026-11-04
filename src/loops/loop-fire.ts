@@ -17,7 +17,6 @@ import { boundLoopCron } from "./authority.ts";
 import { samePerson } from "../directory/person.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import type { Loop, LoopItem, LoopOutput } from "./types.ts";
-import { inTenantOf } from "../tenants/claim.ts";
 import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
@@ -974,14 +973,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function sweepStale(now: number): Promise<void> {
-    const loops = await deps.loops.listAcrossTenants();
-    for (const loop of loops) {
+    for (const loop of await deps.loops.list()) {
       if (
         loop.state === "enabled" &&
         loop.governor?.staleFireMs !== undefined &&
         now - (loop.lastFiredAt ?? loop.createdAt) > loop.governor.staleFireMs
       ) {
-        await inTenantOf(loop.tenantId, () => applyGovernor(loop.id, undefined, now));
+        await applyGovernor(loop.id, undefined, now);
       }
     }
   }

@@ -1,14 +1,5 @@
 import { createPgPool, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
 import { jsonbStringify } from "../util/text.ts";
-import { claimAcrossTenants } from "../tenants/claim.ts";
-import { TENANCY, swapPrimaryKey, tenantColumn, tenantPolicies } from "../tenants/migrations.ts";
-import { workTenant } from "../tenants/work-tenant.ts";
-
-interface TenantEntry<T> {
-  tenantId: string;
-  id: string;
-  value: T;
-}
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
@@ -21,7 +12,6 @@ export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
 export interface DurableMap<T> {
   all(): Promise<T[]>;
   entries(): Promise<Array<[string, T]>>;
-  acrossTenants(): Promise<Array<TenantEntry<T>>>;
   select<K extends Extract<keyof T, string> = never>(query: DurableMapSelect<T, K>): Promise<Array<Omit<T, K>>>;
   selectEntries<K extends Extract<keyof T, string> = never>(
     query: DurableMapSelect<T, K>,
@@ -40,38 +30,6 @@ export interface DurableMap<T> {
 
 const VERSIONS_TABLE = "durable_map_versions";
 
-const VERSIONS_TENANCY = {
-  id: `durable-map/${VERSIONS_TABLE}/0010-tenants`,
-  statements: [
-    `SET LOCAL lock_timeout = '5s'`,
-    `CREATE TABLE IF NOT EXISTS ${VERSIONS_TABLE} (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)`,
-    `DELETE FROM ${VERSIONS_TABLE}`,
-    tenantColumn(VERSIONS_TABLE),
-    `ALTER TABLE ${VERSIONS_TABLE} DROP CONSTRAINT ${VERSIONS_TABLE}_pkey, ADD PRIMARY KEY (tenant_id, tbl)`,
-    ...tenantPolicies(VERSIONS_TABLE),
-  ],
-};
-
-export function durableMapTenancy(table: string): { id: string; statements: string[] }[] {
-  return [
-    {
-      id: `durable-map/${table}/0010-tenants`,
-      statements: [`SET LOCAL lock_timeout = '5s'`, tenantColumn(table), ...tenantPolicies(table)],
-    },
-    {
-      id: `durable-map/${table}/0010-tenants-lookups`,
-      statements: [
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${table}_id_lookup ON ${table}(id)`,
-        `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ${table}_tenant_pkey ON ${table}(tenant_id, id)`,
-      ],
-    },
-    {
-      id: `durable-map/${table}/0010-tenants-swap`,
-      statements: [`SET LOCAL lock_timeout = '5s'`, swapPrimaryKey(table, true)],
-    },
-  ];
-}
-
 export function createPostgresMap<T>(
   pg: PgPool,
   table: string,
@@ -86,10 +44,7 @@ export function createPostgresMap<T>(
     ],
   };
   const migrations = [
-    ...TENANCY,
     migration,
-    VERSIONS_TENANCY,
-    ...durableMapTenancy(table),
     ...indexedFields.flatMap((field) => {
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid index field: ${field}`);
       return [
@@ -128,7 +83,9 @@ export function createPostgresMap<T>(
   let readyP: Promise<void> | null = null;
   function ready(): Promise<void> {
     if (!readyP) {
-      readyP = pg.migrate(...migrations).catch((e) => {
+      readyP = (async () => {
+        for (const definition of migrations) await pg.migrate(definition);
+      })().catch((e) => {
         readyP = null;
         throw e;
       });
@@ -136,7 +93,7 @@ export function createPostgresMap<T>(
     return readyP;
   }
   const bumpSql = `INSERT INTO ${VERSIONS_TABLE} (tbl, v) VALUES ('${table}', 1)
-     ON CONFLICT (tenant_id, tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
+     ON CONFLICT (tbl) DO UPDATE SET v = ${VERSIONS_TABLE}.v + 1`;
   async function withBump<R>(fn: (client: PoolClient) => Promise<R>): Promise<R> {
     await ready();
     return withPgTransaction(await pg.pool(), async (client) => {
@@ -145,22 +102,16 @@ export function createPostgresMap<T>(
     });
   }
   const CACHE_MAX_AGE_MS = 15_000;
-  const caches = new Map<string, { v: string; fetchedAt: number; entries: Array<[string, T]> }>();
+  let cache: { v: string; fetchedAt: number; entries: Array<[string, T]> } | null = null;
   async function snapshot(): Promise<Array<[string, T]>> {
     await ready();
-    const tenant = await workTenant(pg);
-    const vRows = await pg.q(
-      `SELECT v FROM ${VERSIONS_TABLE} WHERE tenant_id = qm_bound_tenant() AND tbl = '${table}'`,
-    );
+    const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
     const v = vRows.length ? String(vRows[0]!.v) : "";
-    const cached = caches.get(tenant);
-    if (cached && cached.v === v && Date.now() - cached.fetchedAt <= CACHE_MAX_AGE_MS) {
-      return structuredClone(cached.entries);
+    if (!cache || cache.v !== v || Date.now() - cache.fetchedAt > CACHE_MAX_AGE_MS) {
+      const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
+      cache = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
     }
-    const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
-    const entries = rows.map((row): [string, T] => [row.id as string, row.json as T]);
-    caches.set(tenant, { v, fetchedAt: Date.now(), entries });
-    return structuredClone(entries);
+    return structuredClone(cache.entries);
   }
   async function selectRows<K extends Extract<keyof T, string>>(
     query: DurableMapSelect<T, K>,
@@ -211,11 +162,6 @@ export function createPostgresMap<T>(
       return (await selectRows(query)).map(([, value]) => value);
     },
     selectEntries: selectRows,
-    async acrossTenants() {
-      await ready();
-      const { rows } = await claimAcrossTenants(pg, `SELECT tenant_id, id, json FROM ${table} ORDER BY tenant_id, id`);
-      return rows.map((row) => ({ tenantId: String(row.tenant_id), id: String(row.id), value: row.json as T }));
-    },
     async get(id) {
       await ready();
       const rows = await pg.q(`SELECT json FROM ${table} WHERE id = $1`, [id]);
@@ -225,7 +171,7 @@ export function createPostgresMap<T>(
       await withBump((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
-           ON CONFLICT (tenant_id, id) DO UPDATE SET json = EXCLUDED.json`,
+           ON CONFLICT (id) DO UPDATE SET json = EXCLUDED.json`,
           [id, jsonbStringify(value)],
         ),
       );
@@ -234,7 +180,7 @@ export function createPostgresMap<T>(
       const res = await withBump((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
-           ON CONFLICT (tenant_id, id) DO UPDATE SET json = ${table}.json
+           ON CONFLICT (id) DO UPDATE SET json = ${table}.json
            RETURNING json`,
           [id, jsonbStringify(value)],
         ),
@@ -245,7 +191,7 @@ export function createPostgresMap<T>(
       const inserted = await withBump((client) =>
         client.query(
           `INSERT INTO ${table} (id, json) VALUES ($1, $2)
-           ON CONFLICT (tenant_id, id) DO NOTHING`,
+           ON CONFLICT (id) DO NOTHING`,
           [id, jsonbStringify(value)],
         ),
       );
@@ -289,7 +235,7 @@ export function createPostgresMap<T>(
         });
         await client.query(
           `INSERT INTO ${table} (id, json) SELECT id, json FROM jsonb_to_recordset($1::jsonb) AS batch(id text, json jsonb)
-           ON CONFLICT (tenant_id, id) DO UPDATE SET json = EXCLUDED.json`,
+           ON CONFLICT (id) DO UPDATE SET json = EXCLUDED.json`,
           [jsonbStringify([...pending].map(([id, json]) => ({ id, json })))],
         );
         return results;
