@@ -4,7 +4,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { appsDomainOf, appUrlOf, parseTenantAppHost, webUrlBase } from "../src/deploy/apps-domain.ts";
+import { appsDomainOf, appUrlOf, webUrlBase } from "../src/deploy/apps-domain.ts";
 import { deploySettings } from "../src/deploy/deploy-settings.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
 import { configureTenantSettings, tenantSettings } from "../src/tenants/settings.ts";
@@ -134,12 +134,6 @@ test("tenant apps domains and links derive from the tenant's own web address", a
     assert.equal(appsDomainOf({ ...deps, deployAppsDomain: "apps.fixed.test" }), "apps.fixed.test");
   });
   assert.equal(webUrlBase("https://mt.example.test/"), "https://mt.example.test");
-  assert.deepEqual(parseTenantAppHost("notes.apps.a.example.test", "apps"), {
-    app: "notes",
-    tenantHost: "a.example.test",
-  });
-  assert.equal(parseTenantAppHost("apps.a.example.test", "apps"), undefined);
-  assert.equal(parseTenantAppHost("x.y.apps.a.example.test", "apps"), undefined);
 });
 
 test("DEPLOY_APPS_TENANT_SUBDOMAIN is one label and excludes a deployment-wide apps domain", () => {

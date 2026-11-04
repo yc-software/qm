@@ -2,7 +2,7 @@ import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3
 import { orgId as configOrgId } from "../config.ts";
 import { appUrlOf } from "./apps-domain.ts";
 import { boundTenant } from "../tenants/context.ts";
-import { tenantSettings } from "../tenants/settings.ts";
+import { appDataKey, appDataScope, litestreamKey, type AppDataScope } from "./app-data-scope.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
@@ -86,7 +86,6 @@ export interface AwsDeployProviderOptions {
   maxIdleDurationSeconds?: number;
   suspendedDurationSeconds?: number;
   appsDomain?: string;
-  /** Serve each tenant's apps at `<app>.<label>.<tenant web host>` (multitenant cores). */
   tenantAppsSubdomain?: string;
   tokenTtlMinutes?: number;
   dataBucket?: string;
@@ -117,7 +116,6 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const resolveCache = new Map<string, { endpoint: DeployEndpoint; checkedMs: number; usedMs: number }>();
   const inflightResolves = new Map<string, Promise<DeployEndpoint | null>>();
   const resolveGens = new Map<string, number>();
-  // Deployment ids are only unique per tenant, so process-wide maps and locks key on both.
   const keyOf = (id: string): string => `${boundTenant() ?? ""}:${id}`;
   const bumpResolveGen = (id: string): void => {
     const key = keyOf(id);
@@ -158,28 +156,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const sts: Pick<STSClient, "send"> | undefined = litestream
     ? (opts.sts ?? new STSClient({ region, ...(opts.profile ? { profile: opts.profile } : {}) }))
     : undefined;
-  // Where one deployment's app data lives. In tenant mode (one core, many tenants) every key
-  // carries the tenant id, so two tenants with the same deployment id never share a key, even in
-  // the shared bucket, and a tenant with its own object store (tenant S3_BUCKET) keeps its data
-  // there. The pre-tenant key is only ever read from the tenant's own bucket, never the shared
-  // one, so a tenant can't pick up another's old snapshot. Single-tenant deployments keep their
-  // existing keys.
-  interface DataScope {
-    bucket: string;
-    prefix: string;
-    legacy?: { bucket: string; prefix: string };
-  }
-  const dataScope = async (): Promise<DataScope | undefined> => {
-    if (!dataBucket) return undefined;
-    if (!opts.tenantAppsSubdomain) return { bucket: dataBucket, prefix: dataPrefix };
-    const tenant = boundTenant();
-    if (!tenant) throw new Error("app data access needs a bound tenant");
-    const own = (await tenantSettings()).env?.S3_BUCKET;
-    const prefix = `${dataPrefix}/${tenant}`;
-    return own ? { bucket: own, prefix, legacy: { bucket: own, prefix: dataPrefix } } : { bucket: dataBucket, prefix };
-  };
-  const dataKeyIn = (prefix: string, deploymentId: string): string => `${prefix}/${deploymentId}.tar`;
-  const litestreamKeyIn = (prefix: string, deploymentId: string): string => `${prefix}/${deploymentId}/litestream`;
+  const dataScope = (): Promise<AppDataScope | undefined> => appDataScope(dataBucket, dataPrefix);
 
   function ensureConfigured(): void {
     if (!region) throw new Error("AWS_DEPLOY_REGION/AWS_REGION not set (DEPLOY_PROVIDER=aws)");
@@ -218,7 +195,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
 
   async function mintDataCreds(
     deploymentId: string,
-    where: DataScope,
+    where: AppDataScope,
   ): Promise<{ accessKeyId: string; secretAccessKey: string; sessionToken: string }> {
     const policy = JSON.stringify({
       Version: "2012-10-17",
@@ -226,13 +203,13 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         {
           Effect: "Allow",
           Action: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
-          Resource: `arn:aws:s3:::${where.bucket}/${litestreamKeyIn(where.prefix, deploymentId)}/*`,
+          Resource: `arn:aws:s3:::${where.bucket}/${litestreamKey(where, deploymentId)}/*`,
         },
         {
           Effect: "Allow",
           Action: "s3:ListBucket",
           Resource: `arn:aws:s3:::${where.bucket}`,
-          Condition: { StringLike: { "s3:prefix": `${litestreamKeyIn(where.prefix, deploymentId)}/*` } },
+          Condition: { StringLike: { "s3:prefix": `${litestreamKey(where, deploymentId)}/*` } },
         },
       ],
     });
@@ -250,7 +227,12 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     return { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken };
   }
 
-  async function stageLitestream(deploymentId: string, where: DataScope, id: string, endpoint: string): Promise<void> {
+  async function stageLitestream(
+    deploymentId: string,
+    where: AppDataScope,
+    id: string,
+    endpoint: string,
+  ): Promise<void> {
     const creds = await mintDataCreds(deploymentId, where);
     const env = `AWS_ACCESS_KEY_ID=${creds.accessKeyId}\nAWS_SECRET_ACCESS_KEY=${creds.secretAccessKey}\nAWS_SESSION_TOKEN=${creds.sessionToken}\nAWS_REGION=${region}\n`;
     const config = [
@@ -259,7 +241,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       "    replicas:",
       "      - type: s3",
       `        bucket: ${where.bucket}`,
-      `        path: ${litestreamKeyIn(where.prefix, deploymentId)}`,
+      `        path: ${litestreamKey(where, deploymentId)}`,
       `        region: ${region}`,
       "",
     ].join("\n");
@@ -267,12 +249,12 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     await writeAbs(id, endpoint, LITESTREAM_CONFIG, Buffer.from(config));
   }
 
-  const litestreamStartScript = (deploymentId: string, where: DataScope): string => {
+  const litestreamStartScript = (deploymentId: string, where: AppDataScope): string => {
     const fail = (code: number): string => `{ tail -c 400 ${shq(LITESTREAM_LOG)} >&2 2>/dev/null; exit ${code}; }`;
     return [
       `command -v litestream >/dev/null 2>&1 && command -v aws >/dev/null 2>&1 || exit 24`,
       `chmod 600 ${shq(LITESTREAM_ENV)} 2>/dev/null || true`,
-      `( set -a; . ${shq(LITESTREAM_ENV)}; set +a; litestream snapshots -config ${shq(LITESTREAM_CONFIG)} ${shq(DATA_DB)} && printf ok | aws s3 cp - s3://${where.bucket}/${litestreamKeyIn(where.prefix, deploymentId)}/.write-probe && aws s3 rm s3://${where.bucket}/${litestreamKeyIn(where.prefix, deploymentId)}/.write-probe ) >> ${shq(LITESTREAM_LOG)} 2>&1 || ${fail(23)}`,
+      `( set -a; . ${shq(LITESTREAM_ENV)}; set +a; litestream snapshots -config ${shq(LITESTREAM_CONFIG)} ${shq(DATA_DB)} && printf ok | aws s3 cp - s3://${where.bucket}/${litestreamKey(where, deploymentId)}/.write-probe && aws s3 rm s3://${where.bucket}/${litestreamKey(where, deploymentId)}/.write-probe ) >> ${shq(LITESTREAM_LOG)} 2>&1 || ${fail(23)}`,
       LIVE_REPLICATOR_PIDS,
       `for q in $(ls_pids); do kill -TERM "$q" 2>/dev/null || true; done`,
       `for i in $(seq 1 40); do [ -z "$(ls_pids)" ] && break; sleep 0.25; done`,
@@ -322,30 +304,23 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       swallowAs("aws-deploy: remove data snapshot tar", undefined),
     );
     if (!tar?.length) throw new Error("data snapshot read-back empty");
-    await s3.send(
-      new PutObjectCommand({ Bucket: where.bucket, Key: dataKeyIn(where.prefix, deploymentId), Body: tar }),
-    );
+    await s3.send(new PutObjectCommand({ Bucket: where.bucket, Key: appDataKey(where, deploymentId), Body: tar }));
     return true;
-  }
-
-  async function readDataTar(bucket: string, key: string): Promise<Uint8Array | null> {
-    try {
-      const got = await s3!.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-      return (await got.Body?.transformToByteArray()) ?? null;
-    } catch (e) {
-      const code = (e as { name?: string })?.name ?? "";
-      const status = (e as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
-      if (/NoSuchKey|NotFound/.test(code) || status === 404) return null;
-      throw e;
-    }
   }
 
   async function hydrateData(deploymentId: string, id: string, endpoint: string): Promise<void> {
     const where = await dataScope();
     if (!s3 || !where) return;
-    let tar = await readDataTar(where.bucket, dataKeyIn(where.prefix, deploymentId));
-    if (!tar?.length && where.legacy)
-      tar = await readDataTar(where.legacy.bucket, dataKeyIn(where.legacy.prefix, deploymentId));
+    let tar: Uint8Array | null;
+    try {
+      const got = await s3.send(new GetObjectCommand({ Bucket: where.bucket, Key: appDataKey(where, deploymentId) }));
+      tar = (await got.Body?.transformToByteArray()) ?? null;
+    } catch (e) {
+      const code = (e as { name?: string })?.name ?? "";
+      const status = (e as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+      if (/NoSuchKey|NotFound/.test(code) || status === 404) return;
+      throw e;
+    }
     if (!tar?.length) return;
     const tarPath = dataTarPath();
     await writeAbs(id, endpoint, tarPath, tar);

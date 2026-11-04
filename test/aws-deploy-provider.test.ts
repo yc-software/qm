@@ -13,7 +13,7 @@ import {
 } from "../src/sandbox/aws-microvm-api.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
-import { boundTenant, withTenant } from "../src/tenants/context.ts";
+import { boundTenant, registerTenants, withTenant } from "../src/tenants/context.ts";
 import { configureTenantSettings } from "../src/tenants/settings.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testMap } from "./support/test-database.ts";
@@ -1241,10 +1241,11 @@ function tenantMemoryStore() {
   } as unknown as ReturnType<typeof testMap<StoredDeployBody>>;
 }
 
-test("app data (tenant mode): two tenants with the same deployment id never share a data key or a creds scope", async () => {
+test("app data (multitenant): two tenants with the same deployment id never share a data key or a creds scope", async () => {
   const A = "00000000-0000-4000-8000-00000000000a";
   const B = "00000000-0000-4000-8000-00000000000b";
   configureTenantSettings(async (t) => (t === A ? { env: { S3_BUCKET: "qm-a-bucket" } } : {}));
+  registerTenants(A, undefined);
   try {
     const { api, vms } = fakeApi();
     const { fetchImpl } = fakeDaemon({
@@ -1276,11 +1277,8 @@ test("app data (tenant mode): two tenants with the same deployment id never shar
       s3,
       sts,
       dataRoleArn: "arn:aws:iam::1:role/data",
-      tenantAppsSubdomain: "apps",
     });
-    // A pre-tenant snapshot in the shared bucket must never be read; one in A's own bucket may be.
     objects.set(`shared/deploy-data/${ID}.tar`, Buffer.from("SHARED"));
-    objects.set(`qm-a-bucket/deploy-data/${ID}.tar`, Buffer.from("A-LEGACY"));
 
     for (const t of [A, B]) {
       await withTenant(t, async () => {
@@ -1292,10 +1290,9 @@ test("app data (tenant mode): two tenants with the same deployment id never shar
       });
     }
 
-    assert.ok(gets.includes(`qm-a-bucket/deploy-data/${A}/${ID}.tar`), "A reads its tenant key first");
-    assert.ok(gets.includes(`qm-a-bucket/deploy-data/${ID}.tar`), "A falls back to the old key in its own bucket");
+    assert.ok(gets.includes(`qm-a-bucket/deploy-data/${A}/${ID}.tar`), "A reads its tenant key in its own bucket");
     assert.ok(gets.includes(`shared/deploy-data/${B}/${ID}.tar`), "B reads its tenant key in the shared bucket");
-    assert.ok(!gets.includes(`shared/deploy-data/${ID}.tar`), "the shared bucket's pre-tenant key is never read");
+    for (const at of gets) assert.ok(at.includes(`/deploy-data/${A}/`) || at.includes(`/deploy-data/${B}/`), at);
     assert.ok(puts.length > 0, "snapshots were written");
     for (const at of puts)
       assert.ok(
@@ -1316,14 +1313,21 @@ test("app data (tenant mode): two tenants with the same deployment id never shar
     for (const s of scopes) assert.ok(!s.includes(`deploy-data/${ID}/`), "no creds for the untenanted prefix");
   } finally {
     configureTenantSettings(undefined);
+    registerTenants(A, A);
   }
 });
 
-test("app data (tenant mode): with no tenant bound, app data is refused rather than written untenanted", async () => {
+test("app data (multitenant): with no tenant bound, app data is refused rather than written untenanted", async () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
   const { s3, calls } = fakeS3();
-  const p = provider(api, fetchImpl, tenantMemoryStore(), { dataBucket: "shared", s3, tenantAppsSubdomain: "apps" });
-  await assert.rejects(p.apply(deployment(ID), version(localSnapshot("a", "1"))));
+  const p = provider(api, fetchImpl, tenantMemoryStore(), { dataBucket: "shared", s3 });
+  const install = "00000000-0000-4000-8000-00000000000c";
+  registerTenants(install, undefined);
+  try {
+    await assert.rejects(p.apply(deployment(ID), version(localSnapshot("a", "1"))));
+  } finally {
+    registerTenants(install, install);
+  }
   assert.equal(calls.length, 0, "no S3 access without a tenant");
 });

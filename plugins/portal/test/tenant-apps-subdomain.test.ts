@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { deriveKey, seal } from "../src/session.ts";
-import { parseTenantAppHost, tenantAppsSubdomain } from "../src/tenant-apps.ts";
+import { parseTenantAppHost } from "../../chassis/src/hostnames.ts";
 
 const secret = "tenant-apps-test-secret";
 const sessionKey = deriveKey(secret, "portal.session.v1");
@@ -42,7 +42,7 @@ Object.assign(process.env, {
   WEB_UI_UPSTREAM: upstreamUrl,
   PORTAL_LOCAL_AUTH_BYPASS: "0",
   PORTAL_PLAYGROUND: "0",
-  PORTAL_APPS_TENANT_SUBDOMAIN: "apps",
+  DEPLOY_APPS_TENANT_SUBDOMAIN: "apps",
 });
 delete process.env.PORTAL_APPS_DOMAIN;
 delete process.env.DEPLOY_APPS_DOMAIN;
@@ -126,18 +126,19 @@ test("signing out on a tenant host clears the cookie scoped to that tenant's hos
 
 test("tenant app hosts parse into the app and the tenant host, nothing looser", () => {
   assert.deepEqual(parseTenantAppHost("notes.apps.a.example.test", "apps"), {
+    host: "notes.apps.a.example.test",
     app: "notes",
     tenantHost: "a.example.test",
   });
-  assert.deepEqual(parseTenantAppHost("Notes.APPS.a.example.test:443", "apps"), {
+  assert.deepEqual(parseTenantAppHost("Notes.APPS.a.example.test.:443", "apps"), {
+    host: "notes.apps.a.example.test",
     app: "notes",
     tenantHost: "a.example.test",
   });
+  assert.equal(parseTenantAppHost("evil.test@notes.apps.a.example.test", "apps"), undefined);
   assert.equal(parseTenantAppHost("apps.a.example.test", "apps"), undefined);
   assert.equal(parseTenantAppHost("a.b.apps.a.example.test", "apps"), undefined);
   assert.equal(parseTenantAppHost("notes.apps.localhost", "apps"), undefined);
-  assert.equal(tenantAppsSubdomain(" Apps "), "apps");
-  assert.throws(() => tenantAppsSubdomain("apps.x"));
 });
 
 test("a host that is one tenant's web host and another tenant's app host is refused, never served as either", async () => {

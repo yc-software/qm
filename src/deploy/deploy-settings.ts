@@ -1,6 +1,7 @@
 import { githubRepoUrl, isGitBranchName } from "../../cli/src/render-source.ts";
 import { porterLocatorPresent, porterApiBaseUrl } from "../sandbox/sandbox-settings.ts";
 import { numEnvStrict, optNum } from "../util/env.ts";
+import { isDnsHostname, tenantAppsSubdomain } from "../../plugins/chassis/src/hostnames.ts";
 import { commitShaSchema } from "../util/ids.ts";
 
 export interface DeploySettings {
@@ -189,14 +190,11 @@ function sharedPlatformSuffixOf(domain: string): string | undefined {
   return SHARED_PLATFORM_SUFFIXES.find((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
 
-const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
-const HOSTNAME_RE = new RegExp(`^${HOSTNAME_LABEL}(?:\\.${HOSTNAME_LABEL})+$`);
-
 function deployAppsDomainEnv(env: NodeJS.ProcessEnv, deployProvider: string): string | undefined {
   const raw = env.DEPLOY_APPS_DOMAIN?.trim();
   if (raw) {
     const canonical = raw.toLowerCase().replace(/\.$/, "");
-    if (!HOSTNAME_RE.test(canonical)) {
+    if (!isDnsHostname(canonical)) {
       throw new Error(
         `DEPLOY_APPS_DOMAIN (${raw}) is not a plain DNS name — set it to a bare domain like apps.example.com (no scheme, port, path, or wildcard prefix).`,
       );
@@ -214,19 +212,14 @@ function deployAppsDomainEnv(env: NodeJS.ProcessEnv, deployProvider: string): st
 }
 
 function deployAppsTenantSubdomainEnv(env: NodeJS.ProcessEnv): string | undefined {
-  const raw = env.DEPLOY_APPS_TENANT_SUBDOMAIN?.trim().toLowerCase();
-  if (!raw) return undefined;
-  if (!new RegExp(`^${HOSTNAME_LABEL}$`).test(raw)) {
-    throw new Error(
-      `DEPLOY_APPS_TENANT_SUBDOMAIN (${raw}) must be one DNS label, like apps — each tenant then serves apps at <app>.${raw}.<tenant host>.`,
-    );
-  }
+  const label = tenantAppsSubdomain(env);
+  if (!label) return undefined;
   if (env.DEPLOY_APPS_DOMAIN?.trim() || env.AWS_DEPLOY_APPS_DOMAIN?.trim()) {
     throw new Error(
       "DEPLOY_APPS_TENANT_SUBDOMAIN gives every tenant its own apps domain, so it cannot be combined with one deployment-wide DEPLOY_APPS_DOMAIN or AWS_DEPLOY_APPS_DOMAIN — unset one of them.",
     );
   }
-  return raw;
+  return label;
 }
 
 function awsDeployEnv(env: NodeJS.ProcessEnv): AwsDeployEnv {

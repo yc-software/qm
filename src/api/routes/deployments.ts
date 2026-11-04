@@ -37,8 +37,8 @@ import {
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
 import { bindTenant, withRowTenant } from "../tenant-ingress.ts";
-import { appsDomainOf, isAppLabel, parseTenantAppHost } from "../../deploy/apps-domain.ts";
-import { requestHost } from "../../tenants/tenancy.ts";
+import { appsDomainOf } from "../../deploy/apps-domain.ts";
+import { isDnsLabel, parseTenantAppHost } from "../../../plugins/chassis/src/hostnames.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
   if (port === undefined) return {};
@@ -109,7 +109,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
   ) {
     const d = await app.getDeployment(id).catch(swallowAs("deployments: load deployment", null));
     const slug = d?.name ?? d?.id;
-    if (d && slug && isAppLabel(slug)) {
+    if (d && slug && isDnsLabel(slug)) {
       res.writeHead(302, {
         location: `https://${slug}.${appsDomain}${subPath}${url.search}`,
         "cache-control": "no-store",
@@ -811,25 +811,19 @@ async function fetchDeploymentResponse(
 async function proxyTenantAppHost(ctx: BaseCtx, label: string): Promise<boolean> {
   const { req, res, deps } = ctx;
   const fromAppHost = req.headers["x-qm-app-host"] === "1";
-  const rawHost = requestHost(req.headers.host);
-  const parsed = parseTenantAppHost(rawHost, label);
+  const parsed = parseTenantAppHost(req.headers.host, label);
   const notFound = (): true => {
     sendJson(res, 404, { error: "not_found" });
     req.resume();
     return true;
   };
-  if (!parsed) return fromAppHost ? notFound() : false;
-  if (!deps.tenancy) return fromAppHost ? notFound() : false;
-  // A host mapped to a tenant as its own web host is never an app host.
-  if (!fromAppHost && (await deps.tenancy.hostTenant(rawHost)).tenant) return false;
-  // The tenant comes from the host the app is served under, never from the app row:
-  // an app name only resolves inside the tenant that owns this apps domain.
+  if (!parsed || !deps.tenancy) return fromAppHost ? notFound() : false;
+  if (!fromAppHost && (await deps.tenancy.hostTenant(parsed.host)).tenant) return false;
   const owner = await deps.tenancy.hostTenant(parsed.tenantHost);
   if (!owner.tenant) return notFound();
-  const tenant = owner.tenant;
-  await bindTenant(tenant, async () => {
+  await bindTenant(owner.tenant, async () => {
     if (appsDomainOf(deps) !== `${label}.${parsed.tenantHost}`) return void notFound();
-    await serveAppSubdomain(ctx, rawHost, parsed.app, fromAppHost, `https://${parsed.tenantHost}`);
+    await serveAppSubdomain(ctx, parsed.host, parsed.app, fromAppHost, `https://${parsed.tenantHost}`);
   });
   return true;
 }
