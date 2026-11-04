@@ -3778,19 +3778,6 @@ qm-markdown .tok-in {
   font-size: 12px;
   cursor: pointer;
 }
-.subagent-row-stop {
-  padding: 1px 8px;
-  border: 1px solid var(--border);
-}
-.subagent-row-stop:disabled {
-  cursor: default;
-  opacity: 0.7;
-}
-.subagent-row-error {
-  flex: 0 0 auto;
-  font-size: 12px;
-  color: var(--destructive);
-}
 
 .bg-panel {
   margin-top: 6px;

@@ -227,6 +227,7 @@ interface SubagentStop {
   state: "stopping" | "failed";
   run: number | undefined;
 }
+const SUBAGENT_STOP_LABEL = { idle: "Stop", stopping: "Stopping…", failed: "Couldn't stop" };
 interface SettledRowKey {
   day: string;
   index: number;
@@ -2784,15 +2785,14 @@ export function createChatSurface(
   function subagentStopTpl(rootId: string, row: SubagentRow): TemplateResult | typeof nothing {
     if (row.state !== "working") return nothing;
     const stop = subagentUi.stops.get(row.session.id)?.state;
-    return html`${stop === "failed" ? html`<span class="subagent-row-error" role="alert">Couldn't stop</span>` : nothing}
-      <button
-        type="button"
-        class="subagent-row-action subagent-row-stop"
-        ?disabled=${stop === "stopping"}
-        @click=${() => void stopSubagent(rootId, row)}
-      >
-        ${stop === "stopping" ? "Stopping…" : "Stop"}
-      </button>`;
+    return html`<button
+      type="button"
+      class="subagent-row-action"
+      ?disabled=${stop === "stopping"}
+      @click=${() => void stopSubagent(rootId, row)}
+    >
+      ${SUBAGENT_STOP_LABEL[stop ?? "idle"]}
+    </button>`;
   }
 
   function acknowledgeSubagent(row: SubagentRow): void {

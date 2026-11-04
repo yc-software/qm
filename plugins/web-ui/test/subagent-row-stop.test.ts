@@ -85,7 +85,7 @@ const rowFor = (title: string) =>
   [...main().querySelectorAll<HTMLElement>(".subagent-row")].find((row) =>
     row.querySelector(".subagent-row-title")?.textContent?.includes(title),
   );
-const stopFor = (title: string) => rowFor(title)?.querySelector<HTMLButtonElement>(".subagent-row-stop") ?? null;
+const stopFor = (title: string) => rowFor(title)?.querySelector<HTMLButtonElement>(".subagent-row-action") ?? null;
 
 async function expandedStrip(h: Awaited<ReturnType<typeof strip>>): Promise<void> {
   h.releaseSessions();
@@ -131,7 +131,7 @@ test("a row's Stop stops only that subagent's current run", async () => {
   }
 });
 
-test("a failed row Stop shows an inline error and lets the person retry", async () => {
+test("a failed row Stop says so in place and lets the person retry", async () => {
   const fixture: Fixture = {
     lanes: [lane("lane-a", "Schema lane"), lane("lane-b", "Backfill lane")],
     signals: [],
@@ -142,13 +142,9 @@ test("a failed row Stop shows an inline error and lets the person retry", async 
   try {
     await expandedStrip(h);
     present(stopFor("Schema lane")).click();
-    await until(() => rowFor("Schema lane")?.querySelector(".subagent-row-error") !== null);
-    assert.equal(
-      present(rowFor("Schema lane")?.querySelector(".subagent-row-error")).textContent?.trim(),
-      "Couldn't stop",
-    );
+    await until(() => stopFor("Schema lane")?.textContent?.trim() === "Couldn't stop");
     assert.equal(present(stopFor("Schema lane")).disabled, false);
-    assert.equal(present(stopFor("Schema lane")).textContent?.trim(), "Stop");
+    assert.equal(present(stopFor("Backfill lane")).textContent?.trim(), "Stop");
     fixture.failSignal = false;
     present(stopFor("Schema lane")).click();
     await until(() => stopFor("Schema lane") === null);
@@ -193,7 +189,6 @@ test("Stop on a run that already ended puts the button back instead of hanging",
     await until(() => fixture.signals.length === 1);
     await until(() => stopFor("Schema lane")?.disabled === false);
     assert.equal(present(stopFor("Schema lane")).textContent?.trim(), "Stop");
-    assert.equal(rowFor("Schema lane")?.querySelector(".subagent-row-error") ?? null, null);
   } finally {
     await h.close();
   }
