@@ -1,6 +1,8 @@
 import { loadPersonalModelAuth } from "../../core/individual-auth-routing.ts";
 import { BrowserCompletionError, completeBrowserRequest } from "../../model/browser-completion.ts";
 import { BROWSER_MODEL_AUD } from "../../auth/capability-token.ts";
+import { routeLabel } from "../../model/model-route.ts";
+import { errMessage, reportFailure } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -24,7 +26,8 @@ const REQUEST_FIELDS = new Set([
 
 async function browserModel(ctx: ApiCtx): Promise<void> {
   const { capability, deps, body, res } = ctx;
-  if (!capability?.browserModel) return sendJson(res, 403, { error: "browser model grant required" });
+  if (!capability?.browserModel || !capability.browserAccount)
+    return sendJson(res, 403, { error: "browser model grant required" });
   if (deps.config && (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict")
     return sendJson(res, 403, { error: "browser model requests are disabled in strict posture" });
   if (!body || typeof body !== "object" || Array.isArray(body))
@@ -42,7 +45,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
   const abort = () => controller.abort();
   res.once("close", abort);
   try {
-    const account = capability.browserAccount ?? "company";
+    const account = capability.browserAccount;
     const personal =
       account === "company" || !deps.userModelCredentials
         ? undefined
@@ -53,6 +56,8 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
       runtime: { modelId: capability.browserModel },
       ...(personal ? { providerKeys: personal.keys } : {}),
     });
+    if (!deps.modelRoutes.servable(route))
+      return sendJson(res, 503, { error: `${routeLabel(route)} has no credential` });
     sendJson(
       res,
       200,
@@ -60,7 +65,8 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
     );
   } catch (error) {
     if (error instanceof BrowserCompletionError) return sendJson(res, error.status, { error: error.message });
-    if (!res.destroyed) sendJson(res, 502, { error: "the browser model request failed" });
+    reportFailure("browser model request", error, capability.scopeId);
+    if (!res.destroyed) sendJson(res, 502, { error: `the browser model request failed: ${errMessage(error)}` });
   } finally {
     res.off("close", abort);
   }

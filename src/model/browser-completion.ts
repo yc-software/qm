@@ -77,8 +77,6 @@ export async function completeBrowserRequest(route: ModelRoute, body: Record<str
   const limit = body.max_completion_tokens ?? body.max_tokens ?? 4096;
   if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit <= 0)
     throw new BrowserCompletionError("Invalid browser output token limit");
-  if (route.billing !== "model_gateway" && !route.keys[String(model.provider)])
-    throw new BrowserCompletionError(`${routeLabel(route)} has no credential`, 503);
   const runtime = await buildModelRuntime(route.keys, route.gateway, "browser");
   const modelApi = model.api;
   const result = await runtime.completeSimple(model, context, {

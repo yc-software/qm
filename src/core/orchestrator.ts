@@ -1556,8 +1556,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       const browserModel =
         !strictReadOnly && allInternal && sessionRoute
-          ? (await deps.resolveSessionRuntime?.({ ...sessionRoute, scopeLabel: scopeId }).catch(() => undefined))
-              ?.modelId
+          ? (
+              await deps
+                .resolveSessionRuntime?.({ ...sessionRoute, scopeLabel: scopeId })
+                .catch(reportFailureAs("browser model: session runtime", undefined, scopeId))
+            )?.modelId
           : undefined;
       if (browserModel) {
         connectorEnv.BROWSE_LAB_MODEL_PROVIDER = "managed";
@@ -1657,7 +1660,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             deps.capabilityTokenCompression,
           );
           turnContextBlocks["Model access"] =
-            "## Model access\nAn OpenAI-compatible model gateway is at `$MODEL_GATEWAY_URL` in the sandbox; authenticate with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`. `GET $MODEL_GATEWAY_URL/v1/models` lists the usable models. Calls bill the shared model gateway, even when this turn runs on a person's own AI account. The token is bound to this turn and expires with it; never send it anywhere but the gateway.";
+            "## Model access\nAn OpenAI-compatible model gateway is at `$MODEL_GATEWAY_URL` in the sandbox; authenticate with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`. `GET $MODEL_GATEWAY_URL/v1/models` lists the usable models. The token is bound to this turn and expires with it; never send it anywhere but the gateway.";
         }
         connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
           {
