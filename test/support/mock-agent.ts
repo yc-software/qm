@@ -52,7 +52,6 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!read_thread",
   "!whats_new",
   "!search ",
-  "!read_members",
   "!set_standing_order ",
   "!get_standing_order",
 ];
@@ -706,13 +705,6 @@ export function createMockAgent(): Agent {
         reply = r.ok
           ? `search(${r.source ?? "?"}) ${(r.hits ?? []).length} hit(s)${first ? ` first=${first.author ?? "?"}:${first.snippet}` : ""}${r.coverageSince ? ` coverage=${r.coverageSince}` : ""}`
           : `[couldn't search] ${r.message ?? "unavailable"}`;
-      } else if (command0 === "!read_members") {
-        const r = await turn.tools.readMembers();
-        await record({ kind: "ToolResult", tool: "read_members", body: { ok: r.ok, count: (r.members ?? []).length } });
-        usedTool = true;
-        reply = r.ok
-          ? `members: ${(r.members ?? []).map((m) => m.displayName).join(", ")}`
-          : `[couldn't read members] ${r.message ?? "unavailable"}`;
       } else if (command0.startsWith("!set_standing_order ")) {
         const orders = cmd.slice(cmd.indexOf("!set_standing_order ") + "!set_standing_order ".length).trim();
         const r = await turn.tools.setStandingOrder(orders);

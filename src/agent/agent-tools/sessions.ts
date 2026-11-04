@@ -40,11 +40,18 @@ export function sessionTools(kit: ToolKit) {
       ),
       model: Type.Optional(
         Type.String({
-          description: "open: model override; use one runtime get lists (unconfigured providers are rejected).",
+          description:
+            "open: model override; use one runtime get lists (unconfigured providers are rejected). Omitted: the model you switched to or were given for this task when it is not the default, else the subagent default (also used when yours cannot run subagents).",
         }),
       ),
-      thinkingLevel: Type.Optional(Type.String({ description: "open: effort override." })),
-      fastMode: Type.Optional(Type.Boolean({ description: "open: fast mode." })),
+      thinkingLevel: Type.Optional(
+        Type.String({
+          description: "open: effort override; omitted: yours when the model is inherited, else the default.",
+        }),
+      ),
+      fastMode: Type.Optional(
+        Type.Boolean({ description: "open: fast mode; omitted: yours when the model is inherited, else the default." }),
+      ),
       target: Type.Optional(
         Type.String({
           description:
@@ -137,7 +144,7 @@ export function sessionTools(kit: ToolKit) {
           callId,
           { tool: "subagents", action: "open", sessionId: result.sessionId, title: result.title },
           text(
-            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use subagents wait before your final answer if you need its result."} ${result.liveRunsRemaining} of its run slots remain.`,
+            `Opened subagent "${result.title}" (sessionId ${result.sessionId}). It is working now. Its result will arrive as an internal message. ${delegateWork ? "End this turn promptly; completion will wake you to report the result." : "Continue independent work, then use subagents wait before your final answer if you need its result."}`,
           ),
         );
       }

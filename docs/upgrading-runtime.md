@@ -43,11 +43,12 @@ retention also removes expired entries from the legacy table, preventing a later
 restart from importing them again. The legacy table remains available for older
 binaries.
 
-Session and run tables start from one base schema (`sessions/store/0047-base-schema`,
-`runs/store/0011-base-schema`). A database already at `sessions/store/0046-spend-days-cron-rebuild`
-and `runs/store/0010-drop-turn-metrics` treats the base schema as applied. A database with
-session or run tables from an older release refuses to start: first run a release that applies
-both of those migrations but predates the base schema until its migrations finish, then upgrade.
+Session, run and directory tables start from one base schema (`sessions/store/0047-base-schema`,
+`runs/store/0011-base-schema`, `directory/store/0006-base-schema`). A database already at
+`sessions/store/0046-spend-days-cron-rebuild`, `runs/store/0010-drop-turn-metrics` and
+`directory/store/0005` treats the base schema as applied. A database with session, run or
+directory tables from an older release refuses to start: first run a release that applies
+those migrations but predates the base schema until its migrations finish, then upgrade.
 
 Rolling back the runtime restores code and configuration, not database contents.
 Older binaries do not display cron history written only to the new journal; those

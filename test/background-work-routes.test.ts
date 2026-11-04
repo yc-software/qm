@@ -16,7 +16,7 @@ const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
 const path = "/v1/background-work";
 
-async function fixture(secret: string | undefined = controlSecret) {
+async function fixture(secret: string | undefined = controlSecret, mappedHosts = false) {
   const store = createBackgroundOwnershipStore(testMap<BackgroundOwnership>());
   await store.set({ ownerDeploymentId: "cohort-a", setBy: "cohort-a" });
   let active = false;
@@ -29,6 +29,7 @@ async function fixture(secret: string | undefined = controlSecret) {
     requireSignedPortalIdentity: true,
     backgroundOwnership: { store, instanceId: "instance-b", deploymentId: "cohort-b", active: () => active },
     deploymentControlSecret: secret,
+    ...(mappedHosts ? { tenancy: { ...built.tenancy, hostTenant: async () => ({ multi: true }) } } : {}),
   });
   server.listen(0);
   const url = `http://localhost:${(server.address() as AddressInfo).port}${path}`;
@@ -123,6 +124,16 @@ test("status reports the responder, the owner record, and the responder's activi
       "setAt",
       "setBy",
     ]);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("ownership status still answers once company hosts are mapped to tenants", async () => {
+  const srv = await fixture(controlSecret, true);
+  try {
+    assert.equal((await srv.request("GET")).status, 200);
+    assert.equal((await srv.request("GET", undefined, { authorization: "" })).status, 401);
   } finally {
     await srv.close();
   }

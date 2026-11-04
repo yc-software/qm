@@ -18,7 +18,7 @@ function discussions(text: string) {
   return json ? JSON.parse(json) : [];
 }
 
-test("side-chat context excludes copied history, tools, footers, private messages, and promoted sessions", async () => {
+test("side-chat context excludes copied history, tools, footers, private memory, and promoted sessions", async () => {
   const store = createPostgresSessionStore(testDatabaseUrl());
   const parent = await store.getOrCreateByThread("parent", "dm", "personal:alice");
   await store.addParticipant(parent.id, "alice");
@@ -52,10 +52,10 @@ test("side-chat context excludes copied history, tools, footers, private message
   assert.equal(discussion.passage, "selected passage");
   assert.deepEqual(
     discussion.messages.map((message: { text: string }) => message.text),
-    ["shared question", "shared answer"],
+    ["private earlier question", "shared question", "shared answer"],
   );
-  assert.equal(discussion.messages[0].user, "bob");
-  assert.equal(typeof discussion.messages[0].timestamp, "number");
+  assert.equal(discussion.messages[1].user, "bob");
+  assert.equal(typeof discussion.messages[1].timestamp, "number");
   assert.equal(text.includes("do not copy footer"), false);
   assert.equal(text.includes("private memory"), false);
   assert.equal(await sideChatContext(store, parent, ["outsider"], 10000), "");

@@ -1,5 +1,4 @@
 import { isAgentReply, type Item, proseText } from "./items.ts";
-import { commonEntrySeqs } from "./transcript-source.ts";
 import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -11,7 +10,9 @@ import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
-import type { Principal, ScopeId, Session, SpawnMeta, TurnOrigin } from "../types.ts";
+import type { Principal, ScopeId, Session, SpawnMeta, StopScope, TurnOrigin } from "../types.ts";
+import { openRuntime, parentRuntime } from "./subagent-runtime.ts";
+import type { RuntimeChoice } from "../agent/agent.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
@@ -142,6 +143,7 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
     conversation: input.conversation,
     actor: input.actor,
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
+    ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
     ...(input.model ? { model: input.model } : {}),
@@ -150,7 +152,6 @@ export function sessionContextOf(input: OrchestratorInput): SpawnMeta {
   };
 }
 
-export const SUBAGENT_TREE_RUN_CAP = 50;
 const SESSION_MESSAGE_DEPTH_CAP = 8;
 const READ_DEFAULT_LIMIT = 30;
 const SESSION_LIST_LIMIT = 50;
@@ -159,7 +160,7 @@ const READ_DEFAULT_MAX_CHARS = 4_000;
 const READ_MAX_CHARS_CEILING = 20_000;
 const LAST_SAID_SCAN = 40;
 
-interface SessionOpenInput {
+export interface SessionOpenInput {
   requestId?: string;
   task: string;
   name?: string;
@@ -169,8 +170,7 @@ interface SessionOpenInput {
   fastMode?: boolean;
 }
 
-type SessionOpenResult =
-  { ok: true; sessionId: string; title: string; liveRunsRemaining: number } | { ok: false; message: string };
+type SessionOpenResult = { ok: true; sessionId: string; title: string } | { ok: false; message: string };
 
 interface SessionWriteInput {
   target: string;
@@ -229,7 +229,7 @@ type SessionReadResult =
   | { ok: true; mode: "transcript"; sessionId: string; title: string; status: string; rendered: string }
   | { ok: false; message: string };
 
-interface SessionSyscallBinding {
+export interface SessionSyscallBinding {
   session: Session;
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
@@ -249,12 +249,17 @@ interface SessionSyscallBinding {
     | "conversation"
     | "actor"
     | "deliveryTarget"
+    | "deliveryWebhook"
     | "timezone"
     | "readOnly"
     | "scopeVersion"
     | "sessionParticipantIds"
     | "surfaceOrigin"
+    | "model"
+    | "thinkingLevel"
+    | "fastMode"
   > & { origin?: OrchestratorInput["origin"] };
+  switchedRuntime?: () => RuntimeChoice | undefined;
 }
 
 export interface SessionSyscalls {
@@ -289,16 +294,17 @@ export interface SessionSyscallDeps {
     | "updateTitle"
     | "latestItemSeq"
     | "visibleItems"
+    | "participantsOf"
     | "getForParticipant"
   >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "get" | "withdraw">;
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
-  treeRunCap?: number;
   advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
   authorize?: (session: Session, actorId: string) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
+  defaultModel?: (scopeId: ScopeId) => Promise<string>;
   conversations?: {
     search?: CoreSearch["search"];
     list(actorId: string): Promise<Session[]>;
@@ -376,6 +382,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     surface: meta.surface,
     ...(meta.surfaceOrigin ? { surfaceOrigin: meta.surfaceOrigin } : {}),
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
+    ...(meta.deliveryWebhook ? { deliveryWebhook: meta.deliveryWebhook } : {}),
     ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
     actor: meta.actor,
     conversation: { ...meta.conversation, threadRef: child.threadRef },
@@ -469,21 +476,21 @@ export async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, r
 }
 
 export const PARENT_INTERRUPT = "by the parent agent";
+export const ANCESTOR_STOP = "because the parent session was stopped";
 export const USER_STOP = "by user";
 export const USER_STOP_ALL = "by user (subagents too)";
-const OWN_RUN_STOPS = new Set<string | undefined>([PARENT_INTERRUPT, USER_STOP]);
 
-export function stopCascades(reason: string | undefined): boolean {
-  return !OWN_RUN_STOPS.has(reason);
-}
+type StopRequest = { reason?: string | undefined; scope?: StopScope };
+
+export const sparesDescendants = (scope: StopScope | undefined): boolean => scope === "run" || scope === "session";
 
 async function stopOf(
   signals: Pick<RunSignalStore, "pending">,
   run: Run,
-): Promise<{ reason: string | undefined } | undefined> {
-  if (run.result?.stopped) return { reason: run.result.stopReason };
+): Promise<{ scope: StopScope | undefined } | undefined> {
+  if (run.result?.stopped) return { scope: run.result.stopScope };
   const abort = (await signals.pending(run.id)).find(({ signal }) => signal.kind === "abort");
-  return abort && { reason: abort.signal.reason };
+  return abort && { scope: abort.signal.scope };
 }
 
 export async function runStopped(
@@ -492,16 +499,17 @@ export async function runStopped(
   runId: string | undefined,
 ): Promise<"self" | "ancestor" | undefined> {
   const seen = new Set<string>();
+  let self = false;
   for (let current = runId; current;) {
-    const self = current === runId;
     if (seen.has(current)) return "ancestor";
     seen.add(current);
     const run = await runs.get(current);
     const stop = run && (await stopOf(signals, run));
-    if (!run || (stop && (self || stopCascades(stop.reason)))) return self ? "self" : "ancestor";
-    current = run.request.delegatingRunId;
+    if (current === runId) self = !run || stop !== undefined;
+    else if (!run || (stop && !sparesDescendants(stop.scope))) return "ancestor";
+    current = run?.request.delegatingRunId;
   }
-  return undefined;
+  return self ? "self" : undefined;
 }
 
 const unstarted = (run: Run): boolean => run.status === "pending" && run.attempts === 0 && run.turnUserSeq === null;
@@ -510,7 +518,7 @@ const interruptible = (run: Run): boolean => !unstarted(run) || Boolean(run.requ
 export async function stopSessionRuns(
   deps: { runs: Pick<RunStore, "inFlightForThread" | "withdraw">; signals: Pick<RunSignalStore, "send"> },
   session: Session,
-  reason?: string,
+  stop: StopRequest,
   interrupt?: { by: string; mailbox: Pick<SessionMailbox, "send"> },
 ): Promise<{ id: string; withdrawn: boolean }[]> {
   const stopped: { id: string; withdrawn: boolean }[] = [];
@@ -528,9 +536,13 @@ export async function stopSessionRuns(
         text: run.request.text,
         createdAt: run.createdAt,
       });
-    await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
+    await deps.signals.send(run.id, {
+      kind: "abort",
+      ...(stop.reason ? { reason: stop.reason } : {}),
+      ...(stop.scope ? { scope: stop.scope } : {}),
+    });
     const withdrawn =
-      run.status === "pending" && (await deps.runs.withdraw(run.id, { unstartedOnly: !stopCascades(reason) }));
+      run.status === "pending" && (await deps.runs.withdraw(run.id, { unstartedOnly: sparesDescendants(stop.scope) }));
     stopped.push({ id: run.id, withdrawn: withdrawn && !foreign });
   }
   return stopped;
@@ -564,8 +576,10 @@ export async function stopSessionTree(
   reason?: string,
 ): Promise<boolean> {
   let stopped = false;
-  for (const session of await treeSessions(deps.sessions, root))
-    if (session.scopeId === root.scopeId && (await stopSessionRuns(deps, session, reason)).length) stopped = true;
+  for (const session of await treeSessions(deps.sessions, root)) {
+    const stop: StopRequest = session.id === root.id ? { reason } : { reason: ANCESTOR_STOP, scope: "ancestor" };
+    if (session.scopeId === root.scopeId && (await stopSessionRuns(deps, session, stop)).length) stopped = true;
+  }
   return stopped;
 }
 
@@ -583,7 +597,6 @@ export async function sessionTreeRuns(
 
 export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscallsFactory {
   const lock = deps.advisoryLock;
-  const cap = deps.treeRunCap ?? SUBAGENT_TREE_RUN_CAP;
 
   return {
     rejectMessage: (sessionId, messageId) => deps.mailbox.acknowledge(sessionId, [messageId]),
@@ -630,13 +643,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         const audience = binding.request.conversation.audience.length
           ? binding.request.conversation.audience
           : [binding.request.actor];
-        const views = await Promise.all(
-          [...new Set([binding.request.actor.id, ...audience.map((p) => p.id)])].map((id) =>
-            deps.sessions.visibleItems(target.id, id),
-          ),
-        );
-        const allowed = commonEntrySeqs(views);
-        return (views[0] ?? []).filter((item) => allowed.has(item.seq));
+        const members = await deps.sessions.participantsOf(target.id);
+        if (!audience.every((p) => members.includes(p.id))) return [];
+        return deps.sessions.visibleItems(target.id, binding.request.actor.id);
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {
@@ -718,7 +727,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const task = input.task?.trim();
               if (!task)
                 return { ok: false, message: "open requires a task: the full instruction the subagent works from." };
-              await deps.validateRuntime?.(input, binding.scopeId);
               const threadRef = `${SUBAGENT_THREAD_PREFIX}${
                 input.requestId
                   ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
@@ -726,27 +734,20 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               }`;
               const fingerprint = hashId([canonicalJson(input)], 40);
               const existing = await deps.sessions.getByThread(threadRef);
-              const root = await sessionTreeRoot(
-                deps.sessions,
-                existing ?? (await deps.sessions.get(binding.session.id))!,
-              );
-              const live = (await sessionTreeRuns(deps.sessions, deps.runs, root)).length;
               if (existing?.spawnMeta?.openFingerprint && existing.spawnMeta.openFingerprint !== fingerprint)
                 throw new Error("the requestId was already used for different work");
               const initialRun = await deps.runs.getByDedupKey(`subagent-open:${threadRef}`);
-              if (existing && initialRun)
-                return {
-                  ok: true,
-                  sessionId: existing.id,
-                  title: visibleTitle(existing),
-                  liveRunsRemaining: Math.max(0, cap - live),
-                };
-              if (live >= cap) {
-                return {
-                  ok: false,
-                  message: `all ${cap} subagent run slots for this conversation are in use — wait for one to finish, read their sessions, or interrupt one you no longer need.`,
-                };
-              }
+              if (existing && initialRun) return { ok: true, sessionId: existing.id, title: visibleTitle(existing) };
+              const runtime =
+                existing?.spawnMeta ??
+                (await openRuntime(
+                  input,
+                  parentRuntime(binding.request, binding.switchedRuntime?.()),
+                  async (choice) => {
+                    await deps.validateRuntime?.({ ...input, ...choice }, binding.scopeId);
+                  },
+                  async () => deps.defaultModel?.(binding.scopeId),
+                ));
               const child = await deps.sessions.getOrCreateByThread(
                 threadRef,
                 binding.session.type,
@@ -762,9 +763,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   origin: caller.origin,
                   unattendedGrants: caller.unattendedGrants,
                   readOnly: input.readOnly || binding.request.readOnly,
-                  model: input.model,
-                  thinkingLevel: input.thinkingLevel,
-                  fastMode: input.fastMode,
+                  model: runtime.model,
+                  thinkingLevel: runtime.thinkingLevel,
+                  fastMode: runtime.fastMode,
                   text: "",
                 }),
                 origin: caller.origin,
@@ -793,7 +794,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 request: deps.prepareRequest ? await deps.prepareRequest(request) : request,
                 maxAttempts: deps.maxAttempts,
               });
-              return { ok: true, sessionId: child.id, title, liveRunsRemaining: Math.max(0, cap - live - 1) };
+              return { ok: true, sessionId: child.id, title };
             })
             .catch((error): SessionOpenResult => ({ ok: false, message: errMessage(error) }));
         },
@@ -867,10 +868,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 if (!input.interrupt)
                   return { ok: false, message: "send_message requires `text` (or interrupt: true)." };
                 return (
-                  await stopSessionRuns(deps, target, PARENT_INTERRUPT, {
-                    by: binding.session.id,
-                    mailbox: deps.mailbox,
-                  })
+                  await stopSessionRuns(
+                    deps,
+                    target,
+                    { reason: PARENT_INTERRUPT, scope: "run" },
+                    {
+                      by: binding.session.id,
+                      mailbox: deps.mailbox,
+                    },
+                  )
                 ).length
                   ? { ok: true, sessionId: target.id, title, delivered: "interrupted" }
                   : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };
@@ -915,20 +921,16 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const dedupKey = input.requestId ? `subagent-followup:${messageId}` : undefined;
               const accepted = await acceptedFollowup(deps.runs, dedupKey, target, stamped, title);
               if (accepted) return accepted;
-              const replaced = input.interrupt ? inFlight.filter(interruptible).map((run) => run.id) : [];
-              const live = (
-                await sessionTreeRuns(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target))
-              ).filter((run) => !replaced.includes(run.id));
-              if (live.length >= cap)
-                return {
-                  ok: false,
-                  message: `all ${cap} session run slots are in use; nothing was sent. Retry later, or send with wake:false to leave it in the mailbox.`,
-                };
               const stopped = input.interrupt
-                ? await stopSessionRuns(deps, target, PARENT_INTERRUPT, {
-                    by: binding.session.id,
-                    mailbox: deps.mailbox,
-                  })
+                ? await stopSessionRuns(
+                    deps,
+                    target,
+                    { reason: PARENT_INTERRUPT, scope: "run" },
+                    {
+                      by: binding.session.id,
+                      mailbox: deps.mailbox,
+                    },
+                  )
                 : [];
               request.origin = sessionTurnOrigin(request.origin, stamped);
               request.sessionSenderId = binding.session.id;

@@ -1,3 +1,4 @@
+import { withRowTenant } from "../tenant-ingress.ts";
 import { z } from "zod";
 import { parseScopeId, scopeId } from "../../types.ts";
 import { sendJson, readRawBody, PayloadTooLargeError } from "../http.ts";
@@ -113,7 +114,14 @@ async function events(ctx: ApiCtx) {
   );
 }
 
-async function receive(ctx: BaseCtx) {
+function receive(ctx: BaseCtx): Promise<void> {
+  if (ctx.params.id === "gmail") return receiveEvent(ctx);
+  return withRowTenant(ctx.req, ctx.res, ctx.deps.tenancy, { table: "loop_ingress", id: ctx.params.id! }, () =>
+    receiveEvent(ctx),
+  );
+}
+
+async function receiveEvent(ctx: BaseCtx): Promise<void> {
   if (!ctx.deps.loopIngress) {
     ctx.req.resume();
     return sendJson(ctx.res, 404, { error: "not_found" });
@@ -139,5 +147,5 @@ export const loopIngressRoutes: ReadonlyArray<Route<ApiCtx>> = [
 ];
 
 export const loopIngressRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "POST", path: "/v1/loop-ingress/:id", auth: "public", handle: receive },
+  { method: "POST", path: "/v1/loop-ingress/:id", auth: "public", tenant: "row", handle: receive },
 ];

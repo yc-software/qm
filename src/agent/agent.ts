@@ -9,6 +9,7 @@ import type {
   ConversationTurn,
   ScopeId,
   Session,
+  StopScope,
   TurnRequest,
   TurnRuntime,
 } from "../types.ts";
@@ -146,7 +147,7 @@ export interface AgentTurnResult {
   prodded?: string[];
   silent?: boolean;
   stopped?: true;
-  stopReason?: string;
+  stopScope?: StopScope;
   stoppedByUser?: true;
   pendingApprovals?: Array<{
     command: string;
@@ -210,5 +211,4 @@ export interface ModelUtilities {
 export interface Agent extends ModelUtilities {
   runTurn(input: AgentTurnInput): Promise<AgentTurnResult>;
   close?(): Promise<void> | void;
-  resetSession?(sessionId: string): Promise<void> | void;
 }

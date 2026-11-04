@@ -1,3 +1,4 @@
+import { loadedTenantSettings } from "../tenants/settings.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes, createCipheriv, createDecipheriv, createHash, hkdfSync } from "node:crypto";
 import type { ConsentMode, OAuthClientResolver, ResolvedClient } from "./oauth.ts";
@@ -55,12 +56,13 @@ export interface DecryptedConnectorClient {
 export interface SecretKey {
   current: Buffer;
   legacy: Buffer;
+  purpose?: string;
   fallbacks?: SecretKey[];
 }
 
 const HKDF_SALT = "agent-platform.secret-box";
 
-export function deriveConnectorKey(material: Buffer | string, purpose = "connector-secrets"): SecretKey {
+function derivedKey(material: Buffer | string, purpose: string): SecretKey {
   const ikm = Buffer.isBuffer(material) ? material : Buffer.from(material, "utf8");
   const current = Buffer.from(hkdfSync("sha256", ikm, HKDF_SALT, `${purpose}.v2`, 32));
   const legacy =
@@ -68,7 +70,25 @@ export function deriveConnectorKey(material: Buffer | string, purpose = "connect
   return { current, legacy };
 }
 
-export function encryptSecret(plain: string, key: SecretKey): string {
+export function deriveConnectorKey(material: Buffer | string, purpose = "connector-secrets"): SecretKey {
+  return { ...derivedKey(material, purpose), purpose };
+}
+
+const tenantKeys = new Map<string, SecretKey>();
+
+function tenantKey(key: SecretKey): SecretKey {
+  const material = key.purpose ? loadedTenantSettings().connectorSecretKey : undefined;
+  if (!material || !key.purpose) return key;
+  const cacheKey = `${key.purpose}\0${material}`;
+  const cached = tenantKeys.get(cacheKey);
+  if (cached) return cached;
+  const derived = derivedKey(material, key.purpose);
+  tenantKeys.set(cacheKey, derived);
+  return derived;
+}
+
+export function encryptSecret(plain: string, secretKey: SecretKey): string {
+  const key = tenantKey(secretKey);
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key.current, iv);
   const ct = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
@@ -76,7 +96,8 @@ export function encryptSecret(plain: string, key: SecretKey): string {
   return `v2:${iv.toString("base64")}:${tag.toString("base64")}:${ct.toString("base64")}`;
 }
 
-export function decryptSecret(enc: string, key: SecretKey): string {
+export function decryptSecret(enc: string, secretKey: SecretKey): string {
+  const key = tenantKey(secretKey);
   const parts = enc.split(":");
   const v2 = parts[0] === "v2";
   const [ivB, tagB, ctB] = v2 ? parts.slice(1) : parts;

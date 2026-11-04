@@ -1,3 +1,4 @@
+import { inTenantOf } from "../tenants/claim.ts";
 import type { SkillPackStore } from "./skill-pack-store.ts";
 import type { SkillPackFetcher } from "./pack-fetcher.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
@@ -40,9 +41,9 @@ export function createSkillSyncEngine(deps: SkillSyncDeps): SkillSyncEngine {
   }
 
   async function syncAll(): Promise<void> {
-    for (const pack of await deps.packs.list()) {
+    for (const pack of await deps.packs.acrossTenants()) {
       try {
-        await syncOne(pack.id);
+        await inTenantOf(pack.tenantId, () => syncOne(pack.id));
       } catch (e) {
         console.error("%s", `[skill-sync] pack ${pack.id} failed:`, errMessage(e));
       }

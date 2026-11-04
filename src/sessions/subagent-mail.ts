@@ -4,20 +4,23 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import type { Principal, Session, SpawnMeta } from "../types.ts";
+import type { Principal, Session, SpawnMeta, StopScope } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { swallowAs } from "../util/errors.ts";
+import { type Item, proseText } from "./items.ts";
 import {
+  ANCESTOR_STOP,
   assertAudienceCompatible,
   isSubagentThreadRef,
+  PARENT_INTERRUPT,
   requiresDelegation,
   runStopped,
   snippet,
-  stopCascades,
+  sparesDescendants,
   storedContext,
   treeSessions,
 } from "./session-syscalls.ts";
@@ -29,13 +32,14 @@ const MESSAGE_WAKE =
   "A subagent sent you a message. Check internal messages with subagents wait (timeoutMs: 0) and decide whether it affects the user's request; report only what is relevant. If it does not, end without posting.";
 const MESSAGE_DISPLAY = "Subagent sent a message";
 
-export type SubagentMailKind = "final_answer" | "no_reply" | "awaiting_input" | "errored" | "refused";
+export type SubagentMailKind = "final_answer" | "no_reply" | "awaiting_input" | "errored" | "refused" | "stopped";
 
 export function renderSubagentMail(input: {
   title: string;
   sessionId: string;
   kind: SubagentMailKind;
   body: string;
+  stopScope?: StopScope;
 }): string {
   const why: Record<SubagentMailKind, string> = {
     final_answer: "finished a turn and sent back its result",
@@ -43,10 +47,16 @@ export function renderSubagentMail(input: {
     awaiting_input: "is blocked waiting for a human approval",
     errored: "failed",
     refused: "was refused",
+    stopped: "was stopped",
   };
+  const stopReasons: Partial<Record<StopScope, string>> = {
+    run: ` ${PARENT_INTERRUPT}`,
+    ancestor: ` ${ANCESTOR_STOP}`,
+  };
+  const stopReason = (input.stopScope && stopReasons[input.stopScope]) ?? "";
   return [
     `<wake reason="subagent" name="${xmlAttrEscape(input.title)}" sessionId="${input.sessionId}" kind="${input.kind}" at="${new Date().toISOString()}">`,
-    `  <why>Your subagent session "${xmlEscape(input.title)}" ${why[input.kind]}.</why>`,
+    `  <why>Your subagent session "${xmlEscape(input.title)}" ${why[input.kind]}${xmlEscape(stopReason)}.</why>`,
     `  <content>${xmlEscape(input.body)}</content>`,
     `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is kept with it; use the subagents tool to read it or give it another task.</instructions>`,
     "</wake>",
@@ -82,7 +92,7 @@ interface ParentWake {
   displayText: string;
 }
 
-type ParentMail = Pick<SessionMessage, "id" | "text" | "sourceEntrySeq" | "wake">;
+type ParentMail = Pick<SessionMessage, "id" | "text" | "sourceEntrySeq" | "wake" | "senderRunId" | "delegatingRunId">;
 
 const messageWake = (id: string): ParentWake => ({
   dedupKey: `subagent-followup:${id}`,
@@ -175,7 +185,7 @@ async function wakeParent(
 ): Promise<"woken" | "busy" | "settled"> {
   const { meta, prepared } = turn;
   const existing = await deps.runs.getByDedupKey(wake.dedupKey);
-  if (!(await deps.mailbox.pending(parent.id)).some((message) => message.id === mailId)) {
+  if (!(await deps.mailbox.unread(parent.id, mailId))) {
     if (existing?.status === "pending") await deps.runs.withdraw(existing.id, { unstartedOnly: true });
     return "settled";
   }
@@ -236,29 +246,49 @@ export async function wakeOwnParent(
   )
     return undefined;
   const turn = await parentTurn(deps, sender, parent, source, mail.text, MESSAGE_DISPLAY);
-  const wake = {
-    ...(source.runId ? { runId: source.runId } : {}),
+  const marked: ParentMail = {
+    ...mail,
+    wake: true,
+    ...(source.runId ? { senderRunId: source.runId } : {}),
     ...(source.delegatingRunId ? { delegatingRunId: source.delegatingRunId } : {}),
   };
-  return mailParent(deps, sender, parent, turn, { ...mail, wake }, messageWake(mail.id));
+  return mailParent(deps, sender, parent, turn, marked, messageWake(mail.id));
 }
 
+type UnreadMailDeps = ParentMailDeps & {
+  sessions: Pick<SessionStore, "get" | "getByThread">;
+  signals: Pick<RunSignalStore, "pending">;
+  advisoryLock: AdvisoryLock;
+};
+
 export async function wakeForUnreadMail(
-  deps: ParentMailDeps & {
-    sessions: Pick<SessionStore, "get" | "getByThread">;
-    signals: Pick<RunSignalStore, "pending">;
-    advisoryLock: AdvisoryLock;
-  },
+  deps: UnreadMailDeps,
   run: Run,
 ): Promise<"woken" | "busy" | "settled" | undefined> {
-  if (isSubagentThreadRef(run.sessionId) || !deps.runs.get) return undefined;
-  if (run.result?.stopped && stopCascades(run.result.stopReason)) return undefined;
+  if (isSubagentThreadRef(run.sessionId) || (run.result?.stopped && !sparesDescendants(run.result.stopScope)))
+    return undefined;
   const parent = await deps.sessions.getByThread(run.sessionId);
-  if (!parent || parent.parentSessionId) return undefined;
+  return parent ? wakeParentForMail(deps, parent) : undefined;
+}
+
+export async function sweepUnreadMailWakes(deps: UnreadMailDeps): Promise<void> {
+  for (let page = await deps.mailbox.awaitingWake(); page.length;) {
+    for (const recipientId of new Set(page.map((message) => message.recipientId))) {
+      const parent = await deps.sessions.get(recipientId);
+      if (parent && !(await deps.runs.inFlightForThread(parent.threadRef)).length)
+        await wakeParentForMail(deps, parent).catch(swallowAs("sessions: recover unread mail wake", undefined));
+    }
+    page = await deps.mailbox.awaitingWake(page.at(-1)?.id);
+  }
+}
+
+async function wakeParentForMail(
+  deps: UnreadMailDeps,
+  parent: Session,
+): Promise<"woken" | "busy" | "settled" | undefined> {
+  if (parent.parentSessionId || !deps.runs.get) return undefined;
   const runs = { get: deps.runs.get };
-  for (const message of await deps.mailbox.pending(parent.id)) {
-    const marker = message.wake;
-    if (!marker) continue;
+  for (const message of await deps.mailbox.wakesFor(parent.id)) {
     const wake = messageWake(message.id);
     const existing = await deps.runs.getByDedupKey(wake.dedupKey);
     const child = await deps.sessions.get(message.senderId);
@@ -270,11 +300,11 @@ export async function wakeForUnreadMail(
       !isSubagentThreadRef(child.threadRef)
         ? "settled"
         : await deps.advisoryLock.withLock("session-tree-admission", async () => {
-            if (await runStopped(runs, deps.signals, marker.runId ?? marker.delegatingRunId)) return "settled";
+            if (await runStopped(runs, deps.signals, message.senderRunId ?? message.delegatingRunId)) return "settled";
             const source = {
               actor: message.actor,
               conversation: { audience: message.audience },
-              ...(marker.delegatingRunId ? { delegatingRunId: marker.delegatingRunId } : {}),
+              ...(message.delegatingRunId ? { delegatingRunId: message.delegatingRunId } : {}),
             };
             const turn = await parentTurn(deps, child, parent, source, message.text, MESSAGE_DISPLAY).catch(
               swallowAs("sessions: unread mail wake", undefined),
@@ -289,63 +319,46 @@ export async function wakeForUnreadMail(
 
 export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quiet = false): Promise<boolean> {
   if (!isSubagentThreadRef(run.sessionId) || run.request.privateSessionMessage) return true;
-  const stopped = run.result?.stopped
-    ? "self"
-    : deps.signals && deps.runs.get && (await runStopped({ get: deps.runs.get }, deps.signals, run.id));
-  if (stopped === "self") return true;
+  const stopped =
+    deps.signals && deps.runs.get
+      ? await runStopped({ get: deps.runs.get }, deps.signals, run.id)
+      : run.result?.stopped && "self";
   const child = await deps.sessions.getByThread(run.sessionId);
   if (!child?.parentSessionId || !child.spawnMeta) return true;
   const parent = await deps.sessions.get(child.parentSessionId);
   if (!parent) return true;
   const title = child.title?.trim() || child.id;
   const result = run.result;
-  let kind: SubagentMailKind;
-  let body: string;
-  if (run.status === "failed" || result?.status === "failed") {
-    kind = "errored";
-    body = snippet(result?.reason ?? "the turn failed", MAIL_ERROR_CAP);
-  } else if (result?.pendingApprovals?.length || result?.status === "pending_approval") {
-    kind = "awaiting_input";
-    body = snippet(
-      result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval",
-      MAIL_ERROR_CAP,
-    );
-  } else if (result?.status === "refused") {
-    kind = "refused";
-    body = snippet(result.reason ?? "the turn was refused", MAIL_ERROR_CAP);
-  } else if (result?.status === "ok" && (result.reply?.trim() || result.attachments?.length)) {
-    kind = "final_answer";
-    body = result.reply?.trim() || `Produced ${result.attachments!.map((file) => file.name).join(", ")}.`;
-  } else {
-    kind = "no_reply";
-    body = "completed without sending a reply.";
-  }
+  const failed = run.status === "failed" || result?.status === "failed";
+  const ending = failed ? "failed" : "completed";
+  const wake = {
+    dedupKey: `subagent-return:${run.id}`,
+    text: COMPLETION_WAKE,
+    displayText: `Delegated task ${result?.stopped ? "stopped" : ending}`,
+  };
+  const turn = await parentTurn(deps, child, parent, run.request, wake.text, wake.displayText);
+  const { meta, prepared } = turn;
+  const outputSeq = result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? result?.sourceUserSeq;
+  const quotes = result?.stopped === true || failed;
+  const readers = [...new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])];
+  const views =
+    quotes || (outputSeq !== undefined && outputSeq !== null)
+      ? await Promise.all(readers.map((id) => deps.sessions.visibleItems(child.id, id)))
+      : [];
+  const shared = (seq: number): boolean => views.every((view) => view.some((item) => item.seq === seq));
+  if (outputSeq !== undefined && outputSeq !== null && !shared(outputSeq))
+    throw new Error("the current parent audience cannot read this child result");
+  const { kind, body } = mailOf(run, failed, quotes ? turnText(views[0] ?? [], shared, run) : undefined);
   const text = renderSubagentMail({
     title,
     sessionId: child.id,
     kind,
     body:
       body.length > 16_000 ? `${body.slice(0, 16_000)}\n[truncated; read the child session for the full result]` : body,
+    ...(result?.stopped && result.stopScope ? { stopScope: result.stopScope } : {}),
   });
-  const turn = await parentTurn(
-    deps,
-    child,
-    parent,
-    run.request,
-    text,
-    `[subagent ${title}: ${kind.replace("_", " ")}]`,
-  );
-  const { meta, prepared } = turn;
-  const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
-  if (outputSeq !== undefined && outputSeq !== null) {
-    for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
-      const visible = await deps.sessions.visibleItems(child.id, id);
-      if (!visible.some((item) => item.seq === outputSeq))
-        throw new Error("the current parent audience cannot read this child result");
-    }
-  }
-  if (result?.attachments?.length && deps.deliveries) {
-    const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);
+  if (result?.attachments?.length && deps.deliveries && !result.stopped) {
+    const delivery = deliveryCandidatesFor(meta, parent.scopeId);
     const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
     const destination =
       candidate ??
@@ -371,12 +384,11 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quie
     text,
     ...(outputSeq !== undefined && outputSeq !== null ? { sourceEntrySeq: outputSeq } : {}),
   };
-  const wake = {
-    dedupKey: `subagent-return:${run.id}`,
-    text: COMPLETION_WAKE,
-    displayText: "Delegated task completed",
-  };
-  return (await mailParent(deps, child, parent, turn, mail, stopped || quiet ? undefined : wake)) === "settled";
+  const wakes =
+    !quiet &&
+    (!stopped ||
+      (stopped === "self" && result?.stopped === true && ["tree", "session"].includes(result.stopScope ?? "tree")));
+  return (await mailParent(deps, child, parent, turn, mail, wakes ? wake : undefined)) === "settled";
 }
 
 export async function settleTreeWakes(
@@ -388,9 +400,45 @@ export async function settleTreeWakes(
 ): Promise<void> {
   const tree = (await treeSessions(deps.sessions, root)).filter((session) => session.scopeId === root.scopeId);
   for (const session of tree)
-    for (const message of await deps.mailbox.pending(session.id))
-      if (message.wake) await deps.mailbox.settle(session.id, message.id);
+    for (const message of await deps.mailbox.wakesFor(session.id)) await deps.mailbox.settle(session.id, message.id);
   for (const run of await deps.runs.pendingReturnsIn(tree.map((session) => session.threadRef)))
     if (await deliverSubagentMail(deps, run, true).catch(swallowAs("sessions: settle tree return", false)))
       await deps.runs.markReturned(run.id);
+}
+
+function turnText(items: readonly Item[], shared: (seq: number) => boolean, run: Run): string | undefined {
+  const since = run.turnUserSeq ?? run.result?.sourceUserSeq;
+  if (since === undefined || since === null) return undefined;
+  const turnId = run.id.toLowerCase();
+  for (const item of items.toReversed()) {
+    if (item.seq < since) return undefined;
+    if (!shared(item.seq) || item.turnId !== turnId) continue;
+    if (item.kind !== "AgentMessage" || item.variant === "files_delivered") continue;
+    const text = proseText(item)?.trim();
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function mailOf(run: Run, failed: boolean, said: string | undefined): { kind: SubagentMailKind; body: string } {
+  const result = run.result;
+  if (result?.stopped) return { kind: "stopped", body: said ?? "It stopped before saying anything." };
+  if (failed) {
+    const reason = snippet(result?.reason ?? "the turn failed", MAIL_ERROR_CAP);
+    return { kind: "errored", body: said ? `${reason}\n\nLast output before the failure:\n${said}` : reason };
+  }
+  if (result?.pendingApprovals?.length || result?.status === "pending_approval")
+    return {
+      kind: "awaiting_input",
+      body: snippet(
+        result.pendingApprovals?.map((a) => a.command).join("; ") ?? "a command needs human approval",
+        MAIL_ERROR_CAP,
+      ),
+    };
+  if (result?.status === "refused")
+    return { kind: "refused", body: snippet(result.reason ?? "the turn was refused", MAIL_ERROR_CAP) };
+  const files = result?.attachments?.map((file) => file.name) ?? [];
+  if (result?.status === "ok" && (result.reply?.trim() || files.length))
+    return { kind: "final_answer", body: result.reply?.trim() || `Produced ${files.join(", ")}.` };
+  return { kind: "no_reply", body: "completed without sending a reply." };
 }

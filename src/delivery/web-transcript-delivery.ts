@@ -1,3 +1,4 @@
+import { inTenantOf } from "../tenants/claim.ts";
 import type { Delivery, ScopeId } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
@@ -23,6 +24,11 @@ export function turnRecordedFailure(tail: readonly Item[], note: { notBefore: nu
 type Disposition = "deliver" | "record" | "settle";
 
 function classify(d: Delivery): Disposition {
+  if (d.destination.type === "webhook") {
+    const recorded =
+      d.provenance?.sourceThreadRef === d.destination.target && d.provenance.sourceAssistantEntrySeq !== undefined;
+    return d.text.trim() && !recorded ? "record" : "deliver";
+  }
   if (d.destination.type !== "web") return "deliver";
   if (d.destination.webTranscript && d.text.trim()) return "record";
   if (!d.provenance) return "deliver";
@@ -30,6 +36,8 @@ function classify(d: Delivery): Disposition {
   if (d.provenance.sourceAssistantEntrySeq === undefined || d.attachments?.length) return "deliver";
   return "settle";
 }
+
+const transcribed = (type: string): boolean => type === "web" || type === "webhook";
 
 export function withWebTranscriptDeliveries(
   store: DeliveryStore,
@@ -134,6 +142,12 @@ export function withWebTranscriptDeliveries(
     }
     return out;
   };
+  const drainedInTenants = async (type: string, rows: Delivery[]): Promise<Delivery[]> => {
+    if (!transcribed(type)) return rows;
+    const out: Delivery[] = [];
+    for (const row of rows) out.push(...(await inTenantOf(row.tenantId, () => drained([row]))));
+    return out;
+  };
 
   return {
     ...store,
@@ -150,11 +164,17 @@ export function withWebTranscriptDeliveries(
     },
     async pending(type) {
       const rows = await store.pending(type);
-      return type === "web" ? drained(rows) : rows;
+      return transcribed(type) ? drained(rows) : rows;
     },
-    async claimPending(type, ttlMs) {
-      const rows = await store.claimPending(type, ttlMs);
-      return type === "web" ? drained(rows) : rows;
+    async pendingAcrossTenants(type) {
+      return drainedInTenants(type, await store.pendingAcrossTenants(type));
+    },
+    async claimPending(type, ttlMs, opts) {
+      const rows = await store.claimPending(type, ttlMs, opts);
+      return transcribed(type) ? drained(rows) : rows;
+    },
+    async claimPendingAcrossTenants(type, ttlMs, opts) {
+      return drainedInTenants(type, await store.claimPendingAcrossTenants(type, ttlMs, opts));
     },
   };
 }

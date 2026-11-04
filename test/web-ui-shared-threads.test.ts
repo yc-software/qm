@@ -12,14 +12,14 @@ import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
-const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-shared-")) }));
+const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-shared-")) });
+const built = buildApp(config);
 built.runtime.start();
 const core = createServer(built.app, {
-  replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+  replayDedupe: createPostgresReplayDedupe(config.databaseUrl!),
   signingSecret: SECRET,
 });
 core.listen(0);

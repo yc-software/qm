@@ -672,7 +672,7 @@ test("run control follows current shared membership while public history require
     }
     assert.ok(
       await built.app.getSessionForViewer(session.id, "shared-member"),
-      "history remains readable through the participant window",
+      "history remains readable to a current participant",
     );
     assert.equal(await built.app.getRun(run.id, "shared-member"), null);
     assert.deepEqual(await built.app.signalRun(run.id, { kind: "abort" }, "shared-member"), {
@@ -1134,18 +1134,18 @@ test("web proxy: Stop stops only the run's own conversation; tree:true stops its
   const stop = (body: Record<string, unknown>) =>
     fetch(`${webBase}/api/runs/${lead.run.id}/signal`, asUser("alice", { method: "POST", body: JSON.stringify(body) }));
   const reasons = async (runId: string) =>
-    (await built.signals.pending(runId)).map(({ signal }) => [signal.kind, signal.reason]);
+    (await built.signals.pending(runId)).map(({ signal }) => [signal.kind, signal.reason, signal.scope]);
 
   assert.equal((await stop({ kind: "abort" })).status, 200);
-  assert.deepEqual(await reasons(lead.run.id), [["abort", "by user"]]);
+  assert.deepEqual(await reasons(lead.run.id), [["abort", "by user", "session"]]);
   assert.deepEqual(await reasons(lane.run.id), []);
 
-  await built.runs.complete(lead.run.id, lead.leaseToken, { status: "silent", stopped: true, stopReason: "by user" });
+  await built.runs.complete(lead.run.id, lead.leaseToken, { status: "silent", stopped: true, stopScope: "session" });
   assert.equal((await stop({ kind: "abort" })).status, 409);
   assert.deepEqual(await reasons(lane.run.id), []);
 
   assert.equal((await stop({ kind: "abort", tree: true })).status, 200);
-  assert.deepEqual(await reasons(lane.run.id), [["abort", "by user (subagents too)"]]);
+  assert.deepEqual(await reasons(lane.run.id), [["abort", "because the parent session was stopped", "ancestor"]]);
   await built.runs.complete(lane.run.id, lane.leaseToken, { status: "silent", stopped: true });
   assert.equal((await stop({ kind: "abort", tree: true })).status, 409);
 });
