@@ -31,6 +31,9 @@ const COMPLETION_WAKE =
 const MESSAGE_WAKE =
   "A subagent sent you a message. Check internal messages with subagents wait (timeoutMs: 0) and decide whether it affects the user's request; report only what is relevant. If it does not, end without posting.";
 const MESSAGE_DISPLAY = "Subagent sent a message";
+const PEER_WAKE =
+  "Another conversation sent you a message. Check internal messages with subagents wait (timeoutMs: 0); if it hands you work or affects the user's request, act on it and report only what is relevant. If it needs nothing, end without posting.";
+const PEER_DISPLAY = "Another conversation sent a message";
 const RESULT_MAIL = "subagent-mail-";
 const returnWakeKey = (runId: string) => `subagent-return:${runId}`;
 
@@ -88,6 +91,7 @@ interface ParentSource {
   conversation: Pick<OrchestratorInput["conversation"], "audience">;
   runId?: string;
   delegatingRunId?: string;
+  peerDepth?: number;
 }
 
 interface ParentWake {
@@ -98,14 +102,21 @@ interface ParentWake {
 
 type ParentMail = Pick<
   SessionMessage,
-  "id" | "text" | "sourceEntrySeq" | "wake" | "senderRunId" | "delegatingRunId" | "resultOf"
+  "id" | "text" | "sourceEntrySeq" | "wake" | "senderRunId" | "delegatingRunId" | "resultOf" | "peerDepth"
 >;
 
-const messageWake = (id: string): ParentWake => ({
+const messageWake = (id: string, peer = false): ParentWake => ({
   dedupKey: `subagent-followup:${id}`,
-  text: MESSAGE_WAKE,
-  displayText: MESSAGE_DISPLAY,
+  text: peer ? PEER_WAKE : MESSAGE_WAKE,
+  displayText: peer ? PEER_DISPLAY : MESSAGE_DISPLAY,
 });
+
+const topLevel = (session: Session): boolean =>
+  !session.parentSessionId && !isSubagentThreadRef(session.threadRef) && !session.threadRef.startsWith("swarm:");
+
+/** A top-level conversation messaging another top-level conversation that shares its context. */
+export const isPeerMessage = (sender: Session, recipient: Session): boolean =>
+  sender.id !== recipient.id && sender.scopeId === recipient.scopeId && topLevel(sender) && topLevel(recipient);
 
 async function delegatingRun(
   runs: ParentMailDeps["runs"],
@@ -159,14 +170,16 @@ async function parentTurn(
 ) {
   if (parent.threadRef.startsWith("swarm:")) throw new Error("subagent returns cannot enter swarm workers");
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
-  const initiatingRun = await delegatingRun(deps.runs, child, source.delegatingRunId);
+  // A peer wake always runs on the recipient's own stored context, never the sender's.
+  const peer = source.peerDepth !== undefined;
+  const initiatingRun = peer ? undefined : await delegatingRun(deps.runs, child, source.delegatingRunId);
   const initiatingContext = initiatingRun?.request ?? child.spawnMeta;
-  if (!initiatingContext) throw new Error("the subagent has no verified runtime context yet");
+  if (!peer && !initiatingContext) throw new Error("the subagent has no verified runtime context yet");
   const currentContext = storedContext(parent);
-  const originalParent = parent.threadRef === initiatingContext.conversation.threadRef;
+  const originalParent = !peer && parent.threadRef === initiatingContext!.conversation.threadRef;
   if (!originalParent && !currentContext) throw new Error("the current parent has no verified runtime context yet");
   const meta = originalParent
-    ? initiatingContext
+    ? initiatingContext!
     : {
         ...currentContext!,
         actor: source.actor,
@@ -220,6 +233,7 @@ async function parentTurn(
   ] as const)
     delete request[key];
   if (!originalParent) request.addressed = false;
+  if (peer) request.sessionMessageDepth = source.peerDepth;
   const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
   assertAudienceCompatible(source, prepared);
   return { meta, prepared, ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}) };
@@ -298,6 +312,24 @@ export async function wakeOwnParent(
   return mailParent(deps, sender, parent, turn, marked, messageWake(mail.id));
 }
 
+export async function wakePeer(
+  deps: ParentMailDeps,
+  sender: Session,
+  recipient: Session,
+  source: ParentSource & { peerDepth: number },
+  mail: Pick<SessionMessage, "id" | "text" | "sourceEntrySeq">,
+): Promise<"woken" | "busy" | "settled" | undefined> {
+  if (!isPeerMessage(sender, recipient)) return undefined;
+  const turn = await parentTurn(deps, sender, recipient, source, mail.text, PEER_DISPLAY);
+  const marked: ParentMail = {
+    ...mail,
+    wake: true,
+    peerDepth: source.peerDepth,
+    ...(source.runId ? { senderRunId: source.runId } : {}),
+  };
+  return mailParent(deps, sender, recipient, turn, marked, messageWake(mail.id, true));
+}
+
 type UnreadMailDeps = ParentMailDeps & {
   sessions: Pick<SessionStore, "get" | "getByThread">;
   signals: Pick<RunSignalStore, "pending">;
@@ -331,15 +363,15 @@ async function wakeParentForMail(
   if (!deps.runs.get) return undefined;
   const runs = { get: deps.runs.get };
   for (const message of await deps.mailbox.wakesFor(parent.id)) {
-    const wake = messageWake(message.id);
-    const existing = await deps.runs.getByDedupKey(wake.dedupKey);
     const child = await deps.sessions.get(message.senderId);
+    const peer = message.peerDepth !== undefined && !!child && isPeerMessage(child, parent);
+    const wake = messageWake(message.id, peer);
+    const existing = await deps.runs.getByDedupKey(wake.dedupKey);
     const outcome =
       existing?.status === "done" ||
       existing?.status === "failed" ||
       !child ||
-      child.parentSessionId !== parent.id ||
-      !isSubagentThreadRef(child.threadRef)
+      (!peer && (child.parentSessionId !== parent.id || !isSubagentThreadRef(child.threadRef)))
         ? "settled"
         : await deps.advisoryLock.withLock("session-tree-admission", async () => {
             if (await runStopped(runs, deps.signals, message.senderRunId ?? message.delegatingRunId)) return "settled";
@@ -347,8 +379,9 @@ async function wakeParentForMail(
               actor: message.actor,
               conversation: { audience: message.audience },
               ...(message.delegatingRunId ? { delegatingRunId: message.delegatingRunId } : {}),
+              ...(peer ? { peerDepth: message.peerDepth } : {}),
             };
-            const turn = await parentTurn(deps, child, parent, source, message.text, MESSAGE_DISPLAY).catch(
+            const turn = await parentTurn(deps, child, parent, source, message.text, wake.displayText).catch(
               swallowAs("sessions: unread mail wake", undefined),
             );
             return turn ? wakeParent(deps, parent, turn, message.id, wake) : "settled";

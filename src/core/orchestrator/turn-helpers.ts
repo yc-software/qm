@@ -201,9 +201,8 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
     ...(input.readOnly ? { readOnly: true } : {}),
-    ...(input.privateSessionMessage
-      ? { privateSessionMessage: true as const, sessionMessageDepth: input.sessionMessageDepth }
-      : {}),
+    ...(input.privateSessionMessage ? { privateSessionMessage: true as const } : {}),
+    ...(input.sessionMessageDepth !== undefined ? { sessionMessageDepth: input.sessionMessageDepth } : {}),
     ...(input.skipMemory ? { skipMemory: true } : {}),
     ...(input.surfaceTools ? { surfaceTools: true } : {}),
     ...(input.addressed ? { addressed: true } : {}),

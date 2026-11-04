@@ -28,7 +28,7 @@ import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
-import { wakeOwnParent } from "./subagent-mail.ts";
+import { isPeerMessage, wakeOwnParent, wakePeer } from "./subagent-mail.ts";
 import {
   liveSubagentsNote,
   openChildren,
@@ -874,7 +874,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const privateChild = isSubagentThreadRef(target.threadRef);
               const privateMessage = binding.request.privateSessionMessage === true || !privateChild;
               const messageDepth = (binding.request.sessionMessageDepth ?? 0) + 1;
-              if (privateMessage && messageDepth > SESSION_MESSAGE_DEPTH_CAP)
+              if (binding.request.privateSessionMessage && messageDepth > SESSION_MESSAGE_DEPTH_CAP)
                 throw new Error("private session message reply limit reached");
               const prepared = childRunRequest(
                 target,
@@ -947,6 +947,23 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!input.wake && !input.interrupt) return leaveMail();
               if (binding.request.privateSessionMessage)
                 return leaveMail("a private turn cannot start work in another session");
+              if (isPeerMessage(binding.session, target)) {
+                if (caller.readOnly) return leaveMail("a read-only turn cannot start work in another conversation");
+                if (messageDepth > SESSION_MESSAGE_DEPTH_CAP)
+                  return leaveMail(
+                    `${SESSION_MESSAGE_DEPTH_CAP} conversations already woke each other in a row, so this one stops the chain`,
+                  );
+                const woken = await wakePeer(
+                  deps,
+                  binding.session,
+                  target,
+                  { ...binding.request, peerDepth: messageDepth },
+                  mail,
+                ).catch((error: unknown) => ({ failed: errMessage(error) }));
+                if (typeof woken === "object") return leaveMail(woken.failed);
+                const delivered = woken === "woken" ? "queued_turn" : "queued_message";
+                return { ok: true, sessionId: target.id, title, delivered, busy: woken === "busy" };
+              }
               if (!target.parentSessionId || (target.id === binding.session.parentSessionId && !input.interrupt)) {
                 if (caller.readOnly) return leaveMail("a read-only subagent cannot start a turn in its parent");
                 const woken = await wakeOwnParent(deps, binding.session.id, target, binding.request, mail).catch(

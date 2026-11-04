@@ -242,7 +242,7 @@ export function sessionTools(kit: ToolKit) {
     description:
       "Work with sessions, the conversations in the web sidebar (subagents are not sessions). " +
       "search: entries across conversations visible to everyone here, with sessionId/seq references. list: sessions you can see here. read: a session's recent transcript. " +
-      "send_message: a private note delivered to another session as internal context, without starting a turn. " +
+      "send_message: a private note delivered to another session as internal context; it wakes that session if it is idle, otherwise the session reads it at its next step. " +
       "new: a clean session starting with `text`. fork: copy this conversation's visible history into a new session, optionally running `text` there. " +
       "Create new/forked sessions only when the attending person asks (they appear under their name); refused on automated turns.",
     parameters: Type.Object({
@@ -327,8 +327,25 @@ export function sessionTools(kit: ToolKit) {
       if (!p.target?.trim()) return fail(`${p.action} requires \`target\`: a sessionId from list.`);
       if (p.action === "send_message") {
         if (!p.text?.trim()) return fail("send_message requires `text`: the note to deliver.");
-        const result = await syscalls.write({ requestId: callId, peer: true, target: p.target, text: p.text });
+        const result = await syscalls.write({
+          requestId: callId,
+          peer: true,
+          wake: true,
+          target: p.target,
+          text: p.text,
+        });
         if (!result.ok) return fail(result.message);
+        const name = `"${result.title}"`;
+        let outcome = `Delivered to ${name}.`;
+        if (result.delivered === "queued_turn") outcome = `Woke ${name}; it is working on this now.`;
+        else if (result.notWoken)
+          outcome = `Left in ${name}'s mailbox without waking it: ${result.notWoken}. ${
+            result.busy
+              ? "It has work running and sees this at its next step."
+              : "It won't see this until something wakes it."
+          }`;
+        else if (result.busy)
+          outcome = `Left in ${name}'s mailbox. It is busy and sees this at its next step; if that turn ends first, this wakes it.`;
         return recordResult(
           callId,
           {
@@ -338,7 +355,7 @@ export function sessionTools(kit: ToolKit) {
             title: result.title,
             delivered: result.delivered,
           },
-          text(`Message to "${result.title}" queued internally without starting a turn.`),
+          text(outcome),
         );
       }
       const result = await syscalls.read({
