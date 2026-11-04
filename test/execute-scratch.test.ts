@@ -442,7 +442,7 @@ test("scratch credentials are selected per command and masked before returning",
   assert.equal(environments[1]?.TOKEN, undefined);
 });
 
-function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a") {
+function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a", actorId = "U1") {
   const events: import("../src/audit/audit-log.ts").AuditEvent[] = [];
   const errors: unknown[] = [];
   const boxes = createTurnSandboxes({
@@ -452,7 +452,7 @@ function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a") {
       errors: { record: (...args: unknown[]) => errors.push(args) },
     },
     input: { runId: "run-1" },
-    actor: { id: "U1" },
+    actor: { id: actorId },
     session: { id: "session-1" },
     transferId,
     scopeId: scopeId("channel", "C1"),
@@ -466,7 +466,7 @@ function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a") {
   return { boxes, events, errors };
 }
 
-test("scratch provisioning is singleflight within a turn and isolated across turns", async () => {
+test("scratch provisioning is singleflight within a turn and isolated across turns and people", async () => {
   const provisions: Parameters<Sandbox["provision"]>[] = [];
   const releases: Parameters<Sandbox["teardown"]>[] = [];
   const sandbox: Partial<Sandbox> = {
@@ -480,7 +480,7 @@ test("scratch provisioning is singleflight within a turn and isolated across tur
     },
   };
   const first = turnBoxes(sandbox);
-  const second = turnBoxes(sandbox, "turn-b");
+  const second = turnBoxes(sandbox, "turn-b", "U2");
   const [a, b, c] = await Promise.all([
     first.boxes.provisionScratch(),
     first.boxes.provisionScratch(),
@@ -494,8 +494,15 @@ test("scratch provisioning is singleflight within a turn and isolated across tur
     assert.deepEqual(opts?.env, { AGENT_API_TOKEN: "scope-capability" });
   }
   await first.boxes.reclaimBox();
+  assert.deepEqual(
+    releases.map(([handle]) => handle.id),
+    [a.id],
+  );
   await second.boxes.reclaimBox();
-  assert.equal(releases.length, 2);
+  assert.deepEqual(
+    releases.map(([handle]) => handle.id),
+    [a.id, c.id],
+  );
   assert.ok(releases.every(([, opts]) => opts?.destroy === true));
   assert.deepEqual(
     first.events.map((event) => event.action),
