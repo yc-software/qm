@@ -25,7 +25,7 @@ function stores(): LoopStores {
   const outputs = createLoopOutputStore(testMap());
   return {
     loops: createLoopStore(testMap()),
-    items: createLoopItemLedger(testMap(), undefined, undefined, outputs),
+    items: createLoopItemLedger(testMap(), outputs),
     outputs,
   };
 }
@@ -73,10 +73,6 @@ test("dismissing an item closes its outputs awaiting review, so they stop holdin
   await runLoopFire(loop, s, effects(s));
   const [held] = await s.items.byLoop(loop.id);
   await s.items.recordAction(held!.id, { kind: "dismiss", outcome: "dismissed" });
-  assert.deepEqual(
-    (await s.outputs.byItem(held!.id)).map((output) => output.state),
-    ["superseded"],
-  );
 
   const next = await runLoopFire(
     loop,
@@ -88,6 +84,33 @@ test("dismissing an item closes its outputs awaiting review, so they stop holdin
   );
   assert.equal(next.enqueued, 1);
   assert.equal(next.worked, 1);
+});
+
+test("a fire closes outputs left open on resolved or pruned items before it counts the review budget", async () => {
+  const s = stores();
+  const loop = await loopIn(s, { caps: { maxOpenOutputs: 2 } });
+  const strand = async (sourceKey: string) => {
+    const { item } = await s.items.enqueue({ loopId: loop.id, sourceKey });
+    await s.items.recordAction(item.id, { kind: "dismiss", outcome: "dismissed" });
+    const output = await s.outputs.capture({
+      loopId: loop.id,
+      itemId: item.id,
+      attemptId: "run-0",
+      shipAction: "open_pr",
+      title: "Fix it",
+      capturedBy: "ledger",
+    });
+    await s.outputs.promoteAttempt(item.id, "run-0");
+    return output.id;
+  };
+  const stranded = [await strand("SENTRY-OLD-1"), await strand("SENTRY-OLD-2")];
+  assert.equal(await s.items.prune(loop.id, { maxItems: 1, retentionMs: Number.MAX_SAFE_INTEGER }), 1);
+  assert.equal((await s.outputs.awaitingReview(loop.id)).length, 2);
+
+  const summary = await runLoopFire(loop, s, effects(s));
+  assert.equal(summary.enqueued, 1);
+  assert.equal(summary.worked, 1);
+  for (const id of stranded) assert.equal((await s.outputs.get(id))?.state, "superseded");
 });
 
 test("firing twice over the same source never works the item twice", async () => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
+import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { sortLedgerItems } from "../src/loops/ledger-view.ts";
 import { planTriage, removeFromGroup, settleGroup, triageWork, workOrder } from "../src/loops/triage.ts";
 import { scopeId } from "../src/types.ts";
@@ -12,7 +13,7 @@ import { testMap } from "./support/test-database.ts";
 const LOOP = "loop-1";
 
 async function flood() {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   const loop = (
     await createLoopStore(testMap()).create({
       owner: "U1",

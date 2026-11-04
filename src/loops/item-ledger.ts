@@ -100,7 +100,6 @@ export interface LoopItemLedger {
   markShipped(id: string, claimToken?: string): Promise<LoopItem | null>;
   returnToWork(id: string, guidance: string, claimToken?: string): Promise<LoopItem | null>;
   park(id: string, reason: string, claimToken?: string): Promise<LoopItem | null>;
-  skip(id: string, reason: string): Promise<LoopItem | null>;
   stats(loopId: string, now: number, held?: ReadonlySet<string>): Promise<LoopQueueStats>;
   deleteByLoop(loopId: string): Promise<void>;
 }
@@ -211,12 +210,12 @@ function mergeIngest(item: LoopItem, entry: IngestEntryInput, now: number): Loop
 
 export function createLoopItemLedger(
   backing: DurableMap<LoopItem>,
+  outputs: Pick<LoopOutputStore, "supersedeActiveSiblings">,
   onEvent?: (event: LedgerEvent) => void,
   coordination?: {
     lock: import("../persistence/advisory-lock.ts").AdvisoryLock;
     accepts: (loopId: string) => Promise<boolean>;
   },
-  outputs?: Pick<LoopOutputStore, "supersedeUndecided">,
 ): LoopItemLedger {
   const update = backing.update.bind(backing);
   const emit = (item: LoopItem | null | undefined, op: LedgerEventOp): void => {
@@ -450,8 +449,8 @@ export function createLoopItemLedger(
         };
       });
       if (!applied) return null;
-      await outputs?.supersedeUndecided(id);
       emit(after, "action");
+      await outputs.supersedeActiveSiblings(id, "");
       return after;
     },
     async reopen(id, opts) {
@@ -619,20 +618,6 @@ export function createLoopItemLedger(
         }),
         claimToken,
         "parked",
-      ),
-    skip: (id, reason) =>
-      transition(
-        id,
-        new Set(["queued", "in_progress"]),
-        (item, now) => ({
-          ...item,
-          status: "skipped",
-          parkedReason: reason,
-          claimedAt: undefined,
-          updatedAt: now,
-        }),
-        undefined,
-        "skipped",
       ),
     async stats(loopId, now, held) {
       const items = (await forLoop(loopId)).filter((item) => !held?.has(item.id));

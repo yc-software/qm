@@ -119,8 +119,8 @@ test("vitals assembled from the stores drive the governor to quarantine on an un
     successCondition: "a PR is linked",
     shipActions: [{ action: "open_pr", gate: "hold" }],
   });
-  const items = createLoopItemLedger(testMap());
   const outputs = createLoopOutputStore(testMap());
+  const items = createLoopItemLedger(testMap(), outputs);
   const { item } = await items.enqueue({ loopId: loop.id, sourceKey: "SENTRY-1" });
   await captureReady(outputs, { ...captured, loopId: loop.id, itemId: item.id });
   await captureReady(outputs, {
@@ -147,8 +147,8 @@ test("undeclared ship actions affect vitals only while their outputs are active"
     successCondition: "a PR is linked",
     shipActions: [{ action: "open_pr", gate: "hold" }],
   });
-  const items = createLoopItemLedger(testMap());
   const outputs = createLoopOutputStore(testMap());
+  const items = createLoopItemLedger(testMap(), outputs);
   const shipped = await captureReady(outputs, { ...captured, loopId: loop.id, shipAction: "send_email" });
   const claim = await outputs.claimShipping(shipped.id);
   await outputs.completeShipping(shipped.id, claim!.claimToken!, { actorId: "U1" }, { status: "ok" });
@@ -167,8 +167,8 @@ test("vitals count the return rate only from outputs a person actually decided",
     successCondition: "the reply answers the question",
     shipActions: [{ action: "front_reply", gate: "hold" }],
   });
-  const items = createLoopItemLedger(testMap());
   const outputs = createLoopOutputStore(testMap());
+  const items = createLoopItemLedger(testMap(), outputs);
   for (const ref of ["a", "b", "c"]) {
     const out = await outputs.capture({
       loopId: loop.id,
@@ -198,8 +198,8 @@ test("unconfirmed undeclared outputs remain open and trigger quarantine", async 
     successCondition: "a PR is linked",
     shipActions: [{ action: "open_pr", gate: "hold" }],
   });
-  const items = createLoopItemLedger(testMap());
   const outputs = createLoopOutputStore(testMap());
+  const items = createLoopItemLedger(testMap(), outputs);
   const output = await captureReady(outputs, { ...captured, loopId: loop.id, shipAction: "send_email" });
   const claimed = await outputs.claimShipping(output.id);
   await outputs.markUnconfirmed(output.id, claimed!.claimToken!);

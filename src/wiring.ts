@@ -1930,18 +1930,13 @@ export function buildApp(
   const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs", ["itemId"]), (output) =>
     publishLoopEvent({ loopId: output.loopId, itemId: output.itemId, op: "ready", at: Date.now() }),
   );
-  const loopItems = createLoopItemLedger(
-    loopItemsMap,
-    publishLoopEvent,
-    {
-      lock: advisoryLock,
-      accepts: async (id) => {
-        const loop = await loopStore.get(id);
-        return Boolean(loop && loop.state !== "archived");
-      },
+  const loopItems = createLoopItemLedger(loopItemsMap, loopOutputs, publishLoopEvent, {
+    lock: advisoryLock,
+    accepts: async (id) => {
+      const loop = await loopStore.get(id);
+      return Boolean(loop && loop.state !== "archived");
     },
-    loopOutputs,
-  );
+  });
   const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
   const cronChanged: { notify?: (id: string) => void } = {};
   const cronFires = createPostgresCronFireStore(databaseUrl);

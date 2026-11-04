@@ -14,7 +14,7 @@ async function world() {
   const sources = testMap<LoopIngress>();
   const deliveries = testMap<IngressDelivery>();
   const loops = createLoopStore(testMap());
-  const items = createLoopItemLedger(testMap());
+  const items = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   const { loop } = await loops.create({
     owner: "alice",
     createdBy: "alice",

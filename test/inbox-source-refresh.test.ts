@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createInboxSourceRefresh as createRefresh } from "../src/loops/inbox-source-refresh.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
+import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 async function fixture(source = "gmail", meta: Record<string, unknown> = { threadId: "t1" }) {
-  const items = createLoopItemLedger(testMap());
+  const items = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await items.ingest([
     {
       loopId: "inbox",

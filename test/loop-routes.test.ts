@@ -32,10 +32,11 @@ function fakeRes() {
 }
 
 function services(): LoopServiceDeps {
+  const outputs = createLoopOutputStore(testMap());
   return {
     store: createLoopStore(testMap()),
-    items: createLoopItemLedger(testMap()),
-    outputs: createLoopOutputStore(testMap()),
+    items: createLoopItemLedger(testMap(), outputs),
+    outputs,
     grants: createShipGrantStore(testMap()),
     crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
     config: testConfigStore("org"),

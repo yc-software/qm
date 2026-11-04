@@ -6,6 +6,7 @@ import { isRunnable } from "./loop-store.ts";
 import { decideShip, outputCandidate, undeclaredShipActions } from "./ship-gate.ts";
 import type { SuccessVerdict } from "./success-evaluation.ts";
 import { workOrder } from "./triage.ts";
+import { isResolved } from "./ledger-view.ts";
 import { isTransientFailure } from "../core/turn-error.ts";
 
 export interface IntakeCandidate {
@@ -115,6 +116,17 @@ class ReviewBudget {
   }
 }
 
+async function openOutputs(loopId: string, stores: LoopStores): Promise<LoopOutput[]> {
+  const items = new Map((await stores.items.byLoop(loopId)).map((item) => [item.id, item]));
+  const open: LoopOutput[] = [];
+  for (const output of (await stores.outputs.byLoop(loopId)).filter(unresolvedOutput)) {
+    const item = items.get(output.itemId);
+    if (item && !isResolved(item)) open.push(output);
+    else await stores.outputs.supersedeActiveSiblings(output.itemId, "");
+  }
+  return open;
+}
+
 export async function runLoopFire(
   loop: Loop,
   stores: LoopStores,
@@ -125,10 +137,8 @@ export async function runLoopFire(
   if (!summary.ran) return summary;
   const effectiveMaxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
 
-  const budget = new ReviewBudget(
-    loop.caps?.maxOpenOutputs,
-    (await stores.outputs.byLoop(loop.id)).filter(unresolvedOutput).length,
-  );
+  const open = await openOutputs(loop.id, stores);
+  const budget = new ReviewBudget(loop.caps?.maxOpenOutputs, open.length);
   if (budget.full) {
     summary.throttled = budget.reason();
     await stores.loops.recordFireOutcome(loop.id, "ok");

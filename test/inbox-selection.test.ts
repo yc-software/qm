@@ -15,10 +15,11 @@ import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-databa
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefresh"]) {
+  const outputs = createLoopOutputStore(testMap());
   const deps = {
     store: createLoopStore(testMap()),
-    items: createLoopItemLedger(testMap()),
-    outputs: createLoopOutputStore(testMap()),
+    items: createLoopItemLedger(testMap(), outputs),
+    outputs,
     grants: createShipGrantStore(testMap()),
     crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
     config: testConfigStore("org"),

@@ -4,6 +4,7 @@ import type { LoopItem } from "../src/loops/types.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { agentDraftOf, createLoopItemLedger, loopItemId, type IngestEntryInput } from "../src/loops/item-ledger.ts";
+import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { ledgerItemView, ledgerState, sortLedgerItems } from "../src/loops/ledger-view.ts";
 import { testMap } from "./support/test-database.ts";
 
@@ -22,7 +23,7 @@ function entry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
 }
 
 test("ingest creates pending items and holds the ones that arrive with a proposal", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   const outcome = await ledger.ingest([
     entry(),
     entry({ dedupeKey: "gmail:thread-2", proposal: { data: { body: "on it" }, by: "agent" } }),
@@ -41,7 +42,7 @@ test("ingest creates pending items and holds the ones that arrive with a proposa
 });
 
 test("the ledger id is the dedupe key scoped to its loop", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry(), entry({ loopId: "loop-2" })]);
   assert.equal((await ledger.byLoop(LOOP)).length, 1);
   assert.equal((await ledger.byLoop("loop-2")).length, 1);
@@ -49,13 +50,13 @@ test("the ledger id is the dedupe key scoped to its loop", async () => {
 });
 
 test("re-ingesting the same source event with nothing new is skipped", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry()]);
   assert.deepEqual(await ledger.ingest([entry()]), { created: 0, updated: 0, skipped: 1 });
 });
 
 test("a newer source event refreshes the payload and the proposal", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ proposal: { data: { body: "first" }, by: "agent" } })]);
   const outcome = await ledger.ingest([
     entry({
@@ -72,7 +73,7 @@ test("a newer source event refreshes the payload and the proposal", async () => 
 });
 
 test("a proposal the person edited survives a sync that brings no newer message", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ proposal: { data: { body: "agent draft" }, by: "agent" } })]);
   const [before] = await ledger.byLoop(LOOP);
   await ledger.setProposal(before!.id, { data: { body: "my own words" }, by: "human" });
@@ -83,7 +84,7 @@ test("a proposal the person edited survives a sync that brings no newer message"
 });
 
 test("a newer message overrides even an edited proposal", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ proposal: { data: { body: "agent draft" }, by: "agent" } })]);
   const [before] = await ledger.byLoop(LOOP);
   await ledger.setProposal(before!.id, { data: { body: "my own words" }, by: "human" });
@@ -93,7 +94,7 @@ test("a newer message overrides even an edited proposal", async () => {
 });
 
 test("actioned items are never resurrected by a stale sync", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry()]);
   const [item] = await ledger.byLoop(LOOP);
   await ledger.recordAction(item!.id, { kind: "send", outcome: "actioned", result: "sent" });
@@ -104,7 +105,7 @@ test("actioned items are never resurrected by a stale sync", async () => {
 });
 
 test("a newer message revives a dismissed item", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry()]);
   const [item] = await ledger.byLoop(LOOP);
   await ledger.recordAction(item!.id, { kind: "dismiss", outcome: "dismissed" });
@@ -116,7 +117,7 @@ test("a newer message revives a dismissed item", async () => {
 });
 
 test("an actioned item cannot be actioned or edited again", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry()]);
   const [item] = await ledger.byLoop(LOOP);
   await ledger.recordAction(item!.id, { kind: "send", outcome: "actioned" });
@@ -126,7 +127,7 @@ test("an actioned item cannot be actioned or edited again", async () => {
 });
 
 test("reopen brings a dismissed item back to held when it holds a proposal", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ proposal: { data: { body: "reply" }, by: "agent" } })]);
   const [item] = await ledger.byLoop(LOOP);
   await ledger.recordAction(item!.id, { kind: "dismiss", outcome: "dismissed" });
@@ -135,7 +136,7 @@ test("reopen brings a dismissed item back to held when it holds a proposal", asy
 });
 
 test("the thread accumulates chat turns and stays bounded", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry()]);
   const [item] = await ledger.byLoop(LOOP);
   await ledger.appendThread(item!.id, [{ role: "human", text: "make it shorter", actorId: "josh" }]);
@@ -155,7 +156,7 @@ test("the thread accumulates chat turns and stays bounded", async () => {
 });
 
 test("setProposal promotes a pending item to held", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry()]);
   const [item] = await ledger.byLoop(LOOP);
   const held = await ledger.setProposal(item!.id, { data: { body: "draft" }, by: "agent", sessionId: "s1" });
@@ -164,7 +165,7 @@ test("setProposal promotes a pending item to held", async () => {
 });
 
 test("annotate merges into the source payload, leaving the item's state and proposal alone", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ proposal: { data: { body: "on it" }, by: "agent" } })]);
   const [item] = await ledger.byLoop(LOOP);
   const annotated = await ledger.annotate(item!.id, { reactions: ["eyes"] });
@@ -180,7 +181,7 @@ test("annotate merges into the source payload, leaving the item's state and prop
 });
 
 test("a newer source event replaces the payload the annotation lived in", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry()]);
   const [item] = await ledger.byLoop(LOOP);
   await ledger.annotate(item!.id, { reactions: ["eyes"] });
@@ -189,7 +190,7 @@ test("a newer source event replaces the payload the annotation lived in", async 
 });
 
 test("prune drops resolved items past retention and over the cap, never open ones", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([
     entry({ dedupeKey: "a" }),
     entry({ dedupeKey: "b" }),
@@ -212,7 +213,7 @@ test("prune drops resolved items past retention and over the cap, never open one
 });
 
 test("prune keeps resolved items inside retention while under the cap", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ dedupeKey: "a" }), entry({ dedupeKey: "b" })]);
   const items = await ledger.byLoop(LOOP);
   await ledger.recordAction(items[0]!.id, { kind: "send", outcome: "actioned" });
@@ -220,7 +221,7 @@ test("prune keeps resolved items inside retention while under the cap", async ()
 });
 
 test("open items sort ahead of resolved ones, newest source event first", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([
     entry({ dedupeKey: "old", sourceAt: 1 }),
     entry({ dedupeKey: "new", sourceAt: 100 }),
@@ -236,7 +237,7 @@ test("open items sort ahead of resolved ones, newest source event first", async 
 });
 
 test("the ledger view exposes the generic shape and never leaks claim tokens", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ proposal: { data: { body: "hi" }, by: "agent" } })]);
   const [item] = await ledger.byLoop(LOOP);
   const view = ledgerItemView(item!, {});
@@ -250,7 +251,7 @@ test("the ledger view exposes the generic shape and never leaks claim tokens", a
 });
 
 test("a parked item reads as failed, not dismissed", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry()]);
   const [item] = await ledger.byLoop(LOOP);
   await ledger.claim(item!.id);
@@ -260,7 +261,7 @@ test("a parked item reads as failed, not dismissed", async () => {
 });
 
 test("a person's edit keeps the agent drafts alongside it, and new agent drafts accumulate", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ proposal: { data: { body: "agent v1" }, by: "agent" } })]);
   const [item] = await ledger.byLoop(LOOP);
   assert.equal(item!.proposal?.by, "agent");
@@ -290,7 +291,7 @@ test("a person's edit keeps the agent drafts alongside it, and new agent drafts 
 });
 
 test("a re-ingested agent draft becomes the draft authorship is judged against, even after a human edit", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ proposal: { data: { body: "agent v1" }, by: "agent" } })]);
   const [item] = await ledger.byLoop(LOOP);
   await ledger.setProposal(item!.id, { data: { body: "my words" }, by: "human" });
@@ -306,7 +307,7 @@ test("a re-ingested agent draft becomes the draft authorship is judged against, 
 });
 
 test("setProposal can be conditioned on the draft version the caller saw", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ proposal: { data: { body: "agent v1" }, by: "agent" } })]);
   const [item] = await ledger.byLoop(LOOP);
   const seenAt = item!.proposal!.at;
@@ -319,14 +320,14 @@ test("setProposal can be conditioned on the draft version the caller saw", async
 });
 
 test("an item ingested without a draft still carries an empty agent-draft history", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry()]);
   const [item] = await ledger.byLoop(LOOP);
   assert.deepEqual(item!.agentDrafts, []);
 });
 
 test("mention identities the agent ever wrote are kept even after the draft history rolls over", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ proposal: { data: { body: "team <!here> look" }, by: "agent" } })]);
   const [item] = await ledger.byLoop(LOOP);
   for (let i = 0; i < 12; i++) await ledger.setProposal(item!.id, { data: { body: `calm v${i}` }, by: "agent" });
@@ -337,7 +338,7 @@ test("mention identities the agent ever wrote are kept even after the draft hist
 });
 
 test("re-ingesting the identical agent draft does not bump its timestamp", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ proposal: { data: { body: "same" }, by: "agent" } })]);
   const [item] = await ledger.byLoop(LOOP);
   const at = item!.proposal!.at;
@@ -347,7 +348,7 @@ test("re-ingesting the identical agent draft does not bump its timestamp", async
 });
 
 test("draft identity ignores key order, as stored JSON does not preserve it", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry({ proposal: { data: { body: "hi", to: ["a@x"], subject: "s" }, by: "agent" } })]);
   const [item] = await ledger.byLoop(LOOP);
   const at = item!.proposal!.at;
@@ -359,7 +360,7 @@ test("draft identity ignores key order, as stored JSON does not preserve it", as
 });
 
 test("continuing a sent reply clears the old draft without losing chat or allowing a second reset", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([
     entry({ sourcePayload: { sentChat: true }, proposal: { data: { body: "First reply" }, by: "human" } }),
   ]);
@@ -389,7 +390,7 @@ test("continuing a sent reply clears the old draft without losing chat or allowi
 
 test("email classification projection is opt-in, scoped, and never changes stored previews", async (t) => {
   const backing = testMap<LoopItem>();
-  const ledger = createLoopItemLedger(backing);
+  const ledger = createLoopItemLedger(backing, createLoopOutputStore(testMap()));
   await ledger.ingest([
     entry({
       sourcePayload: { automated: true, privateDetail: "hidden" },
@@ -428,7 +429,7 @@ test("email classification projection is opt-in, scoped, and never changes store
 
 test("ingest batches per-loop locks and writes and skips duplicate events", async () => {
   const backing = testMap<LoopItem>();
-  const seed = createLoopItemLedger(backing);
+  const seed = createLoopItemLedger(backing, createLoopOutputStore(testMap()));
   await seed.ingest([entry()]);
   let writes = 0;
   let locks = 0;
@@ -443,6 +444,7 @@ test("ingest batches per-loop locks and writes and skips duplicate events", asyn
         return backing.mutateMany(updates);
       },
     },
+    createLoopOutputStore(testMap()),
     undefined,
     {
       lock: {
@@ -464,7 +466,7 @@ test("ingest batches per-loop locks and writes and skips duplicate events", asyn
 
 test("conditional annotations reject changed source payloads even within the same clock tick", async (t) => {
   t.mock.method(Date, "now", () => 1000);
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry()]);
   const [item] = await ledger.byLoop(LOOP);
   const snapshot = structuredClone(item!.sourcePayload!);
@@ -489,7 +491,7 @@ test("conditional annotations reject changed source payloads even within the sam
 });
 
 test("agent ledger views omit cosmetic Slack data without changing UI data or task images", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   const payload = {
     source: "slack",
     slackAvatarsRefreshAt: 12345,
@@ -519,7 +521,7 @@ test("agent ledger views omit cosmetic Slack data without changing UI data or ta
 });
 
 test("ordinary ledger annotations leave previews unchanged and do not project avatar metadata", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.ingest([entry()]);
   const [item] = await ledger.byLoop(LOOP);
   const before = structuredClone(item!.inboxPreview);

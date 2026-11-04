@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createLoopStore, isRunnable, validLoopIcon } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger, loopItemId } from "../src/loops/item-ledger.ts";
+import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
 
@@ -100,7 +101,7 @@ test("a recorded scan start survives later fire outcomes", async () => {
 });
 
 test("re-enqueueing the same source key never doubles the work", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   const first = await ledger.enqueue({ loopId: "L1", sourceKey: "SENTRY-42", sourceSummary: "TypeError in checkout" });
   const second = await ledger.enqueue({ loopId: "L1", sourceKey: "SENTRY-42", sourceSummary: "TypeError in checkout" });
   assert.equal(first.created, true);
@@ -110,7 +111,7 @@ test("re-enqueueing the same source key never doubles the work", async () => {
 });
 
 test("the same source key in two different loops is two items", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   await ledger.enqueue({ loopId: "L1", sourceKey: "SENTRY-42" });
   await ledger.enqueue({ loopId: "L2", sourceKey: "SENTRY-42" });
   assert.equal((await ledger.byLoop("L1")).length, 1);
@@ -119,7 +120,7 @@ test("the same source key in two different loops is two items", async () => {
 });
 
 test("claiming an item counts the attempt and records the run", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   const { item } = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
   const claimed = await ledger.claim(item.id);
   assert.equal(claimed?.status, "in_progress");
@@ -129,7 +130,7 @@ test("claiming an item counts the attempt and records the run", async () => {
 });
 
 test("two racing claims on one queued item yield exactly one winner", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   const { item } = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
   const [first, second] = await Promise.all([ledger.claim(item.id), ledger.claim(item.id)]);
   assert.equal([first, second].filter(Boolean).length, 1);
@@ -137,7 +138,7 @@ test("two racing claims on one queued item yield exactly one winner", async () =
 });
 
 test("a parked item leaves the queue without blocking the rest of it", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   const stuck = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
   const next = await ledger.enqueue({ loopId: "L1", sourceKey: "S2" });
   const claimed = await ledger.claim(stuck.item.id);
@@ -151,7 +152,7 @@ test("a parked item leaves the queue without blocking the rest of it", async () 
 });
 
 test("returning an output puts the item back to work carrying the reviewer's note", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   const { item } = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
   const claimed = await ledger.claim(item.id);
   await ledger.markReady(item.id, ["out-1"], claimed!.claimToken!);
@@ -166,7 +167,7 @@ test("returning an output puts the item back to work carrying the reviewer's not
 });
 
 test("a stale item claim cannot mark ready after the lease is reclaimed", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   const { item } = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
   const stale = await ledger.claim(item.id, 1_000);
   const current = await ledger.claim(item.id, 601_000);
@@ -178,7 +179,7 @@ test("a stale item claim cannot mark ready after the lease is reclaimed", async 
 });
 
 test("queue stats report depth and the age of the oldest waiting item", async () => {
-  const ledger = createLoopItemLedger(testMap());
+  const ledger = createLoopItemLedger(testMap(), createLoopOutputStore(testMap()));
   const { item } = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
   await ledger.enqueue({ loopId: "L1", sourceKey: "S2" });
   const stats = await ledger.stats("L1", item.createdAt + 60_000);

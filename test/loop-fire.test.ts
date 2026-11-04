@@ -65,8 +65,8 @@ function service(
 ) {
   const loops = createLoopStore(testMap());
   const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
-  const items = createLoopItemLedger(testMap());
   const outputs = createLoopOutputStore(testMap());
+  const items = createLoopItemLedger(testMap(), outputs);
   const grants = overrides?.grants ?? createShipGrantStore(testMap());
   const deliveries = fakeDeliveries();
   const turns: TurnRequest[] = [];
