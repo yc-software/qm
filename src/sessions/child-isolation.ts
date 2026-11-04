@@ -49,17 +49,23 @@ function ownWorkdir(isolation: ChildIsolation): ChildWorkdir | undefined {
   return { workdir: isolation.workdir, branch: isolation.branch, ...(isolation.base ? { base: isolation.base } : {}) };
 }
 
+function readyMarker(rootDir: string, step: ChildWorkdir): string {
+  return shq(posixJoin(rootDir, posix.join(posix.dirname(step.workdir), `.${posix.basename(step.workdir)}.ready`)));
+}
+
+function isReady(rootDir: string, step: ChildWorkdir): string {
+  return `[ -f ${readyMarker(rootDir, step)} ] && [ -d ${shq(posixJoin(rootDir, step.workdir))} ]`;
+}
+
 function workdirStep(rootDir: string, step: ChildWorkdir): string {
-  const sibling = (suffix: string) =>
-    shq(posixJoin(rootDir, posix.join(posix.dirname(step.workdir), `.${posix.basename(step.workdir)}.${suffix}`)));
   const dir = posixJoin(rootDir, step.workdir);
-  const ready = sibling("ready");
+  const ready = readyMarker(rootDir, step);
   const base = posixJoin(rootDir, step.base ?? "");
   const git = `git -C ${shq(base)}`;
   const branch = shq(step.branch);
   const isWorktree = `[ -d ${shq(dir)} ] && [ "$(git -C ${shq(dir)} rev-parse --show-toplevel 2>/dev/null)" = "$(cd ${shq(dir)} && pwd -P)" ]`;
   return [
-    `[ -f ${ready} ] && [ -d ${shq(dir)} ] && exit 0`,
+    `${isReady(rootDir, step)} && exit 0`,
     `mkdir -p ${shq(posixJoin(rootDir, WORKDIR_ROOT))} || exit 1`,
     `[ -d ${shq(base)} ] || { echo "base directory ${step.base ?? "."} does not exist yet" >&2; exit 1; }`,
     `if ${git} rev-parse --is-inside-work-tree >/dev/null 2>&1; then`,
@@ -93,8 +99,11 @@ export async function prepareChildWorkdir(
   isolation: ChildIsolation | undefined,
   lock: AdvisoryLock,
 ): Promise<void> {
+  const own = isolation && ownWorkdir(isolation);
   const script = isolation && workdirScript(handle.rootDir, isolation);
-  if (!script) return;
+  if (!own || !script) return;
+  if ((await sandbox.run(handle, isReady(handle.rootDir, own), { timeoutMs: WORKDIR_TIMEOUT_SEC * 1000 })).code === 0)
+    return;
   const result = await lock.withLock(`subagent-workdirs:${handle.resourceId ?? handle.id}`, () =>
     sandbox.run(handle, script, { timeoutMs: WORKDIR_TIMEOUT_SEC * 1000 }),
   );

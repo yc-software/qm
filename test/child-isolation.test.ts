@@ -224,6 +224,10 @@ test("a worktree child's directory becomes a git worktree on its own branch when
   const dir = workdirOf(handle, isolation);
   assert.equal(git(dir, "rev-parse", "--abbrev-ref", "HEAD"), "subagent/fix-1");
   assert.ok(existsSync(join(dir, "README.md")));
+  await prepareChildWorkdir(backend, handle, isolation, {
+    ...lock,
+    withLock: () => Promise.reject(new Error("a ready directory took the setup lock")),
+  });
   writeFileSync(join(dir, "work.txt"), "kept\n");
   rmSync(join(handle.rootDir, "subagents", ".fix-1.ready"));
   await prepareChildWorkdir(backend, handle, isolation, lock);
