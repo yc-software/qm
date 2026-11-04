@@ -1,4 +1,3 @@
-import { commonEntrySeqs } from "../sessions/transcript-source.ts";
 import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
@@ -435,7 +434,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       return block("strict-verdict", verdict?.reason);
     },
 
-    async regenerateTitle(sessionId, principalId, participantIds) {
+    async regenerateTitle(sessionId, principalId, personal) {
       const session = await deps.sessions.get(sessionId);
       if (!session) return null;
       Object.assign(currentModelRequestContext(), {
@@ -444,14 +443,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId: session.scopeId,
         origin: await originOf(session),
       });
-      let items = (await transcripts.forViewer(sessionId, principalId)).items;
-      if (participantIds?.length) {
-        const views = await Promise.all(
-          participantIds.map(async (memberId) => (await transcripts.forViewer(sessionId, memberId)).items),
-        );
-        const common = commonEntrySeqs(views);
-        items = items.filter((item) => common.has(item.seq));
-      }
+      const items = (await transcripts.forViewer(sessionId, principalId)).items;
       if (items.length === 0) return null;
       const transcript = renderTitleTranscript(items);
       const fallbackEntry = items.find((item) => isUserItem(item) && !isOverheard(item));
@@ -459,10 +451,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         session.id,
         session.scopeId,
         transcript,
-        participantIds?.length ? principalId : undefined,
+        personal ? principalId : undefined,
         fallbackEntry ? visibleTitleEntryText(fallbackEntry) : undefined,
       );
-      return { title: title ?? (participantIds ? null : (session.title ?? null)) };
+      return { title: title ?? (personal ? null : (session.title ?? null)) };
     },
 
     async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
@@ -668,13 +660,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId,
         verified: liveAuthorTurn && conversation.kind !== "dm",
       });
-      let participantHistorySeqs: Set<number> | undefined;
-      let participantHistoryMaxSeq = -1;
-      const filterHistory = (items: Item[]): Item[] => {
-        if (!conversation.audience.length) return [];
-        if (!participantHistorySeqs) return items;
-        return items.filter((entry) => entry.seq > participantHistoryMaxSeq || participantHistorySeqs!.has(entry.seq));
-      };
+      const filterHistory = (items: Item[]): Item[] => (conversation.audience.length ? items : []);
       const reconcileSessionParticipants = async (sessionId: string): Promise<void> => {
         const participantIds = input.sessionParticipantIds;
         if (!participantIds?.length) return;
@@ -686,13 +672,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             .map((principalId) => deps.sessions.removeParticipant(sessionId, principalId)),
         );
         await Promise.all(participantIds.map((principalId) => deps.sessions.addParticipant(sessionId, principalId)));
-        const snapshot = await deps.sessions.getItems(sessionId);
-        participantHistoryMaxSeq = snapshot.reduce((max, item) => Math.max(max, item.seq), -1);
-        const views = await Promise.all(
-          participantIds.map((principalId) => deps.sessions.visibleItems(sessionId, principalId)),
-        );
-        participantHistorySeqs = commonEntrySeqs(views);
-        await deps.agent.resetSession?.(sessionId);
       };
       const securityPolicy = resolution.securityPolicy;
       const enforceScreen = securityPolicy.screening === "enforce";

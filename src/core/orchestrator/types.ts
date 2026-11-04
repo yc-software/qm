@@ -208,9 +208,5 @@ export interface Orchestrator {
     sessionId?: string;
     verifiedSwarm?: boolean;
   }): Promise<"allow" | "block" | "unscreened">;
-  regenerateTitle(
-    sessionId: string,
-    principalId: string,
-    participantIds?: readonly string[],
-  ): Promise<{ title: string | null } | null>;
+  regenerateTitle(sessionId: string, principalId: string, personal?: boolean): Promise<{ title: string | null } | null>;
 }

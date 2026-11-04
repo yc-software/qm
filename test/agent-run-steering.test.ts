@@ -207,7 +207,7 @@ test("completed Pi attach results retain openable files in viewer history", asyn
   const store = createPostgresSessionStore(testDatabaseUrl());
   const scopeLabel = "personal:tester" as ScopeId;
   const session = await store.getOrCreateByThread("web:tester:attach-history", "dm", scopeLabel);
-  await store.addParticipant(session.id, "tester", undefined, { includeHistory: true });
+  await store.addParticipant(session.id, "tester");
   const writer = { sessionId: session.id };
   const files = [
     { name: "desktop.png", mimetype: "image/png", sizeBytes: 123, artifactId: "desktop" },
