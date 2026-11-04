@@ -56,6 +56,7 @@ interface SlackInstallationStatus {
 
 export interface SlackInstallationStore {
   get(): Promise<SlackInstallation | null>;
+  tenantIds(): Promise<string[]>;
   status(): Promise<SlackInstallationStatus>;
   set(input: {
     botToken: string;
@@ -100,6 +101,9 @@ export function createSlackInstallationStore(
         }
       : { configured: false, managed: record !== null };
   return {
+    async tenantIds() {
+      return (await map.acrossTenants()).filter((entry) => entry.id === orgId).map((entry) => entry.tenantId);
+    },
     async get() {
       const record = await map.get(orgId());
       if (!record || record.disabled) return null;
