@@ -2,7 +2,6 @@ import {
   resolveGatewayEmbeddingModel,
   gatewayEmbeddingModelIds,
   gatewayModelCatalog,
-  gatewayModelsVersion,
   isGatewayModelId,
   resolveGatewayModel,
 } from "./gateway-models.ts";
@@ -12,7 +11,6 @@ import {
   isEmbeddingModel,
   overlayModel,
   overlayModels,
-  overlaysVersion,
   overlayUnavailableReason,
   type EmbeddingModel,
   type EmbeddingModelDefinition,
@@ -21,6 +19,7 @@ import {
 import { MODEL_REGISTRY, type ModelEntry } from "./model-registry.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
 import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
+import type { ProviderKeys } from "./model-runtime.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -32,6 +31,11 @@ const CODEX_SUBSCRIPTION_PREFIX = "codex/";
 
 export function codexSubscriptionModelId(id: string): string {
   return id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ? id : CODEX_SUBSCRIPTION_PREFIX + id;
+}
+export function personalModelId(id: string, keys: ProviderKeys): string {
+  if (!keys[CODEX_SUBSCRIPTION_PROVIDER]) return id;
+  const subscription = codexSubscriptionModelId(id);
+  return resolveModel(subscription, false)?.provider === CODEX_SUBSCRIPTION_PROVIDER ? subscription : id;
 }
 export function codexProviderModelId(id: string): string {
   return id.startsWith(CODEX_SUBSCRIPTION_PREFIX) ? id.slice(CODEX_SUBSCRIPTION_PREFIX.length) : id;
@@ -80,10 +84,6 @@ export function isModelProvider(value: unknown): value is ModelProvider {
 }
 
 type PiModel = Model<Api>;
-
-export function modelOverlayVersion(): number {
-  return overlaysVersion() + gatewayModelsVersion();
-}
 
 export function isOverlayModel(id: string): boolean {
   return overlayModel(id) !== undefined;

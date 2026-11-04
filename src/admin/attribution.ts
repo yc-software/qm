@@ -1,33 +1,23 @@
-import type { AttributedTurn, ParticipantWindow } from "../sessions/session-store.ts";
-
-function groupWindowsBySession(participants: ParticipantWindow[]): Map<string, ParticipantWindow[]> {
-  const winsBySession = new Map<string, ParticipantWindow[]>();
-  for (const w of participants) {
-    const arr = winsBySession.get(w.sessionId);
-    if (arr) arr.push(w);
-    else winsBySession.set(w.sessionId, [w]);
-  }
-  return winsBySession;
-}
+import type { AttributedTurn, Participant } from "../sessions/session-store.ts";
 
 export interface AttributionInput {
-  participants: ParticipantWindow[];
+  participants: Participant[];
   turns: AttributedTurn[];
 }
 
 export function forEachAttributedTurn(
   input: AttributionInput,
   visit: {
-    onWindow: (sessionId: string, w: ParticipantWindow) => void;
-    onTurn: (w: ParticipantWindow, turn: AttributedTurn) => void;
+    onParticipant: (sessionId: string, p: Participant) => void;
+    onTurn: (p: Participant, turn: AttributedTurn) => void;
   },
 ): void {
-  const winsBySession = groupWindowsBySession(input.participants);
-  for (const [sessionId, wins] of winsBySession) {
-    for (const w of wins) visit.onWindow(sessionId, w);
+  const bySession = Map.groupBy(input.participants, (p) => p.sessionId);
+  for (const [sessionId, members] of bySession) {
+    for (const p of members) visit.onParticipant(sessionId, p);
   }
   for (const turn of input.turns) {
-    const w = winsBySession.get(turn.sessionId)?.find((x) => x.principalId === turn.principalId);
-    if (w) visit.onTurn(w, turn);
+    const p = bySession.get(turn.sessionId)?.find((x) => x.principalId === turn.principalId);
+    if (p) visit.onTurn(p, turn);
   }
 }

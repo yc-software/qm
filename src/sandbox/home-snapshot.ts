@@ -8,6 +8,7 @@ import {
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { shq } from "../util/shell.ts";
+import { tenantScopedId } from "../tenants/context.ts";
 import { swallowAs } from "../util/errors.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { bodyToReadable, isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
@@ -109,7 +110,8 @@ export interface S3SnapshotStoreOptions {
 
 export function createS3SnapshotStore(opts: S3SnapshotStoreOptions): HomeSnapshotStore {
   const s3 = opts.s3 ?? s3Client(opts.region);
-  const keyFor = opts.keyFor ?? ((scope: string): string => `${opts.prefix}/${encodeURIComponent(scope)}.tar`);
+  const keyFor =
+    opts.keyFor ?? ((scope: string): string => `${opts.prefix}/${encodeURIComponent(tenantScopedId(scope))}.tar`);
   const Bucket = opts.bucket;
   return {
     async open(scope): Promise<StoredSnapshot | null> {

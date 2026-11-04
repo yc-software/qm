@@ -5,6 +5,7 @@ import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from 
 import type { Destination } from "../types.ts";
 import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { reportFailureAs } from "../util/errors.ts";
+import { createTenantListeners } from "../tenants/context.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { randomUUID } from "node:crypto";
 import {
@@ -25,6 +26,7 @@ import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.t
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../triggers/types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
+import { trialBeforeSave } from "../cron/script.ts";
 
 import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
@@ -82,8 +84,10 @@ export function createMessagingMethods(
   | "setWebhookEnabled"
   | "updateWebhook"
   | "pendingDeliveries"
+  | "pendingDeliveriesAcrossTenants"
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
+  | "surfaceMirrored"
   | "searchSurface"
   | "readSurfaceMessages"
   | "activeSurfaceThreads"
@@ -125,7 +129,7 @@ export function createMessagingMethods(
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests;
-  const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
+  const contextRequestListeners = createTenantListeners<[SurfaceContextRequest]>("context request");
   const contextRequestTokens = new Map<string, string>();
   // Principals identity knows about that the Slack directory never sees: the email
   // allow-list, invited external users, and anyone who has signed in. On a Slack-less
@@ -167,9 +171,10 @@ export function createMessagingMethods(
   };
 
   return {
-    async createCron(input) {
+    async createCron(input, trial) {
       await validateRuntime(input);
       validateUserSchedule(input.schedule);
+      await trialBeforeSave(input.script, input.schedule, trial);
       const cron = await deps.crons.create(input);
       deps.auditLog.record({
         at: Date.now(),
@@ -208,11 +213,12 @@ export function createMessagingMethods(
         });
       return { owned, visible };
     },
-    async updateCron(id, patch) {
+    async updateCron(id, patch, trial) {
       const before = await deps.crons.get(id);
       if (!before) return null;
       if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
+      await trialBeforeSave(patch.script, patch.schedule, trial);
       const grantsReaffirmed = patch.unattendedGrants !== undefined;
       const guardedPatch =
         (before.unattendedGrants?.length ?? 0) > 0 && !grantsReaffirmed ? { ...patch, unattendedGrants: [] } : patch;
@@ -308,11 +314,17 @@ export function createMessagingMethods(
     updateWebhook(id, patch) {
       return deps.webhooks.update(id, patch);
     },
+    pendingDeliveriesAcrossTenants(type) {
+      return deps.deliveries.pendingAcrossTenants(type);
+    },
     pendingDeliveries(type, claimMs) {
       return claimMs && claimMs > 0 ? deps.deliveries.claimPending(type, claimMs) : deps.deliveries.pending(type);
     },
     async enqueueDelivery(input) {
       await deps.deliveries.enqueue(input);
+    },
+    surfaceMirrored(kind) {
+      return deps.surfaces.get(kind)?.capabilities.mirrored === true;
     },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
@@ -379,12 +391,11 @@ export function createMessagingMethods(
         );
         return request;
       }
-      for (const l of contextRequestListeners) l(viewerToken ? { ...request, query } : request);
+      contextRequestListeners.emit(viewerToken ? { ...request, query } : request);
       return request;
     },
     onContextRequestCreated(listener) {
-      contextRequestListeners.add(listener);
-      return () => contextRequestListeners.delete(listener);
+      return contextRequestListeners.add(listener);
     },
     getContextRequest(id) {
       return contextRequests.get(id);

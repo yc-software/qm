@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { after, test } from "node:test";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { answeredHostLookup } from "../single-tenant-core.ts";
 import { mintPortalIdentity, verifyPortalIdentity } from "../../../chassis/src/portal-identity.ts";
 import { signRequest, canonicalPayload } from "../../../chassis/src/source-auth-sign.ts";
 
@@ -30,6 +31,7 @@ const readAll = (req: IncomingMessage) =>
   });
 
 const core = createServer(async (req, res) => {
+  if (answeredHostLookup(req, res)) return;
   const url = new URL(req.url!, "http://core");
   const raw = await readAll(req);
   const body = raw.toString("utf8");

@@ -1,3 +1,4 @@
+import type { TenantEnvSubset } from "../tenants/tenant-instances.ts";
 import { parseRenderSandboxImage, RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
 import type { LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
@@ -554,5 +555,35 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
     e2bSandbox: e2bSandboxEnv(env),
     managedAgentsSandbox: managedAgentsSandboxEnv(env),
     modalSandbox: modalSandboxEnv(env),
+  };
+}
+
+export const SPRITES_TENANT_ENV = ["SPRITES_TOKEN", "SPRITES_NAME_PREFIX"] as const;
+export const MODAL_TENANT_ENV = [
+  "MODAL_TOKEN_ID",
+  "MODAL_TOKEN_SECRET",
+  "MODAL_ENVIRONMENT",
+  "MODAL_APP_NAME",
+  "MODAL_NAME_PREFIX",
+  "MODAL_SNAPSHOT_S3_BUCKET",
+] as const;
+
+export function tenantSandboxSettings<S extends SandboxSettings>(base: S, env: TenantEnvSubset): S {
+  return {
+    ...base,
+    spritesSandbox: {
+      ...base.spritesSandbox,
+      ...(env.SPRITES_TOKEN ? { token: env.SPRITES_TOKEN } : {}),
+      ...(env.SPRITES_NAME_PREFIX ? { namePrefix: env.SPRITES_NAME_PREFIX } : {}),
+    },
+    modalSandbox: {
+      ...base.modalSandbox,
+      ...(env.MODAL_TOKEN_ID ? { tokenId: env.MODAL_TOKEN_ID } : {}),
+      ...(env.MODAL_TOKEN_SECRET ? { tokenSecret: env.MODAL_TOKEN_SECRET } : {}),
+      ...(env.MODAL_ENVIRONMENT ? { environment: env.MODAL_ENVIRONMENT } : {}),
+      ...(env.MODAL_APP_NAME ? { appName: env.MODAL_APP_NAME } : {}),
+      ...(env.MODAL_NAME_PREFIX ? { namePrefix: env.MODAL_NAME_PREFIX } : {}),
+      ...(env.MODAL_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.MODAL_SNAPSHOT_S3_BUCKET } : {}),
+    },
   };
 }

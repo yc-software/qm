@@ -1,4 +1,5 @@
 import type { TeamStore } from "../teams/teams.ts";
+import type { CronScriptTrial } from "../cron/script.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
@@ -101,7 +102,7 @@ import type { Environment, EnvironmentAttachment, EnvironmentStore } from "../en
 import type { ModelProviderAvailability } from "../model/pi-models.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
-import { type Project, type ProjectStore } from "../projects/project-store.ts";
+import { type Project, type ProjectIcon, type ProjectStore } from "../projects/project-store.ts";
 import type { SearchHit } from "../search/core-search.ts";
 
 interface DeploymentVersionView {
@@ -202,7 +203,16 @@ export type ProjectView = Project & {
 
 type ProjectViewMutation =
   | { status: "ok"; project: ProjectView; changed: boolean }
-  | { status: "not_found" | "forbidden" | "invalid_member" | "invalid_name" | "invalid_channel" | "channel_in_use" };
+  | {
+      status:
+        | "not_found"
+        | "forbidden"
+        | "invalid_member"
+        | "invalid_name"
+        | "invalid_icon"
+        | "invalid_channel"
+        | "channel_in_use";
+    };
 
 interface DeploymentGitUrl {
   url: string;
@@ -341,11 +351,7 @@ export interface App {
     goal?: GoalView;
     runtime?: TurnRuntime;
   } | null>;
-  canViewSessionSnapshot(
-    sessionId: string,
-    principalId: string,
-    visibility: { minSeq: number; maxSeq: number; minCreatedAt: number; maxCreatedAt: number },
-  ): Promise<boolean>;
+  canViewSessionSnapshot(sessionId: string, principalId: string): Promise<boolean>;
   getSessionItemForViewer(sessionId: string, principalId: string, seq: number): Promise<{ item: Item } | null>;
   pinConversationItem(
     threadRef: string,
@@ -385,6 +391,7 @@ export interface App {
   removeProjectMember(id: string, principalId: string, memberId: string): Promise<ProjectViewMutation>;
   setProjectSlackChannel(id: string, principalId: string, channel: string | null): Promise<ProjectViewMutation>;
   renameProject(id: string, principalId: string, name: string): Promise<ProjectViewMutation>;
+  setProjectIcon(id: string, principalId: string, icon: ProjectIcon | null): Promise<ProjectViewMutation>;
   updateSession(
     sessionId: string,
     principalId: string,
@@ -447,11 +454,11 @@ export interface App {
     actorId: string,
     opts?: { allowSharedScope?: boolean; expectedVersion?: number; sessionId?: string },
   ): Promise<number>;
-  createCron(input: CreateCronInput): Promise<Cron>;
+  createCron(input: CreateCronInput, trial?: CronScriptTrial): Promise<Cron>;
   getCron(id: string): Promise<Cron | null>;
   listCrons(): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
-  updateCron(id: string, patch: CronPatch): Promise<Cron | null>;
+  updateCron(id: string, patch: CronPatch, trial?: CronScriptTrial): Promise<Cron | null>;
   deleteCron(id: string): Promise<void>;
   setCronEnabled(id: string, enabled: boolean): Promise<void>;
   setCronFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
@@ -467,6 +474,7 @@ export interface App {
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
   updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
+  pendingDeliveriesAcrossTenants(type: string): Promise<Delivery[]>;
   enqueueDelivery(input: {
     destination: Destination;
     text: string;
@@ -479,6 +487,7 @@ export interface App {
   pendingContextRequests(source: string): Promise<SurfaceContextRequest[]>;
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<boolean>;
   onContextRequestCreated(listener: (request: SurfaceContextRequest) => void): () => void;
+  surfaceMirrored(kind: string): boolean;
   ingestSurfaceEvents(
     events: IngestEvent[],
     surface?: string,
@@ -714,6 +723,7 @@ export interface ContextSummary {
   sessionCount: number;
   lastActivityAt: number | null;
   project?: ProjectView;
+  groupMembers?: Array<{ principalId: string; displayName: string; avatarUrl?: string }>;
 }
 
 interface FileListItem {

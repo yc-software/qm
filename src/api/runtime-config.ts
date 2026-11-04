@@ -1,11 +1,13 @@
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
+import { GENERIC_FAILURE_CLAUSE } from "../../plugins/chassis/src/failure-copy.ts";
+import { conversationScope } from "../resolution/resolution-service.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import type { RuntimePurpose } from "../resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts";
 import { gatewayModelCatalog } from "../model/gateway-models.ts";
 import type { AppDeps } from "./app-types.ts";
-import type { ScopeId } from "../types.ts";
+import type { ScopeId, TurnRequest } from "../types.ts";
 import { orgScope } from "../config.ts";
 import {
   defaultModel,
@@ -27,6 +29,7 @@ import {
 } from "../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
+import { modelBilling } from "../model/model-route.ts";
 
 export type RuntimeDeps = Partial<
   Pick<
@@ -144,7 +147,10 @@ export async function runtimeConfigBody(
     );
     models = models.filter((_, index) => !allowed[index]);
   }
-  const modelCatalog = modelCatalogFor(new Set(models));
+  const billing = (id: string) => modelBilling(!!managedKeys.modelIds?.has(id), !!authorizeChoice);
+  const modelCatalog = Object.fromEntries(
+    Object.entries(modelCatalogFor(new Set(models))).map(([id, meta]) => [id, { ...meta, billing: billing(id) }]),
+  );
   return {
     scopeId: scope,
     ...(purpose ? { executionPurpose: purpose } : {}),
@@ -259,4 +265,67 @@ export function validateWebTurnModelOptions(
   if (input.thinkingLevel && !(THINKING_LEVELS as readonly string[]).includes(input.thinkingLevel))
     return "unsupported thinking level";
   return null;
+}
+
+async function webuiModels(
+  deps: AppDeps,
+  orgModelId: string,
+  providers: ModelProviderAvailability | undefined,
+): Promise<string[] | null> {
+  const configured = await deps.config.getWebuiModelsDurable(orgScope());
+  if (configured != null) return configured.length ? [...new Set([...configured, orgModelId])] : [];
+  if (!providers?.openrouter) return null;
+  const offered = selectableCatalog(await selectableModelCatalog(deps.modelCredentialFetch))
+    .filter((model) => modelOfferedInWebui(model.id))
+    .map((model) => model.id);
+  return [...new Set([...offered, orgModelId])];
+}
+
+export async function turnModelRefusal(
+  deps: AppDeps,
+  req: TurnRequest,
+  actorId: string,
+  individualAuth: boolean,
+  purpose: RuntimePurpose | undefined,
+): Promise<string | null> {
+  const org = orgScope();
+  const scope = conversationScope(req.conversation, actorId);
+  const requested: Partial<RuntimeChoice> = {
+    ...(req.model ? { modelId: req.model } : {}),
+    ...(req.thinkingLevel ? { effortLevel: req.thinkingLevel } : {}),
+    ...(typeof req.fastMode === "boolean" ? { fastMode: req.fastMode } : {}),
+  };
+  if (req.origin?.kind === "automation" && req.model) {
+    const error = await requestedRuntimeError({ deps }, scope, requested, purpose);
+    if (error) return error;
+  }
+  if (req.surface !== "web") return null;
+  if (individualAuth) {
+    if (!req.model) return null;
+    const available = await userRuntimeConfigBody({ deps }, scope, actorId);
+    if (!available.models.includes(req.model)) return "Your connected AI account cannot serve this model.";
+    return validateWebTurnModelOptions(req, available.models);
+  }
+  const fallback = deps.runtimeFallback ?? { modelId: defaultModel() };
+  const providers = deps.modelCredentials
+    ? await deps.modelCredentials.availability()
+    : (deps.providerKeys ?? deps.modelProviders);
+  const hydrate = async () =>
+    deps.modelCredentials && providers?.openrouter ? selectableModelCatalog(deps.modelCredentialFetch) : undefined;
+  const storedOrg = await deps.config.getRuntimeSelectionDurable(org);
+  let orgModelId: string;
+  let runtime: RuntimeChoice;
+  try {
+    const orgModel = storedOrg?.modelId ?? (await deps.config.getBaseModelOwnDurable(org)) ?? fallback.modelId;
+    orgModelId = modelUnavailableReason(orgModel)
+      ? orgModel
+      : (await resolveRuntimeChoice(deps.config, org, org, fallback, undefined, hydrate)).modelId;
+    runtime = await resolveRuntimeChoice(deps.config, org, scope, fallback, requested, hydrate, purpose);
+  } catch (error) {
+    swallow("turn: runtime resolution", error);
+    return `I couldn't set up that runtime choice — ${GENERIC_FAILURE_CLAUSE}`;
+  }
+  if (providers && !modelServiceable(runtime.modelId, providers))
+    return "that model isn't available on this deployment (its provider isn't configured)";
+  return validateWebTurnModelOptions(req, await webuiModels(deps, orgModelId, providers), providers);
 }

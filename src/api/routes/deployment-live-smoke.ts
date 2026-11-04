@@ -1,3 +1,4 @@
+import { withInstallTenant } from "../../tenants/context.ts";
 import { sendJson } from "../http.ts";
 import type { BackgroundOwnership } from "../../runs/background-ownership.ts";
 import { requireDeploymentControl } from "./background-work.ts";
@@ -62,5 +63,12 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
 }
 
 export const deploymentLiveSmokeRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/deployment/live-session", actor: "system", auth: "source", handle: deploymentLiveSmoke },
+  {
+    method: "POST",
+    path: "/v1/deployment/live-session",
+    actor: "system",
+    auth: "source",
+    tenant: "none",
+    handle: (ctx) => withInstallTenant(() => deploymentLiveSmoke(ctx)),
+  },
 ];

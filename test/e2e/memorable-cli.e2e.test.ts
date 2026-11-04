@@ -12,6 +12,7 @@ import { scopeId } from "../../src/types.ts";
 import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
 import { recallText } from "../support/recall-text.ts";
+import { seedInstallTenant } from "../support/tenant-seed.ts";
 
 const DB = process.env.MEMORABLE_E2E_DB_URL;
 const CLI = process.env.MEMORABLE_E2E_BIN;
@@ -60,6 +61,7 @@ describe(
       stub = REAL ? undefined : await startExtractionStub();
       pool = new pg.Pool({ connectionString: DB });
       await pool.query("DROP TABLE IF EXISTS memorable_procedures, memorable_mode, memorable_stats");
+      await seedInstallTenant(DB!);
       const env: NodeJS.ProcessEnv = {
         PATH: process.env.PATH,
         HOME: process.env.HOME,

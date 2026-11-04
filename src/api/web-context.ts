@@ -77,10 +77,7 @@ export function webConversationWindow(
 }
 
 export async function answerWebContextRequest(
-  sessions: Pick<
-    SessionStore,
-    "sessionsByThreadRefs" | "visibleItems" | "getItems" | "countItemsBefore" | "participantWindowsOf"
-  >,
+  sessions: Pick<SessionStore, "sessionsByThreadRefs" | "visibleItems" | "getItems" | "countItemsBefore">,
   query: SurfaceContextQuery,
 ): Promise<{ result?: SurfaceContextResult; error?: string }> {
   if (query.file)
