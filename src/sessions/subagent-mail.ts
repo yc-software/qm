@@ -95,7 +95,10 @@ interface ParentWake {
   displayText: string;
 }
 
-type ParentMail = Pick<SessionMessage, "id" | "text" | "sourceEntrySeq" | "wake" | "senderRunId" | "delegatingRunId">;
+type ParentMail = Pick<
+  SessionMessage,
+  "id" | "text" | "sourceEntrySeq" | "wake" | "senderRunId" | "delegatingRunId" | "resultOf"
+>;
 
 const messageWake = (id: string): ParentWake => ({
   dedupKey: `subagent-followup:${id}`,
@@ -133,7 +136,7 @@ export async function pendingWork(
   for (const message of await deps.mailbox.pending(session.id)) {
     const sender = await deps.sessions.get(message.senderId);
     if (!sender || sender.parentSessionId !== session.id || waiting.has(sender.threadRef)) continue;
-    const resultRunId = message.id.startsWith(RESULT_MAIL) ? message.id.slice(RESULT_MAIL.length) : undefined;
+    const resultRunId = message.resultOf;
     const key = message.wake ? messageWake(message.id).dedupKey : resultRunId && returnWakeKey(resultRunId);
     if (!key) continue;
     const existing = await deps.runs.getByDedupKey(key);
@@ -430,6 +433,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const mail = {
     id: kind === "in_progress" ? `subagent-progress-${run.id}` : resultId,
     text,
+    ...(kind === "in_progress" ? {} : { resultOf: run.id }),
     ...(outputSeq !== undefined && outputSeq !== null ? { sourceEntrySeq: outputSeq } : {}),
   };
   const wakes =
