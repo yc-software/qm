@@ -12,7 +12,6 @@ const scope = scopeId("personal", "U1");
 
 async function opener() {
   const built = stopAtEnd(buildApp(testConfig({ openaiApiKey: "sk-test" })));
-  await built.featureFlags.setEnabled("persistent_subagents", scope, true, "admin");
   const room = await built.sessions.getOrCreateByThread("web:room", "dm", scope, undefined, "web");
   await built.sessions.addParticipant(room.id, actor.id);
   return built.sessionSyscalls.forTurn({
