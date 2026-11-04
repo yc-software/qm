@@ -55,7 +55,6 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     }),
   );
   sharedPools.set(key, { pool, users: 1 });
-  poolUrls.set(pool, connectionString);
   return pool;
 }
 
@@ -125,21 +124,14 @@ export interface PgPool {
 
 type PgSetting = readonly [name: string, value: string];
 
-let ownerDatabase: string | undefined;
-const poolUrls = new WeakMap<Pool, string>();
-
-export function setOwnerDatabase(connectionString: string | undefined): void {
-  ownerDatabase = connectionString;
-}
-
-function tenantSettings(connectionString: string | undefined): PgSetting[] {
-  if (connectionString === undefined || connectionString !== ownerDatabase) assertTenancyAllowed();
+function tenantSettings(ownerLogin: boolean): PgSetting[] {
+  if (!ownerLogin) assertTenancyAllowed();
   const tenant = boundTenant();
   return tenant === undefined ? [] : [["qm.tenant_id", tenant]];
 }
 
-function querySettings(connectionString: string, timeoutMs: number | undefined): PgSetting[] {
-  const settings = tenantSettings(connectionString);
+function querySettings(ownerLogin: boolean, timeoutMs: number | undefined): PgSetting[] {
+  const settings = tenantSettings(ownerLogin);
   if (timeoutMs === undefined) return settings;
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new Error("Query timeout must be a positive finite number");
   return [...settings, ["statement_timeout", String(Math.round(timeoutMs))]];
@@ -206,8 +198,8 @@ async function rollbackOrReport(client: PoolClient, context: string): Promise<Er
   }
 }
 
-async function beginTransaction(pool: Pool, client: PoolClient): Promise<void> {
-  const settings = tenantSettings(poolUrls.get(pool));
+async function beginTransaction(client: PoolClient): Promise<void> {
+  const settings = tenantSettings(false);
   await client.query("BEGIN");
   if (settings.length) await client.query(settingsQuery(settings));
 }
@@ -220,7 +212,7 @@ async function runPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promi
   const client = await pool.connect();
   let rollbackError: Error | undefined;
   try {
-    await beginTransaction(pool, client);
+    await beginTransaction(client);
     const result = await fn(client);
     await client.query("COMMIT");
     return result;
@@ -511,6 +503,7 @@ export function createPgPool(
   connectionString: string,
   definitions: readonly PgMigrationDefinition[] = [],
   maintenanceDefinitions: readonly PgMigrationDefinition[] = [],
+  { ownerLogin = false }: { ownerLogin?: boolean } = {},
 ): PgPool {
   const migrations = definitions.map(definePgMigration);
   for (const migration of migrations) registerPgMigration(connectionString, migration);
@@ -556,7 +549,7 @@ export function createPgPool(
     params: unknown[] = [],
     { signal, timeoutMs }: PgQueryOptions = {},
   ): Promise<{ rows: Rows; rowCount: number }> {
-    const settings = querySettings(connectionString, timeoutMs);
+    const settings = querySettings(ownerLogin, timeoutMs);
     const p = await pool();
     if (!signal && !settings.length) {
       const res = await p.query(text, params);
