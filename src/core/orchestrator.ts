@@ -978,10 +978,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
         frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
       }
-      const sessionSyscalls =
-        !external && deps.sessionSyscalls && (delegationEnabled || actorFeatures.has("persistent_subagents"))
-          ? deps.sessionSyscalls
-          : undefined;
+      const sessionSyscalls = external ? undefined : deps.sessionSyscalls;
       const delegateWork = requiresDelegation(input, delegationEnabled);
       let modeFrame = applyPromptVars(frameMd, frameVars);
       if (delegateWork)

@@ -65,7 +65,6 @@ async function scenario() {
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const mailbox = createSessionMailbox(testMap<SessionMessage>());
   const featureFlags = createFeatureFlagStore(testMap());
-  await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
   const sessionSyscalls = createSessionSyscalls({
     sessions,
     runs,

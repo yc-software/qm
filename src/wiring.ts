@@ -2084,9 +2084,6 @@ export function buildApp(
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     delegationEnabled,
-    enabled: async (actorId) =>
-      (await featureFlags.enabled("persistent_subagents", scopeId("personal", actorId))) ||
-      (await delegationEnabled(actorId)),
     sessions,
     runs,
     signals: runSignals,

@@ -1933,10 +1933,9 @@ test("mailbox survives recreation and rejects acknowledgements for another recip
   assert.deepEqual(await mail.pending("recipient"), []);
 });
 
-test("wait is cancelled and disabled actors cannot open or send", async () => {
+test("wait is cancelled", async () => {
   const r = await rig();
-  let enabled = true;
-  const factory = createSessionSyscalls({ ...r, maxAttempts: 3, enabled: async () => enabled });
+  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
   const abort = new AbortController();
   const api = factory.forTurn({
     session: r.room,
@@ -1946,9 +1945,6 @@ test("wait is cancelled and disabled actors cannot open or send", async () => {
   const waiting = api.receive!(60_000);
   abort.abort();
   await assert.rejects(waiting, { name: "AbortError" });
-  enabled = false;
-  assert.equal((await api.open({ task: "forbidden" })).ok, false);
-  assert.equal((await api.write({ target: "any", text: "forbidden" })).ok, false);
 });
 
 test("an empty mailbox check skips sender validation and a delivered message still validates", async () => {
@@ -1957,7 +1953,7 @@ test("an empty mailbox check skips sender validation and a delivered message sti
   const factory = createSessionSyscalls({
     ...r,
     maxAttempts: 3,
-    enabled: async () => {
+    authorize: async () => {
       checks++;
       return true;
     },
@@ -2019,7 +2015,7 @@ test("queued results recheck source-entry visibility after a participant leaves"
 
 test("enabled coordinators and their children can delegate", async () => {
   const r = await rig();
-  const factory = createSessionSyscalls({ ...r, maxAttempts: 3, enabled: async () => true });
+  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
   const api = factory.forTurn({
     session: r.room,
     scopeId: scope,
