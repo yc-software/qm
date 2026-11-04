@@ -326,7 +326,7 @@ test("a main push reuses a merge group run still settling once every quality job
 });
 
 test("a merge group without a queued PR runs full checks", async () => {
-  const api = async (path: string) => assert.fail(path);
+  const api = async (value: unknown) => assert.fail(String(value));
   assert.equal(await reusableCi(api, api, repository, release, undefined, now), undefined);
 });
 
