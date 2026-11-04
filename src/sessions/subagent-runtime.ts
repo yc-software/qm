@@ -1,4 +1,5 @@
 import type { RuntimeChoice } from "../agent/agent.ts";
+import { swallowAs } from "../util/errors.ts";
 import type { SessionOpenInput, SessionSyscallBinding } from "./session-syscalls.ts";
 
 type OpenRuntime = Pick<SessionOpenInput, "model" | "thinkingLevel" | "fastMode">;
@@ -14,7 +15,11 @@ export async function openRuntime(
   validate: (choice: OpenRuntime) => Promise<void>,
   defaultModel: () => Promise<string | undefined>,
 ): Promise<OpenRuntime> {
-  if (!input.model && parent.model && parent.model !== (await defaultModel().catch(() => undefined))) {
+  if (
+    !input.model &&
+    parent.model &&
+    parent.model !== (await defaultModel().catch(swallowAs("subagents: resolve default model", undefined)))
+  ) {
     const inherited = {
       model: parent.model,
       thinkingLevel: input.thinkingLevel ?? parent.thinkingLevel,
@@ -22,7 +27,7 @@ export async function openRuntime(
     };
     const usable = await validate(inherited)
       .then(() => inherited)
-      .catch(() => null);
+      .catch(swallowAs("subagents: inherit parent runtime", null));
     if (usable) return usable;
   }
   await validate(input);
