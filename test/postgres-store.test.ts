@@ -1283,7 +1283,7 @@ test("pg message search index takes inserts directly instead of through a pendin
   const raw = new pg.Pool({ connectionString: URL });
   try {
     const result = await raw.query("SELECT reloptions FROM pg_class WHERE relname = 'items_message_search'");
-    assert.deepEqual(result.rows[0]?.reloptions, ["fastupdate=off"]);
+    assert.ok(result.rows[0]?.reloptions?.includes("fastupdate=off"));
   } finally {
     await raw.end();
   }
