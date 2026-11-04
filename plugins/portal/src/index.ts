@@ -1,4 +1,5 @@
 import { coreHostTenants, inHostTenant, type HostTenant } from "../../chassis/src/host-tenant.ts";
+import { TENANT_HEADER } from "../../chassis/src/source-auth-sign.ts";
 import { coreTenantSignIn } from "../../chassis/src/tenant-sign-in.ts";
 import {
   DESKTOP_LAUNCH_SCRIPT,
@@ -836,6 +837,26 @@ function hasAgentCapability(req: IncomingMessage): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+const SANDBOX_MODEL_PATH = "/v1/sandbox-model/";
+const FORWARD_SANDBOX_MODEL_HEADERS = [
+  ...FORWARD_AGENT_API_HEADERS,
+  "authorization",
+  "x-api-key",
+  "anthropic-version",
+  "anthropic-beta",
+];
+
+function hasBearerOrApiKey(req: IncomingMessage): boolean {
+  const apiKey = req.headers["x-api-key"];
+  return (typeof apiKey === "string" && apiKey.length > 0) || /^Bearer\s+\S+$/i.test(req.headers.authorization ?? "");
+}
+
+function isAgentApiRequest(req: IncomingMessage): boolean {
+  const pathname = new URL(req.url ?? "/", "http://portal.local").pathname;
+  if (!pathname.startsWith("/v1/")) return false;
+  return hasAgentCapability(req) || (pathname.startsWith(SANDBOX_MODEL_PATH) && hasBearerOrApiKey(req));
+}
+
 function isDeploymentLayerPassthrough(method: string, pathname: string): boolean {
   return (method === "GET" || method === "PUT") && pathname === "/v1/deployment-layer";
 }
@@ -985,7 +1006,9 @@ const server = createServer((req, res) => {
     hostTenantOf.set(req, found);
     return found;
   };
-  const served = isAppHost(req) ? handle(req, res) : inHostTenant(lookup, req, res, () => handle(req, res));
+  const served = isAppHost(req)
+    ? handle(req, res)
+    : inHostTenant(lookup, req, res, () => handle(req, res), !isAgentApiRequest(req));
   void served.catch((err: unknown) => {
     errorLogged = true;
     reportBackendError(err);
@@ -1297,8 +1320,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     );
   }
 
-  if (pathname.startsWith("/v1/") && hasAgentCapability(req)) {
-    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, FORWARD_AGENT_API_HEADERS);
+  if (isAgentApiRequest(req)) {
+    const tenant = boundTenant();
+    return proxyToUpstream(
+      req,
+      res,
+      { baseUrl: CORE, path: pathname, search: url.search },
+      pathname.startsWith(SANDBOX_MODEL_PATH) ? FORWARD_SANDBOX_MODEL_HEADERS : FORWARD_AGENT_API_HEADERS,
+      tenant ? { [TENANT_HEADER]: tenant } : {},
+    );
   }
 
   if (pathname === "/v1" || pathname.startsWith("/v1/")) return json(res, 404, { error: "not_found" });
