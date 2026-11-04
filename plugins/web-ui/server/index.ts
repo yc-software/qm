@@ -3624,11 +3624,15 @@ function inRequestTenant(
   return inHostTenant(hostTenants, req, res, bound, claimed === undefined);
 }
 
+const STATIC_ASSET = /^\/assets\/[a-zA-Z0-9_.-]+$/;
+
 export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("x-frame-options", "DENY");
+  const assetPath = (req.url ?? "").split("?")[0] ?? "";
+  if (req.method === "GET" && STATIC_ASSET.test(assetPath)) return serveStatic(res, assetPath);
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
   try {
