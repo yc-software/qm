@@ -1,3 +1,4 @@
+import { likeContains } from "../persistence/like.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId, Session } from "../types.ts";
 import type { EntrySearchHit, SessionStore } from "./session-store.ts";
@@ -13,11 +14,10 @@ export function createSessionSearch(q: PgPool["q"]): Pick<SessionStore, "searchS
     async searchSessionTitles(principalId, query, limit = 20): Promise<Session[]> {
       const needle = query.trim();
       if (needle.length < 2) return [];
-      const like = `%${needle.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       const rows = await q(
         participantSessionsSql(` AND ${OWN_CHAT("s")} AND COALESCE(p.title, s.title) ILIKE $2`) +
           " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $3",
-        [principalId, like, Math.max(1, Math.min(Math.floor(limit), 100))],
+        [principalId, likeContains(needle), Math.max(1, Math.min(Math.floor(limit), 100))],
         { timeoutMs: SEARCH_TIMEOUT_MS },
       );
       return rows.map(rowToParticipantSession);
