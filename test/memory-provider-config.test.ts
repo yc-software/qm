@@ -236,19 +236,3 @@ test("provider URL errors name only the protocol and host and never echo secrets
     );
   }
 });
-
-test("a read operation's maxQueryChars is a positive integer", () => {
-  const read = (fields: Record<string, unknown>) => {
-    const parsed = JSON.parse(value) as { providers: Array<{ read: Record<string, unknown> }> };
-    parsed.providers[0]!.read = { ...parsed.providers[0]!.read, ...fields };
-    const provider = parseMemoryProviderConfig(JSON.stringify(parsed), ENV)?.providers[0];
-    return provider?.type === "mcp" ? provider.read : undefined;
-  };
-  assert.equal(read({ maxQueryChars: 2000 })?.maxQueryChars, 2000);
-  assert.equal(read({})?.maxQueryChars, undefined);
-  for (const maxQueryChars of [0, -1, 1.5, "2000", null])
-    assert.throws(
-      () => read({ maxQueryChars }),
-      /memory provider knowledge\.read\.maxQueryChars must be a positive integer/,
-    );
-});

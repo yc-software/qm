@@ -5,6 +5,8 @@ import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 import { disclosedMemory } from "./disclosure.ts";
 
+export const RECALL_MESSAGE_CHARS = 2000;
+
 export function memoryRecallQuery(message: string, visibleItems: readonly Item[]): string {
   const recent = visibleItems
     .filter((item) => isUserItem(item) || isAgentReply(item))
@@ -13,7 +15,9 @@ export function memoryRecallQuery(message: string, visibleItems: readonly Item[]
     .filter(Boolean)
     .join("\n")
     .slice(-2000);
-  return [recent, message ? `Current message: ${message.slice(0, 2000)}` : ""].filter(Boolean).join("\n");
+  return [recent, message ? `Current message: ${message.slice(0, RECALL_MESSAGE_CHARS)}` : ""]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function createSemanticMemoryService(

@@ -21,7 +21,6 @@ export interface McpMemoryOperationConfig {
   actorArg?: string;
   scopeArg?: string;
   maxCharsArg?: string;
-  maxQueryChars?: number;
   inputArg?: string;
   replyArg?: string;
   capturedAtArg?: string;
@@ -122,11 +121,6 @@ function operation(value: unknown, at: string, env: NodeJS.ProcessEnv): McpMemor
     const name = string(raw[key], `${at}.${key}`);
     if (!ARG.test(name)) throw new Error(`${at}.${key} is invalid`);
     out[key] = name;
-  }
-  if (raw.maxQueryChars !== undefined) {
-    if (!Number.isSafeInteger(raw.maxQueryChars) || Number(raw.maxQueryChars) <= 0)
-      throw new Error(`${at}.maxQueryChars must be a positive integer`);
-    out.maxQueryChars = Number(raw.maxQueryChars);
   }
   if (out.factsArg && out.contentArg) throw new Error(`${at} sets both factsArg and contentArg; keep one`);
   return out;

@@ -347,7 +347,7 @@ test("a long conversation's recall asks gbrain with the member's message, within
   const message = "Which instrument do I play in my string quartet?";
   const recalled = await recallAcrossScopes(memory, [JORDAN], {
     query: memoryRecallQuery(message, history),
-    message,
+    input: message,
     actorId: "U0JORDAN",
     maxChars: 6000,
   });

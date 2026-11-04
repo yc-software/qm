@@ -5,6 +5,7 @@ import { attestedPerson } from "../directory/person.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
 import { DENIED_CODES, reportEnvelope } from "./provider-outcome.ts";
 import type { McpMemoryOperationConfig } from "./provider-config.ts";
+import { RECALL_MESSAGE_CHARS } from "./semantic-recall.ts";
 
 const MAX_PROVENANCE_CHARS = 200;
 
@@ -32,7 +33,7 @@ export function createMcpMemoryProvider(opts: {
 
   const read = async (scopeId: string, query: string, context?: MemoryRecallContext): Promise<string> => {
     const op = opts.read;
-    const question = op.maxQueryChars ? (context?.message?.trim() || query).slice(0, op.maxQueryChars) : query;
+    const question = context?.input?.trim().slice(0, RECALL_MESSAGE_CHARS) || query;
     const args: Record<string, unknown> = { [op.queryArg ?? "query"]: question };
     if (op.scopeArg) args[op.scopeArg] = scopeId;
     const maxChars = context?.maxChars;
