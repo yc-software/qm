@@ -2132,6 +2132,7 @@ export function buildApp(
     ],
   });
   const orchestratorDeps: OrchestratorDeps = {
+    advisoryLock,
     admittedWork,
     sessionStateBus,
     externalSlackPolicies: config.externalSlackPolicies,
