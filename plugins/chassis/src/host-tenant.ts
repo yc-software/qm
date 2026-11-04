@@ -48,7 +48,7 @@ export async function inHostTenant(
   refuseUnknown = true,
 ): Promise<void> {
   const path = (req.url ?? "").split("?")[0] ?? "";
-  if (!lookup || PROBES.has(path)) return handle();
+  if (!lookup || PROBES.has(path) || path.startsWith("/.well-known/")) return handle();
   const found = await lookup(requestHostname(req)).catch(() => undefined);
   if (!found) {
     req.resume();
