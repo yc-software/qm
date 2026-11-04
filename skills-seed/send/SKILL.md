@@ -51,8 +51,7 @@ any issues that come up, and merge once CI is **fully** green.
    commit. Watcher success alone is never approval to merge.
 
 4. **Run the reviews the repo requires.** Follow the review process in the
-   repo's AGENTS.md or CLAUDE.md (in qm, the Wall of shame lens reviews) on the
-   current head.
+   repo's AGENTS.md or CLAUDE.md on the current head.
 
 5. **Fix every real issue found.** Address each genuine finding from the
    repo's reviews, from CI, and from reviewers/bots: fix it, push, and go
