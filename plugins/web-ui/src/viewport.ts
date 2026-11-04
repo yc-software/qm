@@ -4,7 +4,7 @@ let query: MediaQueryList | undefined;
 const phoneQuery = () => (query ??= window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH}px)`));
 
 // The app-edit chat docked beside an app on a desktop is narrow but is not a phone: keep the desktop layout there.
-const desktopEmbed = () => document.documentElement.classList.contains("desktop-embed");
+export const isDesktopEmbed = (): boolean => document.documentElement.classList.contains("desktop-embed");
 
 export function markDesktopEmbed(embedded: boolean): void {
   const desktop = embedded && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
@@ -12,7 +12,7 @@ export function markDesktopEmbed(embedded: boolean): void {
 }
 
 export function isPhone(): boolean {
-  return phoneQuery().matches && !desktopEmbed();
+  return phoneQuery().matches && !isDesktopEmbed();
 }
 
 export function isTouch(): boolean {
@@ -21,7 +21,7 @@ export function isTouch(): boolean {
 
 export function onPhoneChange(fn: (phone: boolean) => void): () => void {
   const query = phoneQuery();
-  const listener = (e: MediaQueryListEvent) => fn(e.matches && !desktopEmbed());
+  const listener = (e: MediaQueryListEvent) => fn(e.matches && !isDesktopEmbed());
   query.addEventListener("change", listener);
   return () => query.removeEventListener("change", listener);
 }

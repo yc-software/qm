@@ -71,7 +71,7 @@ export function appShellHtml(opts: {
   aside .drag { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; }
   #chat { border: 0; flex: 1; width: 100%; height: 100%; }
   body.leaving header { margin-top: -32px; opacity: 0; pointer-events: none; }
-  body.leaving aside { width: 0 !important; min-width: 0; opacity: 0; overflow: hidden; pointer-events: none; }
+  body.leaving aside { flex: none; width: 0 !important; min-width: 0; opacity: 0; overflow: hidden; pointer-events: none; }
   body.leaving #chat { flex: none; }
   @media (prefers-reduced-motion: reduce) { header, aside { transition: none; } }
   button:focus-visible, .drag:focus-visible { outline: 2px solid var(--foreground); outline-offset: -2px; }
@@ -182,6 +182,7 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
     sync();
     chat.style.width = chat.offsetWidth + "px";
     document.body.classList.add("leaving");
+    window.dispatchEvent(new Event("qm:shell-bare"));
     const done = () => { document.body.classList.add("bare"); chat.src = "about:blank"; };
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) done();
     else setTimeout(done, 260);

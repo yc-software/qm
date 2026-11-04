@@ -93,3 +93,21 @@ test("the app-edit chat docked on a desktop keeps the desktop layout at phone wi
   markDesktopEmbed(false);
   assert.equal(isPhone(), true);
 });
+
+test("the app-edit chat on a touch device keeps the phone layout", () => {
+  const fine = dom.window.matchMedia;
+  const setMatchMedia = (value: unknown) =>
+    Object.defineProperty(dom.window, "matchMedia", { value, configurable: true });
+  setMatchMedia((query: string) => ({
+    matches: !query.includes("pointer: fine"),
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  try {
+    markDesktopEmbed(true);
+    assert.equal(dom.window.document.documentElement.classList.contains("desktop-embed"), false);
+    assert.equal(isPhone(), true);
+  } finally {
+    setMatchMedia(fine);
+  }
+});

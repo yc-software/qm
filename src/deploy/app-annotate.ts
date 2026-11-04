@@ -53,11 +53,13 @@ export const ANNOTATE_JS = String.raw`
   };
   annotationToggle.addEventListener("click", () => setAnnotating(!annotating));
   const annotationShortcut = (e) => {
+    if (document.body.classList.contains("leaving")) return;
     if (e.key.toLowerCase() !== "a" || e.repeat || e.isComposing || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     if (e.target.closest?.("input,textarea,select,[contenteditable]")) return;
     e.preventDefault(); setAnnotating(!annotating);
   };
   window.addEventListener("keydown", annotationShortcut);
+  window.addEventListener("qm:shell-bare", () => { if (annotating) setAnnotating(false); });
   const bindAnnotationShortcut = () => {
     try { app.contentWindow.addEventListener("keydown", annotationShortcut); } catch {}
   };

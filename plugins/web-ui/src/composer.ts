@@ -53,7 +53,7 @@ import { appState } from "./shell";
 import { base64ToText, bytesToBase64, insertIntoDraft, pasteChipLabel } from "./paste-text";
 import { clearDraft, newChatDraftKey, saveDraft } from "./drafts";
 import { tip } from "./tooltip";
-import { isPhone } from "./viewport";
+import { isDesktopEmbed, isPhone } from "./viewport";
 import {
   LOADOUT_CAP,
   isUltrafastModel,
@@ -564,7 +564,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       composerNotice = html`<div class="composer-note">${composerState.note}</div>`;
     }
 
-    const compact = Boolean(ctx.pane) || isPhone();
+    const compact = Boolean(ctx.pane) || isPhone() || isDesktopEmbed();
     const turnRuntime = ctx.chat.turnRuntime();
     const routed =
       turnRuntime?.change && !switchedDefault(turnRuntime) && turnRuntime.modelId !== selectedModel.model.id
