@@ -42,7 +42,7 @@ import type { RuntimeChoice } from "../agent/agent.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
-import { boundTenant, installTenantNow } from "../tenants/context.ts";
+import { boundTenant } from "../tenants/context.ts";
 
 interface SlackRunHooks {
   onReplying?(): void;
@@ -165,12 +165,9 @@ export interface SlackCoreClientDeps {
   inboxEvent?(event: ConversationEvent): Promise<void>;
 }
 
-// Each tenant's workspace dispatches and syncs under its own lease. The install tenant keeps the
-// unqualified key, so single-tenant installs and mixed-version rollouts still exclude each other.
 function tenantLeaseKey(key: string): string {
   const tenant = boundTenant();
-  const install = installTenantNow();
-  return tenant === undefined || install === undefined || tenant === install ? key : `${key}:tenant:${tenant}`;
+  return tenant === undefined ? key : `${key}:tenant:${tenant}`;
 }
 
 const RUN_FALLBACK_POLL_MS = 1_000;
