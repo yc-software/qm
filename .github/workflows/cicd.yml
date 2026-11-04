@@ -177,7 +177,7 @@ jobs:
           cache-dependency-path: |
             cli/package-lock.json
             package-lock.json
-      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
         if: needs.reuse.outputs.reusable != 'true'
         with:
           terraform_version: 1.15.8
