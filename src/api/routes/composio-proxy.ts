@@ -1,19 +1,20 @@
 import {
   ACCOUNT_ID,
-  ComposioHttpError,
+  type ComposioAccountRecord,
   EXECUTE_TIMEOUT_MS,
   activeRun,
   composioUserIds,
   credential,
-  executeFailureCause,
   ownedAccount,
   request,
+  sendExecutionFailure,
+  usableAccount,
 } from "./composio.ts";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { sendJson } from "../http.ts";
-import { APP_CONNECTION_APPS } from "../../connectors/app-connection-apps.ts";
+import { APP_CONNECTION_ROUTES } from "../../connectors/app-connection-routes.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
@@ -35,18 +36,16 @@ const PASSED_HEADERS = ["location", "retry-after", "etag", "content-disposition"
 const COMPOSIO_REQUEST_LIMIT_BYTES = 4_500_000;
 
 function toolkitsFor(url: URL): string[] {
-  return Object.entries(APP_CONNECTION_APPS)
-    .filter(([, { routes }]) =>
+  return Object.entries(APP_CONNECTION_ROUTES)
+    .filter(([, routes]) =>
       routes.some(([host, prefix]) => url.hostname === host && url.pathname.startsWith(prefix ?? "/")),
     )
     .map(([toolkit]) => toolkit);
 }
 
 function allowedSummary(): string {
-  return Object.entries(APP_CONNECTION_APPS)
-    .map(
-      ([toolkit, { routes }]) => `${toolkit}: ${routes.map(([host, prefix]) => `${host}${prefix ?? ""}`).join(", ")}`,
-    )
+  return Object.entries(APP_CONNECTION_ROUTES)
+    .map(([toolkit, routes]) => `${toolkit}: ${routes.map(([host, prefix]) => `${host}${prefix ?? ""}`).join(", ")}`)
     .join("; ");
 }
 
@@ -151,17 +150,10 @@ async function pickAccount(
   });
   const data = await request(ctx, access.key, `/connected_accounts?${query}`);
   if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
-  const accounts = (data.items as Array<Record<string, unknown> | null>).filter(
-    (item): item is Record<string, unknown> =>
-      !!item &&
-      typeof item.id === "string" &&
-      ACCOUNT_ID.test(item.id) &&
-      userIds.includes(String(item.user_id)) &&
-      item.status === "ACTIVE" &&
-      item.is_disabled !== true &&
-      toolkits.includes(String((item.toolkit as { slug?: unknown } | undefined)?.slug)),
-  );
-  if (accounts.length === 1) return String(accounts[0]!.id);
+  const accounts = (data.items as Array<ComposioAccountRecord | null>)
+    .filter((item) => usableAccount(item, userIds))
+    .filter((item) => toolkits.includes(item.toolkit.slug));
+  if (accounts.length === 1) return accounts[0]!.id;
   if (accounts.length === 0)
     sendJson(ctx.res, 409, {
       error: "not_connected",
@@ -171,7 +163,7 @@ async function pickAccount(
   else
     sendJson(ctx.res, 409, {
       error: "choose_account",
-      accounts: accounts.map((item) => ({ id: item.id, toolkit: (item.toolkit as { slug?: unknown }).slug })),
+      accounts: accounts.map((item) => ({ id: item.id, toolkit: item.toolkit.slug })),
       message: "Several connections match. Ask which account to use and pass its accountId.",
     });
   return null;
@@ -284,22 +276,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
       });
     reportFailure("composio: proxy", new Error(mask(redactSecrets(errMessage(error)))), resource);
     if (ctx.res.headersSent) return void ctx.res.destroy();
-    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-    const providerStatus = error instanceof ComposioHttpError ? error.status : undefined;
-    let message = "The request failed or its outcome is unknown. Do not automatically retry a write.";
-    if (timedOut)
-      message = "The request timed out. For reads, request less per call. Do not automatically retry a write.";
-    if (providerStatus === 413)
-      message =
-        "The request body is too large for one call (about 3 MB of file data). Use the provider's chunked or resumable upload. Do not automatically retry a write.";
-    const providerDetail = error instanceof ComposioHttpError ? mask(redactSecrets(error.message)).slice(0, 300) : "";
-    return sendJson(ctx.res, 502, {
-      error: "composio_proxy_failed",
-      cause: executeFailureCause(error, timedOut),
-      ...(providerStatus ? { providerStatus } : {}),
-      ...(providerDetail ? { providerDetail } : {}),
-      message,
-    });
+    return sendExecutionFailure(ctx, error, mask, "composio_proxy_failed");
   }
 }
 

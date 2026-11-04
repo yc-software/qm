@@ -27,7 +27,7 @@ Those skills call `POST /v1/composio/proxy`, which forwards one raw request to t
 - The reply is the provider's own status and body; read it exactly as the direct call's.
 - `409 not_connected` names the app to connect: offer the connect option above. `409 choose_account` lists matching connections: ask which, then pass `accountId`.
 - File downloads come back as raw bytes (`curl -o file`). For a non-JSON upload, send `bodyBase64` with a `content-type` header. One request carries about 3 MB of file data; send larger files with the provider's chunked or resumable upload.
-- `502 composio_proxy_failed` gives `cause` and `providerStatus`; don't automatically retry a write.
+- `502 composio_proxy_failed` gives `cause`, `providerStatus` and `providerDetail` (the provider's own error); don't automatically retry a write.
 
 ## Show setup in web chat
 
@@ -87,7 +87,7 @@ async function apps(path, body) {
 Large pulls (a month of email, a full channel history) fail when one call asks for too much: an oversized page either times out (`cause: "timeout"`) or is rejected by the provider (`providerStatus: 413`). Page conservatively instead:
 
 - List first, fetch second: request IDs or metadata only (options like `ids_only` or `include_payload: false`), then fetch bodies in batches of about 25 for just the messages you need.
-- On a `502`, read the JSON body (`cause`, `providerStatus`, `message`); with curl, use `--fail-with-body` or skip `-f` so the body survives. Back off and shrink the page rather than repeating the same request.
+- On a `502`, read the JSON body (`cause`, `providerStatus`, `providerDetail`, `message`); with curl, use `--fail-with-body` or skip `-f` so the body survives. Back off and shrink the page rather than repeating the same request.
 - For long pulls, write progress (page token, fetched IDs) to a file so the job can resume, and run it in the background.
 
 The API checks active account ownership and toolkit on every execution. Personal connections are available only in authorized contexts. Shared conversations require explicit sharing; unattended work needs its existing owner-keychain authorization. A denial is not permission to switch credentials, accounts, identities, or access paths.

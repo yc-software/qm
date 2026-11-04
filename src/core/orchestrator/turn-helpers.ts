@@ -1,4 +1,3 @@
-import { APP_CONNECTION_SKILLS } from "../../connectors/app-connection-apps.ts";
 import type {
   CandidateDestination,
   CommandApprovalGrant,
@@ -41,17 +40,17 @@ export function stripAckPrefix(text: string, ack: string | undefined): string {
   return lead.slice(ack.length).trimStart();
 }
 
-const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
-  dropbox: "dropbox",
-  "email-draft-in-voice": "google",
-  "email-voice-profile": "google",
-  "google-drive-sheets": "google",
-  "google-workspace": "google",
-  linear: "linear",
-  "morning-digest": "x",
-  "slack-drafts": "slack",
-  x: "x",
-  zoom: "zoom",
+const CONNECTOR_SKILLS: Readonly<Record<string, { provider: string; appConnection?: true }>> = {
+  dropbox: { provider: "dropbox", appConnection: true },
+  "email-draft-in-voice": { provider: "google" },
+  "email-voice-profile": { provider: "google" },
+  "google-drive-sheets": { provider: "google", appConnection: true },
+  "google-workspace": { provider: "google", appConnection: true },
+  linear: { provider: "linear", appConnection: true },
+  "morning-digest": { provider: "x" },
+  "slack-drafts": { provider: "slack" },
+  x: { provider: "x" },
+  zoom: { provider: "zoom", appConnection: true },
 };
 
 export function filterConnectorSkills(
@@ -61,9 +60,8 @@ export function filterConnectorSkills(
 ): SkillResolution[] {
   const available = new Set(availableProviders);
   return resolved.filter((entry) => {
-    const name = entry.skill?.manifest.name ?? "";
-    const provider = CONNECTOR_SKILL_PROVIDERS[name];
-    return !provider || available.has(provider) || (appConnections && APP_CONNECTION_SKILLS.has(name));
+    const skill = CONNECTOR_SKILLS[entry.skill?.manifest.name ?? ""];
+    return !skill || available.has(skill.provider) || (appConnections && skill.appConnection === true);
   });
 }
 

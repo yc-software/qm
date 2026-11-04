@@ -143,9 +143,42 @@ export class ComposioHttpError extends Error {
   }
 }
 
-export function executeFailureCause(error: unknown, timedOut: boolean): string {
-  if (timedOut) return "timeout";
-  return error instanceof ComposioHttpError ? "provider_error" : "unavailable";
+export interface ComposioAccountRecord {
+  id?: unknown;
+  user_id?: unknown;
+  status?: unknown;
+  is_disabled?: unknown;
+  toolkit?: { slug?: unknown };
+}
+
+export function usableAccount<T extends ComposioAccountRecord>(
+  item: T | null | undefined,
+  userIds: readonly string[],
+): item is T & { id: string; toolkit: { slug: string } } {
+  return (
+    !!item &&
+    typeof item.id === "string" &&
+    ACCOUNT_ID.test(item.id) &&
+    userIds.includes(String(item.user_id)) &&
+    item.status === "ACTIVE" &&
+    item.is_disabled !== true &&
+    typeof item.toolkit?.slug === "string" &&
+    /^[a-zA-Z0-9_-]{1,100}$/.test(item.toolkit.slug)
+  );
+}
+
+export function sendExecutionFailure(ctx: ApiCtx, error: unknown, mask: (text: string) => string, code: string): void {
+  const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+  const provider = error instanceof ComposioHttpError ? error : undefined;
+  sendJson(ctx.res, 502, {
+    error: code,
+    cause: (timedOut && "timeout") || (provider && "provider_error") || "unavailable",
+    ...(provider ? { providerStatus: provider.status, providerDetail: mask(redactSecrets(provider.message)) } : {}),
+    message:
+      timedOut || provider?.status === 413
+        ? "The request was too large or slow to complete. For reads, request less per call (smaller pages, metadata before bodies); for uploads, use the provider's chunked or resumable upload. Do not automatically retry a write."
+        : "The request failed or its outcome is unknown. Do not automatically retry a write.",
+  });
 }
 
 export const EXECUTE_TIMEOUT_MS = 90_000;
@@ -358,17 +391,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
   try {
     const data = await request(ctx, access.key, `/connected_accounts?${query}`);
     if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
-    const accounts = data.items.filter(
-      (item) =>
-        item &&
-        userIds.includes(item.user_id) &&
-        item.status === "ACTIVE" &&
-        item.is_disabled !== true &&
-        typeof item.id === "string" &&
-        ACCOUNT_ID.test(item.id) &&
-        typeof item.toolkit?.slug === "string" &&
-        /^[a-zA-Z0-9_-]{1,100}$/.test(item.toolkit.slug),
-    );
+    const accounts = data.items.filter((item) => usableAccount(item, userIds));
     const configIds = [
       ...new Set(
         accounts
@@ -544,16 +567,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
     });
     const mask = createExactSecretValueMasker([access.key]);
     reportFailure("composio: execute", new Error(mask(redactSecrets(errMessage(error)))), `tool=${body.tool}`);
-    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-    return sendJson(ctx.res, 502, {
-      error: "composio_execution_failed",
-      cause: executeFailureCause(error, timedOut),
-      ...(error instanceof ComposioHttpError ? { providerStatus: error.status } : {}),
-      message:
-        timedOut || (error instanceof ComposioHttpError && error.status === 413)
-          ? "The request was too large to complete. For reads, request less per call (smaller pages, metadata before bodies). Do not automatically retry a write."
-          : "Execution failed or its outcome is unknown. Do not automatically retry a write.",
-    });
+    return sendExecutionFailure(ctx, error, mask, "composio_execution_failed");
   }
 }
 

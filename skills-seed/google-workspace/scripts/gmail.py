@@ -31,6 +31,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import sys
 import urllib.parse
 from email.message import EmailMessage
@@ -44,16 +45,20 @@ ACCOUNT: str | None = None
 
 
 def call(method: str, path: str, body: dict | None = None, query: dict | None = None):
+    global ACCOUNT
     url = f"{API}/{path}" + (f"?{urllib.parse.urlencode(query, doseq=True)}" if query else "")
     tok = os.environ.get("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM", "")
     base, cap = os.environ.get("AGENT_API_URL", ""), os.environ.get("AGENT_API_TOKEN", "")
+    head = None
     if tok:
         cmd = ["curl", "-sS", "--max-time", "60", "-X", method,
                "-H", f"Authorization: Bearer {tok}", "-H", "Content-Type: application/json",
                "-w", "\n%{http_code}", url]
         payload = json.dumps(body) if body is not None else None
     elif base and cap:
-        cmd = ["curl", "-sS", "--max-time", "120", "-X", "POST",
+        head = tempfile.NamedTemporaryFile(prefix="gmail-proxy-", delete=False)
+        head.close()
+        cmd = ["curl", "-sS", "--max-time", "120", "-X", "POST", "-D", head.name,
                "-H", f"X-Agent-Capability: {cap}", "-H", "Content-Type: application/json",
                "-w", "\n%{http_code}", f"{base}/v1/composio/proxy"]
         payload = json.dumps({"method": method, "url": url,
@@ -64,6 +69,11 @@ def call(method: str, path: str, body: dict | None = None, query: dict | None = 
     if payload is not None:
         cmd[1:1] = ["--data-binary", "@-"]
     res = subprocess.run(cmd, input=payload, capture_output=True, text=True)
+    if head:
+        with open(head.name) as f:
+            seen = [l.split(":", 1)[1].strip() for l in f if l.lower().startswith("x-composio-account:")]
+        os.unlink(head.name)
+        ACCOUNT = ACCOUNT or (seen[-1] if seen else None)
     if res.returncode != 0:
         sys.exit(f"gmail api unreachable on {method} {path}: {res.stderr.strip()[:500]}")
     text, _, status = res.stdout.rpartition("\n")
