@@ -1,4 +1,4 @@
-import { LRUCache } from "lru-cache";
+import { expiringCache } from "./expiring-cache.ts";
 import { signedHeaders, withSourceAuthNonce } from "./core-client.ts";
 import { boundTenant } from "./tenant.ts";
 
@@ -55,7 +55,7 @@ export function parseTenantSignIn(body: unknown): TenantSignIn {
 }
 
 export function coreTenantSignIn(core: string, secret: string | undefined): TenantSignInLookup {
-  const cache = new LRUCache<string, TenantSignIn>({ max: 1000, ttl: 30_000 });
+  const cache = expiringCache<TenantSignIn>(1000, 30_000);
   return async () => {
     const tenant = boundTenant();
     if (!tenant) return {};
