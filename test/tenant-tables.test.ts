@@ -184,6 +184,24 @@ describe("tenant tables", () => {
     assert.deepEqual(await owner.q("SELECT 1 AS one"), [{ one: 1 }]);
   });
 
+  it("refuses a non-owner login with two tenants while prebuilt legacy keys remain", async () => {
+    const ddl = new pg.Client({ connectionString: ownerUrl });
+    await ddl.connect();
+    try {
+      await ddl.query("CREATE UNIQUE INDEX tenant_probe_legacy_id_key ON tenant_probe(id)");
+      await assert.rejects(refreshTenants(app, true), /legacy single-tenant unique indexes/);
+      await assert.rejects(
+        withTenant(install, () => app.q("SELECT 1 AS one")),
+        TenantUnavailable,
+      );
+    } finally {
+      await ddl.query("DROP INDEX IF EXISTS tenant_probe_legacy_id_key");
+      await ddl.end();
+    }
+    await refreshTenants(app, true);
+    assert.deepEqual(await withTenant(install, () => app.q("SELECT 1 AS one")), [{ one: 1 }]);
+  });
+
   it("keeps two tenants' key-value rows and snapshots apart under the app login", async () => {
     const appMap = createPostgresMap<{ who: string }>(app, "tenant_probe_pair");
     await withTenant(tenantA, () => appMap.put("same-id", { who: "a" }));

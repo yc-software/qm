@@ -12,11 +12,24 @@ const missingTable = (error: unknown): boolean =>
 const BYPASSES_ROW_SECURITY = `SELECT r.rolsuper OR r.rolbypassrls OR EXISTS (
     SELECT 1 FROM pg_class c
      WHERE c.relrowsecurity AND c.relnamespace = current_schema()::regnamespace AND pg_has_role(c.relowner, 'USAGE')
-  ) AS bypass
+  ) AS bypass,
+  EXISTS (
+    SELECT 1 FROM pg_class c
+     WHERE c.relkind = 'i' AND c.relnamespace = current_schema()::regnamespace AND c.relname ~ '_legacy_.*_key$'
+  ) AS legacy_keys
   FROM pg_roles r WHERE r.rolname = current_user`;
+
+const LEGACY_KEYS_REFUSAL =
+  "Refusing tenant work: legacy single-tenant unique indexes from the tenancy prebuild still exist while more than one tenant exists. Drop them before adding a second tenant.";
 
 const BYPASS_REFUSAL =
   "Refusing tenant work: the database login owns the tenant tables or bypasses row-level security while more than one tenant exists. Connect as a non-owner login without BYPASSRLS.";
+
+function multiTenantRefusal(row: Record<string, unknown> | undefined): string | undefined {
+  if (row?.bypass === true) return BYPASS_REFUSAL;
+  if (row?.legacy_keys === true) return LEGACY_KEYS_REFUSAL;
+  return undefined;
+}
 
 async function readTenants(pg: Pick<PgPool, "pool">, watch: boolean): Promise<void> {
   const pool = await pg.pool();
@@ -33,8 +46,7 @@ async function readTenants(pg: Pick<PgPool, "pool">, watch: boolean): Promise<vo
   ]);
   const idOf = (rows: Record<string, unknown>[]): string | undefined =>
     rows[0]?.id == null ? undefined : String(rows[0].id);
-  if (watch)
-    refuseTenancy(Number(soleRows[0]?.tenants ?? 0) > 1 && bypassRows[0]?.bypass === true ? BYPASS_REFUSAL : undefined);
+  if (watch) refuseTenancy(Number(soleRows[0]?.tenants ?? 0) > 1 ? multiTenantRefusal(bypassRows[0]) : undefined);
   sole = idOf(soleRows);
   const install = idOf(installRows);
   if (watch && install !== undefined) registerTenants(install, sole);
