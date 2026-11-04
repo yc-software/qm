@@ -2882,6 +2882,7 @@ const apiRoutes: readonly WebRoute[] = [
         callId?: unknown;
         result?: unknown;
         desktopClientId?: unknown;
+        tree?: unknown;
       }>(req, res, false, 6_000_000);
       if (!p) return;
       const kind = typeof p.kind === "string" ? p.kind : "";
@@ -2912,6 +2913,7 @@ const apiRoutes: readonly WebRoute[] = [
           ...(text !== undefined ? { text } : {}),
           ...steerFields,
           ...(typeof p.queuedRunId === "string" ? { queuedRunId: p.queuedRunId } : {}),
+          ...(kind === "abort" && p.tree === true ? { tree: true } : {}),
         }),
       );
     },

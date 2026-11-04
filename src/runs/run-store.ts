@@ -142,7 +142,7 @@ export interface RunStore {
 
   activeForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
   lastFinishedForThreads(threadRefs: readonly string[]): Promise<Map<string, Run>>;
-  pendingReturns(limit?: number, afterId?: string): Promise<Run[]>;
+  pendingReturns(limit?: number, afterId?: string, threadRefs?: readonly string[]): Promise<Run[]>;
   terminalFinished(after: TerminalCursor, beforeMs: number, limit: number): Promise<Run[]>;
   markReturned(runId: string): Promise<void>;
   deferReturn(runId: string, delayMs: number): Promise<void>;

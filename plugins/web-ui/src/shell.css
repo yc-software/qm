@@ -3713,9 +3713,6 @@ qm-markdown .tok-in {
   padding-left: calc(var(--subagent-depth, 0) * 14px);
   border-radius: 8px;
 }
-.subagent-row.peeking {
-  background: color-mix(in srgb, var(--muted-foreground) 8%, transparent);
-}
 .subagent-row-head {
   appearance: none;
   display: flex;
@@ -3780,33 +3777,6 @@ qm-markdown .tok-in {
   font: inherit;
   font-size: 12px;
   cursor: pointer;
-}
-.subagent-peek {
-  flex: 1 0 100%;
-  min-width: 0;
-  margin: 0;
-  padding: 2px 8px 6px 26px;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
-}
-.subagent-peek-line {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  min-width: 0;
-}
-.subagent-peek-line > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.subagent-peek-line.tool {
-  font-family: var(--font-mono);
-  font-size: 11px;
 }
 
 .bg-panel {

@@ -498,8 +498,12 @@ export async function treeSessions(sessions: Pick<SessionStore, "childrenOf">, r
 
 export const PARENT_INTERRUPT = "by the parent agent";
 export const ANCESTOR_STOP = "because the parent session was stopped";
+export const USER_STOP = "by user";
+export const USER_STOP_ALL = "by user (subagents too)";
 
 type StopRequest = { reason?: string | undefined; scope?: StopScope };
+
+export const sparesDescendants = (scope: StopScope | undefined): boolean => scope === "run" || scope === "session";
 
 async function stopOf(
   signals: Pick<RunSignalStore, "pending">,
@@ -523,7 +527,7 @@ export async function runStopped(
     const run = await runs.get(current);
     const stop = run && (await stopOf(signals, run));
     if (current === runId) self = !run || stop !== undefined;
-    else if (!run || (stop && stop.scope !== "run")) return "ancestor";
+    else if (!run || (stop && !sparesDescendants(stop.scope))) return "ancestor";
     current = run?.request.delegatingRunId;
   }
   return self ? "self" : undefined;
@@ -532,7 +536,7 @@ export async function runStopped(
 const unstarted = (run: Run): boolean => run.status === "pending" && run.attempts === 0 && run.turnUserSeq === null;
 const interruptible = (run: Run): boolean => !unstarted(run) || Boolean(run.request.sessionSenderId);
 
-async function stopSessionRuns(
+export async function stopSessionRuns(
   deps: { runs: Pick<RunStore, "inFlightForThread" | "withdraw">; signals: Pick<RunSignalStore, "send"> },
   session: Session,
   stop: StopRequest,
@@ -559,7 +563,7 @@ async function stopSessionRuns(
       ...(stop.scope ? { scope: stop.scope } : {}),
     });
     const withdrawn =
-      run.status === "pending" && (await deps.runs.withdraw(run.id, { unstartedOnly: Boolean(interrupt) }));
+      run.status === "pending" && (await deps.runs.withdraw(run.id, { unstartedOnly: sparesDescendants(stop.scope) }));
     stopped.push({ id: run.id, withdrawn: withdrawn && !foreign });
   }
   return stopped;
