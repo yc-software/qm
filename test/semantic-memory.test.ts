@@ -48,15 +48,28 @@ test("semantic recall selects an old match, respects budget, and leaves full gre
 });
 
 test("empty/deleted notebooks and other scopes cannot return cached facts", async () => {
-  const { base, memory, calls } = await fixture();
+  const { base, memory } = await fixture();
   await base.capture("personal:a", ["browser preference"], AT);
   await recall(memory, "personal:a", { query: "verify" });
-  calls.length = 0;
   assert.equal(await recall(memory, "personal:b", { query: "verify" }), "");
-  assert.deepEqual(calls, []);
   await base.delete!("personal:a", ["1"]);
   assert.equal(await recall(memory, "personal:a", { query: "verify" }), "");
-  assert.deepEqual(calls, []);
+});
+
+test("recall embeds the query while the notebook is still loading", async () => {
+  const { base, memory, calls } = await fixture();
+  await base.capture("personal:a", ["browser preference", "release notes"], AT);
+  const facts = await base.facts!("personal:a");
+  let load!: () => void;
+  const loaded = new Promise<void>((resolve) => (load = resolve));
+  const recalled = recall(memory, "personal:a", {
+    query: "verify",
+    disclosedFacts: loaded.then(() => new Map([["personal:a", facts]])),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, [["verify"]]);
+  load();
+  assert.match(await recalled, /^- \(2026-10-01\) browser preference/);
 });
 
 test("embedding outage falls back to whole bullets, without disabling grep or writes", async () => {

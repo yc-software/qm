@@ -1907,10 +1907,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
-        const [memoryWindow, memoryView] = await Promise.all([
-          deps.sessions.getContextWindow(session.id),
-          context.memorySnapshot(),
-        ]);
+        const contextWindow = deps.sessions.getContextWindow(session.id);
+        const snapshot = context.memorySnapshot();
+        const recallOutcomes: MemoryProviderOutcome[] = [];
+        const recallFor = (history: Item[]) =>
+          context.recallMemory(
+            memoryRecallQuery(input.text, history),
+            snapshot.then((view) => view.loaded),
+            (outcome) => void recallOutcomes.push(outcome),
+          );
+        const earlyRecall =
+          input.approval || input.overheard?.length
+            ? undefined
+            : contextWindow.then((window) => recallFor(filterHistory(forModelContext(window.items))));
+        void earlyRecall?.catch(() => undefined);
+        const [memoryWindow, memoryView] = await Promise.all([contextWindow, snapshot]);
         let historyAppended = input.approval !== undefined;
         const captureDependencies = () => [
           ...memoryView.facts,
@@ -2723,12 +2734,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const rawEntries = (await turnWindow()).items;
         const priorTurns = input.priorTurns;
         let visibleHistory = filterHistory(forModelContext(rawEntries));
-        const recallOutcomes: MemoryProviderOutcome[] = [];
-        const recalled = await context.recallMemory(
-          memoryRecallQuery(input.text, visibleHistory),
-          memoryView.loaded,
-          (outcome) => void recallOutcomes.push(outcome),
-        );
+        const recalled = await (earlyRecall && !historyAppended ? earlyRecall : recallFor(visibleHistory));
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         const reconciled = partial ? reconcile(visibleHistory, partial, input.resumeCause) : null;
         if (reconciled?.settleItems.length) {
