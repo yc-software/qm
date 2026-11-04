@@ -57,6 +57,12 @@ export async function processRun(
   );
 }
 
+function spawnOf(request: Run["request"]): "swarm" | "delegated" | undefined {
+  if (request.swarm) return "swarm";
+  if (isSessionTurn(request)) return "delegated";
+  return undefined;
+}
+
 export function runTraceAttributes(run: Run): Record<string, string | number | undefined> {
   const request = run.request;
   return {
@@ -68,7 +74,7 @@ export function runTraceAttributes(run: Run): Record<string, string | number | u
       run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
     "qm.surface": request.surface,
     "qm.origin": "origin" in request ? request.origin.kind : undefined,
-    "qm.spawn": request.swarm ? "swarm" : isSessionTurn(request) ? "delegated" : undefined,
+    "qm.spawn": spawnOf(request),
     "qm.parent_run": request.delegatingRunId,
   };
 }
