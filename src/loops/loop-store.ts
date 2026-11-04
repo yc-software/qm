@@ -68,7 +68,7 @@ export interface LoopStore {
   editPlaybook(id: string, edit: PlaybookEdit): Promise<Loop | null>;
   setState(id: string, state: LoopState): Promise<Loop | null>;
   setHealth(id: string, health: LoopHealth, reason?: string, throttle?: boolean): Promise<Loop | null>;
-  recordFireOutcome(id: string, outcome: FireOutcome): Promise<Loop | null>;
+  recordFireOutcome(id: string, outcome: FireOutcome, firedAt: number): Promise<Loop | null>;
   delete(id: string): Promise<void>;
 }
 
@@ -246,11 +246,12 @@ export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
         ...(throttle ? { throttle: true } : { throttle: undefined }),
       });
     },
-    async recordFireOutcome(id, outcome) {
+    async recordFireOutcome(id, outcome, firedAt) {
       return atomicUpdate(id, (loop) => ({
         ...loop,
         consecutiveFailedFires: nextFailedFires(loop.consecutiveFailedFires ?? 0, outcome),
         lastFiredAt: Date.now(),
+        ...(outcome === "ok" ? { lastOkFireAt: firedAt } : {}),
       }));
     },
     delete: (id) => backing.delete(id),

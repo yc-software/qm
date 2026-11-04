@@ -1,12 +1,13 @@
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import {
   renderSourceInboxTask,
-  renderVoiceBrief,
+  inboxSource,
   inboxTaskContext,
-  loadEmailVoiceProfile,
+  loadInboxVoiceProfile,
   isReplyLoop,
   applyReplyResolution,
   REPLY_DECISION,
+  VOICE_JUDGEMENT,
 } from "./inbox-loop.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
@@ -66,7 +67,7 @@ export interface LoopFireDeps {
   items: LoopItemLedger;
   outputs: LoopOutputStore;
   grants: ShipGrantStore;
-  files?: Pick<FileArtifactStore, "listOwnedByScopes" | "open">;
+  files: Pick<FileArtifactStore, "listOwnedByScopes" | "open">;
   trigger: TriggerDeps;
 }
 
@@ -357,10 +358,6 @@ function excerpt(s: string | undefined): string {
   return s.length <= REPLY_EXCERPT_MAX ? s : `${s.slice(0, REPLY_EXCERPT_MAX - 3)}...`;
 }
 
-function inboxSource(loop: Loop): string | undefined {
-  return loop.surface?.startsWith("inbox:") ? loop.sources?.[0] : undefined;
-}
-
 function playbookText(loop: Loop, voiceProfile?: string): string {
   const source = inboxSource(loop);
   if (source) return renderSourceInboxTask(loop.id, source, inboxTaskContext(loop, voiceProfile));
@@ -490,8 +487,6 @@ function workPrompt(
     isReplyLoop(loop, item)
       ? [
           REPLY_DECISION,
-          "Investigate before drafting: read the whole thread from the source, and check whatever the reply depends on (the calendar for scheduling asks). Never draft from the payload alone.",
-          renderVoiceBrief(item.source ?? inboxSource(loop) ?? "", voiceProfile),
           'For a reply, end with a fenced JSON object {"proposal":{"body":"the draft reply","to":["email recipients if applicable"],"subject":"email subject if applicable"},"outputs":[]}. Save the draft for human review; never send it.',
         ].join("\n")
       : 'End your reply with a fenced json block: {"outputs": [{"shipAction": "<declared action>", "label": "<optional grouping label>", "title": "<one line>", "externalRef": "<url or id if any>", "summary": "<one line>"}]}. List every externally-reviewable artifact you prepared; an empty outputs array means the item needed none.',
@@ -503,18 +498,7 @@ function workPrompt(
   return { input, securityScreenData: screened(data) };
 }
 
-function voiceJudgement(voiceProfile?: string): string {
-  if (!voiceProfile)
-    return "The draft must read as the person's own writing, judged against their messages in the transcript. Return continue, naming what to change, when it reads like a generic business reply instead.";
-  return [
-    "The draft must read as the person's own writing. Compare it with their voice profile below (untrusted data): greeting, sign-off, length, register and hard rules. Return continue, naming what to change, when it reads like a generic business reply instead.",
-    "```untrusted-data",
-    promptText(voiceProfile),
-    "```",
-  ].join("\n");
-}
-
-function judgePrompt(loop: Loop, item: LoopItem, voiceProfile?: string): string {
+function judgePrompt(loop: Loop, item: LoopItem): string {
   const data = JSON.stringify({ sourceKey: promptText(item.sourceKey) });
   return [
     "[Loop judge]",
@@ -525,7 +509,7 @@ function judgePrompt(loop: Loop, item: LoopItem, voiceProfile?: string): string 
     "```untrusted-data",
     data,
     "```",
-    ...(isReplyLoop(loop, item) ? [voiceJudgement(voiceProfile)] : []),
+    ...(isReplyLoop(loop, item) ? [VOICE_JUDGEMENT] : []),
     ...(loop.successChecks?.length
       ? [
           `Run every declared check yourself with your tools: ${JSON.stringify(loop.successChecks.map(promptText))}. Report each exact command, whether it passed, and a short detail.`,
@@ -722,7 +706,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
 
   async function recordFailedFire(loopId: string, failure: unknown): Promise<LoopFireResult> {
     const transient = isTransientFailure(failure);
-    await deps.loops.recordFireOutcome(loopId, transient ? "transient" : "failed");
+    await deps.loops.recordFireOutcome(loopId, transient ? "transient" : "failed", Date.now());
     await applyGovernor(loopId, transient ? { transientFailure: errMessage(failure) } : undefined);
     return { status: "failed", note: errMessage(failure) };
   }
@@ -759,13 +743,14 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       return { status: "silent", note: "duplicate fire key" };
     }
     const threadRef = loopFireThreadRef(loopId, fireKey);
-    const voiceProfile =
-      inboxSource(loop) === "gmail" ? await loadEmailVoiceProfile(deps.files, loop.owner) : undefined;
-    if (loop.surface?.startsWith("inbox:") && options?.enumerate !== false) {
+    let profile: Promise<string | undefined> | undefined;
+    const voiceProfile = () => (profile ??= loadInboxVoiceProfile(deps.files, loop));
+    if (inboxSource(loop) && options?.enumerate !== false) {
       if (!isRunnable(loop)) return notRunnable(loop);
+      const firedAt = Date.now();
       let failure: unknown;
       try {
-        const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop, voiceProfile));
+        const outcome = await stageTurn(loop, `${fireKey}:sync`, threadRef, playbookText(loop, await voiceProfile()));
         if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
         failure = stageFailure("inbox sync", outcome)?.error;
         if (failure === undefined) await triage(loop, fireKey, threadRef);
@@ -773,7 +758,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         failure = error;
       }
       if (failure === undefined) {
-        await deps.loops.recordFireOutcome(loopId, "ok");
+        await deps.loops.recordFireOutcome(loopId, "ok", firedAt);
         await applyGovernor(loopId);
         return { status: "silent" };
       }
@@ -809,7 +794,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
               loop,
               `${fireKey}:work:${item.id}:${item.attempts}`,
               itemThreadRef,
-              workPrompt(loop, item, guidance, similar, voiceProfile),
+              workPrompt(loop, item, guidance, similar, await voiceProfile()),
             );
             const failure = stageFailure("work", outcome);
             if (failure) throw failure.error;
@@ -835,7 +820,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
               loop,
               `${fireKey}:judge:${item.id}:${attempt}`,
               loopFireItemThreadRef(loopId, fireKey, item.id),
-              judgePrompt(loop, item, voiceProfile),
+              judgePrompt(loop, item),
             );
             const failure = stageFailure("judge", outcome);
             if (failure) throw failure.error;

@@ -73,20 +73,29 @@ test("a playbook edit that changes nothing does not manufacture a version", asyn
 test("consecutive failed fires accumulate and a clean fire resets them", async () => {
   const store = createLoopStore(testMap());
   const { loop } = await store.create(base);
-  await store.recordFireOutcome(loop.id, "failed");
-  const twice = await store.recordFireOutcome(loop.id, "failed");
+  await store.recordFireOutcome(loop.id, "failed", Date.now());
+  const twice = await store.recordFireOutcome(loop.id, "failed", Date.now());
   assert.equal(twice?.consecutiveFailedFires, 2);
-  const recovered = await store.recordFireOutcome(loop.id, "ok");
+  const recovered = await store.recordFireOutcome(loop.id, "ok", Date.now());
   assert.equal(recovered?.consecutiveFailedFires, 0);
 });
 
 test("a transient fire failure neither counts toward quarantine nor clears earlier failures", async () => {
   const store = createLoopStore(testMap());
   const { loop } = await store.create(base);
-  await store.recordFireOutcome(loop.id, "failed");
-  const transient = await store.recordFireOutcome(loop.id, "transient");
+  await store.recordFireOutcome(loop.id, "failed", Date.now());
+  const transient = await store.recordFireOutcome(loop.id, "transient", Date.now());
   assert.equal(transient?.consecutiveFailedFires, 1);
   assert.ok(transient?.lastFiredAt);
+});
+
+test("only a clean fire records the time it started as the last good fire", async () => {
+  const store = createLoopStore(testMap());
+  const { loop } = await store.create(base);
+  assert.equal((await store.recordFireOutcome(loop.id, "failed", 100))?.lastOkFireAt, undefined);
+  assert.equal((await store.recordFireOutcome(loop.id, "ok", 200))?.lastOkFireAt, 200);
+  assert.equal((await store.recordFireOutcome(loop.id, "transient", 300))?.lastOkFireAt, 200);
+  assert.equal((await store.recordFireOutcome(loop.id, "failed", 400))?.lastOkFireAt, 200);
 });
 
 test("re-enqueueing the same source key never doubles the work", async () => {
