@@ -9832,12 +9832,15 @@ h3.ambient-field-label {
   border: 0;
   padding: 0 16px 16px;
 }
-.inbox-chat-suggestions,
-.inbox-edit-suggestions {
+.inbox-chat-suggestions {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  padding-bottom: 8px;
+}
+.inbox-edit-suggestions {
+  display: contents;
 }
 .inbox-dismiss {
   flex: none;

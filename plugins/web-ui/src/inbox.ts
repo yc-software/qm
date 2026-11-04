@@ -1038,11 +1038,16 @@ export async function askAgent(
   message: string,
   options?: ComposerSubmission,
   snapshot = { draft: effectiveDraft(item), conflictRevision: draftConflicts.get(item.id) ?? 0 },
-): Promise<boolean> {
+): Promise<void> {
   const text = message.trim();
-  if ((!text && !options?.attachments?.length) || chatting.has(item.id)) return false;
+  if (!text && !options?.attachments?.length) return;
+  if (chatting.has(item.id)) throw new Error("Still answering your last message. Your message has been kept.");
   const ready = item.outputs?.find((output) => output.state === "ready");
-  if (ready && text && !options?.attachments?.length) return decideReview(item, ready, "return", text);
+  if (ready && text && !options?.attachments?.length) {
+    if (!(await decideReview(item, ready, "return", text)))
+      throw new Error("Could not request changes. Your message has been kept.");
+    return;
+  }
   const { draft, conflictRevision } = snapshot;
   chatting.add(item.id);
   drawAll();
@@ -1067,11 +1072,9 @@ export async function askAgent(
       updateSentChat(next);
       replaceItem({ ...toInboxItem(next), outputs: item.outputs, detailLoaded: true });
     });
-    return true;
   } catch (e) {
     if (isDraftConflict(e)) await refetchItem(item);
-    notify(`The agent couldn't answer: ${e instanceof Error ? e.message : e}`);
-    return false;
+    throw new Error(`The agent couldn't answer: ${e instanceof Error ? e.message : e}`);
   } finally {
     chatting.delete(item.id);
     drawAll();
@@ -1339,10 +1342,7 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
             draft: effectiveDraft(inboxItemById(item.id) ?? item),
             conflictRevision: draftConflicts.get(item.id) ?? 0,
           };
-          return async (text, options) => {
-            if (!(await askAgent(item, text, options, snapshot)))
-              throw new Error("Could not complete the request. Your message has been kept.");
-          };
+          return (text, options) => askAgent(item, text, options, snapshot);
         },
       },
       compact,
