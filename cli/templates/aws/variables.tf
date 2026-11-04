@@ -1,5 +1,11 @@
 variable "org_id" { type = string }
-variable "account_id" { type = string }
+variable "account_id" {
+  type = string
+  validation {
+    condition     = var.account_id != "000000000000"
+    error_message = "account_id must replace the scaffold value 000000000000 before planning or applying infrastructure"
+  }
+}
 variable "region" { type = string }
 variable "cluster_name" { type = string }
 variable "public_url" { type = string }
