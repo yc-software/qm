@@ -9,6 +9,7 @@ import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.t
 import { createMemoryVectorIndexer } from "../src/memory/vector-indexer.ts";
 import { createPostgresFileUploadStore } from "../src/files/file-upload-store.ts";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
+import { createDeliveryRelay } from "../src/delivery/relay.ts";
 import { createPostgresMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
@@ -363,5 +364,50 @@ test(
     );
     for (const d of pending) await withTenant(d.tenantId!, () => app.ack(d.id, Date.now()));
     assert.deepEqual(await withoutTenant(() => app.pendingAcrossTenants("web")), []);
+  },
+);
+
+test(
+  "under the restricted login, the webhook relay claims each tenant's conversation head and sends and acks it under that tenant",
+  { skip },
+  async () => {
+    await grantTables();
+    const app = createPostgresDeliveryStore(db!.appUrl);
+    const enqueue = (tenant: string, key: string) =>
+      withTenant(tenant, () =>
+        app.enqueue({
+          destination: {
+            type: "webhook",
+            target: "shared-conversation",
+            webhook: { binding: "b1", url: "https://receiver.test/" },
+          },
+          text: key,
+          idempotencyKey: key,
+        }),
+      );
+    const a = await enqueue(A, "hook-a");
+    const b = await enqueue(B, "hook-b");
+    const sent: [string, string | undefined][] = [];
+    let settle!: () => void;
+    const bothSent = new Promise<void>((resolve) => (settle = resolve));
+    const relay = createDeliveryRelay(app, {
+      type: "webhook",
+      claimMs: 60_000,
+      send: async (d) => {
+        sent.push([d.id, boundTenant()]);
+        if (sent.length === 2) settle();
+      },
+    });
+    relay.start();
+    await bothSent;
+    await relay.stop();
+    assert.deepEqual(
+      sent.sort(),
+      [
+        [a.id, A],
+        [b.id, B],
+      ].sort(),
+    );
+    assert.deepEqual(await withoutTenant(() => app.pendingAcrossTenants("webhook")), []);
   },
 );

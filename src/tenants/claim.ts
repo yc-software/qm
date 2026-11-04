@@ -4,16 +4,20 @@ import { ownerPgPool } from "./owner-pool.ts";
 
 export type Claimed<T> = T & { tenantId?: string };
 
+export async function poolAcrossTenants(store: PgPool): Promise<PgPool> {
+  if (boundTenant() !== undefined) throw new Error("A cross-tenant claim cannot run while a tenant is bound");
+  const owner = ownerPgPool(store);
+  if (owner !== store) await store.pool();
+  return owner;
+}
+
 export async function claimAcrossTenants(
   store: PgPool,
   text: string,
   params: unknown[] = [],
   options?: PgQueryOptions,
 ): ReturnType<PgPool["query"]> {
-  if (boundTenant() !== undefined) throw new Error("A cross-tenant claim cannot run while a tenant is bound");
-  const owner = ownerPgPool(store);
-  if (owner !== store) await store.pool();
-  return owner.query(text, params, options);
+  return (await poolAcrossTenants(store)).query(text, params, options);
 }
 
 export function inTenantOf<T>(tenantId: string | undefined, fn: () => T): T {

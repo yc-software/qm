@@ -2,7 +2,7 @@ import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { waitForNoRunningRun, type Run, type RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import { isSessionTurn } from "../core/turn-origin.ts";
+import { boundWebhook, isSessionTurn } from "../core/turn-origin.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -35,16 +35,19 @@ export function replyEditNote(retracted: readonly string[] | undefined): string 
 
 export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
-  const target = run.request.deliveryTarget;
-  const surface = run.request.surface;
-  if (!target || !surface) return null;
   const origin = run.request.origin;
   const surfaceOrigin = run.request.surfaceOrigin;
+  const bound = boundWebhook(run.request);
+  const webhook = bound?.webhook;
+  const target = bound?.target ?? run.request.deliveryTarget;
+  const surface = run.request.surface;
+  if (!target || !surface) return null;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
   const webTranscript = webTranscriptNote(run, surface, failed);
   const destination: Destination = {
-    type: surface,
+    type: webhook ? "webhook" : surface,
+    ...(webhook ? { webhook } : {}),
     target,
     ...(surfaceOrigin
       ? {
@@ -72,6 +75,13 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       : {}),
   });
   if (
+    webhook &&
+    run.request.idempotencyKey &&
+    (run.request.approval || (origin.kind === "human" && !isSessionTurn(run.request)))
+  )
+    provenance.sourceRequestId = run.request.idempotencyKey;
+  if (webhook) provenance.sourceRunId = run.id;
+  if (
     surface === "slack" &&
     run.result?.status === "refused" &&
     (run.result.refusalKind === "security_quarantine" || run.result.refusalKind === "model_budget") &&
@@ -97,6 +107,9 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       idempotencyKey,
     };
   }
+  const nothingToShow = !provenance.sourceRequestId && (run.result?.status === "ok" || run.result?.status === "silent");
+  if (webhook && run.result && !nothingToShow)
+    return { destination, text: standaloneFailureText(run.result) ?? "", provenance, idempotencyKey };
   return null;
 }
 
