@@ -47,7 +47,7 @@ import {
   stoppableRoot,
 } from "./sessions/session-syscalls.ts";
 import {
-  deliverSubagentMail,
+  returnSubagentRun,
   settleTreeWakes,
   sweepUnreadMailWakes,
   wakeForUnreadMail,
@@ -2481,14 +2481,7 @@ export function buildApp(
   });
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
-    advisoryLock
-      .withLock("session-tree-admission", async () => {
-        if (await deliverSubagentMail(subagentMail, run)) await runs.markReturned(run.id);
-      })
-      .catch(async (error: unknown) => {
-        await runs.deferReturn(run.id, 60_000);
-        throw error;
-      });
+    advisoryLock.withLock("session-tree-admission", () => returnSubagentRun(subagentMail, run));
   runs.onTerminal((run) => {
     if (run.sessionId.startsWith("agent:main:subagent:"))
       void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));

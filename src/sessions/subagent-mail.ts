@@ -445,19 +445,32 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run, quie
   return (await mailParent(deps, child, parent, turn, mail, wakes ? wake : undefined)) === "settled";
 }
 
+export async function returnSubagentRun(
+  deps: SubagentMailDeps & { runs: Pick<RunStore, "markReturned" | "deferReturn"> },
+  run: Run,
+  quiet = false,
+): Promise<void> {
+  try {
+    if (await deliverSubagentMail(deps, run, quiet)) await deps.runs.markReturned(run.id);
+  } catch (error) {
+    await deps.runs.deferReturn(run.id, 60_000);
+    throw error;
+  }
+}
+
 export async function settleTreeWakes(
   deps: SubagentMailDeps & {
     sessions: Pick<SessionStore, "childrenOf">;
-    runs: Pick<RunStore, "pendingReturnsIn" | "markReturned">;
+    runs: Pick<RunStore, "pendingReturns" | "markReturned" | "deferReturn">;
   },
   root: Session,
 ): Promise<void> {
   const tree = (await treeSessions(deps.sessions, root)).filter((session) => session.scopeId === root.scopeId);
   for (const session of tree)
     for (const message of await deps.mailbox.wakesFor(session.id)) await deps.mailbox.settle(session.id, message.id);
-  for (const run of await deps.runs.pendingReturnsIn(tree.map((session) => session.threadRef)))
-    if (await deliverSubagentMail(deps, run, true).catch(swallowAs("sessions: settle tree return", false)))
-      await deps.runs.markReturned(run.id);
+  const threadRefs = tree.map((session) => session.threadRef);
+  for (const run of await deps.runs.pendingReturns(Number.MAX_SAFE_INTEGER, "", threadRefs))
+    await returnSubagentRun(deps, run, true).catch(swallowAs("sessions: settle tree return", undefined));
 }
 
 function turnText(items: readonly Item[], shared: (seq: number) => boolean, run: Run): string | undefined {

@@ -543,12 +543,21 @@ test("stopping everything leaves the tree's waiting results and questions as mai
   assert.equal(asked.ok && asked.delivered, "queued_message");
   await r.runs.complete(asker!.run.id, asker!.leaseToken, { status: "ok", reply: "asked" });
   await r.runs.complete(late!.run.id, late!.leaseToken, { status: "ok", reply: "late result" });
-  for (const lane of [asker!, late!])
+  for (const lane of [asker!, late!]) {
     assert.equal(await deliverSubagentMail(deps, (await r.runs.get(lane.run.id))!), false);
+    await r.runs.deferReturn(lane.run.id, 60_000);
+  }
   await settleTreeWakes(deps, r.room);
   await stopSessionTree(r, r.room, USER_STOP_ALL);
   assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
-  assert.deepEqual(await r.runs.pendingReturnsIn([early!, asker!, late!].map((lane) => lane.session.threadRef)), []);
+  assert.deepEqual(
+    await r.runs.pendingReturns(
+      100,
+      "",
+      [early!, asker!, late!].map((lane) => lane.session.threadRef),
+    ),
+    [],
+  );
   const next = await parentRun(r);
   await r.runs.complete(next.run.id, next.leaseToken, { status: "silent", stopped: true, stopScope: "session" });
   assert.equal(await wakeForUnreadMail(deps, (await r.runs.get(next.run.id))!), undefined);
@@ -571,7 +580,7 @@ test("settling a stopped tree skips a result it cannot deliver and only returns 
   };
   await settleTreeWakes(failing, r.room);
   assert.deepEqual(
-    (await r.runs.pendingReturnsIn([r.room.threadRef, lane!.session.threadRef])).map((run) => run.id),
+    (await r.runs.pendingReturns(100, "", [r.room.threadRef, lane!.session.threadRef])).map((run) => run.id),
     [lane!.run.id],
   );
 });

@@ -466,10 +466,8 @@ END $base_schema$`,
         }),
       );
     },
-    async pendingReturns(limit = 100, afterId = "") {
-      const { rows } = await claimAcrossTenants(
-        pg,
-        `SELECT * FROM (
+    async pendingReturns(limit = 100, afterId = "", threadRefs) {
+      const text = `SELECT * FROM (
            SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
            AND session_id LIKE 'agent:main:subagent:%' AND id > $2
            UNION
@@ -479,25 +477,9 @@ END $base_schema$`,
            AND wake.idempotency_key LIKE 'subagent-return:%'
            AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
            AND child.id > $2
-         ) pending WHERE retry_after <= $3 ORDER BY id LIMIT $1`,
-        [limit, afterId, Date.now()],
-      );
-      return rows.map(rowToRun);
-    },
-    async pendingReturnsIn(threadRefs) {
-      const { rows } = await q(
-        `SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
-         AND session_id LIKE 'agent:main:subagent:%' AND session_id = ANY($1)
-         UNION
-         SELECT child.* FROM runs wake JOIN runs child
-         ON child.id = substring(wake.idempotency_key FROM length('subagent-return:') + 1)
-         WHERE wake.status = 'pending' AND wake.attempts = 0 AND wake.turn_user_seq IS NULL
-         AND wake.idempotency_key LIKE 'subagent-return:%'
-         AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
-         AND child.session_id = ANY($1)
-         ORDER BY id`,
-        [threadRefs],
-      );
+         ) pending WHERE ${threadRefs ? "session_id = ANY($3)" : "retry_after <= $3"} ORDER BY id LIMIT $1`;
+      const params = [limit, afterId, threadRefs ?? Date.now()];
+      const { rows } = threadRefs ? await q(text, params) : await claimAcrossTenants(pg, text, params);
       return rows.map(rowToRun);
     },
     async terminalFinished(after, beforeMs, limit) {
