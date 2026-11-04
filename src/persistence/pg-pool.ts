@@ -4,7 +4,7 @@ import type { EventEmitter } from "node:events";
 import type { Socket } from "node:net";
 import type { ClientConfig, Pool, PoolClient, QueryResult } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
-import { boundTenant, pinTenant } from "../tenants/context.ts";
+import { assertTenancyAllowed, boundTenant, pinTenant } from "../tenants/context.ts";
 import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 
@@ -125,6 +125,7 @@ export interface PgPool {
 type PgSetting = readonly [name: string, value: string];
 
 function tenantSettings(tenant = boundTenant()): PgSetting[] {
+  assertTenancyAllowed();
   return tenant === undefined ? [] : [["qm.tenant_id", tenant]];
 }
 

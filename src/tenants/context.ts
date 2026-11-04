@@ -19,6 +19,22 @@ interface SettledTenancy {
 }
 
 let settled: SettledTenancy | undefined;
+let refusal: string | undefined;
+
+export class TenantUnavailable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TenantUnavailable";
+  }
+}
+
+export function refuseTenancy(reason: string | undefined): void {
+  refusal = reason;
+}
+
+export function assertTenancyAllowed(): void {
+  if (refusal !== undefined) throw new TenantUnavailable(refusal);
+}
 
 export function registerTenants(install: string, sole: string | undefined): void {
   settled = { install, sole };

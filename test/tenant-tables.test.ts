@@ -11,7 +11,7 @@ import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createPgPool, migrateRegisteredPgSchemas, type PgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresBudgetTracker } from "../src/ratelimit/postgres-budget.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
-import { installTenantNow, soleTenantNow, withTenant } from "../src/tenants/context.ts";
+import { installTenantNow, soleTenantNow, TenantUnavailable, withTenant } from "../src/tenants/context.ts";
 import { refreshTenants, workTenant } from "../src/tenants/work-tenant.ts";
 import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 
@@ -140,6 +140,19 @@ describe("tenant tables", () => {
     await assert.rejects(workTenant(app), /No tenant is bound to this work/);
     assert.deepEqual(await withTenant(install, () => appMap.get("solo")), { n: 1 });
     assert.equal(await withTenant(tenantA, () => appMap.get("solo")), null);
+  });
+
+  it("refuses an owner login once two tenants exist, and accepts a non-owner login", async () => {
+    await refreshTenants(app);
+    assert.deepEqual(await withTenant(install, () => app.q("SELECT 1 AS one")), [{ one: 1 }]);
+    await assert.rejects(refreshTenants(owner), /owns the tenant tables or bypasses row-level security/);
+    await assert.rejects(
+      withTenant(install, () => app.q("SELECT 1 AS one")),
+      TenantUnavailable,
+    );
+    await assert.rejects(owner.q("SELECT 1 AS one"), TenantUnavailable);
+    await refreshTenants(app);
+    assert.deepEqual(await owner.q("SELECT 1 AS one"), [{ one: 1 }]);
   });
 
   it("keeps two tenants' key-value rows and snapshots apart under the app login", async () => {
