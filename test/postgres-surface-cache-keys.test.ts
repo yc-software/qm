@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { createPostgresSurfaceCache, type SurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { seedReleasedInstall } from "./support/tenant-seed.ts";
 
 async function snapshot(cache: SurfaceCache) {
   return {
@@ -21,19 +22,28 @@ async function snapshot(cache: SurfaceCache) {
   };
 }
 
+const LEGACY_KEYS = {
+  channel_messages: "org_id, container, ts",
+  channel_state: "org_id, container",
+  channel_files: "org_id, container, ts, file_id",
+};
+
 async function downgradeToLegacySchema(url: string): Promise<void> {
   const pool = new pg.Pool({ connectionString: url });
   try {
-    for (const table of ["channel_messages", "channel_state", "channel_files"]) {
-      await pool.query(`ALTER TABLE ${table} DROP COLUMN surface, DROP COLUMN account`);
+    for (const [table, key] of Object.entries(LEGACY_KEYS)) {
+      await pool.query(`ALTER TABLE ${table} DROP COLUMN surface, DROP COLUMN account, DROP COLUMN tenant_id CASCADE`);
+      await pool.query(`ALTER TABLE ${table} ADD PRIMARY KEY (${key}), DISABLE ROW LEVEL SECURITY`);
     }
-    await pool.query("DELETE FROM qm_schema_migrations WHERE id IN ($1, $2)", [
+    await pool.query("DELETE FROM qm_schema_migrations WHERE id IN ($1, $2) OR id LIKE $3", [
       "surface-cache/store/0008",
       "surface-cache/store/0009",
+      "surface-cache/store/0010-tenants%",
     ]);
   } finally {
     await pool.end();
   }
+  await seedReleasedInstall(url);
 }
 
 test("legacy mirror rows read identically after the surface-key upgrade", async () => {
@@ -105,9 +115,9 @@ test("legacy mirror rows read identically after the surface-key upgrade", async 
       );
       assert.deepEqual(keys.rows, [{ surface: "slack", account: "" }], "legacy rows are backfilled to slack");
       for (const [table, columns] of [
-        ["channel_messages", "org_id, surface, account, container, ts"],
-        ["channel_state", "org_id, surface, account, container"],
-        ["channel_files", "org_id, surface, account, container, ts, file_id"],
+        ["channel_messages", "tenant_id, org_id, surface, account, container, ts"],
+        ["channel_state", "tenant_id, org_id, surface, account, container"],
+        ["channel_files", "tenant_id, org_id, surface, account, container, ts, file_id"],
       ] as const) {
         const key = await pool.query("SELECT pg_get_indexdef($1::regclass) AS def", [`${table}_surface_key`]);
         assert.ok(key.rows[0].def.endsWith(`(${columns})`), `${table} has a unique surface and account key`);
