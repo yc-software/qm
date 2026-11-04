@@ -2013,7 +2013,7 @@ test("queued results recheck source-entry visibility after a participant leaves"
   assert.equal((await r.mailbox.pending(shared.id)).length, 1);
 });
 
-test("enabled coordinators and their children can delegate", async () => {
+test("coordinators and their children can delegate", async () => {
   const r = await rig();
   const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
   const api = factory.forTurn({

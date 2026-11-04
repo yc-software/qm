@@ -30,9 +30,9 @@ Coordinator turns use durable session delegation and disable provider-native sub
 
 Swarm workers continue to coordinate through the swarm API, which owns their computer assignment, membership, and execution budgets. Session tools cannot spawn or send from swarm turns, send to swarm workers, or adopt a child under a swarm worker. Ordinary human turns in a swarm root remain ordinary session turns. All session-generated work remains automated. Explicit unattended grants belong to the assigning turn, never an earlier task. For `responsive_spine` participants, an attached child and its completion continuation can retain the original live requester’s sharing and author authority through verified durable run provenance. Current audience and sharing policy still apply; read-only, private-message, swarm, detached, and unrelated automated work cannot borrow that authority.
 
-## Feature flag
+## Access and delegation
 
-Every internal actor is offered the subagents and sessions tools. External actors are not. Existing transcripts remain accessible.
+Every internal actor is offered the subagents and sessions tools. External actors are not.
 
 `responsive_spine` defaults off. Enable it for individual `personal:<principal-id>` scopes through the feature-flags admin API to pilot responsive Slack and spine turns. It applies to the acting person even in shared conversations. Enabled coordinators cannot use command execution, background process tools, credential execution, or provider-native delegation. They dispatch substantial work through `subagents.open`, end promptly, and receive completion wakes. Child sessions retain command tools. Web conversations without spine tools and swarm workers retain their existing behavior. Turning the flag off restores the actor's ordinary toolset and passive completion handling on subsequent turns; it does not interrupt already running work.
 
