@@ -1474,6 +1474,15 @@ async function followRun(
   }
 }
 
+export async function stopThreadRun(threadRef: string): Promise<"stopped" | "ended"> {
+  const { runId } = await activeRunForThread(threadRef);
+  if (!runId) return "ended";
+  const outcome = await signalLiveRun({ ...createRunSlot(), runId }, "abort", undefined, { threadRef: null });
+  if (outcome.ok) return "stopped";
+  if (outcome.reason === "terminal" || outcome.reason === "not_found") return "ended";
+  throw new Error(outcome.why ?? outcome.reason);
+}
+
 function runPath(runId: string, suffix: string): string {
   return `/api/runs/${encodeURIComponent(runId)}${suffix}`;
 }

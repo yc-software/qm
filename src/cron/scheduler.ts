@@ -83,7 +83,6 @@ export interface SchedulerDeps {
   };
   sweepAsks?: (now: number) => Promise<void>;
   jobQueue?: CronJobQueue;
-  requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
@@ -628,7 +627,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             if (!stopped) leaseGuard.start();
           },
           (e: unknown) => {
-            if (deps.requireQueueStart) throw e;
             reportFailure("scheduler: cron job queue start (falling back to interval ticks)", e);
             if (!stopped) sweeper.start(intervalMs);
           },

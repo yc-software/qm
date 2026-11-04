@@ -9,6 +9,7 @@ import {
 } from "./desktop-login.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { drainOnSigterm } from "../../chassis/src/drain.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
@@ -1276,10 +1277,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     });
   }
 
-  if (
-    ((method === "GET" || method === "POST") && pathname === "/v1/background-work") ||
-    (method === "POST" && pathname === "/v1/deployment/live-session")
-  ) {
+  if (method === "POST" && pathname === "/v1/deployment/live-session") {
     return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, [
       ...FORWARD_DEPLOYMENT_LAYER_HEADERS,
       "authorization",
@@ -1981,9 +1979,12 @@ export async function startServer(): Promise<void> {
 export { handle, server };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  startServer().catch((error: unknown) => {
-    reportBackendError(error);
-    console.error("[portal] failed to start:", errMessage(error));
-    process.exitCode = 1;
-  });
+  startServer().then(
+    () => drainOnSigterm(server, "portal"),
+    (error: unknown) => {
+      reportBackendError(error);
+      console.error("[portal] failed to start:", errMessage(error));
+      process.exitCode = 1;
+    },
+  );
 }

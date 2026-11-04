@@ -1556,6 +1556,7 @@ class GroupActions implements IHeaderActionsRenderer {
             )}
           </div>`
         : nothing;
+    this.element.classList.toggle("menu-open", this.menuOpen || tabMenuTpl !== nothing);
     render(
       html`${
         single

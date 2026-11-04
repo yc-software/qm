@@ -88,6 +88,23 @@ export interface SurfaceBriefing {
   instructions?: string;
 }
 
+export type ChildIsolationMode = "shared" | "worktree" | "sandbox";
+
+export interface ChildWorkdir {
+  workdir: string;
+  branch: string;
+  base?: string;
+}
+
+export interface ChildIsolation {
+  mode: ChildIsolationMode;
+  sandboxId?: string;
+  workdir?: string;
+  branch?: string;
+  base?: string;
+  baseChain?: ChildWorkdir[];
+}
+
 export interface SpawnMeta {
   surfaceOrigin?: TurnSurfaceOrigin;
   surfaceTools?: boolean;
@@ -107,6 +124,7 @@ export interface SpawnMeta {
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
+  isolation?: ChildIsolation;
 }
 
 export interface Session {
@@ -466,6 +484,8 @@ export interface TurnRuntime {
   change?: { rule: string } | { agent: "task" | "scope" };
 }
 
+export type StopScope = "run" | "session" | "tree" | "ancestor";
+
 export interface TurnResult {
   status: "ok" | "refused" | "failed" | "pending_approval" | "queued" | "silent" | "react";
   sessionId?: string;
@@ -479,6 +499,7 @@ export interface TurnResult {
   steered?: true;
   steerTs?: string;
   stopped?: boolean;
+  stopScope?: StopScope;
   pendingApprovals?: PendingApproval[];
   attachments?: OutgoingAttachment[];
   sourceUserSeq?: number;

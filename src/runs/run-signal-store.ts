@@ -1,4 +1,4 @@
-import type { ClientToolResult, TurnRequest } from "../types.ts";
+import type { ClientToolResult, StopScope, TurnRequest } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 
 export type RunSignalKind = "abort" | "steer" | "client_result";
@@ -13,6 +13,7 @@ export interface RunSignal {
   callId?: string;
   result?: ClientToolResult;
   reason?: string;
+  scope?: StopScope;
 }
 
 export interface RunSignalStore {
@@ -88,7 +89,7 @@ const SIGNAL_POLL_MS = 5_000;
 
 export interface SignalPollHandlers {
   onSteer(text: string, ts?: string, request?: TurnRequest, acknowledge?: () => Promise<void>): Promise<void | boolean>;
-  onAbort(reason?: string): Promise<void>;
+  onAbort(stop: RunSignal): Promise<void>;
 }
 
 export function startSignalPoll(
@@ -109,7 +110,7 @@ export function startSignalPoll(
       if (stopDelivered) return;
       const stop = (known ?? (await signals.pending(runId))).find(({ signal }) => signal.kind === "abort");
       if (stop?.signal.kind !== "abort") return;
-      await handlers.onAbort(stop.signal.reason);
+      await handlers.onAbort(stop.signal);
       stopDelivered = true;
     };
     return (stopCheck = stopCheck.then(check, check));

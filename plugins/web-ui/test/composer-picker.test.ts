@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import { JSDOM } from "jsdom";
-import { createServer } from "vite";
+import { testViteServer } from "./vite-server.ts";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
 import type { RuntimeConfig } from "../src/runtime-config-cache.ts";
 import type { ModelMetadata } from "../src/pi-models.ts";
@@ -147,7 +147,7 @@ test("the personal-account picker preserves composer choices and saves context d
     ]),
   );
   localStorage.setItem("web-ui:model-picks", JSON.stringify([["web:tester:picker-test", "pi:alpha"]]));
-  const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  const vite = await testViteServer();
   let composer: ComposerSurface | undefined;
   let siblingComposer: ComposerSurface | undefined;
   let resetContext: (() => void) | undefined;

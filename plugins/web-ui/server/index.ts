@@ -3,6 +3,7 @@ import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
 import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { swallow } from "../../chassis/src/errors.ts";
+import { drainOnSigterm } from "../../chassis/src/drain.ts";
 import { withoutTenant } from "../../chassis/src/tenant.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
@@ -2881,6 +2882,7 @@ const apiRoutes: readonly WebRoute[] = [
         callId?: unknown;
         result?: unknown;
         desktopClientId?: unknown;
+        tree?: unknown;
       }>(req, res, false, 6_000_000);
       if (!p) return;
       const kind = typeof p.kind === "string" ? p.kind : "";
@@ -2911,6 +2913,7 @@ const apiRoutes: readonly WebRoute[] = [
           ...(text !== undefined ? { text } : {}),
           ...steerFields,
           ...(typeof p.queuedRunId === "string" ? { queuedRunId: p.queuedRunId } : {}),
+          ...(kind === "abort" && p.tree === true ? { tree: true } : {}),
         }),
       );
     },
@@ -3655,6 +3658,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   createVite(server)
     .then((v) => {
       vite = v;
+      drainOnSigterm(server, "web-ui");
       server.listen(PORT, () => {
         console.log(
           `[web-ui] surface on http://localhost:${PORT} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
