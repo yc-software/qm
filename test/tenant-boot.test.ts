@@ -3,14 +3,12 @@ import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createSandboxResources, type SandboxDefault, type SandboxResource } from "../src/sandbox/sandbox-resources.ts";
-import { rewriteSurfaceOrigins } from "../src/surfaces/origin-migration.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { forEachTenant, listTenants } from "../src/tenants/claim.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createTenantSlackRuntimes } from "../src/surfaces/slack-runtime.ts";
 import { boundTenant, withTenant } from "../src/tenants/context.ts";
-import { ownerPgPool } from "../src/tenants/owner-pool.ts";
 import { TENANT_A, TENANT_B, twoTenantDatabase, twoTenantTestSkip } from "./support/two-tenants.ts";
 
 const skip = twoTenantTestSkip();
@@ -43,7 +41,6 @@ test("boot steps run once under each tenant as the restricted login with two ten
     const tenants = (await db.owner.query("SELECT id::text AS id FROM tenants ORDER BY id")).rows.map((row) => row.id);
     assert.ok(tenants.includes(TENANT_A) && tenants.includes(TENANT_B));
     assert.deepEqual(upgradedIn, tenants);
-    await rewriteSurfaceOrigins(ownerPgPool(maps.pool));
   } finally {
     await db.close();
   }

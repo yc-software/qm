@@ -3,7 +3,6 @@ import type { ClientToolDeclaration, SurfaceBriefing, TurnOrigin, TurnRequest } 
 import { promptText } from "../../util/text.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
-import { RETIRED_ORIGIN_KEYS } from "../../core/turn-origin.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -102,21 +101,13 @@ function zodMessage(field: string, error: z.ZodError): string {
   return `${[field, ...issue.path.map(String)].join(".")}: ${issue.message}`;
 }
 
-const removedOriginFieldsSchema = z.object(
-  Object.fromEntries(RETIRED_ORIGIN_KEYS.map((field) => [field, z.never().optional()])),
-);
-
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
   if (origin?.kind !== "automation") return origin;
   const { useOwnerKeychain: _internalOnly, ...safe } = origin;
   return safe;
 }
 
-function sanitizedTurnRequest(
-  body: TurnRequest & { slackSource?: unknown; externalSlack?: unknown },
-): { request: TurnRequest } | { error: string } {
-  const removed = removedOriginFieldsSchema.safeParse(body);
-  if (!removed.success) return { error: zodMessage("body", removed.error) };
+function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
   if (body.deliveryWebhook !== undefined) {
     const parsed = z
       .object({
@@ -139,8 +130,6 @@ function sanitizedTurnRequest(
   }
   const {
     surfaceOrigin: _surfaceOrigin,
-    slackSource: _slackSource,
-    externalSlack: _externalSlack,
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
     cronScript: _cronScript,

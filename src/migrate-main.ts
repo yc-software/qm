@@ -37,10 +37,9 @@ export async function withRegisteredPgSchemas<T>(
 
 if (import.meta.main) {
   const config = loadConfig();
-  await withRegisteredPgSchemas(config, async (built) => {
+  await withRegisteredPgSchemas(config, async () => {
     await migrateRegisteredPgSchemas(config.databaseUrl);
     if (config.databaseUrl) await migrateCronQueue(config.databaseUrl);
-    await built.rewriteSurfaceOrigins();
     console.log("[qm:migrate] database migrations applied");
   });
 }

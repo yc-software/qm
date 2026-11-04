@@ -33,7 +33,6 @@ export async function startQm(
     : undefined;
   await built.tenancy.refreshSettings();
   const tenantSettings = built.tenancy.keepSettingsFresh();
-  if (!config.backgroundDeploymentId) await built.rewriteSurfaceOrigins();
   await built.forEachTenant(() => built.sandboxResources.initialize());
   const backfilledFires = await built.crons.backfillFires();
   if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);
@@ -143,7 +142,6 @@ export async function startQm(
   if (built.backgroundOwnership) {
     let periodicStop: Promise<void> = Promise.resolve();
     let activationEpoch = 0;
-    let surfaceOriginsRewritten = false;
     const stopPeriodic = () => {
       activationEpoch++;
       periodicStop = built.scheduler.stopClaims();
@@ -160,11 +158,6 @@ export async function startQm(
       async start(signal) {
         const epoch = ++activationEpoch;
         if (signal.aborted) return;
-        if (!surfaceOriginsRewritten) {
-          await built.rewriteSurfaceOrigins();
-          surfaceOriginsRewritten = true;
-          if (signal.aborted || epoch !== activationEpoch) return;
-        }
         built.runtime.startBackground();
         await periodicStop;
         if (signal.aborted || epoch !== activationEpoch) return;
