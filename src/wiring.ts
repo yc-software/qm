@@ -82,7 +82,13 @@ import {
   type Config,
 } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
-import { enabledSandboxBackends } from "./sandbox/sandbox-settings.ts";
+import {
+  enabledSandboxBackends,
+  MODAL_TENANT_ENV,
+  SPRITES_TENANT_ENV,
+  tenantSandboxSettings,
+  type SandboxSettings,
+} from "./sandbox/sandbox-settings.ts";
 import {
   actorAssertionActive,
   createIdentityService,
@@ -161,6 +167,14 @@ import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { ownerPgPool } from "./tenants/owner-pool.ts";
 import { createTenancy, type Tenancy } from "./tenants/tenancy.ts";
 import { configureTenantSettings } from "./tenants/settings.ts";
+import { perTenantInstance } from "./tenants/tenant-instances.ts";
+import {
+  tenantBlobTransfer,
+  tenantByteStore,
+  tenantFileUploads,
+  tenantStorage,
+  type StorageTarget,
+} from "./tenants/tenant-storage.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
@@ -232,7 +246,12 @@ import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
-import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
+import {
+  createSandboxRouter,
+  liveBackends,
+  tenantSandboxBackends,
+  type SandboxBackendName,
+} from "./sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
   legacySandboxBackendForScope,
@@ -738,37 +757,51 @@ export function buildApp(
     config.securityScreen === "off" && overrides.securityScreener ? "enforce" : config.securityScreen,
   );
 
+  const deploymentStorage = (bucket: string): StorageTarget => ({
+    bucket,
+    ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
+  });
   const s3 = config.s3Endpoint ? s3Client(config.s3Region, { endpoint: config.s3Endpoint }) : undefined;
   const s3Override = s3 ? { _client: s3 } : {};
   const blobTransfer: BlobTransferStore =
     config.transferStore === "s3" && config.s3Bucket
-      ? createS3BlobTransferStore({
-          ...s3Override,
-          bucket: config.s3Bucket,
-          ...(config.s3Region ? { region: config.s3Region } : {}),
-          ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-        })
+      ? tenantBlobTransfer(
+          tenantStorage(deploymentStorage(config.s3Bucket), (target) =>
+            createS3BlobTransferStore({
+              ...s3Override,
+              ...target,
+              ...(config.s3Region ? { region: config.s3Region } : {}),
+            }),
+          ),
+        )
       : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
   const fileBytes: DurableByteStore =
     config.snapshotStore === "s3" && config.s3Bucket
-      ? createS3DurableByteStore({
-          ...s3Override,
-          bucket: config.s3Bucket,
-          ...(config.s3Region ? { region: config.s3Region } : {}),
-          ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-        })
+      ? tenantByteStore(
+          tenantStorage(deploymentStorage(config.s3Bucket), (target) =>
+            createS3DurableByteStore({
+              ...s3Override,
+              ...target,
+              ...(config.s3Region ? { region: config.s3Region } : {}),
+            }),
+          ),
+        )
       : createLocalDurableByteStore(join(config.dataDir, "docstore"));
   const files: FileArtifactStore = createPostgresFileArtifactStore(databaseUrl, fileBytes);
+  const fileUploadStore = createPostgresFileUploadStore(databaseUrl);
   const fileUploads =
     config.snapshotStore === "s3" && config.s3Bucket
-      ? createDirectFileUploads({
-          ...(s3 ? { client: s3, presign: (command, expiresIn) => getSignedUrl(s3, command, { expiresIn }) } : {}),
-          bucket: config.s3Bucket,
-          ...(config.s3Region ? { region: config.s3Region } : {}),
-          ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-          store: createPostgresFileUploadStore(databaseUrl),
-          files,
-        })
+      ? tenantFileUploads(
+          tenantStorage(deploymentStorage(config.s3Bucket), (target) =>
+            createDirectFileUploads({
+              ...(s3 ? { client: s3, presign: (command, expiresIn) => getSignedUrl(s3, command, { expiresIn }) } : {}),
+              ...target,
+              ...(config.s3Region ? { region: config.s3Region } : {}),
+              store: fileUploadStore,
+              files,
+            }),
+          ),
+        )
       : undefined;
   const notebookMemory: MemoryService = createPostgresMemoryService(databaseUrl);
   const semanticMemory = createSemanticMemory({
@@ -811,8 +844,8 @@ export function buildApp(
       ...config.localSandbox,
       onError: sandboxOnError,
     });
-  const buildSprites = (): Sandbox => {
-    const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
+  const buildSprites = (settings: SandboxSettings = config): Sandbox => {
+    const { snapshotS3Bucket, ...sprites } = settings.spritesSandbox;
     return createSpritesSandbox({
       ...sprites,
       initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
@@ -949,8 +982,8 @@ export function buildApp(
       onError: sandboxOnError,
     });
   };
-  const buildModal = (): Sandbox => {
-    const modal = config.modalSandbox;
+  const buildModal = (settings: SandboxSettings = config): Sandbox => {
+    const modal = settings.modalSandbox;
     if (!modal.tokenId || !modal.tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
     return createModalSandbox({
@@ -1121,12 +1154,19 @@ export function buildApp(
     "do-managed-agents": buildManagedAgents,
   };
   const enabledBackends = new Set(enabledSandboxBackends(config));
-  const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = {
+  const deploymentBackends: Partial<Record<SandboxBackendName, Sandbox>> = {
     [config.sandboxBackend]: buildBackend[config.sandboxBackend](),
   };
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
-    if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
+    if (name !== config.sandboxBackend && enabledBackends.has(name)) deploymentBackends[name] = buildBackend[name]();
   }
+  const tenantBackends = perTenantInstance([...SPRITES_TENANT_ENV, ...MODAL_TENANT_ENV], (env) =>
+    tenantSandboxBackends(deploymentBackends, tenantSandboxSettings(config, env), env, {
+      sprites: buildSprites,
+      modal: buildModal,
+    }),
+  );
+  const sandboxBackends = liveBackends(() => tenantBackends() ?? deploymentBackends);
   const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
   const sandboxResources = createSandboxResources({
@@ -1309,12 +1349,16 @@ export function buildApp(
     pool: pgArtifactMap.pool,
     bytesFor: (prefix) =>
       config.snapshotStore === "s3" && config.s3Bucket
-        ? createS3DurableByteStore({
-            ...s3Override,
-            bucket: config.s3Bucket,
-            ...(config.s3Region ? { region: config.s3Region } : {}),
-            prefix: `${config.s3Prefix ?? ""}${prefix}`,
-          })
+        ? tenantByteStore(
+            tenantStorage(deploymentStorage(config.s3Bucket), (target) =>
+              createS3DurableByteStore({
+                ...s3Override,
+                bucket: target.bucket,
+                ...(config.s3Region ? { region: config.s3Region } : {}),
+                prefix: `${target.prefix ?? ""}${prefix}`,
+              }),
+            ),
+          )
         : createLocalDurableByteStore(join(config.dataDir, prefix)),
   });
   const runSignals: RunSignalStore = createPostgresRunSignalStore(databaseUrl);
