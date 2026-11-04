@@ -8,7 +8,12 @@ import { createPostgresAppPageViewLog } from "../src/deploy/page-views.ts";
 import { createPostgresFileUploadStore } from "../src/files/file-upload-store.ts";
 import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
-import { createPgPool, migrateRegisteredPgSchemas, type PgPool } from "../src/persistence/pg-pool.ts";
+import {
+  createPgPool,
+  migrateRegisteredPgSchemas,
+  withPgTransaction,
+  type PgPool,
+} from "../src/persistence/pg-pool.ts";
 import { createPostgresBudgetTracker } from "../src/ratelimit/postgres-budget.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
 import { installTenantNow, soleTenantNow, TenantUnavailable, withTenant } from "../src/tenants/context.ts";
@@ -158,6 +163,15 @@ describe("tenant tables", () => {
     useOwnerDatabase(ownerUrl);
     try {
       assert.deepEqual(await ownerPgPool(main).q("SELECT 1 AS one"), [{ one: 1 }]);
+      const claimed = await withPgTransaction(
+        await ownerPgPool(main).pool(),
+        async (client) => (await client.query("SELECT count(*)::int AS n FROM tenants")).rows,
+      );
+      assert.deepEqual(claimed, [{ n: 3 }]);
+      await assert.rejects(
+        withPgTransaction(await main.pool(), async () => undefined),
+        TenantUnavailable,
+      );
       await assert.rejects(main.q("SELECT 1 AS one"), TenantUnavailable);
     } finally {
       useOwnerDatabase(undefined);

@@ -31,8 +31,11 @@ const migrationQueue = createKeyedQueue();
 const connectionTimeoutMs = 10_000;
 
 const sharedPools = new Map<string, { pool: Pool; users: number }>();
+const ownerPools = new WeakSet<Pool>();
 
-async function retainPool(connectionString: string, kind: "query" | "session" | "migration"): Promise<Pool> {
+type PoolKind = "query" | "session" | "migration" | "owner";
+
+async function retainPool(connectionString: string, kind: PoolKind): Promise<Pool> {
   const pg = (await import("pg")).default;
   const key = `${kind}:${connectionString}`;
   const existing = sharedPools.get(key);
@@ -40,7 +43,12 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     existing.users++;
     return existing.pool;
   }
-  const max = { query: poolingConfig.queryMax ?? 20, session: poolingConfig.sessionMax ?? 64, migration: 1 }[kind];
+  const max = {
+    query: poolingConfig.queryMax ?? 20,
+    session: poolingConfig.sessionMax ?? 64,
+    migration: 1,
+    owner: poolingConfig.sessionMax ?? 64,
+  }[kind];
   const connection = pgConnectionOptions(
     connectionString,
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
@@ -55,6 +63,7 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     }),
   );
   sharedPools.set(key, { pool, users: 1 });
+  if (kind === "owner") ownerPools.add(pool);
   return pool;
 }
 
@@ -64,11 +73,7 @@ function guardedPool(pool: Pool): Pool {
   return pool;
 }
 
-async function releasePool(
-  connectionString: string,
-  pool: Pool,
-  kind: "query" | "session" | "migration",
-): Promise<void> {
+async function releasePool(connectionString: string, pool: Pool, kind: PoolKind): Promise<void> {
   const key = `${kind}:${connectionString}`;
   const entry = sharedPools.get(key);
   if (!entry || entry.pool !== pool) return;
@@ -198,8 +203,8 @@ async function rollbackOrReport(client: PoolClient, context: string): Promise<Er
   }
 }
 
-async function beginTransaction(client: PoolClient): Promise<void> {
-  const settings = tenantSettings(false);
+async function beginTransaction(pool: Pool, client: PoolClient): Promise<void> {
+  const settings = tenantSettings(ownerPools.has(pool));
   await client.query("BEGIN");
   if (settings.length) await client.query(settingsQuery(settings));
 }
@@ -212,7 +217,7 @@ async function runPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promi
   const client = await pool.connect();
   let rollbackError: Error | undefined;
   try {
-    await beginTransaction(client);
+    await beginTransaction(pool, client);
     const result = await fn(client);
     await client.query("COMMIT");
     return result;
@@ -512,7 +517,9 @@ export function createPgPool(
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
   let closed = false;
-  const queryUrl = pooledDatabaseUrl(connectionString);
+  const queryUrl = ownerLogin ? connectionString : pooledDatabaseUrl(connectionString);
+  const queryKind = ownerLogin ? "owner" : "query";
+  const sessionKind = ownerLogin ? "owner" : "session";
   async function withMigrationPool<T>(fn: (pool: Pool) => Promise<T>): Promise<T> {
     return migrationQueue(connectionString, async () => {
       const instance = await retainPool(connectionString, "migration");
@@ -537,12 +544,12 @@ export function createPgPool(
   async function pool(): Promise<Pool> {
     await ready();
     if (closed) throw new Error("Postgres store is closed");
-    return (queryPoolP ??= retainPool(queryUrl, "query"));
+    return (queryPoolP ??= retainPool(queryUrl, queryKind));
   }
   async function sessionPool(): Promise<Pool> {
     await ready();
     if (closed) throw new Error("Postgres store is closed");
-    return (sessionPoolP ??= retainPool(connectionString, "session"));
+    return (sessionPoolP ??= retainPool(connectionString, sessionKind));
   }
   async function query(
     text: string,
@@ -590,8 +597,8 @@ export function createPgPool(
     closed = true;
     await readyP?.catch(() => {});
     await Promise.all([
-      queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
-      sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),
+      queryPoolP?.then((instance) => releasePool(queryUrl, instance, queryKind)),
+      sessionPoolP?.then((instance) => releasePool(connectionString, instance, sessionKind)),
     ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {
